@@ -34,7 +34,10 @@ use arrow_schema::{ArrowError, DataType, SortOptions};
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{JoinSide, JoinType, NullEquality, Result, internal_err};
 
-use super::{ColumnIndex, JoinFilter, JoinKeyComparator, new_empty_schema_batch};
+use super::{
+    ColumnIndex, JoinFilter, JoinKeyComparator, PreparedJoinKeyProbe,
+    new_empty_schema_batch,
+};
 
 /// Referenced sources in first-use order. Source zero denotes a synthetic null
 /// row; other source IDs are one-based indexes into the retained build batches.
@@ -213,11 +216,7 @@ fn fixed_width_max_buffer(data_type: &DataType, rows: usize) -> Result<Option<us
         DataType::Null | DataType::Boolean => 0,
         DataType::FixedSizeBinary(width) => {
             let width = usize::try_from(*width).map_err(|_| overflow())?;
-            let bytes = rows.checked_mul(width).ok_or_else(overflow)?;
-            if bytes > i32::MAX as usize {
-                return Err(ArrowError::OffsetOverflowError(bytes).into());
-            }
-            bytes
+            rows.checked_mul(width).ok_or_else(overflow)?
         }
         _ => {
             let Some(width) = data_type.primitive_width() else {
@@ -407,30 +406,46 @@ pub(crate) fn equal_rows_arr_multi(
     }
     let selection = SelectedBuildSources::new(gather_indices);
     let sort_options = vec![SortOptions::default(); right_arrays.len()];
-    let comparators = selection
-        .sources
-        .iter()
-        .map(|&index| {
-            let arrays = &left_arrays[index];
-            if arrays.len() != right_arrays.len() {
-                return internal_err!(
-                    "Cannot compare join keys with different column counts"
-                );
-            }
-            JoinKeyComparator::new(arrays, right_arrays, &sort_options, null_equality)
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let probe = PreparedJoinKeyProbe::new(right_arrays, null_equality);
+
+    // Link candidate positions by source, then compact in original order.
+    // Arrow comparators may build their own logical-null masks even with our
+    // prepared probe metadata. Retaining one comparator at a time bounds that
+    // scratch memory, though Arrow still computes those masks for each source.
+    let mut source_heads = vec![usize::MAX; selection.sources.len()];
+    let mut next_positions = Vec::with_capacity(selection.indices.len());
+    for (position, &(source, _)) in selection.indices.iter().enumerate() {
+        // Equality candidates come from the hash table, before outer padding.
+        debug_assert_ne!(source, 0);
+        next_positions.push(source_heads[source - 1]);
+        source_heads[source - 1] = position;
+    }
+    let mut equal = vec![false; indices_left.len()];
+    for (&index, mut position) in selection.sources.iter().zip(source_heads) {
+        let arrays = &left_arrays[index];
+        if arrays.len() != right_arrays.len() {
+            return internal_err!(
+                "Cannot compare join keys with different column counts"
+            );
+        }
+        let comparator =
+            JoinKeyComparator::new_with_prepared_probe(arrays, &probe, &sort_options)?;
+        while position != usize::MAX {
+            let (_, row) = selection.indices[position];
+            equal[position] =
+                comparator.is_equal(row, indices_right.value(position) as usize);
+            position = next_positions[position];
+        }
+    }
     let mut left_filtered = Vec::with_capacity(indices_left.len());
     let mut right_filtered = Vec::with_capacity(indices_right.len());
-    for ((&left, &right), &(source, row)) in indices_left
+    for ((&left, &right), equal) in indices_left
         .values()
         .iter()
         .zip(indices_right.values())
-        .zip(&selection.indices)
+        .zip(equal)
     {
-        // Equality candidates come from the hash table, before outer padding.
-        debug_assert_ne!(source, 0);
-        if comparators[source - 1].is_equal(row, right as usize) {
+        if equal {
             left_filtered.push(left);
             right_filtered.push(right);
         }
@@ -445,7 +460,16 @@ mod tests {
         DictionaryArray, FixedSizeListArray, Float64Array, Int8Array, Int32Array,
         ListViewArray, PrimitiveRunBuilder, StringArray, UnionArray,
     };
-    use arrow::datatypes::{Field, Int8Type, Int32Type, UnionFields};
+    use arrow::datatypes::{Field, Float64Type, Int8Type, Int32Type, UnionFields};
+
+    #[test]
+    fn fixed_width_children_do_not_have_a_32_bit_byte_offset_limit() -> Result<()> {
+        assert_eq!(
+            fixed_width_max_buffer(&DataType::FixedSizeBinary(16), 1 << 27)?,
+            Some(1 << 31),
+        );
+        Ok(())
+    }
 
     #[test]
     fn gather_only_borrows_selected_sources() -> Result<()> {
@@ -627,6 +651,108 @@ mod tests {
                     assert_eq!(actual, expected);
                 }
             }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn probe_preprocessing_is_shared_across_many_build_sources() -> Result<()> {
+        const SOURCES: usize = 64;
+        let dictionary: ArrayRef = Arc::new(DictionaryArray::<Int8Type>::try_new(
+            Int8Array::from(vec![0, 1, 0, 2]),
+            Arc::new(StringArray::from(vec![Some("a"), None, Some("b")])),
+        )?);
+        let right = vec![
+            Arc::new(Float64Array::from(vec![
+                Some(-0.0),
+                Some(2.0),
+                None,
+                Some(0.0),
+            ])) as ArrayRef,
+            Arc::clone(&dictionary),
+        ];
+        let left = vec![
+            Arc::new(Float64Array::from(vec![
+                Some(0.0),
+                Some(2.0),
+                None,
+                Some(-0.0),
+            ])) as ArrayRef,
+            dictionary,
+        ];
+        let probe = PreparedJoinKeyProbe::new(&right, NullEquality::NullEqualsNothing);
+        let normalized_values = probe.columns[0]
+            .0
+            .as_primitive::<Float64Type>()
+            .values()
+            .inner()
+            .clone();
+        assert!(
+            !normalized_values
+                .ptr_eq(right[0].as_primitive::<Float64Type>().values().inner())
+        );
+        let dictionary_nulls = probe.columns[1].1.as_ref().unwrap().buffer().clone();
+        let value_refs = normalized_values.strong_count();
+        let null_refs = dictionary_nulls.strong_count();
+        let options = vec![SortOptions::default(); right.len()];
+        for _ in 0..SOURCES {
+            let comparator =
+                JoinKeyComparator::new_with_prepared_probe(&left, &probe, &options)?;
+            assert_eq!(normalized_values.strong_count(), value_refs + 1);
+            assert_eq!(dictionary_nulls.strong_count(), null_refs + 1);
+            assert!(comparator.is_equal(0, 0));
+            assert!(!comparator.is_equal(1, 1));
+            assert!(!comparator.is_equal(2, 2));
+            assert!(comparator.is_equal(3, 3));
+            drop(comparator);
+            assert_eq!(normalized_values.strong_count(), value_refs);
+            assert_eq!(dictionary_nulls.strong_count(), null_refs);
+        }
+
+        let batches = vec![left; SOURCES];
+        let contiguous = (0..right.len())
+            .map(|column| {
+                Ok(compute::concat(
+                    &batches
+                        .iter()
+                        .map(|keys| keys[column].as_ref())
+                        .collect::<Vec<_>>(),
+                )?)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut build_indices = Vec::new();
+        let mut probe_indices = Vec::new();
+        let mut gather = Vec::new();
+        for round in 0..4 {
+            for source in (0..SOURCES).rev() {
+                let row = (source + round) % 4;
+                build_indices.push((source * 4 + row) as u64);
+                probe_indices.push(round as u32);
+                gather.push((source + 1, row));
+            }
+        }
+        let build_indices = UInt64Array::from(build_indices);
+        let probe_indices = UInt32Array::from(probe_indices);
+        for null_equality in [
+            NullEquality::NullEqualsNothing,
+            NullEquality::NullEqualsNull,
+        ] {
+            let expected = super::super::equal_rows_arr(
+                &build_indices,
+                &probe_indices,
+                &contiguous,
+                &right,
+                null_equality,
+            )?;
+            let actual = equal_rows_arr_multi(
+                &build_indices,
+                &probe_indices,
+                &batches,
+                &right,
+                &gather,
+                null_equality,
+            )?;
+            assert_eq!(actual, expected);
         }
         Ok(())
     }

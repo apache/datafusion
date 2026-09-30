@@ -116,10 +116,16 @@ impl MultiBatchBuildData {
         reservation.try_grow(metadata_size)?;
         metrics.build_mem_used.add(metadata_size);
 
-        let values = batches
-            .iter()
-            .map(|batch| evaluate_expressions_to_arrays(on_left, batch))
-            .collect::<Result<Vec<_>>>()?;
+        // Fallible iterator collection can grow geometrically. Allocate the
+        // capacities admitted above, including the common single-key case.
+        let mut values = Vec::with_capacity(batches.len());
+        for batch in &batches {
+            let mut keys = Vec::with_capacity(on_left.len());
+            for expr in on_left {
+                keys.push(expr.evaluate(batch)?.into_array_of_size(batch.num_rows())?);
+            }
+            values.push(keys);
+        }
         let mut batch_offsets = Vec::with_capacity(batches.len() + 1);
         batch_offsets.push(0);
         for batch in &batches {
@@ -363,6 +369,40 @@ mod tests {
             counter.count_batch(batch);
         }
         counter.memory_usage()
+    }
+
+    #[test]
+    fn key_metadata_capacities_match_reservation() -> Result<()> {
+        // Non-power-of-two counts expose spare capacity from fallible collect.
+        for (batch_count, key_count) in [(1, 1), (3, 1), (5, 3)] {
+            let batches = (0..batch_count)
+                .map(|_| primitive_batch(1025))
+                .collect::<Vec<_>>();
+            let keys = (0..key_count)
+                .map(|_| Arc::new(Column::new("a", 0)) as PhysicalExprRef)
+                .collect::<Vec<_>>();
+            let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(4096));
+            let reservation = MemoryConsumer::new("test").register(&pool);
+            let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
+            let data =
+                MultiBatchBuildData::try_new(batches, &keys, &reservation, &metrics)?;
+            let metadata_bytes = data.batches.capacity() * size_of::<RecordBatch>()
+                + data.values.capacity() * size_of::<Vec<ArrayRef>>()
+                + data
+                    .values
+                    .iter()
+                    .map(|keys| keys.capacity())
+                    .sum::<usize>()
+                    * size_of::<ArrayRef>()
+                + (data.batch_offsets.capacity() + data.row_directory.capacity())
+                    * size_of::<usize>();
+            assert_eq!(reservation.size(), metadata_bytes);
+            assert_eq!(metrics.build_mem_used.value(), metadata_bytes);
+            drop(data);
+            drop(reservation);
+            assert_eq!(pool.reserved(), 0);
+        }
+        Ok(())
     }
 
     #[test]
