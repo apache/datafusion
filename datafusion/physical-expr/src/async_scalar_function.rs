@@ -162,7 +162,8 @@ impl AsyncFuncExpr {
                             return_field: Arc::clone(&self.return_field),
                             config_options: Arc::clone(&config_options),
                         })
-                        .await?,
+                        .await?
+                        .into_array_of_size(current_batch.num_rows())?,
                 );
             }
         } else {
@@ -181,20 +182,13 @@ impl AsyncFuncExpr {
                         return_field: Arc::clone(&self.return_field),
                         config_options: Arc::clone(&config_options),
                     })
-                    .await?,
+                    .await?
+                    .into_array_of_size(batch.num_rows())?,
             );
         }
 
-        let datas = result_batches
-            .into_iter()
-            .map(|cv| match cv {
-                ColumnarValue::Array(arr) => Ok(arr),
-                ColumnarValue::Scalar(scalar) => Ok(scalar.to_array_of_size(1)?),
-            })
-            .collect::<Result<Vec<_>>>()?;
-
         // Get references to the arrays as dyn Array to call concat
-        let dyn_arrays = datas
+        let dyn_arrays = result_batches
             .iter()
             .map(|arr| arr as &dyn arrow::array::Array)
             .collect::<Vec<_>>();
