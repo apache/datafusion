@@ -3479,6 +3479,32 @@ select avg(c1), arrow_typeof(avg(c1)) from t;
 statement ok
 drop table t;
 
+# avg_decimal_negative_scale
+statement ok
+create table t (k int, c1 decimal(10, -2)) as values
+  (1, arrow_cast(10000, 'Decimal128(10, -2)')),
+  (1, arrow_cast(20000, 'Decimal128(10, -2)')),
+  (2, arrow_cast(20000, 'Decimal128(10, -2)'));
+
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from t where k = 1;
+----
+15000.00 Decimal128(14, 2)
+
+query IR rowsort
+select k, avg(c1) from t group by k;
+----
+1 15000.00
+2 20000.00
+
+query R
+select avg(distinct c1) from t;
+----
+15000.00
+
+statement ok
+drop table t;
+
 # avg_decimal_with_nulls
 statement ok
 create table t (c1 decimal(10, 0)) as values (1), (NULL), (3), (4), (5);
