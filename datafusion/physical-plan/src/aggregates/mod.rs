@@ -211,6 +211,8 @@ use topk::heap::is_supported_heap_type;
 
 mod aggregate_hash_table;
 mod aggregate_stream;
+mod bucketed_aggregation;
+mod final_buckets;
 pub mod group_values;
 mod grouped_hash_stream;
 mod grouped_topk_stream;

@@ -73,6 +73,22 @@ pub struct ByteViewGroupValueBuilder<B: ByteViewType> {
     /// Nulls
     nulls: NullBufferBuilder,
 
+    /// Keep the data buffers of the appended arrays instead of copying the
+    /// bytes of every new group value into [`Self::in_progress`].
+    ///
+    /// Only correct where the builder is known to be short lived compared to
+    /// the arrays it is fed, which is why it is off by default: an aggregation
+    /// that keeps one table for its whole input would pin every batch it has
+    /// seen. A bucketed final aggregation is the opposite case — a bucket's
+    /// rows already sit in one block that is dropped as soon as that bucket
+    /// has been aggregated — so it can keep the bytes where they are.
+    borrow_source: bool,
+
+    /// Data buffers of the array last appended, and where the first of them
+    /// went in [`Self::completed`], so rows of one array are mapped once
+    borrowed_source: Vec<Buffer>,
+    borrowed_base: u32,
+
     /// phantom data so the type requires `<B>`
     _phantom: PhantomData<B>,
 }
@@ -91,6 +107,9 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             completed: Vec::new(),
             max_block_size: BYTE_VIEW_MAX_BLOCK_SIZE,
             nulls: NullBufferBuilder::empty(),
+            borrow_source: false,
+            borrowed_source: Vec::new(),
+            borrowed_base: 0,
             _phantom: PhantomData {},
         }
     }
@@ -99,6 +118,36 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
     fn with_max_block_size(mut self, max_block_size: usize) -> Self {
         self.max_block_size = max_block_size;
         self
+    }
+
+    /// See [`Self::borrow_source`]
+    pub fn with_borrow_source(mut self, borrow_source: bool) -> Self {
+        self.borrow_source = borrow_source;
+        self
+    }
+
+    /// Keeps the data buffers of `array` and returns where the first of them
+    /// went in [`Self::completed`], so that a view of `array` can be stored as
+    /// it is, with only its buffer index moved.
+    ///
+    /// Arrays that arrive one after another usually share their buffers (they
+    /// are batches of one coalesced block), so the last array's buffers are
+    /// remembered and compared by address.
+    fn borrow_buffers(&mut self, buffers: &[Buffer]) -> u32 {
+        let same = self.borrowed_source.len() == buffers.len()
+            && self
+                .borrowed_source
+                .iter()
+                .zip(buffers)
+                .all(|(held, new)| held.ptr_eq(new));
+        if same {
+            return self.borrowed_base;
+        }
+        self.borrowed_base = self.completed.len() as u32;
+        self.completed.extend(buffers.iter().cloned());
+        self.borrowed_source.clear();
+        self.borrowed_source.extend(buffers.iter().cloned());
+        self.borrowed_base
     }
 
     fn equal_to_inner(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
@@ -119,7 +168,18 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
         // Not null row case
         self.nulls.append_non_null();
-        self.do_append_val_inner(arr, row);
+        let base = self.source_base(arr);
+        self.do_append_val_inner(arr, row, base);
+    }
+
+    /// Where the buffers of `array` live in [`Self::completed`], or 0 when
+    /// this builder copies the values it is given.
+    fn source_base(&mut self, array: &GenericByteViewArray<B>) -> u32 {
+        if self.borrow_source {
+            self.borrow_buffers(array.data_buffers())
+        } else {
+            0
+        }
     }
 
     // Don't inline to keep the code small and give LLVM the best chance of
@@ -186,8 +246,9 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
                             rows.len()
                         )
                     })?;
+                    let base = self.source_base(arr);
                     for &row in rows {
-                        self.do_append_val_inner(arr, row);
+                        self.do_append_val_inner(arr, row, base);
                     }
                 }
             }
@@ -201,8 +262,12 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         Ok(())
     }
 
-    fn do_append_val_inner(&mut self, array: &GenericByteViewArray<B>, row: usize)
-    where
+    fn do_append_val_inner(
+        &mut self,
+        array: &GenericByteViewArray<B>,
+        row: usize,
+        source_base: u32,
+    ) where
         B: ByteViewType,
     {
         // SAFETY: the caller ensures `row` is valid
@@ -212,6 +277,12 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         if len <= 12 {
             // Inline value: the view is already self-contained, push as-is.
             self.views.push(view);
+        } else if self.borrow_source {
+            // The bytes stay in the buffer they arrived in, which this builder
+            // now keeps: only the buffer index has to move.
+            let mut src = ByteView::from(view);
+            src.buffer_index += source_base;
+            self.views.push(src.as_u128());
         } else {
             // Non-inline value: copy the buffer data and construct a new view
             // that points into our own buffers, reusing the source prefix.
@@ -231,6 +302,30 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             }
             .as_u128();
             self.views.push(new_view);
+        }
+    }
+
+    /// [`Self::take_n_inner`] for a builder that borrows its values.
+    ///
+    /// The rows that stay behind may point at any of the kept buffers, so none
+    /// of them is released here; they go when the builder does.
+    fn take_n_borrowed(&mut self, n: usize) -> ArrayRef {
+        let null_buffer = self.nulls.take_n(n);
+        let taken_views = ScalarBuffer::from(self.views[..n].to_vec());
+        self.views.drain(..n);
+
+        let mut buffers = self.completed.clone();
+        if !self.in_progress.is_empty() {
+            buffers.push(Buffer::from_slice_ref(&self.in_progress));
+        }
+
+        // Safety: the views were made by this builder over `buffers`
+        unsafe {
+            Arc::new(GenericByteViewArray::<B>::new_unchecked(
+                taken_views,
+                buffers.into(),
+                null_buffer,
+            ))
         }
     }
 
@@ -350,6 +445,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
     fn values_preserving_inner(&self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
         selection.validate_num_groups(self.len())?;
+        // The copy is deliberate: the result outlives this builder's inputs
         let mut selected = Self::new().with_max_block_size(self.max_block_size);
         for index in selection.iter() {
             let is_null = self.nulls.is_null(index);
@@ -413,9 +509,15 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
         // The `n == len` case, we need to take all
         if self.len() == n {
-            let new_builder = Self::new().with_max_block_size(self.max_block_size);
+            let new_builder = Self::new()
+                .with_max_block_size(self.max_block_size)
+                .with_borrow_source(self.borrow_source);
             let cur_builder = replace(self, new_builder);
             return cur_builder.build_inner();
+        }
+
+        if self.borrow_source {
+            return self.take_n_borrowed(n);
         }
 
         // The `n < len` case
@@ -677,6 +779,71 @@ mod tests {
 
     fn to_vec(buf: &BooleanBufferBuilder) -> Vec<bool> {
         (0..buf.len()).map(|i| buf.get_bit(i)).collect()
+    }
+
+    /// A borrowing builder keeps the values of the arrays it was given, so
+    /// they must still be readable once those arrays are gone.
+    #[test]
+    fn borrowed_values_outlive_their_input() {
+        let mut builder =
+            ByteViewGroupValueBuilder::<StringViewType>::new().with_borrow_source(true);
+        let mut expected = Vec::new();
+        for batch in 0..3 {
+            let values: Vec<Option<String>> = (0..8)
+                .map(|i| {
+                    (i % 4 != 0).then(|| {
+                        format!("batch {batch} value {i} padded well past twelve bytes")
+                    })
+                })
+                .collect();
+            let array: ArrayRef = Arc::new(StringViewArray::from(values.clone()));
+            let rows: Vec<usize> = (0..array.len()).collect();
+            builder.vectorized_append(&array, &rows).unwrap();
+            expected.extend(values);
+            // the input is dropped here, while its bytes are still referenced
+        }
+
+        let built = Box::new(builder).build();
+        let output = built.as_string_view();
+        assert_eq!(built.len(), expected.len());
+        for (row, want) in expected.iter().enumerate() {
+            match want {
+                Some(want) => {
+                    assert!(built.is_valid(row));
+                    assert_eq!(output.value(row), want);
+                }
+                None => assert!(built.is_null(row)),
+            }
+        }
+    }
+
+    /// `take_n` cannot release the buffers of a borrowing builder, because a
+    /// row that stays behind may live in any of them.
+    #[test]
+    fn borrowed_take_n_keeps_every_row_readable() {
+        let mut builder =
+            ByteViewGroupValueBuilder::<StringViewType>::new().with_borrow_source(true);
+        let values: Vec<Option<String>> = (0..10)
+            .map(|i| Some(format!("value {i} that is longer than twelve bytes")))
+            .collect();
+        let array: ArrayRef = Arc::new(StringViewArray::from(values.clone()));
+        let rows: Vec<usize> = (0..array.len()).collect();
+        builder.vectorized_append(&array, &rows).unwrap();
+        drop(array);
+
+        let taken = builder.take_n(4);
+        assert_eq!(taken.len(), 4);
+        let taken_view = taken.as_string_view();
+        for (row, want) in values.iter().take(4).enumerate() {
+            assert_eq!(taken_view.value(row), want.as_ref().unwrap());
+        }
+
+        let rest = Box::new(builder).build();
+        assert_eq!(rest.len(), 6);
+        let rest_view = rest.as_string_view();
+        for (row, want) in values.iter().skip(4).enumerate() {
+            assert_eq!(rest_view.value(row), want.as_ref().unwrap());
+        }
     }
 
     #[test]

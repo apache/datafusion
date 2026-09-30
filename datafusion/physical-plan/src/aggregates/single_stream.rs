@@ -29,8 +29,10 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
 
 use super::aggregate_hash_table::{
-    AggregateHashTable, OrderedAggregateTableMetrics, SingleMarker,
+    AggregateHashTable, FinalMarker, OrderedAggregateTableMetrics, SingleMarker,
 };
+use super::bucketed_aggregation::BucketedAggregation;
+use super::final_buckets::FinalBuckets;
 use super::spill::AggregateSpill;
 use super::{AggregateExec, create_schema};
 use crate::aggregates::AggregateMode;
@@ -130,6 +132,21 @@ pub(crate) struct SingleHashAggregateStream {
     /// See the "Optimization: DISTINCT LIMIT Soft Limit" section in
     /// [`SingleHashAggregateStream`] for details.
     group_values_soft_limit: Option<usize>,
+
+    /// `None` unless `hash_aggregate_bucket_threshold` is set and applies
+    /// (see [`Self::new`] for when it does).
+    ///
+    /// The hash table aggregates the raw input as always, but each time it
+    /// reaches the threshold its state is moved into hash buckets and it
+    /// starts over, so it stays small. The buckets hold partial state and
+    /// are aggregated one after another once the input ends.
+    bucketing: Option<Arc<BucketedAggregation>>,
+    /// Set once the hash table has been moved into buckets for the first time
+    buckets: Option<Box<FinalBuckets>>,
+    /// Reused by the compaction of buckets
+    compaction_table: Box<Option<AggregateHashTable<FinalMarker>>>,
+    /// Rows aggregated by the hash table since it was last emptied
+    table_rows: usize,
 }
 
 /// See comments at `poll_next()` for details.
@@ -219,6 +236,50 @@ impl SingleHashAggregateStream {
                 .with_can_spill(can_spill)
                 .register(context.memory_pool());
 
+        let group_values_soft_limit = agg.limit_options().map(|config| config.limit());
+        let bucket_threshold = context
+            .session_config()
+            .options()
+            .execution
+            .hash_aggregate_bucket_threshold;
+        // A soft limit stops reading input early, which bucketing cannot do.
+        //
+        // Only `SinglePartitioned` aggregations are bucketed, which run next to
+        // the aggregations of the other partitions: there it measured the same
+        // run time with half the peak memory. A lone `Single` aggregation has
+        // the machine to itself, so its large table suffers less, and
+        // aggregating every row twice (in the table, then in a bucket)
+        // measured 6-25% slower.
+        let bucketing = (bucket_threshold > 0
+            && agg.mode == AggregateMode::SinglePartitioned
+            && group_values_soft_limit.is_none()
+            && BucketedAggregation::supports_state(
+                &state_schema,
+                agg.group_by().num_group_exprs(),
+            ))
+        .then(|| {
+            // The buckets hold evaluated group keys and partial states, which
+            // are merged the same way spilled state is replayed: see
+            // `SingleSpillContext::final_agg`.
+            let mut final_agg = agg.clone();
+            final_agg.mode = match agg.mode {
+                AggregateMode::SinglePartitioned => AggregateMode::FinalPartitioned,
+                _ => AggregateMode::Final,
+            };
+            *final_agg.group_by_mut() = Arc::new(agg.group_by().as_final());
+            Arc::new(BucketedAggregation::new(
+                bucket_threshold,
+                final_agg,
+                partition,
+                batch_size,
+                Arc::clone(&state_schema),
+                Arc::clone(&schema),
+                spill_context
+                    .as_ref()
+                    .map(|context| context.spill_manager().clone()),
+            ))
+        });
+
         Ok(Self {
             schema,
             input,
@@ -228,7 +289,11 @@ impl SingleHashAggregateStream {
                 hash_table,
                 spill_context,
             }),
-            group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
+            group_values_soft_limit,
+            bucketing,
+            buckets: None,
+            compaction_table: Box::new(None),
+            table_rows: 0,
         })
     }
 
@@ -303,6 +368,7 @@ impl SingleHashAggregateStream {
                 if let Err(e) = result {
                     return Self::break_with_err(e);
                 }
+                self.table_rows += batch.num_rows();
 
                 // Soft group limits are usually small and rarely coincide with
                 // spilling. Once spilling has occurred, skip this optimization to
@@ -316,6 +382,27 @@ impl SingleHashAggregateStream {
                 if self.hit_soft_group_limit(&hash_table) && !spilled {
                     return self
                         .close_input_and_prepare_output(hash_table, spill_context);
+                }
+
+                // Once sorted runs exist the output comes from merging them, so
+                // bucketing only starts from a table that has never spilled.
+                if !spilled && let Some(bucketing) = self.bucketing.clone() {
+                    let timer = elapsed_compute.timer();
+                    let result =
+                        self.keep_table_in_buckets(&bucketing, &mut hash_table, false);
+                    timer.done();
+                    match result {
+                        Ok(true) => {
+                            return ControlFlow::Continue(
+                                SingleHashAggregateState::ReadingInput {
+                                    hash_table,
+                                    spill_context,
+                                },
+                            );
+                        }
+                        Ok(false) => {}
+                        Err(e) => return Self::break_with_err(e),
+                    }
                 }
 
                 // Check memory reservation, and potentially spill.
@@ -364,6 +451,61 @@ impl SingleHashAggregateStream {
         }
     }
 
+    /// Moves the state of `hash_table` into the buckets when it has reached
+    /// the bucket threshold (or, with `flush`, whatever it holds) and reserves
+    /// the memory of the table and the buckets, spilling buckets as needed.
+    ///
+    /// Returns false while bucketing has not started, in which case the
+    /// caller accounts for the table as usual.
+    fn keep_table_in_buckets(
+        &mut self,
+        bucketing: &BucketedAggregation,
+        hash_table: &mut AggregateHashTable<SingleMarker>,
+        flush: bool,
+    ) -> Result<bool> {
+        let num_groups = hash_table.building_group_count();
+        let table_full = num_groups >= bucketing.threshold();
+        if self.buckets.is_none() && !table_full {
+            return Ok(false);
+        }
+
+        if (table_full || flush) && num_groups > 0 {
+            let kept = num_groups as f64 / self.table_rows.max(1) as f64;
+            self.table_rows = 0;
+            let state = hash_table.take_state_batch()?;
+            match self.buckets.as_mut() {
+                Some(buckets) => {
+                    if let Some(state) = state {
+                        buckets.route(&state)?;
+                    }
+                }
+                None => self.buckets = Some(Box::new(bucketing.split(0, state, kept)?)),
+            }
+        }
+
+        let buckets = self.buckets.as_mut().expect("bucketing has started");
+        bucketing.compact(buckets, &mut self.compaction_table)?;
+        match bucketing.reserve(&self.reservation, hash_table.memory_size(), buckets) {
+            Ok(()) => Ok(true),
+            // The table is what cannot be spilled: move it into the buckets too
+            Err(DataFusionError::ResourcesExhausted(_))
+                if hash_table.building_group_count() > 0 =>
+            {
+                self.table_rows = 0;
+                if let Some(state) = hash_table.take_state_batch()? {
+                    buckets.route(&state)?;
+                }
+                bucketing.reserve(
+                    &self.reservation,
+                    hash_table.memory_size(),
+                    buckets,
+                )?;
+                Ok(true)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// See comments in [`Self::group_values_soft_limit`] for details.
     fn hit_soft_group_limit(
         &self,
@@ -386,6 +528,31 @@ impl SingleHashAggregateStream {
         spill_context: Option<Box<AggregateSpill>>,
     ) -> SingleHashAggregateStateTransition {
         self.close_input();
+
+        if self.buckets.is_some()
+            && let Some(bucketing) = self.bucketing.clone()
+        {
+            // The rest of the table joins the buckets, which are then
+            // aggregated one after another.
+            if let Err(e) = self.keep_table_in_buckets(&bucketing, &mut hash_table, true)
+            {
+                return Self::break_with_err(e);
+            }
+            drop(hash_table);
+            *self.compaction_table = None;
+            let buckets = *self.buckets.take().expect("bucketing has started");
+            let empty = self.reservation.new_empty();
+            let reservation = std::mem::replace(&mut self.reservation, empty);
+            let stream = bucketing.output_stream(
+                buckets,
+                reservation,
+                self.baseline_metrics.clone(),
+            );
+            return ControlFlow::Continue(SingleHashAggregateState::MergingSpills {
+                stream,
+            });
+        }
+
         match spill_context {
             Some(spill_context) if spill_context.has_spills() => {
                 ControlFlow::Continue(SingleHashAggregateState::PreparingMergeInput {
