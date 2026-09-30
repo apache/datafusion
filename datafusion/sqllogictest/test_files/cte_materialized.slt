@@ -486,6 +486,376 @@ WITH u AS MATERIALIZED (SELECT c1 FROM unbounded_t) SELECT 1
 statement ok
 DROP TABLE unbounded_t;
 
+# Behaviour matrix. Each case runs with MATERIALIZED, NOT MATERIALIZED and no
+# keyword, and pins the current result. For a volatile body, count(DISTINCT x)
+# over two references is 1 when the references share one evaluation and 2 when
+# each reference evaluates the body.
+#
+# Two references in the same query.
+# MATERIALIZED
+query I rowsort
+WITH m AS MATERIALIZED (SELECT random() AS x)
+SELECT count(DISTINCT x) FROM (SELECT x FROM m UNION ALL SELECT x FROM m)
+----
+1
+
+# NOT MATERIALIZED
+query I rowsort
+WITH m AS NOT MATERIALIZED (SELECT random() AS x)
+SELECT count(DISTINCT x) FROM (SELECT x FROM m UNION ALL SELECT x FROM m)
+----
+2
+
+# no keyword
+query I rowsort
+WITH m AS (SELECT random() AS x)
+SELECT count(DISTINCT x) FROM (SELECT x FROM m UNION ALL SELECT x FROM m)
+----
+2
+
+# One reference in a scalar subquery, one in the main query.
+# MATERIALIZED
+query I rowsort
+WITH m AS MATERIALIZED (SELECT random() AS x)
+SELECT count(DISTINCT x) FROM (SELECT (SELECT x FROM m) AS x UNION ALL SELECT x FROM m)
+----
+1
+
+# NOT MATERIALIZED
+query I rowsort
+WITH m AS NOT MATERIALIZED (SELECT random() AS x)
+SELECT count(DISTINCT x) FROM (SELECT (SELECT x FROM m) AS x UNION ALL SELECT x FROM m)
+----
+2
+
+# no keyword
+query I rowsort
+WITH m AS (SELECT random() AS x)
+SELECT count(DISTINCT x) FROM (SELECT (SELECT x FROM m) AS x UNION ALL SELECT x FROM m)
+----
+2
+
+# One reference in an IN subquery, one in the main query.
+# MATERIALIZED
+query I rowsort
+WITH m AS MATERIALIZED (SELECT random() AS x)
+SELECT count(*) FROM m WHERE x IN (SELECT x FROM m)
+----
+1
+
+# NOT MATERIALIZED
+query I rowsort
+WITH m AS NOT MATERIALIZED (SELECT random() AS x)
+SELECT count(*) FROM m WHERE x IN (SELECT x FROM m)
+----
+0
+
+# no keyword
+query I rowsort
+WITH m AS (SELECT random() AS x)
+SELECT count(*) FROM m WHERE x IN (SELECT x FROM m)
+----
+0
+
+# A volatile scalar subquery inside the body. An uncorrelated scalar subquery
+# is evaluated once per query, so the result is 1 in every mode.
+# MATERIALIZED
+query I rowsort
+WITH m AS MATERIALIZED (SELECT (SELECT random()) AS x)
+SELECT count(DISTINCT x) FROM (SELECT x FROM m UNION ALL SELECT x FROM m)
+----
+1
+
+# NOT MATERIALIZED
+query I rowsort
+WITH m AS NOT MATERIALIZED (SELECT (SELECT random()) AS x)
+SELECT count(DISTINCT x) FROM (SELECT x FROM m UNION ALL SELECT x FROM m)
+----
+1
+
+# no keyword
+query I rowsort
+WITH m AS (SELECT (SELECT random()) AS x)
+SELECT count(DISTINCT x) FROM (SELECT x FROM m UNION ALL SELECT x FROM m)
+----
+1
+
+# A CTE whose body declares another CTE.
+# MATERIALIZED
+query I rowsort
+WITH a AS MATERIALIZED (
+  WITH b AS MATERIALIZED (SELECT random() AS x) SELECT x FROM b UNION ALL SELECT x FROM b)
+SELECT count(DISTINCT x) FROM (SELECT x FROM a UNION ALL SELECT x FROM a)
+----
+1
+
+# NOT MATERIALIZED
+query I rowsort
+WITH a AS NOT MATERIALIZED (
+  WITH b AS NOT MATERIALIZED (SELECT random() AS x) SELECT x FROM b UNION ALL SELECT x FROM b)
+SELECT count(DISTINCT x) FROM (SELECT x FROM a UNION ALL SELECT x FROM a)
+----
+4
+
+# no keyword
+query I rowsort
+WITH a AS (
+  WITH b AS (SELECT random() AS x) SELECT x FROM b UNION ALL SELECT x FROM b)
+SELECT count(DISTINCT x) FROM (SELECT x FROM a UNION ALL SELECT x FROM a)
+----
+4
+
+# Uncorrelated EXISTS, IN and scalar subqueries inside the body.
+# MATERIALIZED
+query I rowsort
+WITH m AS MATERIALIZED (
+  SELECT k FROM t
+  WHERE EXISTS (SELECT 1 FROM t t2 WHERE t2.k > 3)
+    AND k IN (SELECT k FROM t WHERE v > 10)
+    AND v < (SELECT max(v) FROM t))
+SELECT k FROM m
+----
+2
+3
+
+# NOT MATERIALIZED
+query I rowsort
+WITH m AS NOT MATERIALIZED (
+  SELECT k FROM t
+  WHERE EXISTS (SELECT 1 FROM t t2 WHERE t2.k > 3)
+    AND k IN (SELECT k FROM t WHERE v > 10)
+    AND v < (SELECT max(v) FROM t))
+SELECT k FROM m
+----
+2
+3
+
+# no keyword
+query I rowsort
+WITH m AS (
+  SELECT k FROM t
+  WHERE EXISTS (SELECT 1 FROM t t2 WHERE t2.k > 3)
+    AND k IN (SELECT k FROM t WHERE v > 10)
+    AND v < (SELECT max(v) FROM t))
+SELECT k FROM m
+----
+2
+3
+
+# A correlated body in an EXISTS subquery (the MATERIALIZED case is above).
+# NOT MATERIALIZED
+query I rowsort
+SELECT k FROM t WHERE EXISTS (
+  WITH r AS NOT MATERIALIZED (SELECT k AS rk FROM t t2 WHERE t2.k = t.k + 1)
+  SELECT 1 FROM r)
+----
+1
+2
+3
+
+# no keyword
+query I rowsort
+SELECT k FROM t WHERE EXISTS (
+  WITH r AS (SELECT k AS rk FROM t t2 WHERE t2.k = t.k + 1)
+  SELECT 1 FROM r)
+----
+1
+2
+3
+
+# Recursive queries.
+#
+# A volatile CTE declared outside a recursive CTE and read by its recursive
+# term. Materialized, it is evaluated once for the whole query.
+# MATERIALIZED
+query I rowsort
+WITH RECURSIVE
+  m AS MATERIALIZED (SELECT random() AS x),
+  r AS (
+    SELECT 1 AS n, x FROM m
+    UNION ALL
+    SELECT n + 1, m.x FROM r, m WHERE n < 4)
+SELECT count(DISTINCT x) FROM r
+----
+1
+
+# NOT MATERIALIZED
+query I rowsort
+WITH RECURSIVE
+  m AS NOT MATERIALIZED (SELECT random() AS x),
+  r AS (
+    SELECT 1 AS n, x FROM m
+    UNION ALL
+    SELECT n + 1, m.x FROM r, m WHERE n < 4)
+SELECT count(DISTINCT x) FROM r
+----
+4
+
+# no keyword
+query I rowsort
+WITH RECURSIVE
+  m AS (SELECT random() AS x),
+  r AS (
+    SELECT 1 AS n, x FROM m
+    UNION ALL
+    SELECT n + 1, m.x FROM r, m WHERE n < 4)
+SELECT count(DISTINCT x) FROM r
+----
+4
+
+# A volatile CTE declared inside the recursive term. The recursive term is a
+# new query in each iteration, so the CTE is evaluated again in each iteration.
+# MATERIALIZED
+query I rowsort
+WITH RECURSIVE r AS (
+  SELECT 1 AS n, 0.0 AS x
+  UNION ALL
+  SELECT n + 1, s.x FROM r, (WITH m AS MATERIALIZED (SELECT random() AS x) SELECT x FROM m) s
+  WHERE n < 4)
+SELECT count(DISTINCT x) FROM r WHERE n > 1
+----
+3
+
+# NOT MATERIALIZED
+query I rowsort
+WITH RECURSIVE r AS (
+  SELECT 1 AS n, 0.0 AS x
+  UNION ALL
+  SELECT n + 1, s.x FROM r, (WITH m AS NOT MATERIALIZED (SELECT random() AS x) SELECT x FROM m) s
+  WHERE n < 4)
+SELECT count(DISTINCT x) FROM r WHERE n > 1
+----
+3
+
+# no keyword
+query I rowsort
+WITH RECURSIVE r AS (
+  SELECT 1 AS n, 0.0 AS x
+  UNION ALL
+  SELECT n + 1, s.x FROM r, (WITH m AS (SELECT random() AS x) SELECT x FROM m) s
+  WHERE n < 4)
+SELECT count(DISTINCT x) FROM r WHERE n > 1
+----
+3
+
+# Inside one iteration, two references to a CTE declared in the recursive term.
+# MATERIALIZED
+query IB rowsort
+WITH RECURSIVE r AS (
+  SELECT 1 AS n, true AS same
+  UNION ALL
+  SELECT n + 1, s.same FROM r,
+    (WITH m AS MATERIALIZED (SELECT random() AS x) SELECT a.x = b.x AS same FROM m a, m b) s
+  WHERE n < 4)
+SELECT n, same FROM r
+----
+1 true
+2 true
+3 true
+4 true
+
+# NOT MATERIALIZED
+query IB rowsort
+WITH RECURSIVE r AS (
+  SELECT 1 AS n, true AS same
+  UNION ALL
+  SELECT n + 1, s.same FROM r,
+    (WITH m AS NOT MATERIALIZED (SELECT random() AS x) SELECT a.x = b.x AS same FROM m a, m b) s
+  WHERE n < 4)
+SELECT n, same FROM r
+----
+1 true
+2 false
+3 false
+4 false
+
+# no keyword
+query IB rowsort
+WITH RECURSIVE r AS (
+  SELECT 1 AS n, true AS same
+  UNION ALL
+  SELECT n + 1, s.same FROM r,
+    (WITH m AS (SELECT random() AS x) SELECT a.x = b.x AS same FROM m a, m b) s
+  WHERE n < 4)
+SELECT n, same FROM r
+----
+1 true
+2 false
+3 false
+4 false
+
+# A CTE in the recursive term whose body reads the recursive CTE. The body
+# must be evaluated again in each iteration, or the query does not terminate.
+# MATERIALIZED
+query I rowsort
+WITH RECURSIVE r AS (
+  SELECT 1 AS n
+  UNION ALL
+  SELECT n + 1 FROM (WITH m AS MATERIALIZED (SELECT n FROM r) SELECT n FROM m) WHERE n < 4)
+SELECT n FROM r
+----
+1
+2
+3
+4
+
+# NOT MATERIALIZED
+query I rowsort
+WITH RECURSIVE r AS (
+  SELECT 1 AS n
+  UNION ALL
+  SELECT n + 1 FROM (WITH m AS NOT MATERIALIZED (SELECT n FROM r) SELECT n FROM m) WHERE n < 4)
+SELECT n FROM r
+----
+1
+2
+3
+4
+
+# no keyword
+query I rowsort
+WITH RECURSIVE r AS (
+  SELECT 1 AS n
+  UNION ALL
+  SELECT n + 1 FROM (WITH m AS (SELECT n FROM r) SELECT n FROM m) WHERE n < 4)
+SELECT n FROM r
+----
+1
+2
+3
+4
+
+# A recursive CTE referenced two times, with a volatile static term.
+# MATERIALIZED
+query I rowsort
+WITH RECURSIVE r AS MATERIALIZED (
+  SELECT random() AS x, 1 AS n
+  UNION ALL
+  SELECT x, n + 1 FROM r WHERE n < 3)
+SELECT count(DISTINCT x) FROM (SELECT x FROM r UNION ALL SELECT x FROM r)
+----
+1
+
+# NOT MATERIALIZED
+query I rowsort
+WITH RECURSIVE r AS NOT MATERIALIZED (
+  SELECT random() AS x, 1 AS n
+  UNION ALL
+  SELECT x, n + 1 FROM r WHERE n < 3)
+SELECT count(DISTINCT x) FROM (SELECT x FROM r UNION ALL SELECT x FROM r)
+----
+2
+
+# no keyword
+query I rowsort
+WITH RECURSIVE r AS (
+  SELECT random() AS x, 1 AS n
+  UNION ALL
+  SELECT x, n + 1 FROM r WHERE n < 3)
+SELECT count(DISTINCT x) FROM (SELECT x FROM r UNION ALL SELECT x FROM r)
+----
+2
+
 statement ok
 DROP TABLE t;
 
