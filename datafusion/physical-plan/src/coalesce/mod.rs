@@ -120,6 +120,33 @@ impl LimitedBatchCoalescer {
         Ok(PushBatchStatus::Continue)
     }
 
+    /// Emit an already materialized batch without copying it into another batch.
+    /// Buffered rows are emitted first, preserving order. Fetch-clipped batches
+    /// keep the ordinary buffering policy because their visible output is smaller.
+    pub(crate) fn push_batch_without_coalescing(
+        &mut self,
+        batch: RecordBatch,
+    ) -> Result<PushBatchStatus> {
+        assert_or_internal_err!(
+            !self.finished,
+            "LimitedBatchCoalescer: cannot push batch after finish"
+        );
+        if batch.num_rows() == 0
+            || self.fetch.is_some_and(|fetch| {
+                fetch.saturating_sub(self.total_rows) < batch.num_rows()
+            })
+        {
+            return self.push_batch(batch);
+        }
+
+        self.inner.finish_buffered_batch()?;
+        let threshold = self.inner.biggest_coalesce_batch_size();
+        self.inner.set_biggest_coalesce_batch_size(Some(0));
+        let result = self.push_batch(batch);
+        self.inner.set_biggest_coalesce_batch_size(threshold);
+        result
+    }
+
     /// Pushes the next [`RecordBatch`] into the coalescer after applying `filter`,
     /// avoiding a separate materialization pass compared to calling
     /// [`filter_record_batch`] followed by [`Self::push_batch`].
@@ -270,6 +297,124 @@ mod tests {
             .with_fetch(Some(7))
             .with_expected_output_sizes(vec![7])
             .run()
+    }
+
+    #[test]
+    fn bypass_preserves_order_and_restores_coalescing() -> Result<()> {
+        let prefix = uint32_batch(0..2);
+        let large = uint32_batch(2..6);
+        let mut coalescer = LimitedBatchCoalescer::new(prefix.schema(), 16, None);
+        coalescer.push_batch(prefix)?;
+        coalescer.push_batch_without_coalescing(large.clone())?;
+        assert_next_batch_values(&mut coalescer, vec![0, 1]);
+        let output = coalescer.next_completed_batch().unwrap();
+        assert!(Arc::ptr_eq(output.column(0), large.column(0)));
+        assert_eq!(coalescer.inner.biggest_coalesce_batch_size(), Some(8));
+
+        coalescer.push_batch(uint32_batch(6..8))?;
+        coalescer.push_batch(uint32_batch(8..10))?;
+        assert!(coalescer.next_completed_batch().is_none());
+        coalescer.finish()?;
+        assert_next_batch_values(&mut coalescer, vec![6, 7, 8, 9]);
+        assert!(coalescer.next_completed_batch().is_none());
+        assert!(coalescer.push_batch_without_coalescing(large).is_err());
+        assert_eq!(coalescer.inner.biggest_coalesce_batch_size(), Some(8));
+        Ok(())
+    }
+
+    #[test]
+    fn bypass_preserves_fetch_boundaries() -> Result<()> {
+        for fetch in [0, 1, 2, 4, 6, 8] {
+            let prefix = uint32_batch(0..2);
+            let mut coalescer =
+                LimitedBatchCoalescer::new(prefix.schema(), 16, Some(fetch));
+            coalescer.push_batch(prefix)?;
+            if coalescer.push_batch_without_coalescing(uint32_batch(2..6))?
+                == PushBatchStatus::Continue
+            {
+                coalescer.push_batch(uint32_batch(6..10))?;
+            }
+            assert_eq!(coalescer.inner.biggest_coalesce_batch_size(), Some(8));
+            assert_eq!(coalescer.total_rows, fetch);
+            coalescer.finish()?;
+            let mut actual = Vec::new();
+            let mut sizes = Vec::new();
+            while let Some(batch) = coalescer.next_completed_batch() {
+                sizes.push(batch.num_rows());
+                actual.extend_from_slice(
+                    batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<UInt32Array>()
+                        .unwrap()
+                        .values(),
+                );
+            }
+            assert_eq!(actual, (0..fetch as u32).collect::<Vec<_>>());
+            let expected_sizes = match fetch {
+                0 => vec![],
+                1 | 2 | 4 => vec![fetch],
+                6 => vec![2, 4],
+                8 => vec![2, 4, 2],
+                _ => unreachable!(),
+            };
+            assert_eq!(sizes, expected_sizes);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn bypass_empty_and_zero_column_batches() -> Result<()> {
+        use arrow::record_batch::RecordBatchOptions;
+
+        let prefix = uint32_batch(0..2);
+        let mut coalescer = LimitedBatchCoalescer::new(prefix.schema(), 16, None);
+        coalescer.push_batch(prefix)?;
+        coalescer.push_batch_without_coalescing(uint32_batch(2..2))?;
+        assert!(coalescer.next_completed_batch().is_none());
+        coalescer.finish()?;
+        assert_next_batch_values(&mut coalescer, vec![0, 1]);
+
+        let schema = Arc::new(Schema::empty());
+        let batch = RecordBatch::try_new_with_options(
+            Arc::clone(&schema),
+            vec![],
+            &RecordBatchOptions::new().with_row_count(Some(3)),
+        )?;
+        let mut coalescer = LimitedBatchCoalescer::new(schema, 16, None);
+        coalescer.push_batch_without_coalescing(batch)?;
+        assert_eq!(coalescer.next_completed_batch().unwrap().num_rows(), 3);
+        assert_eq!(coalescer.total_rows, 3);
+        assert_eq!(coalescer.inner.biggest_coalesce_batch_size(), Some(8));
+        Ok(())
+    }
+
+    #[test]
+    fn bypass_flush_error_preserves_threshold() -> Result<()> {
+        use arrow::array::{DictionaryArray, Int8Array, StringArray};
+        use arrow::datatypes::Int8Type;
+
+        let batch = |start: i32| {
+            let dictionary = DictionaryArray::<Int8Type>::new(
+                Int8Array::from_iter_values(0..100),
+                Arc::new(StringArray::from_iter_values(
+                    (start..start + 100).map(|value| value.to_string()),
+                )),
+            );
+            RecordBatch::try_from_iter(vec![("d", Arc::new(dictionary) as _)])
+        };
+        let first = batch(0)?;
+        let mut coalescer = LimitedBatchCoalescer::new(first.schema(), 1000, None);
+        coalescer.push_batch(first)?;
+        coalescer.push_batch(batch(100)?)?;
+        assert!(
+            coalescer
+                .push_batch_without_coalescing(batch(200)?)
+                .is_err()
+        );
+        assert_eq!(coalescer.inner.biggest_coalesce_batch_size(), Some(500));
+        assert_eq!(coalescer.total_rows, 200);
+        Ok(())
     }
 
     #[test]

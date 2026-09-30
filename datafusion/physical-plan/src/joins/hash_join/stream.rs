@@ -48,9 +48,9 @@ use crate::{
     },
 };
 
-use arrow::array::{Array, ArrayRef, UInt32Array, UInt64Array};
+use arrow::array::{Array, ArrayRef, AsArray, UInt32Array, UInt64Array};
 use arrow::buffer::{BooleanBuffer, NullBuffer};
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, internal_datafusion_err, internal_err,
@@ -58,8 +58,57 @@ use datafusion_common::{
 use datafusion_physical_expr::PhysicalExprRef;
 
 use datafusion_common::hash_utils::RandomState;
+use datafusion_common::utils::offset_span_len;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::{Stream, StreamExt, ready};
+
+/// Avoid a second materialization for byte-large output from retained builds.
+const MIN_OUTPUT_COALESCE_COPY_BYTES: usize = 2 * 1024 * 1024;
+
+fn push_join_output(
+    output: &mut LimitedBatchCoalescer,
+    batch: RecordBatch,
+    multi_batch: bool,
+) -> Result<PushBatchStatus> {
+    let mut copy_bytes = 0usize;
+    let bypass = multi_batch
+        && batch.columns().iter().any(|array| {
+            // This allocation-free lower bound omits offsets, null metadata and
+            // encoded/nested children. View payload buffers remain shared.
+            let data_type = array.data_type();
+            let bytes = if let Some(width) = data_type.primitive_width() {
+                array.len().saturating_mul(width)
+            } else {
+                match data_type {
+                    DataType::Boolean => array.len().div_ceil(8),
+                    DataType::Utf8 => offset_span_len(array.as_string::<i32>().offsets()),
+                    DataType::LargeUtf8 => {
+                        offset_span_len(array.as_string::<i64>().offsets())
+                    }
+                    DataType::Binary => {
+                        offset_span_len(array.as_binary::<i32>().offsets())
+                    }
+                    DataType::LargeBinary => {
+                        offset_span_len(array.as_binary::<i64>().offsets())
+                    }
+                    DataType::Utf8View | DataType::BinaryView => {
+                        array.len().saturating_mul(size_of::<u128>())
+                    }
+                    DataType::FixedSizeBinary(width) => array
+                        .len()
+                        .saturating_mul(usize::try_from(*width).unwrap_or_default()),
+                    _ => 0,
+                }
+            };
+            copy_bytes = copy_bytes.saturating_add(bytes);
+            copy_bytes >= MIN_OUTPUT_COALESCE_COPY_BYTES
+        });
+    if bypass {
+        output.push_batch_without_coalescing(batch)
+    } else {
+        output.push_batch(batch)
+    }
+}
 
 /// Represents build-side of hash join.
 pub(super) enum BuildSide {
@@ -1065,7 +1114,12 @@ impl HashJoinStream {
             )?
         };
 
-        let push_status = self.output_buffer.push_batch(batch)?;
+        let push_status = push_join_output(
+            &mut self.output_buffer,
+            batch,
+            self.join_type != JoinType::RightMark
+                && build_side.left_data.multi_batch().is_some(),
+        )?;
 
         timer.done();
 
@@ -1231,7 +1285,11 @@ impl HashJoinStream {
                     mark_column.as_ref(),
                 )?
             };
-            let push_status = self.output_buffer.push_batch(batch)?;
+            let push_status = push_join_output(
+                &mut self.output_buffer,
+                batch,
+                build_side.left_data.multi_batch().is_some(),
+            )?;
 
             // If limit reached, finish the coalescer and stop emitting
             if push_status == PushBatchStatus::LimitReached {
@@ -1747,6 +1805,93 @@ mod tests {
         PushdownStrategy, completed_partitions_for_test,
         make_partitioned_accumulator_for_test,
     };
+    use arrow::array::{
+        DictionaryArray, Int32Array, ListArray, StringArray, StringViewArray,
+    };
+    use arrow::buffer::OffsetBuffer;
+    use arrow::datatypes::{Field, Int32Type};
+
+    #[test]
+    fn large_multi_batch_output_bypasses_only_at_copy_threshold() -> Result<()> {
+        for bytes in [
+            MIN_OUTPUT_COALESCE_COPY_BYTES - 1,
+            MIN_OUTPUT_COALESCE_COPY_BYTES,
+        ] {
+            for multi_batch in [false, true] {
+                let array: ArrayRef =
+                    Arc::new(StringArray::from(vec!["x".repeat(bytes)]));
+                let batch =
+                    RecordBatch::try_from_iter(vec![("payload", Arc::clone(&array))])?;
+                let mut output = LimitedBatchCoalescer::new(batch.schema(), 128, None);
+                push_join_output(&mut output, batch, multi_batch)?;
+                let bypass = multi_batch && bytes >= MIN_OUTPUT_COALESCE_COPY_BYTES;
+                if bypass {
+                    let batch = output.next_completed_batch().unwrap();
+                    assert!(Arc::ptr_eq(batch.column(0), &array));
+                } else {
+                    assert!(output.next_completed_batch().is_none());
+                    output.finish()?;
+                    assert_eq!(output.next_completed_batch().unwrap().num_rows(), 1);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn output_copy_policy_ignores_retained_child_and_view_buffers() -> Result<()> {
+        let large = "x".repeat(MIN_OUTPUT_COALESCE_COPY_BYTES);
+        let strings: ArrayRef =
+            Arc::new(StringArray::from(vec![large.as_str(), "small"]));
+        let views: ArrayRef =
+            Arc::new(StringViewArray::from(vec![large.as_str(), "small"]));
+        let dictionary: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![1]),
+            Arc::clone(&strings),
+        ));
+        let list: ArrayRef = Arc::new(ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Utf8, false)),
+            OffsetBuffer::new(vec![1i32, 2].into()),
+            Arc::clone(&strings),
+            None,
+        ));
+        for array in [strings.slice(1, 1), views.slice(1, 1), dictionary, list] {
+            assert!(array.get_buffer_memory_size() >= MIN_OUTPUT_COALESCE_COPY_BYTES);
+            let batch = RecordBatch::try_from_iter(vec![("payload", array)])?;
+            let mut output = LimitedBatchCoalescer::new(batch.schema(), 128, None);
+            push_join_output(&mut output, batch, true)?;
+            assert!(output.next_completed_batch().is_none());
+            output.finish()?;
+            assert_eq!(output.next_completed_batch().unwrap().num_rows(), 1);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn output_copy_policy_counts_columns_but_not_zero_column_rows() -> Result<()> {
+        let payload =
+            StringArray::from(vec!["x".repeat(MIN_OUTPUT_COALESCE_COPY_BYTES / 2)]);
+        let batch = RecordBatch::try_from_iter(vec![
+            ("a", Arc::new(payload.clone()) as ArrayRef),
+            ("b", Arc::new(payload) as ArrayRef),
+        ])?;
+        let mut output = LimitedBatchCoalescer::new(batch.schema(), 128, None);
+        push_join_output(&mut output, batch, true)?;
+        assert_eq!(output.next_completed_batch().unwrap().num_rows(), 1);
+
+        let schema = Arc::new(Schema::empty());
+        let batch = RecordBatch::try_new_with_options(
+            Arc::clone(&schema),
+            vec![],
+            &arrow::record_batch::RecordBatchOptions::new().with_row_count(Some(1)),
+        )?;
+        let mut output = LimitedBatchCoalescer::new(schema, 128, None);
+        push_join_output(&mut output, batch, true)?;
+        assert!(output.next_completed_batch().is_none());
+        output.finish()?;
+        assert_eq!(output.next_completed_batch().unwrap().num_rows(), 1);
+        Ok(())
+    }
 
     fn empty_build_data(partition_id: usize) -> PartitionBuildData {
         PartitionBuildData::Partitioned {

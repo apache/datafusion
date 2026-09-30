@@ -3631,6 +3631,139 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn retained_build_output_avoids_wide_recoalescing() -> Result<()> {
+        use datafusion_physical_expr::expressions::col;
+
+        const WIDTH: usize = 128 * 1024;
+        let payload = "x".repeat(WIDTH);
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("payload", DataType::Utf8, false),
+        ]));
+        let batches = [0..256, 256..512]
+            .into_iter()
+            .map(|ids| {
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(Int32Array::from_iter_values(ids.clone())),
+                        Arc::new(StringArray::from_iter_values(
+                            ids.map(|_| payload.as_str()),
+                        )),
+                    ],
+                )
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut counter = RecordBatchMemoryCounter::new();
+        for batch in &batches {
+            counter.count_batch(batch);
+        }
+        assert!(counter.memory_usage() > 64 * 1024 * 1024);
+
+        let probe_schema = Arc::new(Schema::new(vec![Field::new(
+            "probe",
+            DataType::Int32,
+            false,
+        )]));
+        for use_phj in [false, true] {
+            // The left join leaves one small probe result buffered before its
+            // wide unmatched tail. Fetch clips that tail back to ordinary output.
+            for (join_type, probes, fetch, compact, sizes) in [
+                (JoinType::Inner, vec![0..16; 4], None, false, vec![16; 4]),
+                (JoinType::Inner, vec![0..1; 4], None, false, vec![4]),
+                (JoinType::Inner, vec![0..16; 4], None, true, vec![64]),
+                (
+                    JoinType::Left,
+                    vec![0..478, 478..479],
+                    None,
+                    false,
+                    vec![128, 128, 128, 94, 1, 33],
+                ),
+                (
+                    JoinType::Left,
+                    vec![0..478, 478..479],
+                    Some(483),
+                    false,
+                    vec![128, 128, 128, 94, 5],
+                ),
+            ] {
+                let build_batches = if compact {
+                    batches.iter().map(|batch| batch.slice(0, 16)).collect()
+                } else {
+                    batches.clone()
+                };
+                let probe_batches = probes
+                    .iter()
+                    .cloned()
+                    .map(|ids| {
+                        RecordBatch::try_new(
+                            Arc::clone(&probe_schema),
+                            vec![Arc::new(Int32Array::from_iter_values(ids))],
+                        )
+                    })
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                let join = HashJoinExecBuilder::new(
+                    TestMemoryExec::try_new_exec(
+                        &[build_batches],
+                        Arc::clone(&schema),
+                        None,
+                    )?,
+                    TestMemoryExec::try_new_exec(
+                        &[probe_batches],
+                        Arc::clone(&probe_schema),
+                        None,
+                    )?,
+                    vec![(col("id", &schema)?, col("probe", &probe_schema)?)],
+                    join_type,
+                )
+                .with_partition_mode(PartitionMode::CollectLeft)
+                .with_projection(Some(vec![0, 1]))
+                .with_fetch(fetch)
+                .build()?;
+                let context = prepare_task_ctx(128, use_phj);
+                let output = common::collect(join.execute(0, context)?).await?;
+                assert_eq!(
+                    output.iter().map(RecordBatch::num_rows).collect::<Vec<_>>(),
+                    sizes
+                );
+                let actual = output
+                    .iter()
+                    .flat_map(|batch| {
+                        batch
+                            .column(0)
+                            .as_primitive::<Int32Type>()
+                            .values()
+                            .iter()
+                            .copied()
+                    })
+                    .collect::<Vec<_>>();
+                let expected = if join_type == JoinType::Left {
+                    (0..fetch.unwrap_or(512) as i32).collect::<Vec<_>>()
+                } else {
+                    probes.into_iter().flatten().collect::<Vec<_>>()
+                };
+                assert_eq!(actual, expected);
+                for batch in &output {
+                    assert!(
+                        batch
+                            .column(1)
+                            .as_string::<i32>()
+                            .iter()
+                            .all(|value| value == Some(payload.as_str()))
+                    );
+                }
+                let mut future = join.left_fut.try_once(|| {
+                    Ok(async { internal_err!("build already initialized") })
+                })?;
+                let build = futures::future::poll_fn(|cx| future.get_shared(cx)).await?;
+                assert_eq!(build.multi_batch().is_some(), !compact);
+                assert_phj_used(&join.metrics().unwrap(), use_phj);
+            }
+        }
+        Ok(())
+    }
+
     #[derive(Debug)]
     struct PartitionedTestExec {
         cache: Arc<PlanProperties>,
