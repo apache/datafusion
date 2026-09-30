@@ -23,8 +23,12 @@
 //! supports it (see [`use_blocked_keys`]), and each aggregate uses a
 //! [`BlockedGroupsAccumulator`] when it has one. Everything else keeps today's
 //! flat [`GroupValues`] and [`GroupsAccumulator`], unchanged, so any mix of
-//! flat and blocked parts works, and a table with no blocked part runs exactly
-//! the flat code.
+//! flat and blocked parts works.
+//!
+//! The keys choose independently of the aggregates, so blocked keys can be
+//! mixed with only flat aggregates (e.g. `SELECT k, sum(v) GROUP BY k` with a
+//! primitive `k`). Only a table whose keys and aggregates are all flat runs
+//! exactly the flat code.
 //!
 //! Mixing needs two things:
 //! * Group indices in both layouts: the keys produce their own layout, and
