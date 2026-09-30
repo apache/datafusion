@@ -304,7 +304,6 @@ fn split_for_spill(
 }
 
 /// The size recorded for `batch` when a bounded spill file writes it unsplit.
-#[cfg(test)]
 pub(crate) fn bounded_spill_size(batch: &RecordBatch) -> Result<usize> {
     Ok(compact_piece(batch)?.1)
 }
@@ -376,13 +375,8 @@ fn compact_array(array: &ArrayRef) -> Result<ArrayRef> {
         DataType::Utf8View => compact_view(array.as_string_view()),
         DataType::BinaryView => compact_view(array.as_binary_view()),
         DataType::Dictionary(_, _) => {
-            let dictionary = array.as_any_dictionary();
-            let used = used_dictionary_values(dictionary);
-            let gc = if used.count_set_bits() < dictionary.values().len() {
-                garbage_collect_any_dictionary(dictionary)?
-            } else {
-                Arc::clone(array)
-            };
+            // Returns the array as it is when every value is used.
+            let gc = garbage_collect_any_dictionary(array.as_any_dictionary())?;
             let dictionary = gc.as_any_dictionary();
             dictionary.with_values(compact_array(dictionary.values())?)
         }
@@ -493,7 +487,9 @@ fn compact_list_view<O: OffsetSizeTrait>(
     let mut offsets = Vec::with_capacity(list.len());
     let mut position = 0;
     for (offset, size) in list.value_offsets().iter().zip(list.value_sizes()) {
-        offsets.push(O::usize_as(position));
+        offsets.push(O::from_usize(position).ok_or_else(|| {
+            exec_datafusion_err!("list view offset {position} overflows while spilling")
+        })?);
         let (offset, size) = (offset.as_usize(), size.as_usize());
         if size > 0 {
             values.try_extend(0, offset, offset + size)?;
@@ -635,6 +631,10 @@ fn used_dictionary_values(dictionary: &dyn AnyDictionaryArray) -> BooleanBuffer 
     let values_len = dictionary.values().len();
     let mut used = BooleanBufferBuilder::new(values_len);
     used.append_n(values_len, false);
+    if values_len == 0 {
+        // `normalized_keys` asserts that there are values.
+        return used.finish();
+    }
     let keys = dictionary.keys();
     for (row, key) in dictionary.normalized_keys().into_iter().enumerate() {
         if key < values_len && keys.is_valid(row) {
@@ -1204,6 +1204,39 @@ mod tests {
         let (size, rows) = file.append_batch_async_with_stats(&batch).await?;
         assert!(size <= 4 * WIDE + WIDE / 2);
         assert_eq!(rows, 4);
+        Ok(())
+    }
+
+    /// A piece whose dictionary keys are all null has no used values. After the unused
+    /// values are dropped the dictionary is empty, which must not panic when measured.
+    #[tokio::test]
+    async fn dictionary_with_only_null_keys() -> Result<()> {
+        let values = StringArray::from_iter_values((0..64).map(wide_value));
+        let keys = Int32Array::from_iter((0..64).map(|i| (i >= 8).then_some(i)));
+        let dictionary: ArrayRef =
+            Arc::new(DictionaryArray::try_new(keys, Arc::new(values))?);
+        let fields =
+            Fields::from(vec![Field::new("d", dictionary_type(DataType::Utf8), true)]);
+        let structs: ArrayRef = Arc::new(StructArray::try_new(
+            fields.clone(),
+            vec![Arc::clone(&dictionary)],
+            None,
+        )?);
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("d", dictionary_type(DataType::Utf8), true),
+            Field::new("s", DataType::Struct(fields), false),
+        ]));
+        let batch = RecordBatch::try_new(schema, vec![dictionary, structs])?;
+        // Pieces of 8 rows: the first has only null keys.
+        let budget = 20 * WIDE;
+        for batch in [batch.slice(0, 8), batch.slice(0, 0), batch] {
+            if batch.num_rows() == 0 {
+                split_for_spill(&batch, Some(budget))?;
+                continue;
+            }
+            let (read, _) = round_trip(std::slice::from_ref(&batch), budget).await?;
+            assert_same_rows(&read, &[batch]);
+        }
         Ok(())
     }
 }

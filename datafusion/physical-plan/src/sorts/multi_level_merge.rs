@@ -33,8 +33,6 @@ use datafusion_execution::memory_pool::{MemoryReservation, MergeMemoryPool};
 use crate::sorts::builder::try_grow_reservation_to_at_least;
 use crate::sorts::sort::get_reserved_bytes_for_record_batch_size;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
-use crate::spill::gc_view_arrays;
-use crate::spill::spill_manager::GetSlicedSize;
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -761,9 +759,10 @@ impl MultiLevelMergeBuilder {
                 let batch = batch?;
                 max_batch_rows = max_batch_rows.max(batch.num_rows());
                 all_singletons &= batch.num_rows() == 1;
-                decoded_max = decoded_max.max(batch.get_sliced_size()?);
+                decoded_max =
+                    decoded_max.max(self.spill_manager.decoded_batch_size(&batch)?);
                 if batch.num_rows() == 1
-                    && gc_view_arrays(&batch)?.get_sliced_size()? >= old_max
+                    && self.spill_manager.spilled_batch_size(&batch)? >= old_max
                 {
                     max_is_singleton = true;
                     break;
@@ -980,6 +979,8 @@ mod tests {
     use super::*;
 
     use crate::expressions::PhysicalSortExpr;
+    use crate::spill::gc_view_arrays;
+    use crate::spill::spill_manager::GetSlicedSize;
     use arrow::array::{AsArray, Int64Array};
     use arrow::compute::concat_batches;
     use arrow::datatypes::{DataType, Field, Int64Type, Schema};

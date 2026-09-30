@@ -22,6 +22,7 @@ use crate::coop::cooperative;
 use crate::{common::spawn_buffered, metrics::SpillMetrics};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::utils::memory::get_record_batch_memory_size;
 use datafusion_common::{DataFusionError, Result, config::SpillCompression};
 use datafusion_execution::SendableRecordBatchStream;
 use datafusion_execution::runtime_env::RuntimeEnv;
@@ -78,6 +79,26 @@ impl SpillManager {
     pub(crate) fn with_max_batch_bytes(mut self, max_batch_bytes: Option<usize>) -> Self {
         self.max_batch_bytes = max_batch_bytes;
         self
+    }
+
+    /// The size this manager records for `batch` when it writes it as one piece, the
+    /// same measure as the `max_record_batch_memory` it returns.
+    pub(crate) fn spilled_batch_size(&self, batch: &RecordBatch) -> Result<usize> {
+        match self.max_batch_bytes {
+            Some(_) => super::in_progress_spill_file::bounded_spill_size(batch),
+            None => super::gc_view_arrays(batch)?.get_sliced_size(),
+        }
+    }
+
+    /// The memory a batch read back from this manager's spill files holds, comparable
+    /// to [`Self::spilled_batch_size`]. A bounded manager records what the batch holds
+    /// after IPC decoding, where all buffers of a batch share one allocation, which
+    /// `get_sliced_size` would count once per view data buffer.
+    pub(crate) fn decoded_batch_size(&self, batch: &RecordBatch) -> Result<usize> {
+        match self.max_batch_bytes {
+            Some(_) => Ok(get_record_batch_memory_size(batch)),
+            None => batch.get_sliced_size(),
+        }
     }
 
     pub fn with_batch_read_buffer_capacity(
