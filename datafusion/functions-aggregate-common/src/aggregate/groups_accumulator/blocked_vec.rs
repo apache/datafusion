@@ -232,11 +232,14 @@ impl<T: Copy, const FIXED_BLOCK_SIZE: bool> BlockedVec<T, FIXED_BLOCK_SIZE> {
     /// `group_indices` must only point to the first `total_num_groups`
     /// groups, which is the contract of
     /// [`BlockedGroupsAccumulator::update_batch`] and
-    /// [`BlockedGroupsAccumulator::merge_batch`]. It is only checked in debug
-    /// builds, like the flat accumulators' unchecked indexing.
+    /// [`BlockedGroupsAccumulator::merge_batch`].
     ///
     /// [`BlockedGroupsAccumulator::update_batch`]: datafusion_expr_common::blocked_groups_accumulator::BlockedGroupsAccumulator::update_batch
     /// [`BlockedGroupsAccumulator::merge_batch`]: datafusion_expr_common::blocked_groups_accumulator::BlockedGroupsAccumulator::merge_batch
+    ///
+    /// # Panics
+    /// If an index in `group_indices` is not below `total_num_groups`.
+    /// if there is an index in block that is larger than block size
     pub fn update<F>(
         &mut self,
         total_num_groups: usize,
@@ -244,15 +247,38 @@ impl<T: Copy, const FIXED_BLOCK_SIZE: bool> BlockedVec<T, FIXED_BLOCK_SIZE> {
         group_indices: &[BlocksIndex],
         nulls: Option<&NullBuffer>,
         opt_filter: Option<&BooleanArray>,
-        mut update_fn: F,
+        update_fn: F,
     ) where
         F: FnMut(&mut T),
     {
         self.grow_to(total_num_groups, starting_value);
-        self.debug_assert_in_bounds(group_indices);
+        self.assert_in_bounds(group_indices);
+
+        // SAFETY: grown to `total_num_groups` and checked above
+        unsafe {
+            self.update_unchecked(group_indices, nulls, opt_filter, update_fn);
+        }
+    }
+
+    /// Same as [`Self::update`], but does not grow the vector and the caller guarantees that indices are in bounds.
+    ///
+    /// # Safety
+    /// The behavior is undefined if any of the following are true:
+    /// 1. `groups_indices` contain block index outside the number of blocks (e.g. you did not call `grow_to` first to the expected number of values)
+    /// 2. `groups_indices` index in block is larger than block size
+    /// 3. `groups_indices` index in block for last blocks is larger than the number of elements in the last block
+    pub unsafe fn update_unchecked<F>(
+        &mut self,
+        group_indices: &[BlocksIndex],
+        nulls: Option<&NullBuffer>,
+        opt_filter: Option<&BooleanArray>,
+        mut update_fn: F,
+    ) where
+        F: FnMut(&mut T),
+    {
         if let Some(block) = self.as_single_block_mut() {
             accumulate_blocked_indices(group_indices, nulls, opt_filter, |index| {
-                // SAFETY: indices are in bounds, see the method docs
+                // SAFETY: indices are in bounds, guaranteed by the caller
                 update_fn(unsafe { block.get_unchecked_mut(index.index_in_block()) })
             });
             return;
@@ -263,7 +289,7 @@ impl<T: Copy, const FIXED_BLOCK_SIZE: bool> BlockedVec<T, FIXED_BLOCK_SIZE> {
             let mut addrs = [std::ptr::null_mut::<T>(); RESOLVE_CHUNK];
             for chunk in group_indices.chunks(RESOLVE_CHUNK) {
                 for (addr, &index) in addrs.iter_mut().zip(chunk) {
-                    // SAFETY: indices are in bounds, see the method docs
+                    // SAFETY: indices are in bounds, guaranteed by the caller
                     *addr = unsafe { ptrs.ptr(index) };
                 }
                 for &addr in &addrs[..chunk.len()] {
@@ -274,7 +300,7 @@ impl<T: Copy, const FIXED_BLOCK_SIZE: bool> BlockedVec<T, FIXED_BLOCK_SIZE> {
             }
         } else {
             accumulate_blocked_indices(group_indices, nulls, opt_filter, |index| {
-                // SAFETY: indices are in bounds, see the method docs
+                // SAFETY: indices are in bounds, guaranteed by the caller
                 update_fn(unsafe { &mut *ptrs.ptr(index) })
             });
         }
@@ -289,18 +315,41 @@ impl<T: Copy, const FIXED_BLOCK_SIZE: bool> BlockedVec<T, FIXED_BLOCK_SIZE> {
     /// `group_indices` must only point to the first `total_num_groups`
     /// groups, which is the contract of
     /// [`BlockedGroupsAccumulator::update_batch`] and
-    /// [`BlockedGroupsAccumulator::merge_batch`]. It is only checked in debug
-    /// builds, like the flat accumulators' unchecked indexing.
+    /// [`BlockedGroupsAccumulator::merge_batch`].
     ///
     /// [`BlockedGroupsAccumulator::update_batch`]: datafusion_expr_common::blocked_groups_accumulator::BlockedGroupsAccumulator::update_batch
     /// [`BlockedGroupsAccumulator::merge_batch`]: datafusion_expr_common::blocked_groups_accumulator::BlockedGroupsAccumulator::merge_batch
     ///
     /// # Panics
-    /// If `values` and `group_indices` have different lengths.
+    /// If `values` and `group_indices` have different lengths, or an index in
+    /// `group_indices` is not below `total_num_groups`.
     pub fn update_with<V, F>(
         &mut self,
         total_num_groups: usize,
         starting_value: T,
+        group_indices: &[BlocksIndex],
+        values: &[V],
+        update_fn: F,
+    ) where
+        V: Copy,
+        F: FnMut(&mut T, V),
+    {
+        self.grow_to(total_num_groups, starting_value);
+        self.assert_in_bounds(group_indices);
+
+        // SAFETY: grown to `total_num_groups` and checked above
+        unsafe { self.update_with_unchecked(group_indices, values, update_fn) }
+    }
+
+    /// Same as [`Self::update_with`], but does not grow the vector and the caller guarantees that indices are in bounds.
+    ///
+    /// # Safety
+    /// The behavior is undefined if any of the following are true:
+    /// 1. `groups_indices` contain block index outside the number of blocks (e.g. you did not call `grow_to` first to the expected number of values)
+    /// 2. `groups_indices` index in block is larger than block size
+    /// 3. `groups_indices` index in block for last block is larger than the number of elements in the last block (e.g. you did not call `grow_to` first to the expected number of values)
+    pub unsafe fn update_with_unchecked<V, F>(
+        &mut self,
         group_indices: &[BlocksIndex],
         values: &[V],
         mut update_fn: F,
@@ -309,11 +358,9 @@ impl<T: Copy, const FIXED_BLOCK_SIZE: bool> BlockedVec<T, FIXED_BLOCK_SIZE> {
         F: FnMut(&mut T, V),
     {
         assert_eq!(group_indices.len(), values.len());
-        self.grow_to(total_num_groups, starting_value);
-        self.debug_assert_in_bounds(group_indices);
         if let Some(block) = self.as_single_block_mut() {
             for (&index, &value) in group_indices.iter().zip(values) {
-                // SAFETY: indices are in bounds, see the method docs
+                // SAFETY: indices are in bounds, guaranteed by the caller
                 update_fn(
                     unsafe { block.get_unchecked_mut(index.index_in_block()) },
                     value,
@@ -329,7 +376,7 @@ impl<T: Copy, const FIXED_BLOCK_SIZE: bool> BlockedVec<T, FIXED_BLOCK_SIZE> {
             .zip(values.chunks(RESOLVE_CHUNK))
         {
             for (addr, &index) in addrs.iter_mut().zip(indices) {
-                // SAFETY: indices are in bounds, see the method docs
+                // SAFETY: indices are in bounds, guaranteed by the caller
                 *addr = unsafe { ptrs.ptr(index) };
             }
             for (&addr, &value) in addrs.iter().zip(values) {
@@ -340,15 +387,13 @@ impl<T: Copy, const FIXED_BLOCK_SIZE: bool> BlockedVec<T, FIXED_BLOCK_SIZE> {
         }
     }
 
-    /// Checks, in debug builds only, that every index points to an element.
+    /// Checks that every index points to an element, so the update loops
+    /// can index without bounds checks. Every block but the last holds
+    /// `block_size` elements, see [`BlocksIndex::all_in_bounds`].
     #[inline]
-    fn debug_assert_in_bounds(&self, group_indices: &[BlocksIndex]) {
-        debug_assert!(
-            group_indices.iter().all(|index| {
-                self.blocks
-                    .get(index.block_index())
-                    .is_some_and(|block| index.index_in_block() < block.len())
-            }),
+    fn assert_in_bounds(&self, group_indices: &[BlocksIndex]) {
+        assert!(
+            BlocksIndex::all_in_bounds(group_indices, self.block_size, self.len),
             "group index out of bounds"
         );
     }
@@ -672,5 +717,19 @@ mod tests {
     #[should_panic(expected = "block_size must be positive")]
     fn zero_block_size_panics() {
         let _ = BlockedVec::<i64>::new(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "group index out of bounds")]
+    fn update_out_of_bounds_panics() {
+        let mut v = BlockedVec::<u64>::new(4);
+        v.update(1, 0, &[BlocksIndex::new(0, 1)], None, None, |v| *v += 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "group index out of bounds")]
+    fn update_with_out_of_bounds_panics() {
+        let mut v = BlockedVec::<u64>::new(4);
+        v.update_with(6, 0, &[BlocksIndex::new(0, 4)], &[1], |v, x| *v += x);
     }
 }

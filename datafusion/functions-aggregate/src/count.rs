@@ -892,16 +892,18 @@ impl BlockedGroupsAccumulator for BlockedCountGroupsAccumulator {
         let values = &values[0];
         let nulls = values.logical_nulls().filter(|n| n.null_count() > 0);
 
-        // Add one to each group's counter for each non null, non
-        // filtered value
-        self.counts.update(
-            total_num_groups,
-            0,
-            group_indices,
-            nulls.as_ref(),
-            opt_filter,
-            |count| *count += 1,
-        );
+        self.counts.grow_to(total_num_groups, 0);
+
+        // Add one to each group's counter for each non null, non filtered value
+        // SAFETY: group_index is guaranteed to be in bounds and less than total_num_groups
+        unsafe {
+            self.counts.update_unchecked(
+                group_indices,
+                nulls.as_ref(),
+                opt_filter,
+                |count| *count += 1,
+            );
+        }
         Ok(())
     }
 

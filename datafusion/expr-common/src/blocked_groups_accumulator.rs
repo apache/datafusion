@@ -78,6 +78,37 @@ impl BlocksIndex {
         self.block_index() * block_size + self.index_in_block()
     }
 
+    /// Returns `true` if every index in `indices` points to an existing group
+    /// in storage that holds `len` groups in blocks of `block_size`, where
+    /// every block is full except maybe the last one.
+    ///
+    /// For example, with `block_size = 4` and `len = 10` the blocks hold 4, 4
+    /// and 2 groups, so `(2, 1)` is valid, but `(2, 2)`, `(3, 0)` and `(0, 4)`
+    /// are not.
+    pub fn all_in_bounds(indices: &[Self], block_size: usize, len: usize) -> bool {
+        let Some(last_group) = len.checked_sub(1) else {
+            return indices.is_empty();
+        };
+        let last = Self::from_flat(last_group, block_size);
+
+        // A single pass without a branch per index, so it is vectorized
+        let (max, or) = indices
+            .iter()
+            .fold((0, 0), |(max, or), index| (max.max(index.0), or | index.0));
+
+        // Indices order by block, then position, so an index is valid exactly
+        // when it is not after the last group and its position is below
+        // `block_size`
+        let positions_in_block = if block_size.is_power_of_two() {
+            (or as u32 as usize) < block_size
+        } else {
+            indices
+                .iter()
+                .all(|index| index.index_in_block() < block_size)
+        };
+        max <= last.0 && positions_in_block
+    }
+
     /// Writes [`Self::from_flat`] of every index in `flat` to `out`,
     /// replacing its contents.
     pub fn from_flat_slice(flat: &[usize], block_size: usize, out: &mut Vec<Self>) {
@@ -212,6 +243,34 @@ pub trait BlockedGroupsAccumulator: Send + Any {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn all_in_bounds() {
+        let in_bounds = |indices: &[(usize, usize)], block_size, len| {
+            let indices: Vec<_> = indices
+                .iter()
+                .map(|&(b, i)| BlocksIndex::new(b, i))
+                .collect();
+            BlocksIndex::all_in_bounds(&indices, block_size, len)
+        };
+
+        // Blocks of 4, 4 and 2 groups
+        assert!(in_bounds(&[(0, 0), (1, 3), (2, 1)], 4, 10));
+        // After the last group of the last block
+        assert!(!in_bounds(&[(0, 0), (2, 2)], 4, 10));
+        // After the last block
+        assert!(!in_bounds(&[(3, 0)], 4, 10));
+        // Position past the end of a full block
+        assert!(!in_bounds(&[(0, 4)], 4, 10));
+
+        // Block size that is not a power of two: blocks of 3, 3 and 1 groups
+        assert!(in_bounds(&[(1, 2), (2, 0)], 3, 7));
+        assert!(!in_bounds(&[(0, 3)], 3, 7));
+
+        // No groups
+        assert!(in_bounds(&[], 4, 0));
+        assert!(!in_bounds(&[(0, 0)], 4, 0));
+    }
 
     #[test]
     fn from_emit_to_splits_into_blocks() {

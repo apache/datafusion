@@ -60,15 +60,11 @@ use crate::aggregates::order::GroupOrdering;
 
 use super::common::{AggregateAccumulator, MaterializeAccumulatorFn};
 
-/// Smallest block, in groups. Tables with fewer groups stay in a single,
-/// flat block and run exactly the flat hot loops.
-const MIN_BLOCK_SIZE: usize = 1 << 18;
-
 /// Number of groups per block for every blocked part of a table.
 ///
-/// At least `batch_size`, so an output batch never spans two blocks.
+/// `batch_size`, so every block is emitted as one output batch.
 pub(in crate::aggregates) fn block_size(batch_size: usize) -> usize {
-    batch_size.max(MIN_BLOCK_SIZE).next_power_of_two()
+    batch_size
 }
 
 /// Returns `true` if the group keys of `agg` can be stored in blocks: a single
@@ -476,9 +472,7 @@ mod tests {
         assert!(!state.accumulators[1].storage().is_blocked());
         // min needs flat indices while the keys produce blocked ones
         assert!(state.keys.convert);
-        assert_eq!(block_size(8192), MIN_BLOCK_SIZE);
-        // The block always holds at least one output batch.
-        assert_eq!(block_size(MIN_BLOCK_SIZE + 1), MIN_BLOCK_SIZE * 2);
+        assert_eq!(block_size(8192), 8192);
         Ok(())
     }
 
@@ -486,13 +480,14 @@ mod tests {
     /// sliced at the block boundaries, and their memory is counted once.
     #[test]
     fn mixed_storage_output_is_aligned_and_counted_once() -> Result<()> {
-        let num_groups = MIN_BLOCK_SIZE + 10;
+        let batch_size = 100;
+        let num_groups = batch_size + 10;
         let input = RecordBatch::try_new(
             schema(),
             vec![Arc::new(Int64Array::from_iter_values(0..num_groups as i64))],
         )?;
         let agg = aggregate_exec(vec![], &[count_udaf(), min_udaf()])?;
-        let mut table = single_table(&agg, 8192)?;
+        let mut table = single_table(&agg, batch_size)?;
         table.aggregate_batch(&input)?;
 
         let batches = table.take_state_batches()?;
@@ -501,7 +496,7 @@ mod tests {
                 .iter()
                 .map(|b| b.batch.num_rows())
                 .collect::<Vec<_>>(),
-            vec![MIN_BLOCK_SIZE, 10]
+            vec![batch_size, 10]
         );
         for b in &batches {
             let keys = b.batch.column(0).as_primitive::<Int64Type>().values();
@@ -527,8 +522,8 @@ mod tests {
     /// released once all its slices are handed out.
     #[test]
     fn output_releases_state_block_by_block() -> Result<()> {
-        let num_groups = MIN_BLOCK_SIZE + 10;
-        let batch_size = 8192;
+        let batch_size = 100;
+        let num_groups = 4 * batch_size + 10;
         let input = RecordBatch::try_new(
             schema(),
             vec![Arc::new(Int64Array::from_iter_values(0..num_groups as i64))],
@@ -563,15 +558,14 @@ mod tests {
 
         keys.sort_unstable();
         assert_eq!(keys, (0..num_groups as i64).collect::<Vec<_>>());
-        // While the first block is sliced, the table still holds the second
-        // block; once the first block is handed out, only the small second
-        // block (10 groups) remains.
-        let first_block_batches = MIN_BLOCK_SIZE / batch_size;
-        assert!(memory_per_batch[0] <= memory_while_building);
+        // Each output batch is one block, released once handed out, so only
+        // the last, small block (10 groups) remains after the full blocks.
+        assert_eq!(memory_per_batch.len(), 5);
+        assert!(memory_per_batch.is_sorted_by(|a, b| a > b));
         assert!(
-            memory_per_batch[first_block_batches] < memory_while_building / 4,
-            "memory after the first block: {}, while building: {memory_while_building}",
-            memory_per_batch[first_block_batches]
+            memory_per_batch[3] < memory_while_building / 4,
+            "memory after the full blocks: {}, while building: {memory_while_building}",
+            memory_per_batch[3]
         );
         assert_eq!(*memory_per_batch.last().unwrap(), 0);
         Ok(())
