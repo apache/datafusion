@@ -1455,6 +1455,23 @@ pub fn normalize_float_zero(array: &ArrayRef) -> ArrayRef {
     const NEG_ZERO_F32_BITS: u32 = (-0.0_f32).to_bits();
     const NEG_ZERO_F64_BITS: u64 = (-0.0_f64).to_bits();
     match array.data_type() {
+        DataType::Dictionary(_, value_type) if has_float_leaf(value_type) => {
+            // Reuse the keys: rebuilding dictionary ArrayData revalidates each key.
+            let dictionary = array.as_any_dictionary();
+            let values = normalize_float_zero(dictionary.values());
+            if Arc::ptr_eq(&values, dictionary.values()) {
+                Arc::clone(array)
+            } else {
+                // Drop redundant validity so dictionary comparisons can reuse
+                // the keys' nulls instead of scanning every key for value nulls.
+                let values = if values.nulls().is_some_and(|n| n.null_count() == 0) {
+                    make_array(values.to_data())
+                } else {
+                    values
+                };
+                dictionary.with_values(values)
+            }
+        }
         DataType::Float32 => {
             let arr: &Float32Array = array.as_primitive::<Float32Type>();
             if !arr
@@ -1702,7 +1719,11 @@ mod tests {
         let keys = Int8Array::from(vec![Some(0), Some(1), None, Some(2)]);
         let array: ArrayRef = Arc::new(DictionaryArray::try_new(
             keys.clone(),
-            Arc::new(Float64Array::from(vec![-0.0, nan, 1.0])),
+            // Numeric casts can leave an all-valid bitmap on dictionary values.
+            Arc::new(Float64Array::new(
+                vec![-0.0, nan, 1.0].into(),
+                Some(NullBuffer::new_valid(3)),
+            )),
         )?);
 
         let normalized = normalize_float_zero(&array);
@@ -1712,6 +1733,12 @@ mod tests {
         assert_eq!(values.value(0).to_bits(), 0.0_f64.to_bits());
         assert_eq!(values.value(1).to_bits(), nan.to_bits());
         assert_eq!(values.value(2), 1.0);
+        assert!(values.nulls().is_none());
+        // Logical validity should reuse the keys' bitmap without scanning them.
+        assert_eq!(
+            dictionary.logical_nulls().unwrap().buffer().as_ptr(),
+            keys.nulls().unwrap().buffer().as_ptr()
+        );
 
         assert!(Arc::ptr_eq(&normalize_float_zero(&normalized), &normalized));
 
