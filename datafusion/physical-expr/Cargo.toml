@@ -114,3 +114,7 @@ ignored = ["half"]
 [[bench]]
 harness = false
 name = "equivalence_properties"
+
+[[bench]]
+harness = false
+name = "dictionary_float_zero"
