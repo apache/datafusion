@@ -19,6 +19,8 @@
 
 use std::sync::Arc;
 
+use arrow::array::Array;
+use arrow::compute::{SortColumn, concat, interleave_record_batch, lexsort_to_indices};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, internal_err};
@@ -228,6 +230,73 @@ impl AggregateSpill {
             self.spill_expr.clone(),
             self.batch_size,
         );
+        self.spill_sorted(sorted_iter, max_batch_rows)
+    }
+
+    /// [`Self::sort_and_spill`] for the state batches of a hash aggregate
+    /// table: one batch for flat storage, one per block for blocked storage.
+    /// All batches are written as one sorted spill file.
+    pub(super) fn sort_and_spill_batches(
+        &mut self,
+        state_batches: Vec<MaterializedBatch>,
+    ) -> Result<()> {
+        let mut batches: Vec<RecordBatch> =
+            state_batches.into_iter().map(|b| b.batch).collect();
+        if batches.len() <= 1 {
+            return self.sort_and_spill(batches.pop());
+        }
+
+        // Sort the key columns of all blocks together, then gather each
+        // output batch from the blocks, so all blocks form one sorted run
+        // while only the sort keys are concatenated
+        //
+        // TODO: the concatenated sort keys and the sort indices are temporary
+        //  memory that is not reserved, allocated while we are already out of
+        //  memory for another batch. With many group columns (e.g. 130 columns
+        //  and 10M groups) this is large, and concatenating byte arrays can
+        //  overflow their i32 offsets. `sort_and_spill` on main has the same
+        //  problem for a single batch. Reserve memory for this sort, sort across
+        //  multiple arrays without concat, or consider using `ExternalSorter`,
+        //  which already handles sorting in memory and spilling.
+        let sort_columns = self
+            .spill_expr
+            .iter()
+            .map(|expr| {
+                let arrays = batches
+                    .iter()
+                    .map(|b| expr.expr.evaluate(b)?.into_array(b.num_rows()))
+                    .collect::<Result<Vec<_>>>()?;
+                let arrays: Vec<&dyn Array> = arrays.iter().map(|a| a.as_ref()).collect();
+                Ok(SortColumn {
+                    values: concat(&arrays)?,
+                    options: Some(expr.options),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let sorted = lexsort_to_indices(&sort_columns, None)?;
+        drop(sort_columns);
+
+        // Every block but the last holds the same number of rows
+        let block_rows = batches[0].num_rows();
+        let batch_refs: Vec<&RecordBatch> = batches.iter().collect();
+        let max_batch_rows = sorted.len().min(self.batch_size);
+        let sorted_iter = sorted.values().chunks(self.batch_size).map(|chunk| {
+            let indices: Vec<(usize, usize)> = chunk
+                .iter()
+                .map(|&i| (i as usize / block_rows, i as usize % block_rows))
+                .collect();
+            Ok(interleave_record_batch(&batch_refs, &indices)?)
+        });
+        self.spill_sorted(sorted_iter, max_batch_rows)
+    }
+
+    /// Writes the sorted batches of `sorted_iter` as one spill file, whose
+    /// largest batch has `max_batch_rows` rows.
+    fn spill_sorted(
+        &mut self,
+        sorted_iter: impl Iterator<Item = Result<RecordBatch>>,
+        max_batch_rows: usize,
+    ) -> Result<()> {
         let spill_file = self
             .spill_manager
             .spill_record_batch_iter_and_return_max_batch_memory(
@@ -245,22 +314,6 @@ impl AggregateSpill {
         });
         self.min_spill_batch_rows = self.min_spill_batch_rows.min(max_batch_rows);
 
-        Ok(())
-    }
-
-    /// [`Self::sort_and_spill`] for the state batches of a hash aggregate
-    /// table: one batch for flat storage, one per block for blocked storage,
-    /// each written as its own spill file.
-    pub(super) fn sort_and_spill_batches(
-        &mut self,
-        state_batches: Vec<MaterializedBatch>,
-    ) -> Result<()> {
-        // TODO: sort across multiple arrays without concat (see #24928
-        //  sort.rs/rank.rs) so all blocks are written as one sorted run instead
-        //  of one run per block.
-        for state_batch in state_batches {
-            self.sort_and_spill(Some(state_batch.batch))?;
-        }
         Ok(())
     }
 
