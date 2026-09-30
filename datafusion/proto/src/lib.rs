@@ -59,6 +59,17 @@
 //! [datafusion-substrait]: https://docs.rs/datafusion-substrait/latest/datafusion_substrait
 //! [substrait.io]: https://substrait.io
 //!
+//! # Security
+//!
+//! Serialized plans are treated as trusted input: this crate does not
+//! validate that a plan is well-formed or safe to execute before converting
+//! it into a DataFusion [`LogicalPlan`] or [`ExecutionPlan`]. If your
+//! application accepts serialized plans from an untrusted source, validate
+//! them before passing them to this crate. See the [DataFusion Security
+//! Model] for more details.
+//!
+//! [DataFusion Security Model]: https://github.com/apache/datafusion/blob/main/SECURITY.md#serialized-plans
+//!
 //! # Example: Serializing [`Expr`]s
 //! ```
 //! # use datafusion_common::Result;

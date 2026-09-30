@@ -57,6 +57,14 @@
 //! [`substrait::proto::Rel`] can be serialized / deserialized to bytes, JSON and
 //! other formats using [prost] and the rest of the Rust protobuf ecosystem.
 //!
+//! # Security
+//!
+//! Substrait plans are treated as trusted input. The application must validate
+//! untrusted inputs as this crate does not validate that a plan is safe to
+//! execute. See the [DataFusion Security Model] for more details.
+//!
+//! [DataFusion Security Model]: https://github.com/apache/datafusion/blob/main/SECURITY.md#serialized-plans
+//!
 //! # Example: Serializing [`LogicalPlan`]s
 //! ```
 //! # use datafusion::prelude::*;
