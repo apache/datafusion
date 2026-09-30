@@ -60,6 +60,7 @@ mod schema;
 mod schema_coercion;
 mod string_in_list_pruning;
 mod utils;
+mod write_errors;
 
 #[cfg(test)]
 #[ctor::ctor(unsafe)]

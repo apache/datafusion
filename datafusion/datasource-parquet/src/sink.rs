@@ -678,6 +678,7 @@ type RBStreamSerializeResult = Result<(Vec<ArrowColumnChunk>, MemoryReservation,
 /// parallel column serializers.
 async fn send_arrays_to_col_writers(
     col_array_channels: &[ColSender],
+    column_writer_tasks: &mut Vec<ColumnWriterTask>,
     rb: &RecordBatch,
     schema: Arc<Schema>,
 ) -> Result<()> {
@@ -685,10 +686,11 @@ async fn send_arrays_to_col_writers(
     let mut next_channel = 0;
     for (array, field) in rb.columns().iter().zip(schema.fields()) {
         for c in compute_leaves(field, array)? {
-            // Do not surface error from closed channel (means something
-            // else hit an error, and the plan is shutting down).
             if col_array_channels[next_channel].send(c).await.is_err() {
-                return Ok(());
+                return column_writer_error(
+                    column_writer_tasks.swap_remove(next_channel),
+                )
+                .await;
             }
 
             next_channel += 1;
@@ -696,6 +698,16 @@ async fn send_arrays_to_col_writers(
     }
 
     Ok(())
+}
+
+/// Join a failed worker so its original error reaches the caller immediately.
+async fn column_writer_error(task: ColumnWriterTask) -> Result<()> {
+    task.join_unwind()
+        .await
+        .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
+    Err(internal_datafusion_err!(
+        "Parquet column writer exited before completing its input"
+    ))
 }
 
 /// Spawns a tokio task which joins the parallel column writer tasks,
@@ -768,6 +780,7 @@ fn spawn_parquet_parallel_serialization_task(
                 if current_rg_rows + rb.num_rows() < max_row_group_rows {
                     send_arrays_to_col_writers(
                         &col_array_channels,
+                        &mut column_writer_handles,
                         &rb,
                         Arc::clone(&ctx.schema),
                     )
@@ -779,6 +792,7 @@ fn spawn_parquet_parallel_serialization_task(
                     let a = rb.slice(0, rows_left);
                     send_arrays_to_col_writers(
                         &col_array_channels,
+                        &mut column_writer_handles,
                         &a,
                         Arc::clone(&ctx.schema),
                     )
