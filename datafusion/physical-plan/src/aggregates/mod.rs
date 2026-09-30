@@ -5620,6 +5620,12 @@ mod tests {
         for row in 0..output.num_rows() {
             assert_eq!(sums.value(row), f64::from(a.value(row)));
         }
+        // Each flush contains every group exactly once.
+        for flush in a.values().chunks(num_groups as usize) {
+            let mut keys = flush.to_vec();
+            keys.sort_unstable();
+            assert_eq!(keys, (0..num_groups).collect::<Vec<_>>());
+        }
 
         Ok(())
     }
