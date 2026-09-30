@@ -93,9 +93,11 @@ use datafusion_proto_models::protobuf::{
 use crate::ExecutionPlan;
 
 pub use datafusion_proto_models::ProtoDecoderRegistry;
+// Not public API: see `decode_execution_plan`.
+#[doc(hidden)]
+pub use registry::decode_execution_plan;
 pub use registry::{
-    ExtensionPlanFromProto, decode_execution_plan, execution_plan_names,
-    register_execution_plan,
+    ExtensionPlanFromProto, execution_plan_names, register_execution_plan,
 };
 
 /// Internal dispatch trait backing [`ExecutionPlanEncodeCtx`].
