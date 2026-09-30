@@ -828,8 +828,35 @@ physical_plan
 03)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 ###########################################################
+# Correlated filter inside a derived table whose alias differs
+# from the inner table name (#25837)
+###########################################################
+
+statement ok
+CREATE TABLE o(k INT) AS VALUES (1), (2);
+
+statement ok
+CREATE TABLE l(id INT, v INT) AS VALUES (1, 10), (2, 20);
+
+query II
+SELECT o.k, s.v
+FROM o, LATERAL (
+  SELECT l2.v FROM (SELECT * FROM l WHERE l.id = o.k) AS l2
+) AS s
+ORDER BY o.k;
+----
+1 10
+2 20
+
+###########################################################
 # Cleanup
 ###########################################################
+
+statement ok
+DROP TABLE o;
+
+statement ok
+DROP TABLE l;
 
 statement ok
 DROP TABLE integers;

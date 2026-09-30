@@ -17,6 +17,7 @@
 
 //! [`DecorrelateLateralJoin`] decorrelates logical plans produced by lateral joins.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::decorrelate::{PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR};
@@ -28,7 +29,7 @@ use datafusion_expr::{Expr, Join, expr};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
-use datafusion_common::{Column, DFSchema, Result, ScalarValue, TableReference};
+use datafusion_common::{Column, Result, ScalarValue, TableReference};
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, SubqueryAlias};
@@ -137,17 +138,16 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
     // rewrite column references in both the correlation and ON-clause filters.
     let (right_plan, correlation_filter, original_join_filter) =
         if let Some(ref alias) = alias {
-            let inner_schema = Arc::clone(rewritten_subquery.schema());
+            let corr = correlation_filter
+                .map(|f| requalify_filter(f, &rewritten_subquery, alias))
+                .transpose()?;
+            let on = original_join_filter
+                .map(|f| requalify_filter(f, &rewritten_subquery, alias))
+                .transpose()?;
             let right = LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
                 Arc::new(rewritten_subquery),
                 alias.clone(),
             )?);
-            let corr = correlation_filter
-                .map(|f| requalify_filter(f, &inner_schema, alias))
-                .transpose()?;
-            let on = original_join_filter
-                .map(|f| requalify_filter(f, &inner_schema, alias))
-                .transpose()?;
             (right, corr, on)
         } else {
             (rewritten_subquery, correlation_filter, original_join_filter)
@@ -356,16 +356,46 @@ fn extract_lateral_subquery(
 /// same requalification to the filter so it matches the aliased schema.
 fn requalify_filter(
     filter: Expr,
-    inner_schema: &DFSchema,
+    rewritten_subquery: &LogicalPlan,
     alias: &TableReference,
 ) -> Result<Expr> {
+    let inner_schema = rewritten_subquery.schema();
+    // Qualifiers used inside the rewritten subquery (table names and
+    // derived-table aliases). A pulled-up filter column whose qualifier is
+    // listed here but missing from the subquery output schema was renamed by
+    // an intermediate SubqueryAlias (e.g. `l.id` vs `l2.id`). A qualifier
+    // that appears nowhere inside must be an outer reference (e.g. `o.k`)
+    // and is left untouched.
+    let mut inner_qualifiers = HashSet::new();
+    rewritten_subquery.apply(|plan| {
+        match plan {
+            LogicalPlan::TableScan(scan) => {
+                inner_qualifiers.insert(scan.table_name.clone());
+            }
+            LogicalPlan::SubqueryAlias(subquery_alias) => {
+                inner_qualifiers.insert(subquery_alias.alias.clone());
+            }
+            _ => {}
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
     filter
         .transform(|expr| {
-            if let Expr::Column(col) = &expr
-                && inner_schema.has_column(col)
-            {
-                let new_col = Column::new(Some(alias.clone()), col.name.clone());
-                return Ok(Transformed::yes(Expr::Column(new_col)));
+            if let Expr::Column(col) = &expr {
+                if inner_schema.has_column(col) {
+                    let new_col = Column::new(Some(alias.clone()), col.name.clone());
+                    return Ok(Transformed::yes(Expr::Column(new_col)));
+                }
+                if let Some(relation) = &col.relation
+                    && inner_qualifiers.contains(relation)
+                    && inner_schema
+                        .fields_with_unqualified_name(col.name.as_str())
+                        .len()
+                        == 1
+                {
+                    let new_col = Column::new(Some(alias.clone()), col.name.clone());
+                    return Ok(Transformed::yes(Expr::Column(new_col)));
+                }
             }
             Ok(Transformed::no(expr))
         })
