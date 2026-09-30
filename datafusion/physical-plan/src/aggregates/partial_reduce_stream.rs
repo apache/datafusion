@@ -30,7 +30,9 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
-use super::aggregate_hash_table::{AggregateHashTable, PartialReduceMarker};
+use super::aggregate_hash_table::{
+    AggregateHashTable, MaterializedBatch, PartialReduceMarker,
+};
 use crate::metrics::{BaselineMetrics, Count, MetricBuilder, RecordOutput, SpillMetrics};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream};
@@ -111,7 +113,7 @@ enum PartialReduceHashAggregateState {
         hash_table: AggregateHashTable<PartialReduceMarker>,
         // After each incremental emitting step, the front of `remaining_groups`
         // is updated with batch slicing, and removed once fully emitted.
-        remaining_groups: VecDeque<RecordBatch>,
+        remaining_groups: VecDeque<MaterializedBatch>,
     },
     ProducingOutput {
         hash_table: AggregateHashTable<PartialReduceMarker>,
@@ -295,8 +297,8 @@ impl PartialReduceHashAggregateStream {
     ///
     /// The reservation is left at its pre-emission size while the states are being
     /// emitted, because the cleared states are still held in memory as
-    /// `remaining_groups`. The reservation will be reset after exiting the
-    /// `EmittingOnMemoryPressure` state.
+    /// `remaining_groups`. It shrinks as each batch is fully emitted, and is
+    /// reset after exiting the `EmittingOnMemoryPressure` state.
     ///
     /// # Implementation Note
     /// All accumulated states are materialized at once, and then sliced into
@@ -333,10 +335,7 @@ impl PartialReduceHashAggregateStream {
                 ControlFlow::Continue(
                     PartialReduceHashAggregateState::EmittingOnMemoryPressure {
                         hash_table: original_state.into_hash_table(),
-                        remaining_groups: remaining_groups
-                            .into_iter()
-                            .map(|b| b.batch)
-                            .collect(),
+                        remaining_groups: remaining_groups.into(),
                     },
                 )
             }
@@ -362,17 +361,29 @@ impl PartialReduceHashAggregateStream {
         else {
             unreachable!("expected the EmittingOnMemoryPressure state")
         };
-        let Some(batch) = remaining_groups.pop_front() else {
+        let Some(MaterializedBatch { batch, memory_size }) = remaining_groups.pop_front()
+        else {
             unreachable!("EmittingOnMemoryPressure always holds a batch")
         };
 
         let output_batch = if batch.num_rows() <= self.batch_size {
+            // Last slice of this batch, release its memory. Never grow here:
+            // the pre-emission reservation may be smaller than what is held.
+            let held = hash_table.memory_size()
+                + remaining_groups
+                    .iter()
+                    .map(|b| b.memory_size)
+                    .sum::<usize>();
+            if held < self.reservation.size() {
+                self.reservation.shrink(self.reservation.size() - held);
+            }
             batch
         } else {
             // More rows in this batch, keep the rest at the front.
-            remaining_groups.push_front(
-                batch.slice(self.batch_size, batch.num_rows() - self.batch_size),
-            );
+            remaining_groups.push_front(MaterializedBatch {
+                batch: batch.slice(self.batch_size, batch.num_rows() - self.batch_size),
+                memory_size,
+            });
             batch.slice(0, self.batch_size)
         };
         let next_state = if remaining_groups.is_empty() {
