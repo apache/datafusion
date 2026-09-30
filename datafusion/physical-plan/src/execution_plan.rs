@@ -35,6 +35,7 @@ pub use datafusion_common::utils::project_schema;
 pub use datafusion_common::{ColumnStatistics, Statistics, internal_err};
 pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 pub use datafusion_expr::{Accumulator, ColumnarValue};
+use datafusion_physical_expr::filter::FilterConjunct;
 use datafusion_physical_expr::projection::ProjectionExpr;
 pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
@@ -847,10 +848,18 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// matched back to the corresponding input parent filter by position.
     /// Unsupported filters should therefore be marked unsupported in place,
     /// rather than removed or appended after supported filters.
+    ///
+    /// Each parent filter is a [`FilterConjunct`] that carries properties such
+    /// as the optional flag. An implementation that rewrites a parent filter
+    /// (for example, to remap its columns) must keep these properties, for
+    /// example with [`FilterConjunct::with_expr`].
+    ///
+    /// [`FilterConjunct`]: datafusion_physical_expr::filter::FilterConjunct
+    /// [`FilterConjunct::with_expr`]: datafusion_physical_expr::filter::FilterConjunct::with_expr
     fn gather_filters_for_pushdown(
         &self,
         _phase: FilterPushdownPhase,
-        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        parent_filters: Vec<FilterConjunct>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
         Ok(FilterDescription::all_unsupported(

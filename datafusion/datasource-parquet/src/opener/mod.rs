@@ -155,7 +155,7 @@ impl VirtualColumnsState {
 /// - Predicate-reference check (when pushdown is enabled): returns `Err` if
 ///   the predicate references a virtual column. The contract is that callers
 ///   route filters through
-///   [`ParquetSource::try_pushdown_filters`](crate::source::ParquetSource),
+///   [`ParquetSource::try_pushdown_filter`](crate::source::ParquetSource),
 ///   which classifies virtual-col filters as `PushedDown::No`. Erroring here
 ///   prevents silent wrong results for callers that bypass that path and set
 ///   the predicate directly on `ParquetSource`.
@@ -226,7 +226,7 @@ fn validate_predicate_does_not_reference_virtual_columns(
     if let Some(name) = offender {
         return internal_err!(
             "Predicate references virtual column '{name}'; route via \
-             ParquetSource::try_pushdown_filters."
+             ParquetSource::try_pushdown_filter."
         );
     }
     Ok(())
@@ -5747,7 +5747,7 @@ mod test {
         }
 
         // The predicate-vs-virtual-column check rejects callers that bypass
-        // `ParquetSource::try_pushdown_filters` (which keeps virtual-col
+        // `ParquetSource::try_pushdown_filter` (which keeps virtual-col
         // filters above the scan as a `FilterExec`) and set the predicate
         // directly on the source with pushdown enabled. Without this guard,
         // arrow-rs's `RowFilter` would silently drop the virtual-col conjunct
@@ -5763,8 +5763,8 @@ mod test {
                     .await
                     .unwrap_err();
             assert!(
-                err.to_string().contains("try_pushdown_filters"),
-                "error should mention try_pushdown_filters, got: {err}"
+                err.to_string().contains("try_pushdown_filter"),
+                "error should mention try_pushdown_filter, got: {err}"
             );
         }
 
@@ -5781,8 +5781,8 @@ mod test {
             .await
             .unwrap_err();
             assert!(
-                err.to_string().contains("try_pushdown_filters"),
-                "error should mention try_pushdown_filters, got: {err}"
+                err.to_string().contains("try_pushdown_filter"),
+                "error should mention try_pushdown_filter, got: {err}"
             );
         }
 

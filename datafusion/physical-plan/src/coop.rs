@@ -73,6 +73,7 @@
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::filter::FilterConjunct;
 #[cfg(datafusion_coop = "tokio_fallback")]
 use futures::Future;
 use std::pin::Pin;
@@ -358,7 +359,7 @@ impl ExecutionPlan for CooperativeExec {
     fn gather_filters_for_pushdown(
         &self,
         _phase: FilterPushdownPhase,
-        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        parent_filters: Vec<FilterConjunct>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
         FilterDescription::from_children(parent_filters, &self.children())
