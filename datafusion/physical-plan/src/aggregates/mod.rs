@@ -3361,7 +3361,7 @@ mod tests {
         Int64Array, NullArray, StringArray, StructArray, UInt32Array, UInt64Array,
     };
     use arrow::compute::{SortOptions, concat_batches};
-    use arrow::datatypes::{Int32Type, Int64Type};
+    use arrow::datatypes::{Float64Type, Int32Type, Int64Type, UInt32Type};
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{DataFusionError, assert_contains, internal_err};
     use datafusion_execution::config::SessionConfig;
@@ -3580,6 +3580,14 @@ mod tests {
                 .unwrap_or_else(|| panic!("aggregate records {phase} time"));
             assert!(time.as_usize() > 0);
         }
+    }
+
+    /// Bytes `aggregate`'s stream for partition 0 reserves when it is created,
+    /// before any input is polled.
+    fn initial_reservation(aggregate: &AggregateExec) -> Result<usize> {
+        let task_ctx = new_migrated_hash_ctx(1);
+        let _stream = aggregate.execute_typed(0, &task_ctx)?;
+        Ok(task_ctx.memory_pool().reserved())
     }
 
     fn new_finite_memory_migrated_hash_ctx(
@@ -4164,13 +4172,6 @@ mod tests {
                 .build()?,
         )];
 
-        let task_ctx = if spill {
-            // set to an appropriate value to trigger spill
-            new_spill_ctx(2, 1600)
-        } else {
-            Arc::new(TaskContext::default())
-        };
-
         let partial_aggregate = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
             grouping_set.clone(),
@@ -4179,6 +4180,13 @@ mod tests {
             input,
             Arc::clone(&input_schema),
         )?);
+
+        let task_ctx = if spill {
+            // fits the initial table, but not its growth, to trigger spill
+            new_spill_ctx(2, initial_reservation(&partial_aggregate)? + 64)
+        } else {
+            Arc::new(TaskContext::default())
+        };
 
         let result =
             collect(partial_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
@@ -4231,8 +4239,9 @@ mod tests {
         assert!(final_stats.total_byte_size.get_value().is_some());
 
         let task_ctx = if spill {
-            // enlarge memory limit to let the final aggregation finish
-            new_spill_ctx(2, 4640)
+            // The fair pool is shared by the partial and final tables, give each
+            // one its initial table plus a little, so the final aggregation spills
+            new_spill_ctx(2, initial_reservation(&merged_aggregate)? + 2 * 64)
         } else {
             Arc::clone(&task_ctx)
         };
@@ -4503,12 +4512,6 @@ mod tests {
         let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(true));
         let input_schema = input.schema();
 
-        let runtime = RuntimeEnvBuilder::new()
-            .with_memory_limit(1, 1.0)
-            .build_arc()?;
-        let task_ctx = TaskContext::default().with_runtime(runtime);
-        let task_ctx = Arc::new(task_ctx);
-
         let groups_none = PhysicalGroupBy::default();
         let groups_some = PhysicalGroupBy::new(
             vec![(col("a", &input_schema)?, "a".to_string())],
@@ -4543,32 +4546,26 @@ mod tests {
                 Arc::clone(&input_schema),
             )?);
 
-            let stream = partial_aggregate.execute_typed(0, &task_ctx);
+            // fits only the memory reserved when the stream is created
+            let runtime = RuntimeEnvBuilder::new()
+                .with_memory_limit(initial_reservation(&partial_aggregate)?, 1.0)
+                .build_arc()?;
+            let task_ctx = Arc::new(TaskContext::default().with_runtime(runtime));
+            let stream = partial_aggregate.execute_typed(0, &task_ctx)?;
 
             // ensure that we really got the version we wanted
-            let stream = match version {
+            match version {
                 0 => {
-                    // the ungrouped stream charges its accumulators' construction-time
-                    // state up front, so admission fails before any input is read
-                    let err = stream.err().unwrap();
-                    assert!(
-                        matches!(err.find_root(), DataFusionError::ResourcesExhausted(_)),
-                        "Wrong error type: {err}",
-                    );
-                    continue;
+                    assert!(matches!(stream, StreamType::AggregateStream(_)));
                 }
                 1 => {
-                    let stream = stream?;
                     assert!(matches!(stream, StreamType::GroupedHash(_)));
-                    stream
                 }
                 2 => {
-                    let stream = stream?;
                     assert!(matches!(stream, StreamType::SingleHash(_)));
-                    stream
                 }
                 _ => panic!("Unknown version: {version}"),
-            };
+            }
 
             let stream: SendableRecordBatchStream = stream.into();
             let err = collect(stream).await.unwrap_err();
@@ -5485,14 +5482,21 @@ mod tests {
         Ok(())
     }
 
+    /// Partial-reduce aggregate over one input batch of partial states, reducing
+    /// to groups `1, 2, 3` with sums `50, 20, 30`.
     fn partial_reduce_test_aggregate() -> Result<AggregateExec> {
-        partial_reduce_test_aggregate_with_batches(1)
+        partial_reduce_test_aggregate_with_input(
+            vec![1, 2, 1, 3],
+            vec![10.0, 20.0, 40.0, 30.0],
+            1,
+        )
     }
 
-    /// Partial-reduce aggregate over `num_input_batches` identical input batches
-    /// of partial states, each reducing to groups `1, 2, 3` with sums
-    /// `50, 20, 30`.
-    fn partial_reduce_test_aggregate_with_batches(
+    /// Partial-reduce `SUM(b) GROUP BY a` over `num_input_batches` identical
+    /// input batches of partial states with group keys `a` and partial sums `b`.
+    fn partial_reduce_test_aggregate_with_input(
+        a: Vec<u32>,
+        b: Vec<f64>,
         num_input_batches: usize,
     ) -> Result<AggregateExec> {
         let schema = Arc::new(Schema::new(vec![
@@ -5522,8 +5526,8 @@ mod tests {
         let partial_state_batch = RecordBatch::try_new(
             Arc::clone(&partial_schema),
             vec![
-                Arc::new(UInt32Array::from(vec![1, 2, 1, 3])),
-                Arc::new(Float64Array::from(vec![10.0, 20.0, 40.0, 30.0])),
+                Arc::new(UInt32Array::from(a)),
+                Arc::new(Float64Array::from(b)),
             ],
         )?;
         let partial_reduce_input = TestMemoryExec::try_new_exec(
@@ -5569,14 +5573,21 @@ mod tests {
     #[tokio::test]
     async fn partial_reduce_aggregate_with_memory_limit_emits_early() -> Result<()> {
         let num_input_batches = 3;
-        let partial_reduce =
-            partial_reduce_test_aggregate_with_batches(num_input_batches)?;
+        // Enough groups per batch to outgrow the initial table, even after it is
+        // recreated empty by an early emit.
+        let num_groups = 256;
+        let partial_reduce = partial_reduce_test_aggregate_with_input(
+            (0..num_groups).collect(),
+            (0..num_groups).map(f64::from).collect(),
+            num_input_batches,
+        )?;
+        // Fits only the initial table, so every input batch triggers an early emit.
         let runtime = RuntimeEnvBuilder::new()
-            .with_memory_limit(1, 1.0)
+            .with_memory_limit(initial_reservation(&partial_reduce)?, 1.0)
             .build_arc()?;
         // A batch size smaller than the number of flushed groups also covers
         // splitting one flush across several output batches.
-        let batch_size = 2;
+        let batch_size = 100;
         let task_ctx = Arc::new(
             TaskContext::default()
                 .with_session_config(migrated_hash_session_config(batch_size))
@@ -5598,30 +5609,22 @@ mod tests {
             num_input_batches
         );
 
-        // The table is flushed after every input batch, so each of the three
-        // groups is emitted once per input batch instead of being merged into a
-        // single row. Each flush is sliced into batches of 2 and 1 rows.
-        assert_eq!(output.len(), 2 * num_input_batches);
-        assert_snapshot!(batches_to_string(&output), @r"
-        +---+-------------+
-        | a | SUM(b)[sum] |
-        +---+-------------+
-        | 1 | 50.0        |
-        | 2 | 20.0        |
-        | 3 | 30.0        |
-        | 1 | 50.0        |
-        | 2 | 20.0        |
-        | 3 | 30.0        |
-        | 1 | 50.0        |
-        | 2 | 20.0        |
-        | 3 | 30.0        |
-        +---+-------------+
-        ");
+        // The table is flushed after every input batch, so every group is emitted
+        // once per input batch instead of being merged into a single row. Each
+        // flush of 256 groups is sliced into batches of 100, 100 and 56 rows.
+        let batch_rows: Vec<_> = output.iter().map(RecordBatch::num_rows).collect();
+        assert_eq!(batch_rows, [100, 100, 56].repeat(num_input_batches));
+        let output = concat_batches(&output[0].schema(), &output)?;
+        let a = output.column(0).as_primitive::<UInt32Type>();
+        let sums = output.column(1).as_primitive::<Float64Type>();
+        for row in 0..output.num_rows() {
+            assert_eq!(sums.value(row), f64::from(a.value(row)));
+        }
 
         Ok(())
     }
 
-    /// Same shape as [`partial_reduce_test_aggregate_with_batches`], but with multiple
+    /// Same shape as [`partial_reduce_test_aggregate_with_input`], but with multiple
     /// group keys.
     fn partial_reduce_test_aggregate_rows_multi_group_keys(
         num_input_batches: usize,
@@ -5696,8 +5699,9 @@ mod tests {
             "expected the Null group column to force the GroupValuesRows fallback"
         );
 
+        // Fits only the initial table, so every input batch triggers an early emit.
         let runtime = RuntimeEnvBuilder::new()
-            .with_memory_limit(1, 1.0)
+            .with_memory_limit(initial_reservation(&partial_reduce)?, 1.0)
             .build_arc()?;
         let batch_size = 2;
         let task_ctx = Arc::new(
@@ -6130,7 +6134,7 @@ mod tests {
     async fn run_first_last_multi_partitions() -> Result<()> {
         for is_first_acc in [false, true] {
             for spill in [false, true] {
-                first_last_multi_partitions(is_first_acc, spill, 5000).await?
+                first_last_multi_partitions(is_first_acc, spill).await?
             }
         }
         Ok(())
@@ -6323,17 +6327,7 @@ mod tests {
     //
     // and checks whether the function `merge_batch` works correctly for
     // FIRST_VALUE and LAST_VALUE functions.
-    async fn first_last_multi_partitions(
-        is_first_acc: bool,
-        spill: bool,
-        max_memory: usize,
-    ) -> Result<()> {
-        let task_ctx = if spill {
-            new_spill_ctx(2, max_memory)
-        } else {
-            Arc::new(TaskContext::default())
-        };
-
+    async fn first_last_multi_partitions(is_first_acc: bool, spill: bool) -> Result<()> {
         let (schema, data) = some_data_v2();
         let partition1 = data[0].clone();
         let partition2 = data[1].clone();
@@ -6371,8 +6365,9 @@ mod tests {
             memory_exec,
             Arc::clone(&schema),
         )?);
-        let coalesce = Arc::new(CoalescePartitionsExec::new(aggregate_exec))
-            as Arc<dyn ExecutionPlan>;
+        let coalesce =
+            Arc::new(CoalescePartitionsExec::new(Arc::clone(&aggregate_exec) as _))
+                as Arc<dyn ExecutionPlan>;
         let aggregate_final = Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
             groups,
@@ -6381,6 +6376,14 @@ mod tests {
             coalesce,
             schema,
         )?) as Arc<dyn ExecutionPlan>;
+
+        let task_ctx = if spill {
+            // The fair pool is shared by the four partial tables and the final
+            // table, give each one its initial table plus a little
+            new_spill_ctx(2, 5 * (initial_reservation(&aggregate_exec)? + 1000))
+        } else {
+            Arc::new(TaskContext::default())
+        };
 
         let result = crate::collect(aggregate_final, task_ctx).await?;
         if is_first_acc {
@@ -7421,7 +7424,9 @@ mod tests {
         )?);
 
         let batch_size = 2;
-        let memory_pool = Arc::new(FairSpillPool::new(2000));
+        let memory_pool = Arc::new(FairSpillPool::new(
+            initial_reservation(&single_aggregate)? + 200,
+        ));
         let task_ctx = Arc::new(
             TaskContext::default()
                 .with_session_config(SessionConfig::new().with_batch_size(batch_size))
@@ -8474,7 +8479,7 @@ mod tests {
 
         // Pool must be large enough for accumulation to start but too small for
         // sort_memory after clearing.
-        let task_ctx = new_spill_ctx(1, 500);
+        let task_ctx = new_spill_ctx(1, initial_reservation(&aggr)? + 64);
         let result = collect(aggr.execute(0, Arc::clone(&task_ctx))?).await;
 
         match &result {

@@ -932,7 +932,7 @@ mod tests {
 
         // Create constrained memory to trigger early emission but not completely fail
         let runtime = RuntimeEnvBuilder::default()
-            .with_memory_limit(1024, 1.0) // small enough to start but will trigger pressure
+            .with_memory_limit(5 * 1024, 1.0) // fits the initial table but will trigger pressure
             .build_arc()?;
 
         let mut task_ctx = TaskContext::default().with_runtime(runtime);
@@ -1013,7 +1013,7 @@ mod tests {
 
         // Disable skip aggregation so the same input is emitted on memory pressure.
         let runtime = RuntimeEnvBuilder::default()
-            .with_memory_limit(1024, 1.0)
+            .with_memory_limit(5 * 1024, 1.0)
             .build_arc()?;
         let session_config = task_ctx.session_config().clone().set(
             "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",

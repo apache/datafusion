@@ -468,8 +468,8 @@ mod tests {
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr_common::sort_expr::LexOrdering;
-    use futures::FutureExt;
     use futures::channel::mpsc;
+    use futures::{FutureExt, TryStreamExt};
     use std::collections::BTreeMap;
 
     #[derive(Clone, Copy)]
@@ -577,9 +577,7 @@ mod tests {
                         .build_arc()?,
                 ),
         );
-        let mut streams = vec![];
-        let mut senders = vec![];
-        for partition in 0..2 {
+        let new_stream = |partition| -> Result<_> {
             let (sender, receiver) = mpsc::unbounded();
             let input = Box::pin(RecordBatchStreamAdapter::new(
                 Arc::clone(&partial_schema),
@@ -592,9 +590,8 @@ mod tests {
                 input,
                 aggregate.input_order_mode(),
             )?;
-            senders.push(sender);
-            streams.push(stream.into_stream());
-        }
+            Ok((sender, stream.into_stream()))
+        };
         let mut expected = BTreeMap::new();
         let mut make_batch = |partition: i64, start: i64| {
             for value in start..start + 128 {
@@ -636,32 +633,34 @@ mod tests {
         // Keep partition 1's incomplete ordered run live while partition 0 spills
         // and replays. Channel inputs return Pending after each supplied batch,
         // making this interleaving independent of task scheduling.
+        let (second_sender, mut second) = new_stream(1)?;
         for batch in 0..55 {
-            senders[1]
+            second_sender
                 .unbounded_send(Ok(make_batch(1, batch * 128)))
                 .unwrap();
-            assert!(streams[1].next().now_or_never().is_none());
+            assert!(second.next().now_or_never().is_none());
         }
         let held = pool.reserved();
         assert!(held > 500 * 1024);
+        // Created after `held` is measured, since the stream reserves its initial table.
+        let (first_sender, mut first) = new_stream(0)?;
         for batch in 0..input_batches {
             // Repeated keys cross spill runs, so replay must merge their sums.
-            senders[0]
+            first_sender
                 .unbounded_send(Ok(make_batch(0, batch * 128)))
                 .unwrap();
-            assert!(streams[0].next().now_or_never().is_none());
+            assert!(first.next().now_or_never().is_none());
         }
         if limit == 600 * 1024 {
             assert!(aggregate.metrics().unwrap().spill_count().unwrap() > 0);
         }
-        let mut first = streams.remove(0);
         match finish {
             Finish::Collect => {
-                senders[0].close_channel();
+                first_sender.close_channel();
                 let mut output = collect(first).await?;
                 assert_eq!(pool.reserved(), held);
-                senders[1].close_channel();
-                output.extend(collect(streams.remove(0)).await?);
+                second_sender.close_channel();
+                output.extend(second.by_ref().try_collect::<Vec<_>>().await?);
                 let mut actual = BTreeMap::new();
                 for batch in output {
                     let a = batch
@@ -702,19 +701,19 @@ mod tests {
                 );
             }
             Finish::DropDuringMerge => {
-                senders[0].close_channel();
+                first_sender.close_channel();
                 assert!(first.next().now_or_never().is_none());
                 drop(first);
             }
             Finish::DropDuringReplay => {
-                senders[0].close_channel();
+                first_sender.close_channel();
                 first.next().await.unwrap()?;
                 assert!(pool.reserved() > held);
                 drop(first);
                 assert_eq!(pool.reserved(), held);
             }
             Finish::InputError => {
-                senders[0]
+                first_sender
                     .unbounded_send(datafusion_common::exec_err!(
                         "injected input failure"
                     ))
@@ -725,7 +724,7 @@ mod tests {
                 drop(first);
             }
         }
-        drop(streams);
+        drop(second);
         assert_eq!(pool.reserved(), 0);
         Ok(())
     }
