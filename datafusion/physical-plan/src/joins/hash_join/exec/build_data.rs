@@ -23,6 +23,8 @@ pub(super) const MAX_COMPACT_BUILD_BYTES: usize = 64 * 1024 * 1024;
 const TARGET_BUILD_BATCH_BYTES: usize = 8 * 1024 * 1024;
 const TARGET_BUILD_BATCH_ROWS: usize = 8192;
 const BUILD_ROW_DIRECTORY_STRIDE: usize = 1024;
+// Like OrderedArrayAgg, use average bytes per array to amortize fixed overhead.
+const MIN_BUILD_BATCH_BYTES_PER_COLUMN: usize = 4 * 1024;
 
 /// Keep the compact path for small logical inputs, even when their slices pin
 /// much larger allocations. Unsupported estimates only disable this optimization.
@@ -168,9 +170,17 @@ impl MultiBatchBuildData {
             .map(|index| {
                 index.map_or((0, 0), |row| {
                     let row = row as usize;
-                    let mut batch = self.row_directory[row / BUILD_ROW_DIRECTORY_STRIDE];
-                    while self.batch_offsets[batch + 1] <= row {
-                        batch += 1;
+                    let directory_index = row / BUILD_ROW_DIRECTORY_STRIDE;
+                    let mut batch = self.row_directory[directory_index];
+                    if self.batch_offsets[batch + 1] <= row {
+                        // Wide one-row batches can put many boundaries in one
+                        // directory bucket. Search only that bucket's offsets.
+                        let end = self
+                            .row_directory
+                            .get(directory_index + 1)
+                            .map_or(self.batches.len(), |next| next + 1);
+                        batch += self.batch_offsets[batch + 1..end]
+                            .partition_point(|offset| *offset <= row);
                     }
                     (batch + 1, row - self.batch_offsets[batch])
                 })
@@ -240,8 +250,9 @@ impl MultiBatchBuildData {
     }
 }
 
-/// Coalesce independent flat inputs a bounded group at a time. Shared buffers
-/// stay intact: replacing one slice must not release another slice's charge.
+/// Coalesce metadata-heavy independent flat inputs a bounded group at a time.
+/// Larger batches stay intact unless their backing allocations need repacking.
+/// Shared buffers stay intact: replacing one slice must not release another's charge.
 pub(super) fn coalesce_build_batches(
     schema: &SchemaRef,
     mut batches: Vec<RecordBatch>,
@@ -285,12 +296,18 @@ pub(super) fn coalesce_build_batches(
     let mut pending_reserved_bytes = 0usize;
     let mut pending_copy_bytes = 0usize;
     let mut pending_rows = 0usize;
+    let min_batch_bytes =
+        MIN_BUILD_BATCH_BYTES_PER_COLUMN.saturating_mul(schema.fields().len().max(1));
     for batch in batches {
         let reserved_bytes = get_record_batch_memory_size(&batch);
         let copy_bytes = estimate_batch_concat_allocation(&batch).unwrap_or(usize::MAX);
         let rows = batch.num_rows();
+        let preserve = copy_bytes >= min_batch_bytes
+            && !should_repack_build_batch(schema, reserved_bytes, copy_bytes);
         if !pending.is_empty()
-            && (pending_copy_bytes.saturating_add(copy_bytes) > TARGET_BUILD_BATCH_BYTES
+            && (preserve
+                || pending_copy_bytes.saturating_add(copy_bytes)
+                    > TARGET_BUILD_BATCH_BYTES
                 || pending_rows.saturating_add(rows) > TARGET_BUILD_BATCH_ROWS)
         {
             output.push(coalesce_build_group(
@@ -304,6 +321,10 @@ pub(super) fn coalesce_build_batches(
             pending_reserved_bytes = 0;
             pending_copy_bytes = 0;
             pending_rows = 0;
+        }
+        if preserve {
+            output.push(batch);
+            continue;
         }
         pending_reserved_bytes += reserved_bytes;
         pending_copy_bytes = pending_copy_bytes.saturating_add(copy_bytes);
@@ -331,12 +352,7 @@ fn coalesce_build_group(
     reservation: &mut MemoryReservation,
     metrics: &BuildProbeJoinMetrics,
 ) -> Result<RecordBatch> {
-    if batches.len() == 1
-        && copy_bytes <= TARGET_BUILD_BATCH_BYTES
-        && reserved_bytes > copy_bytes.saturating_mul(2)
-        && !schema.fields().iter().any(|field| {
-            matches!(field.data_type(), DataType::Utf8View | DataType::BinaryView)
-        })
+    if batches.len() == 1 && should_repack_build_batch(schema, reserved_bytes, copy_bytes)
     {
         // Arrow's single-input concat is zero-copy. A second, empty slice
         // forces a bounded copy without allocating another input buffer.
@@ -345,13 +361,27 @@ fn coalesce_build_group(
     concat_build_batches(schema, batches, false, reserved_bytes, reservation, metrics)
 }
 
+fn should_repack_build_batch(
+    schema: &SchemaRef,
+    reserved_bytes: usize,
+    copy_bytes: usize,
+) -> bool {
+    copy_bytes <= TARGET_BUILD_BATCH_BYTES
+        && reserved_bytes > copy_bytes.saturating_mul(2)
+        && !schema.fields().iter().any(|field| {
+            matches!(field.data_type(), DataType::Utf8View | DataType::BinaryView)
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use arrow::array::{
-        FixedSizeListArray, Int64Array, LargeListArray, ListArray, MapArray, StructArray,
+        FixedSizeListArray, Int64Array, LargeListArray, ListArray, MapArray, StringArray,
+        StructArray,
     };
     use arrow::buffer::OffsetBuffer;
+    use arrow::datatypes::Int64Type;
     use arrow_schema::Field;
     use datafusion_execution::memory_pool::{
         GreedyMemoryPool, MemoryConsumer, MemoryPool,
@@ -369,6 +399,191 @@ mod tests {
             counter.count_batch(batch);
         }
         counter.memory_usage()
+    }
+
+    fn coalesce_for_test(batches: Vec<RecordBatch>) -> Result<Vec<RecordBatch>> {
+        coalesce_with_headroom(batches, TARGET_BUILD_BATCH_BYTES)
+    }
+
+    fn coalesce_with_headroom(
+        batches: Vec<RecordBatch>,
+        headroom: usize,
+    ) -> Result<Vec<RecordBatch>> {
+        let bytes = input_bytes(&batches);
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(bytes + headroom));
+        let mut reservation = MemoryConsumer::new("test").register(&pool);
+        reservation.try_grow(bytes)?;
+        let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
+        metrics.build_mem_used.add(bytes);
+        let output = coalesce_build_batches(
+            &batches[0].schema(),
+            batches,
+            bytes,
+            &mut reservation,
+            &metrics,
+        )?;
+        assert_eq!(reservation.size(), input_bytes(&output));
+        assert_eq!(metrics.build_mem_used.value(), input_bytes(&output));
+        Ok(output)
+    }
+
+    #[test]
+    fn coalesce_byte_threshold_scales_with_columns() -> Result<()> {
+        for columns in [1, 2] {
+            for (rows, expected_batches) in [(511, 1), (512, 2)] {
+                let schema = Arc::new(Schema::new(
+                    (0..columns)
+                        .map(|index| {
+                            Field::new(format!("c{index}"), DataType::Int64, false)
+                        })
+                        .collect::<Vec<_>>(),
+                ));
+                let batches = (0..2)
+                    .map(|_| {
+                        RecordBatch::try_new(
+                            Arc::clone(&schema),
+                            (0..columns)
+                                .map(|_| {
+                                    Arc::new(Int64Array::from(vec![1; rows])) as ArrayRef
+                                })
+                                .collect(),
+                        )
+                    })
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                assert_eq!(
+                    estimate_batch_concat_allocation(&batches[0])?,
+                    rows * columns * 8
+                );
+                let originals = batches.clone();
+                let output = coalesce_with_headroom(
+                    batches,
+                    if expected_batches == 2 {
+                        0
+                    } else {
+                        TARGET_BUILD_BATCH_BYTES
+                    },
+                )?;
+                assert_eq!(output.len(), expected_batches);
+                assert_eq!(
+                    output.iter().map(RecordBatch::num_rows).sum::<usize>(),
+                    2 * rows
+                );
+                if expected_batches == 2 {
+                    for (original, retained) in originals.iter().zip(&output) {
+                        assert!(Arc::ptr_eq(original.column(0), retained.column(0)));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn coalesce_small_arrays_but_preserve_wide_batches() -> Result<()> {
+        let narrow = coalesce_for_test(vec![primitive_batch(64), primitive_batch(64)])?;
+        assert_eq!(narrow.len(), 1);
+        assert_eq!(narrow[0].num_rows(), 128);
+
+        for (rows, width, expected_batches) in
+            [(1, 1024, 1), (64, 1024, 2), (1, 16384, 2)]
+        {
+            let value = "x".repeat(width);
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Int64, false),
+                Field::new("payload", DataType::Utf8, false),
+            ]));
+            let batches = (0..2)
+                .map(|_| {
+                    RecordBatch::try_new(
+                        Arc::clone(&schema),
+                        vec![
+                            Arc::new(Int64Array::from(vec![1; rows])),
+                            Arc::new(StringArray::from_iter_values(
+                                (0..rows).map(|_| value.as_str()),
+                            )),
+                        ],
+                    )
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let output = coalesce_for_test(batches)?;
+            assert_eq!(output.len(), expected_batches);
+            assert_eq!(
+                output.iter().map(RecordBatch::num_rows).sum::<usize>(),
+                2 * rows
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn coalesce_preserves_order_around_retained_batches() -> Result<()> {
+        let schema = primitive_batch(1).schema();
+        let mut offset = 0i64;
+        let batches = [64, 64, 512, 64, 64, 512, 64]
+            .into_iter()
+            .map(|rows| {
+                let values = Int64Array::from_iter_values(offset..offset + rows);
+                offset += rows;
+                RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(values)])
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let output = coalesce_for_test(batches)?;
+        assert_eq!(
+            output.iter().map(RecordBatch::num_rows).collect::<Vec<_>>(),
+            vec![128, 512, 128, 512, 64]
+        );
+        let values = output
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_primitive::<Int64Type>()
+                    .values()
+                    .iter()
+                    .copied()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(values, (0..offset).collect::<Vec<_>>());
+        Ok(())
+    }
+
+    #[test]
+    fn coalesce_preserves_shared_small_buffers() -> Result<()> {
+        let parent = primitive_batch(128);
+        let batches = vec![parent.slice(0, 64), parent.slice(64, 64)];
+        let originals = batches.clone();
+        let output = coalesce_for_test(batches)?;
+        assert_eq!(output.len(), 2);
+        for (original, retained) in originals.iter().zip(&output) {
+            assert!(Arc::ptr_eq(original.column(0), retained.column(0)));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn gather_indices_searches_small_batch_boundaries() -> Result<()> {
+        let mut lengths = vec![1; 2 * BUILD_ROW_DIRECTORY_STRIDE + 1];
+        lengths.extend([700, 700, 700, 3000, 1, 1, 2048, 2]);
+        let mut expected = vec![None];
+        for (batch, &rows) in lengths.iter().enumerate() {
+            expected.extend((0..rows).map(|row| Some((batch + 1, row))));
+        }
+        let batches = lengths.into_iter().map(primitive_batch).collect();
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1024 * 1024));
+        let reservation = MemoryConsumer::new("test").register(&pool);
+        let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
+        let data = MultiBatchBuildData::try_new(batches, &[], &reservation, &metrics)?;
+        let indices = UInt64Array::from_iter(
+            std::iter::once(None).chain((0..data.num_rows()).map(|row| Some(row as u64))),
+        );
+        assert_eq!(
+            data.gather_indices(&indices),
+            expected
+                .into_iter()
+                .map(|pair| pair.unwrap_or((0, 0)))
+                .collect::<Vec<_>>()
+        );
+        Ok(())
     }
 
     #[test]

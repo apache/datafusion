@@ -18,7 +18,6 @@
 //! Gather and compare logical build rows without concatenating the build side.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::iter::once;
 use std::sync::Arc;
 
@@ -33,6 +32,7 @@ use arrow::datatypes::{FieldRef, Schema};
 use arrow_schema::{ArrowError, DataType, SortOptions};
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{JoinSide, JoinType, NullEquality, Result, internal_err};
+use hashbrown::HashMap;
 
 use super::{
     ColumnIndex, JoinFilter, JoinKeyComparator, PreparedJoinKeyProbe,
@@ -120,22 +120,37 @@ fn interleave_payload(
     if indices.is_empty() {
         return Ok(new_empty_array(data_type));
     }
-    let nulls: NullBuffer = indices
-        .iter()
-        .map(|&(source, row)| source != 0 && values[source - 1].is_valid(row))
-        .collect();
-    let indices: Cow<'_, [(usize, usize)]> = if nulls.null_count() == 0 {
-        Cow::Borrowed(indices)
-    } else {
-        Cow::Owned(
-            indices
-                .iter()
-                .enumerate()
-                .map(|(index, &row)| if nulls.is_valid(index) { row } else { (0, 0) })
-                .collect(),
-        )
+    // Arrow handles primitive nulls directly. Variable-width nulls still need
+    // normalization to avoid copying hidden payload, as do nested null parents.
+    let normalize_nulls = match data_type {
+        DataType::Struct(_)
+        | DataType::List(_)
+        | DataType::LargeList(_)
+        | DataType::Map(_, _) => true,
+        DataType::Boolean => false,
+        data_type if data_type.primitive_width().is_some() => false,
+        _ => values.iter().any(|array| array.null_count() > 0),
     };
-    let nulls = (nulls.null_count() != 0).then_some(nulls);
+    let (indices, nulls): (Cow<'_, [(usize, usize)]>, _) = if normalize_nulls {
+        let nulls: NullBuffer = indices
+            .iter()
+            .map(|&(source, row)| source != 0 && values[source - 1].is_valid(row))
+            .collect();
+        let indices = if nulls.null_count() == 0 {
+            Cow::Borrowed(indices)
+        } else {
+            Cow::Owned(
+                indices
+                    .iter()
+                    .enumerate()
+                    .map(|(index, &row)| if nulls.is_valid(index) { row } else { (0, 0) })
+                    .collect(),
+            )
+        };
+        (indices, (nulls.null_count() != 0).then_some(nulls))
+    } else {
+        (Cow::Borrowed(indices), None)
+    };
     match data_type {
         DataType::Struct(fields) => {
             let arrays = values.iter().map(|a| a.as_struct()).collect::<Vec<_>>();
@@ -188,7 +203,13 @@ fn interleave_payload(
             )?))
         }
         _ => {
-            let sentinel = new_null_array(data_type, 1);
+            // An unused null sentinel would force Arrow to build a null bitmap
+            // even when all selected arrays and output rows are non-null.
+            let sentinel = if indices.iter().any(|(source, _)| *source == 0) {
+                new_null_array(data_type, 1)
+            } else {
+                new_empty_array(data_type)
+            };
             let arrays = once(sentinel.as_ref())
                 .chain(values.iter().copied())
                 .collect::<Vec<_>>();
@@ -457,8 +478,8 @@ pub(crate) fn equal_rows_arr_multi(
 mod tests {
     use super::*;
     use arrow::array::{
-        DictionaryArray, FixedSizeListArray, Float64Array, Int8Array, Int32Array,
-        ListViewArray, PrimitiveRunBuilder, StringArray, UnionArray,
+        BooleanArray, DictionaryArray, FixedSizeListArray, Float64Array, Int8Array,
+        Int32Array, ListViewArray, PrimitiveRunBuilder, StringArray, UnionArray,
     };
     use arrow::datatypes::{Field, Float64Type, Int8Type, Int32Type, UnionFields};
 
@@ -469,6 +490,81 @@ mod tests {
             fixed_width_max_buffer(&DataType::FixedSizeBinary(16), 1 << 27)?,
             Some(1 << 31),
         );
+        Ok(())
+    }
+
+    #[test]
+    fn gather_flat_nonnull_omits_null_bitmap() -> Result<()> {
+        let first = Int32Array::from(vec![1, 2]);
+        let second = Int32Array::from(vec![3, 4]);
+        let indices = [(2, 1), (1, 0), (2, 0)];
+        let result = interleave_payload(&DataType::Int32, &[&first, &second], &indices)?;
+        assert_eq!(
+            result.as_ref(),
+            &Int32Array::from(vec![4, 1, 3]) as &dyn Array
+        );
+        assert!(result.nulls().is_none());
+
+        let first = StringArray::from(vec!["a", "b"]);
+        let second = StringArray::from(vec!["c", "d"]);
+        let result = interleave_payload(&DataType::Utf8, &[&first, &second], &indices)?;
+        assert_eq!(
+            result.as_ref(),
+            &StringArray::from(vec!["d", "a", "c"]) as &dyn Array
+        );
+        assert!(result.nulls().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn gather_flat_physical_nulls_and_padding() -> Result<()> {
+        let first = Int32Array::from(vec![Some(1), None]);
+        let second = Int32Array::from(vec![None, Some(4)]);
+        for indices in [
+            vec![(1, 1), (2, 1), (2, 0), (1, 0)],
+            vec![(1, 1), (2, 1), (0, 0), (1, 0)],
+        ] {
+            let result =
+                interleave_payload(&DataType::Int32, &[&first, &second], &indices)?;
+            assert_eq!(
+                result.as_ref(),
+                &Int32Array::from(vec![None, Some(4), None, Some(1)]) as &dyn Array
+            );
+        }
+
+        let first = BooleanArray::from(vec![Some(true), None]);
+        let second = BooleanArray::from(vec![Some(false)]);
+        let result = interleave_payload(
+            &DataType::Boolean,
+            &[&first, &second],
+            &[(1, 1), (2, 0), (0, 0), (1, 0)],
+        )?;
+        assert_eq!(
+            result.as_ref(),
+            &BooleanArray::from(vec![None, Some(false), None, Some(true)]) as &dyn Array
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn gather_flat_variable_width_nulls_omit_hidden_payload() -> Result<()> {
+        let first = StringArray::new(
+            OffsetBuffer::new(vec![0, 6, 13].into()),
+            arrow::buffer::Buffer::from(b"hiddenvisible".as_slice()),
+            Some(NullBuffer::from(vec![false, true])),
+        );
+        let second = StringArray::from(vec!["other"]);
+        let result = interleave_payload(
+            &DataType::Utf8,
+            &[&first, &second],
+            &[(1, 0), (2, 0), (1, 1), (0, 0)],
+        )?;
+        assert_eq!(
+            result.as_ref(),
+            &StringArray::from(vec![None, Some("other"), Some("visible"), None])
+                as &dyn Array
+        );
+        assert_eq!(result.as_string::<i32>().value_data(), b"othervisible");
         Ok(())
     }
 
@@ -540,6 +636,33 @@ mod tests {
     }
 
     #[test]
+    fn gather_dictionary_value_nulls_without_padding() -> Result<()> {
+        let first: ArrayRef = Arc::new(DictionaryArray::<Int8Type>::try_new(
+            Int8Array::from(vec![0, 1]),
+            Arc::new(StringArray::from(vec![Some("a"), None])),
+        )?);
+        let second: ArrayRef = Arc::new(DictionaryArray::<Int8Type>::try_new(
+            Int8Array::from(vec![0, 1]),
+            Arc::new(StringArray::from(vec![None, Some("b")])),
+        )?);
+        for array in [&first, &second] {
+            assert_eq!(array.null_count(), 0);
+            assert_eq!(array.logical_nulls().unwrap().null_count(), 1);
+        }
+        let actual = interleave_payload(
+            first.data_type(),
+            &[first.as_ref(), second.as_ref()],
+            &[(2, 0), (1, 0), (2, 1), (1, 1)],
+        )?;
+        let actual = compute::cast(actual.as_ref(), &DataType::Utf8)?;
+        assert_eq!(
+            actual.as_ref(),
+            &StringArray::from(vec![None, Some("a"), Some("b"), None]) as &dyn Array
+        );
+        Ok(())
+    }
+
+    #[test]
     fn gather_encoded_payloads_matches_concat_take() -> Result<()> {
         let fixed: ArrayRef =
             Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
@@ -578,15 +701,29 @@ mod tests {
         )?);
         for array in [fixed, views, runs, union] {
             let sources = [array.slice(0, 2), array.slice(2, 2)];
-            let indices =
-                UInt64Array::from(vec![Some(3), Some(0), None, Some(2), Some(1)]);
             let combined =
                 compute::concat(&sources.iter().map(AsRef::as_ref).collect::<Vec<_>>())?;
-            let expected = take(combined.as_ref(), &indices, None)?;
-            let actual =
-                SelectedBuildSources::new(&[(2, 1), (1, 0), (0, 0), (2, 0), (1, 1)])
+            // Without padding, logical nulls in encoded arrays and non-null
+            // selections use an empty sentinel instead of a synthetic null row.
+            for indices in [
+                vec![Some(3), Some(0), None, Some(2), Some(1)],
+                vec![Some(3), Some(0), Some(2), Some(1)],
+                vec![Some(3), Some(0)],
+            ] {
+                let indices = UInt64Array::from(indices);
+                let expected = take(combined.as_ref(), &indices, None)?;
+                let gather = indices
+                    .iter()
+                    .map(|index| {
+                        index.map_or((0, 0), |row| {
+                            (row as usize / 2 + 1, row as usize % 2)
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let actual = SelectedBuildSources::new(&gather)
                     .gather(array.data_type(), |source| sources[source].as_ref())?;
-            assert_eq!(actual.as_ref(), expected.as_ref(), "{}", array.data_type());
+                assert_eq!(actual.as_ref(), expected.as_ref(), "{}", array.data_type());
+            }
         }
         Ok(())
     }

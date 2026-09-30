@@ -22,9 +22,11 @@
 //! plan construction, build, probe and output draining are included. Large cases
 //! retain over 64 MiB of unique Arrow backing. Cases include tiny independent
 //! batches, shared slices and oversized backing buffers. The small case measures
-//! the compact-build path. Every case probes 4096 rows and checks the matched
-//! build-row checksum before timing. Inner joins have 50% matches; the outer case
-//! has 6.25%. Perfect-hash selection is enabled and disabled over identical inputs.
+//! the compact-build path. Probe batches contain 4096 rows; repeated-probe cases
+//! reuse the same batch 64 times (16 for one-row wide inputs). Each case checks
+//! the matched build-row checksum before timing. Inner joins have 50% matches;
+//! the outer case has 6.25%. Perfect-hash selection is enabled and disabled over
+//! identical inputs.
 //! The separate correctness run reports peak reserved bytes, not process RSS;
 //! timed runs use the normal memory pool without reservation instrumentation.
 
@@ -74,6 +76,7 @@ enum Payload {
 enum Layout {
     Independent,
     Tiny,
+    OneRow,
     Sliced,
     Overallocated,
 }
@@ -81,6 +84,7 @@ enum Layout {
 struct Workload {
     build: Vec<RecordBatch>,
     probe: RecordBatch,
+    probe_repetitions: usize,
     keys: Keys,
     join_type: JoinType,
     expected_rows: usize,
@@ -111,6 +115,7 @@ impl Workload {
         payload: Payload,
         layout: Layout,
         low_match_outer: bool,
+        probe_repetitions: usize,
     ) -> Self {
         let value = "x".repeat(width);
         let batch = |start, end| {
@@ -154,10 +159,10 @@ impl Workload {
                 .map(|start| backing.slice(start, (rows - start).min(INPUT_BATCH_ROWS)))
                 .collect::<Vec<_>>()
         } else {
-            let batch_rows = if matches!(layout, Layout::Tiny) {
-                64
-            } else {
-                INPUT_BATCH_ROWS
+            let batch_rows = match layout {
+                Layout::Tiny => 64,
+                Layout::OneRow => 1,
+                _ => INPUT_BATCH_ROWS,
             };
             (0..rows)
                 .step_by(batch_rows)
@@ -192,22 +197,25 @@ impl Workload {
         Self {
             build,
             probe,
+            probe_repetitions,
             keys,
             join_type: if low_match_outer {
                 JoinType::Right
             } else {
                 JoinType::Inner
             },
-            expected_rows: if low_match_outer {
-                PROBE_ROWS
-            } else {
-                PROBE_ROWS / hit_every
-            },
+            expected_rows: probe_repetitions
+                * if low_match_outer {
+                    PROBE_ROWS
+                } else {
+                    PROBE_ROWS / hit_every
+                },
             expected_sum: probe_ids
                 .iter()
                 .step_by(hit_every)
                 .map(|&id| i64::from(id))
-                .sum(),
+                .sum::<i64>()
+                * probe_repetitions as i64,
         }
     }
 
@@ -227,7 +235,7 @@ impl Workload {
                 None,
             )?,
             TestMemoryExec::try_new_exec(
-                &[vec![self.probe.clone()]],
+                &[vec![self.probe.clone(); self.probe_repetitions]],
                 right_schema,
                 None,
             )?,
@@ -263,7 +271,7 @@ impl Workload {
 fn benchmark(c: &mut Criterion) {
     let runtime = Builder::new_current_thread().enable_all().build().unwrap();
     let mut group = c.benchmark_group("hash_join_batches");
-    for (name, rows, width, keys, payload, layout, outer) in [
+    for (name, rows, width, keys, payload, layout, outer, probe_repetitions) in [
         (
             "small_plain",
             8192,
@@ -272,6 +280,7 @@ fn benchmark(c: &mut Criterion) {
             Payload::Plain,
             Layout::Independent,
             false,
+            1,
         ),
         (
             "large_plain",
@@ -281,6 +290,7 @@ fn benchmark(c: &mut Criterion) {
             Payload::Plain,
             Layout::Independent,
             false,
+            1,
         ),
         (
             "large_computed",
@@ -290,6 +300,7 @@ fn benchmark(c: &mut Criterion) {
             Payload::Plain,
             Layout::Independent,
             false,
+            1,
         ),
         (
             "large_dictionary_keys",
@@ -299,6 +310,7 @@ fn benchmark(c: &mut Criterion) {
             Payload::Plain,
             Layout::Independent,
             false,
+            1,
         ),
         (
             "large_dictionary_payload",
@@ -308,6 +320,7 @@ fn benchmark(c: &mut Criterion) {
             Payload::Dictionary,
             Layout::Independent,
             false,
+            1,
         ),
         (
             "large_list_payload",
@@ -317,6 +330,7 @@ fn benchmark(c: &mut Criterion) {
             Payload::List,
             Layout::Independent,
             false,
+            1,
         ),
         (
             "large_tiny_batches",
@@ -326,6 +340,7 @@ fn benchmark(c: &mut Criterion) {
             Payload::Plain,
             Layout::Tiny,
             false,
+            1,
         ),
         (
             "large_sliced",
@@ -335,6 +350,7 @@ fn benchmark(c: &mut Criterion) {
             Payload::Plain,
             Layout::Sliced,
             false,
+            1,
         ),
         (
             "large_overallocated",
@@ -344,6 +360,7 @@ fn benchmark(c: &mut Criterion) {
             Payload::Plain,
             Layout::Overallocated,
             false,
+            1,
         ),
         (
             "large_low_match_outer",
@@ -353,9 +370,61 @@ fn benchmark(c: &mut Criterion) {
             Payload::Plain,
             Layout::Independent,
             true,
+            1,
+        ),
+        (
+            "large_plain_many_probe",
+            65536,
+            1024,
+            Keys::Integer,
+            Payload::Plain,
+            Layout::Independent,
+            false,
+            64,
+        ),
+        (
+            "large_tiny_batches_many_probe",
+            65536,
+            1024,
+            Keys::Integer,
+            Payload::Plain,
+            Layout::Tiny,
+            false,
+            64,
+        ),
+        (
+            "large_dictionary_keys_many_probe",
+            65536,
+            1024,
+            Keys::Dictionary,
+            Payload::Plain,
+            Layout::Independent,
+            false,
+            64,
+        ),
+        (
+            "large_dictionary_payload_many_probe",
+            65536,
+            1024,
+            Keys::Integer,
+            Payload::Dictionary,
+            Layout::Independent,
+            false,
+            64,
+        ),
+        (
+            "large_one_row_wide_many_probe",
+            4096,
+            16384,
+            Keys::Integer,
+            Payload::Plain,
+            Layout::OneRow,
+            false,
+            16,
         ),
     ] {
-        let workload = Workload::new(rows, width, keys, payload, layout, outer);
+        let workload =
+            Workload::new(rows, width, keys, payload, layout, outer, probe_repetitions);
         let mut counter = RecordBatchMemoryCounter::new();
         for batch in &workload.build {
             counter.count_batch(batch);
