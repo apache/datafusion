@@ -224,6 +224,55 @@ SELECT k FROM t WHERE v IN (
 3
 4
 
+# A body that refers to the outer query would have to run once per outer row.
+# Such a CTE is inlined, as if MATERIALIZED was not given.
+query I rowsort
+SELECT k FROM t WHERE EXISTS (
+  WITH r AS MATERIALIZED (SELECT k AS rk FROM t t2 WHERE t2.k = t.k + 1)
+  SELECT 1 FROM r)
+----
+1
+2
+3
+
+query I
+SELECT k FROM t WHERE NOT EXISTS (
+  WITH r AS MATERIALIZED (SELECT k AS rk FROM t t2 WHERE t2.k = t.k + 1)
+  SELECT 1 FROM r)
+----
+4
+
+query II rowsort
+SELECT k, (
+  WITH r AS MATERIALIZED (SELECT v FROM t t2 WHERE t2.k = t.k)
+  SELECT sum(v) * 2 FROM r)
+FROM t
+----
+1 20
+2 40
+3 60
+4 80
+
+# The correlated CTE is inlined, so the plan has no MaterializedCteExec.
+query TT
+EXPLAIN SELECT k FROM t WHERE EXISTS (
+  WITH r AS MATERIALIZED (SELECT k AS rk FROM t t2 WHERE t2.k = t.k + 1)
+  SELECT 1 FROM r)
+----
+logical_plan
+01)LeftSemi Join: CAST(t.k AS Int64) + Int64(1) = CAST(__correlated_sq_1.k AS Int64)
+02)--TableScan: t projection=[k]
+03)--SubqueryAlias: __correlated_sq_1
+04)----SubqueryAlias: r
+05)------SubqueryAlias: t2
+06)--------TableScan: t projection=[k]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(t.k + Int64(1)@1, CAST(__correlated_sq_1.k AS Int64)@1)], projection=[k@0]
+02)--ProjectionExec: expr=[k@0 as k, CAST(k@0 AS Int64) + 1 as t.k + Int64(1)]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--ProjectionExec: expr=[k@0 as k, CAST(k@0 AS Int64) as CAST(__correlated_sq_1.k AS Int64)]
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
+
 # In a WITH RECURSIVE block, MATERIALIZED applies to a CTE that does not refer
 # to itself.
 query I
