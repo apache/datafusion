@@ -979,7 +979,14 @@ impl AggregateExec {
         &self.cache
     }
 
-    /// Create a new hash aggregate execution plan
+    /// Create a new hash aggregate execution plan.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error if the provided args can't build a valid aggregation:
+    ///
+    /// - Both grouping and aggregate expressions are empty, without grouping sets.
+    /// - The numbers of aggregate expressions and filter expressions differ.
     pub fn try_new(
         mode: AggregateMode,
         group_by: impl Into<Arc<PhysicalGroupBy>>,
@@ -1022,6 +1029,12 @@ impl AggregateExec {
     ) -> Result<Self> {
         let group_by = group_by.into();
         let filter_expr = filter_expr.into();
+
+        if group_by.is_true_no_grouping() && aggr_expr.is_empty() {
+            return internal_err!(
+                "Grouping expressions and aggregate expressions cannot both be empty"
+            );
+        }
 
         // Make sure arguments are consistent in size
         assert_eq_or_internal_err!(
@@ -3350,7 +3363,7 @@ mod tests {
     use arrow::compute::{SortOptions, concat_batches};
     use arrow::datatypes::{Int32Type, Int64Type};
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
-    use datafusion_common::{DataFusionError, internal_err};
+    use datafusion_common::{DataFusionError, assert_contains, internal_err};
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::{
         FairSpillPool, MemoryPool, PeakRecordingPool,
@@ -3412,6 +3425,31 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![a, b, c, d, e]));
 
         Ok(schema)
+    }
+
+    /// If both group_by and aggr is empty, return error since it's not a valid aggregate
+    #[test]
+    fn test_try_new_rejects_empty_aggregate() -> Result<()> {
+        let schema = create_test_schema()?;
+        for group_by in [
+            PhysicalGroupBy::default(),
+            PhysicalGroupBy::new_single(vec![]),
+        ] {
+            let err = AggregateExec::try_new(
+                AggregateMode::Single,
+                group_by,
+                vec![],
+                vec![],
+                Arc::new(EmptyExec::new(Arc::clone(&schema))),
+                Arc::clone(&schema),
+            )
+            .unwrap_err();
+            assert_contains!(
+                err.to_string(),
+                "Grouping expressions and aggregate expressions cannot both be empty"
+            );
+        }
+        Ok(())
     }
 
     /// some mock data to aggregates
