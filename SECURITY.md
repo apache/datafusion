@@ -26,14 +26,42 @@ report vulnerabilities.
 
 DataFusion is a query engine that executes SQL and DataFrame queries, which
 may include reading data from untrusted sources (e.g., files, network
-connections, or user supplied queries). DataFusion is expected to reject
-invalid or malformed input with an error, and to safely execute queries
+connections, and user supplied queries). DataFusion is expected to reject
+malformed input with an error.
+
+## Input Validation
+
+DataFusion is a low level library designed to be embedded in applications that
+have their own security model.
+
+DataFusion will run the queries that are passed to it, and it is the
+responsibility of the embedding application to ensure that the queries are safe
+to execute (for example, verify any externally supplied queries or URLs).
+DataFusion contains some APIs such as [`with_no_dml`] to help the application
+validate input, but it does not guarantee that all input is safe to execute.
+This is the responsibility of the embedding application.
+
+Given a valid DataFusion DataFrame or SQL query, DataFusion is expected to execute it
+correctly without memory safety issues.
+
+Example validation steps that an embedding application may take include:
+* Validate that external URLs are safe to read from (e.g., not a local file or a sensitive system file).
+* Validate that the SQL query does not contain any DML statements (e.g., `INSERT`, `UPDATE`, `DELETE`) if the application does not want to allow them.
+* Validate Arrow data using the [arrow validation APIs]
+
+
+It is the responsibility of the embedding application to validate
+user input
+
+and to safely execute queries
 without compromising the security of the host system.
 
+## Denial of Service (DoS) and Resource Exhaustion
 Unexpected behavior (e.g., panics, crashes, excessive resource consumption, or
 infinite loops) triggered by malformed or adversarial input is generally
 considered a **bug**, not a security vulnerability, unless it is
 **exploitable** and could allow an attacker to
+
 
 * Execute arbitrary code (Remote Code Execution);
 * Exfiltrate sensitive information from process memory (Information Disclosure);
@@ -68,12 +96,9 @@ in the public issue tracker.
 
 ## Reporting a Vulnerability
 
-For security vulnerabilities, please follow the responsible disclosure process
-below so we can investigate and fix the issue before it is exploited in the
-wild.
-
-**Do not file a public issue.** Follow the [ASF security reporting process] by
-emailing [security@apache.org](mailto:security@apache.org).
+For security vulnerabilities **do not file a public issue.** Follow the [ASF
+security reporting process] by emailing
+[security@apache.org](mailto:security@apache.org).
 
 Include in your report:
 
