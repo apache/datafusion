@@ -204,3 +204,10 @@ SELECT s IS NULL,
 FROM (SELECT nullif(s, s) AS s FROM (SELECT named_struct('a', 1, 'b', 'x') AS s));
 ----
 true 42 42
+
+# A NULL struct in a later argument leaves the incoming hash unchanged
+query II
+SELECT xxhash64(7, nullif(s, s)), xxhash64(7)
+FROM (SELECT named_struct('a', 1, 'b', 'x') AS s);
+----
+-2864211556195259663 -2864211556195259663
