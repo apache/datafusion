@@ -722,6 +722,10 @@ mod tests {
             "10".into(),
         );
         config_map.insert(
+            "datafusion.execution.soft_max_bytes_per_output_file".into(),
+            "10".into(),
+        );
+        config_map.insert(
             "datafusion.execution.parquet.compression".into(),
             "zstd(5)".into(),
         );
@@ -1791,16 +1795,18 @@ mod tests {
     #[tokio::test]
     async fn test_insert_into_parameterized() -> Result<()> {
         let test_cases = vec![
-            // (file_format, batch_size, soft_max_rows, expected_files)
-            ("json", 10, 10, 2),
-            ("csv", 10, 10, 2),
+            // (file_format, batch_size, soft_max_rows, soft_max_bytes, expected_files)
+            ("json", 10, 10, 1000, 2),
+            ("csv", 10, 10, 1000, 2),
             #[cfg(feature = "parquet")]
-            ("parquet", 10, 10, 2),
+            ("parquet", 10, 20, 1000, 1),
             #[cfg(feature = "parquet")]
-            ("parquet", 20, 20, 1),
+            ("parquet", 10, 10, 1000, 2),
         ];
 
-        for (format, batch_size, soft_max_rows, expected_files) in test_cases {
+        for (format, batch_size, soft_max_rows, soft_max_bytes, expected_files) in
+            test_cases
+        {
             println!(
                 "Testing insert with format: {format}, batch_size: {batch_size}, expected files: {expected_files}"
             );
@@ -1810,10 +1816,25 @@ mod tests {
                 "datafusion.execution.batch_size".into(),
                 batch_size.to_string(),
             );
+            // Isolate soft-limit rotation from the initial parallel-writer fan-out.
+            config_map.insert(
+                "datafusion.execution.minimum_parallel_output_files".into(),
+                "1".into(),
+            );
             config_map.insert(
                 "datafusion.execution.soft_max_rows_per_output_file".into(),
                 soft_max_rows.to_string(),
             );
+            config_map.insert(
+                "datafusion.execution.soft_max_bytes_per_output_file".into(),
+                soft_max_bytes.to_string(),
+            );
+            if format == "parquet" {
+                config_map.insert(
+                    "datafusion.execution.parquet.compression".into(),
+                    "uncompressed".into(),
+                );
+            }
 
             let file_extension = match format {
                 "json" => JsonFormat::default().get_ext(),
@@ -1832,6 +1853,187 @@ mod tests {
             .await?;
         }
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_copy_respects_soft_max_bytes_per_output_file() -> Result<()> {
+        struct TestCase {
+            format: &'static str,
+            options: &'static str,
+            // Arrow, Avro, and the parallel Parquet writer buffer about 1 MB
+            // before forwarding bytes to the object writer (and therefore the
+            // demuxer). Their batches must be larger than that buffer for
+            // rotation to be observable.
+            payload_size: usize,
+            high_entropy: bool,
+        }
+
+        let test_cases = [
+            TestCase {
+                format: "csv",
+                options: "",
+                payload_size: 32 * 1024,
+                high_entropy: true,
+            },
+            TestCase {
+                format: "csv",
+                options: "OPTIONS ('format.compression' 'gzip')",
+                payload_size: 32 * 1024,
+                high_entropy: true,
+            },
+            TestCase {
+                format: "csv",
+                options: "OPTIONS ('format.compression' 'gzip')",
+                payload_size: 32 * 1024,
+                high_entropy: false,
+            },
+            TestCase {
+                format: "json",
+                options: "",
+                payload_size: 32 * 1024,
+                high_entropy: true,
+            },
+            TestCase {
+                format: "json",
+                options: "OPTIONS ('format.compression' 'zstd')",
+                payload_size: 32 * 1024,
+                high_entropy: true,
+            },
+            TestCase {
+                format: "json",
+                options: "OPTIONS ('format.compression' 'zstd')",
+                payload_size: 32 * 1024,
+                high_entropy: false,
+            },
+            TestCase {
+                format: "arrow",
+                options: "",
+                payload_size: 1536 * 1024,
+                high_entropy: true,
+            },
+            #[cfg(feature = "parquet")]
+            TestCase {
+                format: "parquet",
+                options: "OPTIONS ('format.compression' 'uncompressed', 'format.max_row_group_size' '1', 'format.allow_single_file_parallelism' 'false')",
+                payload_size: 32 * 1024,
+                high_entropy: true,
+            },
+            #[cfg(feature = "parquet")]
+            TestCase {
+                format: "parquet",
+                options: "OPTIONS ('format.compression' 'zstd(3)', 'format.max_row_group_size' '1')",
+                payload_size: 1536 * 1024,
+                high_entropy: true,
+            },
+            #[cfg(feature = "avro")]
+            TestCase {
+                format: "avro",
+                options: "",
+                payload_size: 1536 * 1024,
+                high_entropy: true,
+            },
+        ];
+
+        for test_case in test_cases {
+            let mut config_map = HashMap::new();
+            config_map.insert(
+                "datafusion.execution.minimum_parallel_output_files".into(),
+                "1".into(),
+            );
+            config_map.insert(
+                "datafusion.execution.soft_max_rows_per_output_file".into(),
+                "1000000".into(),
+            );
+            config_map.insert(
+                "datafusion.execution.soft_max_bytes_per_output_file".into(),
+                "1024".into(),
+            );
+            // Use the smallest supported buffer so the writer cannot get far
+            // ahead of the demuxer. There is still an intentional delay, so the
+            // test only requires that rotation eventually occurs.
+            config_map.insert(
+                "datafusion.execution.max_buffered_batches_per_output_file".into(),
+                "2".into(),
+            );
+            let config = SessionConfig::from_string_hash_map(&config_map)?;
+            let ctx = SessionContext::new_with_config(config);
+
+            let payload = if test_case.high_entropy {
+                let alphabet =
+                    b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+                let mut state = 0x4d595df4d0f33173_u64;
+                (0..test_case.payload_size)
+                    .map(|_| {
+                        state ^= state << 13;
+                        state ^= state >> 7;
+                        state ^= state << 17;
+                        alphabet[state as usize % alphabet.len()] as char
+                    })
+                    .collect::<String>()
+            } else {
+                "a".repeat(test_case.payload_size)
+            };
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int32, false),
+                Field::new("payload", DataType::Utf8, false),
+            ]));
+            let batches = (0..8)
+                .map(|id| {
+                    RecordBatch::try_new(
+                        Arc::clone(&schema),
+                        vec![
+                            Arc::new(arrow::array::Int32Array::from(vec![id])),
+                            Arc::new(arrow::array::StringArray::from(vec![
+                                payload.as_str(),
+                            ])),
+                        ],
+                    )
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            ctx.register_table(
+                "soft_limit_source",
+                Arc::new(MemTable::try_new(schema, vec![batches])?),
+            )?;
+
+            let output = TempDir::new()?;
+            let copy_sql = format!(
+                "COPY soft_limit_source TO '{}' STORED AS {} {}",
+                output.path().display(),
+                test_case.format,
+                test_case.options,
+            );
+            let result = ctx.sql(&copy_sql).await?.collect().await?;
+            assert_eq!(
+                ScalarValue::try_from_array(result[0].column(0), 0)?,
+                ScalarValue::UInt64(Some(8)),
+                "COPY row count for {}",
+                test_case.format,
+            );
+
+            let files = output
+                .path()
+                .read_dir()?
+                .collect::<std::io::Result<Vec<_>>>()?;
+            if test_case.high_entropy {
+                assert!(
+                    files.len() > 1,
+                    "{} {} did not rotate after reaching the byte limit; files: {:?}",
+                    test_case.format,
+                    test_case.options,
+                    files.iter().map(|entry| entry.path()).collect::<Vec<_>>(),
+                );
+            } else {
+                assert_eq!(
+                    files.len(),
+                    1,
+                    "{} {} rotated despite compressed output remaining below the byte limit; files: {:?}",
+                    test_case.format,
+                    test_case.options,
+                    files.iter().map(|entry| entry.path()).collect::<Vec<_>>(),
+                );
+            }
+        }
         Ok(())
     }
 
