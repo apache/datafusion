@@ -40,6 +40,8 @@ mod partitioning;
 mod physical_expr;
 pub mod planner;
 pub mod projection;
+#[cfg(feature = "proto")]
+pub mod proto;
 /// Shared test helpers for the `try_to_proto` / `try_from_proto` unit tests
 #[cfg(all(test, feature = "proto"))]
 pub(crate) mod proto_test_util;

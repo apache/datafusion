@@ -1601,6 +1601,13 @@ pub struct PhysicalExtensionNode {
     pub node: ::prost::alloc::vec::Vec<u8>,
     #[prost(message, repeated, tag = "2")]
     pub inputs: ::prost::alloc::vec::Vec<PhysicalPlanNode>,
+    /// Globally unique, namespaced name of the extension plan type (e.g.
+    /// `my-crate.MyExec`), written by plans that serialize themselves through
+    /// `ExecutionPlan::try_to_proto`. When present and registered on the decoding
+    /// session, it selects the decoder directly; otherwise decoding falls back to
+    /// the `PhysicalExtensionCodec` chain. Absent for codec-encoded plans.
+    #[prost(string, optional, tag = "3")]
+    pub plan_name: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// physical expressions
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1919,6 +1926,12 @@ pub struct PhysicalExtensionExprNode {
     pub expr: ::prost::alloc::vec::Vec<u8>,
     #[prost(message, repeated, tag = "2")]
     pub inputs: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    /// Optional type discriminator naming the extension expression, e.g.
+    /// "my_crate.MyExpr". When present and registered in the session's
+    /// PhysicalExprRegistry, decoding is routed to that registered
+    /// decoder; otherwise it falls back to PhysicalExtensionCodec::try_decode_expr.
+    #[prost(string, optional, tag = "3")]
+    pub expr_name: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalHashExprNode {
