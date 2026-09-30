@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::{Any, TypeId};
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::pin::Pin;
@@ -1286,14 +1285,11 @@ fn collect_null_rejecting_columns(predicate: &Arc<dyn PhysicalExpr>) -> HashSet<
 pub(crate) fn null_check_column(
     predicate: &Arc<dyn PhysicalExpr>,
 ) -> Option<(usize, bool)> {
-    // One type check keeps every other predicate cheap.
-    let type_id = (predicate.as_ref() as &dyn Any).type_id();
-    let (arg, is_null) = if type_id == TypeId::of::<IsNullExpr>() {
-        (predicate.downcast_ref::<IsNullExpr>()?.arg(), true)
-    } else if type_id == TypeId::of::<IsNotNullExpr>() {
-        (predicate.downcast_ref::<IsNotNullExpr>()?.arg(), false)
+    let (arg, is_null) = if let Some(expr) = predicate.downcast_ref::<IsNullExpr>() {
+        (expr.arg(), true)
     } else {
-        return None;
+        let expr = predicate.downcast_ref::<IsNotNullExpr>()?;
+        (expr.arg(), false)
     };
     Some((arg.downcast_ref::<Column>()?.index(), is_null))
 }
