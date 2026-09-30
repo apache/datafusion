@@ -3099,6 +3099,45 @@ SELECT win_outer.k FROM win_outer WHERE EXISTS (SELECT 1 FROM (SELECT win_inner.
 ----
 2
 
+# A correlated filter below the window that reads only a `PARTITION BY` column
+# keeps or drops whole partitions, so it is pulled above the window. This holds
+# for a non-equality filter too. The right answer is `1`.
+query I
+SELECT win_outer.k FROM win_outer WHERE EXISTS (SELECT 1 FROM (SELECT row_number() OVER (PARTITION BY win_inner.y ORDER BY win_inner.id) AS rn FROM win_inner WHERE win_inner.y > win_outer.k) AS w WHERE w.rn = 1) ORDER BY win_outer.k;
+----
+1
+
+# IN. The right answer is `1, 2`.
+query I
+SELECT win_outer.k FROM win_outer WHERE 1 IN (SELECT row_number() OVER (PARTITION BY win_inner.y ORDER BY win_inner.id) FROM win_inner WHERE win_inner.y = win_outer.k) ORDER BY win_outer.k;
+----
+1
+2
+
+# A scalar subquery. The right answer is `(1, 1), (2, 1), (5, NULL)`.
+query II
+SELECT win_outer.k, (SELECT max(w.rn) FROM (SELECT row_number() OVER (PARTITION BY win_inner.y ORDER BY win_inner.id) AS rn FROM win_inner WHERE win_inner.y = win_outer.k) AS w) AS m FROM win_outer ORDER BY win_outer.k;
+----
+1 1
+2 1
+5 NULL
+
+# A window that partitions by an expression of the column does not count.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+SELECT win_outer.k, (SELECT max(w.rn) FROM (SELECT row_number() OVER (PARTITION BY win_inner.y + 0 ORDER BY win_inner.id) AS rn FROM win_inner WHERE win_inner.y = win_outer.k) AS w) AS m FROM win_outer ORDER BY win_outer.k;
+
+# A window over an aggregate with count bug handling stays correlated.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+SELECT win_outer.k, (SELECT count(*) OVER () FROM (SELECT count(*) AS c FROM win_inner WHERE win_inner.y = win_outer.k) AS a) AS m FROM win_outer ORDER BY win_outer.k;
+
+# LEFT JOIN LATERAL keeps the outer rows without a match.
+query III
+SELECT win_outer.k, s.id, s.rn FROM win_outer LEFT JOIN LATERAL (SELECT win_inner.id, row_number() OVER (PARTITION BY win_inner.y ORDER BY win_inner.id) AS rn FROM win_inner WHERE win_inner.y = win_outer.k) AS s ON true ORDER BY win_outer.k;
+----
+1 1 1
+2 2 1
+5 NULL NULL
+
 statement ok
 RESET datafusion.explain.logical_plan_only;
 
@@ -3168,6 +3207,13 @@ SELECT unnest_outer.k, s.u FROM unnest_outer, LATERAL (SELECT i.id, unnest(i.arr
 1 3
 1 4
 2 5
+
+# A scalar subquery over an Unnest. The right answer is `(1, 2), (2, 1)`.
+query II
+SELECT unnest_outer.k, (SELECT count(x.u) FROM (SELECT unnest(t.arr) AS u FROM unnest_inner AS t WHERE t.id = unnest_outer.k) AS x) AS c FROM unnest_outer ORDER BY unnest_outer.k;
+----
+1 2
+2 1
 
 statement ok
 RESET datafusion.explain.logical_plan_only;

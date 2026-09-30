@@ -181,6 +181,9 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             // An Unnest replaces the column it unnests with the values of that
             // column, so a filter on it means something else above the
             // Unnest. The output column loses its qualifier, so compare names.
+            // The SQL planner unnests a new `__unnest_placeholder` column and
+            // passes the original column through, so this only stops plans
+            // built with `unnest_column` and similar.
             LogicalPlan::Unnest(ref unnest)
                 if correlated_filter_columns(&unnest.input).iter().any(|col| {
                     unnest
@@ -606,12 +609,7 @@ impl PullUpCorrelatedExpr {
         {
             self.can_pull_up = false;
         }
-        let new_plan = plan.clone().recompute_schema()?;
-        if new_plan.schema() == plan.schema() {
-            Ok(Transformed::no(plan))
-        } else {
-            Ok(Transformed::yes(new_plan))
-        }
+        Ok(Transformed::yes(plan.recompute_schema()?))
     }
 
     /// Whether the pull up can add its columns to `group_expr` without changing
@@ -782,7 +780,11 @@ fn correlated_filter_columns(plan: &LogicalPlan) -> Vec<Column> {
 /// Whether the window function `expr` lists each of `cols` as a plain
 /// `PARTITION BY` column.
 fn partitions_by_all(expr: &Expr, cols: &BTreeSet<Column>) -> bool {
-    let Expr::WindowFunction(window_fun) = expr.clone().unalias_nested().data else {
+    let mut expr = expr;
+    while let Expr::Alias(Alias { expr: inner, .. }) = expr {
+        expr = inner;
+    }
+    let Expr::WindowFunction(window_fun) = expr else {
         return false;
     };
     let partition_by = &window_fun.params.partition_by;
