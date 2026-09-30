@@ -37,10 +37,10 @@ use datafusion_common::{
 use datafusion_expr::expr::{
     self, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Exists,
     HigherOrderFunction, InList, InSubquery, Like, ScalarFunction, SetComparison, Sort,
-    WindowFunction,
+    WindowFunction, in_subquery_tuple_values,
 };
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
-use datafusion_expr::expr_schema::cast_subquery;
+use datafusion_expr::expr_schema::{cast_subquery, cast_subquery_columns};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
     comparison_coercion, like_coercion, regex_coercion, type_union_coercion,
@@ -623,23 +623,45 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     Arc::unwrap_or_clone(subquery.subquery),
                 )?
                 .data;
-                let expr_type = expr.get_type(self.schema)?;
-                let subquery_type = new_plan.schema().field(0).data_type();
-                let common_type = comparison_coercion(&expr_type, subquery_type).ok_or(
-                    plan_datafusion_err!(
-                    "expr type {expr_type} can't cast to {subquery_type} in InSubquery"
-                ),
-                )?;
+
                 let new_subquery = Subquery {
                     subquery: Arc::new(new_plan),
                     outer_ref_columns: subquery.outer_ref_columns,
                     spans: subquery.spans,
                 };
-                Ok(Transformed::yes(Expr::InSubquery(InSubquery::new(
-                    Box::new(expr.cast_to(&common_type, self.schema)?),
-                    cast_subquery(new_subquery, &common_type)?,
-                    negated,
-                ))))
+                let is_tuple =
+                    in_subquery_tuple_values(&expr, &new_subquery.subquery)?.is_some();
+                match *expr {
+                    // Multi-column `(a, b) IN (SELECT x, y ...)`: the tuple is
+                    // planned as a `struct` call whose arguments are compared
+                    // pairwise with the subquery columns, so coerce each pair.
+                    Expr::ScalarFunction(func) if is_tuple => {
+                        let (expr, subquery) = coerce_multi_column_in_subquery(
+                            func,
+                            new_subquery,
+                            self.schema,
+                        )?;
+                        Ok(Transformed::yes(Expr::InSubquery(InSubquery::new(
+                            Box::new(expr),
+                            subquery,
+                            negated,
+                        ))))
+                    }
+                    expr => {
+                        let expr_type = expr.get_type(self.schema)?;
+                        let subquery_type =
+                            new_subquery.subquery.schema().field(0).data_type();
+                        let common_type = comparison_coercion(&expr_type, subquery_type)
+                            .ok_or(plan_datafusion_err!(
+                                "expr type {expr_type} can't cast to {subquery_type} in InSubquery"
+                            ))?;
+                        Ok(Transformed::yes(Expr::InSubquery(InSubquery::new(
+                            Box::new(expr.cast_to(&common_type, self.schema)?),
+                            cast_subquery(new_subquery, &common_type)?,
+                            negated,
+                        ))))
+                    }
+                }
             }
             Expr::SetComparison(SetComparison {
                 expr,
@@ -1620,6 +1642,36 @@ fn project_with_column_index(
 
     Projection::try_new_with_schema(alias_expr, input, schema)
         .map(LogicalPlan::Projection)
+}
+
+/// Coerces a multi-column `(a, b, ...) IN (SELECT x, y, ...)`.
+///
+/// Each tuple element and the subquery column at the same position are cast
+/// to their common comparison type, like the single-column form does for its
+/// one pair.
+fn coerce_multi_column_in_subquery(
+    func: ScalarFunction,
+    subquery: Subquery,
+    schema: &DFSchema,
+) -> Result<(Expr, Subquery)> {
+    let subquery_schema = Arc::clone(subquery.subquery.schema());
+    let mut common_types = Vec::with_capacity(func.args.len());
+    let mut args = Vec::with_capacity(func.args.len());
+    for (arg, field) in func.args.into_iter().zip(subquery_schema.fields()) {
+        let expr_type = arg.get_type(schema)?;
+        let subquery_type = field.data_type();
+        let common_type = comparison_coercion(&expr_type, subquery_type).ok_or(
+            plan_datafusion_err!(
+                "expr type {expr_type} can't cast to {subquery_type} in InSubquery"
+            ),
+        )?;
+        args.push(arg.cast_to(&common_type, schema)?);
+        common_types.push(common_type);
+    }
+    Ok((
+        Expr::ScalarFunction(ScalarFunction::new_udf(func.func, args)),
+        cast_subquery_columns(subquery, &common_types)?,
+    ))
 }
 
 #[cfg(test)]
