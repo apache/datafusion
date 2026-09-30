@@ -1365,7 +1365,7 @@ impl BatchPartitioner {
         let batches = {
             let _timer = timer.timer();
             let indices_array: PrimitiveArray<UInt32Type> = reordered_indices.into();
-            let columns = take_arrays(batch.columns(), &indices_array, None)?;
+            let columns = vec![]; //take_arrays(batch.columns(), &indices_array, None)?;
 
             let mut options = RecordBatchOptions::new();
             options = options.with_row_count(Some(indices_array.len()));
