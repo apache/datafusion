@@ -1544,6 +1544,14 @@ fn with_filters(predicates: Vec<Expr>, plan: LogicalPlan) -> LogicalPlan {
 /// Matching is structural, which makes this conservative rather than wrong: a
 /// predicate written `b + a` does not match a key written `a + b`, and is simply
 /// left above the window.
+///
+/// A node carrying a subquery counts as reading something else, whatever the
+/// keys are. `Expr::apply` does not descend into a subquery's plan, so the
+/// columns it correlates on are invisible here, and an outer reference can vary
+/// inside a single partition: with `PARTITION BY a + b`, the predicate
+/// `a + b > (SELECT ... WHERE inner.x = outer.a)` would otherwise look like it
+/// reads nothing but the key. The same blind spot hides a volatile function
+/// inside a subquery from the caller's `is_volatile` check.
 fn reads_only_partition_keys(
     expr: &Expr,
     partition_keys: &HashSet<Expr>,
@@ -1553,7 +1561,7 @@ fn reads_only_partition_keys(
         Ok(if partition_keys.contains(node) {
             // the whole key was matched, so whatever it reads is accounted for
             TreeNodeRecursion::Jump
-        } else if matches!(node, Expr::Column(_)) {
+        } else if reads_beyond_this_node(node) {
             reads_something_else = true;
             TreeNodeRecursion::Stop
         } else {
@@ -1561,6 +1569,24 @@ fn reads_only_partition_keys(
         })
     })?;
     Ok(!reads_something_else)
+}
+
+/// Does this node read data that walking its children cannot account for?
+///
+/// A column reads itself. The subquery-bearing variants read whatever their
+/// plan reads, including outer references to the window's own input, and
+/// `Expr::apply` yields none of that: `Exists` and `ScalarSubquery` are leaves,
+/// and `InSubquery` and `SetComparison` expose only their left-hand expression.
+fn reads_beyond_this_node(node: &Expr) -> bool {
+    matches!(
+        node,
+        Expr::Column(_)
+            | Expr::OuterReferenceColumn(..)
+            | Expr::ScalarSubquery(_)
+            | Expr::Exists(_)
+            | Expr::InSubquery(_)
+            | Expr::SetComparison(_)
+    )
 }
 
 fn expr_columns(exprs: &[Expr]) -> HashSet<Column> {
@@ -1588,7 +1614,7 @@ mod tests {
         ColumnarValue, ExprFunctionExt, Extension, LogicalPlanBuilder,
         ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TableScan, TableSource,
         TableType, UserDefinedLogicalNodeCore, Volatility, WindowFunctionDefinition, col,
-        in_list, in_subquery, lit,
+        in_list, in_subquery, lit, out_ref_col, scalar_subquery,
     };
 
     use crate::OptimizerContext;
@@ -2257,6 +2283,92 @@ mod tests {
             plan,
             @r"
         Filter: test.a + test.b > TestScalarUDF()
+          WindowAggr: windowExpr=[[rank() PARTITION BY [test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+            TableScan: test
+        "
+        )
+    }
+
+    /// verifies that a predicate carrying a correlated scalar subquery stays
+    /// above the window even though its visible part is exactly the expression
+    /// key. `Expr::apply` does not enter the subquery plan, so `outer.a`, which
+    /// varies inside a partition of `a + b`, is invisible to the key test.
+    #[test]
+    fn filter_keep_window_scalar_subquery_over_expression_key() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let subplan = Arc::new(
+            LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
+                .filter(col("sq.c").eq(out_ref_col(DataType::UInt32, "test.a")))?
+                .aggregate(Vec::<Expr>::new(), vec![sum(col("sq.c"))])?
+                .build()?,
+        );
+
+        let window = Expr::from(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![add(col("a"), col("b"))]) // PARTITION BY a + b
+        .order_by(vec![col("c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![window])?
+            .filter(add(col("a"), col("b")).gt(scalar_subquery(subplan)))?
+            .build()?;
+        assert_plan_not_transformed!(plan.clone());
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test.a + test.b > (<subquery>)
+          Subquery:
+            Aggregate: groupBy=[[]], aggr=[[sum(sq.c)]]
+              TableScan: sq, full_filters=[sq.c = outer_ref(test.a)]
+          WindowAggr: windowExpr=[[rank() PARTITION BY [test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+            TableScan: test
+        "
+        )
+    }
+
+    /// the same guard for `IN (subquery)`, whose subquery plan `Expr::apply`
+    /// also skips: only the left-hand expression is walked
+    #[test]
+    fn filter_keep_window_in_subquery_over_expression_key() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let subplan = Arc::new(
+            LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
+                .filter(col("sq.c").eq(out_ref_col(DataType::UInt32, "test.a")))?
+                .project(vec![col("sq.c")])?
+                .build()?,
+        );
+
+        let window = Expr::from(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![add(col("a"), col("b"))]) // PARTITION BY a + b
+        .order_by(vec![col("c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![window])?
+            .filter(in_subquery(add(col("a"), col("b")), subplan))?
+            .build()?;
+        assert_plan_not_transformed!(plan.clone());
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test.a + test.b IN (<subquery>)
+          Subquery:
+            Projection: sq.c
+              TableScan: sq, full_filters=[sq.c = outer_ref(test.a)]
           WindowAggr: windowExpr=[[rank() PARTITION BY [test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
             TableScan: test
         "
