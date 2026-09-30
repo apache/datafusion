@@ -329,8 +329,11 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             {
                 // If the aggregation is from a distinct it will not change the result for
                 // exists/in subqueries so we can still pull up all predicates.
+                // For LATERAL joins (where in_predicate_opt is None), pulling a non-equality
+                // filter through a DISTINCT aggregate causes duplicate rows because the
+                // DISTINCT output rows are duplicated for each outer row.
                 let is_distinct = aggregate.aggr_expr.is_empty();
-                if !is_distinct {
+                if !is_distinct || self.in_predicate_opt.is_none() {
                     self.can_pull_up = self.can_pull_up && self.can_pull_over_aggregation;
                 }
                 let mut local_correlated_cols = BTreeSet::new();
