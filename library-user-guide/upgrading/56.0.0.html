@@ -1022,6 +1022,27 @@ ignores the unknown field but cannot preserve the qualifier required by the
 expressions, which can cause resolution failure or incorrect rebinding.</p></li>
 </ul>
 </section>
+<section id="functionaldependence-has-a-new-null-equality-field">
+<h3><code class="docutils literal notranslate"><span class="pre">FunctionalDependence</span></code> has a new <code class="docutils literal notranslate"><span class="pre">null_equality</span></code> field<a class="headerlink" href="#functionaldependence-has-a-new-null-equality-field" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">FunctionalDependence</span></code> now records the NULL semantics its dependency holds under.
+Build it with <code class="docutils literal notranslate"><span class="pre">FunctionalDependence::new(..)</span></code> and, when needed,
+<code class="docutils literal notranslate"><span class="pre">.with_null_equality(NullEquality::NullEqualsNull)</span></code> instead of a struct literal.</p>
+<p><strong>Migration guide:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">dep</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FunctionalDependence</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">source_indices</span><span class="p">,</span>
+<span class="w">    </span><span class="n">target_indices</span><span class="p">,</span>
+<span class="w">    </span><span class="n">nullable</span><span class="p">,</span>
+<span class="w">    </span><span class="n">mode</span><span class="p">:</span><span class="w"> </span><span class="nc">Dependency</span><span class="p">::</span><span class="n">Single</span><span class="p">,</span>
+<span class="p">};</span>
+
+<span class="c1">// After</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">dep</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FunctionalDependence</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">source_indices</span><span class="p">,</span><span class="w"> </span><span class="n">target_indices</span><span class="p">,</span><span class="w"> </span><span class="n">nullable</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_mode</span><span class="p">(</span><span class="n">Dependency</span><span class="p">::</span><span class="n">Single</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_null_equality</span><span class="p">(</span><span class="n">NullEquality</span><span class="p">::</span><span class="n">NullEqualsNull</span><span class="p">);</span>
+</pre></div>
+</div>
+</section>
 <section id="filesource-exact-filter-controls-scan-equivalence-properties">
 <h3><code class="docutils literal notranslate"><span class="pre">FileSource::exact_filter</span></code> controls scan equivalence properties<a class="headerlink" href="#filesource-exact-filter-controls-scan-equivalence-properties" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code> no longer derives equivalence properties (constant columns
@@ -1125,6 +1146,7 @@ conjuncts when <code class="docutils literal notranslate"><span class="pre">push
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ensure-distribution-is-deprecated-in-favour-of-ensure-distribution-with-stats"><code class="docutils literal notranslate"><span class="pre">ensure_distribution</span></code> is deprecated in favour of <code class="docutils literal notranslate"><span class="pre">ensure_distribution_with_stats</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#mergeintoop-requires-the-sql-visible-target-qualifier"><code class="docutils literal notranslate"><span class="pre">MergeIntoOp</span></code> requires the SQL-visible target qualifier</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#mergeintoopnode-protobuf-literals-require-target-qualifier"><code class="docutils literal notranslate"><span class="pre">MergeIntoOpNode</span></code> protobuf literals require <code class="docutils literal notranslate"><span class="pre">target_qualifier</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#functionaldependence-has-a-new-null-equality-field"><code class="docutils literal notranslate"><span class="pre">FunctionalDependence</span></code> has a new <code class="docutils literal notranslate"><span class="pre">null_equality</span></code> field</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filesource-exact-filter-controls-scan-equivalence-properties"><code class="docutils literal notranslate"><span class="pre">FileSource::exact_filter</span></code> controls scan equivalence properties</a></li>
 </ul>
 </li>
