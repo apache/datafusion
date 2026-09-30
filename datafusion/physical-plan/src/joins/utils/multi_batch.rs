@@ -463,6 +463,7 @@ mod tests {
     use arrow::datatypes::{Field, Float64Type, Int8Type, Int32Type, UnionFields};
 
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn fixed_width_children_do_not_have_a_32_bit_byte_offset_limit() -> Result<()> {
         assert_eq!(
             fixed_width_max_buffer(&DataType::FixedSizeBinary(16), 1 << 27)?,
