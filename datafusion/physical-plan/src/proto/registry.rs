@@ -107,7 +107,8 @@ pub trait ExtensionPlanFromProto: ExecutionPlan + Sized {
 /// Deliberately private, and the same type on both the
 /// [`register_execution_plan`] and the [`decode_execution_plan`] side.
 /// [`ExtensionPlanFromProto`] is the public contract and
-/// [`decode_execution_plan`] is the public way to invoke one, so this can
+/// [`decode_execution_plan`] (hidden, internal to DataFusion) is the only way
+/// to invoke one, so this can
 /// become something else — a `dyn` decoder object, to admit stateful or
 /// closure decoders, which is what an FFI decoder needs — without a breaking
 /// change.
@@ -167,6 +168,11 @@ pub fn register_execution_plan<T: ExtensionPlanFromProto>(
 /// `Some(Err(..))` means the decoder that *does* own the name failed, which is
 /// fatal: falling back there would let another codec decode the payload
 /// wrongly, the very thing the name exists to prevent.
+///
+/// Not intended as public API: `datafusion-proto` drives decoding and is the
+/// only intended caller. It is `pub` only because that call crosses a crate
+/// boundary, so it is hidden from the docs and may change without notice.
+#[doc(hidden)]
 pub fn decode_execution_plan(
     registry: &ProtoDecoderRegistry,
     node: &PhysicalPlanNode,
