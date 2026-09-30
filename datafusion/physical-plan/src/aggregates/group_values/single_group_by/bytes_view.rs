@@ -143,6 +143,7 @@ impl GroupValues for GroupValuesBytesView {
         // release the map's allocations rather than restoring the warm up
         // capacity that `take` keeps for the emit path.
         self.map.clear_and_release();
+        self.num_groups = 0;
     }
 }
 
@@ -200,5 +201,22 @@ mod tests {
         assert!(group_values.size() > released_size);
         group_values.emit(EmitTo::All).unwrap();
         assert!(group_values.size() > empty + INITIAL_MAP_CAPACITY);
+    }
+
+
+    #[test]
+    fn clear_shrink_should_reset_len() {
+        let mut group_values = GroupValuesBytesView::new(OutputType::Utf8View);
+        let values: ArrayRef = Arc::new(StringViewArray::from_iter_values(
+            (0..10).map(|i| format!("group value number {i}")),
+        ));
+        let mut groups = vec![];
+        group_values
+            .intern(&[Arc::clone(&values)], &mut groups)
+            .unwrap();
+        assert_eq!(group_values.len(), 10);
+
+        group_values.clear_shrink(0);
+        assert_eq!(group_values.len(), 0);
     }
 }

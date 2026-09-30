@@ -283,10 +283,15 @@ impl GroupValues for GroupValuesRows {
     }
 
     fn clear_shrink(&mut self, num_rows: usize) {
-        self.group_values = self.group_values.take().map(|mut rows| {
-            rows.clear();
-            rows
-        });
+        self.group_values = if num_rows == 0 {
+            None
+        } else {
+            self.group_values.take().map(|mut rows| {
+                // This only clear and do not shrink the capacity
+                rows.clear();
+                rows
+            })
+        };
         self.map.clear();
         self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
         self.map_size = self.map.capacity() * size_of::<(u64, usize)>();
@@ -483,5 +488,28 @@ mod tests {
         group_values.intern(&[input], &mut groups)?;
         assert_eq!(groups, vec![3]);
         Ok(())
+    }
+
+    #[test]
+    fn clear_shrink_0_after_intern_should_return_to_original_size() {
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "group",
+            DataType::List(field),
+            true,
+        )]));
+        let mut group_values = GroupValuesRows::try_new(schema).unwrap();
+        let initial_size = group_values.size();
+        let input = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3)]),
+            Some(vec![Some(1), Some(2)]),
+        ])) as ArrayRef;
+        let mut groups = vec![];
+        group_values.intern(&[input], &mut groups).unwrap();
+        assert_ne!(group_values.size(), initial_size, "should save some data");
+        group_values.clear_shrink(0);
+        assert_eq!(group_values.size(), initial_size, "should release memory back to original size");
     }
 }
