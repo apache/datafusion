@@ -810,6 +810,57 @@ ORDER BY t1.id, sub.id;
 1 20 2
 2 30 3
 
+# A correlated filter below the window that reads only a `PARTITION BY` column
+# keeps or drops whole partitions, so it is pulled above the window.
+query TT
+EXPLAIN SELECT t1.id, sub.id, sub.rn
+FROM t1, LATERAL (
+    SELECT t2.id, row_number() OVER (PARTITION BY t2.t1_id ORDER BY t2.id) AS rn
+    FROM t2 WHERE t2.t1_id = t1.id
+) AS sub
+ORDER BY t1.id, sub.id;
+----
+logical_plan
+01)Sort: t1.id ASC NULLS LAST, sub.id ASC NULLS LAST
+02)--Projection: t1.id, sub.id, sub.rn
+03)----Inner Join: t1.id = sub.t1_id
+04)------TableScan: t1 projection=[id]
+05)------SubqueryAlias: sub
+06)--------Projection: t2.id, row_number() PARTITION BY [t2.t1_id] ORDER BY [t2.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn, t2.t1_id
+07)----------WindowAggr: windowExpr=[[row_number() PARTITION BY [t2.t1_id] ORDER BY [t2.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+08)------------TableScan: t2 projection=[id, t1_id]
+physical_plan
+01)SortExec: expr=[id@0 ASC NULLS LAST, id@1 ASC NULLS LAST], preserve_partitioning=[false]
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1_id@2, id@0)], projection=[id@3, id@0, rn@1]
+03)----ProjectionExec: expr=[id@0 as id, row_number() PARTITION BY [t2.t1_id] ORDER BY [t2.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rn, t1_id@1 as t1_id]
+04)------BoundedWindowAggExec: wdw=[row_number() PARTITION BY [t2.t1_id] ORDER BY [t2.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [t2.t1_id] ORDER BY [t2.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+05)--------SortExec: expr=[t1_id@1 ASC NULLS LAST, id@0 ASC NULLS LAST], preserve_partitioning=[false]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query III
+SELECT t1.id, sub.id, sub.rn
+FROM t1, LATERAL (
+    SELECT t2.id, row_number() OVER (PARTITION BY t2.t1_id ORDER BY t2.id) AS rn
+    FROM t2 WHERE t2.t1_id = t1.id
+) AS sub
+ORDER BY t1.id, sub.id;
+----
+1 10 1
+1 20 2
+2 30 1
+
+# The filter must read a `PARTITION BY` column of every window function.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn
+SELECT t1.id, sub.id, sub.rn, sub.c
+FROM t1, LATERAL (
+    SELECT t2.id,
+        row_number() OVER (PARTITION BY t2.t1_id ORDER BY t2.id) AS rn,
+        count(*) OVER (PARTITION BY t2.data) AS c
+    FROM t2 WHERE t2.t1_id = t1.id
+) AS sub
+ORDER BY t1.id, sub.id;
+
 # --- Implicit LATERAL (comma without LATERAL keyword) ---
 # DuckDB auto-detects lateral correlation; DataFusion requires
 # the explicit LATERAL keyword.

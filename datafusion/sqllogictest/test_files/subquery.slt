@@ -3108,9 +3108,10 @@ DROP TABLE win_outer;
 statement ok
 DROP TABLE win_inner;
 
-# A correlated filter below an Unnest is not pulled above the Unnest. The pull
-# up does not carry the columns of the filter through the Unnest, so it failed
-# with a schema error.
+# A correlated filter below an Unnest is pulled above the Unnest. An Unnest maps
+# each input row to its own output rows, so a filter on a column it passes
+# through keeps the same rows. The Unnest must output the columns the pull up
+# adds below it, which failed with a schema error before.
 statement ok
 CREATE TABLE unnest_outer(k INT) AS VALUES (1), (2);
 
@@ -3124,24 +3125,49 @@ query TT
 EXPLAIN SELECT unnest_outer.k FROM unnest_outer WHERE EXISTS (SELECT 1 FROM (SELECT unnest(t.arr) AS u FROM (SELECT * FROM unnest_inner WHERE unnest_inner.id = unnest_outer.k) AS t) AS x WHERE x.u = 3);
 ----
 logical_plan
-01)Filter: EXISTS (<subquery>)
-02)--Subquery:
-03)----Projection: Int64(1)
-04)------SubqueryAlias: x
-05)--------Projection: __unnest_placeholder(t.arr,depth=1) AS UNNEST(t.arr) AS u
-06)----------Filter: __unnest_placeholder(t.arr,depth=1) = Int32(3)
-07)------------Unnest: lists[__unnest_placeholder(t.arr)|depth=1] structs[]
-08)--------------Projection: t.arr AS __unnest_placeholder(t.arr)
-09)----------------SubqueryAlias: t
-10)------------------Projection: unnest_inner.id, unnest_inner.arr
-11)--------------------Filter: unnest_inner.id = outer_ref(unnest_outer.k)
-12)----------------------TableScan: unnest_inner
-13)--TableScan: unnest_outer projection=[k]
+01)LeftSemi Join: unnest_outer.k = __correlated_sq_1.id
+02)--TableScan: unnest_outer projection=[k]
+03)--SubqueryAlias: __correlated_sq_1
+04)----SubqueryAlias: x
+05)------Projection: t.id
+06)--------Filter: __unnest_placeholder(t.arr,depth=1) = Int32(3)
+07)----------Unnest: lists[__unnest_placeholder(t.arr)|depth=1] structs[]
+08)------------Projection: t.arr AS __unnest_placeholder(t.arr), t.id
+09)--------------SubqueryAlias: t
+10)----------------TableScan: unnest_inner projection=[id, arr]
 
-# The subquery stays correlated, which the physical planner does not support.
-# The right answer is `1`.
-statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+query I
 SELECT unnest_outer.k FROM unnest_outer WHERE EXISTS (SELECT 1 FROM (SELECT unnest(t.arr) AS u FROM (SELECT * FROM unnest_inner WHERE unnest_inner.id = unnest_outer.k) AS t) AS x WHERE x.u = 3);
+----
+1
+
+query I
+SELECT unnest_outer.k FROM unnest_outer WHERE NOT EXISTS (SELECT 1 FROM (SELECT unnest(t.arr) AS u FROM (SELECT * FROM unnest_inner WHERE unnest_inner.id = unnest_outer.k) AS t) AS x WHERE x.u = 3);
+----
+2
+
+# The correlated column is selected next to the unnested one.
+query TT
+EXPLAIN SELECT unnest_outer.k, s.u FROM unnest_outer, LATERAL (SELECT i.id, unnest(i.arr) AS u FROM unnest_inner AS i WHERE i.id = unnest_outer.k) AS s ORDER BY unnest_outer.k, s.u;
+----
+logical_plan
+01)Sort: unnest_outer.k ASC NULLS LAST, s.u ASC NULLS LAST
+02)--Projection: unnest_outer.k, s.u
+03)----Inner Join: unnest_outer.k = s.id
+04)------TableScan: unnest_outer projection=[k]
+05)------SubqueryAlias: s
+06)--------Projection: i.id, __unnest_placeholder(i.arr,depth=1) AS UNNEST(i.arr) AS u
+07)----------Unnest: lists[__unnest_placeholder(i.arr)|depth=1] structs[]
+08)------------Projection: i.id, i.arr AS __unnest_placeholder(i.arr)
+09)--------------SubqueryAlias: i
+10)----------------TableScan: unnest_inner projection=[id, arr]
+
+query II
+SELECT unnest_outer.k, s.u FROM unnest_outer, LATERAL (SELECT i.id, unnest(i.arr) AS u FROM unnest_inner AS i WHERE i.id = unnest_outer.k) AS s ORDER BY unnest_outer.k, s.u;
+----
+1 3
+1 4
+2 5
 
 statement ok
 RESET datafusion.explain.logical_plan_only;
