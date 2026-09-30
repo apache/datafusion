@@ -3544,6 +3544,11 @@ mod tests {
 
     /// Runs a join whose 200 keys spread over 2M would size a pruning bitmap
     /// at the 128 KiB cap, and reports the bytes the build side reserved.
+    ///
+    /// Forces the IN-list threshold off: under `force_hash_collisions` every
+    /// key hashes to the same bucket, so `num_of_distinct_key()` no longer
+    /// reflects the real 200 distinct keys and would otherwise take the
+    /// IN-list branch instead of the one under test.
     async fn build_mem_used(limit: usize, dynamic_filters: bool) -> Result<usize> {
         let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
         let batch = |keys: Vec<i64>| {
@@ -3572,7 +3577,16 @@ mod tests {
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(limit, 1.0)
             .build_arc()?;
-        let task_ctx = Arc::new(TaskContext::default().with_runtime(runtime));
+        let mut config = SessionConfig::new();
+        config
+            .options_mut()
+            .optimizer
+            .hash_join_inlist_pushdown_max_size = 0;
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_runtime(runtime)
+                .with_session_config(config),
+        );
         let batches = common::collect(join.execute(0, task_ctx)?).await?;
         assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 3);
         Ok(join
