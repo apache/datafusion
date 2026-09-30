@@ -540,7 +540,12 @@ impl EagerPruner {
                 reader,
                 reader_metadata.clone(),
             );
-            let row_group_indexes: Vec<usize> = row_groups.row_group_indexes().collect();
+            // Statistics have already proved that every row in a fully matched
+            // group matches the predicate, so its Bloom filters cannot prune it.
+            let row_group_indexes: Vec<usize> = row_groups
+                .row_group_indexes()
+                .filter(|idx| !row_groups.access_plan().is_fully_matched(*idx))
+                .collect();
             let bloom_filters = load_row_group_bloom_filters(
                 &mut builder,
                 pruning_predicate,
