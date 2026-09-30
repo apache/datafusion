@@ -17,7 +17,7 @@
 
 //! [`HashJoinExec`] Partitioned Hash Join Operator
 
-pub use exec::{HashJoinExec, HashJoinExecBuilder};
+pub use exec::{HashJoinExec, HashJoinExecBuilder, PreparedHashJoinBuild};
 /// # Public Only for Internal Use:
 ///
 /// This is not a public API and is for internal use only; see [API policy] for details.

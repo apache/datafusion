@@ -31,7 +31,9 @@ use datafusion_physical_expr::PhysicalExprRef;
 /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
 #[doc(hidden)]
 pub use hash_join::HashTableLookupExpr;
-pub use hash_join::{HashExpr, HashJoinExec, HashJoinExecBuilder, SeededRandomState};
+pub use hash_join::{
+    HashExpr, HashJoinExec, HashJoinExecBuilder, PreparedHashJoinBuild, SeededRandomState,
+};
 pub use nested_loop_join::{NestedLoopJoinExec, NestedLoopJoinExecBuilder};
 use parking_lot::Mutex;
 // Note: SortMergeJoin is not used in plans yet
