@@ -5161,9 +5161,7 @@ statement ok
 drop table bit_distinct;
 
 
-# A NULL-typed bitwise aggregate with GROUP BY has no integer groups
-# accumulator, so it must fall back to the scalar accumulator instead of
-# erroring with "GroupsAccumulator not supported for bit_and with Null".
+# bitwise aggregates over NULL inputs, with and without GROUP BY
 statement ok
 create table bit_null (tag varchar) as values ('A'), ('A'), ('B');
 
