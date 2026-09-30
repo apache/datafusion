@@ -510,6 +510,10 @@ mod tests {
         group_values.intern(&[input], &mut groups).unwrap();
         assert_ne!(group_values.size(), initial_size, "should save some data");
         group_values.clear_shrink(0);
-        assert_eq!(group_values.size(), initial_size, "should release memory back to original size");
+        assert_eq!(
+            group_values.size(),
+            initial_size,
+            "should release memory back to original size"
+        );
     }
 }

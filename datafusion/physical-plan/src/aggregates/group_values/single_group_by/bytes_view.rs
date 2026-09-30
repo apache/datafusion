@@ -203,7 +203,6 @@ mod tests {
         assert!(group_values.size() > empty + INITIAL_MAP_CAPACITY);
     }
 
-
     #[test]
     fn clear_shrink_should_reset_len() {
         let mut group_values = GroupValuesBytesView::new(OutputType::Utf8View);
