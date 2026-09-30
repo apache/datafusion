@@ -308,7 +308,12 @@ impl ExternalSorter {
             metrics.spill_metrics.clone(),
             Arc::clone(&schema),
         )
-        .with_compression_type(spill_compression);
+        .with_compression_type(spill_compression)
+        // The final merge starts with `sort_spill_reservation_bytes` of headroom and
+        // reserves memory for the largest batch of each spill file. Bound spilled batches
+        // to that headroom, so wide rows (`batch_size` rows of several MB each) do not make
+        // one spilled batch larger than the memory the merge has for it.
+        .with_max_batch_bytes(Some(sort_spill_reservation_bytes.max(1)));
 
         Ok(Self {
             schema,
