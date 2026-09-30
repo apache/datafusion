@@ -65,6 +65,7 @@ use parquet::file::properties::{
 use parquet::file::writer::SerializedFileWriter;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver, Sender};
+use tokio::sync::watch;
 
 /// Initial writing buffer size. Note this is just a size hint for efficiency. It
 /// will grow beyond the set value if needed.
@@ -602,11 +603,16 @@ async fn column_serializer_task(
     mut writer: ArrowColumnWriter,
     reservation: MemoryReservation,
     encoding_time: Time,
+    progress: Option<watch::Sender<usize>>,
 ) -> Result<(ArrowColumnWriter, MemoryReservation)> {
     while let Some(col) = rx.recv().await {
         let _timer = encoding_time.timer();
         writer.write(&col)?;
         reservation.try_resize(writer.memory_size())?;
+        if let Some(progress) = &progress {
+            // The receiver is dropped once the row-group boundary is fixed.
+            let _ = progress.send(writer.get_estimated_total_bytes());
+        }
     }
     Ok((writer, reservation))
 }
@@ -710,6 +716,7 @@ fn spawn_rg_join_and_finalize_task(
 struct InProgressRowGroup {
     column_writer_handles: Vec<ColumnWriterTask>,
     col_array_channels: Vec<ColSender>,
+    progress: Vec<watch::Receiver<usize>>,
     rows: usize,
 }
 
@@ -721,15 +728,24 @@ impl InProgressRowGroup {
         encoding_time: &Time,
     ) -> Result<Self> {
         let writers = factory.create_column_writers(index)?;
+        let track_bytes = ctx.props.max_row_group_bytes().is_some();
         let mut group = Self {
             column_writer_handles: Vec::with_capacity(writers.len()),
             col_array_channels: Vec::with_capacity(writers.len()),
+            progress: Vec::with_capacity(if track_bytes { writers.len() } else { 0 }),
             rows: 0,
         };
         for writer in writers {
             let (tx, rx) = mpsc::channel(
                 ctx.parallel_options.max_buffered_record_batches_per_stream,
             );
+            let progress = if track_bytes {
+                let (tx, rx) = watch::channel(0);
+                group.progress.push(rx);
+                Some(tx)
+            } else {
+                None
+            };
             let reservation =
                 MemoryConsumer::new("ParquetSink(ArrowColumnWriter)").register(&ctx.pool);
             group
@@ -739,6 +755,7 @@ impl InProgressRowGroup {
                     writer,
                     reservation,
                     encoding_time.clone(),
+                    progress,
                 )));
             group.col_array_channels.push(tx);
         }
@@ -757,6 +774,26 @@ impl InProgressRowGroup {
         Ok(())
     }
 
+    /// There is only one unacknowledged slice per column. A watch notification
+    /// acknowledges that slice even if its estimated size has not changed.
+    async fn synchronize(&mut self) -> Result<()> {
+        for (index, progress) in self.progress.iter_mut().enumerate() {
+            if progress.changed().await.is_err() {
+                return column_writer_error(
+                    self.column_writer_handles.swap_remove(index),
+                )
+                .await;
+            }
+        }
+        Ok(())
+    }
+
+    fn estimated_bytes(&self) -> usize {
+        self.progress.iter().fold(0usize, |total, progress| {
+            total.saturating_add(*progress.borrow())
+        })
+    }
+
     fn finish(
         self,
         pool: &Arc<dyn MemoryPool>,
@@ -766,6 +803,7 @@ impl InProgressRowGroup {
             column_writer_handles,
             col_array_channels,
             rows,
+            ..
         } = self;
         drop(col_array_channels);
         spawn_rg_join_and_finalize_task(
@@ -777,14 +815,32 @@ impl InProgressRowGroup {
     }
 }
 
-/// This task coordinates the serialization of a parquet file in parallel.
-/// As the query produces RecordBatches, these are written to a RowGroup
-/// via parallel [ArrowColumnWriter] tasks. Once the desired max rows per
-/// row group is reached, the parallel tasks are joined on another separate task
-/// and sent to a concatenation task. This task immediately continues to work
-/// on the next row group in parallel. So, parquet serialization is parallelized
-/// across both columns and row_groups, with a theoretical max number of parallel tasks
-/// given by n_columns * num_row_groups.
+async fn finish_and_restart_row_group(
+    group: &mut InProgressRowGroup,
+    index: &mut usize,
+    factory: &ArrowRowGroupWriterFactory,
+    ctx: &ParquetFileWriteContext,
+    encoding_time: &Time,
+    serialize_tx: &Sender<SpawnedTask<RBStreamSerializeResult>>,
+) -> Result<bool> {
+    group.col_array_channels.clear();
+    let task = spawn_rg_join_and_finalize_task(
+        std::mem::take(&mut group.column_writer_handles),
+        group.rows,
+        &ctx.pool,
+        encoding_time.clone(),
+    );
+    // The consumer owns the error when its output channel has closed.
+    if serialize_tx.send(task).await.is_err() {
+        return Ok(false);
+    }
+    *index += 1;
+    *group = InProgressRowGroup::new(factory, *index, ctx, encoding_time)?;
+    Ok(true)
+}
+
+/// Selects common root-record boundaries for the parallel leaf writers.
+/// Byte decisions use the same acknowledged estimates as ArrowWriter.
 fn spawn_parquet_parallel_serialization_task(
     row_group_writer_factory: ArrowRowGroupWriterFactory,
     mut data: Receiver<RecordBatch>,
@@ -793,55 +849,99 @@ fn spawn_parquet_parallel_serialization_task(
     encoding_time: Time,
 ) -> SpawnedTask<Result<(), DataFusionError>> {
     SpawnedTask::spawn(async move {
-        let max_row_group_rows = ctx
+        let max_rows = ctx
             .props
             .max_row_group_row_count()
             .unwrap_or(DEFAULT_MAX_ROW_GROUP_ROW_COUNT);
-        let mut row_group_index = 0;
+        let max_bytes = ctx.props.max_row_group_bytes();
+        let mut index = 0;
         let mut group = InProgressRowGroup::new(
             &row_group_writer_factory,
-            row_group_index,
+            index,
             &ctx,
             &encoding_time,
         )?;
-
-        while let Some(mut rb) = data.recv().await {
-            // Split batches that cross a row-group boundary.
+        while let Some(mut batch) = data.recv().await {
+            if batch.num_rows() == 0 {
+                continue;
+            }
             loop {
-                if group.rows + rb.num_rows() < max_row_group_rows {
-                    group.write(&rb, Arc::clone(&ctx.schema)).await?;
-                    break;
-                } else {
-                    let rows_left = max_row_group_rows - group.rows;
-                    group
-                        .write(&rb.slice(0, rows_left), Arc::clone(&ctx.schema))
-                        .await?;
+                // Match ArrowWriter by choosing one split point from both
+                // limits before slicing, so the remainder stays together.
+                let mut rows_to_write = batch.num_rows().min(max_rows - group.rows);
 
-                    // Finalization can overlap with encoding the next row group.
-                    let finalize_rg_task = group.finish(&ctx.pool, &encoding_time);
-                    if serialize_tx.send(finalize_rg_task).await.is_err() {
-                        return Ok(());
+                if let Some(limit) = max_bytes.filter(|_| group.rows > 0) {
+                    let bytes = group.estimated_bytes();
+                    let avg = bytes / group.rows;
+                    // A zero integer average disables prediction, just as in
+                    // ArrowWriter. The accumulated byte check still applies.
+                    let byte_budget = if bytes >= limit {
+                        0
+                    } else {
+                        (limit - bytes).checked_div(avg).unwrap_or(usize::MAX)
+                    };
+                    if byte_budget == 0 {
+                        if !finish_and_restart_row_group(
+                            &mut group,
+                            &mut index,
+                            &row_group_writer_factory,
+                            &ctx,
+                            &encoding_time,
+                            &serialize_tx,
+                        )
+                        .await?
+                        {
+                            return Ok(());
+                        }
+                        continue;
                     }
+                    rows_to_write = rows_to_write.min(byte_budget);
+                }
 
-                    rb = rb.slice(rows_left, rb.num_rows() - rows_left);
-                    row_group_index += 1;
-                    group = InProgressRowGroup::new(
+                let remaining = if rows_to_write < batch.num_rows() {
+                    let remaining =
+                        batch.slice(rows_to_write, batch.num_rows() - rows_to_write);
+                    batch = batch.slice(0, rows_to_write);
+                    Some(remaining)
+                } else {
+                    None
+                };
+                group.write(&batch, Arc::clone(&ctx.schema)).await?;
+                let full = if group.rows == max_rows {
+                    // This boundary is already fixed. Finalization and the
+                    // next group's encoding can overlap without a feedback wait.
+                    true
+                } else if let Some(limit) = max_bytes {
+                    group.synchronize().await?;
+                    group.estimated_bytes() >= limit
+                } else {
+                    false
+                };
+                if full
+                    && !finish_and_restart_row_group(
+                        &mut group,
+                        &mut index,
                         &row_group_writer_factory,
-                        row_group_index,
                         &ctx,
                         &encoding_time,
-                    )?;
+                        &serialize_tx,
+                    )
+                    .await?
+                {
+                    return Ok(());
+                }
+                match remaining {
+                    Some(next) => batch = next,
+                    None => break,
                 }
             }
         }
-
         if group.rows > 0 {
-            let finalize_rg_task = group.finish(&ctx.pool, &encoding_time);
-            if serialize_tx.send(finalize_rg_task).await.is_err() {
+            let task = group.finish(&ctx.pool, &encoding_time);
+            if serialize_tx.send(task).await.is_err() {
                 return Ok(());
             }
         }
-
         Ok(())
     })
 }
