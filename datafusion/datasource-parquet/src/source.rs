@@ -774,7 +774,7 @@ impl FileSource for ParquetSource {
                 // the parquet opener will pause the single decoder at row
                 // group boundaries and consult `RowGroupPruner` to drop
                 // RGs the current threshold proves unwinnable, rebuilding
-                // the decoder via `into_builder().with_row_groups(...)` to
+                // the decoder via `into_builder().with_row_group_selections(...)` to
                 // skip them. The actual pruning count appears as
                 // `row_groups_pruned_dynamic_filter` in EXPLAIN ANALYZE.
                 // We use `contains_dynamic_filter()` (matches both `Watching`
