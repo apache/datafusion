@@ -1874,6 +1874,156 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_filter_statistics_large_in_list() -> Result<()> {
+        use datafusion_physical_expr::expressions::in_list;
+
+        let schema = Schema::new(vec![Field::new("id", DataType::Utf8, true)]);
+        let distinct_values = 4096;
+        let values: Vec<Arc<dyn PhysicalExpr>> = (0..distinct_values)
+            .map(|i| lit(format!("value_{i}")) as _)
+            .collect();
+        // Non-adjacent duplicates and NULLs must not increase the row cap.
+        let repeated_values = values
+            .iter()
+            .chain(values.iter().rev())
+            .cloned()
+            .chain(std::iter::repeat_n(lit(ScalarValue::Utf8(None)) as _, 32))
+            .collect();
+        let cases = [
+            ("distinct values", values, false, distinct_values),
+            (
+                "duplicates and nulls",
+                repeated_values,
+                false,
+                distinct_values,
+            ),
+            (
+                "only nulls",
+                vec![lit(ScalarValue::Utf8(None)); 32],
+                false,
+                0,
+            ),
+            (
+                "non-literal list member",
+                vec![lit("value_0"), col("id", &schema)?],
+                false,
+                20_000,
+            ),
+            ("negated list", vec![lit("value_0")], true, 20_000),
+        ];
+
+        for (description, list, negated, expected_rows) in cases {
+            let input = Arc::new(StatisticsExec::new(
+                Statistics {
+                    num_rows: Precision::Exact(100_000),
+                    total_byte_size: Precision::Absent,
+                    column_statistics: vec![ColumnStatistics {
+                        null_count: Precision::Exact(0),
+                        distinct_count: Precision::Exact(100_000),
+                        ..Default::default()
+                    }],
+                },
+                schema.clone(),
+            ));
+            let predicate = in_list(col("id", &schema)?, list, &negated, &schema)?;
+            let filter = FilterExec::try_new(predicate, input)?;
+            let statistics =
+                StatisticsContext::new().compute(&filter, &StatisticsArgs::new())?;
+            assert_eq!(
+                statistics.num_rows,
+                Precision::Inexact(expected_rows),
+                "{description}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_statistics_in_list_uniqueness_precheck() -> Result<()> {
+        use datafusion_physical_expr::expressions::in_list;
+
+        let schema = Schema::new(vec![
+            Field::new("other", DataType::Utf8, true),
+            Field::new("id", DataType::Utf8, true),
+        ]);
+        let unique = ColumnStatistics {
+            null_count: Precision::Exact(0),
+            distinct_count: Precision::Exact(100_000),
+            ..Default::default()
+        };
+        let non_unique = ColumnStatistics {
+            distinct_count: Precision::Exact(50_000),
+            ..unique.clone()
+        };
+        let cases = [
+            (
+                "no unique columns",
+                vec![non_unique.clone(), non_unique.clone()],
+                20_000,
+            ),
+            (
+                "unknown statistics",
+                vec![ColumnStatistics::new_unknown(); 2],
+                20_000,
+            ),
+            (
+                "missing distinct count",
+                vec![
+                    non_unique.clone(),
+                    ColumnStatistics {
+                        distinct_count: Precision::Absent,
+                        ..unique.clone()
+                    },
+                ],
+                20_000,
+            ),
+            (
+                "missing null count",
+                vec![
+                    non_unique.clone(),
+                    ColumnStatistics {
+                        null_count: Precision::Absent,
+                        ..unique.clone()
+                    },
+                ],
+                20_000,
+            ),
+            (
+                "only an unrelated column is unique",
+                vec![unique.clone(), non_unique.clone()],
+                20_000,
+            ),
+            ("the second column is unique", vec![non_unique, unique], 3),
+        ];
+
+        for (description, column_statistics, expected_rows) in cases {
+            let input = Arc::new(StatisticsExec::new(
+                Statistics {
+                    num_rows: Precision::Exact(100_000),
+                    total_byte_size: Precision::Absent,
+                    column_statistics,
+                },
+                schema.clone(),
+            ));
+            let predicate = in_list(
+                col("id", &schema)?,
+                vec![lit("a"), lit("b"), lit("a"), lit("c")],
+                &false,
+                &schema,
+            )?;
+            let filter = FilterExec::try_new(predicate, input)?;
+            let statistics =
+                StatisticsContext::new().compute(&filter, &StatisticsArgs::new())?;
+            assert_eq!(
+                statistics.num_rows,
+                Precision::Inexact(expected_rows),
+                "{description}"
+            );
+        }
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_filter_statistics_basic_expr() -> Result<()> {
         // Table:
