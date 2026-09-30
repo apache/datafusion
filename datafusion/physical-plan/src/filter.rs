@@ -1138,11 +1138,11 @@ fn restricted_column(expr: &Arc<dyn PhysicalExpr>) -> Option<(usize, usize)> {
             return None;
         }
         let column = in_list.expr().downcast_ref::<Column>()?;
-        let mut values: Vec<&ScalarValue> = Vec::with_capacity(in_list.list().len());
+        let mut values: HashSet<&ScalarValue> = HashSet::new();
         for expr in in_list.list() {
             let value = expr.downcast_ref::<Literal>()?.value();
-            if !value.is_null() && !values.contains(&value) {
-                values.push(value);
+            if !value.is_null() {
+                values.insert(value);
             }
         }
         return Some((column.index(), values.len()));
