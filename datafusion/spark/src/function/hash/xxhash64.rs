@@ -447,4 +447,33 @@ mod tests {
         }
         assert_ne!(hashes[0], hashes[1]);
     }
+
+    /// Spark canonicalizes all NaN to a single NaN representation.
+    /// This test verifies that both f32 and f64 NaN values (including NaNs
+    /// with different payloads and sign bits) hash to the same value.
+    #[test]
+    fn test_xxhash64_nan_canonicalization() {
+        use arrow::array::{Float32Array, Float64Array};
+        let seed = 42u64;
+
+        // Test f32 NaN canonicalization
+        let nan_f32_1 = f32::NAN; // canonical NaN (0x7fc00000)
+        let nan_f32_2 = f32::from_bits(0xffc00000); // NaN with sign bit set
+        let nan_f32_3 = f32::from_bits(0x7fc00001); // NaN with payload
+        let array_f32: ArrayRef = Arc::new(Float32Array::from(vec![nan_f32_1, nan_f32_2, nan_f32_3]));
+        let mut hashes = vec![DEFAULT_SEED; 3];
+        create_xxhash64_hashes(&[array_f32], &mut hashes).unwrap();
+        assert_eq!(hashes[0], hashes[1], "f32 NaN canonicalization failed: canonical vs sign bit");
+        assert_eq!(hashes[1], hashes[2], "f32 NaN canonicalization failed: sign bit vs payload");
+
+        // Test f64 NaN canonicalization
+        let nan_f64_1 = f64::NAN; // canonical NaN (0x7ff8000000000000)
+        let nan_f64_2 = f64::from_bits(0xfff8000000000000); // NaN with sign bit set
+        let nan_f64_3 = f64::from_bits(0x7ff8000000000001); // NaN with payload
+        let array_f64: ArrayRef = Arc::new(Float64Array::from(vec![nan_f64_1, nan_f64_2, nan_f64_3]));
+        let mut hashes = vec![DEFAULT_SEED; 3];
+        create_xxhash64_hashes(&[array_f64], &mut hashes).unwrap();
+        assert_eq!(hashes[0], hashes[1], "f64 NaN canonicalization failed: canonical vs sign bit");
+        assert_eq!(hashes[1], hashes[2], "f64 NaN canonicalization failed: sign bit vs payload");
+    }
 }

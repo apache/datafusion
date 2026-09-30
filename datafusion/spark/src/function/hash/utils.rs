@@ -188,7 +188,8 @@ macro_rules! hash_array_primitive {
     };
 }
 
-/// Hash a floating-point primitive array, normalizing `-0.0` to `0.0` per Spark.
+/// Hash a floating-point primitive array, normalizing `-0.0` to `0.0` and
+/// canonicalizing NaN per Spark.
 #[macro_export]
 #[doc(hidden)]
 macro_rules! hash_array_primitive_float {
@@ -201,6 +202,17 @@ macro_rules! hash_array_primitive_float {
                 // Spark uses 0 as hash for -0.0, see `Murmur3Hash` expression.
                 if v == 0.0 && v.is_sign_negative() {
                     (0 as $ty2).to_le_bytes()
+                }
+                // Spark canonicalizes all NaN to a single NaN representation.
+                else if v.is_nan() {
+                    // Canonical NaN: 0x7ff8000000000000 for f64, 0x7fc00000 for f32
+                    // Use a bitwise OR with the sign bit cleared to get canonical NaN
+                    // For f64: 0x7ff8000000000000, for f32: 0x7fc00000
+                    if std::mem::size_of::<$ty>() == 8 {
+                        (0x7ff8000000000000u64 as $ty2).to_le_bytes()
+                    } else {
+                        (0x7fc00000u32 as $ty2).to_le_bytes()
+                    }
                 } else {
                     (v as $ty).to_le_bytes()
                 }
