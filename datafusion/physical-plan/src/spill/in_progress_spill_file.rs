@@ -20,7 +20,11 @@
 use datafusion_common::{Result, internal_datafusion_err};
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, AsArray, GenericByteViewArray, RecordBatch};
+use arrow::array::{
+    Array, ArrayRef, AsArray, GenericByteViewArray, OffsetSizeTrait, RecordBatch,
+    UInt32Array,
+};
+use arrow::compute::take_record_batch;
 use arrow::datatypes::{ByteViewType, DataType};
 use arrow_data::MAX_INLINE_VIEW_LEN;
 use arrow_select::dictionary::garbage_collect_any_dictionary;
@@ -347,12 +351,18 @@ fn split_ranges(
 }
 
 /// Compacts a piece for writing and returns it with its post-GC sliced size.
-fn compact_piece(
-    batch: &RecordBatch,
-    gc_dictionaries: bool,
-) -> Result<(RecordBatch, usize)> {
-    let batch = if gc_dictionaries {
-        let columns = batch
+///
+/// A piece of a split batch is a slice, and a slice keeps the buffers of its parent alive:
+/// the children of lists and maps, the data buffers of view arrays, and the values of
+/// dictionaries. `split` copies the piece out first, so it holds only its own rows, then
+/// drops unused dictionary values. [`gc_view_arrays`] compacts view arrays in both cases.
+fn compact_piece(batch: &RecordBatch, split: bool) -> Result<(RecordBatch, usize)> {
+    let batch = if split {
+        let rows = u32::try_from(batch.num_rows()).map_err(|_| {
+            internal_datafusion_err!("spill batch has more than u32::MAX rows")
+        })?;
+        let copied = take_record_batch(batch, &UInt32Array::from_iter_values(0..rows))?;
+        let columns = copied
             .columns()
             .iter()
             .map(|array| match array.data_type() {
@@ -362,7 +372,7 @@ fn compact_piece(
                 _ => Ok(Arc::clone(array)),
             })
             .collect::<Result<Vec<ArrayRef>>>()?;
-        RecordBatch::try_new(batch.schema(), columns)?
+        RecordBatch::try_new(copied.schema(), columns)?
     } else {
         batch.clone()
     };
@@ -382,11 +392,16 @@ fn referenced_batch_size(batch: &RecordBatch) -> Result<usize> {
 /// Estimates the bytes that a (possibly sliced) array points at, which is about its size
 /// once compacted.
 ///
-/// - View arrays: 16 bytes per view, plus each value too long to be stored inline. The
-///   shared data buffers are not counted, because compaction copies out only these values.
-/// - Dictionaries: the keys, plus the values that the keys use. Compaction of a split piece
-///   drops the rest.
-/// - Other types: [`arrow::array::ArrayData::get_slice_memory_size`].
+/// [`arrow::array::ArrayData::get_slice_memory_size`] narrows only the top level of a
+/// slice: a sliced list or map reports its whole child, and a sliced view array reports all
+/// the data buffers it keeps alive. Both halves of a split would then report about the size
+/// of the parent, and the split would stop. So:
+///
+/// - View arrays: 16 bytes per view, plus each value too long to be stored inline.
+/// - Dictionaries: the keys, plus the values that the keys use.
+/// - Lists, large lists and maps: the offsets, plus the child range that the offsets use.
+/// - Structs and fixed-size lists: their children, which `slice` already narrows.
+/// - Other types: `get_slice_memory_size`, which is exact for flat types.
 fn referenced_size(array: &ArrayRef) -> Result<usize> {
     let nulls = array
         .nulls()
@@ -400,9 +415,44 @@ fn referenced_size(array: &ArrayRef) -> Result<usize> {
             let used = garbage_collect_any_dictionary(dictionary)?;
             keys + referenced_size(used.as_any_dictionary().values())?
         }
+        DataType::List(_) => {
+            let list = array.as_list::<i32>();
+            nulls + list_size(list.value_offsets(), list.values())?
+        }
+        DataType::LargeList(_) => {
+            let list = array.as_list::<i64>();
+            nulls + list_size(list.value_offsets(), list.values())?
+        }
+        DataType::Map(_, _) => {
+            let map = array.as_map();
+            let entries: ArrayRef = Arc::new(map.entries().clone());
+            nulls + list_size(map.value_offsets(), &entries)?
+        }
+        DataType::Struct(_) => {
+            nulls
+                + array
+                    .as_struct()
+                    .columns()
+                    .iter()
+                    .map(referenced_size)
+                    .sum::<Result<usize>>()?
+        }
+        DataType::FixedSizeList(_, _) => {
+            nulls + referenced_size(array.as_fixed_size_list().values())?
+        }
         _ => array.to_data().get_slice_memory_size()?,
     };
     Ok(size)
+}
+
+/// The offsets of a list or map, plus the size of the child range that they use.
+fn list_size<O: OffsetSizeTrait>(offsets: &[O], child: &ArrayRef) -> Result<usize> {
+    let (Some(first), Some(last)) = (offsets.first(), offsets.last()) else {
+        return Ok(0);
+    };
+    let start = first.as_usize();
+    let used = child.slice(start, last.as_usize() - start);
+    Ok(size_of_val(offsets) + referenced_size(&used)?)
 }
 
 fn view_values_size<T: ByteViewType + ?Sized>(array: &GenericByteViewArray<T>) -> usize {
@@ -429,9 +479,10 @@ fn max_piece_size(pieces: &[(RecordBatch, usize)]) -> usize {
 mod tests {
     use super::*;
     use arrow::array::{
-        DictionaryArray, Int32Array, Int64Array, StringArray, StringViewArray,
+        DictionaryArray, Int32Array, Int64Array, ListBuilder, MapBuilder, StringArray,
+        StringBuilder, StringViewArray, StructArray,
     };
-    use arrow_schema::{Field, Schema, SchemaRef};
+    use arrow_schema::{Field, Fields, Schema, SchemaRef};
     use datafusion_common::DataFusionError;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_physical_expr_common::metrics::{
@@ -680,6 +731,113 @@ mod tests {
             .try_collect::<Vec<_>>()
             .await?;
         assert_eq!(read.len(), 1);
+        assert_same_rows(&read, &[batch]);
+        Ok(())
+    }
+
+    /// A `List<Utf8>` column: `rows` rows of four quarter-`WIDE` strings each.
+    fn wide_list(rows: usize) -> ArrayRef {
+        let mut builder = ListBuilder::new(StringBuilder::new());
+        for i in 0..rows {
+            for _ in 0..4 {
+                builder
+                    .values()
+                    .append_value(format!("{i}{}", "x".repeat(WIDE / 4)));
+            }
+            builder.append(true);
+        }
+        Arc::new(builder.finish())
+    }
+
+    /// A sliced list keeps its whole child array. The split must measure and copy only the
+    /// child range that each piece uses, or both halves report the parent and the batch is
+    /// written unsplit.
+    #[tokio::test]
+    async fn list_column_is_split() -> Result<()> {
+        let list = wide_list(256);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "l",
+            list.data_type().clone(),
+            false,
+        )]));
+        // A slice of a larger parent, as a sort or aggregate emits.
+        let batch = RecordBatch::try_new(schema, vec![list.slice(64, 128)])?;
+        let budget = 1024 * 1024;
+        let (read, max_memory) = round_trip(std::slice::from_ref(&batch), budget).await?;
+        assert!(
+            max_memory <= budget,
+            "largest spilled batch is {max_memory} bytes"
+        );
+        assert!(
+            read.len() >= 8,
+            "expected at least 8 pieces, got {}",
+            read.len()
+        );
+        assert_same_rows(&read, &[batch]);
+        Ok(())
+    }
+
+    /// A map keeps its whole entries array when it is sliced, like a list.
+    #[tokio::test]
+    async fn map_column_is_split() -> Result<()> {
+        let mut builder =
+            MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
+        for i in 0..256 {
+            builder.keys().append_value(format!("k{i}"));
+            builder.values().append_value(wide_value(i));
+            builder.append(true)?;
+        }
+        let map: ArrayRef = Arc::new(builder.finish());
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "m",
+            map.data_type().clone(),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![map.slice(64, 128)])?;
+        let budget = 1024 * 1024;
+        let (read, max_memory) = round_trip(std::slice::from_ref(&batch), budget).await?;
+        assert!(
+            max_memory <= budget,
+            "largest spilled batch is {max_memory} bytes"
+        );
+        assert!(
+            read.len() >= 8,
+            "expected at least 8 pieces, got {}",
+            read.len()
+        );
+        assert_same_rows(&read, &[batch]);
+        Ok(())
+    }
+
+    /// A struct narrows its children when it is sliced, but a list inside it still keeps its
+    /// whole child array.
+    #[tokio::test]
+    async fn struct_with_list_child_is_split() -> Result<()> {
+        let list = wide_list(256);
+        let ids: ArrayRef = Arc::new(Int64Array::from_iter_values(0..256));
+        let fields = Fields::from(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("l", list.data_type().clone(), false),
+        ]);
+        let structs: ArrayRef =
+            Arc::new(StructArray::try_new(fields.clone(), vec![ids, list], None)?);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            DataType::Struct(fields),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![structs.slice(64, 128)])?;
+        let budget = 1024 * 1024;
+        let (read, max_memory) = round_trip(std::slice::from_ref(&batch), budget).await?;
+        assert!(
+            max_memory <= budget,
+            "largest spilled batch is {max_memory} bytes"
+        );
+        assert!(
+            read.len() >= 8,
+            "expected at least 8 pieces, got {}",
+            read.len()
+        );
         assert_same_rows(&read, &[batch]);
         Ok(())
     }

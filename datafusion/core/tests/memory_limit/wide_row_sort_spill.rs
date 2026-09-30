@@ -25,7 +25,10 @@
 
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray, StringViewArray};
+use arrow::array::{
+    ArrayRef, Int64Array, ListBuilder, RecordBatch, StringArray, StringBuilder,
+    StringViewArray,
+};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::datasource::MemTable;
 use datafusion::execution::memory_pool::FairSpillPool;
@@ -61,6 +64,18 @@ async fn sort_wide_rows(data_type: DataType) {
                 }
                 DataType::Utf8View => {
                     Arc::new(StringViewArray::from_iter_values(rows.map(payload)))
+                }
+                DataType::List(_) => {
+                    // Four elements of a quarter row each.
+                    let mut builder = ListBuilder::new(StringBuilder::new());
+                    for i in rows {
+                        let quarter = format!("{i:08}{}", "x".repeat(ROW_BYTES / 4));
+                        for _ in 0..4 {
+                            builder.values().append_value(&quarter);
+                        }
+                        builder.append(true);
+                    }
+                    Arc::new(builder.finish())
                 }
                 _ => unreachable!(),
             };
@@ -114,4 +129,11 @@ async fn sort_wide_utf8_rows_spills_and_finishes() {
 #[tokio::test]
 async fn sort_wide_utf8_view_rows_spills_and_finishes() {
     sort_wide_rows(DataType::Utf8View).await;
+}
+
+/// A list column keeps its whole child array alive when it is sliced, so the spill writer
+/// must measure and copy only the child range that each piece uses.
+#[tokio::test]
+async fn sort_wide_list_rows_spills_and_finishes() {
+    sort_wide_rows(DataType::new_list(DataType::Utf8, true)).await;
 }
