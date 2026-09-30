@@ -34,7 +34,6 @@ mod equivalence;
 mod pruning;
 
 mod limit_fuzz;
-mod skip_pushdown_fuzz;
 #[expect(clippy::needless_pass_by_value)]
 mod sort_preserving_repartition_fuzz;
 mod window_fuzz;
