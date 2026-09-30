@@ -20,6 +20,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use crate::push_down_filter::lr_is_preserved;
 use crate::simplify_expressions::ExprSimplifier;
 
 use datafusion_common::tree_node::{
@@ -29,6 +30,7 @@ use datafusion_common::{
     Column, DFSchemaRef, HashMap, Result, ScalarValue, assert_or_internal_err, plan_err,
 };
 use datafusion_expr::expr::{Alias, GroupingSet};
+use datafusion_expr::logical_plan::{Join, JoinType};
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{
     collect_subquery_cols, conjunction, find_join_exprs, split_conjunction,
@@ -74,6 +76,21 @@ pub struct PullUpCorrelatedExpr {
     /// whether we have converted a scalar aggregation into a group aggregation. When unnesting
     /// lateral joins, we need to produce a left outer join in such cases.
     pub pulled_up_scalar_agg: bool,
+    /// Every correlated conjunct that a `Filter` of the subquery applies,
+    /// before `remove_duplicated_filter` drops the ones that the `IN`
+    /// predicate already covers. The outer references are kept, so that a
+    /// subquery column and an outer column with the same qualified name stay
+    /// apart.
+    ///
+    /// `join_filters` holds only the conjuncts that the join still needs.
+    /// This list is what the subquery enforces on its own rows. The caller
+    /// uses it to tell if a join key can be NULL inside the scope of an outer
+    /// row: `x IN (SELECT y FROM .. WHERE y = x)` keeps every NULL `y` out of
+    /// its result, although `join_filters` no longer says so.
+    ///
+    /// The list is cleared when the pull up passes a node that can put a NULL
+    /// back into such a column: an outer join, a union or a grouping set.
+    pub correlated_filters: Vec<Expr>,
 }
 
 impl Default for PullUpCorrelatedExpr {
@@ -95,6 +112,7 @@ impl PullUpCorrelatedExpr {
             collected_count_expr_map: HashMap::new(),
             pull_up_having_expr: None,
             pulled_up_scalar_agg: false,
+            correlated_filters: Vec::new(),
         }
     }
 
@@ -142,6 +160,17 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             LogicalPlan::Subquery(_) => {
                 Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
             }
+            // A correlated filter can only move above a join from a side whose
+            // rows the join preserves. Below the side an outer join fills with
+            // NULLs, the filter decides which rows are unmatched, so pulling it
+            // above the join changes the result. The side a semi, anti or mark
+            // join does not output cannot give its columns to a pulled up
+            // filter either.
+            LogicalPlan::Join(ref join) if !correlated_inputs_are_preserved(join) => {
+                // the unsupported case
+                self.can_pull_up = false;
+                Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
+            }
             LogicalPlan::Union(_) | LogicalPlan::Sort(_) | LogicalPlan::Extension(_) => {
                 let plan_hold_outer = !plan.all_out_ref_exprs().is_empty();
                 if plan_hold_outer {
@@ -173,6 +202,12 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
     }
 
     fn f_up(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+        // A node that null-extends or regroups rows can put a NULL back into
+        // a column that a correlated filter below it rejected, so the filters
+        // recorded so far no longer bound what the subquery returns.
+        if !self.correlated_filters.is_empty() && may_reintroduce_nulls(&plan) {
+            self.correlated_filters.clear();
+        }
         let subquery_schema = plan.schema();
         match &plan {
             LogicalPlan::Filter(plan_filter) => {
@@ -182,6 +217,11 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         .iter()
                         .filter(|e| e.contains_outer())
                         .all(|&e| can_pullup_over_aggregation(e));
+                for expr in &subquery_filter_exprs {
+                    if expr.contains_outer() && !self.correlated_filters.contains(expr) {
+                        self.correlated_filters.push((*expr).clone());
+                    }
+                }
                 let (mut join_filters, subquery_filters) =
                     find_join_exprs(subquery_filter_exprs)?;
                 if let Some(in_predicate) = &self.in_predicate_opt {
@@ -533,6 +573,57 @@ impl PullUpCorrelatedExpr {
         }
         Ok(missing_exprs)
     }
+}
+
+/// Whether `plan` can output a NULL in a column that a filter below it keeps
+/// free of NULLs: an outer join fills the columns of its unmatched side with
+/// NULL, a union adds the rows of its other inputs, and a grouping set fills
+/// the columns it leaves out with NULL, such as the grand total row of `ROLLUP`.
+fn may_reintroduce_nulls(plan: &LogicalPlan) -> bool {
+    match plan {
+        LogicalPlan::Join(join) => {
+            matches!(
+                join.join_type,
+                JoinType::Left | JoinType::Right | JoinType::Full
+            )
+        }
+        LogicalPlan::Union(_) => true,
+        LogicalPlan::Aggregate(aggregate) => aggregate
+            .group_expr
+            .iter()
+            .any(|expr| matches!(expr, Expr::GroupingSet(_))),
+        _ => false,
+    }
+}
+
+/// Whether every input of `join` that holds outer references is a side whose
+/// rows the join preserves, so a correlated filter below it can be pulled above
+/// the join without changing the result.
+fn correlated_inputs_are_preserved(join: &Join) -> bool {
+    let (left_preserved, right_preserved) = lr_is_preserved(join.join_type);
+    (left_preserved || !holds_outer_reference(&join.left))
+        && (right_preserved || !holds_outer_reference(&join.right))
+}
+
+/// Whether `plan` or any of its inputs holds an outer reference of the scope
+/// being decorrelated. Like [`PullUpCorrelatedExpr`], this does not descend into
+/// a [`LogicalPlan::Subquery`], whose outer references belong to a nested
+/// scope, such as the right side of a `LATERAL` join that is not decorrelated
+/// yet.
+fn holds_outer_reference(plan: &LogicalPlan) -> bool {
+    let mut found = false;
+    plan.apply(|node| {
+        Ok(match node {
+            LogicalPlan::Subquery(_) => TreeNodeRecursion::Jump,
+            _ if node.contains_outer_reference() => {
+                found = true;
+                TreeNodeRecursion::Stop
+            }
+            _ => TreeNodeRecursion::Continue,
+        })
+    })
+    .expect("apply closure is infallible");
+    found
 }
 
 fn can_pullup_over_aggregation(expr: &Expr) -> bool {
