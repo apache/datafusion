@@ -2019,6 +2019,23 @@ impl DefaultPhysicalPlanner {
                     .downcast_ref::<datafusion_expr::MaterializedCte>()
                     .unwrap();
                 let [body, continuation] = children.two()?;
+                // A CTE that nothing reads is never evaluated.
+                let mut is_referenced = false;
+                cte.continuation.apply_with_subqueries(|node| {
+                    if let LogicalPlan::Extension(Extension { node }) = node
+                        && let Some(scan) =
+                            node.as_any()
+                                .downcast_ref::<datafusion_expr::MaterializedCteScan>()
+                        && scan.id == cte.id
+                    {
+                        is_referenced = true;
+                        return Ok(TreeNodeRecursion::Stop);
+                    }
+                    Ok(TreeNodeRecursion::Continue)
+                })?;
+                if !is_referenced {
+                    return Ok(continuation);
+                }
                 // The body is fully buffered before a scan yields a row, so an
                 // unbounded body would never produce output.
                 if body.boundedness().is_unbounded() {

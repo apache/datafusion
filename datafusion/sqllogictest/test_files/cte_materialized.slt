@@ -427,6 +427,13 @@ SELECT count(*) FROM u
 statement ok
 EXPLAIN WITH u AS (SELECT c1 FROM unbounded_t) SELECT c1 FROM u
 
+# A MATERIALIZED CTE that nothing reads is not evaluated, so an unbounded body
+# is not an error.
+query I
+WITH u AS MATERIALIZED (SELECT c1 FROM unbounded_t) SELECT 1
+----
+1
+
 statement ok
 DROP TABLE unbounded_t;
 
