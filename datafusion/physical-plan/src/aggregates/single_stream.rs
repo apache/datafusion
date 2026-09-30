@@ -219,6 +219,9 @@ impl SingleHashAggregateStream {
                 .with_can_spill(can_spill)
                 .register(context.memory_pool());
 
+        // Reserve memory for the initial hash table. that we hold for the lifetime of the stream.
+        reservation.try_grow(hash_table.memory_size())?;
+
         Ok(Self {
             schema,
             input,
