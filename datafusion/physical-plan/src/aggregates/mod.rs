@@ -4682,6 +4682,19 @@ mod tests {
                 state: vec![0; self.state_bytes],
             }))
         }
+
+        fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
+            true
+        }
+
+        fn create_groups_accumulator(
+            &self,
+            _args: AccumulatorArgs,
+        ) -> Result<Box<dyn GroupsAccumulator>> {
+            Ok(Box::new(ConstructorAllocatingGroupsAccumulator {
+                state: vec![0; self.state_bytes],
+            }))
+        }
     }
 
     #[derive(Debug)]
@@ -4709,6 +4722,158 @@ mod tests {
         fn size(&self) -> usize {
             size_of_val(self) + self.state.capacity()
         }
+    }
+
+    /// Groups accumulator that allocates all of its state at construction. The tests
+    /// using it only create the stream, so the input is never polled.
+    #[derive(Debug)]
+    struct ConstructorAllocatingGroupsAccumulator {
+        state: Vec<u8>,
+    }
+
+    impl GroupsAccumulator for ConstructorAllocatingGroupsAccumulator {
+        fn update_batch(
+            &mut self,
+            _values: &[ArrayRef],
+            _group_indices: &[usize],
+            _opt_filter: Option<&BooleanArray>,
+            _total_num_groups: usize,
+        ) -> Result<()> {
+            internal_err!("input is never polled")
+        }
+
+        fn evaluate(&mut self, _emit_to: EmitTo) -> Result<ArrayRef> {
+            internal_err!("input is never polled")
+        }
+
+        fn state(&mut self, _emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+            internal_err!("input is never polled")
+        }
+
+        fn merge_batch(
+            &mut self,
+            _values: &[ArrayRef],
+            _group_indices: &[usize],
+            _total_num_groups: usize,
+        ) -> Result<()> {
+            internal_err!("input is never polled")
+        }
+
+        fn convert_to_state(
+            &self,
+            _values: &[ArrayRef],
+            _opt_filter: Option<&BooleanArray>,
+        ) -> Result<Vec<ArrayRef>> {
+            internal_err!("input is never polled")
+        }
+
+        fn size(&self) -> usize {
+            size_of_val(self) + self.state.capacity()
+        }
+    }
+
+    /// Grouped streams hold their hash table for their whole lifetime, so the
+    /// accumulators' construction-time state is charged at `execute`: it is rejected
+    /// before any input is polled and, when it fits, is visible to the pool.
+    #[rstest::rstest]
+    #[case::partial(AggregateMode::Partial, false)]
+    #[case::ordered_partial(AggregateMode::Partial, true)]
+    #[case::partial_reduce(AggregateMode::PartialReduce, false)]
+    #[case::final_stage(AggregateMode::Final, false)]
+    #[case::ordered_final(AggregateMode::Final, true)]
+    #[case::single(AggregateMode::Single, false)]
+    #[case::ordered_single(AggregateMode::Single, true)]
+    fn test_grouped_agg_charges_constructor_allocated_state(
+        #[case] mode: AggregateMode,
+        #[case] ordered: bool,
+    ) -> Result<()> {
+        const STATE_BYTES: usize = 8 * 1024 * 1024;
+        let aggregate =
+            constructor_allocating_grouped_aggregate(mode, ordered, STATE_BYTES)?;
+
+        let too_small = new_finite_memory_migrated_hash_ctx(8, STATE_BYTES / 2)?;
+        let err = aggregate
+            .execute_typed(0, &too_small)
+            .err()
+            .expect("initial accumulator state should not fit the pool");
+        assert!(
+            matches!(err.find_root(), DataFusionError::ResourcesExhausted(_)),
+            "Wrong error type: {err}",
+        );
+
+        let fits = new_finite_memory_migrated_hash_ctx(8, 4 * STATE_BYTES)?;
+        let stream = aggregate.execute_typed(0, &fits)?;
+        match (mode, ordered, &stream) {
+            (AggregateMode::Partial, false, StreamType::PartialHash(_))
+            | (AggregateMode::Partial, true, StreamType::OrderedPartialAggregate(_))
+            | (AggregateMode::PartialReduce, false, StreamType::PartialReduceHash(_))
+            | (AggregateMode::Final, false, StreamType::FinalHash(_))
+            | (AggregateMode::Final, true, StreamType::OrderedFinalAggregate(_))
+            | (AggregateMode::Single, false, StreamType::SingleHash(_))
+            | (AggregateMode::Single, true, StreamType::OrderedSingleAggregate(_)) => {}
+            _ => panic!("unexpected stream for {mode:?}, ordered={ordered}"),
+        }
+        let reserved = fits.memory_pool().reserved();
+        assert!(
+            reserved >= STATE_BYTES,
+            "initial accumulator state not charged: {reserved} bytes reserved",
+        );
+
+        Ok(())
+    }
+
+    /// `constructor_allocating(b) GROUP BY a` over an empty input, sorted on `a` when
+    /// `ordered`. Modes that consume partial state read the partial stage's schema.
+    fn constructor_allocating_grouped_aggregate(
+        mode: AggregateMode,
+        ordered: bool,
+        state_bytes: usize,
+    ) -> Result<AggregateExec> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, true),
+        ]));
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
+        let udaf = Arc::new(AggregateUDF::from(ConstructorAllocatingUdaf::new(
+            state_bytes,
+        )));
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
+            AggregateExprBuilder::new(udaf, vec![col("b", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("constructor_allocating(b)")
+                .build()?,
+        )];
+
+        let empty_input = |schema: SchemaRef| -> Result<Arc<dyn ExecutionPlan>> {
+            let mut input = TestMemoryExec::try_new(&[vec![]], schema, None)?;
+            if ordered {
+                input = input.try_with_sort_information(vec![
+                    LexOrdering::new([PhysicalSortExpr::new_default(Arc::new(
+                        Column::new("a", 0),
+                    ))])
+                    .unwrap(),
+                ])?;
+            }
+            Ok(Arc::new(TestMemoryExec::update_cache(&Arc::new(input))))
+        };
+
+        let (input, group_by) = match mode.input_mode() {
+            AggregateInputMode::Raw => (empty_input(Arc::clone(&schema))?, group_by),
+            AggregateInputMode::Partial => {
+                let partial = AggregateExec::try_new(
+                    AggregateMode::Partial,
+                    group_by.clone(),
+                    aggregates.clone(),
+                    vec![None],
+                    empty_input(Arc::clone(&schema))?,
+                    Arc::clone(&schema),
+                )?;
+                (empty_input(partial.schema())?, group_by.as_final())
+            }
+        };
+
+        AggregateExec::try_new(mode, group_by, aggregates, vec![None], input, schema)
     }
 
     #[tokio::test]
