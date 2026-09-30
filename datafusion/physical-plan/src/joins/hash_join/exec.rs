@@ -108,7 +108,9 @@ mod prepared;
 pub use prepared::PreparedHashJoinBuild;
 mod build_data;
 pub(super) use build_data::MultiBatchBuildData;
-use build_data::{coalesce_build_batches, should_preserve_batches};
+use build_data::{
+    coalesce_build_batches, should_preserve_batches, try_compact_dictionary_build,
+};
 
 /// Hard-coded seed to ensure hash values from the hash join differ from `RepartitionExec`, avoiding collisions.
 pub(crate) const HASH_JOIN_SEED: SeededRandomState =
@@ -3163,13 +3165,23 @@ async fn collect_left_input(
             null_equality,
         )? {
         let batch = if preserve_batches {
-            multi_batch = Some(MultiBatchBuildData::try_new(
-                std::mem::take(&mut batches),
-                &on_left,
-                &reservation,
+            if let Some(batch) = try_compact_dictionary_build(
+                &schema,
+                &mut batches,
+                false,
+                &mut reservation,
                 &metrics,
-            )?);
-            multi_batch.as_ref().unwrap().batches()[0].clone()
+            ) {
+                batch
+            } else {
+                multi_batch = Some(MultiBatchBuildData::try_new(
+                    std::mem::take(&mut batches),
+                    &on_left,
+                    &reservation,
+                    &metrics,
+                )?);
+                multi_batch.as_ref().unwrap().batches()[0].clone()
+            }
         } else if prepared {
             concat_batches(&schema, batches.iter())?
         } else {
@@ -3242,14 +3254,24 @@ async fn collect_left_input(
 
         // Match the logical row order used while populating the hash table.
         let batch = if preserve_batches {
-            batches.reverse();
-            multi_batch = Some(MultiBatchBuildData::try_new(
-                std::mem::take(&mut batches),
-                &on_left,
-                &reservation,
+            if let Some(batch) = try_compact_dictionary_build(
+                &schema,
+                &mut batches,
+                true,
+                &mut reservation,
                 &metrics,
-            )?);
-            multi_batch.as_ref().unwrap().batches()[0].clone()
+            ) {
+                batch
+            } else {
+                batches.reverse();
+                multi_batch = Some(MultiBatchBuildData::try_new(
+                    std::mem::take(&mut batches),
+                    &on_left,
+                    &reservation,
+                    &metrics,
+                )?);
+                multi_batch.as_ref().unwrap().batches()[0].clone()
+            }
         } else if prepared {
             concat_batches(&schema, batches.iter().rev())?
         } else {

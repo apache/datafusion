@@ -69,6 +69,7 @@ enum Keys {
 enum Payload {
     Plain,
     Dictionary,
+    UniqueDictionary,
     List,
 }
 
@@ -121,12 +122,18 @@ impl Workload {
         let batch = |start, end| {
             let ids = (start..end).map(|id| id as i32).collect::<Vec<_>>();
             let key = key_array(&ids, keys);
-            let values: ArrayRef = Arc::new(StringArray::from_iter_values(
-                ids.iter().map(|_| value.as_str()),
-            ));
+            let values: ArrayRef = if matches!(payload, Payload::UniqueDictionary) {
+                Arc::new(StringArray::from_iter_values(
+                    ids.iter().map(|id| format!("{id:08}{}", &value[8..])),
+                ))
+            } else {
+                Arc::new(StringArray::from_iter_values(
+                    ids.iter().map(|_| value.as_str()),
+                ))
+            };
             let values: ArrayRef = match payload {
                 Payload::Plain => values,
-                Payload::Dictionary => Arc::new(
+                Payload::Dictionary | Payload::UniqueDictionary => Arc::new(
                     DictionaryArray::<Int32Type>::try_new(
                         Int32Array::from_iter_values(0..ids.len() as i32),
                         values,
@@ -408,6 +415,16 @@ fn benchmark(c: &mut Criterion) {
             1024,
             Keys::Integer,
             Payload::Dictionary,
+            Layout::Independent,
+            false,
+            64,
+        ),
+        (
+            "large_unique_dictionary_payload_many_probe",
+            65536,
+            1024,
+            Keys::Integer,
+            Payload::UniqueDictionary,
             Layout::Independent,
             false,
             64,

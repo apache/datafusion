@@ -26,6 +26,139 @@ const BUILD_ROW_DIRECTORY_STRIDE: usize = 1024;
 // Like OrderedArrayAgg, use average bytes per array to amortize fixed overhead.
 const MIN_BUILD_BATCH_BYTES_PER_COLUMN: usize = 4 * 1024;
 
+/// Dictionary output gathers otherwise unify their value domains on every
+/// probe batch. Prefer paying that cost once when the existing compact-copy
+/// reservation fits, without copying unrelated variable-width payload columns.
+/// Ineligible layouts retain the generic batched implementation.
+fn prefers_compact_dictionary(schema: &Schema) -> bool {
+    let mut has_dictionary = false;
+    for field in schema.fields() {
+        let supported = match field.data_type() {
+            DataType::Dictionary(_, values) => {
+                has_dictionary = true;
+                values.primitive_width().is_some()
+                    || matches!(
+                        values.as_ref(),
+                        DataType::Boolean
+                            | DataType::Utf8
+                            | DataType::LargeUtf8
+                            | DataType::Binary
+                            | DataType::LargeBinary
+                            | DataType::Utf8View
+                            | DataType::BinaryView
+                    )
+            }
+            data_type => {
+                data_type.primitive_width().is_some()
+                    || matches!(data_type, DataType::Boolean | DataType::Null)
+            }
+        };
+        if !supported {
+            return false;
+        }
+    }
+    has_dictionary
+}
+
+fn dictionary_concat_preflight(schema: &Schema, batches: &[RecordBatch]) -> bool {
+    for (column, field) in schema.fields().iter().enumerate() {
+        let DataType::Dictionary(_, values_type) = field.data_type() else {
+            continue;
+        };
+        // Arrow's fallback shifts hidden dictionary keys too. Arbitrary
+        // values under physical nulls can overflow that arithmetic.
+        if batches
+            .iter()
+            .any(|batch| batch.column(column).null_count() > 0)
+        {
+            return false;
+        }
+        let limit = match values_type.as_ref() {
+            DataType::Utf8 | DataType::Binary => i32::MAX as usize,
+            DataType::Utf8View | DataType::BinaryView => u32::MAX as usize,
+            _ => continue,
+        };
+        let mut total = 0usize;
+        for batch in batches {
+            let values = batch.column(column).as_any_dictionary().values();
+            let size = match values_type.as_ref() {
+                DataType::Utf8 => offset_span(values.as_string::<i32>().offsets()).1,
+                DataType::Binary => offset_span(values.as_binary::<i32>().offsets()).1,
+                DataType::Utf8View => values.as_string_view().data_buffers().len(),
+                DataType::BinaryView => values.as_binary_view().data_buffers().len(),
+                _ => unreachable!(),
+            };
+            let Some(size) = total.checked_add(size).filter(|size| *size <= limit) else {
+                return false;
+            };
+            total = size;
+        }
+    }
+    true
+}
+
+/// Attempt the ordinary compact representation without consuming the fallback
+/// inputs. As in `concat_build_batches`, admission estimates output buffers,
+/// not Arrow's internal kernel scratch. Failure keeps batches and charges intact.
+pub(super) fn try_compact_dictionary_build(
+    schema: &SchemaRef,
+    batches: &mut Vec<RecordBatch>,
+    reverse: bool,
+    reservation: &mut MemoryReservation,
+    metrics: &BuildProbeJoinMetrics,
+) -> Option<RecordBatch> {
+    // Arrow's dictionary concat fallback can panic on child offset overflow.
+    // Conservatively bound the domains even when deduplication could fit them.
+    if !prefers_compact_dictionary(schema)
+        || !dictionary_concat_preflight(schema, batches)
+    {
+        return None;
+    }
+    let mut input_counter = RecordBatchMemoryCounter::new();
+    let mut copy_bytes = 0usize;
+    for batch in batches.iter() {
+        input_counter.count_batch(batch);
+        if batches.len() > 1 {
+            for array in batch.columns() {
+                copy_bytes = copy_bytes
+                    .checked_add(estimate_concat_allocation(array.as_ref()).ok()?)?;
+            }
+        }
+    }
+    // Coalescing may have removed empty inputs and released their buffers.
+    // Recount only this optional path, without including hash-table charges.
+    let input_bytes = input_counter.memory_usage();
+    reservation.try_grow(copy_bytes).ok()?;
+    metrics.build_mem_used.add(copy_bytes);
+
+    let compact = if reverse {
+        concat_batches(schema, batches.iter().rev())
+    } else {
+        concat_batches(schema, batches.iter())
+    };
+    let Ok(compact) = compact else {
+        reservation.shrink(copy_bytes);
+        metrics.build_mem_used.sub(copy_bytes);
+        return None;
+    };
+
+    let new_bytes = input_counter.count_batch(&compact);
+    let extra_bytes = new_bytes.saturating_sub(copy_bytes);
+    if reservation.try_grow(extra_bytes).is_err() {
+        drop(compact);
+        reservation.shrink(copy_bytes);
+        metrics.build_mem_used.sub(copy_bytes);
+        return None;
+    }
+    metrics.build_mem_used.add(extra_bytes);
+    let retained_bytes = get_record_batch_memory_size(&compact);
+    batches.clear();
+    let released_bytes = input_bytes + copy_bytes + extra_bytes - retained_bytes;
+    reservation.shrink(released_bytes);
+    metrics.build_mem_used.sub(released_bytes);
+    Some(compact)
+}
+
 /// Keep the compact path for small logical inputs, even when their slices pin
 /// much larger allocations. Unsupported estimates only disable this optimization.
 pub(super) fn should_preserve_batches(
@@ -377,11 +510,11 @@ fn should_repack_build_batch(
 mod tests {
     use super::*;
     use arrow::array::{
-        FixedSizeListArray, Int64Array, LargeListArray, ListArray, MapArray, StringArray,
-        StructArray,
+        DictionaryArray, FixedSizeListArray, Int8Array, Int64Array, LargeListArray,
+        ListArray, MapArray, StringArray, StructArray,
     };
     use arrow::buffer::OffsetBuffer;
-    use arrow::datatypes::Int64Type;
+    use arrow::datatypes::{Int8Type, Int64Type};
     use arrow_schema::Field;
     use datafusion_execution::memory_pool::{
         GreedyMemoryPool, MemoryConsumer, MemoryPool,
@@ -399,6 +532,465 @@ mod tests {
             counter.count_batch(batch);
         }
         counter.memory_usage()
+    }
+
+    fn dictionary_batch(values: StringArray, keys: Int8Array, start: i64) -> RecordBatch {
+        let rows = keys.len();
+        let dictionary = Arc::new(
+            DictionaryArray::<Int8Type>::try_new(keys, Arc::new(values)).unwrap(),
+        );
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("dictionary", dictionary.data_type().clone(), true),
+            Field::new("id", DataType::Int64, false),
+        ]));
+        RecordBatch::try_new(
+            schema,
+            vec![
+                dictionary,
+                Arc::new(Int64Array::from_iter_values(start..start + rows as i64)),
+            ],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn compact_dictionary_policy_keeps_other_payloads_batched() {
+        let dictionary =
+            |values| DataType::Dictionary(Box::new(DataType::Int8), Box::new(values));
+        let schema = |types: Vec<DataType>| {
+            Schema::new(
+                types
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, data_type)| {
+                        Field::new(format!("c{index}"), data_type, true)
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        };
+        assert!(prefers_compact_dictionary(&schema(vec![
+            dictionary(DataType::Utf8),
+            DataType::Int64,
+            DataType::Boolean,
+            DataType::Null,
+        ])));
+        assert!(!prefers_compact_dictionary(&schema(vec![DataType::Int64])));
+        for payload in [
+            DataType::Utf8,
+            DataType::Utf8View,
+            DataType::FixedSizeBinary(1024),
+        ] {
+            assert!(!prefers_compact_dictionary(&schema(vec![
+                dictionary(DataType::Utf8),
+                payload
+            ])));
+        }
+        for values in [
+            dictionary(DataType::Utf8),
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true))),
+        ] {
+            assert!(!prefers_compact_dictionary(&schema(vec![dictionary(
+                values
+            )])));
+        }
+    }
+
+    #[test]
+    fn compact_dictionary_preserves_order_nulls_and_charges() -> Result<()> {
+        for reverse in [false, true] {
+            let mut batches = vec![
+                dictionary_batch(
+                    StringArray::from(vec![Some("same"), None, Some("other")]),
+                    Int8Array::from(vec![0, 1, 1, 2]),
+                    0,
+                ),
+                dictionary_batch(
+                    StringArray::from(vec![Some("other"), None, Some("same")]),
+                    Int8Array::from(vec![0, 1, 1, 2]),
+                    4,
+                ),
+            ];
+            let schema = batches[0].schema();
+            let bytes = input_bytes(&batches);
+            let unrelated_charge = 4096;
+            let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1024 * 1024));
+            let mut reservation = MemoryConsumer::new("test").register(&pool);
+            reservation.try_grow(bytes + unrelated_charge)?;
+            let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
+            metrics.build_mem_used.add(bytes + unrelated_charge);
+            let expected = if reverse {
+                concat_batches(&schema, batches.iter().rev())?
+            } else {
+                concat_batches(&schema, batches.iter())?
+            };
+            let compact = try_compact_dictionary_build(
+                &schema,
+                &mut batches,
+                reverse,
+                &mut reservation,
+                &metrics,
+            )
+            .unwrap();
+            assert!(batches.is_empty());
+            assert_eq!(compact, expected);
+            assert_eq!(
+                reservation.size(),
+                unrelated_charge + get_record_batch_memory_size(&compact)
+            );
+            assert_eq!(metrics.build_mem_used.value(), reservation.size());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn compact_dictionary_without_headroom_keeps_inputs() -> Result<()> {
+        let mut batches = (0..2)
+            .map(|index| {
+                dictionary_batch(
+                    StringArray::from(vec!["a", "b"]),
+                    Int8Array::from(vec![0, 1]),
+                    index * 2,
+                )
+            })
+            .collect::<Vec<_>>();
+        let originals = batches.clone();
+        let bytes = input_bytes(&batches);
+        let unrelated_charge = 4096;
+        let pool: Arc<dyn MemoryPool> =
+            Arc::new(GreedyMemoryPool::new(bytes + unrelated_charge));
+        let mut reservation = MemoryConsumer::new("test").register(&pool);
+        reservation.try_grow(bytes + unrelated_charge)?;
+        let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
+        metrics.build_mem_used.add(bytes + unrelated_charge);
+        assert!(
+            try_compact_dictionary_build(
+                &batches[0].schema(),
+                &mut batches,
+                true,
+                &mut reservation,
+                &metrics,
+            )
+            .is_none()
+        );
+        assert_eq!(reservation.size(), bytes + unrelated_charge);
+        assert_eq!(metrics.build_mem_used.value(), reservation.size());
+        for (batch, original) in batches.iter().zip(originals) {
+            assert!(Arc::ptr_eq(batch.column(0), original.column(0)));
+        }
+        assert_eq!(batches.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn compact_dictionary_null_keys_keep_original_inputs() -> Result<()> {
+        let mut batches = vec![
+            dictionary_batch(
+                StringArray::from(vec!["a"]),
+                Int8Array::from(vec![0; 2]),
+                0,
+            ),
+            dictionary_batch(
+                StringArray::from(vec!["b"]),
+                Int8Array::new(
+                    vec![0, i8::MAX].into(),
+                    Some(arrow::buffer::NullBuffer::from(vec![true, false])),
+                ),
+                2,
+            ),
+        ];
+        let originals = batches.clone();
+        let bytes = input_bytes(&batches);
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1024 * 1024));
+        let mut reservation = MemoryConsumer::new("test").register(&pool);
+        reservation.try_grow(bytes)?;
+        let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
+        metrics.build_mem_used.add(bytes);
+        assert!(
+            try_compact_dictionary_build(
+                &batches[0].schema(),
+                &mut batches,
+                false,
+                &mut reservation,
+                &metrics,
+            )
+            .is_none()
+        );
+        assert_eq!(batches, originals);
+        for (batch, original) in batches.iter().zip(originals) {
+            assert!(Arc::ptr_eq(batch.column(0), original.column(0)));
+        }
+        assert_eq!(reservation.size(), bytes);
+        assert_eq!(metrics.build_mem_used.value(), bytes);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn large_dictionary_join_falls_back_without_copy_headroom() -> Result<()> {
+        use crate::common;
+        use crate::joins::{HashJoinExecBuilder, PartitionMode};
+        use crate::test::TestMemoryExec;
+        use arrow::buffer::Buffer;
+        use datafusion_execution::config::SessionConfig;
+        use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+        use datafusion_physical_expr::expressions::col;
+
+        const DOMAIN_BYTES: usize = 65 * 1024 * 1024;
+        const LIMIT: usize = 96 * 1024 * 1024;
+        let values = Buffer::from_vec(vec![b'p'; DOMAIN_BYTES]);
+        let batches = vec![
+            dictionary_batch(
+                StringArray::new(
+                    OffsetBuffer::new(
+                        vec![0, DOMAIN_BYTES as i32, DOMAIN_BYTES as i32].into(),
+                    ),
+                    values.clone(),
+                    None,
+                ),
+                Int8Array::from(vec![0, 1]),
+                0,
+            ),
+            dictionary_batch(
+                StringArray::new(
+                    OffsetBuffer::new(vec![0, 0, DOMAIN_BYTES as i32].into()),
+                    values,
+                    None,
+                ),
+                Int8Array::from(vec![1, 0]),
+                2,
+            ),
+        ];
+        let schema = batches[0].schema();
+        let bytes = input_bytes(&batches);
+        assert!(bytes > MAX_COMPACT_BUILD_BYTES && bytes < LIMIT);
+        assert!(should_preserve_batches(&batches, bytes));
+        assert!(prefers_compact_dictionary(&schema));
+        let copy_bytes = batches.iter().flat_map(RecordBatch::columns).try_fold(
+            0usize,
+            |bytes, array| -> Result<usize> {
+                Ok(bytes + estimate_concat_allocation(array.as_ref())?)
+            },
+        )?;
+        assert!(copy_bytes > LIMIT - bytes);
+
+        for perfect_hash in [false, true] {
+            let probe_schema = Arc::new(Schema::new(vec![Field::new(
+                "probe",
+                DataType::Int64,
+                false,
+            )]));
+            let probe = RecordBatch::try_new(
+                Arc::clone(&probe_schema),
+                vec![Arc::new(Int64Array::from(vec![1, 3]))],
+            )?;
+            let join = HashJoinExecBuilder::new(
+                TestMemoryExec::try_new_exec(
+                    std::slice::from_ref(&batches),
+                    Arc::clone(&schema),
+                    None,
+                )?,
+                TestMemoryExec::try_new_exec(
+                    &[vec![probe]],
+                    Arc::clone(&probe_schema),
+                    None,
+                )?,
+                vec![(col("id", &schema)?, col("probe", &probe_schema)?)],
+                JoinType::Inner,
+            )
+            .with_partition_mode(PartitionMode::CollectLeft)
+            .with_projection(Some(vec![1, 0]))
+            .build()?;
+            let mut config = SessionConfig::default().with_batch_size(2);
+            config
+                .options_mut()
+                .optimizer
+                .enable_join_dynamic_filter_pushdown = false;
+            config
+                .options_mut()
+                .execution
+                .perfect_hash_join_small_build_threshold =
+                if perfect_hash { usize::MAX } else { 0 };
+            config
+                .options_mut()
+                .execution
+                .perfect_hash_join_min_key_density =
+                if perfect_hash { 0.0 } else { f64::INFINITY };
+            let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(LIMIT));
+            let context = Arc::new(
+                TaskContext::default()
+                    .with_session_config(config)
+                    .with_runtime(
+                        RuntimeEnvBuilder::new()
+                            .with_memory_pool(Arc::clone(&pool))
+                            .build_arc()?,
+                    ),
+            );
+            let output = common::collect(join.execute(0, Arc::clone(&context))?).await?;
+            let ids = output
+                .iter()
+                .flat_map(|batch| {
+                    batch
+                        .column(0)
+                        .as_primitive::<Int64Type>()
+                        .values()
+                        .iter()
+                        .copied()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(ids, vec![1, 3]);
+            for batch in &output {
+                let payload = arrow::compute::cast(batch.column(1), &DataType::Utf8)?;
+                assert!(
+                    payload
+                        .as_string::<i32>()
+                        .iter()
+                        .all(|value| value == Some(""))
+                );
+            }
+            {
+                let mut future = join.left_fut.try_once(|| {
+                    Ok(async { internal_err!("build already initialized") })
+                })?;
+                let build = futures::future::poll_fn(|cx| future.get_shared(cx)).await?;
+                assert!(build.multi_batch().is_some());
+                assert_eq!(build.multi_batch().unwrap().batches().len(), 2);
+            }
+            let used_array_map = join
+                .metrics()
+                .and_then(|metrics| {
+                    metrics.sum_by_name(ARRAY_MAP_CREATED_COUNT_METRIC_NAME)
+                })
+                .map_or(0, |metric| metric.as_usize());
+            assert_eq!(used_array_map > 0, perfect_hash);
+            drop(output);
+            drop(join);
+            drop(context);
+            assert_eq!(pool.reserved(), 0);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn compact_dictionary_capacity_failure_restores_charges() -> Result<()> {
+        let mut batches = (0..2)
+            .map(|batch| {
+                dictionary_batch(
+                    StringArray::from_iter_values(
+                        (0..100).map(|index| format!("{batch}-{index}")),
+                    ),
+                    Int8Array::from_iter_values(0..100),
+                    batch * 100,
+                )
+            })
+            .collect::<Vec<_>>();
+        let schema = batches[0].schema();
+        assert!(concat_batches(&schema, batches.iter()).is_err());
+        let originals = batches.clone();
+        let bytes = input_bytes(&batches);
+        let unrelated_charge = 4096;
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1024 * 1024));
+        let mut reservation = MemoryConsumer::new("test").register(&pool);
+        reservation.try_grow(bytes + unrelated_charge)?;
+        let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
+        metrics.build_mem_used.add(bytes + unrelated_charge);
+        assert!(
+            try_compact_dictionary_build(
+                &schema,
+                &mut batches,
+                false,
+                &mut reservation,
+                &metrics,
+            )
+            .is_none()
+        );
+        assert_eq!(reservation.size(), bytes + unrelated_charge);
+        assert_eq!(metrics.build_mem_used.value(), reservation.size());
+        assert_eq!(batches, originals);
+        for (batch, original) in batches.iter().zip(originals) {
+            assert!(Arc::ptr_eq(batch.column(0), original.column(0)));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn compact_dictionary_recounts_after_empty_shared_inputs() -> Result<()> {
+        let parent = dictionary_batch(
+            StringArray::from(vec!["shared"]),
+            Int8Array::from(vec![0; 4]),
+            0,
+        );
+        let empty_parent = dictionary_batch(
+            StringArray::from_iter_values(["x".repeat(1024 * 1024)]),
+            Int8Array::from(vec![0]),
+            0,
+        );
+        let batches = vec![
+            parent.slice(0, 2),
+            empty_parent.slice(0, 0),
+            parent.slice(2, 2),
+        ];
+        drop(parent);
+        drop(empty_parent);
+        let bytes = input_bytes(&batches);
+        let unrelated_charge = 4096;
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(bytes + 8192));
+        let mut reservation = MemoryConsumer::new("test").register(&pool);
+        reservation.try_grow(bytes + unrelated_charge)?;
+        let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
+        metrics.build_mem_used.add(bytes + unrelated_charge);
+        let schema = batches[0].schema();
+        let mut batches =
+            coalesce_build_batches(&schema, batches, bytes, &mut reservation, &metrics)?;
+        assert_eq!(batches.len(), 2);
+        assert!(input_bytes(&batches) < bytes);
+        let compact = try_compact_dictionary_build(
+            &schema,
+            &mut batches,
+            false,
+            &mut reservation,
+            &metrics,
+        )
+        .unwrap();
+        assert_eq!(compact.num_rows(), 4);
+        assert_eq!(
+            reservation.size(),
+            unrelated_charge + get_record_batch_memory_size(&compact)
+        );
+        assert_eq!(metrics.build_mem_used.value(), reservation.size());
+        Ok(())
+    }
+
+    #[test]
+    fn compact_dictionary_skips_combined_32_bit_offset_overflow() -> Result<()> {
+        // Reusing a one-MiB domain exceeds the conservative logical concat
+        // bound without allocating GiBs or attempting an overflowing concat.
+        let batch = dictionary_batch(
+            StringArray::from_iter_values(["x".repeat(1024 * 1024)]),
+            Int8Array::from(vec![0]),
+            0,
+        );
+        let schema = batch.schema();
+        let mut batches = vec![batch; 2048];
+        assert!(!dictionary_concat_preflight(&schema, &batches));
+        let bytes = input_bytes(&batches);
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(bytes + 4096));
+        let mut reservation = MemoryConsumer::new("test").register(&pool);
+        reservation.try_grow(bytes)?;
+        let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
+        metrics.build_mem_used.add(bytes);
+        assert!(
+            try_compact_dictionary_build(
+                &schema,
+                &mut batches,
+                false,
+                &mut reservation,
+                &metrics,
+            )
+            .is_none()
+        );
+        assert_eq!(batches.len(), 2048);
+        assert_eq!(reservation.size(), bytes);
+        assert_eq!(metrics.build_mem_used.value(), bytes);
+        Ok(())
     }
 
     fn coalesce_for_test(batches: Vec<RecordBatch>) -> Result<Vec<RecordBatch>> {
