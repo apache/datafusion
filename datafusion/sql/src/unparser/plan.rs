@@ -2347,7 +2347,10 @@ impl Unparser<'_> {
     }
 
     fn is_scan_with_pushdown(scan: &TableScan) -> bool {
-        scan.projection.is_some() || !scan.filters.is_empty() || scan.fetch.is_some()
+        scan.projection.is_some()
+            || !scan.filters.is_empty()
+            || scan.fetch.is_some()
+            || scan.skip.is_some()
     }
 
     /// Returns true if a plan, when used as the direct child of a SubqueryAlias,
