@@ -204,7 +204,7 @@ fn create_tree_recursive(
         if let Some((key, value)) = line.split_once('=') {
             extra_info.insert(key.to_string(), value.to_string());
         } else {
-            extra_info.insert(line.to_string(), "".to_string());
+            extra_info.insert(line.to_string(), String::new());
         }
     }
 

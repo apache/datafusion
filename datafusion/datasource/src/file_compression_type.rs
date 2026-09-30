@@ -64,7 +64,7 @@ impl GetExt for FileCompressionType {
             BZIP2 => ".bz2".to_owned(),
             XZ => ".xz".to_owned(),
             ZSTD => ".zst".to_owned(),
-            UNCOMPRESSED => "".to_owned(),
+            UNCOMPRESSED => String::new(),
         }
     }
 }

@@ -672,9 +672,8 @@ impl LimitStream {
                 Poll::Ready(Some(Ok(batch))) => {
                     if batch.num_rows() > 0 {
                         break poll;
-                    } else {
-                        // Continue to poll input stream
                     }
+                    // Continue to poll input stream
                 }
                 Poll::Ready(Some(Err(_e))) => break poll,
                 Poll::Ready(None) => break poll,

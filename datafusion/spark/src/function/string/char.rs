@@ -86,9 +86,9 @@ fn spark_chr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         }
         ColumnarValue::Scalar(ScalarValue::Int64(Some(value))) => {
             if value < 0 {
-                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                    "".to_string(),
-                ))))
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(
+                    Some(String::new()),
+                )))
             } else {
                 match core::char::from_u32((value % 256) as u32) {
                     Some(ch) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(

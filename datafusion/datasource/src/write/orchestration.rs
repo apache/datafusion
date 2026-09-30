@@ -114,7 +114,7 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
         match task.join().await {
             Ok(Ok((cnt, bytes))) => {
                 match writer.write_all(&bytes).await {
-                    Ok(_) => (),
+                    Ok(()) => (),
                     Err(e) => {
                         return SerializedRecordBatchResult::failure(
                             None,
@@ -141,7 +141,7 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
     }
 
     match serialize_task.join().await {
-        Ok(Ok(_)) => (),
+        Ok(Ok(())) => (),
         Ok(Err(e)) => return SerializedRecordBatchResult::failure(Some(writer), e),
         Err(_) => {
             return SerializedRecordBatchResult::failure(

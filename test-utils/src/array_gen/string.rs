@@ -92,7 +92,7 @@ impl StringArrayGenerator {
 fn random_string(rng: &mut StdRng, max_len: usize) -> String {
     // pick characters at random (not just ascii)
     match max_len {
-        0 => "".to_string(),
+        0 => String::new(),
         1 => String::from(rng.random::<char>()),
         _ => {
             let len = rng.random_range(1..=max_len);

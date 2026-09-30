@@ -404,7 +404,7 @@ mod tests {
     fn test_parse_path_empty_vs_root() -> Result<()> {
         assert_eq!(
             ParseUrl::parse("https://example.com", "PATH", None)?,
-            Some("".to_string())
+            Some(String::new())
         );
         assert_eq!(
             ParseUrl::parse("https://example.com/", "PATH", None)?,
@@ -430,7 +430,7 @@ mod tests {
         );
         assert_eq!(
             ParseUrl::parse("http://ex.com?key=", "QUERY", Some("key"))?,
-            Some("".to_string())
+            Some(String::new())
         );
         assert_eq!(
             ParseUrl::parse("http://ex.com?keyonly", "QUERY", Some("keyonly"))?,
@@ -449,10 +449,10 @@ mod tests {
 
     #[test]
     fn test_parse_empty_path_file() -> Result<()> {
-        assert_eq!(ParseUrl::parse("", "PATH", None)?, Some("".to_string()));
+        assert_eq!(ParseUrl::parse("", "PATH", None)?, Some(String::new()));
         assert_eq!(
             ParseUrl::parse("http://example.com", "FILE", None)?,
-            Some("".to_string())
+            Some(String::new())
         );
         assert_eq!(
             ParseUrl::parse("http://example.com?foo=bar", "FILE", None)?,
@@ -460,7 +460,7 @@ mod tests {
         );
         assert_eq!(
             ParseUrl::parse("http://example.com#fragment", "FILE", None)?,
-            Some("".to_string())
+            Some(String::new())
         );
         assert_eq!(
             ParseUrl::parse("http://example.com/?foo=bar", "FILE", None)?,

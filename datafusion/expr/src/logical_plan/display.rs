@@ -485,7 +485,7 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                 let filter_expr = filter
                     .as_ref()
                     .map(|expr| format!(" Filter: {expr}"))
-                    .unwrap_or_else(|| "".to_string());
+                    .unwrap_or_else(String::new);
                 json!({
                     "Node Type": format!("{} Join", join_type),
                     "Join Constraint": format!("{:?}", join_constraint),

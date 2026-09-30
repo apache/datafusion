@@ -692,7 +692,7 @@ mod tests {
 
                 let re = regexp_count_with_scalar_values(&[
                     ScalarValue::Utf8(Some(value.to_string())),
-                    ScalarValue::Utf8(Some("".to_string())),
+                    ScalarValue::Utf8(Some(String::new())),
                     start_sv.clone(),
                 ]);
                 match re {
@@ -704,7 +704,7 @@ mod tests {
 
                 let re = regexp_count_with_scalar_values(&[
                     ScalarValue::LargeUtf8(Some(value.to_string())),
-                    ScalarValue::LargeUtf8(Some("".to_string())),
+                    ScalarValue::LargeUtf8(Some(String::new())),
                     start_sv.clone(),
                 ]);
                 match re {
@@ -716,7 +716,7 @@ mod tests {
 
                 let re = regexp_count_with_scalar_values(&[
                     ScalarValue::Utf8View(Some(value.to_string())),
-                    ScalarValue::Utf8View(Some("".to_string())),
+                    ScalarValue::Utf8View(Some(String::new())),
                     start_sv,
                 ]);
                 match re {
