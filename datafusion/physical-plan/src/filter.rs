@@ -1118,6 +1118,13 @@ fn unique_match_limit(
     predicate: &Arc<dyn PhysicalExpr>,
     statistics: &Statistics,
 ) -> Option<usize> {
+    if !statistics
+        .column_statistics
+        .iter()
+        .any(|column| holds_each_value_once(column, &statistics.num_rows))
+    {
+        return None;
+    }
     let mut limit: Option<usize> = None;
     for expr in split_conjunction(predicate) {
         let Some((index, values)) = restricted_column(expr) else {
