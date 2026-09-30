@@ -76,6 +76,12 @@ data should also be handled properly, but is generally considered a **bug**
 (though a more serious one), not a vulnerability, unless it is exploitable as
 described above.
 
+### Serialized Plans
+
+Serialized plans such as `Substrait` and the `datafusion-proto` format (TODO LINK) are
+considered trusted input. If these plans are received from untrusted sources, it
+is the responsibility of the embedding application to validate them before
+passing them to DataFusion for execution.
 
 ### Extensions and Other Uses of Public APIs
 
@@ -89,8 +95,9 @@ code violates such a contract is not considered a DataFusion vulnerability.
 ## Denial of Service (DoS) and Resource Exhaustion
 
 Unexpected behavior (e.g., panics, crashes, excessive resource consumption, or
-infinite loops) triggered by malformed or adversarial input is generally
-considered a **bug**, not a security vulnerability.
+infinite loops) triggered by malformed or adversarial input that may cause a
+denial of service is generally considered a **bug**, not a security
+vulnerability.
 
 ## Reporting a Bug
 
