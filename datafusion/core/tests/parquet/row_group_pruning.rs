@@ -720,7 +720,7 @@ macro_rules! uint_tests {
 
         #[tokio::test]
         async fn $fn_eq_in_list_negated() {
-            // result of sql "SELECT * FROM t where not in (1)" prune nothing
+            // result of sql "SELECT * FROM t where not in (6)" prune nothing
             // Groups without 6 are fully matched by statistics and skip Bloom.
             // Only [5, 10) contains 6, so only that group is Bloom-evaluated.
             RowGroupPruningTest::new()
