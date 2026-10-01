@@ -929,9 +929,8 @@ pub struct AggregateExec {
 impl AggregateExec {
     /// Try to use TopK (min/max heap) optimization in AggregateExec.
     ///
-    /// If applicable, an inner `AggregateKind` will be set, and later [`ExecutionPlan::execute`]
-    /// will choose optimized path for it. The optimizer MUST keep the limit operator
-    /// above, since different partitions execute without coordination.
+    /// The optimizer must keep the limit operator above because the aggregate may
+    /// still produce more than K rows.
     /// Returns `None` if not applicable.
     ///
     /// # Public Only for Internal Use:
