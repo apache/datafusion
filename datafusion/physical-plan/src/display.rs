@@ -1821,16 +1821,55 @@ mod tests {
             pruned: usize,
             matched: usize,
         ) -> Arc<Metric> {
+            pruning_metric_parts(name, pruned, matched, 0, None)
+        }
+
+        fn pruning_metric_parts(
+            name: &'static str,
+            pruned: usize,
+            matched: usize,
+            fully_matched: usize,
+            partition: Option<usize>,
+        ) -> Arc<Metric> {
             let pruning_metrics = PruningMetrics::new();
             pruning_metrics.add_pruned(pruned);
             pruning_metrics.add_matched(matched);
+            pruning_metrics.add_fully_matched(fully_matched);
             Arc::new(Metric::new(
                 MetricValue::PruningMetrics {
                     name: Cow::Borrowed(name),
                     pruning_metrics,
                 },
-                None,
+                partition,
             ))
+        }
+
+        fn indent_and_graphviz_metric_displays(plan: &dyn ExecutionPlan) -> [String; 4] {
+            [
+                DisplayableExecutionPlan::with_metrics(plan)
+                    .indent(false)
+                    .to_string(),
+                DisplayableExecutionPlan::with_full_metrics(plan)
+                    .indent(false)
+                    .to_string(),
+                DisplayableExecutionPlan::with_metrics(plan)
+                    .graphviz()
+                    .to_string(),
+                DisplayableExecutionPlan::with_full_metrics(plan)
+                    .graphviz()
+                    .to_string(),
+            ]
+        }
+
+        fn pgjson_extras(plan: &dyn ExecutionPlan, full: bool) -> serde_json::Value {
+            let display = if full {
+                DisplayableExecutionPlan::with_full_metrics(plan)
+            } else {
+                DisplayableExecutionPlan::with_metrics(plan)
+            };
+            let out = display.pgjson(false).to_string();
+            let value: serde_json::Value = serde_json::from_str(&out).unwrap();
+            value[0]["Plan"]["Extras"].clone()
         }
 
         #[test]
@@ -2010,6 +2049,128 @@ mod tests {
                 assert_eq!(
                     value[0]["Plan"]["Extras"][BLOOM_FILTER_PRUNING_METRIC_NAME].as_str(),
                     Some("1 total → 1 matched")
+                );
+            }
+        }
+
+        #[test]
+        fn nonzero_bloom_pruned_or_fully_matched_metrics_are_visible() {
+            let mut pruned_metrics = MetricsSet::new();
+            pruned_metrics.push(pruning_metric(BLOOM_FILTER_PRUNING_METRIC_NAME, 3, 0));
+            let pruned_plan = plan_with_metrics(pruned_metrics);
+
+            for rendered in indent_and_graphviz_metric_displays(pruned_plan.as_ref()) {
+                assert!(
+                    rendered
+                        .contains("row_groups_pruned_bloom_filter=3 total → 0 matched")
+                );
+            }
+            for extras in [
+                pgjson_extras(pruned_plan.as_ref(), false),
+                pgjson_extras(pruned_plan.as_ref(), true),
+            ] {
+                assert_eq!(
+                    extras[BLOOM_FILTER_PRUNING_METRIC_NAME].as_str(),
+                    Some("3 total → 0 matched")
+                );
+            }
+
+            let mut fully_matched_metrics = MetricsSet::new();
+            fully_matched_metrics.push(pruning_metric_parts(
+                BLOOM_FILTER_PRUNING_METRIC_NAME,
+                0,
+                0,
+                2,
+                None,
+            ));
+            let fully_matched_plan = plan_with_metrics(fully_matched_metrics);
+
+            for rendered in
+                indent_and_graphviz_metric_displays(fully_matched_plan.as_ref())
+            {
+                assert!(rendered.contains(
+                    "row_groups_pruned_bloom_filter=0 total → 0 matched -> 2 fully matched"
+                ));
+            }
+            for extras in [
+                pgjson_extras(fully_matched_plan.as_ref(), false),
+                pgjson_extras(fully_matched_plan.as_ref(), true),
+            ] {
+                assert_eq!(
+                    extras[BLOOM_FILTER_PRUNING_METRIC_NAME].as_str(),
+                    Some("0 total → 0 matched -> 2 fully matched")
+                );
+            }
+        }
+
+        #[test]
+        fn idle_and_active_bloom_metrics_on_distinct_partitions() {
+            let mut metrics = MetricsSet::new();
+            metrics.push(pruning_metric_parts(
+                BLOOM_FILTER_PRUNING_METRIC_NAME,
+                0,
+                0,
+                0,
+                Some(0),
+            ));
+            metrics.push(pruning_metric_parts(
+                BLOOM_FILTER_PRUNING_METRIC_NAME,
+                0,
+                2,
+                0,
+                Some(1),
+            ));
+            let plan = plan_with_metrics(metrics);
+
+            let aggregated = [
+                DisplayableExecutionPlan::with_metrics(plan.as_ref())
+                    .indent(false)
+                    .to_string(),
+                DisplayableExecutionPlan::with_metrics(plan.as_ref())
+                    .graphviz()
+                    .to_string(),
+            ];
+            for rendered in &aggregated {
+                assert_eq!(
+                    rendered.matches(BLOOM_FILTER_PRUNING_METRIC_NAME).count(),
+                    1
+                );
+                assert!(
+                    rendered
+                        .contains("row_groups_pruned_bloom_filter=2 total → 2 matched")
+                );
+                assert!(!rendered.contains("partition=0"));
+                assert!(!rendered.contains("partition=1"));
+            }
+
+            let full = [
+                DisplayableExecutionPlan::with_full_metrics(plan.as_ref())
+                    .indent(false)
+                    .to_string(),
+                DisplayableExecutionPlan::with_full_metrics(plan.as_ref())
+                    .graphviz()
+                    .to_string(),
+            ];
+            for rendered in &full {
+                assert_eq!(
+                    rendered.matches(BLOOM_FILTER_PRUNING_METRIC_NAME).count(),
+                    1
+                );
+                assert!(rendered.contains(
+                    "row_groups_pruned_bloom_filter{partition=1}=2 total → 2 matched"
+                ));
+                assert!(!rendered.contains("partition=0"));
+            }
+
+            // PostgreSQL JSON extras are keyed by metric name, so partition
+            // labels are not retained; omit still keeps the active totals.
+            for extras in [
+                pgjson_extras(plan.as_ref(), false),
+                pgjson_extras(plan.as_ref(), true),
+            ] {
+                assert_eq!(
+                    extras[BLOOM_FILTER_PRUNING_METRIC_NAME].as_str(),
+                    Some("2 total → 2 matched")
                 );
             }
         }
