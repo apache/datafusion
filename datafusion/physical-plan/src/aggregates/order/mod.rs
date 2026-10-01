@@ -143,7 +143,7 @@ impl GroupOrdering {
             GroupOrdering::Full(full) => {
                 full.new_groups(total_num_groups);
             }
-        };
+        }
         Ok(())
     }
 

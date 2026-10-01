@@ -239,9 +239,10 @@ mod unix_test {
         // Create a mutex for tracking if the right input source is waiting for data.
         let waiting = Arc::new(AtomicBool::new(true));
 
-        // Create schema
+        // Use floating-point ordering so interval pruning does not depend on
+        // proving that integer arithmetic in the join filter cannot overflow.
         let schema = Arc::new(Schema::new(vec![
-            Field::new("a1", DataType::UInt32, false),
+            Field::new("a1", DataType::Float64, false),
             Field::new("a2", DataType::UInt32, false),
         ]));
 
@@ -311,7 +312,7 @@ mod unix_test {
                 left += 1;
             } else {
                 right += 1;
-            };
+            }
         }
         futures::future::try_join_all(tasks).await.unwrap();
 

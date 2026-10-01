@@ -356,3 +356,267 @@ DROP TABLE IF EXISTS tbl;
 
 statement ok
 DROP TABLE sum_simplify_t;
+
+#######
+# EliminateAggregateDistinct: DISTINCT is dropped from duplicate-insensitive
+# aggregates, so no inner group by is planned to deduplicate the input.
+#######
+
+statement ok
+CREATE TABLE distinct_simplify_t (g INT, v INT, b BOOLEAN) AS VALUES
+  (1, 3, true),
+  (1, 3, true),
+  (1, 5, false),
+  (2, 7, true),
+  (2, 7, true),
+  (2, NULL, NULL);
+
+# min: DISTINCT cannot change the minimum
+query II
+SELECT g, min(DISTINCT v) FROM distinct_simplify_t GROUP BY g ORDER BY g;
+----
+1 3
+2 7
+
+query TT
+EXPLAIN SELECT g, min(DISTINCT v) FROM distinct_simplify_t GROUP BY g;
+----
+logical_plan
+01)Aggregate: groupBy=[[distinct_simplify_t.g]], aggr=[[min(distinct_simplify_t.v) AS min(DISTINCT distinct_simplify_t.v)]]
+02)--TableScan: distinct_simplify_t projection=[g, v]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[min(distinct_simplify_t.v) as min(DISTINCT distinct_simplify_t.v)]
+02)--RepartitionExec: partitioning=Hash([g@0], 4), input_partitions=1
+03)----AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[min(distinct_simplify_t.v) as min(DISTINCT distinct_simplify_t.v)]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# max
+query II
+SELECT g, max(DISTINCT v) FROM distinct_simplify_t GROUP BY g ORDER BY g;
+----
+1 5
+2 7
+
+query TT
+EXPLAIN SELECT g, max(DISTINCT v) FROM distinct_simplify_t GROUP BY g;
+----
+logical_plan
+01)Aggregate: groupBy=[[distinct_simplify_t.g]], aggr=[[max(distinct_simplify_t.v) AS max(DISTINCT distinct_simplify_t.v)]]
+02)--TableScan: distinct_simplify_t projection=[g, v]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[max(distinct_simplify_t.v) as max(DISTINCT distinct_simplify_t.v)]
+02)--RepartitionExec: partitioning=Hash([g@0], 4), input_partitions=1
+03)----AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[max(distinct_simplify_t.v) as max(DISTINCT distinct_simplify_t.v)]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# bool_and
+query IB
+SELECT g, bool_and(DISTINCT b) FROM distinct_simplify_t GROUP BY g ORDER BY g;
+----
+1 false
+2 true
+
+query TT
+EXPLAIN SELECT g, bool_and(DISTINCT b) FROM distinct_simplify_t GROUP BY g;
+----
+logical_plan
+01)Aggregate: groupBy=[[distinct_simplify_t.g]], aggr=[[bool_and(distinct_simplify_t.b) AS bool_and(DISTINCT distinct_simplify_t.b)]]
+02)--TableScan: distinct_simplify_t projection=[g, b]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[bool_and(distinct_simplify_t.b) as bool_and(DISTINCT distinct_simplify_t.b)]
+02)--RepartitionExec: partitioning=Hash([g@0], 4), input_partitions=1
+03)----AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[bool_and(distinct_simplify_t.b) as bool_and(DISTINCT distinct_simplify_t.b)]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# bool_or
+query IB
+SELECT g, bool_or(DISTINCT b) FROM distinct_simplify_t GROUP BY g ORDER BY g;
+----
+1 true
+2 true
+
+query TT
+EXPLAIN SELECT g, bool_or(DISTINCT b) FROM distinct_simplify_t GROUP BY g;
+----
+logical_plan
+01)Aggregate: groupBy=[[distinct_simplify_t.g]], aggr=[[bool_or(distinct_simplify_t.b) AS bool_or(DISTINCT distinct_simplify_t.b)]]
+02)--TableScan: distinct_simplify_t projection=[g, b]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[bool_or(distinct_simplify_t.b) as bool_or(DISTINCT distinct_simplify_t.b)]
+02)--RepartitionExec: partitioning=Hash([g@0], 4), input_partitions=1
+03)----AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[bool_or(distinct_simplify_t.b) as bool_or(DISTINCT distinct_simplify_t.b)]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# bit_and
+query II
+SELECT g, bit_and(DISTINCT v) FROM distinct_simplify_t GROUP BY g ORDER BY g;
+----
+1 1
+2 7
+
+query TT
+EXPLAIN SELECT g, bit_and(DISTINCT v) FROM distinct_simplify_t GROUP BY g;
+----
+logical_plan
+01)Aggregate: groupBy=[[distinct_simplify_t.g]], aggr=[[bit_and(distinct_simplify_t.v) AS bit_and(DISTINCT distinct_simplify_t.v)]]
+02)--TableScan: distinct_simplify_t projection=[g, v]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[bit_and(distinct_simplify_t.v) as bit_and(DISTINCT distinct_simplify_t.v)]
+02)--RepartitionExec: partitioning=Hash([g@0], 4), input_partitions=1
+03)----AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[bit_and(distinct_simplify_t.v) as bit_and(DISTINCT distinct_simplify_t.v)]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# bit_or
+query II
+SELECT g, bit_or(DISTINCT v) FROM distinct_simplify_t GROUP BY g ORDER BY g;
+----
+1 7
+2 7
+
+query TT
+EXPLAIN SELECT g, bit_or(DISTINCT v) FROM distinct_simplify_t GROUP BY g;
+----
+logical_plan
+01)Aggregate: groupBy=[[distinct_simplify_t.g]], aggr=[[bit_or(distinct_simplify_t.v) AS bit_or(DISTINCT distinct_simplify_t.v)]]
+02)--TableScan: distinct_simplify_t projection=[g, v]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[bit_or(distinct_simplify_t.v) as bit_or(DISTINCT distinct_simplify_t.v)]
+02)--RepartitionExec: partitioning=Hash([g@0], 4), input_partitions=1
+03)----AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[bit_or(distinct_simplify_t.v) as bit_or(DISTINCT distinct_simplify_t.v)]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# approx_distinct: setting an HLL register a value already reached is a no-op,
+# so the deduplicating inner group by that SingleDistinctToGroupBy used to plan
+# here was pure cost. This is the largest plan change the rule makes.
+query II
+SELECT g, approx_distinct(DISTINCT v) FROM distinct_simplify_t GROUP BY g ORDER BY g;
+----
+1 2
+2 1
+
+query TT
+EXPLAIN SELECT g, approx_distinct(DISTINCT v) FROM distinct_simplify_t GROUP BY g;
+----
+logical_plan
+01)Aggregate: groupBy=[[distinct_simplify_t.g]], aggr=[[approx_distinct(distinct_simplify_t.v) AS approx_distinct(DISTINCT distinct_simplify_t.v)]]
+02)--TableScan: distinct_simplify_t projection=[g, v]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[approx_distinct(distinct_simplify_t.v) as approx_distinct(DISTINCT distinct_simplify_t.v)]
+02)--RepartitionExec: partitioning=Hash([g@0], 4), input_partitions=1
+03)----AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[approx_distinct(distinct_simplify_t.v) as approx_distinct(DISTINCT distinct_simplify_t.v)]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Negative case: bit_xor cancels duplicate pairs, so DISTINCT is kept and
+# SingleDistinctToGroupBy still rewrites the plan.
+query II
+SELECT g, bit_xor(DISTINCT v) FROM distinct_simplify_t GROUP BY g ORDER BY g;
+----
+1 6
+2 7
+
+query TT
+EXPLAIN SELECT g, bit_xor(DISTINCT v) FROM distinct_simplify_t GROUP BY g;
+----
+logical_plan
+01)Projection: distinct_simplify_t.g, bit_xor(alias1) AS bit_xor(DISTINCT distinct_simplify_t.v)
+02)--Aggregate: groupBy=[[distinct_simplify_t.g]], aggr=[[bit_xor(alias1)]]
+03)----Aggregate: groupBy=[[distinct_simplify_t.g, distinct_simplify_t.v AS alias1]], aggr=[[]]
+04)------TableScan: distinct_simplify_t projection=[g, v]
+physical_plan
+01)ProjectionExec: expr=[g@0 as g, bit_xor(alias1)@1 as bit_xor(DISTINCT distinct_simplify_t.v)]
+02)--AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[bit_xor(alias1)]
+03)----RepartitionExec: partitioning=Hash([g@0], 4), input_partitions=4
+04)------AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[bit_xor(alias1)]
+05)--------AggregateExec: mode=FinalPartitioned, gby=[g@0 as g, alias1@1 as alias1], aggr=[]
+06)----------RepartitionExec: partitioning=Hash([g@0, alias1@1], 4), input_partitions=1
+07)------------AggregateExec: mode=Partial, gby=[g@0 as g, v@1 as alias1], aggr=[]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Negative case: count deduplicates for real
+query II
+SELECT g, count(DISTINCT v) FROM distinct_simplify_t GROUP BY g ORDER BY g;
+----
+1 2
+2 1
+
+query TT
+EXPLAIN SELECT g, count(DISTINCT v) FROM distinct_simplify_t GROUP BY g;
+----
+logical_plan
+01)Projection: distinct_simplify_t.g, count(alias1) AS count(DISTINCT distinct_simplify_t.v)
+02)--Aggregate: groupBy=[[distinct_simplify_t.g]], aggr=[[count(alias1)]]
+03)----Aggregate: groupBy=[[distinct_simplify_t.g, distinct_simplify_t.v AS alias1]], aggr=[[]]
+04)------TableScan: distinct_simplify_t projection=[g, v]
+physical_plan
+01)ProjectionExec: expr=[g@0 as g, count(alias1)@1 as count(DISTINCT distinct_simplify_t.v)]
+02)--AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[count(alias1)]
+03)----RepartitionExec: partitioning=Hash([g@0], 4), input_partitions=4
+04)------AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[count(alias1)]
+05)--------AggregateExec: mode=FinalPartitioned, gby=[g@0 as g, alias1@1 as alias1], aggr=[]
+06)----------RepartitionExec: partitioning=Hash([g@0, alias1@1], 4), input_partitions=1
+07)------------AggregateExec: mode=Partial, gby=[g@0 as g, v@1 as alias1], aggr=[]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Mixed: a node that still needs one DISTINCT keeps all of them, so this rule
+# cannot change which plans SingleDistinctToGroupBy rewrites. `count` needs the
+# rewrite, and the plan below shows that it still happens.
+query III
+SELECT g, min(DISTINCT v), count(DISTINCT v) FROM distinct_simplify_t GROUP BY g ORDER BY g;
+----
+1 3 2
+2 7 1
+
+query TT
+EXPLAIN SELECT g, min(DISTINCT v), count(DISTINCT v) FROM distinct_simplify_t GROUP BY g;
+----
+logical_plan
+01)Projection: distinct_simplify_t.g, min(alias1) AS min(DISTINCT distinct_simplify_t.v), count(alias1) AS count(DISTINCT distinct_simplify_t.v)
+02)--Aggregate: groupBy=[[distinct_simplify_t.g]], aggr=[[min(alias1), count(alias1)]]
+03)----Aggregate: groupBy=[[distinct_simplify_t.g, distinct_simplify_t.v AS alias1]], aggr=[[]]
+04)------TableScan: distinct_simplify_t projection=[g, v]
+physical_plan
+01)ProjectionExec: expr=[g@0 as g, min(alias1)@1 as min(DISTINCT distinct_simplify_t.v), count(alias1)@2 as count(DISTINCT distinct_simplify_t.v)]
+02)--AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[min(alias1), count(alias1)]
+03)----RepartitionExec: partitioning=Hash([g@0], 4), input_partitions=4
+04)------AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[min(alias1), count(alias1)]
+05)--------AggregateExec: mode=FinalPartitioned, gby=[g@0 as g, alias1@1 as alias1], aggr=[]
+06)----------RepartitionExec: partitioning=Hash([g@0, alias1@1], 4), input_partitions=1
+07)------------AggregateExec: mode=Partial, gby=[g@0 as g, v@1 as alias1], aggr=[]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# FILTER is applied before deduplication, so it survives the rewrite
+query II
+SELECT g, min(DISTINCT v) FILTER (WHERE v > 3) FROM distinct_simplify_t GROUP BY g ORDER BY g;
+----
+1 5
+2 7
+
+query TT
+EXPLAIN SELECT g, min(DISTINCT v) FILTER (WHERE v > 3) FROM distinct_simplify_t GROUP BY g;
+----
+logical_plan
+01)Aggregate: groupBy=[[distinct_simplify_t.g]], aggr=[[min(distinct_simplify_t.v) FILTER (WHERE distinct_simplify_t.v > Int32(3)) AS min(DISTINCT distinct_simplify_t.v) FILTER (WHERE distinct_simplify_t.v > Int64(3))]]
+02)--TableScan: distinct_simplify_t projection=[g, v]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[min(distinct_simplify_t.v) FILTER (WHERE distinct_simplify_t.v > Int32(3)) as min(DISTINCT distinct_simplify_t.v) FILTER (WHERE distinct_simplify_t.v > Int64(3))]
+02)--RepartitionExec: partitioning=Hash([g@0], 4), input_partitions=1
+03)----AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[min(distinct_simplify_t.v) FILTER (WHERE distinct_simplify_t.v > Int32(3)) as min(DISTINCT distinct_simplify_t.v) FILTER (WHERE distinct_simplify_t.v > Int64(3))]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# min/max(DISTINCT) over floats now sees the raw values. Before this rule, the
+# inner group by of SingleDistinctToGroupBy turned -0.0 into 0.0 in its hash
+# key, so max(DISTINCT v) printed 0.0 here. Now it agrees with max(v).
+# The R column type prints -0.0 as 0, so compare the text form.
+statement ok
+CREATE TABLE distinct_simplify_float_t (v DOUBLE) AS VALUES (-1.0), (-0.0), (-0.0);
+
+query TTTT
+SELECT cast(min(DISTINCT v) AS VARCHAR), cast(max(DISTINCT v) AS VARCHAR), cast(min(v) AS VARCHAR), cast(max(v) AS VARCHAR) FROM distinct_simplify_float_t;
+----
+-1.0 -0.0 -1.0 -0.0
+
+statement ok
+DROP TABLE distinct_simplify_float_t;
+
+statement ok
+DROP TABLE distinct_simplify_t;

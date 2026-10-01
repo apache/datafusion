@@ -70,7 +70,7 @@ async fn scan_all() {
 
     // Verify that some bytes were read
     let bytes_scanned = metric_value(&parquet_metrics, "bytes_scanned").unwrap();
-    assert_ne!(bytes_scanned, 0, "metrics : {parquet_metrics:#?}",);
+    assert_ne!(bytes_scanned, 0, "metrics : {parquet_metrics:#?}");
 }
 
 #[tokio::test]
@@ -87,7 +87,7 @@ async fn skip_all() {
 
     // Verify that skipping all row groups skips reading any data at all
     let bytes_scanned = metric_value(&parquet_metrics, "bytes_scanned").unwrap();
-    assert_eq!(bytes_scanned, 0, "metrics : {parquet_metrics:#?}",);
+    assert_eq!(bytes_scanned, 0, "metrics : {parquet_metrics:#?}");
 }
 
 #[tokio::test]
@@ -184,7 +184,7 @@ async fn row_selection_extension() {
 
     // only the first row group is read, so some bytes are scanned
     let bytes_scanned = metric_value(&parquet_metrics, "bytes_scanned").unwrap();
-    assert_ne!(bytes_scanned, 0, "metrics : {parquet_metrics:#?}",);
+    assert_ne!(bytes_scanned, 0, "metrics : {parquet_metrics:#?}");
 }
 
 #[tokio::test]
@@ -215,7 +215,7 @@ async fn row_selection_extension_spanning_row_groups() {
     .unwrap();
 
     let bytes_scanned = metric_value(&parquet_metrics, "bytes_scanned").unwrap();
-    assert_ne!(bytes_scanned, 0, "metrics : {parquet_metrics:#?}",);
+    assert_ne!(bytes_scanned, 0, "metrics : {parquet_metrics:#?}");
 }
 
 #[tokio::test]
@@ -308,6 +308,36 @@ async fn two_selections() {
         .run_success()
         .await;
     }
+}
+
+#[tokio::test]
+async fn mixed_bitmap_and_selector_selections() {
+    // RG 0 selects a/c with a bitmap, RG 1 selects f/h with selectors.
+    // Each representation must keep coordinates local to its row group.
+    TestFull {
+        access_plan: Some(ParquetAccessPlan::new(vec![
+            RowGroupAccess::Selection(RowSelection::from(
+                arrow::buffer::BooleanBuffer::from(vec![true, false, true, false, false]),
+            )),
+            RowGroupAccess::Selection(select_two_rows()),
+        ])),
+        row_selection: None,
+        expected_rows: 4,
+        expected_output: Some(&[
+            "+------+------------+",
+            "| utf8 | large_utf8 |",
+            "+------+------------+",
+            "| a    | a          |",
+            "| c    | c          |",
+            "| f    | f          |",
+            "| h    | h          |",
+            "+------+------------+",
+        ]),
+        predicate: None,
+    }
+    .run()
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
@@ -442,7 +472,7 @@ impl TestFull {
 
         let new_file_name = if cfg!(target_os = "windows") {
             // Windows path separator is different from Unix
-            file_name.replace("\\", "/")
+            file_name.replace('\\', "/")
         } else {
             file_name.clone()
         };

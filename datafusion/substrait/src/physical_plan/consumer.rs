@@ -87,7 +87,7 @@ pub async fn from_substrait_rel(
                     );
                 }
                 Err(e) => return Err(e),
-            };
+            }
 
             match &read.as_ref().read_type {
                 Some(ReadType::LocalFiles(files)) => {

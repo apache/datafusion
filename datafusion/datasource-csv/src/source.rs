@@ -356,6 +356,7 @@ impl FileSource for CsvSource {
                 .transpose()?,
             newlines_in_values: self.newlines_in_values(),
             truncate_rows: self.truncate_rows(),
+            terminator: self.terminator().map(|terminator| vec![terminator]),
         };
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::CsvScan(node)),
@@ -577,19 +578,27 @@ fn proto_str_to_byte(s: &str, description: &str) -> Result<u8> {
 }
 
 #[cfg(feature = "proto")]
+fn proto_bytes_to_byte(bytes: &[u8], description: &str) -> Result<u8> {
+    let [byte] = bytes else {
+        return datafusion_common::internal_err!(
+            "Invalid CSV {description}: expected exactly one byte, got {}",
+            bytes.len()
+        );
+    };
+    Ok(*byte)
+}
+
+#[cfg(feature = "proto")]
 impl CsvSource {
     /// Reconstructs a `DataSourceExec` from a protobuf `CsvScan`.
     ///
-    /// Custom line terminators are not represented in the wire format.
+    /// Payloads without a terminator use the default newline terminator.
     pub fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         use datafusion_common::config::CsvOptions;
-        use datafusion_datasource::file_compression_type::FileCompressionType;
-        use datafusion_datasource::file_scan_config::{
-            FileScanConfig, FileScanConfigBuilder,
-        };
+        use datafusion_datasource::file_scan_config::FileScanConfig;
         use datafusion_datasource::source::DataSourceExec;
         use datafusion_proto_models::protobuf;
 
@@ -617,6 +626,11 @@ impl CsvSource {
             }
             None => None,
         };
+        let terminator = scan
+            .terminator
+            .as_deref()
+            .map(|terminator| proto_bytes_to_byte(terminator, "terminator"))
+            .transpose()?;
 
         let table_schema = FileScanConfig::parse_table_schema_from_proto(base_conf)?;
 
@@ -632,16 +646,11 @@ impl CsvSource {
             CsvSource::new(table_schema)
                 .with_csv_options(csv_options)
                 .with_escape(escape)
-                .with_comment(comment),
+                .with_comment(comment)
+                .with_terminator(terminator),
         );
 
-        // The compression type is not on the wire; CSV scans always
-        // deserialize as uncompressed.
-        let conf = FileScanConfigBuilder::from(FileScanConfig::try_from_proto(
-            base_conf, ctx, source,
-        )?)
-        .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
-        .build();
+        let conf = FileScanConfig::try_from_proto(base_conf, ctx, source)?;
         Ok(DataSourceExec::from_data_source(conf))
     }
 }

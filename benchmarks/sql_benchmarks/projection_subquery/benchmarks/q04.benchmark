@@ -1,0 +1,3 @@
+template sql_benchmarks/projection_subquery/projection_subquery.benchmark.template
+QPAD=04
+NAME=q04_in_two_columns

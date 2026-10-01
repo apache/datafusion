@@ -57,6 +57,58 @@ fn has_extractable_expr(exprs: &[Expr]) -> bool {
     })
 }
 
+/// Returns the flat names of `plan`'s output columns whose defining expression
+/// is volatile (e.g. `random()`).
+///
+/// Only a [`LogicalPlan::Projection`] can define such a column: anywhere else
+/// the value has already been materialized by the projection that produced it,
+/// so referencing the column again does not re-evaluate anything.
+fn volatile_output_columns(plan: &LogicalPlan) -> BTreeSet<String> {
+    let LogicalPlan::Projection(projection) = plan else {
+        return BTreeSet::new();
+    };
+    projection
+        .schema
+        .iter()
+        .zip(projection.expr.iter())
+        .filter(|(_, expr)| expr.is_volatile())
+        .map(|((qualifier, field), _)| Column::from((qualifier, field)).flat_name())
+        .collect()
+}
+
+/// Returns `true` if building an extraction projection for `exprs` on top of
+/// `input` would duplicate a volatile computation.
+///
+/// When `input` is already a projection, [`build_extraction_projection_impl`]
+/// *merges* into it: every column reference in an extracted expression is
+/// replaced by that column's defining expression (see
+/// [`build_projection_replace_map`]). Inlining a volatile definition makes the
+/// merged projection evaluate it a second, independent time, so the extracted
+/// value no longer matches the column it was derived from:
+///
+/// ```text
+/// Projection: s, get_field(s, 'a') AS field
+///   Projection: named_struct('a', random()) AS s
+/// ```
+///
+/// would merge into a single projection computing `random()` twice, and
+/// `field` would then differ from `s['a']` on every row. Callers skip the
+/// extraction instead.
+fn would_duplicate_volatile<'a>(
+    exprs: impl IntoIterator<Item = &'a Expr>,
+    input: &LogicalPlan,
+) -> bool {
+    let volatile = volatile_output_columns(input);
+    if volatile.is_empty() {
+        return false;
+    }
+    exprs.into_iter().any(|expr| {
+        expr.column_refs()
+            .iter()
+            .any(|col| volatile.contains(&col.flat_name()))
+    })
+}
+
 /// Extracts `MoveTowardsLeafNodes` sub-expressions from non-projection nodes
 /// into **extraction projections** (pass 1 of 2).
 ///
@@ -134,15 +186,19 @@ impl OptimizerRule for ExtractLeafExpressions {
     }
 }
 
-/// Scans the current plan node's expressions for pre-existing
-/// `__datafusion_extracted_N` aliases and advances the generator
-/// counter past them to avoid collisions with user-provided aliases.
+/// Scans the plan for pre-existing `__datafusion_extracted_N` aliases and
+/// advances the generator counter past them to avoid collisions with
+/// user-provided aliases.
+///
+/// Subquery plans nested inside expressions are scanned as well: extraction
+/// rewrites with `transform_down_with_subqueries`, so it can generate aliases
+/// *inside* a subquery and would otherwise collide with a user alias there.
 fn advance_generator_past_existing(
     plan: &LogicalPlan,
     alias_generator: &AliasGenerator,
 ) -> Result<()> {
-    plan.apply(|plan| {
-        plan.expressions().iter().try_for_each(|expr| {
+    plan.apply_with_subqueries(|plan| {
+        plan.apply_expressions(|expr| {
             expr.apply(|e| {
                 if let Expr::Alias(alias) = e
                     && let Some(id) = alias
@@ -154,10 +210,8 @@ fn advance_generator_past_existing(
                     alias_generator.update_min_id(id);
                 }
                 Ok(TreeNodeRecursion::Continue)
-            })?;
-            Ok::<(), datafusion_common::error::DataFusionError>(())
-        })?;
-        Ok(TreeNodeRecursion::Continue)
+            })
+        })
     })
     .map(|_| ())
 }
@@ -193,7 +247,18 @@ fn extract_from_plan(
     }
 
     // Fast pre-check: skip all allocations if no extractable expressions exist
-    if !has_extractable_expr(&plan.expressions()) {
+    let node_exprs = plan.expressions();
+    if !has_extractable_expr(&node_exprs) {
+        return Ok(Transformed::no(plan));
+    }
+
+    // The extraction projection is merged into an input that is already a
+    // projection, which inlines the referenced columns' definitions. Skip the
+    // extraction when that would duplicate a volatile computation.
+    if inputs
+        .iter()
+        .any(|input| would_duplicate_volatile(node_exprs.iter(), input))
+    {
         return Ok(Transformed::no(plan));
     }
 
@@ -772,6 +837,66 @@ fn passthrough_column(expr: &Expr) -> Option<&Column> {
     }
 }
 
+/// Returns `true` if merging the extracted `pairs` (and the pass-through
+/// `columns_needed`) into `child` would inline a `KeepInPlace` definition into
+/// more than one reference site — e.g. a struct-returning UDF `f(c)` behind both
+/// `f(c)['a']` and `f(c)['b']`, or behind `f(c)['a']` and a bare `f(c)`.
+///
+/// `CommonSubexprEliminate` hoists such an expression into a shared column so it
+/// runs once; [`build_extraction_projection_impl`] then resolves that column
+/// back to its definition and re-duplicates it. Mirrors the
+/// `optimize_projections` merge guard (#8296): a compute-once expression used
+/// more than once stays in place.
+fn merge_would_duplicate_kept_expr(
+    pairs: &[(Expr, String)],
+    columns_needed: &IndexSet<Column>,
+    child: &Projection,
+) -> bool {
+    // Columns whose `KeepInPlace` definition must stay put; inlining one would
+    // duplicate a compute-once expression. Plain columns, pushable exprs, and
+    // literals are all cheap to duplicate, so only `KeepInPlace` counts.
+    let kept_columns: std::collections::HashSet<String> = child
+        .schema
+        .iter()
+        .zip(child.expr.iter())
+        .filter_map(|((qualifier, field), expr)| {
+            if matches!(expr.placement(), ExpressionPlacement::KeepInPlace) {
+                Some(Column::from((qualifier, field)).flat_name())
+            } else {
+                None
+            }
+        })
+        .collect();
+    if kept_columns.is_empty() {
+        return false;
+    }
+
+    // Count every site that references a kept column. A pair that references the
+    // same kept column twice still inlines one copy, so count each pair at most
+    // once per column.
+    let mut usage: HashMap<String, usize> = HashMap::new();
+    for (expr, _alias) in pairs {
+        let mut seen: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for col in expr.column_refs() {
+            let name = col.flat_name();
+            if kept_columns.contains(&name) && seen.insert(name.clone()) {
+                *usage.entry(name).or_insert(0) += 1;
+            }
+        }
+    }
+    // Pass-through / pre-existing-alias inputs are additional reference sites:
+    // a bare `f(c)` alongside `f(c)['a']` also pins the compute-once column, so
+    // counting only `pairs` under-counted and re-duplicated it (#23655).
+    for col in columns_needed {
+        let name = col.flat_name();
+        if kept_columns.contains(&name) {
+            *usage.entry(name).or_insert(0) += 1;
+        }
+    }
+    usage.values().any(|&count| count > 1)
+}
+
 /// Splits a projection into extractable pieces, pushes them towards leaf
 /// nodes, and adds a recovery projection if needed.
 ///
@@ -912,6 +1037,24 @@ fn split_and_push_projection(
 
     // If no extractions found, nothing to do
     if extraction_pairs.is_empty() {
+        return Ok(None);
+    }
+
+    // Pushing into an input that is already a projection merges into it and
+    // inlines the referenced columns' definitions. Leave the projection alone
+    // when that would duplicate a volatile computation.
+    if would_duplicate_volatile(
+        extraction_pairs.iter().map(|(expr, _)| expr),
+        input.as_ref(),
+    ) {
+        return Ok(None);
+    }
+
+    // Merging here would re-inline an expression `CommonSubexprEliminate` hoisted
+    // to run once, undoing it (issue #23655); leave the projection in place.
+    if let LogicalPlan::Projection(child) = input.as_ref()
+        && merge_would_duplicate_kept_expr(&extraction_pairs, columns_needed, child)
+    {
         return Ok(None);
     }
 
@@ -1213,6 +1356,15 @@ fn try_push_into_inputs(
         if per_input[idx].pairs.is_empty() {
             new_inputs.push(input.clone());
         } else {
+            // Merging into an input projection inlines the referenced columns'
+            // definitions; bail out when that would duplicate a volatile
+            // computation.
+            if would_duplicate_volatile(
+                per_input[idx].pairs.iter().map(|(expr, _)| expr),
+                input,
+            ) {
+                return Ok(None);
+            }
             let input_arc = Arc::new(input.clone());
             let target_schema = Arc::clone(input.schema());
             let proj = build_extraction_projection_impl(
@@ -1262,13 +1414,14 @@ fn try_push_into_inputs(
 mod tests {
 
     use super::*;
+    use crate::common_subexpr_eliminate::CommonSubexprEliminate;
     use crate::optimize_projections::OptimizeProjections;
-    use crate::test::udfs::PlacementTestUDF;
+    use crate::test::udfs::{PlacementTestUDF, get_field_like};
     use crate::test::*;
     use crate::{Optimizer, OptimizerContext};
     use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::{
-        ScalarUDF, col, lit, logical_plan::builder::LogicalPlanBuilder,
+        ScalarUDF, Volatility, col, lit, logical_plan::builder::LogicalPlanBuilder,
     };
 
     fn leaf_udf(expr: Expr, name: &str) -> Expr {
@@ -1278,6 +1431,19 @@ mod tests {
                     .with_placement(ExpressionPlacement::MoveTowardsLeafNodes),
             )),
             vec![expr, lit(name)],
+        ))
+    }
+
+    /// A stand-in for `random()`: a volatile expression that must be evaluated
+    /// exactly once per row.
+    fn volatile_udf(expr: Expr) -> Expr {
+        Expr::ScalarFunction(ScalarFunction::new_udf(
+            Arc::new(ScalarUDF::new_from_impl(
+                PlacementTestUDF::new()
+                    .with_placement(ExpressionPlacement::KeepInPlace)
+                    .with_volatility(Volatility::Volatile),
+            )),
+            vec![expr],
         ))
     }
 
@@ -1679,8 +1845,8 @@ mod tests {
     }
 
     /// Test: Projection with different field than Filter
-    /// SELECT id, s['label'] FROM t WHERE s['value'] > 150
-    /// Both s['label'] and s['value'] should be in a single extraction projection.
+    /// `SELECT id, s['label'] FROM t WHERE s['value'] > 150`
+    /// Both `s['label']` and `s['value']` should be in a single extraction projection.
     #[test]
     fn test_projection_different_field_from_filter() -> Result<()> {
         let table_scan = test_table_scan_with_struct()?;
@@ -1955,6 +2121,63 @@ mod tests {
         ## Optimized
         Projection: leaf_udf(test.user, Utf8("name"))
           TableScan: test projection=[user]
+        "#)
+    }
+
+    /// Merging an extraction into an input projection inlines the definition of
+    /// every column the extraction references. When that definition is volatile
+    /// the inlined copy is an independent evaluation, so the extraction must be
+    /// skipped and the plan left alone.
+    #[test]
+    fn test_no_merge_into_volatile_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![volatile_udf(col("a")).alias("v")])?
+            .project(vec![col("v"), leaf_udf(col("v"), "x")])?
+            .build()?;
+
+        assert_stages!(plan, @r#"
+        ## Original Plan
+        Projection: v, leaf_udf(v, Utf8("x"))
+          Projection: keep_in_place_udf(test.a) AS v
+            TableScan: test projection=[a]
+
+        ## After Extraction
+        (same as original)
+
+        ## After Pushdown
+        (same as after extraction)
+
+        ## Optimized
+        (same as after pushdown)
+        "#)
+    }
+
+    /// Same guard for pass 1: extracting out of a `Filter` whose input
+    /// projection defines the referenced column volatilely would make the
+    /// predicate test a second, independent evaluation.
+    #[test]
+    fn test_no_extraction_from_filter_over_volatile_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![volatile_udf(col("a")).alias("v")])?
+            .filter(leaf_udf(col("v"), "x").eq(lit(1u32)))?
+            .build()?;
+
+        assert_stages!(plan, @r#"
+        ## Original Plan
+        Filter: leaf_udf(v, Utf8("x")) = UInt32(1)
+          Projection: keep_in_place_udf(test.a) AS v
+            TableScan: test projection=[a]
+
+        ## After Extraction
+        (same as original)
+
+        ## After Pushdown
+        (same as after extraction)
+
+        ## Optimized
+        (same as after pushdown)
         "#)
     }
 
@@ -3251,6 +3474,292 @@ mod tests {
                       Projection: right.id, leaf_udf(right.user, Utf8("t")) AS __datafusion_extracted_2
                         TableScan: right projection=[id, user]
         "#);
+        Ok(())
+    }
+
+    /// Pre-existing `__datafusion_extracted_N` aliases must advance the alias
+    /// generator even when they live inside a subquery plan, since extraction
+    /// descends into subqueries and would otherwise reuse the same alias.
+    #[test]
+    fn test_advance_generator_past_alias_in_subquery() -> Result<()> {
+        use datafusion_expr::in_subquery;
+
+        let subquery = LogicalPlanBuilder::from(test_table_scan_with_struct()?)
+            .project(vec![
+                leaf_udf(col("user"), "name").alias("__datafusion_extracted_7"),
+            ])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(test_table_scan_with_struct_named("outer")?)
+            .filter(in_subquery(col("id"), Arc::new(subquery)))?
+            .build()?;
+
+        let alias_generator = AliasGenerator::new();
+        advance_generator_past_existing(&plan, &alias_generator)?;
+
+        assert_eq!(
+            alias_generator.next(EXTRACTED_EXPR_PREFIX),
+            "__datafusion_extracted_8"
+        );
+
+        Ok(())
+    }
+
+    /// Regression test for issue #23655: `f(c)['a'], f(c)['b']` on a
+    /// struct-returning UDF must evaluate `f(c)` once, not once per field access.
+    ///
+    /// `keep_in_place_udf` / `get_field_like` model `f(c)` and `f(c)[key]` — the
+    /// crate can't depend on the real `get_field` (see [`get_field_like`]).
+    /// Without the guard, `PushDownLeafProjections` re-inlines the shared UDF that
+    /// `CommonSubexprEliminate` hoisted and the passes oscillate to a double
+    /// evaluation.
+    #[test]
+    fn test_struct_returning_udf_evaluated_once() -> Result<()> {
+        let udf = ScalarUDF::new_from_impl(
+            PlacementTestUDF::new().with_placement(ExpressionPlacement::KeepInPlace),
+        );
+        let f_c = udf.call(vec![col("c")]);
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![
+                get_field_like(f_c.clone(), "a"),
+                get_field_like(f_c, "b"),
+            ])?
+            .build()?;
+
+        // The full four-rule interaction, default pass budget so any oscillation
+        // would surface here as a double evaluation.
+        let ctx = OptimizerContext::new();
+        let optimizer = Optimizer::with_rules(vec![
+            Arc::new(CommonSubexprEliminate::new()),
+            Arc::new(ExtractLeafExpressions::new()),
+            Arc::new(PushDownLeafProjections::new()),
+            Arc::new(OptimizeProjections::new()),
+        ]);
+        let optimized = optimizer.optimize(plan, &ctx, |_, _| {})?;
+
+        // Every field access reads the UDF back through `__common_expr_1`; none
+        // wraps a fresh `keep_in_place_udf(...)` call. Asserted explicitly so a
+        // careless snapshot re-accept can't quietly restore the double evaluation.
+        let formatted = format!("{optimized}");
+        assert_eq!(
+            formatted
+                .matches("get_field_like(keep_in_place_udf")
+                .count(),
+            0,
+            "struct-returning UDF must not be re-evaluated inside a field access; got:\n{formatted}"
+        );
+
+        insta::assert_snapshot!(formatted, @r#"
+        Projection: get_field_like(__common_expr_1 AS keep_in_place_udf(test.c), Utf8("a")), get_field_like(__common_expr_1 AS keep_in_place_udf(test.c), Utf8("b"))
+          Projection: keep_in_place_udf(test.c) AS __common_expr_1
+            TableScan: test projection=[c]
+        "#);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_struct_returning_udf_evaluated_once_with_bare_reference() -> Result<()> {
+        // Regression for the `SELECT f(c)['a'], f(c)` shape: the struct UDF is
+        // referenced once through a field access and once as a bare value. The
+        // bare reference is tracked in `columns_needed`, not `extraction_pairs`,
+        // so a guard that counted only pairs would re-inline `f(c)` and evaluate
+        // it twice (#23655).
+        let udf = ScalarUDF::new_from_impl(
+            PlacementTestUDF::new().with_placement(ExpressionPlacement::KeepInPlace),
+        );
+        let f_c = udf.call(vec![col("c")]);
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![get_field_like(f_c.clone(), "a"), f_c])?
+            .build()?;
+
+        let ctx = OptimizerContext::new();
+        let optimizer = Optimizer::with_rules(vec![
+            Arc::new(CommonSubexprEliminate::new()),
+            Arc::new(ExtractLeafExpressions::new()),
+            Arc::new(PushDownLeafProjections::new()),
+            Arc::new(OptimizeProjections::new()),
+        ]);
+        let optimized = optimizer.optimize(plan, &ctx, |_, _| {})?;
+
+        // The field access must read the UDF back through `__common_expr_1`, not
+        // wrap a fresh `keep_in_place_udf(...)` call. Asserted explicitly so a
+        // careless snapshot re-accept can't quietly restore the double evaluation.
+        let formatted = format!("{optimized}");
+        assert_eq!(
+            formatted
+                .matches("get_field_like(keep_in_place_udf")
+                .count(),
+            0,
+            "struct-returning UDF must not be re-evaluated inside a field access; got:\n{formatted}"
+        );
+
+        insta::assert_snapshot!(formatted, @r#"
+        Projection: get_field_like(__common_expr_1 AS keep_in_place_udf(test.c), Utf8("a")), __common_expr_1 AS keep_in_place_udf(test.c)
+          Projection: keep_in_place_udf(test.c) AS __common_expr_1
+            TableScan: test projection=[c]
+        "#);
+
+        Ok(())
+    }
+
+    /// `passthrough_column` tells `split_and_push_projection` which projection
+    /// expressions the input already produces. A renaming alias (`test.a AS b`)
+    /// does not qualify: it is a new output column. If the function accepted
+    /// it, the rename would count as captured, and the recovery projection
+    /// that restores the name would be dropped.
+    #[test]
+    fn test_passthrough_column_rejects_renaming_alias() {
+        // A bare column is a pass-through.
+        let bare = Expr::Column(Column::new(Some("test"), "a"));
+        assert_eq!(
+            passthrough_column(&bare).map(|c| c.flat_name()),
+            Some("test.a".to_string())
+        );
+
+        // `test.a AS a` keeps the name, so it is a pass-through.
+        let trivial_rename = Expr::Column(Column::new(Some("test"), "a")).alias("a");
+        assert_eq!(
+            passthrough_column(&trivial_rename).map(|c| c.flat_name()),
+            Some("test.a".to_string())
+        );
+
+        // `test.a AS b` changes the name, so it is not a pass-through.
+        let renaming = Expr::Column(Column::new(Some("test"), "a")).alias("b");
+        assert_eq!(passthrough_column(&renaming), None);
+
+        // An alias over anything other than a column is not a pass-through.
+        let not_a_column = lit(1).alias("a");
+        assert_eq!(passthrough_column(&not_a_column), None);
+    }
+
+    /// `is_pure_extraction_projection` decides if a merged projection can go
+    /// down one more level. It must accept only `__datafusion_extracted`
+    /// aliases and plain columns, and only with at least one extraction. An
+    /// alias with a different prefix must not count: a second push would
+    /// re-extract the expression under a new alias that the parent cannot
+    /// resolve.
+    #[test]
+    fn test_is_pure_extraction_projection() -> Result<()> {
+        let scan = test_table_scan_with_struct()?;
+
+        // Not a projection.
+        assert!(!is_pure_extraction_projection(&scan));
+
+        // Columns only: nothing was extracted.
+        let columns_only = LogicalPlanBuilder::from(scan.clone())
+            .project(vec![col("id"), col("user")])?
+            .build()?;
+        assert!(!is_pure_extraction_projection(&columns_only));
+
+        // One extraction alias and one pass-through column.
+        let pure = LogicalPlanBuilder::from(scan.clone())
+            .project(vec![
+                leaf_udf(col("user"), "status").alias("__datafusion_extracted_1"),
+                col("id"),
+            ])?
+            .build()?;
+        assert!(is_pure_extraction_projection(&pure));
+
+        // The same shape under a `CommonSubexprEliminate` alias is not an
+        // extraction projection.
+        let common_expr = LogicalPlanBuilder::from(scan.clone())
+            .project(vec![
+                leaf_udf(col("user"), "status").alias("__common_expr_1"),
+                col("id"),
+            ])?
+            .build()?;
+        assert!(!is_pure_extraction_projection(&common_expr));
+
+        // A bare expression is never allowed.
+        let bare_expr = LogicalPlanBuilder::from(scan)
+            .project(vec![leaf_udf(col("user"), "status"), col("id")])?
+            .build()?;
+        assert!(!is_pure_extraction_projection(&bare_expr));
+
+        Ok(())
+    }
+
+    /// A non-volatile `KeepInPlace` expression: the kind that
+    /// `CommonSubexprEliminate` hoists into a column so it runs one time.
+    fn keep_in_place_udf(expr: Expr) -> Expr {
+        Expr::ScalarFunction(ScalarFunction::new_udf(
+            Arc::new(ScalarUDF::new_from_impl(
+                PlacementTestUDF::new().with_placement(ExpressionPlacement::KeepInPlace),
+            )),
+            vec![expr],
+        ))
+    }
+
+    /// `merge_would_duplicate_kept_expr` must block a merge only when it would
+    /// inline one `KeepInPlace` definition into more than one reference site.
+    /// It must count reference sites for `KeepInPlace` columns alone: a plain
+    /// column is cheap to duplicate, and a merge that touches only plain
+    /// columns must still go ahead.
+    #[test]
+    fn test_merge_would_duplicate_kept_expr_counts_only_kept_columns() -> Result<()> {
+        let scan = test_table_scan_with_struct()?;
+        // `k` holds a `KeepInPlace` definition. `id` is a plain column.
+        let child = Projection::try_new(
+            vec![keep_in_place_udf(col("user")).alias("k"), col("id")],
+            Arc::new(scan),
+        )?;
+        let no_columns = IndexSet::new();
+
+        // One reference site: the merge inlines one copy, so it is free.
+        let one_site = vec![(
+            get_field_like(col("k"), "a"),
+            "__datafusion_extracted_1".to_string(),
+        )];
+        assert!(!merge_would_duplicate_kept_expr(
+            &one_site,
+            &no_columns,
+            &child
+        ));
+
+        // Two reference sites: the merge would evaluate `k` two times.
+        let two_sites = vec![
+            (
+                get_field_like(col("k"), "a"),
+                "__datafusion_extracted_1".to_string(),
+            ),
+            (
+                get_field_like(col("k"), "b"),
+                "__datafusion_extracted_2".to_string(),
+            ),
+        ];
+        assert!(merge_would_duplicate_kept_expr(
+            &two_sites,
+            &no_columns,
+            &child
+        ));
+
+        // A pass-through reference to `k` is a second site too (#23655).
+        let kept_column: IndexSet<Column> =
+            std::iter::once(Column::new_unqualified("k")).collect();
+        assert!(merge_would_duplicate_kept_expr(
+            &one_site,
+            &kept_column,
+            &child
+        ));
+
+        // Two sites that reference the plain column `id` are cheap to
+        // duplicate, so the merge must still go ahead.
+        let plain_column_sites = vec![
+            (
+                get_field_like(col("id"), "a"),
+                "__datafusion_extracted_1".to_string(),
+            ),
+            (
+                get_field_like(col("id"), "b"),
+                "__datafusion_extracted_2".to_string(),
+            ),
+        ];
+        assert!(!merge_would_duplicate_kept_expr(
+            &plain_column_sites,
+            &no_columns,
+            &child
+        ));
+
         Ok(())
     }
 }

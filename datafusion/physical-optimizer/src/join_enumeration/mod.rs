@@ -46,7 +46,7 @@ use arrow::datatypes::{FieldRef, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{JoinSide, JoinType, Statistics, internal_err};
+use datafusion_common::{JoinSide, JoinType, internal_err};
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column};
@@ -58,7 +58,6 @@ use datafusion_physical_plan::joins::{
     CrossJoinExec, HashJoinExecBuilder, NestedLoopJoinExec, PartitionMode,
     SortMergeJoinExec,
 };
-use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 
@@ -115,24 +114,15 @@ impl PhysicalOptimizerRule for JoinEnumeration {
         if !config.optimizer.join_enumeration {
             return Ok(plan);
         }
-        let mut default_registry = None;
-        let registry: Option<&StatisticsRegistry> =
-            if config.optimizer.use_statistics_registry {
-                Some(context.statistics_registry().unwrap_or_else(|| {
-                    default_registry
-                        .insert(StatisticsRegistry::default_with_builtin_providers())
-                }))
-            } else {
-                None
-            };
+        let stats_ctx = match context.statistics_registry() {
+            Some(registry) => StatisticsContext::new_with_registry(registry.clone()),
+            None => StatisticsContext::new(),
+        };
+        // The cache is keyed by node pointer, and the search builds and drops
+        // candidate plans, so only reuse it within one call.
         let mut stats = |plan: &dyn ExecutionPlan| {
-            if let Some(registry) = registry {
-                registry
-                    .compute(plan)
-                    .map(|s| Arc::<Statistics>::clone(s.base_arc()))
-            } else {
-                StatisticsContext::new().compute(plan, &StatisticsArgs::new())
-            }
+            stats_ctx.reset_cache();
+            stats_ctx.compute(plan, &StatisticsArgs::new())
         };
         Ok(
             enumerate_join_order(&plan, config, &mut stats, self.cost_model.as_ref())?

@@ -133,7 +133,8 @@ Guidelines for evaluating tests:
 
 1. Prefer `sqllogictest` (`.slt`) tests or DataFrame API tests where
    possible, as they exercise **user-visible behavior** and are less coupled
-   to internal implementation details than unit tests.
+   to internal implementation details than unit tests (see
+   [Choosing What Kind of Test to Write](testing.md#choosing-what-kind-of-test-to-write)).
 2. Verify tests cover edge cases and common failure scenarios, not just the
    common successful path. However, it is NOT necessary to test every possible
    error path, especially if it is difficult to trigger or unlikely to occur in

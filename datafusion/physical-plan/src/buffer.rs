@@ -368,6 +368,7 @@ impl BufferExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::utils::usize_from_wire;
         use datafusion_proto_models::protobuf;
         let buffer = crate::expect_plan_variant!(
             node,
@@ -378,7 +379,8 @@ impl BufferExec {
         // compile error here rather than a silently dropped field.
         let protobuf::BufferExecNode { input, capacity } = &**buffer;
         let input = ctx.decode_required_child(input.as_deref(), "BufferExec", "input")?;
-        Ok(Arc::new(BufferExec::new(input, *capacity as usize)))
+        let capacity = usize_from_wire(*capacity, "BufferExec", "capacity")?;
+        Ok(Arc::new(BufferExec::new(input, capacity)))
     }
 }
 
@@ -476,7 +478,7 @@ impl<T: Send + SizedMessage + 'static> MemoryBufferedStream<T> {
 
                 if batch_tx.send(Ok((item, permit))).is_err() {
                     break; // stream was closed
-                };
+                }
             }
         });
 

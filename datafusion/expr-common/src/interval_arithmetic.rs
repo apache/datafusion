@@ -663,8 +663,8 @@ impl Interval {
             return Ok(None);
         }
 
-        let lower = max_of_bounds(&lhs.lower, &rhs.lower);
-        let upper = min_of_bounds(&lhs.upper, &rhs.upper);
+        let lower = max_lower_bound(&lhs.lower, &rhs.lower);
+        let upper = min_upper_bound(&lhs.upper, &rhs.upper);
 
         // New lower and upper bounds must always construct a valid interval.
         debug_assert!(
@@ -686,18 +686,8 @@ impl Interval {
         let lhs = lhs_owned.as_ref().unwrap_or(self);
         let rhs = rhs_owned.as_ref().unwrap_or(rhs);
 
-        let lower =
-            if lhs.lower.is_null() || (!rhs.lower.is_null() && lhs.lower <= rhs.lower) {
-                lhs.lower.clone()
-            } else {
-                rhs.lower.clone()
-            };
-        let upper =
-            if lhs.upper.is_null() || (!rhs.upper.is_null() && lhs.upper >= rhs.upper) {
-                lhs.upper.clone()
-            } else {
-                rhs.upper.clone()
-            };
+        let lower = min_lower_bound(&lhs.lower, &rhs.lower);
+        let upper = max_upper_bound(&lhs.upper, &rhs.upper);
 
         // New lower and upper bounds must always construct a valid interval.
         debug_assert!(
@@ -1346,9 +1336,17 @@ fn next_value_helper<const INC: bool>(value: ScalarValue) -> ScalarValue {
     }
 }
 
-/// Returns the greater of the given interval bounds. Assumes that a `NULL`
-/// value represents `NEG_INF`.
-fn max_of_bounds(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
+/// Returns the lesser of two lower bounds, treating `NULL` as `NEG_INF`.
+fn min_lower_bound(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
+    if first.is_null() || (!second.is_null() && first <= second) {
+        first.clone()
+    } else {
+        second.clone()
+    }
+}
+
+/// Returns the greater of two lower bounds, treating `NULL` as `NEG_INF`.
+fn max_lower_bound(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
     if !first.is_null() && (second.is_null() || first >= second) {
         first.clone()
     } else {
@@ -1356,10 +1354,18 @@ fn max_of_bounds(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
     }
 }
 
-/// Returns the lesser of the given interval bounds. Assumes that a `NULL`
-/// value represents `INF`.
-fn min_of_bounds(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
+/// Returns the lesser of two upper bounds, treating `NULL` as `INF`.
+fn min_upper_bound(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
     if !first.is_null() && (second.is_null() || first <= second) {
+        first.clone()
+    } else {
+        second.clone()
+    }
+}
+
+/// Returns the greater of two upper bounds, treating `NULL` as `INF`.
+fn max_upper_bound(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
+    if first.is_null() || (!second.is_null() && first >= second) {
         first.clone()
     } else {
         second.clone()
@@ -1482,13 +1488,14 @@ fn mul_helper_multi_zero_inclusive(
     {
         return Interval::make_unbounded(dt).unwrap();
     }
-    // Since unbounded cases are handled above, we can safely
-    // use the utility functions here to eliminate code duplication.
-    let lower = min_of_bounds(
+    // Even finite inputs can produce unbounded endpoints through overflow.
+    // When combining the products, NULL lower bounds represent NEG_INF and
+    // NULL upper bounds represent INF, so either must dominate finite bounds.
+    let lower = min_lower_bound(
         &mul_bounds::<false>(dt, &lhs.lower, &rhs.upper),
         &mul_bounds::<false>(dt, &rhs.lower, &lhs.upper),
     );
-    let upper = max_of_bounds(
+    let upper = max_upper_bound(
         &mul_bounds::<true>(dt, &lhs.upper, &rhs.upper),
         &mul_bounds::<true>(dt, &lhs.lower, &rhs.lower),
     );
@@ -3482,6 +3489,29 @@ mod tests {
     }
 
     #[test]
+    fn test_mul_zero_inclusive_overflow() -> Result<()> {
+        // Both operands contain zero. Overflow in either candidate endpoint
+        // must not be hidden by the other, finite candidate.
+        let cases = [
+            ((0_i8, 20_i8), (-3, 7), (Some(-60_i8), None)),
+            ((-20, 0), (-7, 3), (Some(-60), None)),
+            ((-20, 0), (-3, 7), (None, Some(60))),
+            ((0, 20), (-7, 3), (None, Some(60))),
+            ((-20, 20), (-7, 7), (None, None)),
+            ((-3, 3), (-7, 7), (Some(-21), Some(21))),
+            ((0, 0), (i8::MIN, i8::MAX), (Some(0), Some(0))),
+        ];
+        for ((lo, hi), (rlo, rhi), (expected_lo, expected_hi)) in cases {
+            let lhs = Interval::make(Some(lo), Some(hi))?;
+            let rhs = Interval::make(Some(rlo), Some(rhi))?;
+            let expected = Interval::make(expected_lo, expected_hi)?;
+            assert_eq!(lhs.mul(&rhs)?, expected, "{lhs:?} * {rhs:?}");
+            assert_eq!(rhs.mul(&lhs)?, expected, "{rhs:?} * {lhs:?}");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_mul() -> Result<()> {
         let cases = vec![
             (
@@ -4811,7 +4841,7 @@ mod tests {
         ];
 
         for case in cases {
-            assert_eq!(case.0.not().unwrap(), case.1, "Failed for NOT {}", case.0,);
+            assert_eq!(case.0.not().unwrap(), case.1, "Failed for NOT {}", case.0);
         }
         Ok(())
     }
@@ -4832,7 +4862,7 @@ mod tests {
 
         for (interval, expected) in test_cases {
             let result = interval.is_certainly_true();
-            assert_eq!(result, expected, "Failed for interval: {interval}",);
+            assert_eq!(result, expected, "Failed for interval: {interval}");
         }
     }
 
@@ -4852,7 +4882,7 @@ mod tests {
 
         for (interval, expected) in test_cases {
             let result = interval.is_true().unwrap();
-            assert_eq!(result, expected, "Failed for interval: {interval}",);
+            assert_eq!(result, expected, "Failed for interval: {interval}");
         }
     }
 
@@ -4872,7 +4902,7 @@ mod tests {
 
         for (interval, expected) in test_cases {
             let result = interval.is_certainly_false();
-            assert_eq!(result, expected, "Failed for interval: {interval}",);
+            assert_eq!(result, expected, "Failed for interval: {interval}");
         }
     }
 
@@ -4892,7 +4922,7 @@ mod tests {
 
         for (interval, expected) in test_cases {
             let result = interval.is_false().unwrap();
-            assert_eq!(result, expected, "Failed for interval: {interval}",);
+            assert_eq!(result, expected, "Failed for interval: {interval}");
         }
     }
 
@@ -4912,7 +4942,7 @@ mod tests {
 
         for (interval, expected) in test_cases {
             let result = interval.is_certainly_unknown();
-            assert_eq!(result, expected, "Failed for interval: {interval}",);
+            assert_eq!(result, expected, "Failed for interval: {interval}");
         }
     }
 
@@ -4932,7 +4962,7 @@ mod tests {
 
         for (interval, expected) in test_cases {
             let result = interval.is_unknown().unwrap();
-            assert_eq!(result, expected, "Failed for interval: {interval}",);
+            assert_eq!(result, expected, "Failed for interval: {interval}");
         }
     }
 

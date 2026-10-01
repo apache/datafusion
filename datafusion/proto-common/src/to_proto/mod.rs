@@ -23,7 +23,8 @@ use crate::protobuf_common::{
     EmptyMessage, arrow_type::ArrowTypeEnum, scalar_value::Value,
 };
 use arrow::array::{ArrayRef, RecordBatch};
-use arrow::csv::{QuoteStyle, WriterBuilder};
+use arrow::csv::QuoteStyle;
+use arrow::csv::writer::Terminator;
 use arrow::datatypes::{
     DataType, Field, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, Schema,
     SchemaRef, TimeUnit, UnionMode,
@@ -99,7 +100,7 @@ impl TryFrom<&Field> for protobuf::Field {
             arrow_type: Some(Box::new(arrow_type)),
             nullable: field.is_nullable(),
             children: Vec::new(),
-            metadata: field.metadata().clone(),
+            metadata: field.metadata().into(),
         })
     }
 }
@@ -265,7 +266,7 @@ impl TryFrom<&Schema> for protobuf::Schema {
     fn try_from(schema: &Schema) -> Result<Self, Self::Error> {
         Ok(Self {
             columns: convert_arc_fields_to_proto_fields(schema.fields())?,
-            metadata: schema.metadata.clone(),
+            metadata: schema.metadata().into(),
         })
     }
 }
@@ -276,7 +277,7 @@ impl TryFrom<SchemaRef> for protobuf::Schema {
     fn try_from(schema: SchemaRef) -> Result<Self, Self::Error> {
         Ok(Self {
             columns: convert_arc_fields_to_proto_fields(schema.fields())?,
-            metadata: schema.metadata.clone(),
+            metadata: schema.metadata().into(),
         })
     }
 }
@@ -298,7 +299,7 @@ impl TryFrom<&DFSchema> for protobuf::DfSchema {
             .collect::<Result<Vec<_>, Error>>()?;
         Ok(Self {
             columns,
-            metadata: s.metadata().clone(),
+            metadata: s.metadata().into(),
         })
     }
 }
@@ -872,10 +873,37 @@ impl TryFrom<&CsvWriterOptions> for protobuf::CsvWriterOptions {
     type Error = DataFusionError;
 
     fn try_from(opts: &CsvWriterOptions) -> datafusion_common::Result<Self, Self::Error> {
-        Ok(csv_writer_options_to_proto(
-            &opts.writer_options,
-            &opts.compression,
-        ))
+        let CsvWriterOptions {
+            writer_options,
+            compression,
+            compression_level,
+        } = opts;
+        let compression: protobuf::CompressionTypeVariant = compression.into();
+        let quote_style: protobuf::CsvQuoteStyle = writer_options.quote_style().into();
+        let terminator = match writer_options.line_terminator() {
+            Terminator::CRLF => b"\r\n".to_vec(),
+            Terminator::Any(byte) => vec![*byte],
+        };
+
+        Ok(protobuf::CsvWriterOptions {
+            compression: compression.into(),
+            delimiter: (writer_options.delimiter() as char).to_string(),
+            has_header: writer_options.header(),
+            date_format: writer_options.date_format().map(str::to_owned),
+            datetime_format: writer_options.datetime_format().map(str::to_owned),
+            timestamp_format: writer_options.timestamp_format().map(str::to_owned),
+            time_format: writer_options.time_format().map(str::to_owned),
+            null_value: writer_options.null().to_owned(),
+            quote: (writer_options.quote() as char).to_string(),
+            escape: (writer_options.escape() as char).to_string(),
+            double_quote: writer_options.double_quote(),
+            quote_style: quote_style.into(),
+            ignore_leading_whitespace: writer_options.ignore_leading_whitespace(),
+            ignore_trailing_whitespace: writer_options.ignore_trailing_whitespace(),
+            compression_level: *compression_level,
+            timestamp_tz_format: writer_options.timestamp_tz_format().map(str::to_owned),
+            terminator,
+        })
     }
 }
 
@@ -885,9 +913,16 @@ impl TryFrom<&JsonWriterOptions> for protobuf::JsonWriterOptions {
     fn try_from(
         opts: &JsonWriterOptions,
     ) -> datafusion_common::Result<Self, Self::Error> {
-        let compression: protobuf::CompressionTypeVariant = opts.compression.into();
+        // Exhaustive destructure: new writer options must be explicitly
+        // included in the wire representation.
+        let JsonWriterOptions {
+            compression,
+            compression_level,
+        } = opts;
+        let compression: protobuf::CompressionTypeVariant = (*compression).into();
         Ok(protobuf::JsonWriterOptions {
             compression: compression.into(),
+            compression_level: *compression_level,
         })
     }
 }
@@ -907,10 +942,10 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             data_pagesize_limit: value.data_pagesize_limit as u64,
             write_batch_size: value.write_batch_size as u64,
             writer_version: value.writer_version.to_string(),
-            compression_opt: value.compression.clone().map(protobuf::parquet_options::CompressionOpt::Compression),
+            compression_opt: value.compression.map(|v| protobuf::parquet_options::CompressionOpt::Compression(v.to_string())),
             dictionary_enabled_opt: value.dictionary_enabled.map(protobuf::parquet_options::DictionaryEnabledOpt::DictionaryEnabled),
             dictionary_page_size_limit: value.dictionary_page_size_limit as u64,
-            statistics_enabled_opt: value.statistics_enabled.clone().map(protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled),
+            statistics_enabled_opt: value.statistics_enabled.map(|v| protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled(v.to_string())),
             max_row_group_size: value.max_row_group_size as u64,
             max_in_list_size: value.max_in_list_size as u64,
             created_by: value.created_by.clone(),
@@ -1167,28 +1202,4 @@ where
         .into_iter()
         .map(|field| field.as_ref().try_into())
         .collect::<Result<Vec<_>, Error>>()
-}
-
-pub(crate) fn csv_writer_options_to_proto(
-    csv_options: &WriterBuilder,
-    compression: &CompressionTypeVariant,
-) -> protobuf::CsvWriterOptions {
-    let compression: protobuf::CompressionTypeVariant = compression.into();
-    let quote_style: protobuf::CsvQuoteStyle = csv_options.quote_style().into();
-    protobuf::CsvWriterOptions {
-        compression: compression.into(),
-        delimiter: (csv_options.delimiter() as char).to_string(),
-        has_header: csv_options.header(),
-        date_format: csv_options.date_format().unwrap_or("").to_owned(),
-        datetime_format: csv_options.datetime_format().unwrap_or("").to_owned(),
-        timestamp_format: csv_options.timestamp_format().unwrap_or("").to_owned(),
-        time_format: csv_options.time_format().unwrap_or("").to_owned(),
-        null_value: csv_options.null().to_owned(),
-        quote: (csv_options.quote() as char).to_string(),
-        escape: (csv_options.escape() as char).to_string(),
-        double_quote: csv_options.double_quote(),
-        quote_style: quote_style.into(),
-        ignore_leading_whitespace: csv_options.ignore_leading_whitespace(),
-        ignore_trailing_whitespace: csv_options.ignore_trailing_whitespace(),
-    }
 }

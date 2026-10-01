@@ -508,6 +508,9 @@ impl TypeSignatureClass {
             TypeSignatureClass::Binary if native_type.is_binary() => {
                 Ok(origin_type.to_owned())
             }
+            // Binary has an unambiguous default, unlike Timestamp; cast NULL rather
+            // than letting the generic arm below pass DataType::Null downstream.
+            TypeSignatureClass::Binary if native_type.is_null() => Ok(DataType::Binary),
             TypeSignatureClass::Decimal if native_type.is_decimal() => {
                 Ok(origin_type.to_owned())
             }

@@ -37,6 +37,7 @@ use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
 };
+use datafusion_expr_common::sort_properties::ExprProperties;
 use datafusion_macros::user_doc;
 use itertools::Itertools as _;
 
@@ -111,6 +112,11 @@ impl ScalarUDFImpl for MakeArray {
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn strictly_order_preserving(&self, _inputs: &[ExprProperties]) -> Result<bool> {
+        // Not strictly order preserving since null input does not correspond to null output
+        Ok(false)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {

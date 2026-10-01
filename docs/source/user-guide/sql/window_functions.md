@@ -145,7 +145,7 @@ where **offset** is an non-negative integer.
 
 RANGE and GROUPS modes require an ORDER BY clause (with RANGE the ORDER BY must specify exactly one column).
 
-In RANGE mode an **offset** is measured in ORDER BY values rather than in rows, so the bound is computed by adding it to or subtracting it from the current row's ORDER BY value. That restricts `offset PRECEDING` and `offset FOLLOWING` to ORDER BY types supporting such arithmetic, namely the numeric, date, and timestamp types. Other orderable types, such as strings and binaries, can still be used with `UNBOUNDED PRECEDING`, `CURRENT ROW` and `UNBOUNDED FOLLOWING`, which are located by comparing ORDER BY values.
+In RANGE mode an **offset** is measured in ORDER BY values rather than in rows, so the bound is computed by adding it to or subtracting it from the current row's ORDER BY value. That restricts `offset PRECEDING` and `offset FOLLOWING` to ORDER BY types supporting such arithmetic, namely the numeric, date, and timestamp types. Other orderable types, such as strings, binaries, and times, can still be used with `UNBOUNDED PRECEDING`, `CURRENT ROW` and `UNBOUNDED FOLLOWING`, which are located by comparing ORDER BY values.
 
 ## Filter clause for aggregate window functions
 

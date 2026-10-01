@@ -305,7 +305,7 @@ impl Drop for CpuRuntime {
             // If the thread is still running, we wait for it to finish
             print!("Shutting down CPU runtime thread...");
             if let Err(e) = thread_join_handle.join() {
-                eprintln!("Error joining CPU runtime thread: {e:?}",);
+                eprintln!("Error joining CPU runtime thread: {e:?}");
             } else {
                 println!("CPU runtime thread shutdown successfully.");
             }
