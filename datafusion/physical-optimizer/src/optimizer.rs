@@ -25,7 +25,6 @@ use crate::combine_partial_final_agg::CombinePartialFinalAggregate;
 use crate::ensure_coop::EnsureCooperative;
 use crate::ensure_requirements::OptimizeSorts;
 use crate::filter_pushdown::FilterPushdown;
-use crate::join_selection::JoinSelection;
 use crate::limit_pushdown::LimitPushdown;
 use crate::limited_distinct_aggregation::LimitedDistinctAggregation;
 use crate::output_requirements::OutputRequirements;
@@ -89,40 +88,25 @@ impl PhysicalOptimizer {
         //   queries, and will likely increase the optimization time. Please extend
         //   existing rules when possible, rather than adding a new rule.
         let rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = vec![
-            // The output-requirement boundary (`OutputRequirements` add mode) and
-            // all enforcement (`EnforceDistribution`, `EnforceSorting`) run first
-            // in the analyzer phase (see `PhysicalAnalyzer`); the rules that change
-            // those requirements (`JoinSelection`, `WindowTopN`, `FilterPushdown`)
-            // re-establish validity themselves, so there is no enforcement pass
-            // here. The matching `OutputRequirements` remove pass still runs below.
+            // Requirement enforcement runs in the analyzer phase (see
+            // `PhysicalAnalyzer`), so every rule here receives a valid plan.
             Arc::new(AggregateStatistics::new()),
             // Statistics-based join selection will change the Auto mode to a real join implementation,
             // like collect left, or hash join, or future sort merge join, which will influence the
             // EnsureRequirements rule as it decides whether to add additional repartitioning and
             // local sorting steps to meet distribution and ordering requirements. Therefore, it
             // should run before EnsureRequirements.
-            Arc::new(JoinSelection::new()),
             // The LimitedDistinctAggregation rule should be applied before EnsureRequirements,
             // as that rule may inject other operations in between the different AggregateExecs.
             // Applying the rule early means only directly-connected AggregateExecs must be examined.
             Arc::new(LimitedDistinctAggregation::new()),
-            // The FilterPushdown rule tries to push down filters as far as it can.
-            // For example, it will push down filtering from a `FilterExec` to `DataSourceExec`.
-            // Note that this does not push down dynamic filters (such as those created by a `SortExec` operator in TopK mode),
-            // those are handled by the later `FilterPushdown` rule.
-            // See `FilterPushdownPhase` for more details.
-            Arc::new(FilterPushdown::new()),
             // WindowTopN: replaces Filter(rn<=K) → Window(ROW_NUMBER)
             // with Window(ROW_NUMBER) → PartitionedTopKExec(fetch=K).
             // Must run before EnsureRequirements (so it can rewrite against the
             // window's declared ordering without pattern-matching a SortExec)
             // and before ProjectionPushdown (which embeds projections into FilterExec).
             Arc::new(WindowTopN::new()),
-            // All enforcement (distribution and ordering) runs first in the
-            // analyzer phase; the rules above that change those requirements
-            // (`JoinSelection`, `WindowTopN`, `FilterPushdown`) re-establish
-            // validity themselves. So no enforcement pass runs here -- only the
-            // sort *optimizations*, which are not enforcement.
+            // Sort *optimizations* only; enforcement already ran in the analyzer.
             Arc::new(OptimizeSorts::new()),
             // The CombinePartialFinalAggregate rule should be applied after distribution enforcement
             Arc::new(CombinePartialFinalAggregate::new()),

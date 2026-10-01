@@ -46,12 +46,12 @@ use crate::physical_optimizer::PhysicalOptimizerContext;
 ///
 /// Analyzer rules run as their own phase, before the optimizer rules, in
 /// [`DefaultPhysicalPlanner::optimize_physical_plan`]: every analyzer rule runs,
-/// then every optimizer rule. Requirement enforcement (distribution, ordering)
-/// is itself an analyzer phase, so an optimizer rule can assume it receives a
-/// valid plan. The handful of optimizer rules that change a requirement (for
-/// example `JoinSelection` choosing a partitioned join, `WindowTopN`, or
-/// `FilterPushdown`) re-establish validity themselves rather than relying on a
-/// later enforcement pass.
+/// then every optimizer rule. Within the analyzer, the rules that *decide* what
+/// the plan requires run first (a join's partition mode, which predicates reach
+/// a source), and requirement enforcement (distribution, ordering) runs last on
+/// that final shape. An optimizer rule can therefore assume it receives a valid
+/// plan. The one optimizer rule that still changes a requirement, `WindowTopN`,
+/// re-establishes validity itself.
 ///
 /// ```text
 /// ExecutionPlan  (every operator declares its distribution and ordering
@@ -60,17 +60,17 @@ use crate::physical_optimizer::PhysicalOptimizerContext;
 ///                                ▼
 /// ┌─ PhysicalAnalyzer phase ── make the plan VALID ──────────────┐
 /// │ 1. OutputRequirements (add)   establish the output boundary  │
-/// │ 2. EnforceDistribution        required_input_distribution    │
-/// │ 3. EnforceSorting             required_input_ordering        │
+/// │ 2. JoinSelection              resolve PartitionMode::Auto    │
+/// │ 3. FilterPushdown             push predicates into sources   │
+/// │ 4. EnforceDistribution        required_input_distribution    │
+/// │ 5. EnforceSorting             required_input_ordering        │
 /// └──────────────────────────────┬───────────────────────────────┘
 ///                                │  invariant: the plan is valid
 ///                                ▼
 /// ┌─ PhysicalOptimizer phase ── make the plan FASTER ────────────┐
 /// │ every rule receives a valid plan and leaves a valid plan     │
 /// │                                                              │
-/// │ JoinSelection   ─┐                                           │
-/// │ FilterPushdown  ─┴─▶ re-enforce distribution                 │
-/// │ WindowTopN      ───▶ re-enforce distribution + ordering      │
+/// │ WindowTopN  ───▶ re-enforce distribution + ordering          │
 /// └──────────────────────────────┬───────────────────────────────┘
 ///                                ▼
 ///                   valid, optimized ExecutionPlan

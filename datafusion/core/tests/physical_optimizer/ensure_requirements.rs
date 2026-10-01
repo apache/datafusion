@@ -1566,16 +1566,14 @@ fn test_sort_pushed_below_limit_with_skip_keeps_skip_rows() -> Result<()> {
 }
 
 // ========================================================================
-// Decomposition tests: `EnsureRequirements` was split into three rules
-// (`EnforceDistribution` / `EnforceSorting` / `OptimizeSorts`). These pin
-// the invariants that make the split behavior-preserving:
-//   1. the three rules in sequence reproduce the monolithic rule exactly;
-//   2. `EnforceDistribution` is idempotent (so it can run in the analyzer
-//      phase *and* be re-run in the optimizer phase);
+// Invariants of the enforcement rules `EnforceDistribution`,
+// `EnforceSorting` and `OptimizeSorts`:
+//   1. run in sequence they produce the same plan as `EnsureRequirements`;
+//   2. `EnforceDistribution` is idempotent;
 //   3. `EnforceDistribution` behaves identically whether driven as a
 //      `PhysicalAnalyzerRule` or a `PhysicalOptimizerRule`;
 //   4. `EnforceDistribution` only settles distribution; ordering is
-//      enforced later by `EnforceSorting`.
+//      enforced by `EnforceSorting`.
 // ========================================================================
 
 /// Run the decomposed pipeline (`EnforceDistribution` → `EnforceSorting` →

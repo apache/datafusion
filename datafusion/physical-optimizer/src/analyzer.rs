@@ -20,6 +20,8 @@
 use std::sync::Arc;
 
 use crate::ensure_requirements::{EnforceDistribution, EnforceSorting};
+use crate::filter_pushdown::FilterPushdown;
+use crate::join_selection::JoinSelection;
 use crate::output_requirements::OutputRequirements;
 
 // Re-export from this module for convenience.
@@ -49,19 +51,23 @@ impl Default for PhysicalAnalyzer {
 impl PhysicalAnalyzer {
     /// Create a new analyzer using the recommended list of rules
     pub fn new() -> Self {
-        // All enforcement runs here, first, as the analyzer phase: it makes the
-        // plan *valid* (distribution first, then ordering) before any optimizer
-        // rule sees it, mirroring the logical Analyzer/Optimizer split. The
-        // optimizer rules that change these requirements (`JoinSelection`,
-        // `WindowTopN`, `FilterPushdown`) re-establish validity themselves, so
-        // enforcement is not repeated as an optimizer pass. The sort
-        // *optimizations* (`OptimizeSorts`) are not enforcement and stay in the
-        // optimizer phase.
+        // The analyzer phase first runs the rules that decide what the plan
+        // requires, then enforces those requirements, so enforcement runs once
+        // on the plan's final shape. Everything after it is optimization.
         let rules: Vec<Arc<dyn PhysicalAnalyzerRule + Send + Sync>> = vec![
             // Establish the output-requirement boundary first, so enforcement can
             // see it (parallelize top-level scans below it, preserve the query's
             // final ordering). The matching remove pass runs late in the optimizer.
             Arc::new(OutputRequirements::new_add_mode()),
+            // The rules that decide what the plan *requires* run before the
+            // rules that materialise it. A hash join starts as
+            // `PartitionMode::Auto`, which declares no distribution requirement
+            // and cannot execute; resolving it here means enforcement sees the
+            // join's real requirements. Pushing predicates into sources changes
+            // the statistics the distribution decisions read, so that happens
+            // here too. Neither rule has to re-enforce anything afterwards.
+            Arc::new(JoinSelection::new_before_enforcement()),
+            Arc::new(FilterPushdown::new()),
             Arc::new(EnforceDistribution::new()),
             Arc::new(EnforceSorting::new()),
         ];
@@ -79,18 +85,18 @@ mod tests {
     use super::*;
     use crate::optimizer::PhysicalOptimizer;
 
-    /// All enforcement runs first, as the analyzer: the output-requirement
-    /// boundary is established, then distribution, then ordering, before any
-    /// optimizer rule runs. The optimizer rules that change these requirements
-    /// re-establish validity themselves, so enforcement is not repeated there.
+    /// The analyzer decides requirements first (join modes, pushed-down
+    /// predicates), then enforces distribution and ordering, in that order.
     #[test]
-    fn default_analyzer_enforces_all_requirements_first() {
+    fn default_analyzer_decides_requirements_then_enforces_them() {
         let analyzer = PhysicalAnalyzer::new();
         let names: Vec<&str> = analyzer.rules.iter().map(|r| r.name()).collect();
         assert_eq!(
             names,
             vec![
                 "OutputRequirements",
+                "join_selection",
+                "FilterPushdown",
                 "EnforceDistribution",
                 "EnforceSorting"
             ]
@@ -114,8 +120,8 @@ mod tests {
 
     /// All enforcement (`EnforceDistribution`, `EnforceSorting`) lives in the
     /// analyzer; the optimizer keeps only the sort *optimizations*
-    /// (`OptimizeSorts`), not enforcement. `JoinSelection` / `WindowTopN` /
-    /// `FilterPushdown` re-establish validity themselves after they change it.
+    /// (`OptimizeSorts`), not enforcement. `WindowTopN` is the one optimizer rule
+    /// that still disturbs requirements, and it re-establishes them itself.
     #[test]
     fn default_optimizer_has_no_enforcement_rules() {
         let names: Vec<String> = PhysicalOptimizer::new()

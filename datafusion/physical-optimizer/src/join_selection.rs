@@ -24,12 +24,14 @@
 //! `PartitionMode` and the build side using the available statistics for hash joins.
 
 use crate::PhysicalOptimizerRule;
+use crate::analyzer::PhysicalAnalyzerRule;
+use crate::enforce_distribution::replace_interleave_with_union;
 use crate::ensure_requirements::enforce_distribution_requirements;
 use crate::optimizer::{ConfigOnlyContext, PhysicalOptimizerContext};
 use datafusion_common::Statistics;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{JoinSide, JoinType, internal_err};
 use datafusion_expr_common::sort_properties::SortProperties;
 use datafusion_physical_expr::LexOrdering;
@@ -44,16 +46,114 @@ use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use std::sync::Arc;
 
+/// Where in physical planning a [`JoinSelection`] instance runs, which decides
+/// whether it has to re-establish distribution itself afterwards.
+///
+/// Mirrors [`FilterPushdownPhase`]: one rule, constructed per phase, each
+/// construction with the contract that phase allows.
+///
+/// [`FilterPushdownPhase`]: datafusion_physical_plan::filter_pushdown::FilterPushdownPhase
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JoinSelectionPhase {
+    /// Runs before requirement enforcement, as a [`PhysicalAnalyzerRule`].
+    ///
+    /// A hash join starts out as `PartitionMode::Auto`, which declares no
+    /// distribution requirement and cannot be executed. Resolving it here means
+    /// the enforcement pass that follows sees the join's real requirements and
+    /// materialises them once, so this variant does not re-enforce anything.
+    /// This is what the default [`PhysicalAnalyzer`] registers.
+    ///
+    /// [`PhysicalAnalyzer`]: crate::analyzer::PhysicalAnalyzer
+    BeforeEnforcement,
+    /// Runs after requirement enforcement, as a [`PhysicalOptimizerRule`].
+    ///
+    /// Changing a join's mode or sides here disturbs a distribution that has
+    /// already been enforced, so this variant re-establishes it for the joins
+    /// it changed. That makes it safe to register at any position, which is
+    /// what [`JoinSelection::new`] is for.
+    AfterEnforcement,
+}
+
 /// The [`JoinSelection`] rule tries to modify a given plan so that it can
 /// accommodate infinite sources and optimize joins in the plan according to
 /// available statistical information, if there is any.
-#[derive(Default, Debug)]
-pub struct JoinSelection {}
+///
+/// It resolves each hash join's `PartitionMode::Auto` into `CollectLeft` or
+/// `Partitioned`, picks the build side, and converts joins over unbounded
+/// inputs to their symmetric form. See [`JoinSelectionPhase`] for the two
+/// positions it can occupy in the pipeline.
+#[derive(Debug)]
+pub struct JoinSelection {
+    phase: JoinSelectionPhase,
+}
+
+impl Default for JoinSelection {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl JoinSelection {
-    #[expect(missing_docs)]
+    /// Create a [`JoinSelection`] that runs after enforcement and re-establishes
+    /// distribution for the joins it changes. Safe to register at any position.
     pub fn new() -> Self {
-        Self {}
+        Self {
+            phase: JoinSelectionPhase::AfterEnforcement,
+        }
+    }
+
+    /// Create a [`JoinSelection`] that runs before enforcement, as an analyzer
+    /// rule, and leaves materialising distribution to the enforcement pass that
+    /// follows. See [`JoinSelectionPhase::BeforeEnforcement`].
+    pub fn new_before_enforcement() -> Self {
+        Self {
+            phase: JoinSelectionPhase::BeforeEnforcement,
+        }
+    }
+
+    /// The phase this instance was constructed for.
+    pub fn phase(&self) -> JoinSelectionPhase {
+        self.phase
+    }
+
+    /// Resolve join modes and sides over the whole plan, then re-establish
+    /// distribution when this instance's phase calls for it.
+    fn select(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        context: &dyn PhysicalOptimizerContext,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let subrules: Vec<Box<PipelineFixerSubrule>> = vec![
+            Box::new(hash_join_convert_symmetric_subrule),
+            Box::new(hash_join_swap_subrule),
+        ];
+        let fixed = plan
+            .transform_up(|p| apply_subrules(p, &subrules, context.config_options()))?;
+        let selected = fixed
+            .data
+            .transform_up(|plan| statistical_join_selection_subrule(plan, context))?;
+        let changed = fixed.transformed || selected.transformed;
+
+        // An `InterleaveExec` is a distribution artifact that is only valid while
+        // its children share a partitioning, and swapping a join's sides can break
+        // that, which is the panic in issue #21826. Normalising interleaves back to
+        // unions is a single top-down walk and enforcement re-derives them, so it
+        // is done in both phases: before enforcement it is a no-op, and it keeps
+        // this rule safe on a plan that has already been enforced.
+        let plan = selected
+            .data
+            .transform_down(replace_interleave_with_union)
+            .data()?;
+
+        match self.phase {
+            JoinSelectionPhase::BeforeEnforcement => Ok(plan),
+            // Only pay for a repair when something was actually rewritten; an
+            // unchanged plan is already valid.
+            JoinSelectionPhase::AfterEnforcement if changed => {
+                enforce_distribution_requirements(plan, context)
+            }
+            JoinSelectionPhase::AfterEnforcement => Ok(plan),
+        }
     }
 }
 
@@ -144,7 +244,7 @@ impl PhysicalOptimizerRule for JoinSelection {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.optimize_with_context(plan, &ConfigOnlyContext::new(config))
+        self.select(plan, &ConfigOnlyContext::new(config))
     }
 
     fn optimize_with_context(
@@ -152,28 +252,33 @@ impl PhysicalOptimizerRule for JoinSelection {
         plan: Arc<dyn ExecutionPlan>,
         context: &dyn PhysicalOptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let subrules: Vec<Box<PipelineFixerSubrule>> = vec![
-            Box::new(hash_join_convert_symmetric_subrule),
-            Box::new(hash_join_swap_subrule),
-        ];
-        let fixed = plan
-            .transform_up(|p| apply_subrules(p, &subrules, context.config_options()))?;
-        let selected = fixed
-            .data
-            .transform_up(|plan| statistical_join_selection_subrule(plan, context))?;
-        // JoinSelection tightens each join's `required_input_distribution`
-        // (Auto -> CollectLeft/Partitioned, side swaps, symmetric conversion)
-        // without inserting the repartition/coalesce those new requirements
-        // need. When we actually changed a join, re-establish distribution
-        // validity here: the rule that breaks the invariant is the rule that
-        // restores it. Ordering is already self-satisfied at construction, so
-        // only distribution needs re-enforcing. If nothing changed, the plan is
-        // already valid and re-enforcing would be a gratuitous pass.
-        if fixed.transformed || selected.transformed {
-            enforce_distribution_requirements(selected.data, context)
-        } else {
-            Ok(selected.data)
-        }
+        self.select(plan, context)
+    }
+
+    fn name(&self) -> &str {
+        "join_selection"
+    }
+
+    fn schema_check(&self) -> bool {
+        true
+    }
+}
+
+impl PhysicalAnalyzerRule for JoinSelection {
+    fn analyze(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        config: &ConfigOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.select(plan, &ConfigOnlyContext::new(config))
+    }
+
+    fn analyze_with_context(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        context: &dyn PhysicalOptimizerContext,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.select(plan, context)
     }
 
     fn name(&self) -> &str {

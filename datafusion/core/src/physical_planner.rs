@@ -3100,9 +3100,7 @@ impl DefaultPhysicalPlanner {
     /// declares. The optimizer phase then makes that already-valid plan
     /// *faster*, so every [`PhysicalOptimizerRule`] receives a valid plan and
     /// is expected to leave one. See [`PhysicalAnalyzerRule`] for the phase
-    /// diagram and for how the rules that change a requirement
-    /// (`JoinSelection`, `FilterPushdown`, `WindowTopN`) re-establish validity
-    /// themselves.
+    /// diagram.
     ///
     /// [`PhysicalOptimizerRule`]: datafusion_physical_optimizer::PhysicalOptimizerRule
     /// [`PhysicalAnalyzerRule`]: datafusion_physical_optimizer::analyzer::PhysicalAnalyzerRule

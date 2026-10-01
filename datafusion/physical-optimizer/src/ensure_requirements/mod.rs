@@ -181,9 +181,11 @@ impl EnsureRequirements {
 /// requirements only (normalize interleave, join-key reordering, distribution
 /// enforcement). Split from ordering enforcement so it can be used on its own:
 /// the [`EnforceDistribution`] analyzer rule runs it as the first enforcement
-/// step, and rules that change only distribution (`JoinSelection`,
-/// `FilterPushdown`) call it directly to re-establish the partitioning their
-/// rewrite disturbed, without touching ordering.
+/// step, and a [`JoinSelection`] registered after enforcement calls it directly
+/// to re-establish the partitioning its rewrite disturbed, without touching
+/// ordering.
+///
+/// [`JoinSelection`]: crate::join_selection::JoinSelection
 pub fn enforce_distribution_requirements(
     plan: Arc<dyn ExecutionPlan>,
     context: &dyn PhysicalOptimizerContext,
@@ -320,9 +322,7 @@ pub fn optimize_sorts(
 /// [`PhysicalAnalyzerRule`] that makes the plan distribution-valid before the
 /// optimizer rules see it. It is idempotent enough to run more than once, and
 /// still implements [`PhysicalOptimizerRule`] so downstream pipelines that splice
-/// it in by position keep working; the default optimizer rules that change
-/// distribution (`JoinSelection`, `FilterPushdown`) instead call
-/// [`enforce_distribution_requirements`] directly to re-establish it themselves.
+/// it in by position keep working.
 #[derive(Default, Debug)]
 pub struct EnforceDistribution {}
 
@@ -391,6 +391,10 @@ impl PhysicalAnalyzerRule for EnforceDistribution {
 /// (after [`EnforceDistribution`], on the distribution-fixed plan). The later
 /// optimizer rules that disturb ordering (`WindowTopN`) re-establish it
 /// themselves via [`enforce_requirements`].
+///
+/// It also implements [`PhysicalOptimizerRule`], but only so downstream
+/// pipelines that register it by position keep working; the analyzer
+/// registration is the one the default planner uses.
 #[derive(Default, Debug)]
 pub struct EnforceSorting {}
 
