@@ -1510,15 +1510,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     function_body,
                 };
 
-                let statement = DdlStatement::CreateFunction(Box::new(CreateFunction {
-                    or_replace,
-                    temporary,
-                    name,
-                    return_type: return_type.map(|f| f.data_type().clone()),
-                    args,
-                    params,
-                    schema: DFSchemaRef::new(DFSchema::empty()),
-                }));
+                let statement =
+                    DdlStatement::CreateFunction(Box::new(CreateFunction::try_new(
+                        or_replace,
+                        temporary,
+                        name,
+                        args,
+                        return_type.map(|f| f.data_type().clone()),
+                        params,
+                    )?));
 
                 Ok(LogicalPlan::Ddl(statement))
             }
