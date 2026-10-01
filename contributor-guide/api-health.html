@@ -470,6 +470,8 @@ the Cargo Book</a>. Common examples include:</p>
 <li><p>Marking a function as deprecated (<code class="docutils literal notranslate"><span class="pre">#[deprecated]</span></code>)</p></li>
 <li><p>Adding a new function to a <code class="docutils literal notranslate"><span class="pre">trait</span></code> with a default implementation</p></li>
 </ul>
+<!-- Keep this anchor stable: it is linked from Rust API documentation. -->
+<p><a id="internal-public-apis"></a></p>
 </section>
 <section id="datafusion-internal-public-apis">
 <h3>DataFusion-internal Public APIs<a class="headerlink" href="#datafusion-internal-public-apis" title="Link to this heading">#</a></h3>
@@ -483,6 +485,9 @@ notice or a deprecation period. Examples include:</p>
 <li><p>Operator APIs required by the optimizer to inspect or rewrite execution plans
 across crate boundaries.</p></li>
 </ol>
+<p>Do not expose internal APIs solely for tests or microbenchmarks. Some legacy code
+does so, but new tests and benchmarks should exercise observable behavior to
+simplify maintenance.</p>
 <p>For APIs intended only for internal use, add <code class="docutils literal notranslate"><span class="pre">#[doc(hidden)]</span></code> and a doc comment
 section headed <code class="docutils literal notranslate"><span class="pre">#</span> <span class="pre">Public</span> <span class="pre">Only</span> <span class="pre">for</span> <span class="pre">Internal</span> <span class="pre">Use:</span></code>. Name the crate or component
 that requires access and explain why the API is not intended for downstream use.
