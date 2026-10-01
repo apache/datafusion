@@ -48,7 +48,7 @@ mod static_filter;
 mod strategy;
 
 use static_filter::StaticFilterRef;
-use strategy::{dictionary_value_type, instantiate_static_filter};
+use strategy::instantiate_static_filter;
 
 /// InList
 pub struct InListExpr {
@@ -85,15 +85,10 @@ fn supports_arrow_eq(dt: &DataType) -> bool {
 
 fn normalize_in_list_float_zero_value(value: ColumnarValue) -> ColumnarValue {
     match value {
-        ColumnarValue::Array(array)
-            if dictionary_value_type(array.data_type()).is_floating() =>
-        {
-            ColumnarValue::Array(normalize_float_zero(&array))
-        }
+        ColumnarValue::Array(array) => ColumnarValue::Array(normalize_float_zero(&array)),
         ColumnarValue::Scalar(scalar) => {
             ColumnarValue::Scalar(normalize_float_zero_scalar(scalar))
         }
-        value => value,
     }
 }
 
