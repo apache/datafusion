@@ -136,74 +136,6 @@ pub struct StatisticsContext {
     registry: StatisticsRegistry,
 }
 
-mod sealed {
-    use super::*;
-
-    pub trait Sealed {}
-
-    impl<T: ExecutionPlan> Sealed for T {}
-
-    impl<T: ExecutionPlan> Sealed for Arc<T> {}
-
-    impl Sealed for dyn ExecutionPlan {}
-
-    impl Sealed for Arc<dyn ExecutionPlan> {}
-}
-
-/// A plan accepted by [`StatisticsContext`].
-///
-/// Passing an [`Arc`] retains the root node in the cache. Borrowed plans remain
-/// supported for compatibility, but their root statistics are not memoized.
-/// Implementations returning a retained plan must return an [`Arc`] to the same
-/// node as [`Self::as_execution_plan`].
-pub trait StatisticsPlan: sealed::Sealed {
-    #[doc(hidden)]
-    fn as_execution_plan(&self) -> &dyn ExecutionPlan;
-
-    #[doc(hidden)]
-    fn retained_plan(&self) -> Option<Arc<dyn ExecutionPlan>>;
-}
-
-impl<T: ExecutionPlan> StatisticsPlan for T {
-    fn as_execution_plan(&self) -> &dyn ExecutionPlan {
-        self
-    }
-
-    fn retained_plan(&self) -> Option<Arc<dyn ExecutionPlan>> {
-        None
-    }
-}
-
-impl<T: ExecutionPlan> StatisticsPlan for Arc<T> {
-    fn as_execution_plan(&self) -> &dyn ExecutionPlan {
-        self.as_ref()
-    }
-
-    fn retained_plan(&self) -> Option<Arc<dyn ExecutionPlan>> {
-        Some(Arc::clone(self) as Arc<dyn ExecutionPlan>)
-    }
-}
-
-impl StatisticsPlan for dyn ExecutionPlan {
-    fn as_execution_plan(&self) -> &dyn ExecutionPlan {
-        self
-    }
-
-    fn retained_plan(&self) -> Option<Arc<dyn ExecutionPlan>> {
-        None
-    }
-}
-
-impl StatisticsPlan for Arc<dyn ExecutionPlan> {
-    fn as_execution_plan(&self) -> &dyn ExecutionPlan {
-        self.as_ref()
-    }
-
-    fn retained_plan(&self) -> Option<Arc<dyn ExecutionPlan>> {
-        Some(Arc::clone(self))
-    }
-}
-
 impl Default for StatisticsContext {
     fn default() -> Self {
         Self::new()
@@ -238,8 +170,9 @@ impl StatisticsContext {
     /// Computes the core [`Statistics`] for `plan`, discarding any
     /// provider-supplied extensions (see [`Self::compute_extended`]).
     ///
-    /// Passing `&Arc<_>` caches the root; `&dyn ExecutionPlan` and `&T` cache
-    /// only descendants.
+    /// The root's own statistics are not memoized, because a borrowed plan
+    /// cannot be retained by the cache; its descendants are. Use
+    /// [`Self::compute_arc`] to also memoize the root.
     ///
     /// With no providers registered this is the plain built-in walk: only the
     /// `statistics` cache is touched, so it carries no extension overhead.
@@ -275,37 +208,84 @@ impl StatisticsContext {
     /// assert_eq!(per_partition.num_rows, Precision::Exact(60));
     /// # Ok::<(), datafusion_common::DataFusionError>(())
     /// ```
-    pub fn compute<P: StatisticsPlan + ?Sized>(
+    pub fn compute(
         &self,
-        plan: &P,
+        plan: &dyn ExecutionPlan,
         args: &StatisticsArgs,
     ) -> Result<Arc<Statistics>> {
-        let retained_plan = plan.retained_plan();
-        self.compute_base(
-            plan.as_execution_plan(),
-            retained_plan.as_ref(),
-            args,
-            false,
-        )
-        .map(|(statistics, _)| statistics)
+        self.compute_base(plan, None, args, false)
+            .map(|(statistics, _)| statistics)
+    }
+
+    /// Like [`Self::compute`], but the cache retains `plan` so the root's own
+    /// statistics are memoized as well as its descendants'.
+    ///
+    /// Prefer this when sharing one context across repeated calls on the same
+    /// nodes, such as an optimizer pass.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow::datatypes::{DataType, Field, Schema};
+    /// # use datafusion_common::Statistics;
+    /// # use datafusion_common::stats::Precision;
+    /// # use datafusion_physical_plan::ExecutionPlan;
+    /// # use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
+    /// # use datafusion_physical_plan::test::exec::StatisticsExec;
+    ///
+    /// let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+    /// let stats = Statistics::new_unknown(&schema).with_num_rows(Precision::Exact(100));
+    /// let plan: Arc<dyn ExecutionPlan> = Arc::new(StatisticsExec::new(stats, schema));
+    ///
+    /// let context = StatisticsContext::new();
+    /// let first = context.compute_arc(&plan, &StatisticsArgs::new())?;
+    /// let second = context.compute_arc(&plan, &StatisticsArgs::new())?;
+    ///
+    /// // The second call is a cache hit for the root.
+    /// assert!(Arc::ptr_eq(&first, &second));
+    /// assert_eq!(first.num_rows, Precision::Exact(100));
+    /// # Ok::<(), datafusion_common::DataFusionError>(())
+    /// ```
+    pub fn compute_arc(
+        &self,
+        plan: &Arc<dyn ExecutionPlan>,
+        args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        self.compute_base(plan.as_ref(), Some(plan), args, false)
+            .map(|(statistics, _)| statistics)
     }
 
     /// Computes the [`ExtendedStatistics`] for `plan`: the core statistics plus
     /// any extensions a provider attached to this node (see the type-level docs
-    /// for how extensions propagate up the tree). Passing `&Arc<_>` caches the
-    /// root; `&dyn ExecutionPlan` and `&T` cache only descendants.
-    pub fn compute_extended<P: StatisticsPlan + ?Sized>(
+    /// for how extensions propagate up the tree). As with [`Self::compute`],
+    /// the root is not memoized; see [`Self::compute_extended_arc`].
+    pub fn compute_extended(
         &self,
-        plan: &P,
+        plan: &dyn ExecutionPlan,
         args: &StatisticsArgs,
     ) -> Result<Arc<ExtendedStatistics>> {
-        let retained_plan = plan.retained_plan();
-        let (statistics, extensions) = self.compute_base(
-            plan.as_execution_plan(),
-            retained_plan.as_ref(),
-            args,
-            true,
-        )?;
+        self.compute_extended_base(plan, None, args)
+    }
+
+    /// Like [`Self::compute_extended`], but the cache retains `plan` so the
+    /// root's own statistics and extensions are memoized as well.
+    pub fn compute_extended_arc(
+        &self,
+        plan: &Arc<dyn ExecutionPlan>,
+        args: &StatisticsArgs,
+    ) -> Result<Arc<ExtendedStatistics>> {
+        self.compute_extended_base(plan.as_ref(), Some(plan), args)
+    }
+
+    fn compute_extended_base(
+        &self,
+        plan: &dyn ExecutionPlan,
+        retained_plan: Option<&Arc<dyn ExecutionPlan>>,
+        args: &StatisticsArgs,
+    ) -> Result<Arc<ExtendedStatistics>> {
+        let (statistics, extensions) =
+            self.compute_base(plan, retained_plan, args, true)?;
         Ok(Arc::new(ExtendedStatistics::new_with_extensions(
             statistics,
             extensions.unwrap_or_default(),
@@ -750,10 +730,10 @@ mod tests {
         let ctx = StatisticsContext::new();
         let args = StatisticsArgs::new();
 
-        let s1 = ctx.compute(&leaf, &args).unwrap();
+        let s1 = ctx.compute_arc(&leaf, &args).unwrap();
         assert!(!ctx.cache.borrow().statistics.is_empty());
 
-        let s2 = ctx.compute(&leaf, &args).unwrap();
+        let s2 = ctx.compute_arc(&leaf, &args).unwrap();
         assert!(Arc::ptr_eq(&s1, &s2));
     }
 
@@ -763,7 +743,7 @@ mod tests {
         let weak = Arc::downgrade(&leaf);
         let ctx = StatisticsContext::new();
 
-        let _ = ctx.compute(&leaf, &StatisticsArgs::new()).unwrap();
+        let _ = ctx.compute_arc(&leaf, &StatisticsArgs::new()).unwrap();
         drop(leaf);
         assert!(weak.upgrade().is_some());
 
@@ -780,7 +760,7 @@ mod tests {
         let parent_weak = Arc::downgrade(&parent);
         let ctx = StatisticsContext::new();
 
-        let _ = ctx.compute(&parent, &StatisticsArgs::new()).unwrap();
+        let _ = ctx.compute_arc(&parent, &StatisticsArgs::new()).unwrap();
         drop(parent);
         drop(leaf);
         assert!(parent_weak.upgrade().is_some());
@@ -801,7 +781,7 @@ mod tests {
 
         {
             let ctx = StatisticsContext::new();
-            let _ = ctx.compute(&parent, &StatisticsArgs::new()).unwrap();
+            let _ = ctx.compute_arc(&parent, &StatisticsArgs::new()).unwrap();
             drop(parent);
             drop(leaf);
             assert!(parent_weak.upgrade().is_some());
@@ -843,7 +823,9 @@ mod tests {
         let weak = Arc::downgrade(&leaf);
         let ctx = ctx_with(Arc::new(TagLeafProvider { rows: 10, tag: 7 }));
 
-        let _ = ctx.compute_extended(&leaf, &StatisticsArgs::new()).unwrap();
+        let _ = ctx
+            .compute_extended_arc(&leaf, &StatisticsArgs::new())
+            .unwrap();
         ctx.cache.borrow_mut().statistics.clear();
         drop(leaf);
         assert!(weak.upgrade().is_some());
@@ -856,7 +838,7 @@ mod tests {
     fn reset_cache_clears_entries() {
         let leaf = make_stats_leaf(10);
         let ctx = StatisticsContext::new();
-        let _ = ctx.compute(&leaf, &StatisticsArgs::new()).unwrap();
+        let _ = ctx.compute_arc(&leaf, &StatisticsArgs::new()).unwrap();
         assert!(!ctx.cache.borrow().statistics.is_empty());
         ctx.reset_cache();
         assert!(ctx.cache.borrow().statistics.is_empty());
