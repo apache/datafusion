@@ -3238,7 +3238,8 @@ mod tests {
                 FunctionalDependence::new(vec![0], vec![0, 1, 2, 3], false)
                     .with_mode(Dependency::Single),
                 FunctionalDependence::new(vec![2], vec![2, 3], true)
-                    .with_mode(Dependency::Multi),
+                    .with_mode(Dependency::Multi)
+                    .with_null_equality(NullEquality::NullEqualsNull),
             ])
         );
         Ok(())
