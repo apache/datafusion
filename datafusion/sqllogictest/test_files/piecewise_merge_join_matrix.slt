@@ -164,6 +164,91 @@ SELECT l.lid, l.lv, r.rid, r.rv FROM cj_dup_l l JOIN cj_dup_r r ON l.lv < r.rv;
 2 1 1 2
 2 1 2 2
 
+# Float key with negative zero on an outer side: -0.0 and +0.0 compare equal in
+# SQL, so `-0.0 < 0.0` is false and `-0.0 <= 0.0` is true. Streamed rows that
+# match no buffered row are set aside before the sort, and that check must agree
+# with the scan's comparator, which normalizes the sign of zero.
+statement ok
+CREATE TABLE cj_fl(lid INT, lv DOUBLE);
+
+statement ok
+INSERT INTO cj_fl VALUES (1, -0.0);
+
+statement ok
+CREATE TABLE cj_fr(rid INT, rv DOUBLE);
+
+statement ok
+INSERT INTO cj_fr VALUES (1, 0.0), (2, -1.0);
+
+query IRIR rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_fl l RIGHT JOIN cj_fr r ON l.lv < r.rv;
+----
+NULL NULL 1 0
+NULL NULL 2 -1
+
+query IRIR rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_fl l RIGHT JOIN cj_fr r ON l.lv <= r.rv;
+----
+1 0 1 0
+NULL NULL 2 -1
+
+query IRIR rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_fl l FULL JOIN cj_fr r ON l.lv < r.rv;
+----
+1 0 NULL NULL
+NULL NULL 1 0
+NULL NULL 2 -1
+
+# One unsorted streamed batch mixing matching, non-matching and NULL keys. The
+# non-matching and NULL rows are set aside before the sort, and the rest are
+# sorted and mapped back to their rows in the batch. Against cj_l.lv = {1,3,5,
+# NULL} with `<`: rv=4 matches lv 1 and 3, rv=6 matches 1, 3 and 5, rv=2
+# matches 1; rv=0, rv=1 and the NULLs match nothing.
+statement ok
+CREATE TABLE cj_mix_r(rid INT, rv INT);
+
+statement ok
+INSERT INTO cj_mix_r VALUES (1, 4), (2, NULL), (3, 0), (4, 6), (5, 2), (6, NULL), (7, 1);
+
+query IIII rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_l l JOIN cj_mix_r r ON l.lv < r.rv;
+----
+1 1 1 4
+1 1 4 6
+1 1 5 2
+2 3 1 4
+2 3 4 6
+3 5 4 6
+
+query IIII rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_l l RIGHT JOIN cj_mix_r r ON l.lv < r.rv;
+----
+1 1 1 4
+1 1 4 6
+1 1 5 2
+2 3 1 4
+2 3 4 6
+3 5 4 6
+NULL NULL 2 NULL
+NULL NULL 3 0
+NULL NULL 6 NULL
+NULL NULL 7 1
+
+query IIII rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_l l FULL JOIN cj_mix_r r ON l.lv < r.rv;
+----
+1 1 1 4
+1 1 4 6
+1 1 5 2
+2 3 1 4
+2 3 4 6
+3 5 4 6
+4 NULL NULL NULL
+NULL NULL 2 NULL
+NULL NULL 3 0
+NULL NULL 6 NULL
+NULL NULL 7 1
+
 # ==================================================================
 # Part 2: Existence joins (LeftSemi / LeftAnti; Right/Mark fall back to NLJ)
 # ==================================================================

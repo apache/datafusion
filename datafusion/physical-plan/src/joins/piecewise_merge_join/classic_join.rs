@@ -206,14 +206,7 @@ impl ClassicPWMJStream {
         )?;
         build_timer.done();
 
-        // NULLs sort first, so the last key is NULL only when every buffered key is.
-        let values = buffered_data.values();
-        self.buffered_extreme = match values.len().checked_sub(1) {
-            Some(last) if values.is_valid(last) => Some(ColumnarValue::Scalar(
-                ScalarValue::try_from_array(values, last)?,
-            )),
-            _ => None,
-        };
+        self.buffered_extreme = buffered_extreme(buffered_data.values())?;
 
         // We will start fetching stream batches for classic joins
         self.state = PiecewiseMergeJoinStreamState::FetchStreamBatch;
@@ -260,9 +253,8 @@ impl ClassicPWMJStream {
                 self.join_metrics.input_batches.add(1);
                 self.join_metrics.input_rows.add(batch.num_rows());
 
-                // Rows that can match no buffered row are settled here, before the sort:
-                // emitted as unmatched for `Right`/`Full`, dropped otherwise. Only the rest
-                // are sorted and scanned.
+                // Rows that can match no buffered row are settled before the sort (see
+                // `split_off_never_matching`); only the rest are sorted and scanned.
                 let buffered_values =
                     self.buffered_side.try_as_ready()?.buffered_data.values();
                 let matchable = matchable_rows(
@@ -298,8 +290,10 @@ impl ClassicPWMJStream {
                 };
                 let stream_values = take(keys.as_ref(), &sorted, None)?;
 
-                // Reset BatchProcessState before processing a new stream batch
+                // Reset BatchProcessState before processing a new stream batch. NULL keys
+                // never match and sort first, so the scan starts past the buffered ones.
                 self.batch_process_state.reset();
+                self.batch_process_state.start_buffer_idx = buffered_values.null_count();
                 self.state = PiecewiseMergeJoinStreamState::ProcessStreamBatch(
                     SortedStreamBatch::new(stream_batch, vec![stream_values]),
                 );
@@ -424,8 +418,6 @@ struct BatchProcessState {
     start_stream_idx: usize,
     // Signals to continue processing the current stream batch
     continue_process: bool,
-    // Skip nulls
-    processed_null_count: bool,
     // Smallest buffered index marked while scanning the current stream batch, or
     // `usize::MAX` if nothing has been marked yet. Because `buffer_idx` only moves forward
     // within a batch, this lets all but the batch's first match skip the shared atomic.
@@ -439,7 +431,6 @@ impl BatchProcessState {
             start_buffer_idx: 0,
             start_stream_idx: 0,
             continue_process: true,
-            processed_null_count: false,
             batch_min_marked: usize::MAX,
         }
     }
@@ -448,7 +439,6 @@ impl BatchProcessState {
         self.start_buffer_idx = 0;
         self.start_stream_idx = 0;
         self.continue_process = true;
-        self.processed_null_count = false;
         self.batch_min_marked = usize::MAX;
     }
 
@@ -496,12 +486,12 @@ fn resolve_classic_join(
     let mut buffer_idx = batch_process_state.start_buffer_idx;
     let stream_idx = batch_process_state.start_stream_idx;
 
-    // NULL keys never match and sort first, so the scan starts past the buffered ones.
-    // Streamed NULL keys never get here: `matchable_rows` settled them before the sort.
-    debug_assert_eq!(stream_values[0].null_count(), 0);
-    if !batch_process_state.processed_null_count {
-        buffer_idx = buffered_side.buffered_data.values().null_count();
-        batch_process_state.processed_null_count = true;
+    // Streamed NULL keys are settled before the sort (see `split_off_never_matching`). One
+    // that got here would sort before every buffered key and match all of them.
+    if stream_values[0].null_count() > 0 {
+        return internal_err!(
+            "PiecewiseMergeJoin: streamed NULL keys must be settled before the scan"
+        );
     }
 
     let match_on_equal = matches_on_equal(operator)?;
@@ -510,13 +500,18 @@ fn resolve_classic_join(
     // so that each one's first match is at or after the previous one's, which bounds the
     // search below to `[buffer_idx, buffered_len)`.
     //
-    // Every row here matches: `matchable_rows` kept only rows that match the last buffered
-    // row, and settled the rest (as unmatched for `Right`/`Full`) before the sort.
+    // Every row here matches the last buffered row, as `matchable_rows` kept only those.
     for row_idx in stream_idx..stream_batch.batch.num_rows() {
         buffer_idx = first_match(buffer_idx, buffered_len, |idx| {
             is_match(cmp.compare(row_idx, idx), match_on_equal)
         });
-        debug_assert!(buffer_idx < buffered_len);
+        // A row with no match would emit nothing here, and for `Right`/`Full` would never
+        // be emitted as unmatched either.
+        if buffer_idx >= buffered_len {
+            return internal_err!(
+                "PiecewiseMergeJoin: streamed row {row_idx} reached the scan without a match"
+            );
+        }
         let count = buffered_len - buffer_idx;
 
         let batch = build_matched_indices_and_mark_buffered(
@@ -592,13 +587,23 @@ fn build_matched_indices_and_mark_buffered(
     )?)
 }
 
+// The last key of the sorted buffered side, or `None` when it is empty or every key is NULL:
+// NULLs sort first, so the last key is NULL only when every buffered key is.
+fn buffered_extreme(values: &ArrayRef) -> Result<Option<ColumnarValue>> {
+    Ok(match values.len().checked_sub(1) {
+        Some(last) if values.is_valid(last) => Some(ColumnarValue::Scalar(
+            ScalarValue::try_from_array(values, last)?,
+        )),
+        _ => None,
+    })
+}
+
 // Which rows of `stream_values` can match at least one buffered row.
 //
 // Every match set is a suffix `[k, buffered_len)` of the sorted buffered side, so a streamed
 // row matches anything at all iff it matches the last buffered row, `buffered_extreme`
 // (`None` when no buffered key is non-null, so nothing can match). A NULL on either side
-// compares to NULL, which is no match. Settling these rows up front means they are never
-// sorted, gathered or scanned.
+// compares to NULL, which is no match.
 //
 // This must agree exactly with the scan's `JoinKeyComparator`, or it would change which rows
 // match. For flat keys one vectorized `apply_cmp` does: it normalizes `-0.0` to `+0.0` as the
@@ -678,13 +683,13 @@ fn split_off_never_matching(
 
 // Joins streamed rows with NULLs for every buffered column.
 fn null_padded_streamed_batch(
-    new_stream_batch: &RecordBatch,
+    streamed_batch: &RecordBatch,
     join_schema: &SchemaRef,
 ) -> Result<RecordBatch> {
-    let streamed_columns = new_stream_batch.columns().to_vec();
+    let streamed_columns = streamed_batch.columns().to_vec();
     let buffered_cols_len = join_schema.fields().len() - streamed_columns.len();
 
-    let num_rows = new_stream_batch.num_rows();
+    let num_rows = streamed_batch.num_rows();
     let mut buffered_columns: Vec<ArrayRef> = join_schema
         .fields()
         .iter()
@@ -1227,50 +1232,6 @@ mod tests {
         Ok(())
     }
 
-    /// The pre-sort check that settles never-matching streamed rows must compare keys
-    /// the way the scan's `JoinKeyComparator` does, which normalizes `-0.0` to `+0.0`.
-    /// Under IEEE 754 total order (arrow's raw kernels, and the sort) `-0.0 < +0.0`
-    /// holds, so a check built on that would let the `+0.0` row through as a candidate
-    /// that the scan then rejects; with SQL semantics both rows are unmatched.
-    #[tokio::test]
-    async fn join_right_less_than_signed_zero_prefilter_agrees_with_scan() -> Result<()> {
-        let float_exec =
-            |a: &str, b: &str, keys: Vec<f64>| -> Result<Arc<dyn ExecutionPlan>> {
-                let schema = Arc::new(Schema::new(vec![
-                    Field::new(a, DataType::Int32, false),
-                    Field::new(b, DataType::Float64, false),
-                ]));
-                let ids = (0..keys.len() as i32).collect::<Vec<_>>();
-                let batch = RecordBatch::try_new(
-                    Arc::clone(&schema),
-                    vec![
-                        Arc::new(arrow::array::Int32Array::from(ids)),
-                        Arc::new(arrow::array::Float64Array::from(keys)),
-                    ],
-                )?;
-                Ok(TestMemoryExec::try_new_exec(&[vec![batch]], schema, None)?)
-            };
-        let left = float_exec("a1", "b1", vec![-0.0])?;
-        let right = float_exec("a2", "b2", vec![0.0, -1.0])?;
-        let on = (
-            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
-            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
-        );
-
-        let (_, batches, _) =
-            join_collect(left, right, on, Operator::Lt, JoinType::Right).await?;
-
-        assert_snapshot!(batches_to_string(&batches), @r"
-        +----+----+----+------+
-        | a1 | b1 | a2 | b2   |
-        +----+----+----+------+
-        |    |    | 0  | 0.0  |
-        |    |    | 1  | -1.0 |
-        +----+----+----+------+
-        ");
-        Ok(())
-    }
-
     /// `matchable_rows` against the scan's own definition of a match -- some non-NULL
     /// buffered row `idx` with `is_match(cmp.compare(row, idx))` under the scan's
     /// `JoinKeyComparator` -- for every operator and every kind of key it dispatches on:
@@ -1493,14 +1454,7 @@ mod tests {
                         &sort_to_indices(buffered.as_ref(), Some(sort_options), None)?,
                         None,
                     )?;
-                    let extreme = match sorted.len().checked_sub(1) {
-                        Some(last) if sorted.is_valid(last) => {
-                            Some(ColumnarValue::Scalar(ScalarValue::try_from_array(
-                                &sorted, last,
-                            )?))
-                        }
-                        _ => None,
-                    };
+                    let extreme = buffered_extreme(&sorted)?;
 
                     let actual = matchable_rows(
                         &streamed,
