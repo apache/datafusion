@@ -1202,7 +1202,7 @@ impl AggregateExec {
     /// aggregation when the request is unsupported.
     #[deprecated(
         since = "56.0.0",
-        note = "This API is intended for internal use only and was inadvertently made public. Do not use this API."
+        note = "The replacement APIs are [`try_optimize_topk`](Self::try_optimize_topk) and [`try_optimize_distinct_soft_limit`](Self::try_optimize_distinct_soft_limit). They still require specific plan-shape invariants to be used correctly, so they remain internal for now. If you have a use case that requires these APIs to be public, please open an issue in DataFusion."
     )]
     pub fn with_new_limit_options(&self, limit_options: Option<LimitOptions>) -> Self {
         let mut new = self.clone().without_optimization();
@@ -1383,7 +1383,7 @@ impl AggregateExec {
     /// Set a legacy limit hint. Unsupported requests leave ordinary aggregation.
     #[deprecated(
         since = "56.0.0",
-        note = "This API is intended for internal use only and was inadvertently made public. Do not use this API."
+        note = "The replacement APIs are [`try_optimize_topk`](Self::try_optimize_topk) and [`try_optimize_distinct_soft_limit`](Self::try_optimize_distinct_soft_limit). They still require specific plan-shape invariants to be used correctly, so they remain internal for now. If you have a use case that requires these APIs to be public, please open an issue in DataFusion."
     )]
     pub fn with_limit_options(self, limit_options: Option<LimitOptions>) -> Self {
         let ordinary = self.without_optimization();
