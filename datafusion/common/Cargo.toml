@@ -54,6 +54,10 @@ sql = ["sqlparser"]
 
 [[bench]]
 harness = false
+name = "create_hashes"
+
+[[bench]]
+harness = false
 name = "with_hashes"
 
 [[bench]]
