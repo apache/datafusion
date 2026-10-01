@@ -136,13 +136,27 @@ pub struct StatisticsContext {
     registry: StatisticsRegistry,
 }
 
+mod sealed {
+    use super::*;
+
+    pub trait Sealed {}
+
+    impl<T: ExecutionPlan> Sealed for T {}
+
+    impl<T: ExecutionPlan> Sealed for Arc<T> {}
+
+    impl Sealed for dyn ExecutionPlan {}
+
+    impl Sealed for Arc<dyn ExecutionPlan> {}
+}
+
 /// A plan accepted by [`StatisticsContext`].
 ///
 /// Passing an [`Arc`] retains the root node in the cache. Borrowed plans remain
 /// supported for compatibility, but their root statistics are not memoized.
 /// Implementations returning a retained plan must return an [`Arc`] to the same
 /// node as [`Self::as_execution_plan`].
-pub trait StatisticsPlan {
+pub trait StatisticsPlan: sealed::Sealed {
     #[doc(hidden)]
     fn as_execution_plan(&self) -> &dyn ExecutionPlan;
 
@@ -224,6 +238,9 @@ impl StatisticsContext {
     /// Computes the core [`Statistics`] for `plan`, discarding any
     /// provider-supplied extensions (see [`Self::compute_extended`]).
     ///
+    /// Passing `&Arc<_>` caches the root; `&dyn ExecutionPlan` and `&T` cache
+    /// only descendants.
+    ///
     /// With no providers registered this is the plain built-in walk: only the
     /// `statistics` cache is touched, so it carries no extension overhead.
     ///
@@ -269,7 +286,8 @@ impl StatisticsContext {
 
     /// Computes the [`ExtendedStatistics`] for `plan`: the core statistics plus
     /// any extensions a provider attached to this node (see the type-level docs
-    /// for how extensions propagate up the tree).
+    /// for how extensions propagate up the tree). Passing `&Arc<_>` caches the
+    /// root; `&dyn ExecutionPlan` and `&T` cache only descendants.
     pub fn compute_extended<P: StatisticsPlan + ?Sized>(
         &self,
         plan: &P,
