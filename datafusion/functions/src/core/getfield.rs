@@ -351,11 +351,8 @@ impl ScalarUDFImpl for GetFieldFunc {
                 // the underlying struct, then wrap the result back in the
                 // same Dictionary type so the promised type matches execution.
                 DataType::Dictionary(key_type, value_type)
-                    if matches!(value_type.as_ref(), DataType::Struct(_)) =>
+                    if let DataType::Struct(fields) = value_type.as_ref() =>
                 {
-                    let DataType::Struct(fields) = value_type.as_ref() else {
-                        unreachable!()
-                    };
                     let field_name = sv
                         .as_ref()
                         .and_then(|sv| {
