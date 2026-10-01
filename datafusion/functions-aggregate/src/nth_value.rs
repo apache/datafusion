@@ -30,6 +30,7 @@ use datafusion_common::utils::{SingleRowListArrayBuilder, get_row_at_idx};
 use datafusion_common::{
     Result, ScalarValue, assert_or_internal_err, exec_err, not_impl_err,
 };
+use datafusion_expr::DistinctHandling;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -85,7 +86,9 @@ pub fn nth_value(
     ),
     argument(
         name = "n",
-        description = "The position (nth) of the value to retrieve, based on the ordering."
+        description = "The position of the value to retrieve. Positive values count from the first \
+            value, starting at 1; negative values count backward from the last value, where -1 \
+            returns the last value."
     )
 )]
 /// Expression for a `NTH_VALUE(..., ... ORDER BY ...)` aggregation. In a multi
@@ -186,6 +189,13 @@ impl AggregateUDFImpl for NthValueAgg {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // Duplicate-sensitive, but the accumulator does not read
+        // `is_distinct` and today silently returns the non-distinct answer.
+        // The tag records the intent; enforcement is a follow-up change.
+        DistinctHandling::Unsupported
     }
 }
 

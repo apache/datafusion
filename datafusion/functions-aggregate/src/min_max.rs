@@ -21,13 +21,8 @@
 mod min_max_bytes;
 mod min_max_struct;
 
-use arrow::array::ArrayRef;
-use arrow::datatypes::{
-    DataType, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type,
-    DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
-    DurationSecondType, Float16Type, Float32Type, Float64Type, Int8Type, Int16Type,
-    Int32Type, Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
-};
+use arrow::array::{ArrayRef, ArrowPrimitiveType, downcast_primitive};
+use arrow::datatypes::{DataType, Float16Type, Float32Type, Float64Type};
 use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, Result, exec_err, internal_err};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
@@ -35,23 +30,16 @@ use datafusion_physical_expr::expressions;
 use std::cmp::Ordering;
 use std::fmt::Debug;
 
-use arrow::datatypes::i256;
-use arrow::datatypes::{
-    Date32Type, Date64Type, Time32MillisecondType, Time32SecondType,
-    Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
-};
-
 use crate::min_max::min_max_bytes::MinMaxBytesAccumulator;
 use crate::min_max::min_max_struct::MinMaxStructAccumulator;
 use datafusion_common::ScalarValue;
+use datafusion_expr::DistinctHandling;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, SetMonotonicity, Signature, Volatility,
     function::AccumulatorArgs,
 };
 use datafusion_expr::{GroupsAccumulator, StatisticsArgs};
 use datafusion_macros::user_doc;
-use half::f16;
 use std::collections::VecDeque;
 use std::mem::{size_of, size_of_val};
 use std::ops::Deref;
@@ -115,9 +103,9 @@ impl Default for Max {
 ///
 /// [`ArrowPrimitiveType`]: arrow::datatypes::ArrowPrimitiveType
 macro_rules! primitive_max_accumulator {
-    ($DATA_TYPE:ident, $NATIVE:ident, $PRIMTYPE:ident) => {{
+    ($t:ty, $data_type:ident) => {{
         Ok(Box::new(
-            PrimitiveGroupsAccumulator::<$PRIMTYPE, _>::new($DATA_TYPE, |cur, new| {
+            PrimitiveGroupsAccumulator::<$t, _>::new($data_type, |cur, new| {
                 match (new).partial_cmp(cur) {
                     Some(Ordering::Greater) | None => {
                         // new is Greater or None
@@ -126,8 +114,21 @@ macro_rules! primitive_max_accumulator {
                     _ => {}
                 }
             })
-            // Initialize each accumulator to $NATIVE::MIN
-            .with_starting_value($NATIVE::MIN),
+            // Initialize each accumulator to $t::Native::MIN
+            .with_starting_value(<$t as ArrowPrimitiveType>::Native::MIN),
+        ))
+    }};
+    ($t:ty, $data_type:ident, total, $bits:ident) => {{
+        Ok(Box::new(
+            PrimitiveGroupsAccumulator::<$t, _>::new($data_type, |cur, new| {
+                if new.total_cmp(cur) == Ordering::Greater {
+                    *cur = new
+                }
+            })
+            // Use the total-order minimum so negative NaNs replace the sentinel.
+            .with_starting_value(
+                <$t as ArrowPrimitiveType>::Native::from_bits($bits::MAX),
+            ),
         ))
     }};
 }
@@ -138,9 +139,9 @@ macro_rules! primitive_max_accumulator {
 ///
 /// [`ArrowPrimitiveType`]: arrow::datatypes::ArrowPrimitiveType
 macro_rules! primitive_min_accumulator {
-    ($DATA_TYPE:ident, $NATIVE:ident, $PRIMTYPE:ident) => {{
+    ($t:ty, $data_type:ident) => {{
         Ok(Box::new(
-            PrimitiveGroupsAccumulator::<$PRIMTYPE, _>::new(&$DATA_TYPE, |cur, new| {
+            PrimitiveGroupsAccumulator::<$t, _>::new(&$data_type, |cur, new| {
                 match (new).partial_cmp(cur) {
                     Some(Ordering::Less) | None => {
                         // new is Less or NaN
@@ -150,7 +151,20 @@ macro_rules! primitive_min_accumulator {
                 }
             })
             // Initialize each accumulator to $NATIVE::MAX
-            .with_starting_value($NATIVE::MAX),
+            .with_starting_value(<$t as ArrowPrimitiveType>::Native::MAX),
+        ))
+    }};
+    ($t:ty, $data_type:ident, total, $bits:ident) => {{
+        Ok(Box::new(
+            PrimitiveGroupsAccumulator::<$t, _>::new(&$data_type, |cur, new| {
+                if new.total_cmp(cur) == Ordering::Less {
+                    *cur = new
+                }
+            })
+            // Use the total-order maximum so positive NaNs replace the sentinel.
+            .with_starting_value(
+                <$t as ArrowPrimitiveType>::Native::from_bits($bits::MAX >> 1),
+            ),
         ))
     }};
 }
@@ -223,36 +237,18 @@ impl AggregateUDFImpl for Max {
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         use DataType::*;
-        matches!(
-            args.return_field.data_type(),
-            Int8 | Int16
-                | Int32
-                | Int64
-                | UInt8
-                | UInt16
-                | UInt32
-                | UInt64
-                | Float16
-                | Float32
-                | Float64
-                | Decimal32(_, _)
-                | Decimal64(_, _)
-                | Decimal128(_, _)
-                | Decimal256(_, _)
-                | Date32
-                | Date64
-                | Time32(_)
-                | Time64(_)
-                | Timestamp(_, _)
-                | Utf8
-                | LargeUtf8
-                | Utf8View
-                | Binary
-                | LargeBinary
-                | BinaryView
-                | Duration(_)
-                | Struct(_)
-        )
+        let data_type = args.return_field.data_type();
+        data_type.is_primitive()
+            || matches!(
+                data_type,
+                Utf8 | LargeUtf8
+                    | Utf8View
+                    | Binary
+                    | LargeBinary
+                    | BinaryView
+                    | Duration(_)
+                    | Struct(_)
+            )
     }
 
     fn create_groups_accumulator(
@@ -260,84 +256,31 @@ impl AggregateUDFImpl for Max {
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
         use DataType::*;
-        use TimeUnit::*;
         let data_type = args.return_field.data_type();
+
         match data_type {
-            Int8 => primitive_max_accumulator!(data_type, i8, Int8Type),
-            Int16 => primitive_max_accumulator!(data_type, i16, Int16Type),
-            Int32 => primitive_max_accumulator!(data_type, i32, Int32Type),
-            Int64 => primitive_max_accumulator!(data_type, i64, Int64Type),
-            UInt8 => primitive_max_accumulator!(data_type, u8, UInt8Type),
-            UInt16 => primitive_max_accumulator!(data_type, u16, UInt16Type),
-            UInt32 => primitive_max_accumulator!(data_type, u32, UInt32Type),
-            UInt64 => primitive_max_accumulator!(data_type, u64, UInt64Type),
             Float16 => {
-                primitive_max_accumulator!(data_type, f16, Float16Type)
+                primitive_max_accumulator!(Float16Type, data_type, total, u16)
             }
             Float32 => {
-                primitive_max_accumulator!(data_type, f32, Float32Type)
+                primitive_max_accumulator!(Float32Type, data_type, total, u32)
             }
             Float64 => {
-                primitive_max_accumulator!(data_type, f64, Float64Type)
+                primitive_max_accumulator!(Float64Type, data_type, total, u64)
             }
-            Date32 => primitive_max_accumulator!(data_type, i32, Date32Type),
-            Date64 => primitive_max_accumulator!(data_type, i64, Date64Type),
-            Time32(Second) => {
-                primitive_max_accumulator!(data_type, i32, Time32SecondType)
+            _ => {
+                downcast_primitive! {
+                    data_type => (primitive_max_accumulator, data_type),
+                    Utf8 | LargeUtf8 | Utf8View | Binary | LargeBinary | BinaryView => {
+                        Ok(Box::new(MinMaxBytesAccumulator::new_max(data_type.clone())))
+                    }
+                    Struct(_) => Ok(Box::new(MinMaxStructAccumulator::new_max(
+                        data_type.clone(),
+                    ))),
+                    // This is only reached if groups_accumulator_supported is out of sync
+                    _ => internal_err!("GroupsAccumulator not supported for max({})", data_type),
+                }
             }
-            Time32(Millisecond) => {
-                primitive_max_accumulator!(data_type, i32, Time32MillisecondType)
-            }
-            Time64(Microsecond) => {
-                primitive_max_accumulator!(data_type, i64, Time64MicrosecondType)
-            }
-            Time64(Nanosecond) => {
-                primitive_max_accumulator!(data_type, i64, Time64NanosecondType)
-            }
-            Timestamp(Second, _) => {
-                primitive_max_accumulator!(data_type, i64, TimestampSecondType)
-            }
-            Timestamp(Millisecond, _) => {
-                primitive_max_accumulator!(data_type, i64, TimestampMillisecondType)
-            }
-            Timestamp(Microsecond, _) => {
-                primitive_max_accumulator!(data_type, i64, TimestampMicrosecondType)
-            }
-            Timestamp(Nanosecond, _) => {
-                primitive_max_accumulator!(data_type, i64, TimestampNanosecondType)
-            }
-            Duration(Second) => {
-                primitive_max_accumulator!(data_type, i64, DurationSecondType)
-            }
-            Duration(Millisecond) => {
-                primitive_max_accumulator!(data_type, i64, DurationMillisecondType)
-            }
-            Duration(Microsecond) => {
-                primitive_max_accumulator!(data_type, i64, DurationMicrosecondType)
-            }
-            Duration(Nanosecond) => {
-                primitive_max_accumulator!(data_type, i64, DurationNanosecondType)
-            }
-            Decimal32(_, _) => {
-                primitive_max_accumulator!(data_type, i32, Decimal32Type)
-            }
-            Decimal64(_, _) => {
-                primitive_max_accumulator!(data_type, i64, Decimal64Type)
-            }
-            Decimal128(_, _) => {
-                primitive_max_accumulator!(data_type, i128, Decimal128Type)
-            }
-            Decimal256(_, _) => {
-                primitive_max_accumulator!(data_type, i256, Decimal256Type)
-            }
-            Utf8 | LargeUtf8 | Utf8View | Binary | LargeBinary | BinaryView => {
-                Ok(Box::new(MinMaxBytesAccumulator::new_max(data_type.clone())))
-            }
-            Struct(_) => Ok(Box::new(MinMaxStructAccumulator::new_max(
-                data_type.clone(),
-            ))),
-            // This is only reached if groups_accumulator_supported is out of sync
-            _ => internal_err!("GroupsAccumulator not supported for max({})", data_type),
         }
     }
 
@@ -376,6 +319,11 @@ impl AggregateUDFImpl for Max {
         // `MAX` is monotonically increasing as it always increases or stays
         // the same as new values are seen.
         SetMonotonicity::Increasing
+    }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // `MAX` is idempotent: duplicates cannot change the maximum.
+        DistinctHandling::Insensitive
     }
 }
 
@@ -517,36 +465,19 @@ impl AggregateUDFImpl for Min {
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         use DataType::*;
-        matches!(
-            args.return_field.data_type(),
-            Int8 | Int16
-                | Int32
-                | Int64
-                | UInt8
-                | UInt16
-                | UInt32
-                | UInt64
-                | Float16
-                | Float32
-                | Float64
-                | Decimal32(_, _)
-                | Decimal64(_, _)
-                | Decimal128(_, _)
-                | Decimal256(_, _)
-                | Date32
-                | Date64
-                | Time32(_)
-                | Time64(_)
-                | Timestamp(_, _)
-                | Utf8
-                | LargeUtf8
-                | Utf8View
-                | Binary
-                | LargeBinary
-                | BinaryView
-                | Duration(_)
-                | Struct(_)
-        )
+
+        let data_type = args.return_field.data_type();
+        data_type.is_primitive()
+            || matches!(
+                data_type,
+                Utf8 | LargeUtf8
+                    | Utf8View
+                    | Binary
+                    | LargeBinary
+                    | BinaryView
+                    | Duration(_)
+                    | Struct(_)
+            )
     }
 
     fn create_groups_accumulator(
@@ -554,84 +485,31 @@ impl AggregateUDFImpl for Min {
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
         use DataType::*;
-        use TimeUnit::*;
         let data_type = args.return_field.data_type();
+
         match data_type {
-            Int8 => primitive_min_accumulator!(data_type, i8, Int8Type),
-            Int16 => primitive_min_accumulator!(data_type, i16, Int16Type),
-            Int32 => primitive_min_accumulator!(data_type, i32, Int32Type),
-            Int64 => primitive_min_accumulator!(data_type, i64, Int64Type),
-            UInt8 => primitive_min_accumulator!(data_type, u8, UInt8Type),
-            UInt16 => primitive_min_accumulator!(data_type, u16, UInt16Type),
-            UInt32 => primitive_min_accumulator!(data_type, u32, UInt32Type),
-            UInt64 => primitive_min_accumulator!(data_type, u64, UInt64Type),
             Float16 => {
-                primitive_min_accumulator!(data_type, f16, Float16Type)
+                primitive_min_accumulator!(Float16Type, data_type, total, u16)
             }
             Float32 => {
-                primitive_min_accumulator!(data_type, f32, Float32Type)
+                primitive_min_accumulator!(Float32Type, data_type, total, u32)
             }
             Float64 => {
-                primitive_min_accumulator!(data_type, f64, Float64Type)
+                primitive_min_accumulator!(Float64Type, data_type, total, u64)
             }
-            Date32 => primitive_min_accumulator!(data_type, i32, Date32Type),
-            Date64 => primitive_min_accumulator!(data_type, i64, Date64Type),
-            Time32(Second) => {
-                primitive_min_accumulator!(data_type, i32, Time32SecondType)
+            _ => {
+                downcast_primitive! {
+                    data_type => (primitive_min_accumulator, data_type),
+                    Utf8 | LargeUtf8 | Utf8View | Binary | LargeBinary | BinaryView => {
+                        Ok(Box::new(MinMaxBytesAccumulator::new_min(data_type.clone())))
+                    }
+                    Struct(_) => Ok(Box::new(MinMaxStructAccumulator::new_min(
+                        data_type.clone(),
+                    ))),
+                    // This is only reached if groups_accumulator_supported is out of sync
+                    _ => internal_err!("GroupsAccumulator not supported for min({})", data_type),
+                }
             }
-            Time32(Millisecond) => {
-                primitive_min_accumulator!(data_type, i32, Time32MillisecondType)
-            }
-            Time64(Microsecond) => {
-                primitive_min_accumulator!(data_type, i64, Time64MicrosecondType)
-            }
-            Time64(Nanosecond) => {
-                primitive_min_accumulator!(data_type, i64, Time64NanosecondType)
-            }
-            Timestamp(Second, _) => {
-                primitive_min_accumulator!(data_type, i64, TimestampSecondType)
-            }
-            Timestamp(Millisecond, _) => {
-                primitive_min_accumulator!(data_type, i64, TimestampMillisecondType)
-            }
-            Timestamp(Microsecond, _) => {
-                primitive_min_accumulator!(data_type, i64, TimestampMicrosecondType)
-            }
-            Timestamp(Nanosecond, _) => {
-                primitive_min_accumulator!(data_type, i64, TimestampNanosecondType)
-            }
-            Duration(Second) => {
-                primitive_min_accumulator!(data_type, i64, DurationSecondType)
-            }
-            Duration(Millisecond) => {
-                primitive_min_accumulator!(data_type, i64, DurationMillisecondType)
-            }
-            Duration(Microsecond) => {
-                primitive_min_accumulator!(data_type, i64, DurationMicrosecondType)
-            }
-            Duration(Nanosecond) => {
-                primitive_min_accumulator!(data_type, i64, DurationNanosecondType)
-            }
-            Decimal32(_, _) => {
-                primitive_min_accumulator!(data_type, i32, Decimal32Type)
-            }
-            Decimal64(_, _) => {
-                primitive_min_accumulator!(data_type, i64, Decimal64Type)
-            }
-            Decimal128(_, _) => {
-                primitive_min_accumulator!(data_type, i128, Decimal128Type)
-            }
-            Decimal256(_, _) => {
-                primitive_min_accumulator!(data_type, i256, Decimal256Type)
-            }
-            Utf8 | LargeUtf8 | Utf8View | Binary | LargeBinary | BinaryView => {
-                Ok(Box::new(MinMaxBytesAccumulator::new_min(data_type.clone())))
-            }
-            Struct(_) => Ok(Box::new(MinMaxStructAccumulator::new_min(
-                data_type.clone(),
-            ))),
-            // This is only reached if groups_accumulator_supported is out of sync
-            _ => internal_err!("GroupsAccumulator not supported for min({})", data_type),
         }
     }
 
@@ -671,6 +549,11 @@ impl AggregateUDFImpl for Min {
         // `MIN` is monotonically decreasing as it always decreases or stays
         // the same as new values are seen.
         SetMonotonicity::Decreasing
+    }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // `MIN` is idempotent: duplicates cannot change the minimum.
+        DistinctHandling::Insensitive
     }
 }
 
@@ -1014,16 +897,73 @@ mod tests {
     use super::*;
     use arrow::{
         array::{
-            Array, DictionaryArray, Float32Array, Int8Array, Int32Array,
+            Array, AsArray, DictionaryArray, Float32Array, Int8Array, Int32Array,
             IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
             PrimitiveArray, StringArray,
         },
         datatypes::{
-            ArrowDictionaryKeyType, IntervalDayTimeType, IntervalMonthDayNanoType,
-            IntervalUnit, IntervalYearMonthType,
+            ArrowDictionaryKeyType, Field, Float32Type, IntervalDayTimeType,
+            IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, Schema,
         },
     };
+    use datafusion_expr::EmitTo;
     use std::sync::Arc;
+
+    #[test]
+    fn grouped_float_min_max_total_order() -> Result<()> {
+        fn grouped_float32_min() -> Result<Box<dyn GroupsAccumulator>> {
+            let data_type = &DataType::Float32;
+            primitive_min_accumulator!(Float32Type, data_type, total, u32)
+        }
+
+        fn grouped_float32_max() -> Result<Box<dyn GroupsAccumulator>> {
+            let data_type = &DataType::Float32;
+            primitive_max_accumulator!(Float32Type, data_type, total, u32)
+        }
+
+        fn evaluate_grouped_float32(
+            mut accumulator: Box<dyn GroupsAccumulator>,
+            values: Vec<f32>,
+        ) -> f32 {
+            let group_indices = vec![0; values.len()];
+            let values = Arc::new(Float32Array::from(values)) as ArrayRef;
+            accumulator
+                .update_batch(&[values], &group_indices, None, 1)
+                .unwrap();
+            accumulator
+                .evaluate(EmitTo::All)
+                .unwrap()
+                .as_primitive::<Float32Type>()
+                .value(0)
+        }
+
+        let positive_nan = f32::NAN;
+        let negative_nan = f32::from_bits(f32::NAN.to_bits() | (1 << 31));
+
+        let min_cases = [
+            (vec![positive_nan, 1.0], 1.0),
+            (vec![1.0, negative_nan], negative_nan),
+            (vec![0.0, -0.0], -0.0),
+            (vec![positive_nan], positive_nan),
+        ];
+        for (values, expected) in min_cases {
+            let actual = evaluate_grouped_float32(grouped_float32_min()?, values);
+            assert_eq!(actual.to_bits(), expected.to_bits());
+        }
+
+        let max_cases = [
+            (vec![positive_nan, 1.0], positive_nan),
+            (vec![1.0, negative_nan], 1.0),
+            (vec![-0.0, 0.0], 0.0),
+            (vec![negative_nan], negative_nan),
+        ];
+        for (values, expected) in max_cases {
+            let actual = evaluate_grouped_float32(grouped_float32_max()?, values);
+            assert_eq!(actual.to_bits(), expected.to_bits());
+        }
+
+        Ok(())
+    }
 
     #[test]
     fn interval_min_max() {
@@ -1124,6 +1064,180 @@ mod tests {
         );
     }
 
+    /// Runs `udf` through its [`GroupsAccumulator`], feeding `values` to two
+    /// accumulators (first and second half of the rows) and merging the state
+    /// of the first into the second, so that `update_batch`, `state` and
+    /// `merge_batch` are all exercised.
+    fn evaluate_grouped(
+        udf: &dyn AggregateUDFImpl,
+        values: &ArrayRef,
+        group_indices: &[usize],
+        total_num_groups: usize,
+    ) -> Result<ArrayRef> {
+        let data_type = values.data_type().clone();
+        let schema = Schema::new(vec![Field::new("v", data_type.clone(), true)]);
+        let expr: Arc<dyn datafusion_physical_expr::PhysicalExpr> =
+            Arc::new(expressions::Column::new("v", 0));
+        let expr_field = Arc::new(Field::new("v", data_type.clone(), true));
+        let args = || AccumulatorArgs {
+            schema: &schema,
+            expr_fields: std::slice::from_ref(&expr_field),
+            exprs: std::slice::from_ref(&expr),
+            is_distinct: false,
+            name: udf.name(),
+            ignore_nulls: false,
+            is_reversed: false,
+            return_field: Arc::new(Field::new(udf.name(), data_type.clone(), true)),
+            order_bys: &[],
+        };
+
+        let mid = values.len() / 2;
+        let mut first = udf.create_groups_accumulator(args())?;
+        first.update_batch(
+            &[values.slice(0, mid)],
+            &group_indices[..mid],
+            None,
+            total_num_groups,
+        )?;
+
+        let mut second = udf.create_groups_accumulator(args())?;
+        second.update_batch(
+            &[values.slice(mid, values.len() - mid)],
+            &group_indices[mid..],
+            None,
+            total_num_groups,
+        )?;
+
+        let state = first.state(EmitTo::All)?;
+        let merge_group_indices: Vec<usize> = (0..total_num_groups).collect();
+        second.merge_batch(&state, &merge_group_indices, total_num_groups)?;
+
+        let result = second.evaluate(EmitTo::All)?;
+        assert_eq!(result.data_type(), &data_type);
+        Ok(result)
+    }
+
+    #[test]
+    fn interval_min_max_groups_accumulator() -> Result<()> {
+        // Group 0 and 1 get values from both halves of the input, group 2 only
+        // sees nulls and group 3 never receives any row.
+        let group_indices = [0, 1, 2, 0, 1, 0, 1, 2];
+        let total_num_groups = 4;
+
+        let cases: Vec<(ArrayRef, ArrayRef, ArrayRef)> = vec![
+            (
+                Arc::new(IntervalYearMonthArray::from(vec![
+                    Some(IntervalYearMonthType::make_value(0, 1)),
+                    Some(IntervalYearMonthType::make_value(5, 34)),
+                    None,
+                    Some(IntervalYearMonthType::make_value(-2, 4)),
+                    Some(IntervalYearMonthType::make_value(7, -4)),
+                    Some(IntervalYearMonthType::make_value(0, 1)),
+                    None,
+                    None,
+                ])),
+                // min
+                Arc::new(IntervalYearMonthArray::from(vec![
+                    Some(IntervalYearMonthType::make_value(-2, 4)),
+                    Some(IntervalYearMonthType::make_value(7, -4)),
+                    None,
+                    None,
+                ])),
+                // max
+                Arc::new(IntervalYearMonthArray::from(vec![
+                    Some(IntervalYearMonthType::make_value(0, 1)),
+                    Some(IntervalYearMonthType::make_value(5, 34)),
+                    None,
+                    None,
+                ])),
+            ),
+            (
+                Arc::new(IntervalDayTimeArray::from(vec![
+                    Some(IntervalDayTimeType::make_value(0, 0)),
+                    Some(IntervalDayTimeType::make_value(5, 454000)),
+                    None,
+                    Some(IntervalDayTimeType::make_value(-34, 0)),
+                    Some(IntervalDayTimeType::make_value(7, -4000)),
+                    Some(IntervalDayTimeType::make_value(1, 0)),
+                    Some(IntervalDayTimeType::make_value(5, 453999)),
+                    None,
+                ])),
+                // min
+                Arc::new(IntervalDayTimeArray::from(vec![
+                    Some(IntervalDayTimeType::make_value(-34, 0)),
+                    Some(IntervalDayTimeType::make_value(5, 453999)),
+                    None,
+                    None,
+                ])),
+                // max
+                Arc::new(IntervalDayTimeArray::from(vec![
+                    Some(IntervalDayTimeType::make_value(1, 0)),
+                    Some(IntervalDayTimeType::make_value(7, -4000)),
+                    None,
+                    None,
+                ])),
+            ),
+            (
+                Arc::new(IntervalMonthDayNanoArray::from(vec![
+                    Some(IntervalMonthDayNanoType::make_value(1, 0, 0)),
+                    Some(IntervalMonthDayNanoType::make_value(
+                        344,
+                        34,
+                        -43_000_000_000,
+                    )),
+                    None,
+                    Some(IntervalMonthDayNanoType::make_value(
+                        -593,
+                        -33,
+                        13_000_000_000,
+                    )),
+                    Some(IntervalMonthDayNanoType::make_value(5, 2, 493_000_000_000)),
+                    Some(IntervalMonthDayNanoType::make_value(1, 0, 1)),
+                    Some(IntervalMonthDayNanoType::make_value(
+                        344,
+                        34,
+                        -42_000_000_000,
+                    )),
+                    None,
+                ])),
+                // min
+                Arc::new(IntervalMonthDayNanoArray::from(vec![
+                    Some(IntervalMonthDayNanoType::make_value(
+                        -593,
+                        -33,
+                        13_000_000_000,
+                    )),
+                    Some(IntervalMonthDayNanoType::make_value(5, 2, 493_000_000_000)),
+                    None,
+                    None,
+                ])),
+                // max
+                Arc::new(IntervalMonthDayNanoArray::from(vec![
+                    Some(IntervalMonthDayNanoType::make_value(1, 0, 1)),
+                    Some(IntervalMonthDayNanoType::make_value(
+                        344,
+                        34,
+                        -42_000_000_000,
+                    )),
+                    None,
+                    None,
+                ])),
+            ),
+        ];
+
+        for (values, expected_min, expected_max) in cases {
+            let min =
+                evaluate_grouped(&Min::new(), &values, &group_indices, total_num_groups)?;
+            assert_eq!(&min, &expected_min, "min({})", values.data_type());
+
+            let max =
+                evaluate_grouped(&Max::new(), &values, &group_indices, total_num_groups)?;
+            assert_eq!(&max, &expected_max, "max({})", values.data_type());
+        }
+
+        Ok(())
+    }
+
     #[test]
     fn float_min_max_with_nans() {
         let pos_nan = f32::NAN;
@@ -1175,7 +1289,7 @@ mod tests {
         let mut res = Vec::with_capacity(len);
         for i in 0..len {
             let start = i.saturating_sub(n_sliding_window);
-            expected.push(*data[start..i + 1].iter().min().unwrap());
+            expected.push(*data[start..=i].iter().min().unwrap());
 
             moving_min.push(data[i]);
             if i > n_sliding_window {
@@ -1194,7 +1308,7 @@ mod tests {
         let mut res = Vec::with_capacity(len);
         for i in 0..len {
             let start = i.saturating_sub(n_sliding_window);
-            expected.push(*data[start..i + 1].iter().max().unwrap());
+            expected.push(*data[start..=i].iter().max().unwrap());
 
             moving_max.push(data[i]);
             if i > n_sliding_window {

@@ -654,6 +654,10 @@ impl ExecutionPlan for ErrorExec {
 #[derive(Debug, Clone)]
 pub struct StatisticsExec {
     stats: Statistics,
+    /// Per-partition statistics. `None` means they are not modeled: a
+    /// request for a specific partition then returns
+    /// [`Statistics::new_unknown`].
+    partition_statistics: Option<Vec<Statistics>>,
     schema: Arc<Schema>,
     cache: Arc<PlanProperties>,
 }
@@ -664,19 +668,44 @@ impl StatisticsExec {
             schema.fields().len(),
             "if defined, the column statistics vector length should be the number of fields"
         );
-        let cache = Self::compute_properties(Arc::new(schema.clone()));
+        let cache = Self::compute_properties(Arc::new(schema.clone()), 2);
         Self {
             stats,
+            partition_statistics: None,
             schema: Arc::new(schema),
             cache: Arc::new(cache),
         }
     }
 
+    /// Sets the per-partition statistics, in partition order.
+    ///
+    /// The plan's partition count becomes `partition_statistics.len()`. Each
+    /// entry's column statistics length must match the schema, like the
+    /// overall statistics passed to [`Self::new`].
+    pub fn with_partition_statistics(
+        mut self,
+        partition_statistics: Vec<Statistics>,
+    ) -> Self {
+        for stats in &partition_statistics {
+            assert_eq!(
+                stats.column_statistics.len(),
+                self.schema.fields().len(),
+                "if defined, the column statistics vector length should be the number of fields"
+            );
+        }
+        self.cache = Arc::new(Self::compute_properties(
+            Arc::clone(&self.schema),
+            partition_statistics.len(),
+        ));
+        self.partition_statistics = Some(partition_statistics);
+        self
+    }
+
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn compute_properties(schema: SchemaRef) -> PlanProperties {
+    fn compute_properties(schema: SchemaRef, partition_count: usize) -> PlanProperties {
         PlanProperties::new(
             EquivalenceProperties::new(schema),
-            Partitioning::UnknownPartitioning(2),
+            Partitioning::UnknownPartitioning(partition_count),
             EmissionType::Incremental,
             Boundedness::Bounded,
         )
@@ -757,10 +786,20 @@ impl ExecutionPlan for StatisticsExec {
         _input_stats: &[Arc<Statistics>],
         args: &StatisticsArgs,
     ) -> Result<Arc<Statistics>> {
-        Ok(Arc::new(if args.partition().is_some() {
-            Statistics::new_unknown(&self.schema)
-        } else {
-            self.stats.clone()
+        Ok(Arc::new(match args.partition() {
+            Some(idx) => match &self.partition_statistics {
+                Some(partition_statistics) => match partition_statistics.get(idx) {
+                    Some(stats) => stats.clone(),
+                    None => {
+                        return internal_err!(
+                            "Invalid partition index: {idx}, the partition count is {}",
+                            partition_statistics.len()
+                        );
+                    }
+                },
+                None => Statistics::new_unknown(&self.schema),
+            },
+            None => self.stats.clone(),
         }))
     }
 }
@@ -817,7 +856,7 @@ impl DisplayAs for BlockingExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "BlockingExec",)
+                write!(f, "BlockingExec")
             }
             DisplayFormatType::TreeRender => {
                 // TODO: collect info
@@ -977,7 +1016,7 @@ impl DisplayAs for PanicExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "PanicExec",)
+                write!(f, "PanicExec")
             }
             DisplayFormatType::TreeRender => {
                 // TODO: collect info

@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Focused benchmarks for `InList` cases.
+//! Benchmarks for static `IN LIST` filters.
 //!
-//! This benchmark file adds targeted coverage for representative `IN LIST`
-//! workloads with controlled parameters:
+//! The cases control match rate and list size across several value types and
+//! string layouts:
 //!
 //! - **Controlled match rates**: Exercises both hit-heavy and miss-heavy paths
 //! - **List size scaling**: Measures behavior across small and large `IN` lists
@@ -27,7 +27,7 @@
 //! - **Shared-prefix strings**: Adds collision-heavy string cases where values
 //!   only differ late in the string
 //! - **Mixed-length strings**: Covers inputs that combine short and long values
-//! - **Null handling**: Includes representative `NULL` and `NOT IN` cases
+//! - **Null handling**: Covers `NULL` and `NOT IN` cases
 //!
 //! # Case Coverage
 //!
@@ -45,14 +45,20 @@
 //! | Utf8View length-12 cases | Utf8View | 12-byte strings | 16, 64 |
 //! | Utf8View long-string cases | Utf8View | 24-byte strings | 4, 16, 64, 256 |
 //! | Shared-prefix string cases | Utf8, Utf8View | same prefix, different suffix | 16, 32, 64 |
-//! | Fixed-size binary cases | FixedSizeBinary(16) | fixed-width binary values | 4, 64, 256, 10000 |
+//! | Dictionary dispatch cases | Int32, Dictionary<Int32> | per-batch dispatch overhead | 4, 64 |
+//! | Fixed-size binary direct-comparison case | FixedSizeBinary(1) | direct-comparison cutoff | 16 |
+//! | Fixed-size binary direct-comparison case | FixedSizeBinary(16) | direct-comparison cutoff | 4 |
+//! | Fixed-size binary bitmap case | FixedSizeBinary(2) | bitmap lookup | 64 |
+//! | Fixed-size binary hash-set cases | FixedSizeBinary(16) | hash-set scaling | 64, 256, 10000 |
+//! | Fixed-size binary unaligned case | FixedSizeBinary(16) | per-evaluation alignment copy | 64 |
 
 use arrow::array::types::IntervalMonthDayNano;
 use arrow::array::*;
+use arrow::buffer::{Buffer, MutableBuffer};
 use arrow::datatypes::{Field, Int32Type, IntervalMonthDayNanoType, Schema};
 use arrow::record_batch::RecordBatch;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use datafusion_common::ScalarValue;
+use datafusion_common::{HashSet, ScalarValue};
 use datafusion_physical_expr::expressions::{col, in_list, lit};
 use half::f16;
 use rand::distr::Alphanumeric;
@@ -753,7 +759,7 @@ fn bench_dict_int32(
     let mut rng = StdRng::seed_from_u64(seed);
 
     let dict_values: Vec<i32> = (0..dict_size).map(|_| rng.random()).collect();
-    let haystack: Vec<i32> = dict_values.iter().take(list_size).cloned().collect();
+    let haystack: Vec<i32> = dict_values.iter().take(list_size).copied().collect();
 
     let indices: Vec<i32> = (0..ARRAY_SIZE)
         .map(|_| rng.random_range(0..dict_size as i32))
@@ -866,11 +872,65 @@ fn bench_dictionary(c: &mut Criterion) {
     bench_dict_string(c, "utf8_short/dict=500/list=20", 500, 20, 10);
 }
 
+/// Measures the fixed per-batch cost of handling dictionary and plain inputs.
+/// Small batches make dispatch overhead visible, while the standard 8,192-row
+/// batch shows whether it matters in the usual vectorized case.
+fn bench_dictionary_dispatch(c: &mut Criterion) {
+    for list_size in [4_usize, 64] {
+        let strategy = if list_size == 4 {
+            "branchless"
+        } else {
+            "hash_set"
+        };
+        let haystack = (0..list_size as i32).collect::<Vec<_>>();
+
+        for batch_size in [1, 8, 64, ARRAY_SIZE] {
+            let keys = (0..batch_size)
+                .map(|index| (index % 8) as i32)
+                .collect::<Vec<_>>();
+            let values = keys.iter().map(|key| key * 2).collect::<Vec<_>>();
+
+            for dictionary in [false, true] {
+                let array: ArrayRef = if dictionary {
+                    Arc::new(
+                        DictionaryArray::<Int32Type>::try_new(
+                            Int32Array::from(keys.clone()),
+                            Arc::new(Int32Array::from_iter_values((0..8).map(|v| v * 2))),
+                        )
+                        .unwrap(),
+                    )
+                } else {
+                    Arc::new(Int32Array::from(values.clone()))
+                };
+
+                let schema =
+                    Schema::new(vec![Field::new("a", array.data_type().clone(), false)]);
+                let exprs = haystack.iter().map(|value| lit(*value)).collect();
+                let expr =
+                    in_list(col("a", &schema).unwrap(), exprs, &false, &schema).unwrap();
+                let batch = RecordBatch::try_new(Arc::new(schema), vec![array]).unwrap();
+                let encoding = if dictionary { "dictionary" } else { "plain" };
+
+                c.bench_with_input(
+                    BenchmarkId::new(
+                        "dictionary_dispatch",
+                        format!(
+                            "i32/{strategy}/{encoding}/list={list_size}/batch={batch_size}"
+                        ),
+                    ),
+                    &batch,
+                    |b, batch| b.iter(|| expr.evaluate(batch).unwrap()),
+                );
+            }
+        }
+    }
+}
+
 // =============================================================================
 // NULL HANDLING BENCHMARKS
 // =============================================================================
 //
-// Tests representative null-containing inputs across primitive and string cases.
+// Null-containing primitive and string cases.
 
 fn bench_nulls(c: &mut Criterion) {
     // =========================================================================
@@ -1014,72 +1074,182 @@ fn bench_nulls(c: &mut Criterion) {
 }
 
 // =============================================================================
-// FIXED SIZE BINARY BENCHMARKS (FixedSizeBinary<16>, e.g. UUIDs)
+// FIXED SIZE BINARY BENCHMARKS
 // =============================================================================
 
-/// Generates a random 16-byte value (UUID-sized).
-fn random_fixed_binary_16(rng: &mut StdRng) -> Vec<u8> {
-    let mut buf = vec![0u8; 16];
+fn random_fixed_binary(rng: &mut StdRng, width: i32) -> Vec<u8> {
+    let mut buf = vec![0u8; width as usize];
     rng.fill(&mut buf[..]);
     buf
 }
 
-/// Benchmarks FixedSizeBinary(16) IN list evaluation.
-/// FixedSizeBinary doesn't use the generic numeric helpers since its array
-/// construction differs from primitive types.
-fn bench_fixed_size_binary_inner(
-    c: &mut Criterion,
-    name: &str,
+#[derive(Clone, Copy)]
+enum InputLayout {
+    Aligned,
+    UnalignedI128,
+}
+
+#[derive(Clone, Copy)]
+struct FixedSizeBinaryBenchConfig {
+    width: i32,
+    list_size: usize,
+    input_layout: InputLayout,
+}
+
+impl FixedSizeBinaryBenchConfig {
+    const fn aligned(width: i32, list_size: usize) -> Self {
+        Self {
+            width,
+            list_size,
+            input_layout: InputLayout::Aligned,
+        }
+    }
+
+    const fn unaligned_i128(list_size: usize) -> Self {
+        Self {
+            width: 16,
+            list_size,
+            input_layout: InputLayout::UnalignedI128,
+        }
+    }
+}
+
+const FIXED_SIZE_BINARY_CASES: [FixedSizeBinaryBenchConfig; 7] = [
+    FixedSizeBinaryBenchConfig::aligned(1, 16),
+    FixedSizeBinaryBenchConfig::aligned(2, 64),
+    FixedSizeBinaryBenchConfig::aligned(16, 4),
+    FixedSizeBinaryBenchConfig::aligned(16, 64),
+    FixedSizeBinaryBenchConfig::aligned(16, 256),
+    FixedSizeBinaryBenchConfig::aligned(16, 10000),
+    // 8,192 rows at 16 bytes each copy 128 KiB per evaluation.
+    FixedSizeBinaryBenchConfig::unaligned_i128(64),
+];
+
+fn generate_fixed_size_binary_data(
+    rng: &mut StdRng,
+    width: i32,
     list_size: usize,
     match_rate: f64,
-) {
-    let seed = 0xF1ED_B1A7_u64.wrapping_add(list_size as u64 * 0x6666);
-    let mut rng = StdRng::seed_from_u64(seed);
+) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
+    if let Some(domain_size) = match width {
+        1 => Some(1_usize << 8),
+        2 => Some(1_usize << 16),
+        _ => None,
+    } {
+        // The value generator needs at least one value outside the haystack.
+        assert!(list_size < domain_size);
+    }
 
-    // Generate IN list values (16-byte each)
-    let haystack: Vec<Vec<u8>> = (0..list_size)
-        .map(|_| random_fixed_binary_16(&mut rng))
-        .collect();
+    // Keep the number of distinct haystack values equal to the configured list size.
+    let mut haystack_set = HashSet::with_capacity(list_size);
+    let mut haystack = Vec::with_capacity(list_size);
+    while haystack.len() < list_size {
+        let value = random_fixed_binary(rng, width);
+        if haystack_set.insert(value.clone()) {
+            haystack.push(value);
+        }
+    }
 
-    // Generate array with controlled match rate
-    let values: Vec<Vec<u8>> = (0..ARRAY_SIZE)
+    // Generate values with the configured match rate.
+    let values = (0..ARRAY_SIZE)
         .map(|_| {
             if !haystack.is_empty() && rng.random_bool(match_rate) {
-                haystack.choose(&mut rng).unwrap().clone()
+                haystack.choose(rng).unwrap().clone()
             } else {
-                random_fixed_binary_16(&mut rng)
+                loop {
+                    let value = random_fixed_binary(rng, width);
+                    if !haystack_set.contains(&value) {
+                        break value;
+                    }
+                }
             }
         })
         .collect();
 
-    let refs: Vec<&[u8]> = values.iter().map(|v| v.as_slice()).collect();
-    let array = FixedSizeBinaryArray::try_from_iter(refs.into_iter()).unwrap();
+    (haystack, values)
+}
+
+// The cast only checks alignment; the pointer is never dereferenced.
+#[expect(clippy::cast_ptr_alignment)]
+fn unaligned_fixed_size_binary_16(values: &[Vec<u8>]) -> FixedSizeBinaryArray {
+    const WIDTH: usize = 16;
+    let payload_len = values.len() * WIDTH;
+    let mut bytes = MutableBuffer::with_capacity(payload_len + 1);
+    bytes.push(0_u8);
+    for value in values {
+        assert_eq!(value.len(), WIDTH);
+        bytes.extend_from_slice(value);
+    }
+
+    // MutableBuffer starts at an Arrow-aligned address. Fixed-size binary
+    // values only require byte alignment, so slicing off this padding byte
+    // creates a valid Arrow buffer that models unaligned external input.
+    let buffer = Buffer::from(bytes).slice(1);
+    assert!(
+        !buffer.as_ptr().cast::<i128>().is_aligned(),
+        "benchmark input must be unaligned"
+    );
+    FixedSizeBinaryArray::new(WIDTH as i32, buffer, None)
+}
+
+/// FixedSizeBinary doesn't use the generic numeric helpers since its array
+/// construction differs from primitive types.
+fn bench_fixed_size_binary_inner(
+    c: &mut Criterion,
+    config: FixedSizeBinaryBenchConfig,
+    match_pct: u32,
+) {
+    assert!(match_pct <= 100);
+    let match_rate = f64::from(match_pct) / 100.0;
+
+    let seed = 0xF1ED_B1A7_u64
+        .wrapping_add(config.list_size as u64 * 0x6666)
+        .wrapping_add(config.width as u64 * 0x7777);
+    let mut rng = StdRng::seed_from_u64(seed);
+
+    let (haystack, values) = generate_fixed_size_binary_data(
+        &mut rng,
+        config.width,
+        config.list_size,
+        match_rate,
+    );
+
+    let array = match config.input_layout {
+        InputLayout::Aligned => {
+            FixedSizeBinaryArray::try_from_iter(values.iter().map(Vec::as_slice)).unwrap()
+        }
+        InputLayout::UnalignedI128 => unaligned_fixed_size_binary_16(&values),
+    };
 
     let schema = Schema::new(vec![Field::new("a", array.data_type().clone(), true)]);
     let exprs: Vec<_> = haystack
         .iter()
-        .map(|v| lit(ScalarValue::FixedSizeBinary(16, Some(v.clone()))))
+        .map(|v| lit(ScalarValue::FixedSizeBinary(config.width, Some(v.clone()))))
         .collect();
     let expr = in_list(col("a", &schema).unwrap(), exprs, &false, &schema).unwrap();
     let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])
         .unwrap();
 
     c.bench_with_input(
-        BenchmarkId::new("fixed_size_binary", name),
+        BenchmarkId::new("fixed_size_binary", {
+            let name = format!(
+                "fsb{}/list={}/match={match_pct}%",
+                config.width, config.list_size
+            );
+            match config.input_layout {
+                InputLayout::Aligned => name,
+                InputLayout::UnalignedI128 => format!("{name}/input=unaligned"),
+            }
+        }),
         &batch,
         |b, batch| b.iter(|| expr.evaluate(batch).unwrap()),
     );
 }
 
 fn bench_fixed_size_binary(c: &mut Criterion) {
-    for list_size in [4, 64, 256, 10000] {
+    for config in FIXED_SIZE_BINARY_CASES {
         for match_pct in MATCH_RATES {
-            bench_fixed_size_binary_inner(
-                c,
-                &format!("fsb16/list={list_size}/match={match_pct}%"),
-                list_size,
-                match_pct as f64 / 100.0,
-            );
+            bench_fixed_size_binary_inner(c, config, match_pct);
         }
     }
 }
@@ -1091,7 +1261,7 @@ fn bench_fixed_size_binary(c: &mut Criterion) {
 criterion_group! {
     name = benches;
     config = Criterion::default();
-    targets = bench_narrow_integer, bench_primitive, bench_f32, bench_timestamp_ns, bench_interval_month_day_nano, bench_utf8, bench_utf8view, bench_dictionary, bench_nulls, bench_fixed_size_binary
+    targets = bench_narrow_integer, bench_primitive, bench_f32, bench_timestamp_ns, bench_interval_month_day_nano, bench_utf8, bench_utf8view, bench_dictionary, bench_dictionary_dispatch, bench_nulls, bench_fixed_size_binary
 }
 
 criterion_main!(benches);

@@ -311,7 +311,7 @@ impl Display for ParquetMetadataIndex {
             self.last_num_pruned()
         )?;
         let batches = pretty_format_batches(std::slice::from_ref(&self.index)).unwrap();
-        write!(f, "{batches}",)
+        write!(f, "{batches}")
     }
 }
 

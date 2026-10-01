@@ -195,9 +195,8 @@ impl SessionStateDefaults {
     ) {
         let url = config.options().catalog.location.as_ref();
         let format = config.options().catalog.format.as_ref();
-        let (url, format) = match (url, format) {
-            (Some(url), Some(format)) => (url, format),
-            _ => return,
+        let (Some(url), Some(format)) = (url, format) else {
+            return;
         };
         let url = url.to_string();
         let format = format.to_string();
@@ -211,13 +210,11 @@ impl SessionStateDefaults {
         let path = object_store::path::Path::parse(path).expect("Can't parse path");
         let store = ObjectStoreUrl::parse(authority.as_str())
             .expect("Invalid default catalog url");
-        let store = match runtime.object_store(store) {
-            Ok(store) => store,
-            _ => return,
+        let Ok(store) = runtime.object_store(store) else {
+            return;
         };
-        let factory = match table_factories.get(format.as_str()) {
-            Some(factory) => factory,
-            _ => return,
+        let Some(factory) = table_factories.get(format.as_str()) else {
+            return;
         };
         let schema = ListingSchemaProvider::new(
             authority,
@@ -237,7 +234,7 @@ impl SessionStateDefaults {
         for format in formats {
             if let Err(e) = state.register_file_format(format, false) {
                 log::info!("Unable to register default file format: {e}")
-            };
+            }
         }
     }
 }

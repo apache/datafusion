@@ -18,6 +18,7 @@
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow_schema::DataType;
 use arrow_schema::TimeUnit::Nanosecond;
+use arrow_schema::{Field, Schema};
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion::prelude::{DataFrame, SessionContext};
 use datafusion_catalog::MemTable;
@@ -67,6 +68,28 @@ fn register_string_table(ctx: &SessionContext, num_columns: usize, num_rows: usi
     let table = MemTable::try_new(schema, partitions).unwrap();
 
     ctx.register_table("t", Arc::new(table)).unwrap();
+}
+
+/// Registers a table `name` with `num_columns` Int32 columns (`a0..aN`) plus an
+/// `arr` `List<Int32>` column, used to benchmark `UNNEST` planning.
+fn register_list_table(ctx: &SessionContext, name: &str, num_columns: usize) {
+    let mut fields: Vec<Field> = (0..num_columns)
+        .map(|i| Field::new(format!("a{i}"), DataType::Int32, true))
+        .collect();
+    fields.push(Field::new(
+        "arr",
+        DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+        true,
+    ));
+    let schema = Arc::new(Schema::new(fields));
+    let table = MemTable::try_new(schema, vec![vec![]]).unwrap();
+    ctx.register_table(name, Arc::new(table)).unwrap();
+}
+
+/// Create a logical plan from the specified sql (parse + plan only, NO
+/// analysis or optimization). Isolates SQL planner cost.
+fn logical_plan(ctx: &SessionContext, rt: &Runtime, sql: &str) {
+    black_box(rt.block_on(ctx.state().create_logical_plan(sql)).unwrap());
 }
 
 /// Build a dataframe for testing logical plan optimization
@@ -387,8 +410,8 @@ fn criterion_benchmark(c: &mut Criterion) {
     let case_heavy_left_join_df = build_case_heavy_left_join_df(&case_heavy_ctx, &rt);
 
     // really slow :(
-    let mut group = c.benchmark_group("sample_size_5");
-    group.sample_size(5);
+    let mut group = c.benchmark_group("sample_size_10");
+    group.sample_size(10);
     group.bench_function("logical_plan_optimize", |b| {
         b.iter(|| {
             let df_clone = df.clone();
@@ -525,6 +548,38 @@ fn criterion_benchmark(c: &mut Criterion) {
             );
         })
     });
+
+    // UNNEST planning. The unnest rewrite builds an inner projection that is
+    // deduplicated on every pushed expression, so wide select lists stress it.
+    // See `push_projection_dedupl` in datafusion/sql/src/utils.rs.
+    let unnest_ctx = SessionContext::new();
+    register_list_table(&unnest_ctx, "t_list200", 200);
+    register_list_table(&unnest_ctx, "t_list1000", 1000);
+
+    // Bare columns next to an unnest: each column is pushed once.
+    for num_columns in [200usize, 1000] {
+        let cols = (0..num_columns)
+            .map(|i| format!("a{i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let query = format!("SELECT unnest(arr), {cols} FROM t_list{num_columns}");
+        c.bench_function(&format!("logical_unnest_plus_{num_columns}_columns"), |b| {
+            b.iter(|| logical_plan(&unnest_ctx, &rt, &query))
+        });
+    }
+
+    // Columns inside expressions that contain an unnest: exercises both the
+    // column path and the repeated unnest placeholder alias path.
+    {
+        let exprs = (0..200)
+            .map(|i| format!("unnest(arr) + a{i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let query = format!("SELECT {exprs} FROM t_list200");
+        c.bench_function("logical_unnest_in_200_exprs", |b| {
+            b.iter(|| logical_plan(&unnest_ctx, &rt, &query))
+        });
+    }
 }
 
 criterion_group!(benches, criterion_benchmark);

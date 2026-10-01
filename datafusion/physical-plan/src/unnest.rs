@@ -23,10 +23,10 @@ use std::task::{Poll, ready};
 
 use super::metrics::{
     self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
-    MetricsSet, RecordOutput, SplitMetrics,
+    MetricsSet, SplitMetrics,
 };
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
-use crate::stream::{BatchSplitStream, EmptyRecordBatchStream};
+use crate::stream::{BatchSplitStream, EmptyRecordBatchStream, ObservedStream};
 use crate::{
     ChildrenPropertiesMode, DisplayFormatType, Distribution, ExecutionPlan,
     RecordBatchStream, ReplaceChildrenOptions, SendableRecordBatchStream,
@@ -46,6 +46,7 @@ use arrow::record_batch::RecordBatch;
 use arrow_ord::cmp::lt;
 use async_trait::async_trait;
 use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::utils::apply_parent_nulls;
 use datafusion_common::{
     Constraints, HashMap, HashSet, Result, UnnestOptions, exec_datafusion_err, exec_err,
     internal_err,
@@ -296,6 +297,7 @@ impl ExecutionPlan for UnnestExec {
         let batch_size = context.session_config().batch_size();
         let input = self.input.execute(partition, context)?;
         let metrics = UnnestMetrics::new(partition, &self.metrics);
+        let baseline_metrics = metrics.baseline_metrics.clone();
 
         let stream = Box::pin(UnnestStream {
             input,
@@ -311,10 +313,15 @@ impl ExecutionPlan for UnnestExec {
         // Chunking the input bounds each build to roughly `batch_size` rows, but two cases
         // can still produce an oversized batch (see `predict_output_lens`), so the output
         // goes through the shared splitter to make the bound unconditional.
-        Ok(Box::pin(BatchSplitStream::new(
+        let stream = Box::pin(BatchSplitStream::new(
             stream,
             batch_size,
             SplitMetrics::new(&self.metrics, partition),
+        ));
+        Ok(Box::pin(ObservedStream::new(
+            stream,
+            baseline_metrics,
+            None,
         )))
     }
 
@@ -408,6 +415,7 @@ impl UnnestExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::utils::usize_from_wire;
         use datafusion_proto_models::protobuf;
 
         let unnest = crate::expect_plan_variant!(
@@ -443,8 +451,8 @@ impl UnnestExec {
             .collect();
         let struct_column_indices = struct_type_columns
             .iter()
-            .map(|index| *index as _)
-            .collect();
+            .map(|index| usize_from_wire(*index, "UnnestExec", "struct_type_columns"))
+            .collect::<Result<Vec<_>>>()?;
         let options = options.as_ref().ok_or_else(|| {
             datafusion_common::internal_datafusion_err!(
                 "UnnestExec is missing required field 'options'"
@@ -651,7 +659,6 @@ impl UnnestStream {
                 // that with `None` rather than an empty batch.
                 if let Some(batch) = result? {
                     debug_assert!(batch.num_rows() > 0);
-                    (&batch).record_output(&self.metrics.baseline_metrics);
                     return Poll::Ready(Some(Ok(batch)));
                 }
                 continue;
@@ -761,7 +768,11 @@ fn flatten_struct_cols(
                 DataType::Struct(_) => {
                     let struct_arr =
                         column_data.as_any().downcast_ref::<StructArray>().unwrap();
-                    Ok(struct_arr.columns().to_vec())
+                    struct_arr
+                        .columns()
+                        .iter()
+                        .map(|column| apply_parent_nulls(column, struct_arr.nulls()))
+                        .collect()
                 }
                 data_type => internal_err!(
                     "expecting column {idx} from input plan to be a struct, got {data_type}"
@@ -1429,13 +1440,212 @@ fn repeat_arrs_from_indices(
 mod tests {
     use super::*;
     use arrow::array::{
-        GenericListArray, Int32Array, NullBufferBuilder, OffsetSizeTrait, StringArray,
+        BooleanArray, DictionaryArray, GenericListArray, Int32Array, MapArray, NullArray,
+        NullBufferBuilder, OffsetSizeTrait, RunArray, StringArray, StringViewArray,
+        UnionArray, layout,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer};
-    use arrow::datatypes::{Field, Int32Type};
+    use arrow::datatypes::{Field, Int32Type, UnionFields};
     use datafusion_common::NullHandling;
     use datafusion_common::test_util::batches_to_string;
+    use datafusion_physical_expr_common::metrics::MetricValue;
     use insta::assert_snapshot;
+
+    #[tokio::test]
+    async fn test_unnest_struct_parent_nulls() -> Result<()> {
+        let values =
+            Int32Array::from(vec![Some(10), Some(20), None, Some(40), Some(50), None]);
+        let child_nulls = values.nulls().cloned();
+        let strings = vec![
+            Some("first value longer than twelve bytes"),
+            Some("second value longer than twelve bytes"),
+            None,
+            Some("fourth value longer than twelve bytes"),
+            Some("fifth value longer than twelve bytes"),
+            None,
+        ];
+        let list_values = vec![
+            Some(vec![Some(1), None]),
+            Some(vec![]),
+            None,
+            Some(vec![Some(4)]),
+            Some(vec![Some(5), Some(6)]),
+            None,
+        ];
+        let list = ListArray::from_iter_primitive::<Int32Type, _, _>(list_values.clone());
+        let large_list =
+            LargeListArray::from_iter_primitive::<Int32Type, _, _>(list_values);
+        let nested = StructArray::new(
+            vec![Field::new("v", DataType::Int32, true)].into(),
+            vec![Arc::new(values.clone())],
+            child_nulls.clone(),
+        );
+        let entries = StructArray::new(
+            vec![
+                Field::new("key", DataType::Int32, false),
+                Field::new("value", DataType::Int32, true),
+            ]
+            .into(),
+            vec![
+                Arc::new(Int32Array::from(vec![0, 1, 2, 3, 4, 5])),
+                Arc::new(values.clone()),
+            ],
+            None,
+        );
+        let mut children: Vec<ArrayRef> = vec![
+            Arc::new(values.clone()),
+            Arc::new(BooleanArray::from(vec![
+                Some(true),
+                Some(false),
+                None,
+                Some(true),
+                Some(false),
+                None,
+            ])),
+            Arc::new(StringArray::from(strings.clone())),
+            Arc::new(StringViewArray::from(strings)),
+            Arc::new(NullArray::new(6)),
+            Arc::new(list.clone()),
+            Arc::new(large_list.clone()),
+            Arc::new(ListViewArray::from(list)),
+            Arc::new(LargeListViewArray::from(large_list)),
+            Arc::new(FixedSizeListArray::new(
+                Arc::new(Field::new_list_field(DataType::Int32, true)),
+                1,
+                Arc::new(values.clone()),
+                child_nulls.clone(),
+            )),
+            Arc::new(nested),
+            Arc::new(MapArray::new(
+                Arc::new(Field::new("entries", entries.data_type().clone(), false)),
+                OffsetBuffer::new(vec![0, 1, 2, 3, 4, 5, 6].into()),
+                entries,
+                child_nulls,
+                false,
+            )),
+            Arc::new(DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(vec![Some(0), Some(1), None, Some(0), Some(2), None]),
+                Arc::new(StringArray::from(vec![Some("first"), None, Some("last")])),
+            )?),
+            Arc::new(RunArray::<Int32Type>::try_new(
+                &Int32Array::from(vec![2, 3, 5, 6]),
+                &Int32Array::from(vec![Some(10), None, Some(40), None]),
+            )?),
+        ];
+        for offsets in [None, Some(vec![0, 0, 2, 3, 4, 5].into())] {
+            children.push(Arc::new(UnionArray::try_new(
+                UnionFields::try_new(
+                    [3, 7],
+                    [
+                        Field::new("int", DataType::Int32, true),
+                        Field::new("string", DataType::Utf8, true),
+                    ],
+                )?,
+                vec![3, 3, 3, 7, 7, 3].into(),
+                offsets,
+                vec![
+                    Arc::new(values.clone()),
+                    Arc::new(StringArray::from(vec!["text"; 6])),
+                ],
+            )?));
+        }
+        let fields: Vec<Field> = children
+            .iter()
+            .enumerate()
+            .map(|(i, child)| {
+                Field::new(format!("v{i}"), child.data_type().clone(), true)
+            })
+            .collect();
+        let schema = Arc::new(Schema::new(fields.clone()));
+        for nulls in [
+            None,
+            Some(NullBuffer::new_valid(6)),
+            Some(NullBuffer::from(vec![true, false, true, true, false, true])),
+            Some(NullBuffer::new_null(6)),
+        ] {
+            let parent = StructArray::new(fields.clone().into(), children.clone(), nulls);
+            for (offset, len) in [(0, 6), (1, 4)] {
+                let parent = parent.slice(offset, len);
+                let batch = RecordBatch::try_from_iter(vec![(
+                    "s",
+                    Arc::new(parent.clone()) as ArrayRef,
+                )])?;
+                let source = crate::test::TestMemoryExec::try_new_exec(
+                    &[vec![batch.clone()]],
+                    batch.schema(),
+                    None,
+                )?;
+                let unnest = UnnestExec::new(
+                    source,
+                    vec![],
+                    vec![0],
+                    Arc::clone(&schema),
+                    UnnestOptions::default(),
+                )?;
+                let batches = crate::common::collect(
+                    unnest.execute(0, Arc::new(TaskContext::default()))?,
+                )
+                .await?;
+                assert_eq!(batches.len(), 1);
+                assert_eq!(batches[0].schema(), schema);
+                assert_eq!(batches[0].num_rows(), len);
+                for (result, child) in batches[0].columns().iter().zip(parent.columns()) {
+                    let actual = result.to_data();
+                    actual.validate_full()?;
+                    assert_eq!(result.data_type(), child.data_type());
+                    let child_nulls = child.logical_nulls();
+                    let result_nulls = result.logical_nulls();
+                    for row in 0..len {
+                        assert_eq!(
+                            result_nulls
+                                .as_ref()
+                                .is_some_and(|nulls| nulls.is_null(row)),
+                            parent.is_null(row)
+                                || child_nulls
+                                    .as_ref()
+                                    .is_some_and(|nulls| nulls.is_null(row)),
+                            "{:?}, row {row}",
+                            child.data_type(),
+                        );
+                        if parent.is_valid(row) {
+                            assert_eq!(
+                                result.slice(row, 1).as_ref(),
+                                child.slice(row, 1).as_ref()
+                            );
+                        }
+                    }
+                    if layout(child.data_type()).can_contain_null_mask {
+                        let expected = child.to_data();
+                        assert_eq!(actual.offset(), expected.offset());
+                        assert_eq!(actual.buffers().len(), expected.buffers().len());
+                        for (actual, expected) in
+                            actual.buffers().iter().zip(expected.buffers())
+                        {
+                            assert!(
+                                actual.ptr_eq(expected),
+                                "value buffer copied for {:?}",
+                                child.data_type()
+                            );
+                        }
+                        assert_eq!(
+                            actual.child_data().len(),
+                            expected.child_data().len()
+                        );
+                        for (actual, expected) in
+                            actual.child_data().iter().zip(expected.child_data())
+                        {
+                            assert!(
+                                actual.ptr_eq(expected),
+                                "child buffers copied for {:?}",
+                                child.data_type()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 
     // Create a GenericListArray with the following list values:
     //  [A, B, C], [], NULL, [D], NULL, [NULL, F]
@@ -2213,6 +2423,19 @@ mod tests {
         options: UnnestOptions,
         depth: usize,
     ) -> Result<Vec<RecordBatch>> {
+        Ok(
+            unnest_at_depth_with_metrics(input, batch_size, options, depth)
+                .await?
+                .0,
+        )
+    }
+
+    async fn unnest_at_depth_with_metrics(
+        input: Vec<RecordBatch>,
+        batch_size: usize,
+        options: UnnestOptions,
+        depth: usize,
+    ) -> Result<(Vec<RecordBatch>, MetricsSet)> {
         let input_schema = input[0].schema();
         let output_schema =
             Arc::new(Schema::new(vec![Field::new("l", DataType::Int32, true)]));
@@ -2234,7 +2457,9 @@ mod tests {
                     .with_batch_size(batch_size),
             ),
         );
-        crate::common::collect(unnest.execute(0, task_ctx)?).await
+        let batches = crate::common::collect(unnest.execute(0, task_ctx)?).await?;
+        let metrics = unnest.metrics().expect("UnnestExec exposes metrics");
+        Ok((batches, metrics))
     }
 
     /// The values an unnest produces, flattened across all output batches.
@@ -2326,6 +2551,40 @@ mod tests {
                 case.batch_size
             );
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_unnest_stream_output_metrics_after_split() -> Result<()> {
+        let (batches, metrics) = unnest_at_depth_with_metrics(
+            vec![list_batch(&[Some(25)])],
+            10,
+            UnnestOptions::default(),
+            1,
+        )
+        .await?;
+
+        assert_eq!(
+            batches
+                .iter()
+                .map(RecordBatch::num_rows)
+                .collect::<Vec<_>>(),
+            vec![10, 10, 5]
+        );
+        let output_batches = metrics
+            .sum(|metric| matches!(metric.value(), MetricValue::OutputBatches(_)))
+            .expect("output_batches metric exists")
+            .as_usize();
+        assert_eq!(output_batches, batches.len());
+        let output_rows = metrics
+            .sum(|metric| matches!(metric.value(), MetricValue::OutputRows(_)))
+            .expect("output_rows metric exists")
+            .as_usize();
+        assert_eq!(
+            output_rows,
+            batches.iter().map(RecordBatch::num_rows).sum::<usize>()
+        );
+
         Ok(())
     }
 

@@ -53,13 +53,13 @@ This is a list of DataFusion related blog posts, articles, and other resources. 
 
 - **2026-03-31** [Blog: Writing Custom Table Providers in Apache DataFusion](https://datafusion.apache.org/blog/2026/03/31/writing-table-providers/)
 
-- **2026-03-20** [Blog: Turning LIMIT into an I/O Optimization: Inside DataFusion’s Multi-Layer Pruning Stack](https://datafusion.apache.org/blog/2026/03/20/multi-layer-pruning/)
+- **2026-03-20** [Blog: Turning LIMIT into an I/O Optimization: Inside DataFusion’s Multi-Layer Pruning Stack](https://datafusion.apache.org/blog/2026/03/20/limit-pruning/)
 
 - **2026-02-23** [Blog: Apache DataFusion: A Data Engineer's Guide to the Query Engine Reshaping How We Build Data Systems](https://andrewmadson.substack.com/p/apache-datafusion-a-data-engineers)
 
 - **2026-02-09** [Blog: Vector search using only Parquet and DataFusion](https://blog.xiangpeng.systems/posts/vector-search-with-parquet-datafusion/)
 
-- **2026-02-02** [Blog: Optimizing SQL CASE Expression Evaluation](https://datafusion.apache.org/blog/2026/02/02/case-expression/)
+- **2026-02-02** [Blog: Optimizing SQL CASE Expression Evaluation](https://datafusion.apache.org/blog/2026/02/02/datafusion_case/)
 
 - **2026-01-12** [Blog: Extending SQL in DataFusion: from ->> to TABLESAMPLE](https://datafusion.apache.org/blog/2026/01/12/extending-sql)
 
@@ -223,6 +223,8 @@ regular virtual event where community members share what they are building with 
 
 # 🌎 Community Events
 
+- **2026-11-12** [San Francisco Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/25665) - [RSVP](https://luma.com/k04h0om1)
+- **2026-09-30** [London Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/24512) - [RSVP](https://luma.com/r12f1t5o)
 - **2026-09-03** [Boston Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/21541) - [RSVP](https://luma.com/yexgqifv)
 - **2026-08-13** [San Francisco Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/24013) - [RSVP](https://luma.com/gk3s2vib)
 - **2026-07-22** [Denver Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/18428) - [RSVP](https://luma.com/jsu6faie)
