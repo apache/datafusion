@@ -23,8 +23,7 @@ use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field, Int32Type};
 use criterion::{
-    BenchmarkGroup, Criterion, SamplingMode, criterion_group, criterion_main,
-    measurement::WallTime,
+    BenchmarkGroup, Criterion, criterion_group, criterion_main, measurement::WallTime,
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
@@ -35,10 +34,10 @@ use std::sync::Arc;
 
 const ROWS: usize = 256;
 const WIDTH: usize = 8;
+const LARGE_ROWS: usize = 65_536;
 
 fn criterion_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("array_compact");
-    group.sampling_mode(SamplingMode::Flat);
 
     // Keep the visible rows fixed while varying the retained child size.
     for kind in ["primitive", "dictionary"] {
@@ -98,33 +97,11 @@ fn criterion_benchmark(c: &mut Criterion) {
         );
     }
 
-    // Compare list lengths of 0–32 with lengths of 15–16 at both 25% and 1%
-    // random nulls. Each pair has 256 lists and the same 4,044 element slots;
-    // list_input's fixed seed gives the pair identical values and null bits.
-    let variable_lengths = (0..ROWS).map(|i| (i * 17) % 33).collect::<Vec<_>>();
-    let total = variable_lengths.iter().sum::<usize>();
-    let near_uniform_lengths = (0..ROWS)
-        .map(|i| total / ROWS + usize::from(i < total % ROWS))
-        .collect::<Vec<_>>();
-    for (pattern, name) in [("random", "utf8"), ("random_sparse", "utf8_sparse")] {
-        for (shape, lengths) in [
-            ("variable", &variable_lengths),
-            ("near_uniform", &near_uniform_lengths),
-        ] {
-            bench_input(
-                &mut group,
-                &format!("shape/{shape}/{name}"),
-                list_input("utf8", lengths.clone(), pattern, None, 0),
-            );
-        }
-    }
-    for kind in ["utf8_short", "utf8_long"] {
-        bench_input(
-            &mut group,
-            &format!("strings/{kind}"),
-            fixed_width_input(kind, "mixed"),
-        );
-    }
+    bench_input(
+        &mut group,
+        "strings/utf8_long",
+        fixed_width_input("utf8_long", "mixed"),
+    );
     for (kind, pattern, name) in [
         ("primitive", "mixed", "shape/width_128"),
         ("utf8", "sparse", "shape/utf8/width_128"),
@@ -159,7 +136,6 @@ fn criterion_benchmark(c: &mut Criterion) {
     }
     for (name, lengths, nulls) in [
         ("zero_rows", vec![], None),
-        ("empty_lists", vec![0; ROWS], None),
         (
             "null_lists",
             vec![WIDTH; ROWS],
@@ -172,9 +148,11 @@ fn criterion_benchmark(c: &mut Criterion) {
             list_input("primitive", lengths, "mixed", nulls, 0),
         );
     }
-    for (kind, name) in [("primitive", "nulls/all"), ("utf8", "all_null/utf8")] {
-        bench_input(&mut group, name, fixed_width_input(kind, "all"));
-    }
+    bench_input(
+        &mut group,
+        "nulls/all",
+        fixed_width_input("primitive", "all"),
+    );
 
     bench_input(&mut group, "large_list/utf8", {
         let input = fixed_width_input("utf8", "mixed");
@@ -203,54 +181,59 @@ fn criterion_benchmark(c: &mut Criterion) {
             "random_dense",
             "large/decimal256/random_dense",
         ),
-        (
-            "decimal256",
-            "random_dense",
-            "small/decimal256/random_dense",
-        ),
-        ("float64", "random_half", "large/float64/random_half"),
-        ("binary", "random_sparse", "binary/random_sparse"),
-        ("binary", "random_half", "binary/random_half"),
-        ("large_binary", "random_half", "large_binary/random_half"),
     ] {
-        let rows = if name.starts_with("large/") {
-            65_536
-        } else {
-            ROWS
-        };
         bench_input(
             &mut group,
             name,
-            list_input(kind, vec![16; rows], pattern, None, 0),
+            list_input(kind, vec![16; LARGE_ROWS], pattern, None, 0),
         );
     }
     for (name, stride) in [
         ("large/int32/null_rows_half", 2),
         ("large/int32/null_rows_mostly", 100),
     ] {
-        let nulls = NullBuffer::from_iter((0..65_536).map(|i| i % stride == 0));
+        let nulls = NullBuffer::from_iter((0..LARGE_ROWS).map(|i| i % stride == 0));
         bench_input(
             &mut group,
             name,
-            list_input("primitive", vec![16; 65_536], "random_half", Some(nulls), 0),
+            list_input(
+                "primitive",
+                vec![16; LARGE_ROWS],
+                "random_half",
+                Some(nulls),
+                0,
+            ),
         );
     }
-    // Store bytes even in NULL element slots to measure allocation tradeoffs.
+    // Binary and LargeBinary copy byte spans through their own match arms.
+    for (kind, name) in [
+        ("binary", "binary/random_half"),
+        ("large_binary", "large_binary/random_half"),
+    ] {
+        bench_input(
+            &mut group,
+            name,
+            list_input(kind, vec![16; ROWS], "random_half", None, 0),
+        );
+    }
+    // Store 256 bytes in every element slot, including NULL ones, to measure
+    // allocation tradeoffs. Only every 100th element is valid (99% NULL), and
+    // the null_rows case also leaves only every 100th list valid.
+    let (offsets, values, _) =
+        StringArray::new_repeated("x".repeat(256), 8192).into_parts();
+    let strings: ArrayRef = Arc::new(StringArray::new(
+        offsets,
+        values,
+        Some(NullBuffer::from_iter((0..8192).map(|i| i % 100 == 0))),
+    ));
     for (name, parent_nulls) in [
         ("strings/null_payload", false),
         ("strings/null_payload_null_rows", true),
     ] {
-        let strings =
-            StringArray::from_iter_values(std::iter::repeat_n("x".repeat(256), 8192));
-        let strings = StringArray::new(
-            strings.offsets().clone(),
-            strings.values().clone(),
-            Some(NullBuffer::from_iter((0..8192).map(|i| i % 100 == 0))),
-        );
         let input = ListArray::new(
             Arc::new(Field::new_list_field(DataType::Utf8, true)),
             OffsetBuffer::from_repeated_length(16, 512),
-            Arc::new(strings),
+            Arc::clone(&strings),
             parent_nulls.then(|| NullBuffer::from_iter((0..512).map(|i| i % 100 == 0))),
         );
         bench_input(&mut group, name, Arc::new(input));
@@ -279,7 +262,6 @@ fn child(kind: &str, values: Vec<Option<i32>>) -> ArrayRef {
         "decimal256" => {
             cast(&Int32Array::from(values), &DataType::Decimal256(40, 4)).unwrap()
         }
-        "float64" => cast(&Int32Array::from(values), &DataType::Float64).unwrap(),
         "binary" | "large_binary" => {
             let strings = child("utf8", values);
             cast(
@@ -298,12 +280,8 @@ fn child(kind: &str, values: Vec<Option<i32>>) -> ArrayRef {
         "boolean" => Arc::new(BooleanArray::from_iter(
             values.into_iter().map(|v| v.map(|v| v % 2 == 0)),
         )),
-        "utf8" | "utf8_short" | "utf8_long" | "utf8_view" => {
-            let len = match kind {
-                "utf8_short" => 8,
-                "utf8_long" => 256,
-                _ => 32,
-            };
+        "utf8" | "utf8_long" | "utf8_view" => {
+            let len = if kind == "utf8_long" { 256 } else { 32 };
             let text = "x".repeat(len);
             let strings = values.iter().map(|v| v.map(|_| text.as_str()));
             if kind == "utf8_view" {
@@ -362,6 +340,9 @@ fn child(kind: &str, values: Vec<Option<i32>>) -> ArrayRef {
                 true,
             ))
         }
+        // Store NULLs in the dictionary values and keep every key valid. For this
+        // layout `DictionaryArray::logical_nulls` checks each key; NULL keys over
+        // non-null values would instead reuse the key validity bitmap.
         "dictionary" => Arc::new(
             DictionaryArray::<Int32Type>::try_new(
                 Int32Array::from_iter_values(
