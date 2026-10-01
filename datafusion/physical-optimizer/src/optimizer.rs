@@ -119,7 +119,7 @@ impl PhysicalOptimizer {
             Arc::new(TopKAggregation::new()),
             // Tries to push limits down through window functions, growing as appropriate
             // This can possibly be combined with [LimitPushdown]
-            // It needs to come after sort enforcement (the EnforceSorting analyzer rule)
+            // It needs to come after sort enforcement (the EnsureRequirements analyzer rule)
             Arc::new(LimitPushPastWindows::new()),
             // The HashJoinBuffering rule adds a BufferExec node with the configured capacity
             // in the prob side of hash joins. That way, the probe side gets eagerly polled before

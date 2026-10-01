@@ -44,8 +44,8 @@ Rule order matters. The default pipeline may change between releases.
         │    1. OutputRequirements (add)  establish the output boundary
         │    2. join_selection            resolve each join's PartitionMode::Auto
         │    3. FilterPushdown            push predicates into sources
-        │    4. EnforceDistribution       satisfy required_input_distribution
-        │    5. EnforceSorting            satisfy required_input_ordering
+        │    4. EnsureRequirements        satisfy required_input_distribution,
+        │                                 then required_input_ordering
         │
         │  ==> from here on every PhysicalOptimizerRule receives a valid plan
         │      and must leave a valid plan
@@ -105,31 +105,30 @@ Analyzer rules run before the physical optimizer rules and make the plan
 _valid_: they enforce the invariants every operator declares. All enforcement
 lives here. `OutputRequirements` (add phase) first establishes the
 output-requirement boundary so enforcement can see it (top-level scan
-parallelism, final-ordering preservation); `EnforceDistribution` then enforces
-distribution; `EnforceSorting` then enforces ordering on the distribution-fixed
-plan. Before that, `join_selection` resolves each join's partition mode and
-`FilterPushdown` pushes predicates into sources, so enforcement sees the plan's
-real requirements and final statistics and runs exactly once. The optimizer
+parallelism, final-ordering preservation); `EnsureRequirements` then enforces
+distribution and, on the distribution-fixed plan, ordering. Before that,
+`join_selection` resolves each join's partition mode and `FilterPushdown` pushes
+predicates into sources, so enforcement sees the plan's real requirements and
+final statistics and runs exactly once. The optimizer
 phase keeps only the sort _optimizations_ (`OptimizeSorts`), which make an
 already-valid plan faster; `WindowTopN` is the one optimizer rule that still
 changes a requirement, and it re-establishes validity itself.
 
-| order | rule                  | summary                                                                                   |
-| ----- | --------------------- | ----------------------------------------------------------------------------------------- |
-| 1     | `OutputRequirements`  | Adds helper nodes so output requirements survive enforcement and later physical rewrites. |
-| 2     | `join_selection`      | Resolves each join's partition mode and build side, so enforcement sees its requirements. |
-| 3     | `FilterPushdown`      | Pushes supported physical filters into sources, so enforcement sees final statistics.     |
-| 4     | `EnforceDistribution` | Enforces the distribution requirements each operator declares (repartition / coalesce).   |
-| 5     | `EnforceSorting`      | Enforces ordering requirements (inserts SortExecs) on the distribution-fixed plan.        |
+| order | rule                 | summary                                                                                   |
+| ----- | -------------------- | ----------------------------------------------------------------------------------------- |
+| 1     | `OutputRequirements` | Adds helper nodes so output requirements survive enforcement and later physical rewrites. |
+| 2     | `join_selection`     | Resolves each join's partition mode and build side, so enforcement sees its requirements. |
+| 3     | `FilterPushdown`     | Pushes supported physical filters into sources, so enforcement sees final statistics.     |
+| 4     | `EnsureRequirements` | Enforces the distribution and ordering requirements each operator declares.               |
 
 ### Physical Optimizer Rules
 
 The same rule name may appear more than once when the default pipeline runs it
 in multiple phases.
 
-All enforcement (the `OutputRequirements` add boundary, `EnforceDistribution`,
-`EnforceSorting`) runs first, in the analyzer phase (see above), so it does not
-appear in this list, and neither do `join_selection` and `FilterPushdown`, which
+All enforcement (the `OutputRequirements` add boundary, `EnsureRequirements`)
+runs first, in the analyzer phase (see above), so it does not appear in this
+list, and neither do `join_selection` and `FilterPushdown`, which
 run there ahead of it. The matching `OutputRequirements` remove phase still runs
 here, late, once planning is done.
 

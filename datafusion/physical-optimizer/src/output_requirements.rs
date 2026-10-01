@@ -390,7 +390,7 @@ impl crate::PhysicalAnalyzerRule for OutputRequirements {
     /// `Add` mode establishes the top-level output-requirement boundary that
     /// enforcement relies on (so distribution enforcement parallelizes below it
     /// and ordering enforcement preserves the query's final ordering). It runs
-    /// in the analyzer phase, ahead of `EnforceDistribution` / `EnforceSorting`.
+    /// in the analyzer phase, ahead of `EnsureRequirements`.
     /// `Remove` mode only runs as an optimizer rule, so it is a no-op here.
     fn analyze(
         &self,

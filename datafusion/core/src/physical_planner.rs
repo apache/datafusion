@@ -3708,8 +3708,7 @@ mod tests {
                 "OutputRequirements",
                 "join_selection",
                 "FilterPushdown",
-                "EnforceDistribution",
-                "EnforceSorting"
+                "EnsureRequirements"
             ],
             "unexpected analyzer phase: {analyzer_names:?}"
         );
@@ -3721,13 +3720,8 @@ mod tests {
             .collect();
         assert!(optimizer_names.contains(&"OptimizeSorts"));
         assert!(optimizer_names.contains(&"FilterPushdown(Post)"));
-        for moved_or_removed in [
-            "EnforceDistribution",
-            "EnforceSorting",
-            "EnsureRequirements",
-            "join_selection",
-            "FilterPushdown",
-        ] {
+        for moved_or_removed in ["EnsureRequirements", "join_selection", "FilterPushdown"]
+        {
             assert!(
                 !optimizer_names.contains(&moved_or_removed),
                 "{moved_or_removed} should not be an optimizer rule, got {optimizer_names:?}"

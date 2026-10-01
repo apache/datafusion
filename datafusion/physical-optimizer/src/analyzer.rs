@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use crate::ensure_requirements::{EnforceDistribution, EnforceSorting};
+use crate::ensure_requirements::EnsureRequirements;
 use crate::filter_pushdown::FilterPushdown;
 use crate::join_selection::JoinSelection;
 use crate::output_requirements::OutputRequirements;
@@ -68,8 +68,7 @@ impl PhysicalAnalyzer {
             // here too. Neither rule has to re-enforce anything afterwards.
             Arc::new(JoinSelection::new_before_enforcement()),
             Arc::new(FilterPushdown::new()),
-            Arc::new(EnforceDistribution::new()),
-            Arc::new(EnforceSorting::new()),
+            Arc::new(EnsureRequirements::new()),
         ];
         Self::with_rules(rules)
     }
@@ -97,31 +96,15 @@ mod tests {
                 "OutputRequirements",
                 "join_selection",
                 "FilterPushdown",
-                "EnforceDistribution",
-                "EnforceSorting"
+                "EnsureRequirements"
             ]
         );
     }
 
-    /// The monolithic `EnsureRequirements` is no longer registered in either
-    /// default list; the default pipeline uses the decomposed rules.
-    #[test]
-    fn default_lists_do_not_use_monolithic_ensure_requirements() {
-        let analyzer_has = PhysicalAnalyzer::new()
-            .rules
-            .iter()
-            .any(|r| r.name() == "EnsureRequirements");
-        let optimizer_has = PhysicalOptimizer::new()
-            .rules
-            .iter()
-            .any(|r| r.name() == "EnsureRequirements");
-        assert!(!analyzer_has && !optimizer_has);
-    }
-
-    /// All enforcement (`EnforceDistribution`, `EnforceSorting`) lives in the
-    /// analyzer; the optimizer keeps only the sort *optimizations*
-    /// (`OptimizeSorts`), not enforcement. `WindowTopN` is the one optimizer rule
-    /// that still disturbs requirements, and it re-establishes them itself.
+    /// Enforcement (`EnsureRequirements`) lives in the analyzer; the optimizer
+    /// keeps only the sort *optimizations* (`OptimizeSorts`), not enforcement.
+    /// `WindowTopN` is the one optimizer rule that still disturbs requirements,
+    /// and it re-establishes them itself.
     #[test]
     fn default_optimizer_has_no_enforcement_rules() {
         let names: Vec<String> = PhysicalOptimizer::new()
@@ -130,12 +113,8 @@ mod tests {
             .map(|r| r.name().to_string())
             .collect();
         assert!(
-            !names.iter().any(|n| n == "EnforceDistribution"),
-            "EnforceDistribution should not be an optimizer rule, got {names:?}"
-        );
-        assert!(
-            !names.iter().any(|n| n == "EnforceSorting"),
-            "EnforceSorting should not be an optimizer rule, got {names:?}"
+            !names.iter().any(|n| n == "EnsureRequirements"),
+            "EnsureRequirements should not be an optimizer rule, got {names:?}"
         );
         assert!(
             names.iter().any(|n| n == "OptimizeSorts"),
@@ -143,17 +122,15 @@ mod tests {
         );
     }
 
-    /// The enforcement analyzer rules keep their schema-check contract on.
+    /// The enforcement analyzer rule keeps its schema-check contract on.
     #[test]
-    fn enforcement_rules_schema_check_is_on() {
+    fn enforcement_rule_schema_check_is_on() {
         let analyzer = PhysicalAnalyzer::new();
-        for name in ["EnforceDistribution", "EnforceSorting"] {
-            let rule = analyzer
-                .rules
-                .iter()
-                .find(|r| r.name() == name)
-                .unwrap_or_else(|| panic!("{name} present in analyzer"));
-            assert!(rule.schema_check(), "{name} schema_check should be on");
-        }
+        let rule = analyzer
+            .rules
+            .iter()
+            .find(|r| r.name() == "EnsureRequirements")
+            .expect("EnsureRequirements present in analyzer");
+        assert!(rule.schema_check());
     }
 }
