@@ -2,13 +2,14 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use arrow::array::{Array, ArrayRef, BooleanArray, make_comparator};
+use arrow::array::{Array, ArrayRef, BooleanArray, make_array, make_comparator};
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
 use arrow::util::bit_iterator::BitIndexIterator;
 use datafusion_common::Result;
 use datafusion_common::hash_utils::{RandomState, with_hashes};
+use datafusion_common::utils::{has_float_leaf, normalize_float_zero};
 use hashbrown::HashTable;
 
 use super::result::build_in_list_result;
@@ -40,6 +41,8 @@ impl ArrayStaticFilter {
             });
         }
 
+        // Hashing treats both signed zeros alike; the comparator must do so too.
+        let in_array = normalize_float_zero(&in_array);
         let state = RandomState::default();
         let table = Self::build_haystack_table(&in_array, &state)?;
 
@@ -125,6 +128,11 @@ impl StaticFilter for ArrayStaticFilter {
             ));
         }
 
-        self.find_needles_in_haystack(v, negated)
+        if has_float_leaf(v.data_type()) {
+            let normalized = normalize_float_zero(&make_array(v.to_data()));
+            self.find_needles_in_haystack(normalized.as_ref(), negated)
+        } else {
+            self.find_needles_in_haystack(v, negated)
+        }
     }
 }
