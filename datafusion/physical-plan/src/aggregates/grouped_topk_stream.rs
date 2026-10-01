@@ -19,8 +19,6 @@
 
 use crate::aggregates::group_values::{AggregateArgumentMetrics, GroupByMetrics};
 use crate::aggregates::topk::priority_map::PriorityMap;
-#[cfg(debug_assertions)]
-use crate::aggregates::topk_types_supported;
 use crate::aggregates::{
     AggregateExec, PhysicalGroupBy, aggregate_expressions, aggregate_metric_label,
     evaluate_group_by,
@@ -33,7 +31,6 @@ use arrow::compute::concat;
 use arrow::datatypes::SchemaRef;
 use arrow::util::pretty::print_batches;
 use datafusion_common::Result;
-use datafusion_common::internal_datafusion_err;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::metrics::RecordOutput;
@@ -69,6 +66,7 @@ impl GroupedTopKAggregateStream {
         context: &Arc<TaskContext>,
         partition: usize,
         limit: usize,
+        descending: bool,
     ) -> Result<Self> {
         let agg_schema = Arc::clone(&aggr.schema);
         let group_by = Arc::clone(aggr.group_by());
@@ -88,38 +86,17 @@ impl GroupedTopKAggregateStream {
         let (expr, _) = &aggr.group_expr().expr()[0];
         let kt = expr.data_type(&aggr.input().schema())?;
 
-        // Check if this is a MIN/MAX aggregate or a DISTINCT-like operation
-        let (vt, desc) = if let Some((val_field, desc)) = aggr.get_minmax_desc() {
-            // MIN/MAX case: use the aggregate output type
-            (val_field.data_type().clone(), desc)
-        } else {
-            // DISTINCT case: use the group key type and get ordering from limit_order_descending
-            // The ordering direction is set by the optimizer when it pushes down the limit
-            let desc = aggr
-                .limit_options()
-                .and_then(|config| config.descending)
-                .ok_or_else(|| {
-                    internal_datafusion_err!(
-                        "Ordering direction required for DISTINCT with limit"
-                    )
-                })?;
-            (kt.clone(), desc)
-        };
-
-        // Type validation is performed by the optimizer and can_use_topk() check.
-        // This debug assertion documents the contract without runtime overhead in release builds.
-        #[cfg(debug_assertions)]
-        {
-            debug_assert!(
-                topk_types_supported(&kt, &vt),
-                "TopK type validation should have been performed by optimizer and can_use_topk(). \
-                 Found unsupported types: key={kt:?}, value={vt:?}"
-            );
-        }
+        // The TopK state has already validated the single key/aggregate shape,
+        // types, and direction. MIN/MAX use their value type; grouping-only
+        // aggregation uses its key as the priority value too.
+        let vt = aggr.aggr_expr().first().map_or_else(
+            || kt.clone(),
+            |aggregate| aggregate.field().data_type().clone(),
+        );
 
         // Note: Null values in aggregate columns are filtered by the aggregation layer
         // before reaching the heap, so the heap implementations don't need explicit null handling.
-        let priority_map = PriorityMap::new(kt, vt, limit, desc)?;
+        let priority_map = PriorityMap::new(kt, vt, limit, descending)?;
 
         Ok(GroupedTopKAggregateStream {
             partition,
@@ -329,11 +306,12 @@ impl Stream for GroupedTopKAggregateStream {
 mod tests {
     use super::*;
     use crate::ExecutionPlan;
-    use crate::aggregates::{AggregateMode, LimitOptions};
+    use crate::aggregates::AggregateMode;
     use crate::collect;
     use crate::metrics::MetricValue;
     use crate::test::TestMemoryExec;
     use arrow::array::{Float64Array, UInt32Array};
+    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::assert_batches_eq;
@@ -373,7 +351,9 @@ mod tests {
                 input,
                 schema,
             )?
-            .with_limit_options(Some(LimitOptions::new(2))),
+            .try_optimize_topk(2, "MIN(a)", SortOptions::new(false, false))
+            .unwrap()
+            .data,
         );
         let context = Arc::new(TaskContext::default());
         let result = collect(Arc::clone(&aggregate_exec) as _, context).await?;

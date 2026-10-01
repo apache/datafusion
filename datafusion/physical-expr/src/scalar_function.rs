@@ -322,6 +322,13 @@ impl PhysicalExpr for ScalarFunctionExpr {
             .map(|props| &props.range)
             .collect::<Vec<_>>();
         let range = self.fun().evaluate_bounds(&children_range)?;
+        // The default UDF bounds carry no type information. Recover the resolved
+        // output type for property inference without discarding explicit bounds.
+        let range = if range.data_type() == DataType::Null && range.is_unbounded() {
+            Interval::make_unbounded(self.return_type()).unwrap_or(range)
+        } else {
+            range
+        };
 
         Ok(ExprProperties {
             sort_properties,
@@ -357,14 +364,16 @@ impl PhysicalExpr for ScalarFunctionExpr {
 mod tests {
     use super::*;
     use crate::expressions::Column;
-    use arrow::datatypes::Field;
+    use arrow::datatypes::{Field, TimeUnit};
+    use datafusion_expr::sort_properties::SortProperties;
     use datafusion_expr::{ScalarUDFImpl, Signature};
     use datafusion_physical_expr_common::physical_expr::is_volatile;
 
-    /// Test helper to create a mock UDF with a specific volatility
+    /// Test UDF with configurable volatility and return type, using default bounds.
     #[derive(Debug, PartialEq, Eq, Hash)]
     struct MockScalarUDF {
         signature: Signature,
+        return_type: DataType,
     }
 
     impl ScalarUDFImpl for MockScalarUDF {
@@ -377,11 +386,226 @@ mod tests {
         }
 
         fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-            Ok(DataType::Int32)
+            Ok(self.return_type.clone())
         }
 
         fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-            Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(42))))
+            Ok(ColumnarValue::Scalar(ScalarValue::try_from(
+                &self.return_type,
+            )?))
+        }
+    }
+
+    fn default_bounds_expr(return_type: DataType) -> ScalarFunctionExpr {
+        ScalarFunctionExpr::try_new(
+            Arc::new(ScalarUDF::from(MockScalarUDF {
+                signature: Signature::exact(vec![], Volatility::Immutable),
+                return_type,
+            })),
+            vec![],
+            &Schema::empty(),
+            Arc::new(ConfigOptions::default()),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn properties_recover_return_type_without_changing_bounds_evaluation() {
+        for data_type in [
+            DataType::Null,
+            DataType::Boolean,
+            DataType::Int32,
+            DataType::UInt64,
+            DataType::Float64,
+            DataType::Utf8,
+            DataType::Timestamp(TimeUnit::Second, None),
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("America/Goose_Bay".into())),
+            DataType::Time32(TimeUnit::Millisecond),
+            DataType::Time64(TimeUnit::Microsecond),
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+        ] {
+            let expr = default_bounds_expr(data_type.clone());
+            let properties = expr.get_properties(&[]).unwrap();
+            assert_eq!(
+                properties.range,
+                Interval::make_unbounded(&data_type).unwrap()
+            );
+            assert_eq!(properties.sort_properties, SortProperties::Unordered);
+            assert!(!properties.preserves_lex_ordering);
+            assert!(!properties.strictly_order_preserving);
+            // The constraint solver calls this method directly, bypassing the fallback.
+            assert_eq!(
+                expr.evaluate_bounds(&[]).unwrap(),
+                Interval::make_unbounded(&DataType::Null).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn properties_keep_unknown_bounds_for_unsupported_return_type() {
+        // This unit is not supported for Time32 by ScalarValue/Interval.
+        let data_type = DataType::Time32(TimeUnit::Nanosecond);
+        assert!(Interval::make_unbounded(&data_type).is_err());
+        let properties = default_bounds_expr(data_type).get_properties(&[]).unwrap();
+        assert_eq!(
+            properties.range,
+            Interval::make_unbounded(&DataType::Null).unwrap()
+        );
+    }
+
+    #[test]
+    fn datetime_properties_use_resolved_return_types() {
+        use datafusion_functions::datetime::date_bin::DateBinFunc;
+        use datafusion_functions::datetime::from_unixtime::FromUnixtimeFunc;
+
+        for source_type in [
+            DataType::Timestamp(TimeUnit::Second, None),
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+            DataType::Time32(TimeUnit::Millisecond),
+            DataType::Time64(TimeUnit::Microsecond),
+        ] {
+            let expr = ScalarFunctionExpr::try_new(
+                Arc::new(ScalarUDF::from(DateBinFunc::new())),
+                vec![
+                    Arc::new(Literal::new(ScalarValue::new_interval_mdn(
+                        0,
+                        0,
+                        60_000_000_000,
+                    ))),
+                    Arc::new(Column::new("ts", 0)),
+                ],
+                &Schema::new(vec![Field::new("ts", source_type.clone(), true)]),
+                Arc::new(ConfigOptions::default()),
+            )
+            .unwrap();
+            let properties = expr
+                .get_properties(&[
+                    ExprProperties::new_unknown().with_order(SortProperties::Singleton),
+                    ExprProperties::new_unknown()
+                        .with_range(Interval::make_unbounded(&source_type).unwrap()),
+                ])
+                .unwrap();
+            assert_eq!(
+                properties.range,
+                Interval::make_unbounded(&source_type).unwrap()
+            );
+        }
+
+        for (session_tz, explicit_tz, expected_tz) in [
+            (None, None, None),
+            (Some("America/Denver"), None, Some("America/Denver")),
+            (
+                Some("America/Denver"),
+                Some("America/Goose_Bay"),
+                Some("America/Goose_Bay"),
+            ),
+        ] {
+            let mut config = ConfigOptions::default();
+            config.execution.time_zone = session_tz.map(str::to_owned);
+            let udf = FromUnixtimeFunc::new_with_config(&config);
+            let mut args: Vec<Arc<dyn PhysicalExpr>> =
+                vec![Arc::new(Column::new("c", 0))];
+            if let Some(tz) = explicit_tz {
+                args.push(Arc::new(Literal::new(ScalarValue::from(tz))));
+            }
+            let children = vec![ExprProperties::new_unknown(); args.len()];
+            let expr = ScalarFunctionExpr::try_new(
+                Arc::new(ScalarUDF::from(udf)),
+                args,
+                &Schema::new(vec![Field::new("c", DataType::Int64, true)]),
+                Arc::new(config),
+            )
+            .unwrap();
+            // The literal's timezone was resolved during construction, even
+            // though the child intervals here contain no value information.
+            let expected =
+                DataType::Timestamp(TimeUnit::Second, expected_tz.map(Into::into));
+            assert_eq!(
+                expr.get_properties(&children).unwrap().range,
+                Interval::make_unbounded(&expected).unwrap()
+            );
+        }
+    }
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct BoundsUDF {
+        inner: MockScalarUDF,
+        fail: bool,
+    }
+
+    impl ScalarUDFImpl for BoundsUDF {
+        fn name(&self) -> &str {
+            "bounds_function"
+        }
+
+        fn signature(&self) -> &Signature {
+            self.inner.signature()
+        }
+
+        fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+            self.inner.return_type(arg_types)
+        }
+
+        fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            self.inner.invoke_with_args(args)
+        }
+
+        fn evaluate_bounds(&self, inputs: &[&Interval]) -> Result<Interval> {
+            if self.fail {
+                return internal_err!("bounds evaluation failed");
+            }
+            Ok(inputs[0].clone())
+        }
+    }
+
+    #[test]
+    fn properties_preserve_udf_bounds_and_errors() {
+        for fail in [false, true] {
+            let expr = ScalarFunctionExpr::try_new(
+                Arc::new(ScalarUDF::from(BoundsUDF {
+                    inner: MockScalarUDF {
+                        signature: Signature::exact(
+                            vec![DataType::Int32],
+                            Volatility::Immutable,
+                        ),
+                        return_type: DataType::Int32,
+                    },
+                    fail,
+                })),
+                vec![Arc::new(Column::new("a", 0))],
+                &Schema::new(vec![Field::new("a", DataType::Int32, true)]),
+                Arc::new(ConfigOptions::default()),
+            )
+            .unwrap();
+            for (lower, upper) in [
+                (Some(0), Some(100)),
+                (Some(1), Some(1)),
+                (None, Some(100)),
+                (Some(0), None),
+                (None, None),
+            ] {
+                let bounds = Interval::make::<i32>(lower, upper).unwrap();
+                let child = ExprProperties::new_unknown().with_range(bounds.clone());
+                let properties = expr.get_properties(&[child]);
+                let direct = expr.evaluate_bounds(&[&bounds]);
+                if fail {
+                    assert!(
+                        properties
+                            .unwrap_err()
+                            .to_string()
+                            .contains("bounds evaluation failed")
+                    );
+                    assert!(
+                        direct
+                            .unwrap_err()
+                            .to_string()
+                            .contains("bounds evaluation failed")
+                    );
+                } else {
+                    assert_eq!(properties.unwrap().range, bounds);
+                    assert_eq!(direct.unwrap(), bounds);
+                }
+            }
         }
     }
 
@@ -389,6 +613,7 @@ mod tests {
     fn test_scalar_function_volatile_node() {
         // Create a volatile UDF
         let volatile_udf = Arc::new(ScalarUDF::from(MockScalarUDF {
+            return_type: DataType::Int32,
             signature: Signature::uniform(
                 1,
                 vec![DataType::Float32],
@@ -398,6 +623,7 @@ mod tests {
 
         // Create a non-volatile UDF
         let stable_udf = Arc::new(ScalarUDF::from(MockScalarUDF {
+            return_type: DataType::Int32,
             signature: Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
         }));
 
