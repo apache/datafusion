@@ -36,7 +36,8 @@ use datafusion_common::assert_batches_eq;
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource_csv::CsvFormat;
 use datafusion_datasource_json::JsonFormat;
-use datafusion_execution::cache::TableScopedPath;
+use datafusion_execution::cache::{StoreScopedPath, TableScopedPath};
+use datafusion_execution::object_store::ObjectStoreUrl;
 use futures::stream::BoxStream;
 use insta::assert_snapshot;
 use object_store::memory::InMemory;
@@ -219,6 +220,13 @@ async fn insert_invalidates_overlapping_unscoped_listings() {
     let ctx = SessionContext::new();
     ctx.runtime_env()
         .register_object_store(&Url::parse("mem://").unwrap(), store);
+    let other_store = Arc::new(InMemory::new());
+    other_store
+        .put(&Path::from("table/data.csv"), "4\n".into())
+        .await
+        .unwrap();
+    ctx.runtime_env()
+        .register_object_store(&Url::parse("mem://other").unwrap(), other_store);
     ctx.sql("SET datafusion.execution.listing_table_ignore_subdirectory = false")
         .await
         .unwrap()
@@ -236,15 +244,16 @@ async fn insert_invalidates_overlapping_unscoped_listings() {
         .get_list_files_cache()
         .unwrap();
     let tables = [
-        ("root_table", "table"),
-        ("child_table", "table/region=US"),
-        ("descendant_table", "table/region=US/q1"),
-        ("sibling_table", "table/region=EU"),
+        ("root_table", "mem://", "table"),
+        ("child_table", "mem://", "table/region=US"),
+        ("descendant_table", "mem://", "table/region=US/q1"),
+        ("sibling_table", "mem://", "table/region=EU"),
+        ("other_store_table", "mem://other", "table"),
     ];
 
-    for (name, path) in tables {
+    for (name, store_url, path) in tables {
         // Keep the URLs unscoped so overlapping tables share path-based cache entries.
-        let url = ListingTableUrl::parse(format!("mem:///{path}/")).unwrap();
+        let url = ListingTableUrl::parse(format!("{store_url}/{path}/")).unwrap();
         let options =
             ListingOptions::new(Arc::new(CsvFormat::default().with_has_header(false)))
                 .with_file_extension(".csv");
@@ -261,7 +270,10 @@ async fn insert_invalidates_overlapping_unscoped_listings() {
             .unwrap();
         let key = TableScopedPath {
             table: None,
-            path: Path::from(path),
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::parse(store_url).unwrap(),
+                Path::from(path),
+            ),
         };
         assert!(cache.get(&key).is_some());
     }
@@ -273,13 +285,20 @@ async fn insert_invalidates_overlapping_unscoped_listings() {
         .await
         .unwrap();
 
-    for (name, path) in tables {
+    for (name, store_url, path) in tables {
         let key = TableScopedPath {
             table: None,
-            path: Path::from(path),
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::parse(store_url).unwrap(),
+                Path::from(path),
+            ),
         };
         let cached = cache.get(&key);
-        assert_eq!(cached.is_some(), name == "sibling_table", "{name}");
+        assert_eq!(
+            cached.is_some(),
+            matches!(name, "sibling_table" | "other_store_table"),
+            "{name}"
+        );
     }
 
     let batches = ctx

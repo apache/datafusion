@@ -2145,10 +2145,12 @@ mod test {
     };
     use datafusion_datasource::morsel::{Morsel, Morselizer};
     use datafusion_datasource::{PartitionedFile, TableSchema, TableSchemaBuilder};
+    use datafusion_execution::cache::StoreScopedPath;
     use datafusion_execution::cache::cache_manager::{
         CachedFileMetadataEntry, FileMetadataCache,
     };
     use datafusion_execution::cache::default_cache::DefaultCache;
+    use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_expr::{Expr, col, lit};
     use datafusion_physical_expr::{
         PhysicalExpr,
@@ -3966,7 +3968,7 @@ mod test {
         use crate::source::ParquetSource;
         use datafusion_datasource::file::FileSource;
         use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
-        use datafusion_execution::object_store::ObjectStoreUrl;
+
         use datafusion_functions::core::expr_fn::get_field;
 
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
@@ -3991,6 +3993,7 @@ mod test {
             .with_parquet_file_reader_factory(Arc::new(
                 CachedParquetFileReaderFactory::new(
                     Arc::clone(&store),
+                    ObjectStoreUrl::local_filesystem(),
                     Arc::clone(&cache),
                 ),
             ))
@@ -4045,7 +4048,10 @@ mod test {
         .await;
         let cache: Arc<FileMetadataCache> = Arc::new(DefaultCache::new(1024 * 1024));
         let original = DFParquetMetadata::new(store.as_ref(), &file.object_meta)
-            .with_file_metadata_cache(Some(Arc::clone(&cache)))
+            .with_file_metadata_cache(
+                Some(Arc::clone(&cache)),
+                ObjectStoreUrl::local_filesystem(),
+            )
             .with_page_index_policy(Some(PageIndexPolicy::Optional))
             .fetch_metadata()
             .await
@@ -4061,6 +4067,7 @@ mod test {
             .with_parquet_file_reader_factory(Arc::new(
                 CachedParquetFileReaderFactory::new(
                     Arc::clone(&store),
+                    ObjectStoreUrl::local_filesystem(),
                     Arc::clone(&cache),
                 ),
             ))
@@ -4090,7 +4097,12 @@ mod test {
                 prepared.loaded.reader_metadata.metadata()
             ));
         }
-        let cached = cache.get(&file.object_meta.location).unwrap();
+        let cached = cache
+            .get(&StoreScopedPath::new(
+                ObjectStoreUrl::local_filesystem(),
+                file.object_meta.location.clone(),
+            ))
+            .unwrap();
         let cached = cached
             .file_metadata
             .as_any()
@@ -4191,6 +4203,7 @@ mod test {
                 .with_parquet_file_reader_factory(Arc::new(
                     CachedParquetFileReaderFactory::new(
                         Arc::clone(&store),
+                        ObjectStoreUrl::local_filesystem(),
                         Arc::clone(&cache),
                     ),
                 ))
@@ -4220,7 +4233,12 @@ mod test {
             };
             assert_eq!(pruning_metrics.pruned(), 2);
             assert!(
-                cache.get(&file.object_meta.location).is_none(),
+                cache
+                    .get(&StoreScopedPath::new(
+                        ObjectStoreUrl::local_filesystem(),
+                        file.object_meta.location.clone(),
+                    ))
+                    .is_none(),
                 "encrypted metadata must not enter the shared cache"
             );
         }
@@ -5101,10 +5119,12 @@ mod test {
         use parquet::file::properties::WriterProperties;
 
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-        let metadata_cache: Arc<FileMetadataCache> =
-            Arc::new(DefaultCache::<Path, CachedFileMetadataEntry>::new(
-                64 * 1024 * 1024,
-            ));
+        let metadata_cache: Arc<FileMetadataCache> = Arc::new(DefaultCache::<
+            StoreScopedPath,
+            CachedFileMetadataEntry,
+        >::new(
+            64 * 1024 * 1024
+        ));
         let values: Vec<i32> = (1..=100).collect();
         let batch = record_batch!((
             "a",
@@ -5142,6 +5162,7 @@ mod test {
             .with_parquet_file_reader_factory(Arc::new(
                 CachedParquetFileReaderFactory::new(
                     Arc::clone(&store),
+                    ObjectStoreUrl::local_filesystem(),
                     Arc::clone(&metadata_cache),
                 ),
             ))
@@ -5153,7 +5174,10 @@ mod test {
         assert_eq!(counter_metric_value(&metrics, "page_index_load_skipped"), 1);
 
         let cached = metadata_cache
-            .get(&Path::from("test.parquet"))
+            .get(&StoreScopedPath::new(
+                ObjectStoreUrl::local_filesystem(),
+                Path::from("test.parquet"),
+            ))
             .expect("metadata cache should contain the file");
         let extra_info = cached.file_metadata.extra_info();
         let page_index_cached = extra_info.get("page_index").map(String::as_str);

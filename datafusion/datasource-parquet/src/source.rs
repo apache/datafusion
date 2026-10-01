@@ -1282,14 +1282,17 @@ impl ParquetSource {
         let store = ctx
             .task_ctx()
             .runtime_env()
-            .object_store(object_store_url)?;
+            .object_store(&object_store_url)?;
         let metadata_cache = ctx
             .task_ctx()
             .runtime_env()
             .cache_manager
             .get_file_metadata_cache();
-        let reader_factory =
-            Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
+        let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
+            store,
+            object_store_url.clone(),
+            metadata_cache,
+        ));
 
         let mut source = ParquetSource::new(table_schema)
             .with_parquet_file_reader_factory(reader_factory)

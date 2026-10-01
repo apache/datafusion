@@ -310,7 +310,8 @@ mod tests {
     use crate::cache::default_cache::TimeProvider;
     use crate::cache::{Cache, CacheEntryInfo};
     use crate::cache::{CacheKey, CacheValue};
-    use crate::cache::{SchemaFingerprint, TableScopedPath};
+    use crate::cache::{SchemaFingerprint, StoreScopedPath, TableScopedPath};
+    use crate::object_store::ObjectStoreUrl;
     use arrow::array::{Int32Array, ListArray, RecordBatch};
     use arrow::buffer::{OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
@@ -366,6 +367,56 @@ mod tests {
         }
     }
 
+    fn metadata_cache_key(path: &Path) -> StoreScopedPath {
+        StoreScopedPath::new(ObjectStoreUrl::local_filesystem(), path.clone())
+    }
+
+    #[test]
+    fn test_file_metadata_cache_separates_object_stores() {
+        let cache = DefaultCache::new(1024);
+        let meta = create_test_object_meta("data.parquet", 100);
+        let first_key = StoreScopedPath::new(
+            ObjectStoreUrl::parse("s3://first").unwrap(),
+            meta.location.clone(),
+        );
+        let second_key = StoreScopedPath::new(
+            ObjectStoreUrl::parse("s3://second").unwrap(),
+            meta.location.clone(),
+        );
+        let first: Arc<dyn FileMetadata> = Arc::new(TestFileMetadata {
+            metadata: "first".to_owned(),
+        });
+        let second: Arc<dyn FileMetadata> = Arc::new(TestFileMetadata {
+            metadata: "second".to_owned(),
+        });
+
+        cache.put(
+            &first_key,
+            CachedFileMetadataEntry::new(meta.clone(), Arc::clone(&first)),
+        );
+        assert!(cache.get(&second_key).is_none());
+        cache.put(
+            &second_key,
+            CachedFileMetadataEntry::new(meta, Arc::clone(&second)),
+        );
+        assert_eq!(cache.len(), 2);
+        assert!(Arc::ptr_eq(
+            &cache.get(&first_key).unwrap().file_metadata,
+            &first
+        ));
+        assert!(Arc::ptr_eq(
+            &cache.get(&second_key).unwrap().file_metadata,
+            &second
+        ));
+        assert_eq!(
+            cache.memory_used(),
+            first_key.size()
+                + second_key.size()
+                + first.memory_size()
+                + second.memory_size()
+        );
+    }
+
     #[test]
     fn test_default_file_metadata_cache() {
         let object_meta = create_test_object_meta("test", 1024);
@@ -377,50 +428,62 @@ mod tests {
         let cache = DefaultCache::new(1024 * 1024);
 
         // Cache miss
-        assert!(cache.get(&object_meta.location).is_none());
+        assert!(
+            cache
+                .get(&metadata_cache_key(&object_meta.location))
+                .is_none()
+        );
 
         // Put a value
         let cached_entry =
             CachedFileMetadataEntry::new(object_meta.clone(), Arc::clone(&metadata));
-        cache.put(&object_meta.location, cached_entry);
+        cache.put(&metadata_cache_key(&object_meta.location), cached_entry);
 
         // Verify the cached value
-        assert!(cache.contains_key(&object_meta.location));
-        let result = cache.get(&object_meta.location).unwrap();
+        assert!(cache.contains_key(&metadata_cache_key(&object_meta.location)));
+        let result = cache
+            .get(&metadata_cache_key(&object_meta.location))
+            .unwrap();
         let test_file_metadata = Arc::downcast::<TestFileMetadata>(result.file_metadata);
         assert!(test_file_metadata.is_ok());
         assert_eq!(test_file_metadata.unwrap().metadata, "retrieved_metadata");
 
         // Cache hit - check validation
-        let result2 = cache.get(&object_meta.location).unwrap();
+        let result2 = cache
+            .get(&metadata_cache_key(&object_meta.location))
+            .unwrap();
         assert!(result2.is_valid_for(&object_meta));
 
         // File size changed - closure should detect invalidity
         let object_meta2 = create_test_object_meta("test", 2048);
-        let result3 = cache.get(&object_meta2.location).unwrap();
+        let result3 = cache
+            .get(&metadata_cache_key(&object_meta2.location))
+            .unwrap();
         // Cached entry should NOT be valid for new meta
         assert!(!result3.is_valid_for(&object_meta2));
 
         // Return new entry
         let new_entry =
             CachedFileMetadataEntry::new(object_meta2.clone(), Arc::clone(&metadata));
-        cache.put(&object_meta2.location, new_entry);
+        cache.put(&metadata_cache_key(&object_meta2.location), new_entry);
 
-        let result4 = cache.get(&object_meta2.location).unwrap();
+        let result4 = cache
+            .get(&metadata_cache_key(&object_meta2.location))
+            .unwrap();
         assert_eq!(result4.meta.size, 2048);
 
         // remove
-        cache.remove(&object_meta.location);
-        assert!(!cache.contains_key(&object_meta.location));
+        cache.remove(&metadata_cache_key(&object_meta.location));
+        assert!(!cache.contains_key(&metadata_cache_key(&object_meta.location)));
 
         // len and clear
         let object_meta3 = create_test_object_meta("test3", 100);
         cache.put(
-            &object_meta.location,
+            &metadata_cache_key(&object_meta.location),
             CachedFileMetadataEntry::new(object_meta.clone(), Arc::clone(&metadata)),
         );
         cache.put(
-            &object_meta3.location,
+            &metadata_cache_key(&object_meta3.location),
             CachedFileMetadataEntry::new(object_meta3.clone(), Arc::clone(&metadata)),
         );
         assert_eq!(cache.len(), 2);
@@ -447,86 +510,87 @@ mod tests {
 
     #[test]
     fn test_default_file_metadata_cache_with_limit() {
-        // Create a cache with 1000 bytes capacity + 4 keys each key 2 bytes
-        let cache = DefaultCache::new(1000 + 4 * 2);
+        // Allow 1000 bytes of metadata plus four store-qualified keys.
+        let key_size = metadata_cache_key(&Path::from("01")).size();
+        let cache = DefaultCache::new(1000 + 4 * key_size);
 
         let (object_meta1, metadata1) = generate_test_metadata_with_size("01", 100);
         let (object_meta2, metadata2) = generate_test_metadata_with_size("02", 500);
         let (object_meta3, metadata3) = generate_test_metadata_with_size("03", 300);
 
         cache.put(
-            &object_meta1.location,
+            &metadata_cache_key(&object_meta1.location),
             CachedFileMetadataEntry::new(object_meta1.clone(), metadata1),
         );
         cache.put(
-            &object_meta2.location,
+            &metadata_cache_key(&object_meta2.location),
             CachedFileMetadataEntry::new(object_meta2.clone(), metadata2),
         );
         cache.put(
-            &object_meta3.location,
+            &metadata_cache_key(&object_meta3.location),
             CachedFileMetadataEntry::new(object_meta3.clone(), metadata3),
         );
 
         // all entries will fit
         assert_eq!(cache.len(), 3);
-        assert_eq!(cache.memory_used(), 906);
-        assert!(cache.contains_key(&object_meta1.location));
-        assert!(cache.contains_key(&object_meta2.location));
-        assert!(cache.contains_key(&object_meta3.location));
+        assert_eq!(cache.memory_used(), 900 + 3 * key_size);
+        assert!(cache.contains_key(&metadata_cache_key(&object_meta1.location)));
+        assert!(cache.contains_key(&metadata_cache_key(&object_meta2.location)));
+        assert!(cache.contains_key(&metadata_cache_key(&object_meta3.location)));
 
         // add a new entry which will remove the least recently used ("1")
         let (object_meta4, metadata4) = generate_test_metadata_with_size("04", 200);
         cache.put(
-            &object_meta4.location,
+            &metadata_cache_key(&object_meta4.location),
             CachedFileMetadataEntry::new(object_meta4.clone(), metadata4),
         );
         assert_eq!(cache.len(), 3);
-        assert_eq!(cache.memory_used(), 1006);
-        assert!(!cache.contains_key(&object_meta1.location));
-        assert!(cache.contains_key(&object_meta4.location));
+        assert_eq!(cache.memory_used(), 1000 + 3 * key_size);
+        assert!(!cache.contains_key(&metadata_cache_key(&object_meta1.location)));
+        assert!(cache.contains_key(&metadata_cache_key(&object_meta4.location)));
 
         // get entry "2", which will move it to the top of the queue, and add a new one which will
         // remove the new least recently used ("3")
-        let _ = cache.get(&object_meta2.location);
+        let _ = cache.get(&metadata_cache_key(&object_meta2.location));
         let (object_meta5, metadata5) = generate_test_metadata_with_size("05", 100);
         cache.put(
-            &object_meta5.location,
+            &metadata_cache_key(&object_meta5.location),
             CachedFileMetadataEntry::new(object_meta5.clone(), metadata5),
         );
         assert_eq!(cache.len(), 3);
-        assert_eq!(cache.memory_used(), 806);
-        assert!(!cache.contains_key(&object_meta3.location));
-        assert!(cache.contains_key(&object_meta5.location));
+        assert_eq!(cache.memory_used(), 800 + 3 * key_size);
+        assert!(!cache.contains_key(&metadata_cache_key(&object_meta3.location)));
+        assert!(cache.contains_key(&metadata_cache_key(&object_meta5.location)));
 
         // new entry which will not be able to fit in the 1000 bytes allocated
         let (object_meta6, metadata6) = generate_test_metadata_with_size("06", 1200);
         cache.put(
-            &object_meta6.location,
+            &metadata_cache_key(&object_meta6.location),
             CachedFileMetadataEntry::new(object_meta6.clone(), metadata6),
         );
         assert_eq!(cache.len(), 3);
-        assert_eq!(cache.memory_used(), 806);
-        assert!(!cache.contains_key(&object_meta6.location));
+        assert_eq!(cache.memory_used(), 800 + 3 * key_size);
+        assert!(!cache.contains_key(&metadata_cache_key(&object_meta6.location)));
 
         // new entry which is able to fit without removing any entry
         let (object_meta7, metadata7) = generate_test_metadata_with_size("07", 200);
         cache.put(
-            &object_meta7.location,
+            &metadata_cache_key(&object_meta7.location),
             CachedFileMetadataEntry::new(object_meta7.clone(), metadata7),
         );
         assert_eq!(cache.len(), 4);
-        assert_eq!(cache.memory_used(), 1008);
-        assert!(cache.contains_key(&object_meta7.location));
+        assert_eq!(cache.memory_used(), 1000 + 4 * key_size);
+        assert!(cache.contains_key(&metadata_cache_key(&object_meta7.location)));
 
         // new entry which will remove all other entries
         let (object_meta8, metadata8) = generate_test_metadata_with_size("08", 999);
         cache.put(
-            &object_meta8.location,
+            &metadata_cache_key(&object_meta8.location),
             CachedFileMetadataEntry::new(object_meta8.clone(), metadata8),
         );
         assert_eq!(cache.len(), 1);
-        assert_eq!(cache.memory_used(), 1001);
-        assert!(cache.contains_key(&object_meta8.location));
+        assert_eq!(cache.memory_used(), 999 + key_size);
+        assert!(cache.contains_key(&metadata_cache_key(&object_meta8.location)));
 
         // when updating an entry, the previous ones are not unnecessarily removed
         let (object_meta9, metadata9) = generate_test_metadata_with_size("09", 300);
@@ -534,49 +598,49 @@ mod tests {
         let (object_meta11_v1, metadata11_v1) =
             generate_test_metadata_with_size("11", 400);
         cache.put(
-            &object_meta9.location,
+            &metadata_cache_key(&object_meta9.location),
             CachedFileMetadataEntry::new(object_meta9.clone(), metadata9),
         );
         cache.put(
-            &object_meta10.location,
+            &metadata_cache_key(&object_meta10.location),
             CachedFileMetadataEntry::new(object_meta10.clone(), metadata10),
         );
         cache.put(
-            &object_meta11_v1.location,
+            &metadata_cache_key(&object_meta11_v1.location),
             CachedFileMetadataEntry::new(object_meta11_v1.clone(), metadata11_v1),
         );
-        assert_eq!(cache.memory_used(), 906);
+        assert_eq!(cache.memory_used(), 900 + 3 * key_size);
         assert_eq!(cache.len(), 3);
         let (object_meta11_v2, metadata11_v2) =
             generate_test_metadata_with_size("11", 500);
         cache.put(
-            &object_meta11_v2.location,
+            &metadata_cache_key(&object_meta11_v2.location),
             CachedFileMetadataEntry::new(object_meta11_v2.clone(), metadata11_v2),
         );
-        assert_eq!(cache.memory_used(), 1006);
+        assert_eq!(cache.memory_used(), 1000 + 3 * key_size);
         assert_eq!(cache.len(), 3);
-        assert!(cache.contains_key(&object_meta9.location));
-        assert!(cache.contains_key(&object_meta10.location));
-        assert!(cache.contains_key(&object_meta11_v2.location));
+        assert!(cache.contains_key(&metadata_cache_key(&object_meta9.location)));
+        assert!(cache.contains_key(&metadata_cache_key(&object_meta10.location)));
+        assert!(cache.contains_key(&metadata_cache_key(&object_meta11_v2.location)));
 
         // when updating an entry that now exceeds the limit, the LRU ("09") needs to be removed
         let (object_meta11_v3, metadata11_v3) =
-            generate_test_metadata_with_size("11", 510);
+            generate_test_metadata_with_size("11", 510 + key_size);
         cache.put(
-            &object_meta11_v3.location,
+            &metadata_cache_key(&object_meta11_v3.location),
             CachedFileMetadataEntry::new(object_meta11_v3.clone(), metadata11_v3),
         );
-        assert_eq!(cache.memory_used(), 714);
+        assert_eq!(cache.memory_used(), 710 + 3 * key_size);
         assert_eq!(cache.len(), 2);
-        assert!(cache.contains_key(&object_meta10.location));
-        assert!(cache.contains_key(&object_meta11_v3.location));
+        assert!(cache.contains_key(&metadata_cache_key(&object_meta10.location)));
+        assert!(cache.contains_key(&metadata_cache_key(&object_meta11_v3.location)));
 
         // manually removing an entry that is not the LRU
-        cache.remove(&object_meta11_v3.location);
+        cache.remove(&metadata_cache_key(&object_meta11_v3.location));
         assert_eq!(cache.len(), 1);
-        assert_eq!(cache.memory_used(), 202);
-        assert!(cache.contains_key(&object_meta10.location));
-        assert!(!cache.contains_key(&object_meta11_v3.location));
+        assert_eq!(cache.memory_used(), 200 + key_size);
+        assert!(cache.contains_key(&metadata_cache_key(&object_meta10.location)));
+        assert!(!cache.contains_key(&metadata_cache_key(&object_meta11_v3.location)));
 
         // clear
         cache.clear();
@@ -588,31 +652,32 @@ mod tests {
         let (object_meta13, metadata13) = generate_test_metadata_with_size("13", 200);
         let (object_meta14, metadata14) = generate_test_metadata_with_size("14", 500);
         cache.put(
-            &object_meta12.location,
+            &metadata_cache_key(&object_meta12.location),
             CachedFileMetadataEntry::new(object_meta12.clone(), metadata12),
         );
         cache.put(
-            &object_meta13.location,
+            &metadata_cache_key(&object_meta13.location),
             CachedFileMetadataEntry::new(object_meta13.clone(), metadata13),
         );
         cache.put(
-            &object_meta14.location,
+            &metadata_cache_key(&object_meta14.location),
             CachedFileMetadataEntry::new(object_meta14.clone(), metadata14),
         );
         assert_eq!(cache.len(), 3);
-        assert_eq!(cache.memory_used(), 1006);
+        assert_eq!(cache.memory_used(), 1000 + 3 * key_size);
         cache.update_cache_limit(600);
         assert_eq!(cache.len(), 1);
-        assert_eq!(cache.memory_used(), 502);
-        assert!(!cache.contains_key(&object_meta12.location));
-        assert!(!cache.contains_key(&object_meta13.location));
-        assert!(cache.contains_key(&object_meta14.location));
+        assert_eq!(cache.memory_used(), 500 + key_size);
+        assert!(!cache.contains_key(&metadata_cache_key(&object_meta12.location)));
+        assert!(!cache.contains_key(&metadata_cache_key(&object_meta13.location)));
+        assert!(cache.contains_key(&metadata_cache_key(&object_meta14.location)));
     }
 
     #[test]
     fn test_default_file_metadata_cache_entries_info() {
-        // Create a cache with 1000 bytes + 4 bytes for 4 keys each key 1 byte
-        let cache = DefaultCache::new(1000 + 4);
+        // Allow 1000 bytes of metadata plus four store-qualified keys.
+        let key_size = metadata_cache_key(&Path::from("1")).size();
+        let cache = DefaultCache::new(1000 + 4 * key_size);
 
         let (object_meta1, metadata1) = generate_test_metadata_with_size("1", 100);
         let (object_meta2, metadata2) = generate_test_metadata_with_size("2", 200);
@@ -625,16 +690,16 @@ mod tests {
 
         // Build a cache which fits exactly these 3 entries
 
-        cache.put(&object_meta1.location, entry_1.clone());
-        cache.put(&object_meta2.location, entry_2.clone());
-        cache.put(&object_meta3.location, entry_3.clone());
+        cache.put(&metadata_cache_key(&object_meta1.location), entry_1.clone());
+        cache.put(&metadata_cache_key(&object_meta2.location), entry_2.clone());
+        cache.put(&metadata_cache_key(&object_meta3.location), entry_3.clone());
         let entries = cache.list_entries();
 
         assert_eq!(
             entries,
             HashMap::from([
                 (
-                    Path::from("1"),
+                    metadata_cache_key(&Path::from("1")),
                     CacheEntryInfo {
                         value: entry_1.clone(),
                         size_bytes: 100,
@@ -643,7 +708,7 @@ mod tests {
                     }
                 ),
                 (
-                    Path::from("2"),
+                    metadata_cache_key(&Path::from("2")),
                     CacheEntryInfo {
                         value: entry_2.clone(),
                         size_bytes: 200,
@@ -652,7 +717,7 @@ mod tests {
                     }
                 ),
                 (
-                    Path::from("3"),
+                    metadata_cache_key(&Path::from("3")),
                     CacheEntryInfo {
                         value: entry_3.clone(),
                         size_bytes: 300,
@@ -664,12 +729,12 @@ mod tests {
         );
 
         // new hit on "1"
-        let _ = cache.get(&object_meta1.location);
+        let _ = cache.get(&metadata_cache_key(&object_meta1.location));
         assert_eq!(
             cache.list_entries(),
             HashMap::from([
                 (
-                    Path::from("1"),
+                    metadata_cache_key(&Path::from("1")),
                     CacheEntryInfo {
                         value: entry_1.clone(),
                         size_bytes: 100,
@@ -678,7 +743,7 @@ mod tests {
                     }
                 ),
                 (
-                    Path::from("2"),
+                    metadata_cache_key(&Path::from("2")),
                     CacheEntryInfo {
                         value: entry_2.clone(),
                         size_bytes: 200,
@@ -687,7 +752,7 @@ mod tests {
                     }
                 ),
                 (
-                    Path::from("3"),
+                    metadata_cache_key(&Path::from("3")),
                     CacheEntryInfo {
                         value: entry_3.clone(),
                         size_bytes: 300,
@@ -701,12 +766,12 @@ mod tests {
         // new entry, will evict "2"
         let (object_meta4, metadata4) = generate_test_metadata_with_size("4", 600);
         let entry_4 = CachedFileMetadataEntry::new(object_meta4.clone(), metadata4);
-        cache.put(&object_meta4.location, entry_4.clone());
+        cache.put(&metadata_cache_key(&object_meta4.location), entry_4.clone());
         assert_eq!(
             cache.list_entries(),
             HashMap::from([
                 (
-                    Path::from("1"),
+                    metadata_cache_key(&Path::from("1")),
                     CacheEntryInfo {
                         value: entry_1.clone(),
                         size_bytes: 100,
@@ -715,7 +780,7 @@ mod tests {
                     }
                 ),
                 (
-                    Path::from("3"),
+                    metadata_cache_key(&Path::from("3")),
                     CacheEntryInfo {
                         value: entry_3.clone(),
                         size_bytes: 300,
@@ -724,7 +789,7 @@ mod tests {
                     }
                 ),
                 (
-                    Path::from("4"),
+                    metadata_cache_key(&Path::from("4")),
                     CacheEntryInfo {
                         value: entry_4.clone(),
                         size_bytes: 600,
@@ -739,12 +804,15 @@ mod tests {
         let (object_meta1_new, metadata1_new) = generate_test_metadata_with_size("1", 50);
         let entry_1 =
             CachedFileMetadataEntry::new(object_meta1_new.clone(), metadata1_new);
-        cache.put(&object_meta1_new.location, entry_1.clone());
+        cache.put(
+            &metadata_cache_key(&object_meta1_new.location),
+            entry_1.clone(),
+        );
         assert_eq!(
             cache.list_entries(),
             HashMap::from([
                 (
-                    Path::from("1"),
+                    metadata_cache_key(&Path::from("1")),
                     CacheEntryInfo {
                         value: entry_1.clone(),
                         size_bytes: 50,
@@ -753,7 +821,7 @@ mod tests {
                     }
                 ),
                 (
-                    Path::from("3"),
+                    metadata_cache_key(&Path::from("3")),
                     CacheEntryInfo {
                         value: entry_3.clone(),
                         size_bytes: 300,
@@ -762,7 +830,7 @@ mod tests {
                     }
                 ),
                 (
-                    Path::from("4"),
+                    metadata_cache_key(&Path::from("4")),
                     CacheEntryInfo {
                         value: entry_4.clone(),
                         size_bytes: 600,
@@ -774,12 +842,12 @@ mod tests {
         );
 
         // remove entry "4"
-        cache.remove(&object_meta4.location);
+        cache.remove(&metadata_cache_key(&object_meta4.location));
         assert_eq!(
             cache.list_entries(),
             HashMap::from([
                 (
-                    Path::from("1"),
+                    metadata_cache_key(&Path::from("1")),
                     CacheEntryInfo {
                         value: entry_1.clone(),
                         size_bytes: 50,
@@ -788,7 +856,7 @@ mod tests {
                     }
                 ),
                 (
-                    Path::from("3"),
+                    metadata_cache_key(&Path::from("3")),
                     CacheEntryInfo {
                         value: entry_3.clone(),
                         size_bytes: 300,
@@ -828,8 +896,11 @@ mod tests {
         )]);
 
         let path = TableScopedPath {
-            path: meta.location.clone(),
             table: None,
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::local_filesystem(),
+                meta.location.clone(),
+            ),
         };
         let schema_fingerprint = Arc::new(SchemaFingerprint::from_schema(&schema));
 
@@ -889,8 +960,11 @@ mod tests {
         assert_eq!(entries.len(), 1);
 
         let path_3 = TableScopedPath {
-            path: Path::from("test"),
             table: None,
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::local_filesystem(),
+                Path::from("test"),
+            ),
         };
 
         let entry = entries.get(&path_3).unwrap();
@@ -964,8 +1038,11 @@ mod tests {
         );
 
         let path = TableScopedPath {
-            path: meta.location.clone(),
             table: None,
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::local_filesystem(),
+                meta.location.clone(),
+            ),
         };
 
         cache.put(&path, cached_value);
@@ -993,8 +1070,11 @@ mod tests {
     fn test_cache_invalidation_on_file_modification() {
         let cache = DefaultCache::new(DEFAULT_FILE_STATISTICS_MEMORY_LIMIT);
         let path = TableScopedPath {
-            path: Path::from("test.parquet"),
             table: None,
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::local_filesystem(),
+                Path::from("test.parquet"),
+            ),
         };
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let schema_fingerprint = Arc::new(SchemaFingerprint::from_schema(&schema));
@@ -1035,15 +1115,18 @@ mod tests {
     fn test_ordering_cache_invalidation_on_file_modification() {
         let cache = DefaultCache::new(DEFAULT_FILE_STATISTICS_MEMORY_LIMIT);
         let path = TableScopedPath {
-            path: Path::from("test.parquet"),
             table: None,
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::local_filesystem(),
+                Path::from("test.parquet"),
+            ),
         };
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let schema_fingerprint = Arc::new(SchemaFingerprint::from_schema(&schema));
 
         // Cache with original metadata and ordering
         let meta_v1 = ObjectMeta {
-            location: path.path.clone(),
+            location: path.store_path.path.clone(),
             last_modified: DateTime::parse_from_rfc3339("2022-09-27T22:36:00+02:00")
                 .unwrap()
                 .into(),
@@ -1067,7 +1150,7 @@ mod tests {
 
         // File modified (size changed)
         let meta_v2 = ObjectMeta {
-            location: path.path.clone(),
+            location: path.store_path.path.clone(),
             last_modified: DateTime::parse_from_rfc3339("2022-09-28T10:00:00+02:00")
                 .unwrap()
                 .into(),
@@ -1115,8 +1198,11 @@ mod tests {
         );
 
         let path_1 = TableScopedPath {
-            path: meta1.location.clone(),
             table: None,
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::local_filesystem(),
+                meta1.location.clone(),
+            ),
         };
 
         cache.put(&path_1, cached_value_1.clone());
@@ -1129,8 +1215,11 @@ mod tests {
         );
 
         let path_2 = TableScopedPath {
-            path: meta2.location.clone(),
             table: None,
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::local_filesystem(),
+                meta2.location.clone(),
+            ),
         };
 
         cache.put(&path_2, cached_value_2.clone());
@@ -1172,7 +1261,10 @@ mod tests {
 
         let mut ctx = DFHeapSizeCtx::default();
 
-        let limit_for_2_entries = meta_1.location.as_ref().heap_size(&mut ctx)
+        let limit_for_2_entries = 2 * ObjectStoreUrl::local_filesystem()
+            .as_str()
+            .heap_size(&mut ctx)
+            + meta_1.location.as_ref().heap_size(&mut ctx)
             + value_1.heap_size(&mut ctx)
             + meta_2.location.as_ref().heap_size(&mut ctx)
             + value_2.heap_size(&mut ctx);
@@ -1180,13 +1272,19 @@ mod tests {
         // create a cache with a limit which fits exactly 2 entries
         let cache = DefaultCache::new(limit_for_2_entries);
         let path_1 = TableScopedPath {
-            path: meta_1.location.clone(),
             table: None,
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::local_filesystem(),
+                meta_1.location.clone(),
+            ),
         };
 
         let path_2 = TableScopedPath {
-            path: meta_2.location.clone(),
             table: None,
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::local_filesystem(),
+                meta_2.location.clone(),
+            ),
         };
 
         cache.put(&path_1, value_1.clone());
@@ -1201,8 +1299,11 @@ mod tests {
         assert_eq!(result_2.unwrap(), value_2);
 
         let path_3 = TableScopedPath {
-            path: meta_3.location.clone(),
             table: None,
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::local_filesystem(),
+                meta_3.location.clone(),
+            ),
         };
 
         // adding the third entry evicts the first entry
@@ -1230,7 +1331,7 @@ mod tests {
         assert_eq!(cache.len(), 1);
         assert_eq!(
             cache.memory_used(),
-            meta_3.location.as_ref().heap_size(&mut ctx) + value_3.heap_size(&mut ctx)
+            path_3.size() + value_3.heap_size(&mut ctx)
         );
 
         cache.clear();
@@ -1249,8 +1350,11 @@ mod tests {
         let cache = DefaultCache::new(limit_less_than_the_entry);
 
         let path_1 = TableScopedPath {
-            path: meta.location.clone(),
             table: None,
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::local_filesystem(),
+                meta.location.clone(),
+            ),
         };
 
         cache.put(&path_1, value_too_large.clone());
@@ -1263,7 +1367,7 @@ mod tests {
         cache.put(&path_1, value_fits.clone());
 
         assert_eq!(cache.len(), 1);
-        assert_eq!(cache.memory_used(), 1514);
+        assert_eq!(cache.memory_used(), path_1.size() + value_fits.size());
 
         // now add an entry which is over the limit and make sure the old stale entry is removed
         let stale_entry = cache.put(&path_1, value_too_large.clone());
@@ -1364,7 +1468,10 @@ mod tests {
     ) -> (TableScopedPath, CachedFileList) {
         let key = TableScopedPath {
             table,
-            path: Path::from(path),
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::local_filesystem(),
+                Path::from(path),
+            ),
         };
         let metas: Vec<ObjectMeta> = (0..count)
             .map(|i| create_object_meta(&format!("file{i}"), meta_size))
@@ -1380,7 +1487,7 @@ mod tests {
         let path = Path::from("test_path");
         let key = TableScopedPath {
             table: table_ref.clone(),
-            path,
+            store_path: StoreScopedPath::new(ObjectStoreUrl::local_filesystem(), path),
         };
 
         // Initially cache is empty
@@ -1895,7 +2002,10 @@ mod tests {
         let table_ref = Some(TableReference::from("table"));
         let key = TableScopedPath {
             table: table_ref,
-            path: table_base,
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::local_filesystem(),
+                table_base,
+            ),
         };
         cache.put(&key, CachedFileList::new(files));
 
@@ -1939,7 +2049,10 @@ mod tests {
         let table_ref = Some(TableReference::from("table"));
         let key = TableScopedPath {
             table: table_ref,
-            path: table_base,
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::local_filesystem(),
+                table_base,
+            ),
         };
         cache.put(&key, CachedFileList::new(files));
         let result = cache.get(&key).unwrap();
@@ -1973,7 +2086,10 @@ mod tests {
         let table_ref = Some(TableReference::from("table"));
         let key = TableScopedPath {
             table: table_ref,
-            path: table_base,
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::local_filesystem(),
+                table_base,
+            ),
         };
         cache.put(&key, CachedFileList::new(files));
         let result = cache.get(&key).unwrap();

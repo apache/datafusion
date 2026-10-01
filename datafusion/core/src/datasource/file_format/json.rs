@@ -36,6 +36,7 @@ mod tests {
         BatchDeserializer, DecoderDeserializer, DeserializerOutput,
     };
     use datafusion_datasource::file_format::FileFormat;
+    use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
     use datafusion_physical_plan::{ExecutionPlan, collect};
 
@@ -75,7 +76,12 @@ mod tests {
         let store = Arc::new(LocalFileSystem::new()) as _;
         let format = JsonFormat::default().with_newline_delimited(false);
         format
-            .infer_schema(&ctx, &store, &[local_unpartitioned_file(&path)])
+            .infer_schema(
+                &ctx,
+                &store,
+                &ObjectStoreUrl::local_filesystem(),
+                &[local_unpartitioned_file(&path)],
+            )
             .await
     }
 
@@ -214,7 +220,12 @@ mod tests {
         let format = JsonFormat::default().with_schema_infer_max_rec(3);
 
         let file_schema = format
-            .infer_schema(&ctx, &store, &[local_unpartitioned_file(filename)])
+            .infer_schema(
+                &ctx,
+                &store,
+                &ObjectStoreUrl::local_filesystem(),
+                &[local_unpartitioned_file(filename)],
+            )
             .await
             .expect("Schema inference");
 
