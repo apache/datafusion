@@ -279,11 +279,8 @@ where
 mod tests {
     use super::*;
     use arrow::array::types::Int32Type;
-    use arrow::array::{ArrayRef, Int32Array};
-    use arrow::datatypes::DataType;
-    use datafusion_expr::EmitTo;
+    use arrow::array::Int32Array;
     use std::mem::size_of;
-    use std::sync::Arc;
 
     /// Mirror of the `EmitTo::take_needed` regression test, applied to the
     /// concrete `GroupValuesPrimitive` accumulator.
