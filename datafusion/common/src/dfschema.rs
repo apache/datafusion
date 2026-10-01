@@ -606,6 +606,10 @@ impl DFSchema {
     /// Use [DFSchema]::equivalent_names_and_types for stricter semantic type
     /// equivalence checking.
     pub fn logically_equivalent_names_and_types(&self, other: &Self) -> bool {
+        // Same allocation, so nothing to compare.
+        if std::ptr::eq(self, other) {
+            return true;
+        }
         if self.fields().len() != other.fields().len() {
             return false;
         }
@@ -1901,6 +1905,30 @@ mod tests {
             &struct_field,
             &DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int8, true),]))
         ));
+    }
+
+    #[test]
+    fn logically_equivalent_names_and_types_checks_names_and_identity() -> Result<()> {
+        let schema = DFSchema::try_from_qualified_schema("t", &test_schema_1())?;
+
+        // Comparing a schema with itself takes the pointer shortcut.
+        assert!(schema.logically_equivalent_names_and_types(&schema));
+
+        // Same types, but one column has a different name.
+        let renamed = DFSchema::try_from_qualified_schema(
+            "t",
+            &Schema::new(vec![
+                Field::new("c0", DataType::Boolean, true),
+                Field::new("c2", DataType::Boolean, true),
+            ]),
+        )?;
+        assert!(!schema.logically_equivalent_names_and_types(&renamed));
+
+        // An identical schema built on its own still goes through the field
+        // comparison and matches.
+        let rebuilt = DFSchema::try_from_qualified_schema("t", &test_schema_1())?;
+        assert!(schema.logically_equivalent_names_and_types(&rebuilt));
+        Ok(())
     }
 
     #[test]

@@ -629,6 +629,7 @@ impl Optimizer {
             // path; that path refreshes parent schemas after child schemas
             // change.
             let mut has_subqueries = plan_has_subqueries(&new_plan);
+            let is_last_pass = i + 1 >= options.optimizer.max_passes;
 
             for rule in &self.rules {
                 // If skipping failed rules, copy plan before attempting to rewrite
@@ -708,24 +709,16 @@ impl Optimizer {
                         new_plan = data;
                         observer(&new_plan, rule.as_ref());
                         if transformed {
-                            // Only rescan for subqueries when this pass
-                            // already saw one: none of the built-in rules
-                            // construct a subquery expression from scratch,
-                            // so a plan without subqueries is expected to
-                            // stay that way. A custom rule (added via
-                            // `Optimizer::with_rules` or
-                            // `SessionState::add_optimizer_rule`) that
-                            // introduces a subquery into a plan that had
-                            // none has that subquery's inner plan visited
-                            // by later rules from the next pass rather than
-                            // this one, and not at all if this is the last
-                            // pass.
-                            if has_subqueries {
-                                // Refresh after changed rules so
-                                // decorrelation can move later rules onto
-                                // the in-place path; that path refreshes
-                                // parent schemas after child schemas
-                                // change.
+                            // Refresh after changed rules so decorrelation can
+                            // move later rules onto the in-place path; that
+                            // path refreshes parent schemas after child
+                            // schemas change. Built-in rules don't create
+                            // subqueries, so the rescan only runs once the
+                            // plan has one. A subquery that a custom rule adds
+                            // is otherwise picked up when the next pass
+                            // begins, and in the final pass the rescan always
+                            // runs so later rules still reach it.
+                            if has_subqueries || is_last_pass {
                                 has_subqueries = plan_has_subqueries(&new_plan);
                             }
                             log_plan(rule.name(), &new_plan);
@@ -1052,6 +1045,38 @@ mod tests {
         assert_eq!(passes[0], ["test"]);
         assert!(
             passes[1].iter().any(|t| t == SUBQUERY_ONLY_TABLE),
+            "expected a visit to {SUBQUERY_ONLY_TABLE}, got {visited_tables:?}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn subquery_introduced_in_the_final_pass_is_visited_in_that_pass() -> Result<()> {
+        // Arrange: only one pass, so there is no later pass to pick up the
+        // subquery that the first rule adds.
+        let visited_tables = Arc::new(Mutex::new(Vec::new()));
+        let opt = Optimizer::with_rules(vec![
+            Arc::new(IntroduceSubqueryRule {}),
+            Arc::new(RecordTableScansRule {
+                visited_tables: Arc::clone(&visited_tables),
+            }),
+        ]);
+        let config = OptimizerContext::new().with_max_passes(1);
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(col("a").eq(lit(1u32)))?
+            .build()?;
+        assert!(!super::plan_has_subqueries(&plan));
+
+        // Act
+        let optimized_plan = opt.optimize(plan, &config, |_, _| {})?;
+
+        // Assert: the recording rule still reaches the scan inside the new
+        // subquery.
+        assert!(super::plan_has_subqueries(&optimized_plan));
+        let visited_tables = visited_tables.lock().unwrap();
+        assert!(
+            visited_tables.iter().any(|t| t == SUBQUERY_ONLY_TABLE),
             "expected a visit to {SUBQUERY_ONLY_TABLE}, got {visited_tables:?}"
         );
 
