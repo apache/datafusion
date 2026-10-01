@@ -360,8 +360,9 @@ impl Unparser<'_> {
                 negated: *negated,
                 expr: Box::new(self.expr_to_sql_inner(expr)?),
                 pattern: Box::new(self.expr_to_sql_inner(pattern)?),
-                escape_char: escape_char
-                    .map(|c| SingleQuotedString(c.to_string()).into()),
+                escape_char: escape_char.map(|c| {
+                    Box::new(ast::Expr::Value(SingleQuotedString(c.to_string()).into()))
+                }),
                 any: false,
             }),
             Expr::Like(Like {
@@ -374,8 +375,9 @@ impl Unparser<'_> {
                 let negated = *negated;
                 let expr = Box::new(self.expr_to_sql_inner(expr)?);
                 let pattern = Box::new(self.expr_to_sql_inner(pattern)?);
-                let escape_char =
-                    escape_char.map(|c| SingleQuotedString(c.to_string()).into());
+                let escape_char = escape_char.map(|c| {
+                    Box::new(ast::Expr::Value(SingleQuotedString(c.to_string()).into()))
+                });
 
                 if *case_insensitive {
                     Ok(ast::Expr::ILike {
@@ -406,18 +408,29 @@ impl Unparser<'_> {
                     ..
                 } = &agg.params;
 
-                // if this is a WITHIN GROUP aggregate, skip the prepended arg
-                let (args_to_use, within_group) =
-                    if agg.func.supports_within_group_clause() && !order_by.is_empty() {
-                        let args_to_use = self.function_args_to_sql(&args[1..])?;
-                        let within_group = order_by
-                            .iter()
-                            .map(|sort_expr| self.sort_to_sql(sort_expr))
-                            .collect::<Result<Vec<ast::OrderByExpr>>>()?;
-                        (args_to_use, within_group)
+                // An aggregate's `order_by` is spelled one of two ways in SQL:
+                // `WITHIN GROUP (ORDER BY ..)` for ordered-set aggregates, and an
+                // `ORDER BY` clause inside the argument list for every other
+                // aggregate. Both map onto `params.order_by`.
+                let (args_to_use, within_group, clauses) = if order_by.is_empty() {
+                    (self.function_args_to_sql(args)?, vec![], vec![])
+                } else {
+                    let order_by_sql = order_by
+                        .iter()
+                        .map(|sort_expr| self.sort_to_sql(sort_expr))
+                        .collect::<Result<Vec<ast::OrderByExpr>>>()?;
+                    if agg.func.supports_within_group_clause() {
+                        // Ordered-set aggregates carry the ordered value as their
+                        // first argument, so skip it.
+                        (self.function_args_to_sql(&args[1..])?, order_by_sql, vec![])
                     } else {
-                        (self.function_args_to_sql(args)?, Vec::new())
-                    };
+                        (
+                            self.function_args_to_sql(args)?,
+                            vec![],
+                            vec![ast::FunctionArgumentClause::OrderBy(order_by_sql)],
+                        )
+                    }
+                };
 
                 let filter = match filter {
                     Some(filter) => Some(Box::new(self.expr_to_sql_inner(filter)?)),
@@ -433,7 +446,7 @@ impl Unparser<'_> {
                         duplicate_treatment: distinct
                             .then_some(DuplicateTreatment::Distinct),
                         args: args_to_use,
-                        clauses: vec![],
+                        clauses,
                     }),
                     filter,
                     null_treatment: None,
@@ -562,7 +575,6 @@ impl Unparser<'_> {
                     kind: ast::CastKind::TryCast,
                     expr: Box::new(inner_expr),
                     data_type: self.arrow_dtype_to_ast_dtype(field)?,
-                    array: false,
                     format: None,
                 })
             }
@@ -868,7 +880,11 @@ impl Unparser<'_> {
         Ok(ast::OrderByExpr {
             expr: sql_parser_expr,
             options: OrderByOptions {
-                asc: Some(*asc),
+                sort: Some(if *asc {
+                    ast::OrderBySort::Asc
+                } else {
+                    ast::OrderBySort::Desc
+                }),
                 nulls_first,
             },
             with_fill: None,
@@ -1249,7 +1265,6 @@ impl Unparser<'_> {
             kind: ast::CastKind::Cast,
             expr: Box::new(ast::Expr::value(SingleQuotedString(ts))),
             data_type: self.dialect.timestamp_cast_dtype(&time_unit, &None),
-            array: false,
             format: None,
         })
     }
@@ -1272,7 +1287,6 @@ impl Unparser<'_> {
             kind: ast::CastKind::Cast,
             expr: Box::new(ast::Expr::value(SingleQuotedString(time))),
             data_type: ast::DataType::Time(None, TimezoneInfo::None),
-            array: false,
             format: None,
         })
     }
@@ -1293,7 +1307,6 @@ impl Unparser<'_> {
                     kind: ast::CastKind::Cast,
                     expr: Box::new(inner_expr),
                     data_type: self.arrow_dtype_to_ast_dtype(field)?,
-                    array: false,
                     format: None,
                 }),
             },
@@ -1301,7 +1314,6 @@ impl Unparser<'_> {
                 kind: ast::CastKind::Cast,
                 expr: Box::new(inner_expr),
                 data_type: self.arrow_dtype_to_ast_dtype(field)?,
-                array: false,
                 format: None,
             }),
         }
@@ -1452,7 +1464,6 @@ impl Unparser<'_> {
                         date.to_string(),
                     ))),
                     data_type: ast::DataType::Date,
-                    array: false,
                     format: None,
                 })
             }
@@ -1476,7 +1487,6 @@ impl Unparser<'_> {
                         datetime.to_string(),
                     ))),
                     data_type: self.ast_type_for_date64_in_cast(),
-                    array: false,
                     format: None,
                 })
             }
