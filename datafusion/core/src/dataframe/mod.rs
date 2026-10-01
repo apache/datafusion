@@ -2639,19 +2639,19 @@ impl DataFrame {
         let projections = self
             .logical_plan()
             .schema()
-            .fields()
             .iter()
-            .map(|field| {
+            .map(|(qualifier, field)| {
+                let column = Expr::Column(Column::from((qualifier, field)));
                 if cols.contains(field) && applies(field) {
                     // Try to cast fill value to column type. If the cast fails, fallback to the original column.
                     match value.clone().cast_to(field.data_type()) {
-                        Ok(fill_value) => func
-                            .call(vec![col(field.name()), lit(fill_value)])
-                            .alias(field.name()),
-                        Err(_) => col(field.name()),
+                        Ok(fill_value) => {
+                            func.call(vec![column, lit(fill_value)]).alias(field.name())
+                        }
+                        Err(_) => column,
                     }
                 } else {
-                    col(field.name())
+                    column
                 }
             })
             .collect::<Vec<_>>();

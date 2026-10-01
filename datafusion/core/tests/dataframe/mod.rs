@@ -7029,6 +7029,106 @@ async fn test_fill_nan_uncastable_value() -> Result<()> {
     Ok(())
 }
 
+#[rstest]
+#[tokio::test]
+async fn test_fill_special_column_names(
+    #[values(false, true)] fill_nan: bool,
+    #[values("Name", "a.b")] name: &str,
+    #[values(false, true)] uncastable: bool,
+) -> Result<()> {
+    let fill = if fill_nan {
+        DataFrame::fill_nan
+    } else {
+        DataFrame::fill_null
+    };
+    let missing = if fill_nan { Some(f64::NAN) } else { None };
+    let other_name = if name == "Name" { "a.b" } else { "Name" };
+    let schema = Arc::new(Schema::new(vec![
+        Field::new(name, DataType::Float64, true),
+        Field::new(other_name, DataType::Utf8, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(Float64Array::from(vec![Some(1.0), missing, Some(3.0)])),
+            Arc::new(StringArray::from(vec![Some("a"), None, Some("c")])),
+        ],
+    )?;
+    let ctx = SessionContext::new();
+    let df = ctx.read_batch(batch.clone())?;
+    let value = if uncastable {
+        ScalarValue::from("abc")
+    } else {
+        ScalarValue::from(0.0)
+    };
+
+    let results = fill(&df, &value, &[name])?.collect().await?;
+    let expected = if uncastable {
+        // An uncastable replacement leaves the selected column unchanged.
+        batch
+    } else {
+        RecordBatch::try_new(
+            batch.schema(),
+            vec![
+                Arc::new(Float64Array::from(vec![1.0, 0.0, 3.0])),
+                Arc::clone(batch.column(1)),
+            ],
+        )?
+    };
+    // Both selected and untouched names must be preserved literally.
+    assert_eq!(batches_to_string(&results), batches_to_string(&[expected]));
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_fill_preserves_qualified_columns(
+    #[values(false, true)] fill_nan: bool,
+) -> Result<()> {
+    let fill = if fill_nan {
+        DataFrame::fill_nan
+    } else {
+        DataFrame::fill_null
+    };
+    let missing = if fill_nan { Some(f64::NAN) } else { None };
+    let ctx = SessionContext::new();
+    let left = ctx
+        .read_batch(record_batch!(
+            ("id", Int32, [1, 2]),
+            ("value", Float64, [missing, Some(3.0)])
+        )?)?
+        .alias("t1")?;
+    let right = ctx
+        .read_batch(record_batch!(("id", Int32, [1, 2]))?)?
+        .alias("t2")?;
+    let joined = left.join(right, JoinType::Inner, &["t1.id"], &["t2.id"], None)?;
+    let filled = fill(&joined, &ScalarValue::from(0.0), &["value"])?;
+
+    assert_eq!(
+        filled.schema().qualified_field(0).0,
+        Some(&TableReference::bare("t1"))
+    );
+    assert_eq!(
+        filled.schema().qualified_field(2).0,
+        Some(&TableReference::bare("t2"))
+    );
+    let results = filled.collect().await?;
+    insta::allow_duplicates! {
+        assert_snapshot!(
+            batches_to_sort_string(&results),
+            @r"
+        +----+-------+----+
+        | id | value | id |
+        +----+-------+----+
+        | 1  | 0.0   | 1  |
+        | 2  | 3.0   | 2  |
+        +----+-------+----+
+        "
+        );
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_insert_into_casting_support() -> Result<()> {
     // Testing case1:
