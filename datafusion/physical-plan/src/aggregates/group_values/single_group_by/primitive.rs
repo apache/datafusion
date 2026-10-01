@@ -327,12 +327,23 @@ mod tests {
     fn test_exact_hash_table_allocation_accounting() -> Result<()> {
         let mut group_values = GroupValuesPrimitive::<Int32Type>::new(DataType::Int32);
 
-        // 1. Initial state: map is unallocated
-        assert_eq!(group_values.map.capacity(), 0);
-        assert_eq!(group_values.map.allocation_size(), 0);
+        // 1. Initial state: the constructor calls HashTable::with_capacity(128),
+        //    so the map already has a nonzero retained allocation. Capture it
+        //    and verify that size() accounts for it correctly.
+        let initial_map_bytes = group_values.map.allocation_size();
+        assert!(
+            group_values.map.capacity() >= 128,
+            "expected initial capacity >= 128, got {}",
+            group_values.map.capacity(),
+        );
+        assert!(
+            initial_map_bytes > 0,
+            "expected nonzero initial allocation_size, got 0",
+        );
         assert_eq!(
             group_values.size(),
-            group_values.values.allocated_size() + group_values.map.allocation_size()
+            group_values.values.allocated_size() + initial_map_bytes,
+            "size() must include the pre-allocated map bytes",
         );
 
         // 2. Insert keys and observe table allocation growth
