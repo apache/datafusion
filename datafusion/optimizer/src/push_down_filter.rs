@@ -26,9 +26,7 @@ use itertools::Itertools;
 use log::{Level, debug, log_enabled};
 
 use datafusion_common::instant::Instant;
-use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
-};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
     Column, DFSchema, Result, assert_eq_or_internal_err, internal_err, plan_err,
     qualified_name,
@@ -173,10 +171,14 @@ pub(crate) fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
         JoinType::Right => (false, true),
         JoinType::Full => (false, false),
         // No columns from the right side of the join can be referenced in output
-        // predicates for semi/anti joins, so whether we specify t/f doesn't matter.
+        // predicates for semi/anti joins. The right side must stay `false`:
+        // `PullUpCorrelatedExpr` uses it to refuse to pull a correlated filter
+        // out of a side that the join does not output.
         JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => (true, false),
         // No columns from the left side of the join can be referenced in output
-        // predicates for semi/anti joins, so whether we specify t/f doesn't matter.
+        // predicates for semi/anti joins. The left side must stay `false`:
+        // `PullUpCorrelatedExpr` uses it to refuse to pull a correlated filter
+        // out of a side that the join does not output.
         JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => (false, true),
     }
 }
@@ -229,22 +231,18 @@ impl<'a> ColumnChecker<'a> {
 
 /// Determine whether the predicate can evaluate as the join conditions
 fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
-    let mut is_evaluate = true;
-    predicate.apply(|expr| match expr {
-        Expr::Column(_)
-        | Expr::Literal(_, _)
-        | Expr::Placeholder(_)
-        | Expr::ScalarVariable(_, _) => Ok(TreeNodeRecursion::Jump),
+    Ok(!predicate.exists(|expr| match expr {
         Expr::Exists { .. }
         | Expr::InSubquery(_)
         | Expr::SetComparison(_)
         | Expr::ScalarSubquery(_)
         | Expr::OuterReferenceColumn(_, _)
-        | Expr::Unnest(_) => {
-            is_evaluate = false;
-            Ok(TreeNodeRecursion::Stop)
-        }
-        Expr::Alias(_)
+        | Expr::Unnest(_) => Ok(true),
+        Expr::Column(_)
+        | Expr::Literal(_, _)
+        | Expr::Placeholder(_)
+        | Expr::ScalarVariable(_, _)
+        | Expr::Alias(_)
         | Expr::BinaryExpr(_)
         | Expr::Like(_)
         | Expr::SimilarTo(_)
@@ -266,15 +264,14 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::ScalarFunction(_)
         | Expr::HigherOrderFunction(_)
         | Expr::Lambda(_)
-        | Expr::LambdaVariable(_) => Ok(TreeNodeRecursion::Continue),
+        | Expr::LambdaVariable(_) => Ok(false),
         // TODO: remove the next line after `Expr::Wildcard` is removed
         #[expect(deprecated)]
         Expr::AggregateFunction(_)
         | Expr::WindowFunction(_)
         | Expr::Wildcard { .. }
         | Expr::GroupingSet(_) => internal_err!("Unsupported predicate type"),
-    })?;
-    Ok(is_evaluate)
+    })?)
 }
 
 /// examine OR clause to see if any useful clauses can be extracted and push down.
@@ -1494,19 +1491,10 @@ fn unalias(expr: &Expr) -> &Expr {
 
 /// check whether the expression uses the columns in `check_map`.
 fn contain<T>(e: &Expr, check_map: &HashMap<String, T>) -> bool {
-    let mut is_contain = false;
-    e.apply(|expr| {
-        if let Expr::Column(c) = &expr
-            && check_map.contains_key(&c.flat_name())
-        {
-            is_contain = true;
-            Ok(TreeNodeRecursion::Stop)
-        } else {
-            Ok(TreeNodeRecursion::Continue)
-        }
+    e.exists(|expr| {
+        Ok(matches!(expr, Expr::Column(c) if check_map.contains_key(&c.flat_name())))
     })
-    .unwrap();
-    is_contain
+    .unwrap()
 }
 
 fn with_filters(predicates: Vec<Expr>, plan: LogicalPlan) -> LogicalPlan {
@@ -3233,7 +3221,8 @@ mod tests {
             projection,
             source: Arc::new(test_provider),
             fetch: None,
-            statistics_requests: std::collections::BTreeSet::new(),
+            skip: None,
+            statistics_requests: Box::default(),
         });
 
         Ok(LogicalPlanBuilder::from(table_scan))

@@ -4,6 +4,7 @@
 
 - [Quick Start Setup](docs/source/contributor-guide/development_environment.md#quick-start)
 - [Testing Quick Start](docs/source/contributor-guide/testing.md#testing-quick-start)
+- [Choosing What Kind of Test to Write](docs/source/contributor-guide/testing.md#choosing-what-kind-of-test-to-write)
 - [Before Submitting a PR](docs/source/contributor-guide/index.md#before-submitting-a-pr)
 - [Reviewing Pull Requests](docs/source/contributor-guide/pr_review.md)
 - [Contributor Guide](docs/source/contributor-guide/index.md)
@@ -38,7 +39,10 @@ When creating a PR, you MUST follow the [PR template](.github/pull_request_templ
 
 ## Testing
 
-If documentation files changed then run 
+When adding tests, you MUST follow
+[Choosing What Kind of Test to Write](docs/source/contributor-guide/testing.md#choosing-what-kind-of-test-to-write):
+
+If documentation files changed then run
 ```bash
 ./ci/scripts/doc_prettier_check.sh --write --allow-dirty
 ```
