@@ -629,14 +629,14 @@ fn test_no_group_by() -> Result<()> {
     let source = mock_data()?;
     let schema = source.schema();
 
-    // `SELECT <aggregate with no expressions> FROM DataSourceExec LIMIT 10;`, Single AggregateExec
+    // `SELECT COUNT(*) FROM DataSourceExec LIMIT 10;`, Single AggregateExec
     let single_agg = AggregateExec::try_new(
         AggregateMode::Single,
         build_group_by(&schema, vec![]),
-        vec![], /* aggr_expr */
-        vec![], /* filter_expr */
-        source, /* input */
-        schema, /* input_schema */
+        vec![Arc::new(TestAggregate::CountStar.count_expr(&schema))],
+        vec![None],
+        source,
+        schema,
     )?;
     let limit_exec = LocalLimitExec::new(
         Arc::new(single_agg),
@@ -650,7 +650,7 @@ fn test_no_group_by() -> Result<()> {
         actual,
         @r"
     LocalLimitExec: fetch=10
-      AggregateExec: mode=Single, gby=[], aggr=[]
+      AggregateExec: mode=Single, gby=[], aggr=[COUNT(*)]
         DataSourceExec: partitions=1, partition_sizes=[1]
     "
     );
