@@ -1428,7 +1428,7 @@ config_namespace! {
         /// `start_offset` picks the range containing the row group's start.
         /// `midpoint` picks the range containing its midpoint, as Spark does,
         /// which spreads large row groups more evenly across ranges.
-        pub row_group_range_assignment: RowGroupRangeAssignment, default = RowGroupRangeAssignment::StartOffset
+        pub row_group_range_assignment: RowGroupRangeAssignment, default = RowGroupRangeAssignment::Midpoint
 
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
