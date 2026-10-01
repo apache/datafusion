@@ -38,11 +38,13 @@ use crate::aggregates::{
         boolean::GroupValuesBoolean, bytes::GroupValuesBytes,
         bytes_view::GroupValuesBytesView, primitive::GroupValuesPrimitive,
     },
+    group_values::single_group_by_ordered::primitive::FullyOrderedGroupValuesPrimitive,
     order::GroupOrdering,
 };
 
 mod metrics;
 mod null_builder;
+mod single_group_by_ordered;
 
 pub(crate) use metrics::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
@@ -155,12 +157,19 @@ pub fn new_group_values(
     schema: SchemaRef,
     group_ordering: &GroupOrdering,
 ) -> Result<Box<dyn GroupValues>> {
+    let is_fully_ordered = matches!(group_ordering, GroupOrdering::Full(_));
+
     if schema.fields.len() == 1 {
         let d = schema.fields[0].data_type();
 
         macro_rules! downcast_helper {
             ($t:ty, $d:ident) => {
-                return Ok(Box::new(GroupValuesPrimitive::<$t>::new($d.clone())))
+                return Ok(if is_fully_ordered {
+                    Box::new(FullyOrderedGroupValuesPrimitive::<$t>::new($d.clone()))
+                        as Box<dyn GroupValues>
+                } else {
+                    Box::new(GroupValuesPrimitive::<$t>::new($d.clone())) as _
+                })
             };
         }
 
