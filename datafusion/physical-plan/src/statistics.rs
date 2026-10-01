@@ -116,8 +116,14 @@ pub enum ChildStats {
     Skip,
 }
 
-/// Owns the bottom-up traversal and per-walk memoization cache for statistics
+/// Owns the bottom-up traversal and memoization cache for statistics
 /// computation. Call [`StatisticsContext::compute`] to walk a plan tree.
+///
+/// The cache lives as long as the context and may be shared across walks and
+/// plan rewrites. Each entry holds a strong reference to the plan node it was
+/// computed for, so cached nodes (and their per-partition statistics) stay
+/// alive until [`Self::reset_cache`] is called or the context is dropped. Reset
+/// a long-lived context at a lifecycle boundary to bound its memory.
 ///
 /// An optional [`StatisticsRegistry`] plugs providers into the walk: at each node
 /// they are consulted before the operator's built-in
@@ -173,6 +179,11 @@ impl StatisticsContext {
     /// The root's own statistics are not memoized, because a borrowed plan
     /// cannot be retained by the cache; its descendants are. Use
     /// [`Self::compute_arc`] to also memoize the root.
+    ///
+    /// A borrowed root is still looked up in the cache by address, so it must
+    /// be a standalone plan node (normally the pointee of an
+    /// `Arc<dyn ExecutionPlan>`), not a plan stored inline within another
+    /// cached node.
     ///
     /// With no providers registered this is the plain built-in walk: only the
     /// `statistics` cache is touched, so it carries no extension overhead.
@@ -259,7 +270,8 @@ impl StatisticsContext {
     /// Computes the [`ExtendedStatistics`] for `plan`: the core statistics plus
     /// any extensions a provider attached to this node (see the type-level docs
     /// for how extensions propagate up the tree). As with [`Self::compute`],
-    /// the root is not memoized; see [`Self::compute_extended_arc`].
+    /// the root is not memoized and must be a standalone plan node; see
+    /// [`Self::compute_extended_arc`].
     pub fn compute_extended(
         &self,
         plan: &dyn ExecutionPlan,
@@ -351,8 +363,8 @@ impl StatisticsContext {
                     (plan.statistics_from_inputs(&child_statistics, args)?, None)
                 }
             };
-        if let Some(owner) = retained_plan.as_ref() {
-            self.store_statistics(plan, owner, partition, Arc::clone(&statistics));
+        if let Some(owner) = retained_plan {
+            self.store_statistics(owner, partition, Arc::clone(&statistics));
         }
         Ok((statistics, extensions))
     }
@@ -477,7 +489,7 @@ impl StatisticsContext {
                     None
                 } else {
                     if let Some(owner) = retained_plan {
-                        self.store_extensions(plan, owner, partition, extensions.clone());
+                        self.store_extensions(owner, partition, extensions.clone());
                     }
                     Some(extensions)
                 };
@@ -528,17 +540,16 @@ impl StatisticsContext {
             .map(|entry| Arc::clone(&entry.value))
     }
 
+    /// Inserts `value` keyed by `owner`'s pointer, retaining `owner` so the
+    /// key's address cannot be reused while the entry exists.
     fn store_cache_entry<T>(
         cache: &mut HashMap<CacheKey, CacheEntry<T>>,
-        plan: &dyn ExecutionPlan,
         owner: &Arc<dyn ExecutionPlan>,
         partition: Option<usize>,
         value: T,
     ) {
-        let key = cache_key(owner.as_ref(), partition);
-        debug_assert_eq!(key, cache_key(plan, partition));
         cache.insert(
-            key,
+            cache_key(owner.as_ref(), partition),
             CacheEntry {
                 _plan: Arc::clone(owner),
                 value,
@@ -548,14 +559,12 @@ impl StatisticsContext {
 
     fn store_statistics(
         &self,
-        plan: &dyn ExecutionPlan,
         owner: &Arc<dyn ExecutionPlan>,
         partition: Option<usize>,
         statistics: Arc<Statistics>,
     ) {
         Self::store_cache_entry(
             &mut self.cache.borrow_mut().statistics,
-            plan,
             owner,
             partition,
             statistics,
@@ -576,14 +585,12 @@ impl StatisticsContext {
 
     fn store_extensions(
         &self,
-        plan: &dyn ExecutionPlan,
         owner: &Arc<dyn ExecutionPlan>,
         partition: Option<usize>,
         extensions: Extensions,
     ) {
         Self::store_cache_entry(
             &mut self.cache.borrow_mut().extensions,
-            plan,
             owner,
             partition,
             extensions,
@@ -815,6 +822,17 @@ mod tests {
 
         ctx.reset_cache();
         assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn borrowed_compute_hits_root_cached_by_compute_arc() {
+        let leaf = make_stats_leaf(10);
+        let ctx = StatisticsContext::new();
+        let args = StatisticsArgs::new();
+
+        let owned = ctx.compute_arc(&leaf, &args).unwrap();
+        let borrowed = ctx.compute(leaf.as_ref(), &args).unwrap();
+        assert!(Arc::ptr_eq(&owned, &borrowed));
     }
 
     #[test]
