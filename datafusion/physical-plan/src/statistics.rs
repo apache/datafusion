@@ -528,6 +528,27 @@ impl StatisticsContext {
             .map(|entry| Arc::clone(&entry.value))
     }
 
+    fn store_cache_entry<T>(
+        cache: &mut HashMap<CacheKey, CacheEntry<T>>,
+        plan: &dyn ExecutionPlan,
+        retained_plan: Option<Arc<dyn ExecutionPlan>>,
+        partition: Option<usize>,
+        value: T,
+    ) {
+        let key = cache_key(plan, partition);
+        if let Some(retained_plan) = retained_plan
+            && key == cache_key(retained_plan.as_ref(), partition)
+        {
+            cache.insert(
+                key,
+                CacheEntry {
+                    _plan: retained_plan,
+                    value,
+                },
+            );
+        }
+    }
+
     fn store_statistics(
         &self,
         plan: &dyn ExecutionPlan,
@@ -535,17 +556,13 @@ impl StatisticsContext {
         partition: Option<usize>,
         statistics: Arc<Statistics>,
     ) {
-        if let Some(retained_plan) = retained_plan
-            && cache_key(plan, partition) == cache_key(retained_plan.as_ref(), partition)
-        {
-            self.cache.borrow_mut().statistics.insert(
-                cache_key(plan, partition),
-                CacheEntry {
-                    _plan: retained_plan,
-                    value: statistics,
-                },
-            );
-        }
+        Self::store_cache_entry(
+            &mut self.cache.borrow_mut().statistics,
+            plan,
+            retained_plan,
+            partition,
+            statistics,
+        );
     }
 
     fn cached_extensions(
@@ -567,17 +584,13 @@ impl StatisticsContext {
         partition: Option<usize>,
         extensions: Extensions,
     ) {
-        if let Some(retained_plan) = retained_plan
-            && cache_key(plan, partition) == cache_key(retained_plan.as_ref(), partition)
-        {
-            self.cache.borrow_mut().extensions.insert(
-                cache_key(plan, partition),
-                CacheEntry {
-                    _plan: retained_plan,
-                    value: extensions,
-                },
-            );
-        }
+        Self::store_cache_entry(
+            &mut self.cache.borrow_mut().extensions,
+            plan,
+            retained_plan,
+            partition,
+            extensions,
+        );
     }
 }
 
