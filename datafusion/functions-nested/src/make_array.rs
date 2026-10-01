@@ -192,7 +192,6 @@ pub fn array_array<O: OffsetSizeTrait>(
     data_type: DataType,
     field_name: &str,
 ) -> Result<ArrayRef> {
-    // do not accept 0 arguments.
     if args.is_empty() {
         let array = new_null_array(&Null, 0);
         return Ok(Arc::new(
