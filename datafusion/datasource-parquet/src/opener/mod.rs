@@ -18,6 +18,7 @@
 //! [`ParquetMorselizer`] state machines for opening Parquet files
 
 mod early_stop;
+#[cfg(feature = "parquet_encryption")]
 mod encryption;
 
 use self::early_stop::EarlyStoppingStream;
