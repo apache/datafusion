@@ -33,12 +33,13 @@ use super::{
         unproject_unnest_expr_as_flatten_value, unproject_window_exprs,
     },
 };
-use crate::unparser::extension_unparser::{
-    UnparseToStatementResult, UnparseWithinStatementResult,
-};
 use crate::unparser::utils::{find_unnest_node_until_relation, unproject_agg_exprs};
 use crate::unparser::{
     ast::FlattenRelationBuilder, ast::UnnestRelationBuilder, rewrite::rewrite_qualify,
+};
+use crate::unparser::{
+    extension_unparser::{UnparseToStatementResult, UnparseWithinStatementResult},
+    utils::filter_depends_on_input_alias,
 };
 use crate::utils::UNNEST_PLACEHOLDER;
 use datafusion_common::{
@@ -518,6 +519,14 @@ impl Unparser<'_> {
                     schema: projection.input.schema().as_ref(),
                 })
             }
+            // when a filter references aliases from its input, we add a subquery around it to
+            // prevent invalid references, so we need to keep track of it here
+            LogicalPlan::Filter(filter) if filter_depends_on_input_alias(filter) => {
+                Some(DerivedInputScope {
+                    alias: "derived_projection",
+                    schema: filter.input.schema().as_ref(),
+                })
+            }
             LogicalPlan::Filter(filter) => {
                 Self::derived_input_scope(filter.input.as_ref(), select)
             }
@@ -593,7 +602,18 @@ impl Unparser<'_> {
         alias: Option<ast::TableAlias>,
         lateral: bool,
     ) -> Result<()> {
+        let preserve_names = matches!(plan, LogicalPlan::Projection(_))
+            && alias.as_ref().is_none_or(|alias| alias.columns.is_empty());
         let mut derived_builder = DerivedRelationBuilder::default();
+        if preserve_names {
+            derived_builder.projection_names(
+                plan.schema()
+                    .fields()
+                    .iter()
+                    .map(|field| self.column_alias_to_sql(field.name()))
+                    .collect::<Result<Vec<_>>>()?,
+            );
+        }
         derived_builder.lateral(lateral).alias(alias).subquery({
             let inner_statement = self.plan_to_sql(plan)?;
             if let ast::Statement::Query(inner_query) = inner_statement {
@@ -1232,6 +1252,18 @@ impl Unparser<'_> {
                     select.selection(Some(filter_expr));
                 }
 
+                // if the inner plan aliases columns used by the filter, we need to convert to a
+                // subquery to prevent invalid references
+                if filter_depends_on_input_alias(filter) {
+                    return self.derive_with_dialect_alias(
+                        "derived_projection",
+                        &filter.input,
+                        relation,
+                        false,
+                        vec![],
+                    );
+                }
+
                 self.select_to_sql_recursively(
                     filter.input.as_ref(),
                     query,
@@ -1632,7 +1664,11 @@ impl Unparser<'_> {
                 // we must emit a derived subquery: (SELECT ...) AS alias.
                 // Without this, the recursive handler would merge those clauses
                 // into the outer SELECT, losing the subquery structure entirely.
-                if unparsed_table_scan.is_none() && Self::requires_derived_subquery(plan)
+                // Also, do not add a table alias past a Filter, as otherwise the predicates might
+                // refer to invalid tables.
+                if (unparsed_table_scan.is_none()
+                    && Self::requires_derived_subquery(plan))
+                    || matches!(plan, LogicalPlan::Filter(_))
                 {
                     // When the dialect does not support column aliases in
                     // table aliases (e.g. SQLite), inject the aliases into
@@ -2689,18 +2725,9 @@ impl Unparser<'_> {
             Expr::Alias(Alias { expr, name, .. }) => {
                 let inner = self.expr_to_sql(expr)?;
 
-                // Determine the alias name to use
-                let col_name = if let Some(rewritten_name) =
-                    self.dialect.col_alias_overrides(name)?
-                {
-                    rewritten_name.to_string()
-                } else {
-                    name.to_string()
-                };
-
                 Ok(ast::SelectItem::ExprWithAlias {
                     expr: inner,
-                    alias: self.new_ident_quoted_if_needs(col_name),
+                    alias: self.column_alias_to_sql(name)?,
                 })
             }
             _ => {
@@ -2709,6 +2736,14 @@ impl Unparser<'_> {
                 Ok(ast::SelectItem::UnnamedExpr(inner))
             }
         }
+    }
+
+    fn column_alias_to_sql(&self, name: &str) -> Result<Ident> {
+        let name = self
+            .dialect
+            .col_alias_overrides(name)?
+            .unwrap_or_else(|| name.to_string());
+        Ok(self.new_ident_quoted_if_needs(name))
     }
 
     fn sorts_to_sql(&self, sort_exprs: &[SortExpr]) -> Result<OrderByKind> {

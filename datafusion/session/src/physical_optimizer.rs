@@ -80,5 +80,34 @@ pub trait PhysicalOptimizerRule: Debug + std::any::Any {
     /// change the schema of the plan after the rewriting.
     /// Some of the optimization rules might change the nullable properties of the schema
     /// and should disable the schema check.
+    ///
+    /// The planner reads this from the rule it holds, so a rule that runs
+    /// *other* rules inside its own [`optimize`] must account for what the
+    /// whole wrapped transformation does to the schema, not just its own body:
+    ///
+    /// * A wrapper around a single rule should forward that rule's value.
+    /// * A wrapper that runs multiple rules should return `true` only if the
+    ///   complete wrapped transformation preserves the schema contract. When
+    ///   that is derived solely from the wrapped rules, every wrapped rule must
+    ///   enable the check (`all()`, not `any()`): if any wrapped rule is allowed
+    ///   to change the schema, returning `true` makes the checker assert a
+    ///   change it should tolerate.
+    /// * A wrapper mixing schema-preserving and schema-changing rules cannot be
+    ///   expressed as a single flag; validate per-rule inside the wrapper so the
+    ///   inner checks are retained.
+    ///
+    /// When the flag can be derived from the wrapped rules, `all()` (not
+    /// `any()`) is the safe combinator:
+    ///
+    /// ```text
+    /// fn schema_check(&self) -> bool {
+    ///     self.wrapped.iter().all(|rule| rule.schema_check())
+    /// }
+    /// ```
+    ///
+    /// Returning a blanket `false` still silently disables validation for
+    /// everything inside, including rules that asked for it.
+    ///
+    /// [`optimize`]: PhysicalOptimizerRule::optimize
     fn schema_check(&self) -> bool;
 }

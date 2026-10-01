@@ -17,7 +17,7 @@
 
 //! [`HashJoinExec`] Partitioned Hash Join Operator
 
-pub use exec::{HashJoinExec, HashJoinExecBuilder};
+pub use exec::{HashJoinExec, HashJoinExecBuilder, PreparedHashJoinBuild};
 pub use partitioned_hash_eval::{HashExpr, HashTableLookupExpr, SeededRandomState};
 
 mod exec;

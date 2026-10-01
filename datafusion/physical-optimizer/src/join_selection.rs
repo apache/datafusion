@@ -172,11 +172,13 @@ impl PhysicalOptimizerRule for JoinSelection {
     }
 }
 
-/// Determines whether it is possible to swap inputs of a hash join - for null-aware joins, we can only swap `LeftAnti` with no filters
+/// Determines whether it is possible to swap inputs of a hash join - for null-aware joins, we can only swap an uncorrelated `LeftAnti`
+/// (a single join key and no filter), because the swapped `RightAnti` has no per-row NULL handling
 fn can_swap_hash_join(hash_join: &HashJoinExec) -> bool {
     hash_join.join_type().supports_swap()
         && (!hash_join.null_aware
             || (*hash_join.join_type() == JoinType::LeftAnti
+                && hash_join.on().len() == 1
                 && hash_join.filter().is_none()))
 }
 

@@ -29,16 +29,17 @@ use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
-    Column, DFSchemaRef, ExprSchema, NullEquality, Result, ScalarValue,
-    assert_or_internal_err, plan_err,
+    Column, DFSchema, NullEquality, Result, ScalarValue, assert_or_internal_err, plan_err,
 };
 use datafusion_expr::expr::{Exists, InSubquery};
-use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
+use datafusion_expr::expr_rewriter::{
+    create_col_from_scalar_expr, strip_outer_reference,
+};
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::utils::{conjunction, expr_to_columns, split_conjunction_owned};
 use datafusion_expr::{
-    BinaryExpr, Expr, Filter, LogicalPlan, LogicalPlanBuilder, Operator, exists,
-    in_subquery, lit, not, not_exists, not_in_subquery, when,
+    BinaryExpr, Expr, ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder, Operator,
+    exists, in_subquery, lit, not, not_exists, not_in_subquery, when,
 };
 
 use log::debug;
@@ -81,7 +82,7 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
             for expr in projection.expr {
                 let original_name = expr.schema_name().to_string();
                 let (new_input, mut rewritten_expr) =
-                    rewrite_inner_subqueries(cur_input, expr, config, true)?;
+                    rewrite_inner_subqueries(cur_input, expr, config, true, true)?;
                 if has_subquery(&rewritten_expr) {
                     return Ok(Transformed::no(LogicalPlan::Projection(
                         original_projection,
@@ -129,14 +130,29 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
                     match build_join_top(&subquery, &cur_input, config.alias_generator())?
                     {
                         Some(plan) => cur_input = plan,
-                        // If the subquery can not be converted to a Join, reconstruct the subquery expression and add it to the Filter
-                        None => other_exprs.push(subquery.expr()),
+                        // The subquery cannot become a semi or anti join. A
+                        // `NOT IN` may still become mark joins that
+                        // materialize its three-valued result, see
+                        // `in_subquery_value_mark_join`. Any other subquery
+                        // expression goes back into the filter as it is.
+                        None => match subquery.expr() {
+                            expr @ Expr::InSubquery(InSubquery {
+                                negated: true, ..
+                            }) => {
+                                let (plan, expr) = rewrite_inner_subqueries(
+                                    cur_input, expr, config, true, true,
+                                )?;
+                                cur_input = plan;
+                                other_exprs.push(expr);
+                            }
+                            expr => other_exprs.push(expr),
+                        },
                     }
                 }
                 // The subquery expression is embedded within another expression
                 SubqueryPredicate::Embedded(expr) => {
                     let (plan, expr_without_subqueries) =
-                        rewrite_inner_subqueries(cur_input, expr, config, false)?;
+                        rewrite_filter_subqueries(cur_input, expr, config)?;
                     cur_input = plan;
                     other_exprs.push(expr_without_subqueries);
                 }
@@ -167,11 +183,61 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
     }
 }
 
+/// Rewrites the subqueries of one embedded `Filter` conjunct, deciding for each
+/// occurrence whether its mark join has to be null-aware.
+///
+/// A `Filter` keeps a row only when the predicate is TRUE, and `AND`/`OR` make
+/// TRUE only out of TRUE. A NULL mark therefore acts exactly like a FALSE mark
+/// under them, so a non-negated `IN` reached through nothing but `AND`/`OR`
+/// does not need the more expensive null-aware join. Every other context can
+/// tell NULL from FALSE and gets one.
+///
+/// The decision is taken at the occurrence rather than once for the whole
+/// conjunct, so a sibling's shape cannot change it, and any expression this
+/// function does not name falls through to the null-aware branch.
+fn rewrite_filter_subqueries(
+    outer: LogicalPlan,
+    expr: Expr,
+    config: &dyn OptimizerConfig,
+) -> Result<(LogicalPlan, Expr)> {
+    match expr {
+        Expr::BinaryExpr(BinaryExpr {
+            left,
+            op: op @ (Operator::And | Operator::Or),
+            right,
+        }) => {
+            let (outer, left) = rewrite_filter_subqueries(outer, *left, config)?;
+            let (outer, right) = rewrite_filter_subqueries(outer, *right, config)?;
+            Ok((
+                outer,
+                Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right))),
+            ))
+        }
+        Expr::InSubquery(in_subquery) => {
+            // A subquery in the `IN` value is compared, not used as a filter
+            // truth value, so its own mark is observable there.
+            let needs_null_aware_mark =
+                in_subquery.negated || has_subquery(&in_subquery.expr);
+            rewrite_inner_subqueries(
+                outer,
+                Expr::InSubquery(in_subquery),
+                config,
+                false,
+                needs_null_aware_mark,
+            )
+        }
+        other => rewrite_inner_subqueries(outer, other, config, false, true),
+    }
+}
+
+/// `needs_null_aware_mark` is `false` only when the caller can prove that a NULL
+/// mark and a FALSE mark give the same answer. See [`rewrite_filter_subqueries`].
 fn rewrite_inner_subqueries(
     outer: LogicalPlan,
     expr: Expr,
     config: &dyn OptimizerConfig,
     materialize_in_value: bool,
+    needs_null_aware_mark: bool,
 ) -> Result<(LogicalPlan, Expr)> {
     let mut cur_input = outer;
     let alias = config.alias_generator();
@@ -179,8 +245,19 @@ fn rewrite_inner_subqueries(
         Expr::Exists(Exists {
             subquery: Subquery { subquery, .. },
             negated,
-        }) => match mark_join(&cur_input, &subquery, None, negated, alias)? {
-            Some((plan, exists_expr)) => {
+        }) => match mark_join(
+            &cur_input,
+            &subquery,
+            None,
+            negated,
+            alias,
+            needs_null_aware_mark,
+        )? {
+            Some(MarkJoin {
+                plan,
+                mark: exists_expr,
+                ..
+            }) => {
                 cur_input = plan;
                 Ok(Transformed::yes(exists_expr))
             }
@@ -206,7 +283,15 @@ fn rewrite_inner_subqueries(
                     .map_or(plan_err!("single expression required."), |output_expr| {
                         Ok(Expr::eq(*expr.clone(), output_expr))
                     })?;
-                mark_join(&cur_input, &subquery, Some(&in_predicate), negated, alias)?
+                mark_join(
+                    &cur_input,
+                    &subquery,
+                    Some(&in_predicate),
+                    negated,
+                    alias,
+                    needs_null_aware_mark,
+                )?
+                .map(|join| (join.plan, join.mark))
             };
             match rewritten {
                 Some((plan, exists_expr)) => {
@@ -222,6 +307,21 @@ fn rewrite_inner_subqueries(
     Ok((cur_input, expr_without_subqueries.data))
 }
 
+/// Rewrites an `IN` subquery that gives a value, for example in a SELECT list.
+/// The value follows SQL three-valued logic: TRUE for a match, FALSE for a miss
+/// and NULL (UNKNOWN) when the answer depends on a NULL.
+///
+/// There are two paths:
+///
+/// * One mark join. When the mark column is already exact under three-valued
+///   logic (see [`MarkJoin::three_valued_exact`]), the mark column is the
+///   answer and this single join is the full rewrite. This is the usual case.
+/// * Three mark joins. In the other case the mark column only tells TRUE from
+///   not-TRUE, so the UNKNOWN cases must be materialized: one more join tells
+///   if the subquery gives a NULL, and one more tells if the subquery gives
+///   any row. A `CASE` expression puts the three marks together. The two extra
+///   joins have no join predicate, so use them only when the first path
+///   cannot apply.
 fn in_subquery_value_mark_join(
     left: &LogicalPlan,
     subquery: &LogicalPlan,
@@ -233,23 +333,41 @@ fn in_subquery_value_mark_join(
         .head_output_expr()?
         .map_or(plan_err!("single expression required."), Ok)?;
     let in_predicate = Expr::eq(expr.clone(), output_expr.clone());
-    let Some((matched_plan, matched)) =
-        mark_join(left, subquery, Some(&in_predicate), false, alias)?
+    let Some(MarkJoin {
+        plan: matched_plan,
+        mark: matched,
+        three_valued_exact,
+    }) = mark_join(left, subquery, Some(&in_predicate), false, alias, true)?
     else {
         return Ok(None);
     };
+
+    // The mark column is the full answer when it is exact. Negation does not
+    // change that, because NOT UNKNOWN is UNKNOWN.
+    if three_valued_exact {
+        return Ok(Some((
+            matched_plan,
+            if negated { not(matched) } else { matched },
+        )));
+    }
 
     // SQL IN needs three facts per outer row to distinguish FALSE from UNKNOWN.
     let null_subquery = LogicalPlanBuilder::from(subquery.clone())
         .filter(output_expr.is_null())?
         .build()?;
-    let Some((null_plan, subquery_has_null)) =
-        mark_join(&matched_plan, &null_subquery, None, false, alias)?
+    let Some(MarkJoin {
+        plan: null_plan,
+        mark: subquery_has_null,
+        ..
+    }) = mark_join(&matched_plan, &null_subquery, None, false, alias, true)?
     else {
         return Ok(None);
     };
-    let Some((final_plan, subquery_non_empty)) =
-        mark_join(&null_plan, subquery, None, false, alias)?
+    let Some(MarkJoin {
+        plan: final_plan,
+        mark: subquery_non_empty,
+        ..
+    }) = mark_join(&null_plan, subquery, None, false, alias, true)?
     else {
         return Ok(None);
     };
@@ -365,13 +483,15 @@ fn build_join_top(
     };
     let subquery = query_info.query.subquery.as_ref();
     let subquery_alias = alias.next("__correlated_sq");
-    build_join(
+    Ok(build_join(
         left,
         subquery,
         in_predicate_opt.as_ref(),
         join_type,
-        subquery_alias,
-    )
+        &subquery_alias,
+        true,
+    )?
+    .map(|join| join.plan))
 }
 
 /// This is used to handle the case when the subquery is embedded in a more complex boolean
@@ -395,49 +515,214 @@ fn mark_join(
     in_predicate_opt: Option<&Expr>,
     negated: bool,
     alias_generator: &Arc<AliasGenerator>,
-) -> Result<Option<(LogicalPlan, Expr)>> {
+    needs_null_aware_mark: bool,
+) -> Result<Option<MarkJoin>> {
     let alias = alias_generator.next("__correlated_sq");
 
     let exists_col = Expr::Column(Column::new(Some(alias.clone()), "mark"));
     let exists_expr = if negated { !exists_col } else { exists_col };
 
-    Ok(
-        build_join(left, subquery, in_predicate_opt, JoinType::LeftMark, alias)?
-            .map(|plan| (plan, exists_expr)),
-    )
+    Ok(build_join(
+        left,
+        subquery,
+        in_predicate_opt,
+        JoinType::LeftMark,
+        &alias,
+        needs_null_aware_mark,
+    )?
+    .map(|join| MarkJoin {
+        plan: join.plan,
+        mark: exists_expr,
+        three_valued_exact: join.mark_is_three_valued_exact,
+    }))
 }
 
-/// Check if join keys in the join filter may contain NULL values
-///
-/// Returns true if any join key column is nullable on either side.
-/// This is used to optimize null-aware anti joins: if all join keys are non-nullable,
-/// we can use a regular anti join instead of the more expensive null-aware variant.
-fn join_keys_may_be_null(
+/// A [`JoinType::LeftMark`] join that replaces a subquery predicate.
+struct MarkJoin {
+    /// The outer plan with the subquery joined into it.
+    plan: LogicalPlan,
+    /// Reads the mark column of the join, negated if the caller asked for it.
+    mark: Expr,
+    /// True when the mark column already gives SQL three-valued `IN`
+    /// semantics: TRUE for a match, FALSE for a miss and NULL for UNKNOWN.
+    ///
+    /// A plain mark is exact when neither side of the `IN` predicate can be
+    /// NULL in scope. Otherwise the join must be null-aware, and the `IN`
+    /// equality must be its first key, which is where the null-aware hash join
+    /// reads the `IN` value. That join also applies a residual non-equality
+    /// filter when it decides whether a NULL makes the mark UNKNOWN.
+    ///
+    /// In any other case the caller materializes the UNKNOWN rows with more
+    /// joins, see [`in_subquery_value_mark_join`].
+    three_valued_exact: bool,
+}
+
+/// Is the `IN` equality the first equality of `join_filter` that the hash
+/// join can use as a key? A null-aware hash join reads its first key as the
+/// `IN` value and the other keys as the correlation.
+fn value_is_first_key(
+    in_value: &InValue,
     join_filter: &Expr,
-    left_schema: &DFSchemaRef,
-    right_schema: &DFSchemaRef,
+    left_schema: &DFSchema,
+    right_schema: &DFSchema,
 ) -> Result<bool> {
-    // Extract columns from the join filter
-    let mut columns = std::collections::HashSet::new();
-    expr_to_columns(join_filter, &mut columns)?;
+    let (equijoin_keys, _) = split_eq_and_noneq_join_predicate(
+        join_filter.clone(),
+        left_schema,
+        right_schema,
+    )?;
+    Ok(equijoin_keys.first().is_some_and(|(value, column)| {
+        value == &in_value.value && column == &in_value.subquery_column
+    }))
+}
 
-    // Check if any column is nullable
-    for col in columns {
-        // Check in left schema
-        if let Ok(field) = left_schema.field_from_column(&col)
-            && field.as_ref().is_nullable()
-        {
-            return Ok(true);
-        }
-        // Check in right schema
-        if let Ok(field) = right_schema.field_from_column(&col)
-            && field.as_ref().is_nullable()
-        {
-            return Ok(true);
-        }
+/// The two sides of an `IN` predicate, `value IN (SELECT output_expr ..)`.
+struct InValue {
+    /// The value from the outer plan, as the join filter refers to it. This is
+    /// a projected column when `value_as_written` is a constant.
+    value: Expr,
+    /// The subquery output, as the join filter refers to it: a column of the
+    /// aliased subquery.
+    subquery_column: Expr,
+    /// The value as the query writes it.
+    value_as_written: Expr,
+    /// The subquery output expression as the query writes it.
+    output_expr: Expr,
+}
+
+impl InValue {
+    /// Can either side be NULL for a row inside the scope of an outer row?
+    /// See [`key_may_be_null_in_scope`]. The correlated filters name the
+    /// expressions as the query writes them, so the test matches on those.
+    ///
+    /// Only then can `IN` be UNKNOWN, so only then does the join need
+    /// null-aware semantics. A correlation key that is NULL just empties the
+    /// scope, which makes `IN` FALSE.
+    fn may_be_null_in_scope(
+        &self,
+        left_schema: &DFSchema,
+        right_schema: &DFSchema,
+        scope_filters: &[Expr],
+    ) -> Result<bool> {
+        Ok(key_may_be_null_in_scope(
+            self.value.nullable(left_schema)?,
+            &self.value_as_written,
+            true,
+            scope_filters,
+        ) || key_may_be_null_in_scope(
+            self.subquery_column.nullable(right_schema)?,
+            &self.output_expr,
+            false,
+            scope_filters,
+        ))
     }
+}
 
-    Ok(false)
+/// Can this join key be NULL for a row inside the scope of an outer row?
+///
+/// `nullable` is what the schema says about the key. The key is a full
+/// expression, not only a column. An expression can be NULL although none of
+/// its columns is nullable: `NULLIF(id, 1)`, `TRY_CAST(s AS INT)`, a `CASE`
+/// with no `ELSE` branch, or a scalar function that does not declare its
+/// nullability. So the caller asks the key expression itself, against the
+/// schema of its own side.
+///
+/// The subquery can still keep every NULL out of its result. A correlated
+/// conjunct such as `y = x`, `y > x` or `y IS NOT NULL` is never TRUE for a
+/// NULL `y`, so no row with a NULL `y` is in the scope of any outer row, and
+/// an outer row with a NULL `x` has an empty scope. Neither can make `IN`
+/// UNKNOWN, so such a key does not need null-aware semantics. The usual shape
+/// is a correlation that repeats the `IN` predicate, `x IN (SELECT y FROM t
+/// WHERE y = x)`: the pull up drops that conjunct from the join filter, but
+/// it still bounds the subquery result
+/// (<https://github.com/apache/datafusion/issues/25480>).
+///
+/// This is a sufficient test, not an exact one. A conjunct counts only if it
+/// is a comparison or an `IS NOT NULL` on the key expression itself, casts
+/// aside. Any other conjunct is assumed to let a NULL through, which keeps
+/// the join null-aware.
+///
+/// `key_is_outer` tells on which side of the join the key is. The scope
+/// filters keep their outer references, and a side of a conjunct matches an
+/// outer key only if it names outer columns alone. A subquery column can have
+/// the same qualified name as an outer column (`FROM t AS a` inside a query
+/// over `a`), and it must not be read as the outer key.
+fn key_may_be_null_in_scope(
+    nullable: bool,
+    key: &Expr,
+    key_is_outer: bool,
+    scope_filters: &[Expr],
+) -> bool {
+    if !nullable {
+        return false;
+    }
+    let key = strip_casts(key);
+    !scope_filters
+        .iter()
+        .any(|filter| filter_rejects_null(filter, key, key_is_outer))
+}
+
+/// Is `filter` never TRUE when `key` is NULL? See
+/// [`key_may_be_null_in_scope`] for `key_is_outer`.
+fn filter_rejects_null(filter: &Expr, key: &Expr, key_is_outer: bool) -> bool {
+    let is_key = |side: &Expr| {
+        let side = strip_casts(side);
+        if key_is_outer {
+            side.contains_outer()
+                && side.column_refs().is_empty()
+                && &strip_outer_reference(side.clone()) == key
+        } else {
+            !side.contains_outer() && side == key
+        }
+    };
+    match filter {
+        Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+            matches!(
+                op,
+                Operator::Eq
+                    | Operator::NotEq
+                    | Operator::Lt
+                    | Operator::LtEq
+                    | Operator::Gt
+                    | Operator::GtEq
+            ) && (is_key(left) || is_key(right))
+        }
+        Expr::IsNotNull(expr) => is_key(expr),
+        _ => false,
+    }
+}
+
+/// `CAST(NULL)` is NULL and `CAST(x)` is not NULL for a non-null `x`, so a
+/// conjunct on `x` says the same about `CAST(x)`, and the other way round.
+/// Type coercion adds such casts on one side only. `TRY_CAST` can make a NULL
+/// from a value, so it is not unwrapped.
+fn strip_casts(expr: &Expr) -> &Expr {
+    let mut expr = expr;
+    while let Expr::Cast(cast) = expr {
+        expr = cast.expr.as_ref();
+    }
+    expr
+}
+
+/// Combines the `IN`/`NOT IN` equality with the correlation predicates, if any.
+///
+/// The equality stays the leading conjunct so that it becomes `on[0]`, the key
+/// position a null-aware hash join reads as the `NOT IN` value key (see
+/// `HashJoinExec::null_aware`).
+fn in_predicate_first(in_predicate: Expr, correlation: Option<Expr>) -> Expr {
+    match correlation {
+        Some(correlation) => in_predicate.and(correlation),
+        None => in_predicate,
+    }
+}
+
+/// The outcome of [`build_join`].
+struct BuiltJoin {
+    /// The outer plan with the subquery joined into it.
+    plan: LogicalPlan,
+    /// See [`MarkJoin::three_valued_exact`]. This is always false unless the
+    /// join is a [`JoinType::LeftMark`] join built for an `IN` predicate.
+    mark_is_three_valued_exact: bool,
 }
 
 fn build_join(
@@ -445,8 +730,9 @@ fn build_join(
     subquery: &LogicalPlan,
     in_predicate_opt: Option<&Expr>,
     join_type: JoinType,
-    alias: String,
-) -> Result<Option<LogicalPlan>> {
+    alias: &str,
+    needs_null_aware_mark: bool,
+) -> Result<Option<BuiltJoin>> {
     let mut pull_up = PullUpCorrelatedExpr::new()
         .with_in_predicate_opt(in_predicate_opt.cloned())
         .with_exists_sub_query(in_predicate_opt.is_none());
@@ -468,38 +754,129 @@ fn build_join(
     // alias the join filter
     let join_filter_opt = conjunction(pull_up.join_filters)
         .map_or(Ok(None), |filter| {
-            replace_qualified_name(filter, &all_correlated_cols, &alias).map(Some)
+            replace_qualified_name(filter, &all_correlated_cols, alias).map(Some)
         })?;
 
-    let join_filter = match (join_filter_opt, in_predicate_opt.cloned()) {
-        (
-            Some(join_filter),
-            Some(Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: Operator::Eq,
-                right,
-            })),
-        ) => {
-            let right_col = create_col_from_scalar_expr(&right, alias)?;
-            let in_predicate = Expr::eq(left.deref().clone(), Expr::Column(right_col));
-            in_predicate.and(join_filter)
+    // The two sides of the `IN` predicate: the value from the outer plan and
+    // the subquery output it is compared with, renamed to the alias.
+    let in_value = match in_predicate_opt {
+        Some(Expr::BinaryExpr(BinaryExpr {
+            left,
+            op: Operator::Eq,
+            right,
+        })) => {
+            let right_col = create_col_from_scalar_expr(right, alias.to_string())?;
+            Some(InValue {
+                value: left.deref().clone(),
+                subquery_column: Expr::Column(right_col),
+                value_as_written: left.deref().clone(),
+                output_expr: right.deref().clone(),
+            })
         }
-        (Some(join_filter), _) => join_filter,
-        (
-            _,
-            Some(Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: Operator::Eq,
-                right,
-            })),
-        ) => {
-            let right_col = create_col_from_scalar_expr(&right, alias)?;
-
-            Expr::eq(left.deref().clone(), Expr::Column(right_col))
-        }
-        (None, None) => lit(true),
-        _ => return Ok(None),
+        Some(_) => return Ok(None),
+        None => None,
     };
+
+    // True if the `IN` value or the subquery column it is compared with can be
+    // NULL inside the scope of an outer row. `EXISTS` has no value to compare.
+    let value_may_be_null = match &in_value {
+        Some(in_value) => in_value.may_be_null_in_scope(
+            left.schema(),
+            sub_query_alias.schema(),
+            &pull_up.correlated_filters,
+        )?,
+        None => false,
+    };
+
+    // Whether this join needs null-aware (`NOT IN` three-valued) semantics.
+    // Decided once: the constant projection below, the mark branch and the anti
+    // branch all depend on the same answer. `NOT EXISTS` is two-valued and has
+    // no `IN` value, so it never qualifies.
+    //
+    // The left projection below only adds a column for a constant value and
+    // the right projection only drops unreferenced columns, so neither changes
+    // the nullability this looks at.
+    let null_aware = value_may_be_null
+        && match join_type {
+            JoinType::LeftAnti => true,
+            JoinType::LeftMark => needs_null_aware_mark,
+            _ => false,
+        };
+
+    // `<constant> IN/NOT IN (<subquery>)`: the outer value expression holds no
+    // column reference, so `<constant> = __correlated_sq.col` is not a valid
+    // equi-join key (see `find_valid_equijoin_key_pair`) and stays in the join
+    // filter. Two things then go wrong for a null-aware join: the filter is
+    // right-only, so `push_down_filter` moves it into the subquery and drops the
+    // very NULLs that make `NOT IN` UNKNOWN, and a join without equi-join keys
+    // is planned as a nested loop join, which has no null-aware implementation.
+    // A correlated subquery hits a third problem: its correlation predicate is a
+    // valid equi-join key, so it takes `on[0]`, the position the null-aware hash
+    // join reads as the `NOT IN` value key.
+    // Projecting the constant as a column of the outer side turns the predicate
+    // into a real equi-join key, which fixes all three. It only pays for itself
+    // on a join that ends up null-aware.
+    let mut projected_left = None;
+    let in_value = match in_value {
+        Some(in_value) if in_value.value.column_refs().is_empty() && null_aware => {
+            // The projected column is unqualified, so a left field that already
+            // has this name — however unlikely — would make the reference
+            // ambiguous.
+            let mut value_name = format!("{alias}_value");
+            let left_schema = left.schema();
+            while left_schema.fields().iter().any(|f| f.name() == &value_name) {
+                value_name.push('_');
+            }
+            let value_col = Column::new_unqualified(value_name);
+            let projections = left_schema
+                .columns()
+                .into_iter()
+                .map(Expr::from)
+                .chain(std::iter::once(in_value.value.alias(value_col.name())))
+                .collect::<Vec<_>>();
+            projected_left = Some(
+                LogicalPlanBuilder::from(left.clone())
+                    .project(projections)?
+                    .build()?,
+            );
+            Some(InValue {
+                value: Expr::Column(value_col),
+                ..in_value
+            })
+        }
+        other => other,
+    };
+    let left = projected_left.as_ref().unwrap_or(left);
+
+    let join_filter = match (&in_value, join_filter_opt) {
+        (Some(in_value), correlation_opt) => in_predicate_first(
+            Expr::eq(in_value.value.clone(), in_value.subquery_column.clone()),
+            correlation_opt,
+        ),
+        (None, Some(correlation)) => correlation,
+        (None, None) => lit(true),
+    };
+
+    // Only a null-aware join reads the key order.
+    let value_is_first_key = match &in_value {
+        Some(in_value) if null_aware => value_is_first_key(
+            in_value,
+            &join_filter,
+            left.schema(),
+            sub_query_alias.schema(),
+        )?,
+        _ => false,
+    };
+
+    // A `NOT IN` in a filter builds a `LeftAnti` join. The null-aware hash
+    // join reads its first key as the `NOT IN` value and the other keys as the
+    // scope of the outer row (see `HashJoinExec::null_aware`). If the `IN`
+    // equality did not become that first key, give up here. The caller then
+    // materializes the UNKNOWN rows with more joins, see
+    // `in_subquery_value_mark_join`.
+    if join_type == JoinType::LeftAnti && null_aware && !value_is_first_key {
+        return Ok(None);
+    }
 
     if matches!(join_type, JoinType::LeftMark | JoinType::RightMark) {
         let right_schema = sub_query_alias.schema();
@@ -535,30 +912,12 @@ fn build_join(
             sub_query_alias.clone()
         };
 
-        let mark_filter_is_hashable_only =
-            if join_type == JoinType::LeftMark && in_predicate_opt.is_some() {
-                let (_, residual_filter) = split_eq_and_noneq_join_predicate(
-                    join_filter.clone(),
-                    left.schema(),
-                    right_projected.schema(),
-                )?;
-                residual_filter.is_none()
-            } else {
-                false
-            };
-
         // For scalar NOT IN mark joins, propagate null-aware semantics into the
-        // nullable mark column when the predicate can be implemented by hash keys.
-        // Non-equality correlated filters stay on the legacy path because hash join
-        // execution cannot mark UNKNOWN candidates for residual predicates.
-        let null_aware = join_type == JoinType::LeftMark
-            && in_predicate_opt.is_some()
-            && mark_filter_is_hashable_only
-            && join_keys_may_be_null(
-                &join_filter,
-                left.schema(),
-                right_projected.schema(),
-            )?;
+        // nullable mark column. A non-equality correlation stays behind as a
+        // join filter, which the hash join also applies when it decides
+        // whether a NULL makes the mark UNKNOWN.
+        let mark_is_three_valued_exact = in_value.is_some()
+            && (!value_may_be_null || (null_aware && value_is_first_key));
 
         let new_plan = LogicalPlanBuilder::from(left.clone())
             .join_detailed_with_options(
@@ -576,20 +935,11 @@ fn build_join(
             new_plan.display_indent()
         );
 
-        return Ok(Some(new_plan));
+        return Ok(Some(BuiltJoin {
+            plan: new_plan,
+            mark_is_three_valued_exact,
+        }));
     }
-
-    // Determine if this should be a null-aware anti join
-    // Null-aware semantics are only needed for NOT IN subqueries, not NOT EXISTS:
-    // - NOT IN: Uses three-valued logic, requires null-aware handling
-    // - NOT EXISTS: Uses two-valued logic, regular anti join is correct
-    // We can distinguish them: NOT IN has in_predicate_opt, NOT EXISTS does not
-    //
-    // Additionally, if the join keys are non-nullable on both sides, we don't need
-    // null-aware semantics because NULLs cannot exist in the data.
-    let null_aware = join_type == JoinType::LeftAnti
-        && in_predicate_opt.is_some()
-        && join_keys_may_be_null(&join_filter, left.schema(), sub_query_alias.schema())?;
 
     // join our sub query into the main plan
     let new_plan = if null_aware {
@@ -613,7 +963,10 @@ fn build_join(
         "predicate subquery optimized:\n{}",
         new_plan.display_indent()
     );
-    Ok(Some(new_plan))
+    Ok(Some(BuiltJoin {
+        plan: new_plan,
+        mark_is_three_valued_exact: false,
+    }))
 }
 
 #[derive(Debug)]
@@ -664,7 +1017,9 @@ mod tests {
     use crate::assert_optimized_plan_eq_display_indent_snapshot;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_expr::builder::table_source;
-    use datafusion_expr::{and, binary_expr, col, out_ref_col, table_scan};
+    use datafusion_expr::{
+        and, binary_expr, col, cube, grouping_set, out_ref_col, rollup, table_scan,
+    };
 
     macro_rules! assert_optimized_plan_equal {
         (
@@ -697,6 +1052,15 @@ mod tests {
         table_scan(Some(name), &schema, None)?.build()
     }
 
+    /// `CASE WHEN test.c = 1 THEN NULL ELSE test.c END`: an expression that can
+    /// be NULL although `test.c` is not nullable. `NULLIF(c, 1)` and
+    /// `TRY_CAST(c AS INT)` have the same shape, but the optimizer crate cannot
+    /// depend on the function crates.
+    fn nullable_key_expr() -> Result<Expr> {
+        when(col("test.c").eq(lit(1u32)), lit(ScalarValue::UInt32(None)))
+            .otherwise(col("test.c"))
+    }
+
     fn has_null_aware_left_mark_join(plan: &LogicalPlan) -> bool {
         if let LogicalPlan::Join(join) = plan
             && join.join_type == JoinType::LeftMark
@@ -724,6 +1088,138 @@ mod tests {
             DecorrelatePredicateSubquery::new(),
         )]);
         optimizer.optimize(plan, &crate::OptimizerContext::new(), |_, _| {})
+    }
+
+    /// A grouping set subquery for the tests below: `SELECT c FROM <name> WHERE
+    /// c = test.c GROUP BY <group_expr>`.
+    fn correlated_grouping_set_subquery(
+        name: &str,
+        group_expr: Expr,
+    ) -> Result<Arc<LogicalPlan>> {
+        Ok(Arc::new(
+            LogicalPlanBuilder::from(test_table_scan_with_name(name)?)
+                .filter(
+                    col(format!("{name}.c")).eq(out_ref_col(DataType::UInt32, "test.c")),
+                )?
+                .aggregate(vec![group_expr], Vec::<Expr>::new())?
+                .project(vec![col(format!("{name}.c"))])?
+                .build()?,
+        ))
+    }
+
+    /// `ROLLUP(c)` is `GROUPING SETS ((c), ())`. Adding the correlated column to
+    /// every set drops the empty one, so the subquery is left correlated.
+    /// <https://github.com/apache/datafusion/issues/25519>
+    #[test]
+    fn exists_subquery_with_rollup_is_not_decorrelated() -> Result<()> {
+        let subquery = correlated_grouping_set_subquery("sq", rollup(vec![col("sq.c")]))?;
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(exists(subquery))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.b [b:UInt32]
+          Filter: EXISTS (<subquery>) [a:UInt32, b:UInt32, c:UInt32]
+            Subquery: [c:UInt32;N]
+              Projection: sq.c [c:UInt32;N]
+                Aggregate: groupBy=[[ROLLUP (sq.c)]], aggr=[[]] [c:UInt32;N, __grouping_id:UInt8]
+                  Filter: sq.c = outer_ref(test.c) [a:UInt32, b:UInt32, c:UInt32]
+                    TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    /// `CUBE(c)` holds the empty set for the same reason. The correlation is on
+    /// `a` rather than on the `IN` key, so it stays a filter of its own instead
+    /// of being folded into the `IN` predicate.
+    /// <https://github.com/apache/datafusion/issues/25519>
+    #[test]
+    fn in_subquery_with_cube_is_not_decorrelated() -> Result<()> {
+        let subquery = Arc::new(
+            LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
+                .filter(col("sq.a").eq(out_ref_col(DataType::UInt32, "test.a")))?
+                .aggregate(vec![cube(vec![col("sq.c")])], Vec::<Expr>::new())?
+                .project(vec![col("sq.c")])?
+                .build()?,
+        );
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(in_subquery(col("test.c"), subquery))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.b [b:UInt32]
+          Filter: test.c IN (<subquery>) [a:UInt32, b:UInt32, c:UInt32]
+            Subquery: [c:UInt32;N]
+              Projection: sq.c [c:UInt32;N]
+                Aggregate: groupBy=[[CUBE (sq.c)]], aggr=[[]] [c:UInt32;N, __grouping_id:UInt8]
+                  Filter: sq.a = outer_ref(test.a) [a:UInt32, b:UInt32, c:UInt32]
+                    TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    /// A set that groups by another column does not carry the correlated one.
+    /// <https://github.com/apache/datafusion/issues/25519>
+    #[test]
+    fn exists_subquery_with_partial_grouping_set_is_not_decorrelated() -> Result<()> {
+        let subquery = correlated_grouping_set_subquery(
+            "sq",
+            grouping_set(vec![vec![col("sq.c")], vec![col("sq.b")]]),
+        )?;
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(exists(subquery))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.b [b:UInt32]
+          Filter: EXISTS (<subquery>) [a:UInt32, b:UInt32, c:UInt32]
+            Subquery: [c:UInt32;N]
+              Projection: sq.c [c:UInt32;N]
+                Aggregate: groupBy=[[GROUPING SETS ((sq.c), (sq.b))]], aggr=[[]] [c:UInt32;N, b:UInt32;N, __grouping_id:UInt8]
+                  Filter: sq.c = outer_ref(test.c) [a:UInt32, b:UInt32, c:UInt32]
+                    TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    /// Every set already groups by the correlated column, so the pull up adds
+    /// nothing and the subquery decorrelates as it did before.
+    /// <https://github.com/apache/datafusion/issues/25519>
+    #[test]
+    fn exists_subquery_with_covering_grouping_set_is_decorrelated() -> Result<()> {
+        let subquery = correlated_grouping_set_subquery(
+            "sq",
+            grouping_set(vec![vec![col("sq.c")], vec![col("sq.c"), col("sq.b")]]),
+        )?;
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(exists(subquery))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.b [b:UInt32]
+          LeftSemi Join:  Filter: __correlated_sq_1.c = test.c [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            SubqueryAlias: __correlated_sq_1 [c:UInt32;N]
+              Projection: sq.c [c:UInt32;N]
+                Aggregate: groupBy=[[GROUPING SETS ((sq.c), (sq.c, sq.b))]], aggr=[[]] [c:UInt32;N, b:UInt32;N, __grouping_id:UInt8]
+                  TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
     }
 
     /// Test for several IN subquery expressions
@@ -1300,20 +1796,127 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Projection: CASE WHEN __correlated_sq_1.mark THEN Boolean(true) WHEN __correlated_sq_2.mark OR test.c IS NULL AND __correlated_sq_3.mark THEN Boolean(NULL) ELSE Boolean(false) END AS is_present [is_present:Boolean;N]
-          LeftMark Join:  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, mark:Boolean;N, mark:Boolean;N, mark:Boolean;N]
-            LeftMark Join:  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, mark:Boolean;N, mark:Boolean;N]
-              LeftMark Join:  Filter: test.c = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32, mark:Boolean;N]
-                TableScan: test [a:UInt32, b:UInt32, c:UInt32]
-                Projection: __correlated_sq_1.c [c:UInt32]
-                  SubqueryAlias: __correlated_sq_1 [c:UInt32]
-                    Projection: sq.c [c:UInt32]
-                      TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
-              SubqueryAlias: __correlated_sq_2 [c:UInt32]
-                Filter: sq.c IS NULL [c:UInt32]
-                  Projection: sq.c [c:UInt32]
-                    TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
-            SubqueryAlias: __correlated_sq_3 [c:UInt32]
+        Projection: __correlated_sq_1.mark AS is_present [is_present:Boolean;N]
+          LeftMark Join:  Filter: test.c = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32, mark:Boolean;N]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            Projection: __correlated_sq_1.c [c:UInt32]
+              SubqueryAlias: __correlated_sq_1 [c:UInt32]
+                Projection: sq.c [c:UInt32]
+                  TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    /// A residual non-equality correlation stays on the one mark join. The
+    /// null-aware hash join applies it when it decides whether a NULL makes
+    /// the mark UNKNOWN, so the mark is still exact.
+    #[test]
+    fn in_subquery_in_projection_with_residual_filter() -> Result<()> {
+        let subquery = Arc::new(
+            LogicalPlanBuilder::from(nullable_scalar_mark_scan("inner_t")?)
+                .filter(
+                    out_ref_col(DataType::Int32, "outer_t.grp").gt(col("inner_t.grp")),
+                )?
+                .project(vec![col("inner_t.id")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(nullable_scalar_mark_scan("outer_t")?)
+            .project(vec![
+                in_subquery(col("outer_t.id"), subquery).alias("is_present"),
+            ])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: __correlated_sq_1.mark AS is_present [is_present:Boolean;N]
+          LeftMark Join:  Filter: outer_t.id = __correlated_sq_1.id AND outer_t.grp > __correlated_sq_1.grp null_aware [id:Int32;N, grp:Int32;N, mark:Boolean;N]
+            TableScan: outer_t [id:Int32;N, grp:Int32;N]
+            Projection: __correlated_sq_1.id, __correlated_sq_1.grp [id:Int32;N, grp:Int32;N]
+              SubqueryAlias: __correlated_sq_1 [id:Int32;N, grp:Int32;N]
+                Projection: inner_t.id, inner_t.grp [id:Int32;N, grp:Int32;N]
+                  TableScan: inner_t [id:Int32;N, grp:Int32;N]
+        "
+        )
+    }
+
+    /// `NOT IN` reads the same mark column, negated. The keys are nullable here,
+    /// so the join is null-aware and the mark is NULL for the UNKNOWN rows.
+    #[test]
+    fn not_in_subquery_in_projection() -> Result<()> {
+        let subquery = Arc::new(
+            LogicalPlanBuilder::from(nullable_scalar_mark_scan("inner_t")?)
+                .project(vec![col("inner_t.id")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(nullable_scalar_mark_scan("outer_t")?)
+            .project(vec![
+                not_in_subquery(col("outer_t.id"), subquery).alias("is_absent"),
+            ])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: NOT __correlated_sq_1.mark AS is_absent [is_absent:Boolean;N]
+          LeftMark Join:  Filter: outer_t.id = __correlated_sq_1.id null_aware [id:Int32;N, grp:Int32;N, mark:Boolean;N]
+            TableScan: outer_t [id:Int32;N, grp:Int32;N]
+            Projection: __correlated_sq_1.id [id:Int32;N]
+              SubqueryAlias: __correlated_sq_1 [id:Int32;N]
+                Projection: inner_t.id [id:Int32;N]
+                  TableScan: inner_t [id:Int32;N, grp:Int32;N]
+        "
+        )
+    }
+
+    /// A key expression can be NULL although none of its columns is nullable.
+    /// The mark join must then be null-aware, so the mark is NULL for the rows
+    /// that give UNKNOWN.
+    #[test]
+    fn in_subquery_in_projection_with_nullable_key_expr() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![
+                in_subquery(nullable_key_expr()?, test_subquery_with_name("sq")?)
+                    .alias("is_present"),
+            ])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: __correlated_sq_1.mark AS is_present [is_present:Boolean;N]
+          LeftMark Join:  Filter: CASE WHEN test.c = UInt32(1) THEN UInt32(NULL) ELSE test.c END = __correlated_sq_1.c null_aware [a:UInt32, b:UInt32, c:UInt32, mark:Boolean;N]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            Projection: __correlated_sq_1.c [c:UInt32]
+              SubqueryAlias: __correlated_sq_1 [c:UInt32]
+                Projection: sq.c [c:UInt32]
+                  TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    /// The `NOT IN` filter path builds a `LeftAnti` join. It reads the key
+    /// nullability the same way, so a nullable key expression over columns that
+    /// are not nullable also makes that join null-aware.
+    #[test]
+    fn not_in_subquery_filter_with_nullable_key_expr() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(not_in_subquery(
+                nullable_key_expr()?,
+                test_subquery_with_name("sq")?,
+            ))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.b [b:UInt32]
+          LeftAnti Join:  Filter: CASE WHEN test.c = UInt32(1) THEN UInt32(NULL) ELSE test.c END = __correlated_sq_1.c null_aware [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            SubqueryAlias: __correlated_sq_1 [c:UInt32]
               Projection: sq.c [c:UInt32]
                 TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
         "
@@ -1413,6 +2016,39 @@ mod tests {
         )
     }
 
+    /// A constant value expression has no column, so `Int32(3) = inner_t.id`
+    /// cannot be an equi-join key on its own. The rule projects the constant as
+    /// a column of the outer side; `ExtractEquijoinPredicate` (not run here)
+    /// then turns the filter into a real key for the null-aware hash join.
+    #[test]
+    fn constant_not_in_subquery_projects_value_as_join_key() -> Result<()> {
+        let outer_scan = nullable_scalar_mark_scan("outer_t")?;
+        let inner_scan = nullable_scalar_mark_scan("inner_t")?;
+
+        let subquery = Arc::new(
+            LogicalPlanBuilder::from(inner_scan)
+                .project(vec![col("inner_t.id")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(outer_scan)
+            .filter(not_in_subquery(lit(3i32), subquery))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: outer_t.id, outer_t.grp [id:Int32;N, grp:Int32;N]
+          LeftAnti Join:  Filter: __correlated_sq_1_value = __correlated_sq_1.id null_aware [id:Int32;N, grp:Int32;N, __correlated_sq_1_value:Int32]
+            Projection: outer_t.id, outer_t.grp, Int32(3) AS __correlated_sq_1_value [id:Int32;N, grp:Int32;N, __correlated_sq_1_value:Int32]
+              TableScan: outer_t [id:Int32;N, grp:Int32;N]
+            SubqueryAlias: __correlated_sq_1 [id:Int32;N]
+              Projection: inner_t.id [id:Int32;N]
+                TableScan: inner_t [id:Int32;N, grp:Int32;N]
+        "
+        )
+    }
+
     #[test]
     fn correlated_not_in_mark_join_is_null_aware_for_hashable_filter() -> Result<()> {
         let outer_scan = nullable_scalar_mark_scan("outer_t")?;
@@ -1441,22 +2077,22 @@ mod tests {
         Ok(())
     }
 
+    /// A correlation that repeats the `IN` predicate keeps every NULL out of
+    /// the subquery result, so the mark join must not be null-aware.
     #[test]
-    fn correlated_not_in_mark_join_is_not_null_aware_for_residual_filter() -> Result<()> {
+    fn mark_join_for_in_predicate_correlation_is_not_null_aware() -> Result<()> {
         let outer_scan = nullable_scalar_mark_scan("outer_t")?;
         let inner_scan = nullable_scalar_mark_scan("inner_t")?;
 
         let subquery = Arc::new(
             LogicalPlanBuilder::from(inner_scan)
-                .filter(
-                    out_ref_col(DataType::Int32, "outer_t.grp").lt(col("inner_t.grp")),
-                )?
+                .filter(out_ref_col(DataType::Int32, "outer_t.id").eq(col("inner_t.id")))?
                 .project(vec![col("inner_t.id")])?
                 .build()?,
         );
 
         let plan = LogicalPlanBuilder::from(outer_scan)
-            .filter(not_in_subquery(col("outer_t.id"), subquery).is_null())?
+            .filter(in_subquery(col("outer_t.id"), subquery).is_null())?
             .build()?;
 
         let optimized = optimize_with_decorrelate(plan)?;
@@ -1467,6 +2103,56 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    /// A grouping set above the correlation puts a NULL back into the key: the
+    /// grand-total row of `ROLLUP` is a NULL for every outer row. The
+    /// correlation then no longer bounds the subquery result, and the mark
+    /// join stays null-aware.
+    #[test]
+    fn mark_join_for_in_predicate_correlation_below_rollup_is_null_aware() -> Result<()> {
+        let subquery = correlated_grouping_set_subquery("sq", rollup(vec![col("sq.c")]))?;
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![in_subquery(col("test.c"), subquery).alias("m")])?
+            .build()?;
+
+        let optimized = optimize_with_decorrelate(plan)?;
+        assert!(
+            has_null_aware_left_mark_join(&optimized),
+            "{}",
+            optimized.display_indent_schema()
+        );
+
+        Ok(())
+    }
+
+    /// The same for the `LeftAnti` join that a `NOT IN` filter builds.
+    #[test]
+    fn anti_join_for_in_predicate_correlation_is_not_null_aware() -> Result<()> {
+        let outer_scan = nullable_scalar_mark_scan("outer_t")?;
+        let inner_scan = nullable_scalar_mark_scan("inner_t")?;
+
+        let subquery = Arc::new(
+            LogicalPlanBuilder::from(inner_scan)
+                .filter(out_ref_col(DataType::Int32, "outer_t.id").eq(col("inner_t.id")))?
+                .project(vec![col("inner_t.id")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(outer_scan)
+            .filter(not_in_subquery(col("outer_t.id"), subquery))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        LeftAnti Join:  Filter: outer_t.id = __correlated_sq_1.id [id:Int32;N, grp:Int32;N]
+          TableScan: outer_t [id:Int32;N, grp:Int32;N]
+          SubqueryAlias: __correlated_sq_1 [id:Int32;N]
+            Projection: inner_t.id [id:Int32;N]
+              TableScan: inner_t [id:Int32;N, grp:Int32;N]
+        "
+        )
     }
 
     #[test]
