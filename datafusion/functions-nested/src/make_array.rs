@@ -193,6 +193,7 @@ pub fn array_array<O: OffsetSizeTrait>(
     field_name: &str,
 ) -> Result<ArrayRef> {
     if args.is_empty() {
+        // If input is empty, combined output is an empty array with `Null` data type
         let array = new_null_array(&Null, 0);
         return Ok(Arc::new(
             SingleRowListArrayBuilder::new(array).build_list_array(),
