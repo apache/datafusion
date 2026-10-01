@@ -116,7 +116,7 @@ impl<T: ArrowPrimitiveType> GroupValues for FullyOrderedGroupValuesPrimitive<T> 
                 self.values.push(current_value_valid);
 
                 // If prev group was not null and in this new input there are no nulls
-                for v in values_slice {
+                for &v in values_slice {
                     // If new group, save the current group and start a new one
                     if v != current_value_valid {
                         current_group += 1;
@@ -140,7 +140,7 @@ impl<T: ArrowPrimitiveType> GroupValues for FullyOrderedGroupValuesPrimitive<T> 
                 );
 
                 // Only look at the non nulls values section
-                for v in &col.values()[0..values_without_nulls] {
+                for &v in &col.values()[0..values_without_nulls] {
                     // If new group, save the current group and start a new one
                     if v != current_value_valid {
                         current_group += 1;
