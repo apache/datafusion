@@ -187,6 +187,11 @@ pub(crate) fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
 /// └──────────────┘   └──────────────┘        └─────────────────────────────┘
 ///      col1               col2                         output
 /// ```
+///
+/// # Public Only for Internal Use:
+/// `datafusion-spark` uses this helper to construct arrays with its element field
+/// name. This implementation detail is not part of the supported public API.
+#[doc(hidden)]
 pub fn array_array<O: OffsetSizeTrait>(
     args: &[ArrayRef],
     data_type: DataType,
