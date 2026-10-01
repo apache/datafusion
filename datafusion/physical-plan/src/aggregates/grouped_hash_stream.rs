@@ -34,13 +34,13 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::vec;
 
-use super::aggregate_hash_table::accumulator_phases;
+use super::aggregate_hash_table::{accumulator_phases, create_group_accumulator};
 use super::order::GroupOrdering;
 use super::skip_partial::SkipAggregationProbe;
 use super::{AggregateExec, format_human_display};
 use crate::aggregates::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
-    GroupByMetrics, GroupValues, new_group_values,
+    GroupByMetrics, GroupValues, aggregate_sub_metrics, new_group_values,
 };
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
@@ -65,9 +65,8 @@ use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
-use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
+use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 
@@ -401,19 +400,24 @@ impl GroupedHashAggregateStream {
     ) -> Result<Self> {
         debug!("Creating GroupedHashAggregateStream");
         let agg_schema = Arc::clone(&agg.schema);
-        let agg_group_by = Arc::clone(&agg.group_by);
-        let agg_filter_expr = Arc::clone(&agg.filter_expr);
+        let agg_group_by = Arc::clone(agg.group_by());
+        let agg_filter_expr = agg.clone_filter_exprs();
 
         let batch_size = context.session_config().batch_size();
         let input = agg.input.execute(partition, Arc::clone(context))?;
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let group_by_metrics = GroupByMetrics::new(&agg.metrics, partition);
         let aggregate_labels = agg
-            .aggr_expr
+            .aggr_expr()
             .iter()
             .map(|agg_expr| aggregate_metric_label(agg_expr))
             .collect::<Vec<_>>();
         let aggregate_argument_metrics = AggregateArgumentMetrics::new(
+            &agg.metrics,
+            partition,
+            aggregate_labels.iter().cloned(),
+        );
+        let aggregate_submetrics = aggregate_sub_metrics(
             &agg.metrics,
             partition,
             aggregate_labels.iter().cloned(),
@@ -427,31 +431,32 @@ impl GroupedHashAggregateStream {
 
         let timer = baseline_metrics.elapsed_compute().timer();
 
-        let aggregate_exprs = Arc::clone(&agg.aggr_expr);
+        let aggregate_exprs = agg.clone_aggr_exprs();
 
         // arguments for each aggregate, one vec of expressions per
         // aggregate
         let aggregate_arguments = aggregates::aggregate_expressions(
-            &agg.aggr_expr,
+            agg.aggr_expr(),
             &agg.mode,
             agg_group_by.num_group_exprs(),
         )?;
         // arguments for aggregating spilled data is the same as the one for final aggregation
         let merging_aggregate_arguments = aggregates::aggregate_expressions(
-            &agg.aggr_expr,
+            agg.aggr_expr(),
             &AggregateMode::Final,
             agg_group_by.num_group_exprs(),
         )?;
 
         let filter_expressions = match agg.mode.input_mode() {
             AggregateInputMode::Raw => agg_filter_expr,
-            AggregateInputMode::Partial => vec![None; agg.aggr_expr.len()].into(),
+            AggregateInputMode::Partial => vec![None; agg.aggr_expr().len()].into(),
         };
 
         // Instantiate the accumulators
         let accumulators: Vec<_> = aggregate_exprs
             .iter()
-            .map(create_group_accumulator)
+            .zip(aggregate_submetrics)
+            .map(|(agg_expr, metrics)| create_group_accumulator(agg_expr, metrics))
             .collect::<Result<_>>()?;
 
         let group_schema = agg_group_by.group_schema(&agg.input().schema())?;
@@ -643,26 +648,6 @@ impl GroupedHashAggregateStream {
             skip_aggregation_probe,
             reduction_factor,
         })
-    }
-}
-
-/// Create an accumulator for `agg_expr` -- a [`GroupsAccumulator`] if
-/// that is supported by the aggregate, or a
-/// [`GroupsAccumulatorAdapter`] if not.
-pub(crate) fn create_group_accumulator(
-    agg_expr: &Arc<AggregateFunctionExpr>,
-) -> Result<Box<dyn GroupsAccumulator>> {
-    if agg_expr.groups_accumulator_supported() {
-        agg_expr.create_groups_accumulator()
-    } else {
-        // Note in the log when the slow path is used
-        debug!(
-            "Creating GroupsAccumulatorAdapter for {}: {agg_expr:?}",
-            agg_expr.name()
-        );
-        let agg_expr_captured = Arc::clone(agg_expr);
-        let factory = move || agg_expr_captured.create_accumulator();
-        Ok(Box::new(GroupsAccumulatorAdapter::new(factory)))
     }
 }
 
@@ -1367,6 +1352,7 @@ impl GroupedHashAggregateStream {
                 .with_metrics(self.baseline_metrics.clone())
                 .with_batch_size(self.batch_size)
                 .with_reservation(self.reservation.new_empty())
+                .with_replay_headroom()
                 .build()?;
             self.input_done = false;
 
@@ -1394,6 +1380,9 @@ impl GroupedHashAggregateStream {
             // to ensure we don't spill the spilled data to disk again.
             self.oom_mode = OutOfMemoryMode::ReportError;
 
+            // Release unused initial capacity from recreated group values so it
+            // does not consume the memory available for spill replay.
+            self.group_values.clear_shrink(0);
             self.update_memory_reservation()?;
 
             ExecutionState::ReadingInput
@@ -1496,12 +1485,172 @@ mod tests {
     use crate::ExecutionPlan;
     use crate::InputOrderMode;
     use crate::test::TestMemoryExec;
-    use arrow::array::{Int32Array, Int64Array};
+    use arrow::array::{Int32Array, Int64Array, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-    use datafusion_functions_aggregate::count::count_udaf;
+    use datafusion_expr::{AggregateMetric, AggregateMetrics};
+    use datafusion_functions_aggregate::{array_agg::array_agg_udaf, count::count_udaf};
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::col;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    #[derive(Debug)]
+    struct CountingMetric(Arc<AtomicUsize>);
+
+    impl AggregateMetric for CountingMetric {
+        fn add_duration(&self, _duration: Duration) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[derive(Debug)]
+    struct CountingMetrics {
+        resolutions: Arc<AtomicUsize>,
+        durations: Arc<AtomicUsize>,
+    }
+
+    impl AggregateMetrics for CountingMetrics {
+        fn metric(&self, _subphase: &'static str) -> Arc<dyn AggregateMetric> {
+            self.resolutions.fetch_add(1, Ordering::Relaxed);
+            Arc::new(CountingMetric(Arc::clone(&self.durations)))
+        }
+    }
+
+    #[test]
+    fn legacy_grouped_distinct_installs_metrics_for_conversion_and_update() -> Result<()>
+    {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::UInt32,
+            false,
+        )]));
+        let aggregate_expr = Arc::new(
+            AggregateExprBuilder::new(array_agg_udaf(), vec![col("value", &schema)?])
+                .schema(Arc::clone(&schema))
+                .distinct()
+                .alias("distinct_values")
+                .build()?,
+        );
+        let metric_resolutions = Arc::new(AtomicUsize::new(0));
+        let metric_durations = Arc::new(AtomicUsize::new(0));
+        let mut accumulator = create_group_accumulator(
+            &aggregate_expr,
+            Arc::new(CountingMetrics {
+                resolutions: Arc::clone(&metric_resolutions),
+                durations: Arc::clone(&metric_durations),
+            }),
+        )?;
+        let values: ArrayRef = Arc::new(UInt32Array::from(vec![1, 2, 3]));
+
+        accumulator.convert_to_state(&[Arc::clone(&values)], None)?;
+        accumulator.update_batch(&[values], &[0, 1, 2], None, 3)?;
+
+        // Three temporary conversion accumulators and three grouped accumulators
+        // each receive the aggregate expression's metrics.
+        assert_eq!(metric_resolutions.load(Ordering::Relaxed), 6);
+        assert_eq!(metric_durations.load(Ordering::Relaxed), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_grouped_distinct_merge_records_metric_once() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::UInt32,
+            false,
+        )]));
+        let aggregate_expr = Arc::new(
+            AggregateExprBuilder::new(array_agg_udaf(), vec![col("value", &schema)?])
+                .schema(Arc::clone(&schema))
+                .distinct()
+                .alias("distinct_values")
+                .build()?,
+        );
+        let metric_resolutions = Arc::new(AtomicUsize::new(0));
+        let metric_durations = Arc::new(AtomicUsize::new(0));
+        let mut accumulator = create_group_accumulator(
+            &aggregate_expr,
+            Arc::new(CountingMetrics {
+                resolutions: Arc::clone(&metric_resolutions),
+                durations: Arc::clone(&metric_durations),
+            }),
+        )?;
+
+        let mut state = ListBuilder::new(UInt32Builder::new());
+        for value in [1, 2, 3] {
+            state.append_value([Some(value)]);
+        }
+        accumulator.merge_batch(&[Arc::new(state.finish())], &[1, 2, 3], 4)?;
+
+        // Four group accumulators each receive the aggregate expression's metrics.
+        assert_eq!(metric_resolutions.load(Ordering::Relaxed), 4);
+        assert_eq!(metric_durations.load(Ordering::Relaxed), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn grouped_hash_stream_reports_distinct_array_agg_submetric() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("group", DataType::Int32, false),
+            Field::new("value", DataType::UInt32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 1, 2, 2])),
+                Arc::new(UInt32Array::from(vec![3, 3, 4, 4])),
+            ],
+        )?;
+        let input = Arc::new(TestMemoryExec::try_new(
+            &[vec![batch]],
+            Arc::clone(&schema),
+            None,
+        )?);
+        let group_by = PhysicalGroupBy::new_single(vec![(
+            col("group", &schema)?,
+            "group".to_string(),
+        )]);
+        let aggregate_expr = Arc::new(
+            AggregateExprBuilder::new(array_agg_udaf(), vec![col("value", &schema)?])
+                .schema(Arc::clone(&schema))
+                .distinct()
+                .alias("distinct_values")
+                .build()?,
+        );
+        let output_schema = Arc::new(create_schema(
+            &schema,
+            &group_by,
+            std::slice::from_ref(&aggregate_expr),
+            AggregateMode::Single,
+        )?);
+        let aggregate_exec = AggregateExec::try_new(
+            AggregateMode::Single,
+            group_by,
+            vec![aggregate_expr],
+            vec![None],
+            input,
+            output_schema,
+        )?;
+
+        let mut stream = GroupedHashAggregateStream::new(
+            &aggregate_exec,
+            &Arc::new(TaskContext::default()),
+            0,
+        )?;
+        while let Some(batch) = stream.next().await {
+            batch?;
+        }
+
+        let metrics = aggregate_exec.metrics().unwrap();
+        let distinct_time = metrics
+            .iter()
+            .find(|metric| metric.value().name() == "agg_expr_0_internal_distinct_time")
+            .expect("internal distinct time metric");
+        assert!(distinct_time.value().as_usize() > 0);
+
+        Ok(())
+    }
 
     // Migrated to PartialHashAggregateStream coverage in hash_stream.rs;
     // kept here for the legacy GroupedHashAggregateStream implementation.

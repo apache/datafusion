@@ -96,10 +96,6 @@ impl ScalarSubqueryExpr {
     }
 
     /// Returns the index of this subquery in the shared results container.
-    #[deprecated(
-        since = "55.0.0",
-        note = "was only used for proto serialization, which no longer needs it. It will be removed in 61.0.0 or 6 months after 55.0.0 is released, whichever is longer."
-    )]
     pub fn index(&self) -> SubqueryIndex {
         self.index
     }
@@ -171,18 +167,25 @@ impl PhysicalExpr for ScalarSubqueryExpr {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
         use datafusion_common::utils::usize_to_wire;
         use datafusion_proto_models::protobuf;
+
+        let Self {
+            field,
+            index,
+            results: _, // Runtime state, supplied by ScalarSubqueryExec on decode.
+        } = self;
+
         Ok(Some(protobuf::PhysicalExprNode {
             expr_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::ScalarSubquery(
                 protobuf::PhysicalScalarSubqueryExprNode {
-                    data_type: Some(self.field.data_type().try_into()?),
-                    nullable: self.field.is_nullable(),
+                    data_type: Some(field.data_type().try_into()?),
+                    nullable: field.is_nullable(),
                     index: usize_to_wire(
-                        self.index.as_usize(),
+                        index.as_usize(),
                         "ScalarSubqueryExpr",
                         "index",
                     )?,
-                    metadata: self.field.metadata().clone(),
+                    metadata: field.metadata().into(),
                 },
             )),
         }))
@@ -214,22 +217,25 @@ impl ScalarSubqueryExpr {
             protobuf::physical_expr_node::ExprType::ScalarSubquery,
             "ScalarSubqueryExpr",
         );
-        let data_type = require_proto_field(
-            sq.data_type.as_ref(),
-            "ScalarSubqueryExpr",
-            "data_type",
-        )?
-        .try_into()?;
-        let metadata = if sq.metadata.is_empty() {
+        let protobuf::PhysicalScalarSubqueryExprNode {
+            data_type,
+            nullable,
+            index,
+            metadata,
+        } = sq;
+        let data_type =
+            require_proto_field(data_type.as_ref(), "ScalarSubqueryExpr", "data_type")?
+                .try_into()?;
+        let metadata = if metadata.is_empty() {
             None
         } else {
-            Some(FieldMetadata::from(sq.metadata.clone()))
+            Some(FieldMetadata::from(metadata.clone()))
         };
         Ok(Arc::new(ScalarSubqueryExpr::new_with_metadata(
             data_type,
-            sq.nullable,
+            *nullable,
             metadata,
-            SubqueryIndex::new(sq.index as usize),
+            SubqueryIndex::new(*index as usize),
             results.clone(),
         )))
     }

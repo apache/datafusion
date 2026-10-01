@@ -904,6 +904,19 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     ///
     /// If the function is `ABS(a)`, and the input interval is `a: [-3, 2]`,
     /// then the output interval would be `[0, 3]`.
+    ///
+    /// # Output type
+    ///
+    /// The default implementation returns an unbounded [`DataType::Null`]
+    /// interval because the output type cannot be inferred from input intervals
+    /// alone. During physical property analysis, `ScalarFunctionExpr` uses its
+    /// resolved return type to replace this default with a typed unbounded
+    /// interval when supported. UDFs need not override this method solely to
+    /// preserve their output type for that analysis.
+    ///
+    /// Override this method to provide more precise bounds. Explicit bounds
+    /// are preserved. The fallback does not apply to direct bounds evaluation
+    /// by the constraint solver.
     fn evaluate_bounds(&self, _input: &[&Interval]) -> Result<Interval> {
         // We cannot assume the input datatype is the same of output type.
         Interval::make_unbounded(&DataType::Null)

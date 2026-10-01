@@ -219,11 +219,11 @@ impl FileSink for AvroFileSink {
         mut file_stream_rx: DemuxedStreamReceiver,
         object_store: Arc<dyn ObjectStore>,
     ) -> Result<u64> {
-        let mut file_write_tasks: JoinSet<std::result::Result<usize, DataFusionError>> =
+        let mut file_write_tasks: JoinSet<Result<usize, DataFusionError>> =
             JoinSet::new();
 
         let writer_schema = get_writer_schema(&self.config);
-        while let Some((path, mut rx)) = file_stream_rx.recv().await {
+        while let Some((file_metadata, mut rx)) = file_stream_rx.recv().await {
             let shared_buffer = SharedBuffer::new(INITIAL_BUFFER_BYTES);
             let mut avro_writer: AvroWriter<SharedBuffer> =
                 WriterBuilder::new(writer_schema.as_ref().clone())
@@ -233,7 +233,7 @@ impl FileSink for AvroFileSink {
                     })?;
             let mut object_store_writer = ObjectWriterBuilder::new(
                 FileCompressionType::UNCOMPRESSED,
-                &path,
+                &file_metadata.path,
                 Arc::clone(&object_store),
             )
             .with_buffer_size(Some(
@@ -243,6 +243,7 @@ impl FileSink for AvroFileSink {
                     .execution
                     .objectstore_writer_buffer_size,
             ))
+            .with_bytes_written_counter(file_metadata.size)
             .build()?;
             file_write_tasks.spawn(async move {
                 let mut row_count = 0;
