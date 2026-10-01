@@ -31,7 +31,6 @@ use half::f16;
 use hashbrown::hash_table::HashTable;
 #[cfg(not(feature = "force_hash_collisions"))]
 use std::hash::BuildHasher;
-use std::mem::size_of;
 use std::sync::Arc;
 
 /// A trait to allow hashing of floating point numbers
@@ -283,6 +282,7 @@ mod tests {
     use arrow::array::{ArrayRef, Int32Array};
     use arrow::datatypes::DataType;
     use datafusion_expr::EmitTo;
+    use std::mem::size_of;
     use std::sync::Arc;
 
     /// Mirror of the `EmitTo::take_needed` regression test, applied to the
