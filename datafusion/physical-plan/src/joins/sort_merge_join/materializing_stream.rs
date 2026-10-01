@@ -616,10 +616,12 @@ impl MaterializingSortMergeJoinStream {
     ) -> Result<()> {
         // 1. Load the first streamed row and the first buffered key group.
         self.load_next_streamed_batch().await?;
-        self.advance_buffered_group().await?;
+        if !self.finished() {
+            self.advance_buffered_group().await?;
+        }
 
-        // 2. Merge-scan while either input still has rows.
-        while !(self.streamed_exhausted && self.buffered_exhausted) {
+        // 2. Merge-scan while the join can still produce output.
+        while !self.finished() {
             // Flush the deferred-filtering pipeline once a full batch of
             // rows accumulated (filtered outer joins output through it).
             if self.deferred_filtering
@@ -844,14 +846,41 @@ impl MaterializingSortMergeJoinStream {
         }
     }
 
-    /// Flush everything that remains once both inputs are exhausted.
+    /// Whether the join can produce no further output. Besides both inputs being exhausted,
+    /// an exhausted streamed side ends every join but Full, the only one that emits buffered
+    /// rows without a streamed match, and an exhausted buffered side (which leaves no key
+    /// group behind) ends an Inner join, which has nothing to match the remaining streamed
+    /// rows against. Spark's SortMergeJoinExec stops at the same points; an empty streamed
+    /// partition therefore never polls the buffered side.
+    fn finished(&self) -> bool {
+        (self.streamed_exhausted
+            && (self.buffered_exhausted || self.join_type != JoinType::Full))
+            || (self.buffered_exhausted && self.join_type == JoinType::Inner)
+    }
+
+    /// Drops both inputs and every buffered key group once nothing more can be joined, so the
+    /// memory they reserve is back in the pool before the final output batches are emitted
+    /// rather than when the stream is dropped.
+    fn release_inputs(&mut self) {
+        while self.pop_front_buffered_batch().is_some() {}
+        self.streamed_buffered_cmp = None;
+        self.buffered_equality_cmp = None;
+        self.streamed = Box::pin(EmptyRecordBatchStream::new(self.streamed.schema()));
+        self.buffered = Box::pin(EmptyRecordBatchStream::new(self.buffered.schema()));
+        self.streamed_exhausted = true;
+        self.buffered_exhausted = true;
+    }
+
+    /// Flush everything that remains once the join is finished.
     async fn on_children_exhausted(
         &mut self,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
-        // Freeze the remaining pairs, restoring any spilled batches needed.
+        // Freeze the remaining pairs, restoring any spilled batches needed, then release
+        // the inputs they came from.
         self.restore_spilled_batches_for_freeze().await?;
         self.freeze_all()?;
+        self.release_inputs();
 
         // Verify metadata alignment before final output
         self.joined_record_batches
@@ -1073,6 +1102,17 @@ impl MaterializingSortMergeJoinStream {
         }
     }
 
+    /// Dequeue the head buffered batch, releasing its reservation and its share of the
+    /// spilled-batch count. The only way to drop a buffered batch without leaking either.
+    fn pop_front_buffered_batch(&mut self) -> Option<BufferedBatch> {
+        let buffered_batch = self.buffered_data.batches.pop_front()?;
+        self.free_reservation(&buffered_batch);
+        if matches!(buffered_batch.batch, BufferedBatchState::Spilled(_)) {
+            self.spilled_batch_count -= 1;
+        }
+        Some(buffered_batch)
+    }
+
     fn allocate_reservation(&mut self, mut buffered_batch: BufferedBatch) -> Result<()> {
         match self.reservation.try_grow(buffered_batch.size_estimation) {
             Ok(_) => {
@@ -1206,12 +1246,8 @@ impl MaterializingSortMergeJoinStream {
             self.restore_spilled_batches(&needed).await?;
 
             self.freeze_dequeuing_buffered()?;
-            if let Some(mut buffered_batch) = self.buffered_data.batches.pop_front() {
+            if let Some(mut buffered_batch) = self.pop_front_buffered_batch() {
                 self.produce_buffered_not_matched(&mut buffered_batch)?;
-                self.free_reservation(&buffered_batch);
-                if matches!(buffered_batch.batch, BufferedBatchState::Spilled(_)) {
-                    self.spilled_batch_count -= 1;
-                }
                 head_changed = true;
             }
         }

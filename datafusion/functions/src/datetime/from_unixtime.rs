@@ -110,6 +110,14 @@ impl FromUnixtimeFunc {
     }
 }
 
+fn timezone_from_scalar(value: &ScalarValue) -> Option<Arc<str>> {
+    value
+        .try_as_str()
+        .flatten()
+        .filter(|timezone| !timezone.is_empty())
+        .map(Arc::from)
+}
+
 impl ScalarUDFImpl for FromUnixtimeFunc {
     fn name(&self) -> &str {
         "from_unixtime"
@@ -134,17 +142,9 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
             )
         } else {
             args.scalar_arguments[1]
-                .and_then(|sv| {
-                    sv.try_as_str()
-                        .flatten()
-                        .filter(|s| !s.is_empty())
-                        .map(|tz| {
-                            Field::new(
-                                self.name(),
-                                Timestamp(Second, Some(Arc::from(tz.to_string()))),
-                                true,
-                            )
-                        })
+                .and_then(timezone_from_scalar)
+                .map(|timezone| {
+                    Field::new(self.name(), Timestamp(Second, Some(timezone)), true)
                 })
                 .map(Arc::new)
                 .map_or_else(

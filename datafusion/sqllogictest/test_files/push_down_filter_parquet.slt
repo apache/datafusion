@@ -1336,3 +1336,111 @@ RESET datafusion.execution.parquet.pushdown_filters;
 
 statement ok
 drop table t;
+
+# A predicate that the Parquet scan keeps only for pruning
+# (pushdown_filters = false) must not make the scan claim equivalences.
+# Each file is sorted by (a, b). If the scan claims that `a` is constant,
+# the order-preserving repartition below the FilterExec merges on `b` only
+# and the rows with a = 5 come out in the wrong order.
+
+statement ok
+COPY (SELECT * FROM (VALUES (3, 9), (5, 1)) v(a, b))
+TO 'test_files/scratch/push_down_filter_parquet/pruning_only_eq/f1.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY (SELECT * FROM (VALUES (5, 2)) v(a, b))
+TO 'test_files/scratch/push_down_filter_parquet/pruning_only_eq/f2.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE pruning_only_eq (a INT, b INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/pruning_only_eq/'
+WITH ORDER (a ASC, b ASC);
+
+statement ok
+set datafusion.optimizer.repartition_file_scans = false;
+
+statement ok
+set datafusion.optimizer.prefer_existing_sort = true;
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+# The repartition merges on (a, b), the real file ordering
+query TT
+EXPLAIN SELECT b FROM pruning_only_eq WHERE a = 5 ORDER BY b LIMIT 1;
+----
+physical_plan
+01)SortPreservingMergeExec: [b@0 ASC NULLS LAST], fetch=1
+02)--FilterExec: a@0 = 5, projection=[b@1], fetch=1
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST, b@1 ASC NULLS LAST
+04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/pruning_only_eq/f1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/pruning_only_eq/f2.parquet]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], file_type=parquet, predicate=a@0 = 5, pruning_predicate=a_null_count@2 != row_count@3 AND a_min@0 <= 5 AND 5 <= a_max@1, required_guarantees=[a in (5)]
+
+query I
+SELECT b FROM pruning_only_eq WHERE a = 5 ORDER BY b LIMIT 1;
+----
+1
+
+query II
+SELECT a, b FROM pruning_only_eq WHERE a = 5 ORDER BY b;
+----
+5 1
+5 2
+
+statement ok
+set datafusion.optimizer.prefer_existing_sort = false;
+
+query III
+SELECT a, b, count(*) FROM pruning_only_eq WHERE a = 5 GROUP BY a, b ORDER BY b;
+----
+5 1 1
+5 2 1
+
+# The same filter, with columns `a` and `b` in the opposite roles
+statement ok
+set datafusion.optimizer.prefer_existing_sort = true;
+
+statement ok
+COPY (SELECT * FROM (VALUES (1, 9), (3, 3)) v(a, b))
+TO 'test_files/scratch/push_down_filter_parquet/pruning_only_col_eq/f1.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY (SELECT * FROM (VALUES (5, 5)) v(a, b))
+TO 'test_files/scratch/push_down_filter_parquet/pruning_only_col_eq/f2.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE pruning_only_col_eq (a INT, b INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/pruning_only_col_eq/'
+WITH ORDER (a ASC);
+
+query II
+SELECT a, b FROM pruning_only_col_eq WHERE a = b ORDER BY a;
+----
+3 3
+5 5
+
+statement ok
+drop table pruning_only_eq;
+
+statement ok
+drop table pruning_only_col_eq;
+
+statement ok
+RESET datafusion.optimizer.repartition_file_scans;
+
+statement ok
+RESET datafusion.optimizer.prefer_existing_sort;
+
+statement ok
+RESET datafusion.execution.parquet.pushdown_filters;
+
+statement ok
+RESET datafusion.explain.physical_plan_only;
