@@ -40,8 +40,6 @@ pub(crate) struct FullyOrderedGroupValuesPrimitive<T: ArrowPrimitiveType> {
     null_group: Option<usize>,
     /// The values for each group index
     values: Vec<T::Native>,
-    /// The current value and its group index
-    current_value: Option<(Option<T::Native>, usize)>,
 }
 
 impl<T: ArrowPrimitiveType> FullyOrderedGroupValuesPrimitive<T> {
@@ -51,7 +49,6 @@ impl<T: ArrowPrimitiveType> FullyOrderedGroupValuesPrimitive<T> {
             data_type,
             values: Vec::with_capacity(128),
             null_group: None,
-            current_value: None,
         }
     }
 
@@ -61,11 +58,10 @@ impl<T: ArrowPrimitiveType> FullyOrderedGroupValuesPrimitive<T> {
         mut current_value_valid: T::Native,
         mut current_group: usize,
         values_slice: &[T::Native],
-    ) -> (T::Native, usize)
+    ) -> usize
     where
         T::Native: HashValue,
     {
-        // If prev group was not null and in this new input there are no nulls
         for &v in values_slice {
             let v = v.canonicalize();
             // If new group, save the current group and start a new one
@@ -77,7 +73,28 @@ impl<T: ArrowPrimitiveType> FullyOrderedGroupValuesPrimitive<T> {
             groups.push(current_group);
         }
 
-        (current_value_valid, current_group)
+        current_group
+    }
+
+    /// Return the current value and the current group index, if any
+    ///
+    /// If the current value is null, the current group index will be the index of the null group
+    /// If the current value is not null, the current group index will be the index of the last value in the values vector
+    /// If there are no values, return None
+    fn current_value(&self) -> Option<(Option<T::Native>, usize)> {
+        let current_group_index = self.values.len() - 1;
+        let last_value = self.values.last()?;
+
+        let current_value = if self
+            .null_group
+            .is_some_and(|group_index| group_index == current_group_index)
+        {
+            None
+        } else {
+            Some(*last_value)
+        };
+
+        Some((current_value, current_group_index))
     }
 }
 
@@ -95,8 +112,9 @@ where
             return Ok(());
         }
 
-        // After first batch
-        if self.current_value.is_none() {
+        // On first batch
+
+        if self.is_empty() {
             let value = if col.is_null(0) {
                 // Set the null group to 0, since the first value is null
                 self.null_group = Some(0);
@@ -104,12 +122,10 @@ where
             } else {
                 Some(col.value(0).canonicalize())
             };
-            self.current_value = Some((value, 0));
             self.values.push(value.unwrap_or_default());
         }
 
-        // Naive approach will optimize later
-        let (mut current_value, mut current_group) = self.current_value.clone().unwrap();
+        let (mut current_value, mut current_group) = self.current_value().unwrap();
 
         match (current_value, col.null_count()) {
             // If current group is null and the entire column is null
@@ -135,22 +151,20 @@ where
 
                 let values_slice = &col.values()[null_count..];
 
-                let mut current_value_valid = values_slice[0];
+                let current_value_valid = values_slice[0];
                 current_group += 1;
                 self.values.push(current_value_valid);
 
-                (current_value_valid, current_group) =self.handle_valid(
+                self.handle_valid(
                     groups,
                     current_value_valid,
                     current_group,
                     values_slice,
                 );
-
-                current_value = Some(current_value_valid);
             }
 
             // If current value is valid
-            (Some(mut current_value_valid), null_count) => {
+            (Some(current_value_valid), null_count) => {
                 let values_without_nulls = col.len() - null_count;
 
                 debug_assert_eq!(
@@ -159,7 +173,7 @@ where
                     "input is ordered, so once null was seen after non nulls, all nulls should be at the end of the column"
                 );
 
-                (current_value_valid, current_group) = self.handle_valid(
+                current_group = self.handle_valid(
                     groups,
                     current_value_valid,
                     current_group,
@@ -167,20 +181,15 @@ where
                 );
 
                 // If there are nulls
-                current_value = if null_count > 0 {
+                if null_count > 0 {
                     current_group += 1;
                     self.values.push(T::default_value());
                     self.null_group = Some(current_group);
 
                     groups.resize(col.len(), current_group);
-                    None
-                } else {
-                    Some(current_value_valid)
-                };
+                }
             }
         }
-
-        self.current_value = Some((current_value, current_group));
 
         Ok(())
     }
@@ -198,16 +207,6 @@ where
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        if self.is_empty() {
-            match emit_to {
-                EmitTo::First(n) if n > 0 => {
-                    return internal_err!("emit_to is First(n) but there are no values");
-                }
-                _ => {}
-            }
-            return Ok(vec![new_empty_array(&self.data_type)]);
-        }
-
         fn build_primitive<T: ArrowPrimitiveType>(
             values: Vec<T::Native>,
             null_idx: Option<usize>,
@@ -223,14 +222,8 @@ where
             PrimitiveArray::<T>::new(values.into(), nulls)
         }
 
-        let emit_to = match emit_to {
-            EmitTo::First(n) if n == self.values.len() => EmitTo::All,
-            e => e,
-        };
-
         let array: PrimitiveArray<T> = match emit_to {
             EmitTo::All => {
-                self.current_value = None;
                 build_primitive(std::mem::take(&mut self.values), self.null_group.take())
             }
             EmitTo::First(n) => {
@@ -243,7 +236,6 @@ where
                     None => None,
                 };
 
-                self.current_value.as_mut().unwrap().1 -= n;
                 build_primitive(split_vec_min_alloc(&mut self.values, n), null_group)
             }
         };
@@ -283,7 +275,6 @@ where
     fn clear_shrink(&mut self, num_rows: usize) {
         self.values.clear();
         self.values.shrink_to(num_rows);
-        self.current_value = None;
         self.null_group = None;
     }
 }
