@@ -35,7 +35,7 @@ use crate::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
 use crate::metrics::{ExecutionPlanMetricsSet, SpillMetrics};
 use crate::projection::{ProjectionExec, ProjectionExpr};
 use crate::sorts::sort::SortExec;
-use crate::spill::spill_manager::SpillManager;
+use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
 use crate::test::TestMemoryExec;
 use crate::test::exec::{BarrierExec, PanicExec};
 use crate::test::{build_table_i32, build_table_i32_two_cols};
@@ -6065,9 +6065,10 @@ fn filtered_bitwise_spill_fixture() -> Result<FilteredBitwiseSpillFixture> {
 
 /// Exercises inner key group spilling under memory pressure.
 ///
-/// Uses a tiny memory limit (100 bytes) with disk spilling enabled. Since our
-/// operator only buffers inner rows when a filter is present, this test includes
-/// a filter (c1 < c2, always true). Verifies:
+/// Uses a 1-byte memory limit, below the size of any buffered slice, with
+/// disk spilling enabled. Since our operator only buffers inner rows when a
+/// filter is present, this test includes a filter (c1 < c2, always true).
+/// Verifies:
 /// 1. Spill metrics are recorded (spill_count, spilled_bytes, spilled_rows > 0)
 /// 2. Results match a non-spilled run
 #[tokio::test]
@@ -6081,7 +6082,7 @@ async fn bitwise_spill_with_filter() -> Result<()> {
     } = filtered_bitwise_spill_fixture()?;
 
     let runtime = RuntimeEnvBuilder::new()
-        .with_memory_limit(100, 1.0)
+        .with_memory_limit(1, 1.0)
         .with_disk_manager_builder(
             DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
         )
@@ -6191,7 +6192,7 @@ async fn bitwise_filtered_no_spill() -> Result<()> {
 
     // Tiny memory pool with the DiskManager disabled: spilling is impossible.
     let runtime = RuntimeEnvBuilder::new()
-        .with_memory_limit(100, 1.0)
+        .with_memory_limit(1, 1.0)
         .with_disk_manager_builder(
             DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
         )
@@ -6245,6 +6246,133 @@ async fn bitwise_filtered_no_spill() -> Result<()> {
     Ok(())
 }
 
+/// Builds `num_batches` batches of `rows_per_batch` rows each. Row `i`
+/// (counted across batches) holds `(i, i / group_size, i * c_step % 10)`, so
+/// every join key covers `group_size` consecutive rows.
+fn small_key_group_batches(
+    names: (&str, &str, &str),
+    num_batches: i32,
+    rows_per_batch: i32,
+    group_size: i32,
+    c_step: i32,
+) -> Vec<RecordBatch> {
+    (0..num_batches)
+        .map(|b| {
+            let rows: Vec<i32> = (b * rows_per_batch..(b + 1) * rows_per_batch).collect();
+            build_table_i32(
+                (names.0, &rows),
+                (names.1, &rows.iter().map(|i| i / group_size).collect()),
+                (names.2, &rows.iter().map(|i| i * c_step % 10).collect()),
+            )
+        })
+        .collect()
+}
+
+/// A buffered inner key group of a few rows is a slice of a much larger
+/// inner batch. It must be charged for the rows it holds, not for the
+/// parent batch's buffers, so a pool that fits any one small group but not
+/// a whole inner batch must not spill.
+#[tokio::test]
+async fn bitwise_small_key_groups_charged_by_sliced_size() -> Result<()> {
+    const NUM_BATCHES: i32 = 2;
+    const ROWS_PER_BATCH: i32 = 1024;
+
+    // Left key groups hold 2 rows, right key groups hold 3. Left keys past
+    // the right side's last key have no match, and c1 < c2 holds for only
+    // some rows within matching keys, so every join type returns some but
+    // not all of its outer rows.
+    let left_batches =
+        small_key_group_batches(("a1", "b1", "c1"), NUM_BATCHES, ROWS_PER_BATCH, 2, 1);
+    let right_batches =
+        small_key_group_batches(("a2", "b1", "c2"), NUM_BATCHES, ROWS_PER_BATCH, 3, 7);
+
+    // Half of the smallest input batch: far above the sliced size of any
+    // key group (two slices at most, when a group spans a batch boundary),
+    // but below what one whole parent batch reports.
+    let parent_batch_size = left_batches
+        .iter()
+        .chain(&right_batches)
+        .map(|b| b.get_array_memory_size())
+        .min()
+        .unwrap();
+    let memory_limit = parent_batch_size / 2;
+    let largest_group_size = left_batches[0]
+        .slice(0, 3)
+        .get_sliced_size()?
+        .max(right_batches[0].slice(0, 3).get_sliced_size()?);
+    // Keep 10x headroom over a two-slice group so the test turns on how a
+    // group is charged, not on landing near the limit.
+    assert!(
+        memory_limit > 10 * 2 * largest_group_size,
+        "memory limit {memory_limit} too close to group size {largest_group_size}"
+    );
+
+    let left = build_table_from_batches(left_batches);
+    let right = build_table_from_batches(right_batches);
+    let on: JoinOn = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+    )];
+    let sort_options = vec![SortOptions::default(); on.len()];
+    let filter = build_c1_lt_c2_filter(left.schema().as_ref(), right.schema().as_ref());
+    let num_outer_rows = (NUM_BATCHES * ROWS_PER_BATCH) as usize;
+
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(memory_limit, 1.0)
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+        )
+        .build_arc()?;
+
+    for join_type in [LeftSemi, LeftAnti, RightSemi, RightAnti] {
+        let bounded_ctx =
+            Arc::new(TaskContext::default().with_runtime(Arc::clone(&runtime)));
+        let join = join_with_filter(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            filter.clone(),
+            join_type,
+            sort_options.clone(),
+            NullEquality::NullEqualsNothing,
+        )?;
+        let bounded_result = common::collect(join.execute(0, bounded_ctx)?).await?;
+        let metrics = join
+            .metrics()
+            .unwrap_or_else(|| panic!("metrics missing for {join_type:?}"));
+        assert_eq!(
+            metrics.spill_count(),
+            Some(0),
+            "small key groups spilled under a {memory_limit} byte pool for {join_type:?}"
+        );
+
+        let unbounded_join = join_with_filter(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            filter.clone(),
+            join_type,
+            sort_options.clone(),
+            NullEquality::NullEqualsNothing,
+        )?;
+        let unbounded_result =
+            common::collect(unbounded_join.execute(0, Arc::new(TaskContext::default()))?)
+                .await?;
+        assert_eq!(
+            bounded_result, unbounded_result,
+            "bounded and unbounded results differ for {join_type:?}"
+        );
+
+        let rows: usize = bounded_result.iter().map(|b| b.num_rows()).sum();
+        assert!(
+            rows > 0 && rows < num_outer_rows,
+            "expected some but not all outer rows for {join_type:?}, got {rows}"
+        );
+    }
+
+    Ok(())
+}
+
 /// A single inner key group spanning several inner batches can spill more
 /// than once under memory pressure. Every spilled slice must still be
 /// evaluated against the outer rows — an earlier spill file must not be
@@ -6280,10 +6408,10 @@ async fn bitwise_multi_spill_inner_key_group() -> Result<()> {
     let sort_options = vec![SortOptions::default(); on.len()];
     let filter = build_c1_lt_c2_filter(left.schema().as_ref(), right.schema().as_ref());
 
-    // 100-byte pool: every buffered slice fails its reservation, so each
+    // 1-byte pool: every buffered slice fails its reservation, so each
     // inner batch of the key group spills separately.
     let runtime = RuntimeEnvBuilder::new()
-        .with_memory_limit(100, 1.0)
+        .with_memory_limit(1, 1.0)
         .with_disk_manager_builder(
             DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
         )
@@ -6403,7 +6531,7 @@ async fn bitwise_spill_null_key_group() -> Result<()> {
     let filter = build_c1_lt_c2_filter(left.schema().as_ref(), right.schema().as_ref());
 
     let runtime = RuntimeEnvBuilder::new()
-        .with_memory_limit(100, 1.0)
+        .with_memory_limit(1, 1.0)
         .with_disk_manager_builder(
             DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
         )
@@ -7077,7 +7205,7 @@ async fn bitwise_spill_pending_stream() -> Result<()> {
     );
 
     let runtime = RuntimeEnvBuilder::new()
-        .with_memory_limit(100, 1.0)
+        .with_memory_limit(1, 1.0)
         .with_disk_manager_builder(pending_disk_manager_builder())
         .build_arc()?;
 

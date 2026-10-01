@@ -128,7 +128,7 @@ use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, Time,
 };
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
-use crate::spill::spill_manager::SpillManager;
+use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 use arrow::array::{Array, ArrayRef, BooleanArray, BooleanBufferBuilder, RecordBatch};
 use arrow::compute::{BatchCoalescer, SortOptions, filter_record_batch, not};
@@ -660,7 +660,11 @@ impl BitwiseSortMergeJoinStream {
 
             let inner_batch = self.inner_batch.as_ref().unwrap();
             let slice = inner_batch.slice(from, group_end - from);
-            self.inner_buffer_size += slice.get_array_memory_size();
+            // A slice reports its parent batch's full buffers, so charge only
+            // the rows the group holds. View arrays still count their parent's
+            // data buffers, and a group spanning an inner batch boundary keeps
+            // the earlier parent batch alive, so this can be one batch low.
+            self.inner_buffer_size += slice.get_sliced_size()?;
             self.inner_key_buffer.push(slice);
 
             // Reserve memory for the newly buffered slice. If the pool
