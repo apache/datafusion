@@ -15,13 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates::group_values::GroupValues;
+use crate::aggregates::group_values::{GroupValues, HashValue};
 use arrow::array::{
     Array, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder,
     PrimitiveArray, cast::AsArray, new_empty_array,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::hash_utils::RandomState;
 use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_common::{Result, internal_err};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
@@ -43,8 +42,6 @@ pub(crate) struct FullyOrderedGroupValuesPrimitive<T: ArrowPrimitiveType> {
     values: Vec<T::Native>,
     /// The current value and its group index
     current_value: Option<(Option<T::Native>, usize)>,
-    /// The random state used to generate hashes
-    random_state: RandomState,
 }
 
 impl<T: ArrowPrimitiveType> FullyOrderedGroupValuesPrimitive<T> {
@@ -55,12 +52,39 @@ impl<T: ArrowPrimitiveType> FullyOrderedGroupValuesPrimitive<T> {
             values: Vec::with_capacity(128),
             null_group: None,
             current_value: None,
-            random_state: crate::aggregates::AGGREGATION_HASH_SEED,
         }
+    }
+
+    fn handle_valid(
+        &mut self,
+        groups: &mut Vec<usize>,
+        mut current_value_valid: T::Native,
+        mut current_group: usize,
+        values_slice: &[T::Native],
+    ) -> (T::Native, usize)
+    where
+        T::Native: HashValue,
+    {
+        // If prev group was not null and in this new input there are no nulls
+        for &v in values_slice {
+            let v = v.canonicalize();
+            // If new group, save the current group and start a new one
+            if v.is_ne(current_value_valid) {
+                current_group += 1;
+                current_value_valid = v;
+                self.values.push(current_value_valid);
+            }
+            groups.push(current_group);
+        }
+
+        (current_value_valid, current_group)
     }
 }
 
-impl<T: ArrowPrimitiveType> GroupValues for FullyOrderedGroupValuesPrimitive<T> {
+impl<T: ArrowPrimitiveType> GroupValues for FullyOrderedGroupValuesPrimitive<T>
+where
+    T::Native: HashValue,
+{
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
         assert_eq!(cols.len(), 1);
         groups.clear();
@@ -78,7 +102,7 @@ impl<T: ArrowPrimitiveType> GroupValues for FullyOrderedGroupValuesPrimitive<T> 
                 self.null_group = Some(0);
                 None
             } else {
-                Some(col.value(0))
+                Some(col.value(0).canonicalize())
             };
             self.current_value = Some((value, 0));
             self.values.push(value.unwrap_or_default());
@@ -115,16 +139,12 @@ impl<T: ArrowPrimitiveType> GroupValues for FullyOrderedGroupValuesPrimitive<T> 
                 current_group += 1;
                 self.values.push(current_value_valid);
 
-                // If prev group was not null and in this new input there are no nulls
-                for &v in values_slice {
-                    // If new group, save the current group and start a new one
-                    if v != current_value_valid {
-                        current_group += 1;
-                        current_value_valid = v;
-                        self.values.push(current_value_valid);
-                    }
-                    groups.push(current_group);
-                }
+                (current_value_valid, current_group) =self.handle_valid(
+                    groups,
+                    current_value_valid,
+                    current_group,
+                    values_slice,
+                );
 
                 current_value = Some(current_value_valid);
             }
@@ -139,16 +159,12 @@ impl<T: ArrowPrimitiveType> GroupValues for FullyOrderedGroupValuesPrimitive<T> 
                     "input is ordered, so once null was seen after non nulls, all nulls should be at the end of the column"
                 );
 
-                // Only look at the non nulls values section
-                for &v in &col.values()[0..values_without_nulls] {
-                    // If new group, save the current group and start a new one
-                    if v != current_value_valid {
-                        current_group += 1;
-                        current_value_valid = v;
-                        self.values.push(current_value_valid);
-                    }
-                    groups.push(current_group);
-                }
+                (current_value_valid, current_group) = self.handle_valid(
+                    groups,
+                    current_value_valid,
+                    current_group,
+                    &col.values()[0..values_without_nulls],
+                );
 
                 // If there are nulls
                 current_value = if null_count > 0 {

@@ -169,7 +169,7 @@ pub fn new_group_values(
                         as Box<dyn GroupValues>
                 } else {
                     Box::new(GroupValuesPrimitive::<$t>::new($d.clone())) as _
-                });
+                })
             };
         }
 
