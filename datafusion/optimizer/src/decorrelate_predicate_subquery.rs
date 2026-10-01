@@ -3077,4 +3077,42 @@ mod tests {
         "
         )
     }
+
+    /// An Unnest replaces the column it unnests with the values of that
+    /// column. A correlated filter on that column below the Unnest compares
+    /// the whole list, so it cannot move above the Unnest.
+    #[test]
+    fn exists_subquery_filter_on_unnested_column() -> Result<()> {
+        let list_type =
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("arr", list_type.clone(), true),
+        ]);
+        let subquery = Arc::new(
+            table_scan(Some("sq"), &schema, None)?
+                .filter(col("sq.arr").eq(out_ref_col(list_type, "outer_t.arr")))?
+                .unnest_column("arr")?
+                .project(vec![col("sq.id")])?
+                .build()?,
+        );
+        let plan = table_scan(Some("outer_t"), &schema, None)?
+            .filter(exists(subquery))?
+            .project(vec![col("outer_t.id")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: outer_t.id [id:Int32;N]
+          Filter: EXISTS (<subquery>) [id:Int32;N, arr:List(Int32);N]
+            Subquery: [id:Int32;N]
+              Projection: sq.id [id:Int32;N]
+                Unnest: lists[sq.arr|depth=1] structs[] [id:Int32;N, arr:Int32;N]
+                  Filter: sq.arr = outer_ref(outer_t.arr) [id:Int32;N, arr:List(Int32);N]
+                    TableScan: sq [id:Int32;N, arr:List(Int32);N]
+            TableScan: outer_t [id:Int32;N, arr:List(Int32);N]
+        "
+        )
+    }
 }
