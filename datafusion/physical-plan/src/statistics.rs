@@ -773,6 +773,31 @@ mod tests {
     }
 
     #[test]
+    fn borrowed_parent_is_not_cached_but_retains_children() {
+        let leaf = make_stats_leaf(10);
+        let weak = Arc::downgrade(&leaf);
+        let parent: Arc<dyn ExecutionPlan> =
+            Arc::new(CoalescePartitionsExec::new(Arc::clone(&leaf)));
+        let parent_key = cache_key(parent.as_ref(), None);
+        let ctx = StatisticsContext::new();
+
+        let _ = ctx
+            .compute(parent.as_ref(), &StatisticsArgs::new())
+            .unwrap();
+        assert!(
+            !ctx.cache.borrow().statistics.contains_key(&parent_key),
+            "borrowed roots must not be memoized"
+        );
+
+        drop(parent);
+        drop(leaf);
+        assert!(weak.upgrade().is_some());
+
+        ctx.reset_cache();
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
     fn extension_cache_retains_plan_lifetime() {
         let leaf = make_stats_leaf(10);
         let weak = Arc::downgrade(&leaf);
