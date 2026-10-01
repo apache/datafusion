@@ -512,7 +512,7 @@ a higher-level API that delegates to <a class="reference external" href="https:/
 <li><p><code class="docutils literal notranslate"><span class="pre">empty</span></code> - create an empty plan with no fields</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">values</span></code> - create a plan from a set of literal values</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">scan</span></code> - create a plan representing a table scan</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">scan_with_filters</span></code> - create a plan representing a table scan with filters</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">table_scan</span></code> - create a plan representing a table scan with optional projection/filters/fetch/skip</p></li>
 </ul>
 <p>Once the builder is created, transformation methods can be called to declare that further operations should be
 performed on the plan. Note that all we are doing at this stage is building up the logical plan structure. No query

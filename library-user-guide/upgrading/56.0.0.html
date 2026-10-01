@@ -1067,6 +1067,75 @@ conjuncts when <code class="docutils literal notranslate"><span class="pre">push
 </pre></div>
 </div>
 </section>
+<section id="tableprovider-scan-with-args-supports-skip-pushdown">
+<h3><code class="docutils literal notranslate"><span class="pre">TableProvider::scan_with_args</span></code> supports skip pushdown<a class="headerlink" href="#tableprovider-scan-with-args-supports-skip-pushdown" title="Link to this heading">#</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">ScanArgs</span></code> struct now carries a new <code class="docutils literal notranslate"><span class="pre">skip</span></code> (number of rows to skip) field
+alongside <code class="docutils literal notranslate"><span class="pre">limit</span></code>. <code class="docutils literal notranslate"><span class="pre">TableProvider::scan_with_args()</span></code> by default forwards to <code class="docutils literal notranslate"><span class="pre">scan()</span></code>, so
+existing <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> implementations keep compiling and working
+unchanged; implementations that want to take advantage of <code class="docutils literal notranslate"><span class="pre">skip</span></code> (or future
+<code class="docutils literal notranslate"><span class="pre">ScanArgs</span></code> fields) can override <code class="docutils literal notranslate"><span class="pre">scan_with_args</span></code> in addition to <code class="docutils literal notranslate"><span class="pre">scan</span></code>.</p>
+<p>A new <code class="docutils literal notranslate"><span class="pre">TableProvider::supports_skip_pushdown()</span> <span class="pre">-&gt;</span> <span class="pre">bool</span></code> (default <code class="docutils literal notranslate"><span class="pre">false</span></code>)
+lets a provider guarantee it honors <code class="docutils literal notranslate"><span class="pre">ScanArgs::skip</span></code> exactly — that a scan
+built with <code class="docutils literal notranslate"><span class="pre">skip</span></code> omits <em>exactly</em> the first <code class="docutils literal notranslate"><span class="pre">skip</span></code> rows it would
+otherwise have produced, not just approximately. <code class="docutils literal notranslate"><span class="pre">ListingTable</span></code> overrides this
+to <code class="docutils literal notranslate"><span class="pre">true</span></code> and honors <code class="docutils literal notranslate"><span class="pre">skip</span></code>.</p>
+<p>DataFusion’s SQL/DataFrame optimizer (<code class="docutils literal notranslate"><span class="pre">push_down_limit</span></code>) now populates
+<code class="docutils literal notranslate"><span class="pre">LogicalPlan::TableScan::skip</span></code> from a query’s <code class="docutils literal notranslate"><span class="pre">LIMIT</span> <span class="pre">...</span> <span class="pre">OFFSET</span> <span class="pre">...</span></code> clause,
+but only when the scan’s source reports <code class="docutils literal notranslate"><span class="pre">supports_skip_pushdown()</span> <span class="pre">==</span> <span class="pre">true</span></code>.
+In that case the skip is moved entirely into the scan and the remaining
+<code class="docutils literal notranslate"><span class="pre">Limit</span></code> above it no longer re-applies it; every other provider keeps today’s
+behavior unchanged, with the skip always enforced above the scan. <code class="docutils literal notranslate"><span class="pre">skip</span></code> is
+also reachable directly, independent of the optimizer, by constructing a
+<code class="docutils literal notranslate"><span class="pre">TableScan</span></code> (for example via <code class="docutils literal notranslate"><span class="pre">LogicalPlanBuilder::scan_with_filters_fetch_skip</span></code>)
+or by calling <code class="docutils literal notranslate"><span class="pre">scan_with_args</span></code> with <code class="docutils literal notranslate"><span class="pre">ScanArgs::with_skip</span></code>.</p>
+<p>This pushdown is also preserved end-to-end through plan serialization:
+<code class="docutils literal notranslate"><span class="pre">datafusion-substrait</span></code>’s producer folds a scan’s <code class="docutils literal notranslate"><span class="pre">skip</span></code> into the <code class="docutils literal notranslate"><span class="pre">FetchRel</span></code>
+it emits for the wrapping <code class="docutils literal notranslate"><span class="pre">Limit</span></code> (Substrait’s <code class="docutils literal notranslate"><span class="pre">ReadRel</span></code> has no field of its
+own for it), and <code class="docutils literal notranslate"><span class="pre">datafusion-proto</span></code>’s <code class="docutils literal notranslate"><span class="pre">ListingTableScanNode</span></code>, <code class="docutils literal notranslate"><span class="pre">ViewTableScanNode</span></code>,
+and <code class="docutils literal notranslate"><span class="pre">CustomTableScanNode</span></code> messages gained optional <code class="docutils literal notranslate"><span class="pre">fetch</span></code>/<code class="docutils literal notranslate"><span class="pre">skip</span></code> fields so a
+<code class="docutils literal notranslate"><span class="pre">TableScan</span></code>’s own <code class="docutils literal notranslate"><span class="pre">fetch</span></code>/<code class="docutils literal notranslate"><span class="pre">skip</span></code> — previously silently dropped — now
+round-trips exactly.</p>
+<section id="who-is-affected">
+<h4>Who is affected<a class="headerlink" href="#who-is-affected" title="Link to this heading">#</a></h4>
+<ul class="simple">
+<li><p>Custom <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> implementations that want skip pushdown: override
+<code class="docutils literal notranslate"><span class="pre">scan_with_args</span></code> to read <code class="docutils literal notranslate"><span class="pre">ScanArgs::skip()</span></code> and honor it exactly, and
+override <code class="docutils literal notranslate"><span class="pre">supports_skip_pushdown</span></code> to return <code class="docutils literal notranslate"><span class="pre">true</span></code>. Once you do,
+<code class="docutils literal notranslate"><span class="pre">LIMIT</span> <span class="pre">...</span> <span class="pre">OFFSET</span> <span class="pre">...</span></code> queries against that provider will have their skip pushed
+into the scan automatically.</p></li>
+<li><p>Callers that already build a scan through <code class="docutils literal notranslate"><span class="pre">ScanArgs</span></code>/<code class="docutils literal notranslate"><span class="pre">scan_with_args</span></code> (for
+example custom query planners) can now also set <code class="docutils literal notranslate"><span class="pre">skip</span></code>.</p></li>
+</ul>
+</section>
+<section id="api-breaks">
+<h4>API breaks<a class="headerlink" href="#api-breaks" title="Link to this heading">#</a></h4>
+<p>The <em>public</em> <code class="docutils literal notranslate"><span class="pre">TableScan</span></code> struct has one new <em>public</em> field - <code class="docutils literal notranslate"><span class="pre">skip</span></code> and
+one field whose type is changed - <code class="docutils literal notranslate"><span class="pre">statistics_requests</span></code>. The addition of <code class="docutils literal notranslate"><span class="pre">skip</span></code>
+field increases the size of <code class="docutils literal notranslate"><span class="pre">TableScan</span></code> and thus the size of <code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code> enum. To keep
+the size of <code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code> reasonable the type of the <code class="docutils literal notranslate"><span class="pre">TableScan::statistics_requests</span></code>
+field is changed from <code class="docutils literal notranslate"><span class="pre">BTreeSet&lt;StatisticsRequest&gt;</span></code> (24 bytes) to
+<code class="docutils literal notranslate"><span class="pre">Box&lt;BTreeSet&lt;StatisticsRequest&gt;&gt;</span></code> (8 bytes).
+The users’ applications are recommended to use <code class="docutils literal notranslate"><span class="pre">TableScanBuilder</span></code> to construct new
+instances of <code class="docutils literal notranslate"><span class="pre">TableScan</span></code> instead of instantiating directly <code class="docutils literal notranslate"><span class="pre">TableScan</span> <span class="pre">{</span> <span class="pre">...</span> <span class="pre">}</span></code> to avoid
+the API breaks.</p>
+</section>
+<section id="example">
+<h4>Example<a class="headerlink" href="#example" title="Link to this heading">#</a></h4>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">provider</span>
+<span class="w">    </span><span class="p">.</span><span class="n">scan_with_args</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="n">state</span><span class="p">,</span>
+<span class="w">        </span><span class="n">ScanArgs</span><span class="p">::</span><span class="n">default</span><span class="p">()</span>
+<span class="w">            </span><span class="p">.</span><span class="n">with_projection</span><span class="p">(</span><span class="n">projection</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">with_filters</span><span class="p">(</span><span class="nb">Some</span><span class="p">(</span><span class="o">&amp;</span><span class="n">filters</span><span class="p">))</span>
+<span class="w">            </span><span class="p">.</span><span class="n">with_limit</span><span class="p">(</span><span class="n">limit</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">with_skip</span><span class="p">(</span><span class="n">skip</span><span class="p">),</span>
+<span class="w">    </span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="k">await</span><span class="o">?</span>
+<span class="w">    </span><span class="p">.</span><span class="n">into_inner</span><span class="p">();</span>
+</pre></div>
+</div>
+</section>
+</section>
 </section>
 </section>
 
@@ -1148,6 +1217,12 @@ conjuncts when <code class="docutils literal notranslate"><span class="pre">push
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#mergeintoopnode-protobuf-literals-require-target-qualifier"><code class="docutils literal notranslate"><span class="pre">MergeIntoOpNode</span></code> protobuf literals require <code class="docutils literal notranslate"><span class="pre">target_qualifier</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#functionaldependence-has-a-new-null-equality-field"><code class="docutils literal notranslate"><span class="pre">FunctionalDependence</span></code> has a new <code class="docutils literal notranslate"><span class="pre">null_equality</span></code> field</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filesource-exact-filter-controls-scan-equivalence-properties"><code class="docutils literal notranslate"><span class="pre">FileSource::exact_filter</span></code> controls scan equivalence properties</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#tableprovider-scan-with-args-supports-skip-pushdown"><code class="docutils literal notranslate"><span class="pre">TableProvider::scan_with_args</span></code> supports skip pushdown</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#who-is-affected">Who is affected</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#api-breaks">API breaks</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#example">Example</a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
