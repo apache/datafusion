@@ -130,7 +130,7 @@ impl BuildSide {
 /// [`need_produce_result_in_final`]), and only in the partition that finished
 /// probing last. That state re-enters itself once per emitted chunk of at most
 /// `batch_size` rows.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(super) enum HashJoinStreamState {
     /// Initial state for HashJoinStream indicating that build-side data not collected yet
     WaitBuildSide,
@@ -175,7 +175,7 @@ impl HashJoinStreamState {
 }
 
 /// Container for HashJoinStreamState::ProcessProbeBatch related data
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(super) struct ProcessProbeBatchState {
     /// Current probe-side batch
     batch: RecordBatch,
@@ -194,6 +194,9 @@ pub(super) struct ProcessProbeBatchState {
     /// `probe_hit_rate` and `avg_fanout` count a probe row whose matches span
     /// several chunks only once.
     matched_probe_idx: Option<u32>,
+    /// Key comparator for this batch, built on first use and reused by every
+    /// chunk
+    key_comparator: Option<JoinKeyComparator>,
 }
 
 impl ProcessProbeBatchState {
@@ -388,9 +391,6 @@ pub(super) struct HashJoinStream {
     probe_indices_buffer: Vec<u32>,
     /// Scratch space for build indices during hash lookup
     build_indices_buffer: Vec<u64>,
-    /// Key comparator for the current probe batch, built on first use and
-    /// reused by every chunk of that batch
-    probe_key_comparator: Option<JoinKeyComparator>,
 
     /// Scratch space for scope-key hashes in the null-aware mark pass, reused
     /// across probe batches. Separate from `hashes_buffer`, which still holds
@@ -585,7 +585,6 @@ impl HashJoinStream {
             hashes_buffer,
             probe_indices_buffer: Vec::with_capacity(batch_size),
             build_indices_buffer: Vec::with_capacity(batch_size),
-            probe_key_comparator: None,
             // Left unallocated: only correlated null-aware joins ever use
             // these, and they grow them on first use.
             null_mark_hashes_buffer: Vec::new(),
@@ -775,8 +774,6 @@ impl HashJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
-        // The comparator refers to the previous probe batch's key arrays.
-        self.probe_key_comparator = None;
         match ready!(self.right.poll_next_unpin(cx)) {
             None => {
                 // Release the probe-side input pipeline's resources. The schema
@@ -816,6 +813,7 @@ impl HashJoinStream {
                         offset: (0, None),
                         joined_probe_idx: None,
                         matched_probe_idx: None,
+                        key_comparator: None,
                     });
             }
             Some(Err(err)) => return Poll::Ready(Err(err)),
@@ -907,7 +905,7 @@ impl HashJoinStream {
                 state.offset,
                 &mut self.probe_indices_buffer,
                 &mut self.build_indices_buffer,
-                &mut self.probe_key_comparator,
+                &mut state.key_comparator,
             )?,
             Map::ArrayMap(array_map) => {
                 let next_offset = array_map.get_matched_indices_with_limit_offset(
@@ -1041,7 +1039,6 @@ impl HashJoinStream {
         // If limit reached, finish and move to Completed state
         if push_status == PushBatchStatus::LimitReached {
             self.output_buffer.finish()?;
-            self.probe_key_comparator = None;
             self.state = HashJoinStreamState::Completed;
             return Ok(StatefulStreamResult::Continue);
         }

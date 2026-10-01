@@ -2478,6 +2478,12 @@ pub struct JoinKeyComparator {
     rest: Vec<DynComparator>,
 }
 
+impl Debug for JoinKeyComparator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("JoinKeyComparator").finish_non_exhaustive()
+    }
+}
+
 impl JoinKeyComparator {
     /// Build comparators for each join key column pair.
     pub fn new(
