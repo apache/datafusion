@@ -472,7 +472,8 @@ impl RowGroupAccessPlanFilter {
             }
 
             if self.access_plan.is_fully_matched(idx) {
-                metrics.row_groups_pruned_bloom_filter.add_matched(1);
+                // Statistics already proved every row matches. Bloom did not
+                // evaluate this group, so do not record a Bloom outcome.
                 continue;
             }
 
