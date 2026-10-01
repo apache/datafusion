@@ -451,6 +451,11 @@ impl RowGroupAccessPlanFilter {
                 continue;
             }
 
+            if self.access_plan.is_fully_matched(idx) {
+                metrics.row_groups_pruned_bloom_filter.add_matched(1);
+                continue;
+            }
+
             // A row group without any loaded bloom filter cannot be pruned by this pass: with no
             // bloom statistics to consult, evaluation can only conclude "may match". Skip the
             // evaluation in that case: it runs once per row group and can be expensive for wide

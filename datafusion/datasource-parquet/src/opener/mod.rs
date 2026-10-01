@@ -18,6 +18,7 @@
 //! [`ParquetMorselizer`] state machines for opening Parquet files
 
 mod early_stop;
+#[cfg(feature = "parquet_encryption")]
 mod encryption;
 
 use self::early_stop::EarlyStoppingStream;
@@ -1482,6 +1483,10 @@ impl RowGroupsPrunedParquetOpen {
             self.prepared.pruning_predicate.as_ref().map(|p| p.as_ref())
             && self.prepared.loaded.prepared.enable_bloom_filter
             && !self.row_groups.is_empty()
+            && self
+                .row_groups
+                .row_group_indexes()
+                .any(|idx| !self.row_groups.access_plan().is_fully_matched(idx))
         {
             // Use the existing reader for bloom filter I/O;
             // replace with a fresh reader for decoding below.
@@ -1521,6 +1526,11 @@ impl RowGroupsPrunedParquetOpen {
                 .collect();
 
             for idx in self.row_groups.row_group_indexes() {
+                // Statistics have already proved that every row in this group
+                // matches the predicate, so its Bloom filters cannot prune it.
+                if self.row_groups.access_plan().is_fully_matched(idx) {
+                    continue;
+                }
                 let mut row_group_filters =
                     BloomFilterStatistics::with_capacity(parquet_columns.len());
                 for (column_name, column_idx, physical_type, type_length) in
@@ -2491,6 +2501,11 @@ mod test {
         /// Enable page index.
         fn with_enable_page_index(mut self, enable: bool) -> Self {
             self.enable_page_index = enable;
+            self
+        }
+
+        fn with_enable_bloom_filter(mut self, enable: bool) -> Self {
+            self.enable_bloom_filter = enable;
             self
         }
 
@@ -4643,6 +4658,86 @@ mod test {
             rows_without_page_index, 100,
             "without page index all rows are returned"
         );
+    }
+
+    #[tokio::test]
+    async fn fully_matched_row_groups_skip_bloom_filter_reads() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let batches = vec![
+            record_batch!(("a", Int32, vec![1, 1, 1])).unwrap(),
+            record_batch!(("a", Int32, vec![0, 1, 2])).unwrap(),
+        ];
+        let schema = batches[0].schema();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(3))
+            .set_bloom_filter_enabled(true)
+            .set_statistics_enabled(EnabledStatistics::Chunk)
+            .build();
+        let data_size = write_parquet_batches(
+            Arc::clone(&store),
+            "bloom.parquet",
+            batches,
+            Some(props),
+        )
+        .await;
+        let file = PartitionedFile::new("bloom.parquet".to_string(), data_size as u64);
+        let predicate = logical2physical(&col("a").eq(lit(1)), &schema);
+
+        let mut bloom_bytes = Vec::new();
+        for stats_pruning in [false, true] {
+            let metrics = ExecutionPlanMetricsSet::new();
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_predicate(Arc::clone(&predicate))
+                .with_pushdown_filters(true)
+                .with_row_group_stats_pruning(stats_pruning)
+                .with_enable_bloom_filter(true)
+                .with_metrics(metrics.clone())
+                .build();
+            let stream = open_file(&morselizer, file.clone()).await.unwrap();
+            // The decoder has not been polled yet, so only Bloom filter reads
+            // contribute to this metric.
+            bloom_bytes.push(counter_metric_value(&metrics, "bytes_scanned"));
+            assert_eq!(collect_int32_values(stream).await, vec![1, 1, 1, 1]);
+        }
+        assert!(bloom_bytes[1] > 0, "partial row group needs Bloom I/O");
+        assert!(
+            bloom_bytes[1] < bloom_bytes[0],
+            "fully matched row group should not load Bloom filters: {bloom_bytes:?}"
+        );
+
+        let all_matched = record_batch!(("a", Int32, vec![1, 1, 1])).unwrap();
+        let data_size = write_parquet_batches(
+            Arc::clone(&store),
+            "all-matched.parquet",
+            vec![all_matched],
+            Some(
+                WriterProperties::builder()
+                    .set_bloom_filter_enabled(true)
+                    .set_statistics_enabled(EnabledStatistics::Chunk)
+                    .build(),
+            ),
+        )
+        .await;
+        let metrics = ExecutionPlanMetricsSet::new();
+        let morselizer = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_predicate(predicate)
+            .with_pushdown_filters(true)
+            .with_row_group_stats_pruning(true)
+            .with_enable_bloom_filter(true)
+            .with_metrics(metrics.clone())
+            .build();
+        let stream = open_file(
+            &morselizer,
+            PartitionedFile::new("all-matched.parquet".to_string(), data_size as u64),
+        )
+        .await
+        .unwrap();
+        assert_eq!(counter_metric_value(&metrics, "bytes_scanned"), 0);
+        assert_eq!(collect_int32_values(stream).await, vec![1, 1, 1]);
     }
 
     #[test]
