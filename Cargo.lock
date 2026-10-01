@@ -2214,6 +2214,7 @@ dependencies = [
  "insta",
  "itertools 0.15.0",
  "recursive",
+ "serde",
  "serde_json",
  "sqlparser",
 ]
@@ -2559,6 +2560,7 @@ dependencies = [
  "rand 0.9.4",
  "rstest",
  "rstest_reuse",
+ "serde",
  "serde_json",
  "tokio",
 ]
