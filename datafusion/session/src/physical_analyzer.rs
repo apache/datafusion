@@ -100,8 +100,7 @@ pub trait PhysicalAnalyzerRule: Debug + std::any::Any {
     /// The default implementation calls [`analyze`](Self::analyze) with the
     /// config options from the context. This mirrors
     /// [`PhysicalOptimizerRule::optimize_with_context`], so enforcement passes
-    /// keep the same statistics-registry access they had while they were
-    /// optimizer rules.
+    /// have the same statistics-registry access as optimizer rules.
     ///
     /// [`PhysicalOptimizerRule::optimize_with_context`]: crate::physical_optimizer::PhysicalOptimizerRule::optimize_with_context
     fn analyze_with_context(

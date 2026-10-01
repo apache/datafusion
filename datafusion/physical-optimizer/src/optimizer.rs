@@ -91,20 +91,15 @@ impl PhysicalOptimizer {
             // Requirement enforcement runs in the analyzer phase (see
             // `PhysicalAnalyzer`), so every rule here receives a valid plan.
             Arc::new(AggregateStatistics::new()),
-            // Statistics-based join selection will change the Auto mode to a real join implementation,
-            // like collect left, or hash join, or future sort merge join, which will influence the
-            // EnsureRequirements rule as it decides whether to add additional repartitioning and
-            // local sorting steps to meet distribution and ordering requirements. Therefore, it
-            // should run before EnsureRequirements.
-            // The LimitedDistinctAggregation rule should be applied before EnsureRequirements,
-            // as that rule may inject other operations in between the different AggregateExecs.
-            // Applying the rule early means only directly-connected AggregateExecs must be examined.
+            // Enforcement already ran, so a partial and final AggregateExec may be
+            // separated by a RepartitionExec; the rule looks through
+            // distribution-only operators to reach the partial aggregate.
             Arc::new(LimitedDistinctAggregation::new()),
             // WindowTopN: replaces Filter(rn<=K) → Window(ROW_NUMBER)
             // with Window(ROW_NUMBER) → PartitionedTopKExec(fetch=K).
-            // Must run before EnsureRequirements (so it can rewrite against the
-            // window's declared ordering without pattern-matching a SortExec)
-            // and before ProjectionPushdown (which embeds projections into FilterExec).
+            // It changes the window's input requirements and re-enforces them
+            // itself. Must run before ProjectionPushdown (which embeds
+            // projections into FilterExec).
             Arc::new(WindowTopN::new()),
             // Sort *optimizations* only; enforcement already ran in the analyzer.
             Arc::new(OptimizeSorts::new()),
@@ -124,7 +119,7 @@ impl PhysicalOptimizer {
             Arc::new(TopKAggregation::new()),
             // Tries to push limits down through window functions, growing as appropriate
             // This can possibly be combined with [LimitPushdown]
-            // It needs to come after [EnsureRequirements] (which handles sort enforcement)
+            // It needs to come after sort enforcement (the EnforceSorting analyzer rule)
             Arc::new(LimitPushPastWindows::new()),
             // The HashJoinBuffering rule adds a BufferExec node with the configured capacity
             // in the prob side of hash joins. That way, the probe side gets eagerly polled before

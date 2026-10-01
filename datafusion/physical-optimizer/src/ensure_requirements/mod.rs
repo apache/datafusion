@@ -15,20 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`EnsureRequirements`] optimizer rule that enforces distribution and
-//! sorting requirements together so that the two never invalidate each other.
+//! Requirement enforcement: makes a plan satisfy the distribution and
+//! ordering requirements its operators declare, inspired by Apache Spark's
+//! `EnsureRequirements` and Presto/Trino's `AddExchanges`.
 //!
-//! This rule replaces the separate `EnforceDistribution` + `EnforceSorting`
-//! rules with a unified approach inspired by Apache Spark's `EnsureRequirements`
-//! and Presto/Trino's `AddExchanges`.
+//! The default pipeline runs enforcement as analyzer rules, in this order:
+//! [`EnforceDistribution`] (Phases 0-2a), then [`EnforceSorting`] (Phase 2b)
+//! on the distribution-fixed plan. The Phase 3 sort *optimizations* run later
+//! as the [`OptimizeSorts`] optimizer rule. [`EnsureRequirements`] runs all
+//! phases in one pass and is kept for pipelines that still register it.
 //!
 //! # Motivation
 //!
-//! The previous two-rule design (`EnforceDistribution` then `EnforceSorting`)
-//! suffers from non-idempotent composition: `EnforceSorting`'s `pushdown_sorts`
-//! can break distribution invariants established by `EnforceDistribution`,
-//! because `SortExec.preserve_partitioning` couples sorting and distribution
-//! decisions. See <https://github.com/apache/datafusion/issues/21973> for details.
+//! Ordering enforcement used to include sort pushdown, and that pushdown could
+//! break the distribution established just before it, because
+//! `SortExec.preserve_partitioning` couples sorting and distribution decisions.
+//! See <https://github.com/apache/datafusion/issues/21973> for details. The
+//! phases here keep them apart: enforcement (Phases 0-2) only inserts what a
+//! requirement needs, and sort pushdown lives in the Phase 3 optimizations,
+//! which run on an already-valid plan.
 //!
 //! # Architecture
 //!
@@ -64,11 +69,6 @@
 //!
 //! # Key Properties
 //!
-//! - **Idempotent across the whole rule**: Running `EnsureRequirements`
-//!   twice produces the same plan. This is the property that fixes
-//!   <https://github.com/apache/datafusion/issues/21973>, where the old
-//!   two-rule pipeline could regress a parallel sort plan into a serial one
-//!   on pass 2.
 //! - **Distribution before sorting**: For each child, distribution is
 //!   resolved before ordering, so sorting decisions always have full
 //!   distribution context.
@@ -159,12 +159,14 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::statistics::StatisticsContext;
 
-/// Optimizer rule that enforces both distribution and sorting requirements.
+/// Optimizer rule that runs every enforcement phase in one pass: distribution
+/// (via [`enforce_distribution_requirements`]), then sorting (via
+/// [`enforce_sorting_requirements`]), then the sort optimizations (via
+/// [`optimize_sorts`]).
 ///
-/// This rule combines the functionality of `EnforceDistribution` and
-/// `EnforceSorting` into a coordinated sequence where distribution is
-/// always settled before sorting for each operator, preventing the
-/// non-idempotent interactions between the two separate rules.
+/// The default pipeline registers the per-phase rules [`EnforceDistribution`],
+/// [`EnforceSorting`] and [`OptimizeSorts`] instead; this combined rule is kept
+/// so pipelines that still register `EnsureRequirements` keep working.
 ///
 /// See [module level documentation](self) for more details.
 #[derive(Default, Debug)]

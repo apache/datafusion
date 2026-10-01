@@ -3164,9 +3164,9 @@ impl DefaultPhysicalPlanner {
         // The analyzer phase's contract is that it hands the optimizer an
         // executable plan: every requirement enforced, no placeholder left
         // unresolved. Check it here, once, where the phase ends. Like the
-        // per-rule invariant checks this runs in debug builds only, so it
-        // costs nothing in release and still catches a chain that forgets a
-        // rule in CI.
+        // per-rule `InvariantLevel::Always` checks this runs in debug builds
+        // only, so it costs nothing in release and still catches a chain that
+        // forgets a rule in CI.
         #[cfg(debug_assertions)]
         if analyzer_phase_ran {
             InvariantChecker(InvariantLevel::Executable)

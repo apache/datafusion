@@ -383,12 +383,6 @@ impl OptimizationTest {
         let mut parquet_pushdown_config = ConfigOptions::default();
         parquet_pushdown_config.execution.parquet.pushdown_filters =
             allow_pushdown_filters;
-        // Pin target_partitions so any repartitioning these rules introduce (e.g.
-        // FilterPushdown re-establishing distribution) renders a fixed partition
-        // count in the snapshots instead of the machine's `num_cpus`, which
-        // otherwise makes the goldens fail on CI runners with a different core
-        // count than the machine they were accepted on.
-        parquet_pushdown_config.execution.target_partitions = 4;
 
         let input = format_execution_plan(&input_plan);
         let input_schema = input_plan.schema();

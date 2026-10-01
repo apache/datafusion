@@ -2932,7 +2932,7 @@ fn test_filter_pushdown_through_union_does_not_support() {
 
     insta::assert_snapshot!(
         OptimizationTest::new(plan, FilterPushdown::new(), true),
-        @r"
+        @"
     OptimizationTest:
       input:
         - FilterExec: a@0 = foo
@@ -3041,7 +3041,7 @@ fn test_filter_with_fetch_not_fully_pushed_through_union() {
 
     insta::assert_snapshot!(
         OptimizationTest::new(plan, FilterPushdown::new(), true),
-        @r"
+        @"
     OptimizationTest:
       input:
         - FilterExec: a@0 = foo, fetch=8
