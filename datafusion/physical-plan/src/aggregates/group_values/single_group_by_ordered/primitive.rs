@@ -18,11 +18,11 @@
 use crate::aggregates::group_values::{GroupValues, HashValue};
 use arrow::array::{
     Array, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder,
-    PrimitiveArray, cast::AsArray, new_empty_array,
+    PrimitiveArray, cast::AsArray,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::utils::split_vec_min_alloc;
-use datafusion_common::{Result, internal_err};
+use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::{EmitTo, GroupSelection};
 use std::sync::Arc;
@@ -125,7 +125,7 @@ where
             self.values.push(value.unwrap_or_default());
         }
 
-        let (mut current_value, mut current_group) = self.current_value().unwrap();
+        let (current_value, mut current_group) = self.current_value().unwrap();
 
         match (current_value, col.null_count()) {
             // If current group is null and the entire column is null
