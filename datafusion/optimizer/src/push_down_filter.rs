@@ -3235,7 +3235,8 @@ mod tests {
             projection,
             source: Arc::new(test_provider),
             fetch: None,
-            statistics_requests: std::collections::BTreeSet::new(),
+            skip: None,
+            statistics_requests: Box::default(),
         });
 
         Ok(LogicalPlanBuilder::from(table_scan))
