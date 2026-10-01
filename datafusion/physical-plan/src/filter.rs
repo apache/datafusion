@@ -541,8 +541,7 @@ impl FilterExec {
         let stats = Self::statistics_helper(
             &schema,
             Arc::unwrap_or_clone(
-                StatisticsContext::new()
-                    .compute(input.as_ref(), &StatisticsArgs::new())?,
+                StatisticsContext::new().compute(input, &StatisticsArgs::new())?,
             ),
             predicate,
             default_selectivity,

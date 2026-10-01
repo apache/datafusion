@@ -45,23 +45,26 @@ fn cache_key(plan: &dyn ExecutionPlan, partition: Option<usize>) -> CacheKey {
     )
 }
 
-/// Per-call memoization cache for statistics computation.
+/// Per-context memoization cache for statistics computation.
 ///
-/// Keyed by `(plan node pointer address, partition)`. Shared across
-/// a single statistics walk via [`StatisticsContext`].
-///
-/// The pointer-based key is safe within a single synchronous walk:
-/// all `Arc<dyn ExecutionPlan>` nodes are held by the plan tree for
-/// the duration of the walk, so addresses cannot be reused.
+/// Keys are `(plan node pointer address, partition)`. Every entry retains the
+/// `Arc` whose pointer supplied its key, preventing a dropped plan's address
+/// from being reused by a different plan while the entry exists.
 ///
 /// Core statistics and provider extensions are cached separately: the
 /// `statistics` map is the hot path (populated on every walk); the `extensions`
 /// map is populated only when a provider returns non-empty extensions, so a walk
 /// with no providers never touches it.
+#[derive(Debug)]
+struct CacheEntry<T> {
+    _plan: Arc<dyn ExecutionPlan>,
+    value: T,
+}
+
 #[derive(Debug, Default)]
 struct StatsCache {
-    statistics: HashMap<CacheKey, Arc<Statistics>>,
-    extensions: HashMap<CacheKey, Extensions>,
+    statistics: HashMap<CacheKey, CacheEntry<Arc<Statistics>>>,
+    extensions: HashMap<CacheKey, CacheEntry<Extensions>>,
 }
 
 /// Arguments passed to [`ExecutionPlan::statistics_from_inputs`] carrying
@@ -133,6 +136,60 @@ pub struct StatisticsContext {
     registry: StatisticsRegistry,
 }
 
+/// A plan accepted by [`StatisticsContext`].
+///
+/// Passing an [`Arc`] retains the root node in the cache. Borrowed plans remain
+/// supported for compatibility, but their root statistics are not memoized.
+/// Implementations returning a retained plan must return an [`Arc`] to the same
+/// node as [`Self::as_execution_plan`].
+pub trait StatisticsPlan {
+    #[doc(hidden)]
+    fn as_execution_plan(&self) -> &dyn ExecutionPlan;
+
+    #[doc(hidden)]
+    fn retained_plan(&self) -> Option<Arc<dyn ExecutionPlan>>;
+}
+
+impl<T: ExecutionPlan> StatisticsPlan for T {
+    fn as_execution_plan(&self) -> &dyn ExecutionPlan {
+        self
+    }
+
+    fn retained_plan(&self) -> Option<Arc<dyn ExecutionPlan>> {
+        None
+    }
+}
+
+impl<T: ExecutionPlan> StatisticsPlan for Arc<T> {
+    fn as_execution_plan(&self) -> &dyn ExecutionPlan {
+        self.as_ref()
+    }
+
+    fn retained_plan(&self) -> Option<Arc<dyn ExecutionPlan>> {
+        Some(Arc::clone(self) as Arc<dyn ExecutionPlan>)
+    }
+}
+
+impl StatisticsPlan for dyn ExecutionPlan {
+    fn as_execution_plan(&self) -> &dyn ExecutionPlan {
+        self
+    }
+
+    fn retained_plan(&self) -> Option<Arc<dyn ExecutionPlan>> {
+        None
+    }
+}
+
+impl StatisticsPlan for Arc<dyn ExecutionPlan> {
+    fn as_execution_plan(&self) -> &dyn ExecutionPlan {
+        self.as_ref()
+    }
+
+    fn retained_plan(&self) -> Option<Arc<dyn ExecutionPlan>> {
+        Some(Arc::clone(self))
+    }
+}
+
 impl Default for StatisticsContext {
     fn default() -> Self {
         Self::new()
@@ -153,12 +210,11 @@ impl StatisticsContext {
         }
     }
 
-    /// Clears the memoization cache.
+    /// Clears the memoization cache and releases its retained plan nodes.
     ///
-    /// The cache is keyed by raw plan-node pointers, which are only stable
-    /// while the current plan tree is alive. Reset between optimizer passes
-    /// (which rewrite the plan) when reusing one context across them, so stale
-    /// pointer keys cannot collide.
+    /// Resetting is optional for correctness: each cache entry retains the plan
+    /// node that supplied its pointer key. Use it to bound memory at a logical
+    /// lifecycle boundary, such as after an optimizer pass.
     pub fn reset_cache(&self) {
         let mut cache = self.cache.borrow_mut();
         cache.statistics.clear();
@@ -202,24 +258,29 @@ impl StatisticsContext {
     /// assert_eq!(per_partition.num_rows, Precision::Exact(60));
     /// # Ok::<(), datafusion_common::DataFusionError>(())
     /// ```
-    pub fn compute(
+    pub fn compute<P: StatisticsPlan + ?Sized>(
         &self,
-        plan: &dyn ExecutionPlan,
+        plan: &P,
         args: &StatisticsArgs,
     ) -> Result<Arc<Statistics>> {
-        self.compute_base(plan, args, false)
+        self.compute_base(plan.as_execution_plan(), plan.retained_plan(), args, false)
             .map(|(statistics, _)| statistics)
     }
 
     /// Computes the [`ExtendedStatistics`] for `plan`: the core statistics plus
     /// any extensions a provider attached to this node (see the type-level docs
     /// for how extensions propagate up the tree).
-    pub fn compute_extended(
+    pub fn compute_extended<P: StatisticsPlan + ?Sized>(
         &self,
-        plan: &dyn ExecutionPlan,
+        plan: &P,
         args: &StatisticsArgs,
     ) -> Result<Arc<ExtendedStatistics>> {
-        let (statistics, extensions) = self.compute_base(plan, args, true)?;
+        let (statistics, extensions) = self.compute_base(
+            plan.as_execution_plan(),
+            plan.retained_plan(),
+            args,
+            true,
+        )?;
         Ok(Arc::new(ExtendedStatistics::new_with_extensions(
             statistics,
             extensions.unwrap_or_default(),
@@ -243,6 +304,7 @@ impl StatisticsContext {
     fn compute_base(
         &self,
         plan: &dyn ExecutionPlan,
+        retained_plan: Option<Arc<dyn ExecutionPlan>>,
         args: &StatisticsArgs,
         read_cached_extensions: bool,
     ) -> Result<(Arc<Statistics>, Option<Extensions>)> {
@@ -273,18 +335,22 @@ impl StatisticsContext {
         let children = plan.children();
         // Try providers before resolving the operator's own children, so a
         // provider that overrides this node is not blocked by the fallback walk.
-        let (statistics, extensions) =
-            match self.try_provider_stats(plan, &children, args)? {
-                Some(computed) => computed,
-                None => {
-                    let requests = plan.child_stats_requests(partition);
-                    self.validate_child_requests(plan, &children, &requests)?;
-                    let child_statistics =
-                        self.resolve_children(plan, &children, &requests)?;
-                    (plan.statistics_from_inputs(&child_statistics, args)?, None)
-                }
-            };
-        self.store_statistics(plan, partition, Arc::clone(&statistics));
+        let (statistics, extensions) = match self.try_provider_stats(
+            plan,
+            retained_plan.as_ref(),
+            &children,
+            args,
+        )? {
+            Some(computed) => computed,
+            None => {
+                let requests = plan.child_stats_requests(partition);
+                self.validate_child_requests(plan, &children, &requests)?;
+                let child_statistics =
+                    self.resolve_children(plan, &children, &requests)?;
+                (plan.statistics_from_inputs(&child_statistics, args)?, None)
+            }
+        };
+        self.store_statistics(plan, retained_plan, partition, Arc::clone(&statistics));
         Ok((statistics, extensions))
     }
 
@@ -336,6 +402,7 @@ impl StatisticsContext {
                 ChildStats::At(p) => self
                     .compute_base(
                         child.as_ref(),
+                        Some(Arc::clone(child)),
                         &StatisticsArgs::new().with_partition(*p),
                         false,
                     )
@@ -366,6 +433,7 @@ impl StatisticsContext {
     fn try_provider_stats(
         &self,
         plan: &dyn ExecutionPlan,
+        retained_plan: Option<&Arc<dyn ExecutionPlan>>,
         children: &[&Arc<dyn ExecutionPlan>],
         args: &StatisticsArgs,
     ) -> Result<Option<(Arc<Statistics>, Option<Extensions>)>> {
@@ -405,7 +473,12 @@ impl StatisticsContext {
                 let extensions = if extensions.is_empty() {
                     None
                 } else {
-                    self.store_extensions(plan, partition, extensions.clone());
+                    self.store_extensions(
+                        plan,
+                        retained_plan.cloned(),
+                        partition,
+                        extensions.clone(),
+                    );
                     Some(extensions)
                 };
                 return Ok(Some((statistics, extensions)));
@@ -452,19 +525,27 @@ impl StatisticsContext {
             .borrow()
             .statistics
             .get(&cache_key(plan, partition))
-            .cloned()
+            .map(|entry| Arc::clone(&entry.value))
     }
 
     fn store_statistics(
         &self,
         plan: &dyn ExecutionPlan,
+        retained_plan: Option<Arc<dyn ExecutionPlan>>,
         partition: Option<usize>,
         statistics: Arc<Statistics>,
     ) {
-        self.cache
-            .borrow_mut()
-            .statistics
-            .insert(cache_key(plan, partition), statistics);
+        if let Some(retained_plan) = retained_plan
+            && cache_key(plan, partition) == cache_key(retained_plan.as_ref(), partition)
+        {
+            self.cache.borrow_mut().statistics.insert(
+                cache_key(plan, partition),
+                CacheEntry {
+                    _plan: retained_plan,
+                    value: statistics,
+                },
+            );
+        }
     }
 
     fn cached_extensions(
@@ -476,19 +557,27 @@ impl StatisticsContext {
             .borrow()
             .extensions
             .get(&cache_key(plan, partition))
-            .cloned()
+            .map(|entry| entry.value.clone())
     }
 
     fn store_extensions(
         &self,
         plan: &dyn ExecutionPlan,
+        retained_plan: Option<Arc<dyn ExecutionPlan>>,
         partition: Option<usize>,
         extensions: Extensions,
     ) {
-        self.cache
-            .borrow_mut()
-            .extensions
-            .insert(cache_key(plan, partition), extensions);
+        if let Some(retained_plan) = retained_plan
+            && cache_key(plan, partition) == cache_key(retained_plan.as_ref(), partition)
+        {
+            self.cache.borrow_mut().extensions.insert(
+                cache_key(plan, partition),
+                CacheEntry {
+                    _plan: retained_plan,
+                    value: extensions,
+                },
+            );
+        }
     }
 }
 
@@ -631,18 +720,47 @@ mod tests {
         let ctx = StatisticsContext::new();
         let args = StatisticsArgs::new();
 
-        let s1 = ctx.compute(leaf.as_ref(), &args).unwrap();
+        let s1 = ctx.compute(&leaf, &args).unwrap();
         assert!(!ctx.cache.borrow().statistics.is_empty());
 
-        let s2 = ctx.compute(leaf.as_ref(), &args).unwrap();
+        let s2 = ctx.compute(&leaf, &args).unwrap();
         assert!(Arc::ptr_eq(&s1, &s2));
+    }
+
+    #[test]
+    fn context_cache_retains_plan_lifetime() {
+        let leaf = make_stats_leaf(10);
+        let weak = Arc::downgrade(&leaf);
+        let ctx = StatisticsContext::new();
+
+        let _ = ctx.compute(&leaf, &StatisticsArgs::new()).unwrap();
+        drop(leaf);
+        assert!(weak.upgrade().is_some());
+
+        ctx.reset_cache();
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn extension_cache_retains_plan_lifetime() {
+        let leaf = make_stats_leaf(10);
+        let weak = Arc::downgrade(&leaf);
+        let ctx = ctx_with(Arc::new(TagLeafProvider { rows: 10, tag: 7 }));
+
+        let _ = ctx.compute_extended(&leaf, &StatisticsArgs::new()).unwrap();
+        ctx.cache.borrow_mut().statistics.clear();
+        drop(leaf);
+        assert!(weak.upgrade().is_some());
+
+        ctx.reset_cache();
+        assert!(weak.upgrade().is_none());
     }
 
     #[test]
     fn reset_cache_clears_entries() {
         let leaf = make_stats_leaf(10);
         let ctx = StatisticsContext::new();
-        let _ = ctx.compute(leaf.as_ref(), &StatisticsArgs::new()).unwrap();
+        let _ = ctx.compute(&leaf, &StatisticsArgs::new()).unwrap();
         assert!(!ctx.cache.borrow().statistics.is_empty());
         ctx.reset_cache();
         assert!(ctx.cache.borrow().statistics.is_empty());
@@ -714,7 +832,9 @@ mod tests {
 
         // Fresh computation: returned even though no cached read was requested,
         // and still recorded for parents.
-        let (_, extensions) = ctx.compute_base(leaf.as_ref(), &args, false).unwrap();
+        let (_, extensions) = ctx
+            .compute_base(leaf.as_ref(), Some(Arc::clone(&leaf)), &args, false)
+            .unwrap();
         assert_eq!(extensions.unwrap().get::<Tag>(), Some(&Tag(7)));
         assert!(
             ctx.cache
@@ -724,9 +844,13 @@ mod tests {
         );
 
         // Cache hit: extensions are cloned out of the cache only on request.
-        let (_, extensions) = ctx.compute_base(leaf.as_ref(), &args, false).unwrap();
+        let (_, extensions) = ctx
+            .compute_base(leaf.as_ref(), Some(Arc::clone(&leaf)), &args, false)
+            .unwrap();
         assert!(extensions.is_none());
-        let (_, extensions) = ctx.compute_base(leaf.as_ref(), &args, true).unwrap();
+        let (_, extensions) = ctx
+            .compute_base(leaf.as_ref(), Some(Arc::clone(&leaf)), &args, true)
+            .unwrap();
         assert_eq!(extensions.unwrap().get::<Tag>(), Some(&Tag(7)));
     }
 
