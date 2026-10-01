@@ -390,7 +390,7 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                 table_name,
                 filters,
                 fetch,
-                skip: offset,
+                skip,
                 ..
             }) => {
                 let mut object = pg_fields!(
@@ -450,8 +450,8 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     object.push("Fetch", serde_json::Value::Number((*f).into()));
                 }
 
-                if let Some(o) = offset {
-                    object["Offset"] = serde_json::Value::Number((*o).into());
+                if let Some(s) = skip {
+                    object.push("Skip", serde_json::Value::Number((*s).into()));
                 }
 
                 object
