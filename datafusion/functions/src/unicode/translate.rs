@@ -19,6 +19,7 @@ use arrow::array::{Array, ArrayRef, AsArray, GenericStringArray, StringArrayType
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::DataType;
 use datafusion_common::HashMap;
+use datafusion_common::utils::offset_span_len;
 
 use super::common::try_as_scalar_str;
 use crate::strings::{
@@ -114,7 +115,7 @@ impl ScalarUDFImpl for TranslateFunc {
                     let arr = string_array.as_string::<i32>();
                     let builder = GenericStringArrayBuilder::<i32>::with_capacity(
                         len,
-                        arr.value_data().len(),
+                        offset_span_len(arr.offsets()),
                     );
                     translate_with_table(&arr, &table, builder)
                 }
@@ -122,7 +123,7 @@ impl ScalarUDFImpl for TranslateFunc {
                     let arr = string_array.as_string::<i64>();
                     let builder = GenericStringArrayBuilder::<i64>::with_capacity(
                         len,
-                        arr.value_data().len(),
+                        offset_span_len(arr.offsets()),
                     );
                     translate_with_table(&arr, &table, builder)
                 }
@@ -160,7 +161,7 @@ fn invoke_translate(args: &[ArrayRef]) -> Result<ArrayRef> {
             let to_array = args[2].as_string::<i32>();
             let builder = GenericStringArrayBuilder::<i32>::with_capacity(
                 len,
-                string_array.value_data().len(),
+                offset_span_len(string_array.offsets()),
             );
             translate(&string_array, from_array, to_array, builder)
         }
@@ -170,7 +171,7 @@ fn invoke_translate(args: &[ArrayRef]) -> Result<ArrayRef> {
             let to_array = args[2].as_string::<i32>();
             let builder = GenericStringArrayBuilder::<i64>::with_capacity(
                 len,
-                string_array.value_data().len(),
+                offset_span_len(string_array.offsets()),
             );
             translate(&string_array, from_array, to_array, builder)
         }
@@ -442,7 +443,7 @@ mod tests {
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
     use crate::unicode::translate::TranslateFunc;
-    use crate::utils::test::test_function;
+    use crate::utils::test::{sliced_byte_array, test_function};
 
     #[test]
     fn test_functions() -> Result<()> {
@@ -610,6 +611,50 @@ mod tests {
         assert_eq!(result.value(1), "xbc");
         assert!(result.is_null(2));
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_sliced_capacity() -> Result<()> {
+        use arrow::datatypes::Field;
+        use datafusion_expr::ScalarFunctionArgs;
+        for data_type in [Utf8, arrow::datatypes::DataType::LargeUtf8] {
+            let input = sliced_byte_array(&[Some("aé,b"), None], &data_type)?;
+            for len in [0, 2] {
+                for scalar in [false, true] {
+                    let parameter = |s| {
+                        if scalar {
+                            ColumnarValue::Scalar(ScalarValue::from(s))
+                        } else {
+                            ColumnarValue::Array(Arc::new(StringArray::from(vec![
+                                s;
+                                len
+                            ])))
+                        }
+                    };
+                    let result = TranslateFunc::new()
+                        .invoke_with_args(ScalarFunctionArgs {
+                            args: vec![
+                                ColumnarValue::Array(input.slice(0, len)),
+                                parameter("a"),
+                                parameter("z"),
+                            ],
+                            arg_fields: vec![
+                                Field::new("input", data_type.clone(), true).into(),
+                                Field::new("from", Utf8, false).into(),
+                                Field::new("to", Utf8, false).into(),
+                            ],
+                            number_rows: len,
+                            return_field: Field::new("result", data_type.clone(), true)
+                                .into(),
+                            config_options: Default::default(),
+                        })?
+                        .into_array(len)?;
+                    assert_eq!(result.len(), len);
+                    assert!(result.get_buffer_memory_size() < 1024);
+                }
+            }
+        }
         Ok(())
     }
 }

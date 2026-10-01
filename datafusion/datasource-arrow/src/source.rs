@@ -179,7 +179,12 @@ impl FileOpener for ArrowFileOpener {
                     })?;
                     // build decoder according to footer & projection
                     let schema =
-                        arrow_ipc::convert::fb_to_schema(footer.schema().unwrap());
+                        arrow_ipc::convert::try_fb_to_schema(footer.schema().unwrap())
+                            .map_err(|err| {
+                                exec_datafusion_err!(
+                                    "Unable to convert IPC schema: {err:?}"
+                                )
+                            })?;
                     let mut decoder = FileDecoder::new(schema.into(), footer.version());
                     if let Some(projection) = projection {
                         decoder = decoder.with_projection(projection);

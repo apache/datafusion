@@ -443,14 +443,13 @@ pub fn accumulate<T, F>(
             let nulls = values.nulls().unwrap();
             // This is based on (ahem, COPY/PASTE) arrow::compute::aggregate::sum
             // iterate over in chunks of 64 bits for more efficient null checking
-            let group_indices_chunks = group_indices.chunks_exact(64);
-            let data_chunks = data.chunks_exact(64);
+            let (group_indices_chunks, group_indices_remainder) =
+                group_indices.as_chunks::<64>();
+            let (data_chunks, data_remainder) = data.as_chunks::<64>();
             let bit_chunks = nulls.inner().bit_chunks();
 
-            let group_indices_remainder = group_indices_chunks.remainder();
-            let data_remainder = data_chunks.remainder();
-
             group_indices_chunks
+                .iter()
                 .zip(data_chunks)
                 .zip(bit_chunks.iter())
                 .for_each(|((group_index_chunk, data_chunk), mask)| {
@@ -605,13 +604,12 @@ pub fn accumulate_indices<F>(
         }
         (None, Some(filter)) => {
             debug_assert_eq!(filter.len(), group_indices.len());
-            let group_indices_chunks = group_indices.chunks_exact(64);
+            let (group_indices_chunks, group_indices_remainder) =
+                group_indices.as_chunks::<64>();
             let filter_validity = filter_to_validity(filter);
             let bit_chunks = filter_validity.bit_chunks();
 
-            let group_indices_remainder = group_indices_chunks.remainder();
-
-            group_indices_chunks.zip(bit_chunks.iter()).for_each(
+            group_indices_chunks.iter().zip(bit_chunks.iter()).for_each(
                 |(group_index_chunk, mask)| {
                     // index_mask has value 1 << i in the loop
                     let mut index_mask = 1;
@@ -642,12 +640,11 @@ pub fn accumulate_indices<F>(
             debug_assert_eq!(valids.len(), group_indices.len());
             // This is based on (ahem, COPY/PASTA) arrow::compute::aggregate::sum
             // iterate over in chunks of 64 bits for more efficient null checking
-            let group_indices_chunks = group_indices.chunks_exact(64);
+            let (group_indices_chunks, group_indices_remainder) =
+                group_indices.as_chunks::<64>();
             let bit_chunks = valids.inner().bit_chunks();
 
-            let group_indices_remainder = group_indices_chunks.remainder();
-
-            group_indices_chunks.zip(bit_chunks.iter()).for_each(
+            group_indices_chunks.iter().zip(bit_chunks.iter()).for_each(
                 |(group_index_chunk, mask)| {
                     // index_mask has value 1 << i in the loop
                     let mut index_mask = 1;
@@ -679,14 +676,14 @@ pub fn accumulate_indices<F>(
             debug_assert_eq!(filter.len(), group_indices.len());
             debug_assert_eq!(valids.len(), group_indices.len());
 
-            let group_indices_chunks = group_indices.chunks_exact(64);
+            let (group_indices_chunks, group_indices_remainder) =
+                group_indices.as_chunks::<64>();
             let valid_bit_chunks = valids.inner().bit_chunks();
             let filter_validity = filter_to_validity(filter);
             let filter_bit_chunks = filter_validity.bit_chunks();
 
-            let group_indices_remainder = group_indices_chunks.remainder();
-
             group_indices_chunks
+                .iter()
                 .zip(valid_bit_chunks.iter())
                 .zip(filter_bit_chunks.iter())
                 .for_each(|((group_index_chunk, valid_mask), filter_mask)| {

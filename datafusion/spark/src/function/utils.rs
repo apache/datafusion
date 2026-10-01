@@ -17,6 +17,10 @@
 
 #[cfg(test)]
 pub mod test {
+    use arrow::array::{Array, ArrayRef, StringArray};
+    use arrow::datatypes::DataType;
+    use datafusion_common::Result;
+
     /// $FUNC ScalarUDFImpl to test
     /// $ARGS arguments (vec) to pass to function
     /// $EXPECTED a Result<ColumnarValue>
@@ -142,4 +146,28 @@ pub mod test {
     }
 
     pub(crate) use test_scalar_function;
+
+    /// Runs `run` on small slices of a string array that retains a large
+    /// values buffer, and checks that the output is sized for the visible rows.
+    pub(crate) fn check_sliced_string_capacity(
+        visible: &str,
+        run: impl Fn(ArrayRef) -> Result<ArrayRef>,
+    ) -> Result<()> {
+        let padding = "x".repeat(65536);
+        let input = StringArray::from(vec![
+            Some(padding.as_str()),
+            Some(visible),
+            None,
+            Some(padding.as_str()),
+        ]);
+        for data_type in [DataType::Utf8, DataType::LargeUtf8] {
+            let input = arrow::compute::cast(&input, &data_type)?;
+            for len in [0, 2] {
+                let result = run(input.slice(1, len))?;
+                assert_eq!(result.len(), len);
+                assert!(result.get_buffer_memory_size() < 1024);
+            }
+        }
+        Ok(())
+    }
 }

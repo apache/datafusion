@@ -5172,6 +5172,25 @@ statement ok
 drop table bit_distinct;
 
 
+# bitwise aggregates over NULL inputs, with and without GROUP BY
+statement ok
+create table bit_null (tag varchar) as values ('A'), ('A'), ('B');
+
+query ???
+SELECT bit_and(NULL), bit_or(NULL), bit_xor(NULL) FROM bit_null;
+----
+NULL NULL NULL
+
+query ???T
+SELECT bit_and(NULL), bit_or(NULL), bit_xor(NULL), tag FROM bit_null GROUP BY tag ORDER BY tag;
+----
+NULL NULL NULL A
+NULL NULL NULL B
+
+statement ok
+drop table bit_null;
+
+
 # bit_and_i32
 statement ok
 create table t (c int) as values (4), (7), (15);
@@ -7533,6 +7552,35 @@ set datafusion.optimizer.enable_distinct_aggregation_soft_limit = true;
 statement ok
 set datafusion.optimizer.repartition_aggregations = true;
 
+# A window function in the projection makes `EnsureRequirements` add a sort below
+# the distinct aggregation, so the aggregation ends up with an output ordering after
+# `LimitedDistinctAggregation` pushed a direction-less limit into it. The query
+# must still execute and return the distinct rows.
+statement ok
+CREATE TABLE distinct_limit_window_table(env VARCHAR, region VARCHAR, deployment VARCHAR) AS VALUES
+  ('prod', 'a', 'x'),
+  ('prod', 'a', 'y'),
+  ('staging', 'b', 'x');
+
+query TTI rowsort
+SELECT DISTINCT env, region, count(*) OVER (PARTITION BY env, deployment) AS n
+FROM distinct_limit_window_table
+LIMIT 30;
+----
+prod a 1
+staging b 1
+
+query TI rowsort
+SELECT DISTINCT env, count(*) OVER (PARTITION BY env) AS n
+FROM distinct_limit_window_table
+LIMIT 30;
+----
+prod 2
+staging 1
+
+statement ok
+DROP TABLE distinct_limit_window_table;
+
 #
 # regr_*() tests
 #
@@ -8771,9 +8819,9 @@ logical_plan
 15)------------EmptyRelation: rows=1
 physical_plan
 01)ProjectionExec: expr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST]@1 as last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))@2 as sum(DISTINCT Int64(1))]
-02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))], ordering_mode=Sorted
+02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))]
 03)----RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=5
-04)------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))], ordering_mode=Sorted
+04)------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))]
 05)--------UnionExec
 06)----------ProjectionExec: expr=[1 as id, 2 as foo]
 07)------------PlaceholderRowExec
@@ -8823,8 +8871,8 @@ logical_plan
 01)Aggregate: groupBy=[[]], aggr=[[count(Int64(NULL)) AS count(NULL)]]
 02)--TableScan: t projection=[]
 physical_plan
-01)AggregateExec: mode=Single, gby=[], aggr=[count(NULL)]
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[0 as count(NULL)]
+02)--PlaceholderRowExec
 
 statement count 0
 drop table t;
@@ -8897,8 +8945,8 @@ logical_plan
 01)Aggregate: groupBy=[[]], aggr=[[count(Int64(1)), count(Int64(2))]]
 02)--TableScan: t projection=[]
 physical_plan
-01)AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1)), count(Int64(2))]
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[2 as count(Int64(1)), 2 as count(Int64(2))]
+02)--PlaceholderRowExec
 
 query II
 select count(1), count() from t;
@@ -8959,9 +9007,24 @@ logical_plan
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1)), count(Int64(2))]]
 03)----TableScan: t projection=[]
 physical_plan
-01)ProjectionExec: expr=[count(Int64(1))@0 * count(Int64(2))@1 as count(Int64(1)) * count(Int64(2))]
-02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1)), count(Int64(2))]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[2 * 2 as count(Int64(1)) * count(Int64(2))]
+02)--PlaceholderRowExec
+
+# Any non-null literal counts every row, so it can be answered from statistics
+query II
+select count('a'), count(true) from t;
+----
+2 2
+
+query TT
+explain select count('a'), count(true) from t;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[count(Utf8("a")), count(Boolean(true))]]
+02)--TableScan: t projection=[]
+physical_plan
+01)ProjectionExec: expr=[2 as count(Utf8("a")), 2 as count(Boolean(true))]
+02)--PlaceholderRowExec
 
 statement count 0
 drop table t;
@@ -9933,7 +9996,9 @@ SELECT sum(s) FROM (SELECT sum(column2) OVER () AS s FROM nested_agg_t);
 statement ok
 DROP TABLE nested_agg_t;
 
-# Tests for COUNT(... ORDER BY ...)
+# Tests for aggregates that ignore ORDER BY
+
+# COUNT(... ORDER BY ...)
 statement ok
 CREATE TABLE count_order_by_t (a INT, b INT, c INT) AS VALUES
 (1, NULL, 10),
@@ -9975,3 +10040,89 @@ physical_plan
 
 statement ok
 DROP TABLE count_order_by_t;
+
+# Aggregates that keep the default `order_sensitivity` receive the ORDER BY
+# columns as extra arguments, which their GroupsAccumulator must ignore.
+statement ok
+CREATE TABLE agg_order_by_t (g INT, v DOUBLE, i BIGINT) AS VALUES
+(1, 1.0, 1),
+(1, 3.0, 3),
+(2, 5.0, 5),
+(2, 7.0, 7),
+(2, 9.0, 9);
+
+# Same aggregates without ORDER BY, for comparison
+query IRIR
+SELECT g, avg(v), bit_and(i), var(v) FROM agg_order_by_t GROUP BY g ORDER BY g;
+----
+1 2 1 2
+2 7 1 4
+
+query IR
+SELECT g, avg(v ORDER BY i) FROM agg_order_by_t GROUP BY g ORDER BY g;
+----
+1 2
+2 7
+
+query II
+SELECT g, bit_and(i ORDER BY v) FROM agg_order_by_t GROUP BY g ORDER BY g;
+----
+1 1
+2 1
+
+query II
+SELECT g, bit_or(i ORDER BY v) FROM agg_order_by_t GROUP BY g ORDER BY g;
+----
+1 3
+2 15
+
+query II
+SELECT g, bit_xor(i ORDER BY v) FROM agg_order_by_t GROUP BY g ORDER BY g;
+----
+1 2
+2 11
+
+query IR
+SELECT g, var(v ORDER BY i) FROM agg_order_by_t GROUP BY g ORDER BY g;
+----
+1 2
+2 4
+
+query IR
+SELECT g, var_pop(v ORDER BY i) FROM agg_order_by_t GROUP BY g ORDER BY g;
+----
+1 1
+2 2.666666666667
+
+query IR
+SELECT g, stddev(v ORDER BY i) FROM agg_order_by_t GROUP BY g ORDER BY g;
+----
+1 1.414213562373
+2 2
+
+query IR
+SELECT g, stddev_pop(v ORDER BY i) FROM agg_order_by_t GROUP BY g ORDER BY g;
+----
+1 1
+2 1.632993161855
+
+# DISTINCT uses a different Accumulator
+query IRR
+SELECT g, avg(DISTINCT v ORDER BY v), var(DISTINCT v ORDER BY v) FROM agg_order_by_t GROUP BY g ORDER BY g;
+----
+1 2 2
+2 7 4
+
+# Without GROUP BY the Accumulator is used instead of the GroupsAccumulator
+query R
+SELECT avg(v ORDER BY i) FROM agg_order_by_t;
+----
+5
+
+query RR
+SELECT avg(DISTINCT v ORDER BY v), var(DISTINCT v ORDER BY v) FROM agg_order_by_t;
+----
+5 10
+
+statement ok
+DROP TABLE agg_order_by_t;

@@ -143,6 +143,10 @@ pub struct InstrumentedObjectStore {
     requests: Arc<Mutex<Vec<RequestDetails>>>,
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "error type is dictated by the object_store API"
+)]
 impl InstrumentedObjectStore {
     /// Returns a new [`InstrumentedObjectStore`] that wraps the provided [`ObjectStore`]
     fn new(object_store: Arc<dyn ObjectStore>, instrument_mode: AtomicU8) -> Self {

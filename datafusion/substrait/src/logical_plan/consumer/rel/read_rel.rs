@@ -26,7 +26,7 @@ use datafusion::common::{
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::utils::split_conjunction_owned;
 use datafusion::logical_expr::{
-    EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder, Values,
+    EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder, TableScanBuilder, Values,
 };
 use std::sync::Arc;
 use substrait::proto::expression::MaskExpression;
@@ -61,13 +61,13 @@ pub async fn from_read_rel(
                 _ => return plan_err!("No table named '{table_ref}'"),
             };
 
-            LogicalPlanBuilder::scan_with_filters(
+            let table_scan = TableScanBuilder::new(
                 table_ref,
                 provider_as_source(Arc::clone(&provider)),
-                None,
-                filters,
-            )?
-            .build()?
+            )
+            .with_filters(filters)
+            .build()?;
+            LogicalPlanBuilder::table_scan(table_scan)?.build()?
         };
 
         ensure_schema_compatibility(plan.schema(), schema.clone())?;
