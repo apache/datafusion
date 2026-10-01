@@ -26,6 +26,7 @@ use crate::operator_statistics::{
     ExtendedStatistics, StatisticsRegistry, StatisticsResult,
 };
 use datafusion_common::extensions::Extensions;
+use datafusion_common::stats::Precision;
 use datafusion_common::{
     Result, Statistics, assert_eq_or_internal_err, assert_or_internal_err,
 };
@@ -113,7 +114,7 @@ impl StatisticsArgs {
 /// every partition can emit up to `fetch` rows, so the output can reach
 /// `fetch * n_partitions` rows, and never more than the input. How the input
 /// rows are spread over the partitions is unknown, so the result is inexact
-/// unless `fetch` cannot drop any row.
+/// unless an exact input count shows that `fetch` cannot drop any row.
 pub(crate) fn with_per_partition_fetch(
     input: Statistics,
     fetch: Option<usize>,
@@ -126,8 +127,9 @@ pub(crate) fn with_per_partition_fetch(
     if args.partition().is_some() || n_partitions <= 1 {
         return input.with_fetch(Some(fetch), 0, 1);
     }
-    // No partition can hold more than `fetch` rows, so none is dropped.
-    if matches!(input.num_rows.get_value(), Some(&num_rows) if num_rows <= fetch) {
+    // No partition can hold more than `fetch` rows, so none is dropped. Only
+    // an exact count proves that: an estimate below `fetch` may be wrong.
+    if matches!(input.num_rows, Precision::Exact(num_rows) if num_rows <= fetch) {
         return Ok(input);
     }
     Ok(input
@@ -695,6 +697,32 @@ mod tests {
 
         let overall = ctx.compute(union.as_ref(), &StatisticsArgs::new()).unwrap();
         assert_eq!(overall.num_rows, Precision::Exact(999));
+    }
+
+    /// Only an exact row count can show that a fetch on each of four partitions
+    /// drops no row. An estimate cannot, so the result becomes inexact, column
+    /// statistics included.
+    #[test]
+    fn per_partition_fetch_keeps_exactness_only_for_exact_counts() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let fetch_10_of_4 = |num_rows| {
+            let mut input = Statistics::new_unknown(&schema);
+            input.num_rows = num_rows;
+            input.column_statistics[0].null_count = Precision::Exact(3);
+            with_per_partition_fetch(input, Some(10), 4, &StatisticsArgs::new())
+        };
+
+        let exact = fetch_10_of_4(Precision::Exact(8))?;
+        assert_eq!(exact.num_rows, Precision::Exact(8));
+        assert_eq!(exact.column_statistics[0].null_count, Precision::Exact(3));
+
+        let estimate = fetch_10_of_4(Precision::Inexact(8))?;
+        assert_eq!(estimate.num_rows, Precision::Inexact(8));
+        assert_eq!(
+            estimate.column_statistics[0].null_count,
+            Precision::Inexact(3)
+        );
+        Ok(())
     }
 
     /// Row counts under a fetch that applies to each of four partitions.
