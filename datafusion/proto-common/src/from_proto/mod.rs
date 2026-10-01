@@ -44,6 +44,7 @@ use datafusion_common::{
         ParquetColumnOptions, ParquetOptions, TableParquetOptions,
     },
     file_options::{csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions},
+    parquet_config::RowGroupRangeAssignment,
     parsers::CompressionTypeVariant,
     plan_datafusion_err,
     stats::Precision,
@@ -1219,6 +1220,11 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                 .transpose()?,
             max_row_group_size: to_usize(value.max_row_group_size, "max_row_group_size")?,
             max_in_list_size: to_usize(value.max_in_list_size, "max_in_list_size")?,
+            row_group_range_assignment: match value.row_group_range_assignment.as_str() {
+                // Empty when encoded before this option existed
+                "" => RowGroupRangeAssignment::default(),
+                assignment => assignment.parse()?,
+            },
             created_by: value.created_by.clone(),
             column_index_truncate_length: value
                 .column_index_truncate_length_opt.as_ref()
@@ -1438,7 +1444,9 @@ mod tests {
     use datafusion_common::config::{
         MaxRowGroupBytes, ParquetCdcOptions, ParquetOptions, TableParquetOptions,
     };
-    use datafusion_common::parquet_config::{DFParquetCompression, DFParquetStatistics};
+    use datafusion_common::parquet_config::{
+        DFParquetCompression, DFParquetStatistics, RowGroupRangeAssignment,
+    };
 
     #[test]
     fn constraint_requires_mode() {
@@ -1546,6 +1554,24 @@ mod tests {
         let recovered = parquet_options_proto_round_trip(opts.clone());
         assert_eq!(recovered.coerce_int96, Some("us".to_string()));
         assert_eq!(recovered.coerce_int96_tz, Some("UTC".to_string()));
+    }
+
+    #[test]
+    fn test_parquet_options_row_group_range_assignment_round_trip() {
+        let opts = ParquetOptions {
+            row_group_range_assignment: RowGroupRangeAssignment::Midpoint,
+            ..ParquetOptions::default()
+        };
+        let mut proto: crate::protobuf_common::ParquetOptions =
+            (&opts).try_into().expect("to_proto");
+        assert_eq!(ParquetOptions::try_from(&proto).unwrap(), opts);
+
+        // Options encoded before the field existed decode with the default
+        proto.row_group_range_assignment.clear();
+        assert_eq!(
+            ParquetOptions::try_from(&proto).unwrap(),
+            ParquetOptions::default()
+        );
     }
 
     #[test]

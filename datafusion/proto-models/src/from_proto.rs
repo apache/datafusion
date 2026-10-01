@@ -30,6 +30,7 @@ use datafusion_common::config::{
     ParquetOptions, TableParquetOptions,
 };
 use datafusion_common::display::{PlanType, StringifiedPlan};
+use datafusion_common::parquet_config::RowGroupRangeAssignment;
 use datafusion_common::parsers::{CompressionTypeVariant, CsvQuoteStyle};
 use datafusion_common::utils::usize_from_wire;
 use datafusion_common::{
@@ -355,6 +356,11 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
             "" => ParquetOptions::default().writer_version,
             version => version.parse()?,
         };
+        let row_group_range_assignment = match proto.row_group_range_assignment.as_str() {
+            // Empty when encoded before this option existed
+            "" => RowGroupRangeAssignment::default(),
+            assignment => assignment.parse()?,
+        };
         let to_usize =
             |value: u64, field: &str| usize_from_wire(value, "ParquetOptions", field);
 
@@ -411,6 +417,7 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
                 .transpose()?,
             max_row_group_size: to_usize(proto.max_row_group_size, "max_row_group_size")?,
             max_in_list_size: to_usize(proto.max_in_list_size, "max_in_list_size")?,
+            row_group_range_assignment,
             created_by: proto.created_by.clone(),
             column_index_truncate_length: proto
                 .column_index_truncate_length_opt

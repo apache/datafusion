@@ -107,6 +107,46 @@ impl From<parquet::file::properties::WriterVersion> for DFParquetWriterVersion {
     }
 }
 
+/// Which byte range of a split Parquet file reads each row group
+///
+/// Each row group maps to one offset, so ranges that cover a file read every
+/// row group exactly once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RowGroupRangeAssignment {
+    /// The start of the row group's first column chunk
+    #[default]
+    StartOffset,
+    /// That start plus half of the row group's compressed size, as parquet-java
+    /// (and therefore Spark) computes it
+    Midpoint,
+}
+
+impl FromStr for RowGroupRangeAssignment {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "start_offset" => Ok(Self::StartOffset),
+            "midpoint" => Ok(Self::Midpoint),
+            other => Err(DataFusionError::Configuration(format!(
+                "Invalid parquet row group range assignment: {other}. Expected one of: start_offset, midpoint"
+            ))),
+        }
+    }
+}
+
+impl Display for RowGroupRangeAssignment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::StartOffset => "start_offset",
+            Self::Midpoint => "midpoint",
+        };
+        f.write_str(s)
+    }
+}
+
+crate::config_field!(RowGroupRangeAssignment, value => RowGroupRangeAssignment::from_str(value)?);
+
 /// Parquet statistics levels supported by the writer
 ///
 /// This enum validates statistics settings at configuration time, ensuring only
