@@ -32,7 +32,8 @@ use arrow::datatypes::Schema;
 use datafusion_common::display::GraphvizBuilder;
 use datafusion_common::tree_node::{TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::{Column, DataFusionError, internal_datafusion_err};
-use serde_json::json;
+use serde::Serialize;
+use serde::ser::SerializeMap;
 
 /// Formats plans with a single line per node. For example:
 ///
@@ -220,6 +221,53 @@ impl<'n> TreeNodeVisitor<'n> for GraphvizVisitor<'_, '_> {
     }
 }
 
+/// Builds a [`PgJsonFields`] from `"key": value` pairs, keeping their order.
+macro_rules! pg_fields {
+    ($($key:literal : $value:expr),* $(,)?) => {
+        PgJsonFields(vec![$(($key, serde_json::json!($value))),*])
+    };
+}
+
+/// Node-specific fields of a `pgjson` node, serialized as a JSON object whose
+/// keys keep their insertion order (independent of `serde_json`'s
+/// `preserve_order` feature).
+struct PgJsonFields(Vec<(&'static str, serde_json::Value)>);
+
+impl PgJsonFields {
+    fn push(&mut self, key: &'static str, value: impl Into<serde_json::Value>) {
+        self.0.push((key, value.into()));
+    }
+}
+
+/// One node of the `pgjson` output: the node-specific fields, then
+/// `"Plans"`, then `"Output"` (if the schema is shown).
+struct PgJsonNode {
+    fields: PgJsonFields,
+    plans: Vec<PgJsonNode>,
+    output: Option<Vec<String>>,
+}
+
+impl Serialize for PgJsonNode {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(None)?;
+        for (key, value) in &self.fields.0 {
+            map.serialize_entry(key, value)?;
+        }
+        map.serialize_entry("Plans", &self.plans)?;
+        if let Some(output) = &self.output {
+            map.serialize_entry("Output", output)?;
+        }
+        map.end()
+    }
+}
+
+/// Top-level entry of the `pgjson` output.
+#[derive(Serialize)]
+struct PgJsonRoot {
+    #[serde(rename = "Plan")]
+    plan: PgJsonNode,
+}
+
 /// Formats plans to display as postgresql plan json format.
 ///
 /// There are already many existing visualizer for this format, for example [dalibo](https://explain.dalibo.com/).
@@ -271,7 +319,7 @@ pub struct PgJsonVisitor<'a, 'b> {
     f: &'a mut fmt::Formatter<'b>,
 
     /// A mapping from plan node id to the plan node json representation.
-    objects: HashMap<u32, serde_json::Value>,
+    objects: HashMap<u32, PgJsonNode>,
 
     next_id: u32,
 
@@ -300,18 +348,18 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
     }
 
     /// Converts a logical plan node to a json object.
-    fn to_json_value(node: &LogicalPlan) -> serde_json::Value {
+    fn to_json_value(node: &LogicalPlan) -> PgJsonFields {
         match node {
             LogicalPlan::EmptyRelation(_) => {
-                json!({
+                pg_fields!(
                     "Node Type": "EmptyRelation",
-                })
+                )
             }
             LogicalPlan::RecursiveQuery(RecursiveQuery { is_distinct, .. }) => {
-                json!({
+                pg_fields!(
                     "Node Type": "RecursiveQuery",
                     "Is Distinct": is_distinct,
-                })
+                )
             }
             LogicalPlan::Values(Values { values, .. }) => {
                 let str_values = values
@@ -332,10 +380,10 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                 let eclipse = if values.len() > 5 { "..." } else { "" };
 
                 let values_str = format!("{str_values}{eclipse}");
-                json!({
+                pg_fields!(
                     "Node Type": "Values",
                     "Values": values_str
-                })
+                )
             }
             LogicalPlan::TableScan(TableScan {
                 source,
@@ -345,17 +393,17 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                 skip: offset,
                 ..
             }) => {
-                let mut object = json!({
+                let mut object = pg_fields!(
                     "Node Type": "TableScan",
                     "Relation Name": table_name.table(),
-                });
+                );
 
                 if let Some(s) = table_name.schema() {
-                    object["Schema"] = serde_json::Value::String(s.to_string());
+                    object.push("Schema", serde_json::Value::String(s.to_string()));
                 }
 
                 if let Some(c) = table_name.catalog() {
-                    object["Catalog"] = serde_json::Value::String(c.to_string());
+                    object.push("Catalog", serde_json::Value::String(c.to_string()));
                 }
 
                 if !filters.is_empty() {
@@ -379,21 +427,27 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     }
 
                     if !full_filter.is_empty() {
-                        object["Full Filters"] =
-                            serde_json::Value::String(expr_vec_fmt!(full_filter));
+                        object.push(
+                            "Full Filters",
+                            serde_json::Value::String(expr_vec_fmt!(full_filter)),
+                        );
                     }
                     if !partial_filter.is_empty() {
-                        object["Partial Filters"] =
-                            serde_json::Value::String(expr_vec_fmt!(partial_filter));
+                        object.push(
+                            "Partial Filters",
+                            serde_json::Value::String(expr_vec_fmt!(partial_filter)),
+                        );
                     }
                     if !unsupported_filters.is_empty() {
-                        object["Unsupported Filters"] =
-                            serde_json::Value::String(expr_vec_fmt!(unsupported_filters));
+                        object.push(
+                            "Unsupported Filters",
+                            serde_json::Value::String(expr_vec_fmt!(unsupported_filters)),
+                        );
                     }
                 }
 
                 if let Some(f) = fetch {
-                    object["Fetch"] = serde_json::Value::Number((*f).into());
+                    object.push("Fetch", serde_json::Value::Number((*f).into()));
                 }
 
                 if let Some(o) = offset {
@@ -403,17 +457,17 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                 object
             }
             LogicalPlan::Projection(Projection { expr, .. }) => {
-                json!({
+                pg_fields!(
                     "Node Type": "Projection",
                     "Expressions": expr.iter().map(|e| e.to_string()).collect::<Vec<_>>()
-                })
+                )
             }
             LogicalPlan::Dml(DmlStatement { table_name, op, .. }) => {
-                json!({
+                pg_fields!(
                     "Node Type": "Projection",
                     "Operation": op.name(),
                     "Table Name": table_name.table()
-                })
+                )
             }
             LogicalPlan::Copy(CopyTo {
                 input: _,
@@ -428,52 +482,52 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     .map(|(k, v)| format!("{k}={v}"))
                     .collect::<Vec<_>>()
                     .join(", ");
-                json!({
+                pg_fields!(
                     "Node Type": "CopyTo",
                     "Output URL": output_url,
                     "File Type": file_type.get_ext(),
                     "Options": op_str
-                })
+                )
             }
             LogicalPlan::Ddl(ddl) => {
-                json!({
+                pg_fields!(
                     "Node Type": "Ddl",
                     "Operation": format!("{}", ddl.display())
-                })
+                )
             }
             LogicalPlan::Filter(Filter {
                 predicate: expr, ..
             }) => {
-                json!({
+                pg_fields!(
                     "Node Type": "Filter",
                     "Condition": format!("{}", expr)
-                })
+                )
             }
             LogicalPlan::Window(Window { window_expr, .. }) => {
-                json!({
+                pg_fields!(
                     "Node Type": "WindowAggr",
                     "Expressions": expr_vec_fmt!(window_expr)
-                })
+                )
             }
             LogicalPlan::Aggregate(Aggregate {
                 group_expr,
                 aggr_expr,
                 ..
             }) => {
-                json!({
+                pg_fields!(
                     "Node Type": "Aggregate",
                     "Group By": expr_vec_fmt!(group_expr),
                     "Aggregates": expr_vec_fmt!(aggr_expr)
-                })
+                )
             }
             LogicalPlan::Sort(Sort { expr, fetch, .. }) => {
-                let mut object = json!({
+                let mut object = pg_fields!(
                     "Node Type": "Sort",
                     "Sort Key": expr_vec_fmt!(expr),
-                });
+                );
 
                 if let Some(fetch) = fetch {
-                    object["Fetch"] = serde_json::Value::Number((*fetch).into());
+                    object.push("Fetch", serde_json::Value::Number((*fetch).into()));
                 }
 
                 object
@@ -491,12 +545,12 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     .as_ref()
                     .map(|expr| format!(" Filter: {expr}"))
                     .unwrap_or_else(|| "".to_string());
-                json!({
+                pg_fields!(
                     "Node Type": format!("{} Join", join_type),
                     "Join Constraint": format!("{:?}", join_constraint),
                     "Join Keys": join_expr.join(", "),
                     "Filter": filter_expr.to_string()
-                })
+                )
             }
             LogicalPlan::AsOfJoin(AsOfJoin {
                 on,
@@ -506,34 +560,34 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
             }) => {
                 let join_expr: Vec<String> =
                     on.iter().map(|(l, r)| format!("{l} = {r}")).collect();
-                json!({
+                pg_fields!(
                     "Node Type": "AsOf Join",
                     "Join Constraint": format!("{join_constraint:?}"),
                     "Join Keys": join_expr.join(", "),
-                    "Match Condition": match_condition.to_string(),
-                })
+                    "Match Condition": match_condition.to_string()
+                )
             }
             LogicalPlan::Repartition(Repartition {
                 partitioning_scheme,
                 ..
             }) => match partitioning_scheme {
                 Partitioning::RoundRobinBatch(n) => {
-                    json!({
+                    pg_fields!(
                         "Node Type": "Repartition",
                         "Partitioning Scheme": "RoundRobinBatch",
                         "Partition Count": n
-                    })
+                    )
                 }
                 Partitioning::Hash(expr, n) => {
                     let hash_expr: Vec<String> =
                         expr.iter().map(|e| format!("{e}")).collect();
 
-                    json!({
+                    pg_fields!(
                         "Node Type": "Repartition",
                         "Partitioning Scheme": "Hash",
                         "Partition Count": n,
                         "Partitioning Key": hash_expr
-                    })
+                    )
                 }
                 Partitioning::Range(range) => {
                     let range_expr: Vec<String> =
@@ -544,60 +598,56 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                         .map(|e| format!("{e}"))
                         .collect();
 
-                    json!({
+                    pg_fields!(
                         "Node Type": "Repartition",
                         "Partitioning Scheme": "Range",
                         "Partition Count": range.partition_count(),
                         "Partitioning Key": range_expr,
                         "Split Points": split_points
-                    })
+                    )
                 }
                 Partitioning::DistributeBy(expr) => {
                     let dist_by_expr: Vec<String> =
                         expr.iter().map(|e| format!("{e}")).collect();
-                    json!({
+                    pg_fields!(
                         "Node Type": "Repartition",
                         "Partitioning Scheme": "DistributeBy",
                         "Partitioning Key": dist_by_expr
-                    })
+                    )
                 }
             },
             LogicalPlan::Limit(Limit { skip, fetch, .. }) => {
-                let mut object = serde_json::json!(
-                    {
-                        "Node Type": "Limit",
-                    }
-                );
+                let mut object = pg_fields!("Node Type": "Limit");
                 if let Some(s) = skip {
-                    object["Skip"] = s.to_string().into()
+                    object.push("Skip", s.to_string());
                 }
                 if let Some(f) = fetch {
-                    object["Fetch"] = f.to_string().into()
+                    object.push("Fetch", f.to_string());
                 }
                 object
             }
             LogicalPlan::Subquery(Subquery { .. }) => {
-                json!({
+                pg_fields!(
                     "Node Type": "Subquery"
-                })
+                )
             }
             LogicalPlan::SubqueryAlias(SubqueryAlias { alias, .. }) => {
-                json!({
+                pg_fields!(
                     "Node Type": "Subquery",
                     "Alias": alias.table(),
-                })
+                )
             }
             LogicalPlan::Statement(statement) => {
-                json!({
+                pg_fields!(
                     "Node Type": "Statement",
                     "Statement": format!("{}", statement.display())
-                })
+                )
             }
             LogicalPlan::Distinct(distinct) => match distinct {
                 Distinct::All(_) => {
-                    json!({
+                    pg_fields!(
                         "Node Type": "DistinctAll"
-                    })
+                    )
                 }
                 Distinct::On(DistinctOn {
                     on_expr,
@@ -605,44 +655,46 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     sort_expr,
                     ..
                 }) => {
-                    let mut object = json!({
+                    let mut object = pg_fields!(
                         "Node Type": "DistinctOn",
                         "On": expr_vec_fmt!(on_expr),
                         "Select": expr_vec_fmt!(select_expr),
-                    });
+                    );
                     if let Some(sort_expr) = sort_expr {
-                        object["Sort"] =
-                            serde_json::Value::String(expr_vec_fmt!(sort_expr));
+                        object.push(
+                            "Sort",
+                            serde_json::Value::String(expr_vec_fmt!(sort_expr)),
+                        );
                     }
 
                     object
                 }
             },
             LogicalPlan::Explain { .. } => {
-                json!({
+                pg_fields!(
                     "Node Type": "Explain"
-                })
+                )
             }
             LogicalPlan::Analyze { .. } => {
-                json!({
+                pg_fields!(
                     "Node Type": "Analyze"
-                })
+                )
             }
             LogicalPlan::Union(_) => {
-                json!({
+                pg_fields!(
                     "Node Type": "Union"
-                })
+                )
             }
             LogicalPlan::Extension(e) => {
-                json!({
+                pg_fields!(
                     "Node Type": e.node.name(),
                     "Detail": format!("{:?}", e.node)
-                })
+                )
             }
             LogicalPlan::DescribeTable(DescribeTable { .. }) => {
-                json!({
+                pg_fields!(
                     "Node Type": "DescribeTable"
-                })
+                )
             }
             LogicalPlan::Unnest(Unnest {
                 input: plan,
@@ -661,11 +713,11 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     .iter()
                     .map(|i| &input_columns[*i])
                     .collect::<Vec<&Column>>();
-                json!({
+                pg_fields!(
                     "Node Type": "Unnest",
                     "ListColumn": expr_vec_fmt!(list_type_columns),
                     "StructColumn": expr_vec_fmt!(struct_type_columns),
-                })
+                )
             }
         }
     }
@@ -680,20 +732,17 @@ impl<'n> TreeNodeVisitor<'n> for PgJsonVisitor<'_, '_> {
     ) -> datafusion_common::Result<TreeNodeRecursion> {
         let id = self.next_id;
         self.next_id += 1;
-        let mut object = Self::to_json_value(node);
-
-        object["Plans"] = serde_json::Value::Array(vec![]);
-
-        if self.with_schema {
-            object["Output"] = serde_json::Value::Array(
+        let object = PgJsonNode {
+            fields: Self::to_json_value(node),
+            plans: vec![],
+            output: self.with_schema.then(|| {
                 node.schema()
                     .fields()
                     .iter()
                     .map(|f| f.name().to_string())
-                    .map(serde_json::Value::String)
-                    .collect(),
-            );
-        }
+                    .collect()
+            }),
+        };
 
         self.objects.insert(id, object);
         self.parent_ids.push(id);
@@ -716,15 +765,10 @@ impl<'n> TreeNodeVisitor<'n> for PgJsonVisitor<'_, '_> {
                 .objects
                 .get_mut(parent_id)
                 .expect("Missing parent node!");
-            let plans = parent_node
-                .get_mut("Plans")
-                .and_then(|p| p.as_array_mut())
-                .expect("Plans should be an array");
-
-            plans.push(current_node);
+            parent_node.plans.push(current_node);
         } else {
             // This is the root node
-            let plan = serde_json::json!([{"Plan": current_node}]);
+            let plan = [PgJsonRoot { plan: current_node }];
             write!(
                 self.f,
                 "{}",
