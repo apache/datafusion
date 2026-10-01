@@ -82,8 +82,8 @@ impl<T: ArrowPrimitiveType> FullyOrderedGroupValuesPrimitive<T> {
     /// If the current value is not null, the current group index will be the index of the last value in the values vector
     /// If there are no values, return None
     fn current_value(&self) -> Option<(Option<T::Native>, usize)> {
-        let current_group_index = self.values.len() - 1;
         let last_value = self.values.last()?;
+        let current_group_index = self.values.len() - 1;
 
         let current_value = if self
             .null_group
@@ -151,7 +151,7 @@ where
 
                 let values_slice = &col.values()[null_count..];
 
-                let current_value_valid = values_slice[0];
+                let current_value_valid = values_slice[0].canonicalize();
                 current_group += 1;
                 self.values.push(current_value_valid);
 
