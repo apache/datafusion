@@ -23,6 +23,8 @@ use std::fmt;
 use std::fmt::Formatter;
 use std::time::Duration;
 
+use serde::Serialize;
+
 use arrow::datatypes::SchemaRef;
 
 use datafusion_common::display::GraphvizBuilder;
@@ -448,17 +450,14 @@ impl<'a> DisplayableExecutionPlan<'a> {
                 };
                 accept(self.plan, &mut visitor).map_err(|_| fmt::Error)?;
                 let root = visitor.root.ok_or(fmt::Error)?;
-                let mut root_entry = serde_json::json!({ "Plan": root });
-                if let Some(summary) = self.summary {
-                    if let Some(total_rows) = summary.total_rows {
-                        root_entry["Total Rows"] = serde_json::Value::from(total_rows);
-                    }
-                    if let Some(duration) = summary.duration {
-                        root_entry["Duration"] =
-                            serde_json::Value::from(format!("{duration:?}"));
-                    }
-                }
-                let doc = serde_json::Value::Array(vec![root_entry]);
+                let doc = [PgJsonRoot {
+                    plan: root,
+                    total_rows: self.summary.and_then(|s| s.total_rows),
+                    duration: self
+                        .summary
+                        .and_then(|s| s.duration)
+                        .map(|d| format!("{d:?}")),
+                }];
                 write!(
                     f,
                     "{}",
@@ -768,10 +767,67 @@ struct PgJsonExecutionPlanVisitor<'a> {
     metric_types: &'a [MetricType],
     metric_categories: Option<&'a [MetricCategory]>,
     metric_names: Option<&'a [String]>,
-    objects: HashMap<u32, serde_json::Value>,
+    objects: HashMap<u32, PgJsonNode>,
     parent_ids: Vec<u32>,
     next_id: u32,
-    root: Option<serde_json::Value>,
+    root: Option<PgJsonNode>,
+}
+
+/// Top-level entry of the `pgjson` output. Field order is the output order.
+#[derive(Serialize)]
+struct PgJsonRoot {
+    #[serde(rename = "Plan")]
+    plan: PgJsonNode,
+    #[serde(rename = "Total Rows", skip_serializing_if = "Option::is_none")]
+    total_rows: Option<usize>,
+    #[serde(rename = "Duration", skip_serializing_if = "Option::is_none")]
+    duration: Option<String>,
+}
+
+/// One node of the `pgjson` output. Field order is the output order, so the
+/// JSON reads top-down like a PostgreSQL plan, with `"Plans"` last.
+#[derive(Serialize)]
+struct PgJsonNode {
+    #[serde(rename = "Node Type")]
+    node_type: String,
+    #[serde(rename = "Details")]
+    details: String,
+    #[serde(rename = "Output", skip_serializing_if = "Option::is_none")]
+    output: Option<Vec<String>>,
+    #[serde(rename = "Actual Rows", skip_serializing_if = "Option::is_none")]
+    actual_rows: Option<usize>,
+    #[serde(rename = "Actual Total Time", skip_serializing_if = "Option::is_none")]
+    actual_total_time: Option<f64>,
+    #[serde(rename = "Extras", skip_serializing_if = "PgJsonExtras::is_empty")]
+    extras: PgJsonExtras,
+    #[serde(rename = "Plans")]
+    plans: Vec<PgJsonNode>,
+}
+
+/// Non-canonical metrics of a node, serialized as a JSON object whose keys
+/// keep their insertion order (independent of `serde_json`'s
+/// `preserve_order` feature).
+#[derive(Default)]
+struct PgJsonExtras(Vec<(String, serde_json::Value)>);
+
+impl PgJsonExtras {
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Insert or replace `key`. A replaced key keeps its original position.
+    fn insert(&mut self, key: &str, value: serde_json::Value) {
+        match self.0.iter_mut().find(|(k, _)| k == key) {
+            Some((_, v)) => *v = value,
+            None => self.0.push((key.to_string(), value)),
+        }
+    }
+}
+
+impl Serialize for PgJsonExtras {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_map(self.0.iter().map(|(k, v)| (k, v)))
+    }
 }
 
 impl PgJsonExecutionPlanVisitor<'_> {
@@ -829,7 +885,7 @@ impl PgJsonExecutionPlanVisitor<'_> {
     /// Populate `"Actual Rows"`, `"Actual Total Time"`, and `"Extras"` for
     /// the given node from its aggregated `MetricsSet`, honoring the same
     /// filtering pipeline used by `IndentVisitor`.
-    fn attach_metrics(&self, plan: &dyn ExecutionPlan, object: &mut serde_json::Value) {
+    fn attach_metrics(&self, plan: &dyn ExecutionPlan, object: &mut PgJsonNode) {
         if matches!(self.show_metrics, ShowMetrics::None) {
             return;
         }
@@ -860,27 +916,22 @@ impl PgJsonExecutionPlanVisitor<'_> {
 
         // Build the Extras bucket, while extracting PG-canonical keys to the
         // top level.
-        let mut extras = serde_json::Map::new();
         for metric in metrics.iter() {
             let value = metric.value();
             match value {
                 MetricValue::OutputRows(c) => {
-                    object["Actual Rows"] = serde_json::Value::from(c.value());
+                    object.actual_rows = Some(c.value());
                 }
                 MetricValue::ElapsedCompute(t) => {
                     let ms = (t.value() as f64) / 1_000_000.0;
-                    object["Actual Total Time"] = serde_json::Value::from(ms);
+                    object.actual_total_time = Some(ms);
                 }
                 _ => {
-                    extras.insert(
-                        value.name().to_string(),
-                        Self::metric_value_to_json(value),
-                    );
+                    object
+                        .extras
+                        .insert(value.name(), Self::metric_value_to_json(value));
                 }
             }
-        }
-        if !extras.is_empty() {
-            object["Extras"] = serde_json::Value::Object(extras);
         }
     }
 }
@@ -895,27 +946,30 @@ impl ExecutionPlanVisitor for PgJsonExecutionPlanVisitor<'_> {
         // Build fields in reading order: Node Type, Details, (schema),
         // (metrics), Plans last — so the JSON output reads top-down like a
         // PostgreSQL plan.
-        let mut object = serde_json::json!({
-            "Node Type": plan.name(),
-            "Details": Self::one_line_details(plan),
-        });
+        let mut object = PgJsonNode {
+            node_type: plan.name().to_string(),
+            details: Self::one_line_details(plan),
+            output: None,
+            actual_rows: None,
+            actual_total_time: None,
+            extras: PgJsonExtras::default(),
+            plans: vec![],
+        };
 
         if self.show_schema || self.verbose {
             // Always include output columns when a caller asked for schema;
             // also include them in verbose mode so the pgjson output mirrors
             // the extra context shown by indent's verbose flag.
-            let columns: Vec<serde_json::Value> = plan
-                .schema()
-                .fields()
-                .iter()
-                .map(|f| serde_json::Value::String(f.name().to_string()))
-                .collect();
-            object["Output"] = serde_json::Value::Array(columns);
+            object.output = Some(
+                plan.schema()
+                    .fields()
+                    .iter()
+                    .map(|f| f.name().to_string())
+                    .collect(),
+            );
         }
 
         self.attach_metrics(plan, &mut object);
-
-        object["Plans"] = serde_json::Value::Array(vec![]);
 
         self.objects.insert(id, object);
         self.parent_ids.push(id);
@@ -928,11 +982,7 @@ impl ExecutionPlanVisitor for PgJsonExecutionPlanVisitor<'_> {
 
         if let Some(parent_id) = self.parent_ids.last() {
             let parent = self.objects.get_mut(parent_id).ok_or(fmt::Error)?;
-            let plans = parent
-                .get_mut("Plans")
-                .and_then(|p| p.as_array_mut())
-                .ok_or(fmt::Error)?;
-            plans.push(current);
+            parent.plans.push(current);
         } else {
             self.root = Some(current);
         }
@@ -1874,8 +1924,6 @@ mod tests {
             let out = DisplayableExecutionPlan::new(plan.as_ref())
                 .pgjson(false)
                 .to_string();
-            // This snapshot assumes `serde_json` is built with the
-            // `preserve_order` feature (enabled via this crate's dev-deps).
             assert_snapshot!(out, @r#"
             [
               {

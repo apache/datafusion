@@ -125,6 +125,23 @@ fn rewrite_limit(mut limit: Limit) -> Result<Transformed<LogicalPlan>> {
     };
 
     match Arc::unwrap_or_clone(limit.input) {
+        LogicalPlan::TableScan(mut scan)
+            if skip > 0 && scan.source.supports_skip_pushdown() =>
+        {
+            // The source guarantees it will omit exactly the first `skip`
+            // rows itself, so the remaining `Limit` only needs to trim to
+            // `fetch` — its skip becomes 0.
+            scan.skip = Some(scan.skip.unwrap_or(0).saturating_add(skip));
+            let new_fetch = if fetch != 0 {
+                scan.fetch
+                    .map(|existing_fetch| min(existing_fetch.saturating_sub(skip), fetch))
+                    .or(Some(fetch))
+            } else {
+                Some(0)
+            };
+            scan.fetch = new_fetch;
+            transformed_limit(0, fetch, LogicalPlan::TableScan(scan))
+        }
         LogicalPlan::TableScan(mut scan) => {
             let rows_needed = if fetch != 0 { fetch + skip } else { 0 };
             let new_fetch = scan
@@ -163,16 +180,24 @@ fn rewrite_limit(mut limit: Limit) -> Result<Transformed<LogicalPlan>> {
                 let sort_fetch = skip + fetch;
                 Some(sort.fetch.map(|f| f.min(sort_fetch)).unwrap_or(sort_fetch))
             };
-            if new_fetch == sort.fetch {
-                if skip > 0 {
-                    original_limit(skip, fetch, LogicalPlan::Sort(sort))
+            let fetch_changed = new_fetch != sort.fetch;
+            sort.fetch = new_fetch;
+            if skip > 0 {
+                if fetch_changed {
+                    limit.input = Arc::new(LogicalPlan::Sort(sort));
+                    Ok(Transformed::yes(LogicalPlan::Limit(limit)))
                 } else {
-                    Ok(Transformed::yes(LogicalPlan::Sort(sort)))
+                    original_limit(skip, fetch, LogicalPlan::Sort(sort))
                 }
             } else {
-                sort.fetch = new_fetch;
-                limit.input = Arc::new(LogicalPlan::Sort(sort));
-                Ok(Transformed::yes(LogicalPlan::Limit(limit)))
+                // With `skip = 0` the Sort's fetch already caps the output, so
+                // drop the Limit now instead of on the next pass. The Sort then
+                // replaces the Limit as the visited node and its own visit is
+                // skipped, so apply the TopK pushdown here. The plan changed
+                // (the Limit is gone) even if the TopK does not move.
+                let mut result = push_topk_through_join(sort)?;
+                result.transformed = true;
+                Ok(result)
             }
         }
         LogicalPlan::Projection(mut proj) => {
@@ -305,10 +330,11 @@ mod test {
     use crate::test::*;
 
     use crate::OptimizerContext;
+    use arrow::datatypes::{Schema, SchemaRef};
     use datafusion_common::DFSchemaRef;
     use datafusion_expr::{
-        Expr, Extension, UserDefinedLogicalNodeCore, col, exists,
-        logical_plan::builder::LogicalPlanBuilder,
+        Expr, Extension, TableScanBuilder, TableSource, UserDefinedLogicalNodeCore, col,
+        exists, logical_plan::builder::LogicalPlanBuilder,
     };
     use datafusion_functions_aggregate::expr_fn::max;
 
@@ -489,6 +515,136 @@ mod test {
         )
     }
 
+    /// A `TableSource` that declares it will honor `skip` exactly, so
+    /// `push_down_limit` is allowed to push `skip` into `TableScan::skip`
+    /// and elide the outer `Limit`'s skip.
+    #[derive(Debug)]
+    struct SkipPushdownTableSource {
+        schema: SchemaRef,
+    }
+
+    impl TableSource for SkipPushdownTableSource {
+        fn schema(&self) -> SchemaRef {
+            Arc::clone(&self.schema)
+        }
+
+        fn supports_skip_pushdown(&self) -> bool {
+            true
+        }
+    }
+
+    fn skip_pushdown_table_scan() -> Result<LogicalPlan> {
+        let schema = Arc::new(Schema::new(test_table_scan_fields()));
+        let source = Arc::new(SkipPushdownTableSource { schema });
+        Ok(LogicalPlan::TableScan(
+            TableScanBuilder::new("test", source).build()?,
+        ))
+    }
+
+    #[test]
+    fn limit_pushdown_skip_supported() -> Result<()> {
+        let table_scan = skip_pushdown_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .limit(10, Some(1000))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Limit: skip=0, fetch=1000
+          TableScan: test, fetch=1000, skip=10
+        "
+        )
+    }
+
+    fn skip_pushdown_table_scan_with(
+        fetch: Option<usize>,
+        skip: Option<usize>,
+    ) -> Result<LogicalPlan> {
+        let LogicalPlan::TableScan(scan) = skip_pushdown_table_scan()? else {
+            unreachable!()
+        };
+        Ok(LogicalPlan::TableScan(
+            TableScanBuilder::from(scan)
+                .with_fetch(fetch)
+                .with_skip(skip)
+                .build()?,
+        ))
+    }
+
+    /// A scan that already skips/fetches: the new skip is added on top of
+    /// the existing one and the existing fetch shrinks by the new skip.
+    #[test]
+    fn limit_pushdown_skip_into_scan_with_skip_and_fetch() -> Result<()> {
+        let table_scan = skip_pushdown_table_scan_with(Some(15), Some(3))?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .limit(10, Some(1000))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Limit: skip=0, fetch=1000
+          TableScan: test, fetch=5, skip=13
+        "
+        )
+    }
+
+    /// Skipping past the scan's existing fetch leaves nothing to read
+    #[test]
+    fn limit_pushdown_skip_beyond_scan_fetch() -> Result<()> {
+        let table_scan = skip_pushdown_table_scan_with(Some(5), None)?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .limit(10, Some(3))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Limit: skip=0, fetch=3
+          TableScan: test, fetch=0, skip=10
+        "
+        )
+    }
+
+    #[test]
+    fn limit_pushdown_skip_with_fetch_zero() -> Result<()> {
+        let table_scan = skip_pushdown_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .limit(10, Some(0))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Limit: skip=0, fetch=0
+          TableScan: test, fetch=0, skip=10
+        "
+        )
+    }
+
+    /// Adding to an existing skip must saturate instead of overflowing
+    #[test]
+    fn limit_pushdown_skip_saturates() -> Result<()> {
+        let table_scan = skip_pushdown_table_scan_with(None, Some(usize::MAX - 1))?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .limit(10, Some(3))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Limit: skip=0, fetch=3
+          TableScan: test, fetch=3, skip=18446744073709551615
+        "
+        )
+    }
+
     #[test]
     fn limit_pushdown_multiple_limits() -> Result<()> {
         let table_scan = test_table_scan()?;
@@ -660,15 +816,51 @@ mod test {
             .limit(0, Some(10))?
             .build()?;
 
-        // Should push down limit to sort
+        // Should push down limit to sort, and drop the now redundant limit
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Limit: skip=0, fetch=10
-          Sort: test.a ASC NULLS LAST, fetch=10
-            TableScan: test
+        Sort: test.a ASC NULLS LAST, fetch=10
+          TableScan: test
         "
         )
+    }
+
+    /// `Limit(skip=0) -> Sort` settles in the first pass: the second pass
+    /// leaves the plan unchanged, so the optimizer stops after 2 passes.
+    #[test]
+    fn limit_push_down_sort_settles_in_first_pass() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .sort_by(vec![col("a")])?
+            .limit(0, Some(10))?
+            .build()?;
+
+        let optimizer_ctx = OptimizerContext::new().with_max_passes(3);
+        let optimizer =
+            crate::Optimizer::with_rules(vec![Arc::new(PushDownLimit::new())]);
+        let mut passes = 0;
+        optimizer.optimize(plan, &optimizer_ctx, |_, _| passes += 1)?;
+        assert_eq!(passes, 2);
+        Ok(())
+    }
+
+    /// Dropping the `Limit` above a `Sort` changes the plan even when the
+    /// TopK has no join to move through, so the rule must report it.
+    #[test]
+    fn limit_push_down_sort_reports_transformed() -> Result<()> {
+        for sort_fetch in [None, Some(10), Some(5)] {
+            let plan = LogicalPlanBuilder::from(test_table_scan()?)
+                .sort_with_limit(vec![col("a").sort(true, false)], sort_fetch)?
+                .limit(0, Some(10))?
+                .build()?;
+
+            let result = PushDownLimit::new().rewrite(plan, &OptimizerContext::new())?;
+            assert!(result.transformed, "sort fetch {sort_fetch:?}");
+            assert!(matches!(result.data, LogicalPlan::Sort(_)));
+        }
+        Ok(())
     }
 
     #[test]
