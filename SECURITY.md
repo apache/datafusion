@@ -77,7 +77,7 @@ violating the API contracts are not considered a DataFusion vulnerability.
 
 We treat all bugs seriously and welcome help fixing them. If you find a bug
 that does not meet the criteria for a security vulnerability, please report it
-in the public issue tracker.
+in the [public issue tracker](https://github.com/apache/datafusion/issues/).
 
 ## Reporting a Vulnerability
 
