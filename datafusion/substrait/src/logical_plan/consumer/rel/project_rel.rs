@@ -29,6 +29,10 @@ use std::sync::Arc;
 use substrait::proto::ProjectRel;
 
 #[async_recursion]
+#[expect(
+    clippy::double_must_use,
+    reason = "`async_recursion` adds `#[must_use]` to the boxed future it returns"
+)]
 pub async fn from_project_rel(
     consumer: &impl SubstraitConsumer,
     p: &ProjectRel,
