@@ -2302,6 +2302,50 @@ pub(super) fn equal_rows_arr(
     null_equality: NullEquality,
     comparator: &mut Option<JoinKeyComparator>,
 ) -> Result<(UInt64Array, UInt32Array)> {
+    equal_rows_arr_impl(
+        indices_left,
+        indices_right,
+        left_arrays,
+        right_arrays,
+        null_equality,
+        comparator,
+        true,
+    )
+}
+
+/// Same as [`equal_rows_arr`], but `left_arrays` must already have float
+/// `-0.0` rewritten to `+0.0` (see `normalize_float_zero`), so a comparator
+/// built here skips that scan on the left side. Hash join keeps its build
+/// keys in that form, which saves rescanning the whole build side for every
+/// probe batch.
+pub(super) fn equal_rows_arr_with_normalized_left(
+    indices_left: &UInt64Array,
+    indices_right: &UInt32Array,
+    left_arrays: &[ArrayRef],
+    right_arrays: &[ArrayRef],
+    null_equality: NullEquality,
+    comparator: &mut Option<JoinKeyComparator>,
+) -> Result<(UInt64Array, UInt32Array)> {
+    equal_rows_arr_impl(
+        indices_left,
+        indices_right,
+        left_arrays,
+        right_arrays,
+        null_equality,
+        comparator,
+        false,
+    )
+}
+
+fn equal_rows_arr_impl(
+    indices_left: &UInt64Array,
+    indices_right: &UInt32Array,
+    left_arrays: &[ArrayRef],
+    right_arrays: &[ArrayRef],
+    null_equality: NullEquality,
+    comparator: &mut Option<JoinKeyComparator>,
+    normalize_left: bool,
+) -> Result<(UInt64Array, UInt32Array)> {
     if indices_left.len() != indices_right.len() {
         return Err(internal_datafusion_err!(
             "Cannot compare join indices with different lengths: left={}, right={}",
@@ -2346,7 +2390,12 @@ pub(super) fn equal_rows_arr(
         Some(comparator) => comparator,
         None => {
             let sort_options = vec![SortOptions::default(); left_arrays.len()];
-            comparator.insert(JoinKeyComparator::new(
+            let new_comparator = if normalize_left {
+                JoinKeyComparator::new
+            } else {
+                JoinKeyComparator::new_with_normalized_left
+            };
+            comparator.insert(new_comparator(
                 left_arrays,
                 right_arrays,
                 &sort_options,
@@ -2494,6 +2543,35 @@ impl JoinKeyComparator {
         sort_options: &[SortOptions],
         null_equality: NullEquality,
     ) -> Result<Self> {
+        Self::build(left_arrays, right_arrays, sort_options, null_equality, true)
+    }
+
+    /// Like [`Self::new`], but trusts `left_arrays` to already have float
+    /// `-0.0` rewritten to `+0.0` and does not scan them again. Only the right
+    /// side is normalized here. Passing a left side that still holds `-0.0`
+    /// makes it compare unequal to `+0.0`.
+    pub(crate) fn new_with_normalized_left(
+        left_arrays: &[ArrayRef],
+        right_arrays: &[ArrayRef],
+        sort_options: &[SortOptions],
+        null_equality: NullEquality,
+    ) -> Result<Self> {
+        Self::build(
+            left_arrays,
+            right_arrays,
+            sort_options,
+            null_equality,
+            false,
+        )
+    }
+
+    fn build(
+        left_arrays: &[ArrayRef],
+        right_arrays: &[ArrayRef],
+        sort_options: &[SortOptions],
+        null_equality: NullEquality,
+        normalize_left: bool,
+    ) -> Result<Self> {
         debug_assert_eq!(left_arrays.len(), right_arrays.len());
         debug_assert_eq!(left_arrays.len(), sort_options.len());
 
@@ -2508,8 +2586,12 @@ impl JoinKeyComparator {
                 // no-op (Arc::clone) for non-floats and for float arrays
                 // that contain no `-0.0`. `normalize_float_zero` preserves
                 // null positions, so the original null masks below remain
-                // valid.
-                let l_norm = normalize_float_zero(l);
+                // valid. A left side that is already normalized is used as is.
+                let l_norm = if normalize_left {
+                    normalize_float_zero(l)
+                } else {
+                    Arc::clone(l)
+                };
                 let r_norm = normalize_float_zero(r);
                 let inner = make_comparator(l_norm.as_ref(), r_norm.as_ref(), *opts)?;
                 if null_equality == NullEquality::NullEqualsNothing {
@@ -4804,6 +4886,54 @@ mod tests {
         .unwrap();
         assert_eq!(cmp_nl.compare(0, 0), Ordering::Greater);
         assert_eq!(cmp_nl.compare(1, 1), Ordering::Less);
+    }
+
+    #[test]
+    fn join_key_comparator_with_normalized_left_skips_left_normalization() {
+        let opts = [SortOptions::default()];
+        let neg_zero: ArrayRef = Arc::new(Float64Array::from(vec![-0.0]));
+        let pos_zero: ArrayRef = Arc::new(Float64Array::from(vec![0.0]));
+
+        // `new` rewrites -0.0 on both sides, so the keys match.
+        let cmp = JoinKeyComparator::new(
+            &[Arc::clone(&neg_zero)],
+            &[Arc::clone(&pos_zero)],
+            &opts,
+            NullEquality::NullEqualsNothing,
+        )
+        .unwrap();
+        assert!(cmp.is_equal(0, 0));
+
+        // The left side is taken as already normalized, so a raw -0.0 there
+        // is compared bit for bit and does not match +0.0.
+        let cmp = JoinKeyComparator::new_with_normalized_left(
+            &[Arc::clone(&neg_zero)],
+            &[Arc::clone(&pos_zero)],
+            &opts,
+            NullEquality::NullEqualsNothing,
+        )
+        .unwrap();
+        assert!(!cmp.is_equal(0, 0));
+
+        // The right side is still normalized by both constructors.
+        for cmp in [
+            JoinKeyComparator::new(
+                &[Arc::clone(&pos_zero)],
+                &[Arc::clone(&neg_zero)],
+                &opts,
+                NullEquality::NullEqualsNothing,
+            )
+            .unwrap(),
+            JoinKeyComparator::new_with_normalized_left(
+                &[Arc::clone(&pos_zero)],
+                &[Arc::clone(&neg_zero)],
+                &opts,
+                NullEquality::NullEqualsNothing,
+            )
+            .unwrap(),
+        ] {
+            assert!(cmp.is_equal(0, 0));
+        }
     }
 
     #[test]
