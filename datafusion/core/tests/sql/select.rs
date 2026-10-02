@@ -410,6 +410,23 @@ async fn test_limit_offset_parameters() -> Result<()> {
             vec![1],
             1,
         ),
+        (
+            "SELECT value FROM (SELECT 20 AS value LIMIT $1) AS t",
+            vec![1],
+            20,
+        ),
+        (
+            "SELECT (SELECT value FROM (VALUES (10), (20)) AS t(value) \
+             ORDER BY value LIMIT $1) AS value",
+            vec![1],
+            10,
+        ),
+        (
+            "SELECT 20 AS value WHERE EXISTS \
+             (SELECT value FROM (VALUES (10), (20)) AS t(value) OFFSET $1)",
+            vec![1],
+            20,
+        ),
     ] {
         let df = ctx.sql(sql).await?;
         let parameter_types = df.logical_plan().get_parameter_types()?;
