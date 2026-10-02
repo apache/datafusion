@@ -276,7 +276,7 @@ impl ScalarUDFImpl for DateBinFunc {
         //
         // A negative month stride can move a bin past its source (see
         // `bin_months`), so its output is not monotonic, even for ordinary
-        // dates.
+        // dates. See https://github.com/apache/datafusion/issues/25856
         let monotonic_stride =
             matches!(step.range.lower(), ScalarValue::IntervalDayTime(Some(_)))
                 || matches!(
