@@ -24,7 +24,7 @@ use std::task::{Context, Poll};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties, Statistics};
 use crate::projection::ProjectionExec;
-use crate::statistics::{ChildStats, StatisticsArgs};
+use crate::statistics::{ChildStats, StatisticsArgs, with_per_partition_fetch};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{
     ChildrenPropertiesMode, DisplayFormatType, ExecutionPlan, RecordBatchStream,
@@ -248,10 +248,15 @@ impl ExecutionPlan for CoalesceBatchesExec {
     fn statistics_from_inputs(
         &self,
         input_stats: &[Arc<Statistics>],
-        _args: &StatisticsArgs,
+        args: &StatisticsArgs,
     ) -> Result<Arc<Statistics>> {
         let stats = input_stats[0].as_ref().clone();
-        Ok(Arc::new(stats.with_fetch(self.fetch, 0, 1)?))
+        Ok(Arc::new(with_per_partition_fetch(
+            stats,
+            self.fetch,
+            self.properties().output_partitioning().partition_count(),
+            args,
+        )?))
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
@@ -491,5 +496,47 @@ impl CoalesceBatchesStream {
 impl RecordBatchStream for CoalesceBatchesStream {
     fn schema(&self) -> SchemaRef {
         self.coalescer.schema()
+    }
+}
+
+#[cfg(test)]
+#[expect(deprecated)]
+mod tests {
+    use super::*;
+    use crate::collect;
+    use crate::statistics::StatisticsContext;
+    use crate::test::scan_partitioned;
+    use datafusion_common::stats::Precision;
+    use datafusion_execution::TaskContext;
+
+    /// `fetch` stops each partition separately, so the overall statistics must
+    /// allow for the rows of every partition.
+    #[tokio::test]
+    async fn fetch_statistics_count_every_partition() -> Result<()> {
+        // Four partitions of 100 rows each.
+        let coalesce: Arc<dyn ExecutionPlan> = Arc::new(
+            CoalesceBatchesExec::new(scan_partitioned(4), 8192).with_fetch(Some(10)),
+        );
+        let emitted: usize =
+            collect(Arc::clone(&coalesce), Arc::new(TaskContext::default()))
+                .await?
+                .iter()
+                .map(|batch| batch.num_rows())
+                .sum();
+        assert_eq!(emitted, 40);
+
+        let num_rows = |partition| {
+            StatisticsContext::new()
+                .compute(
+                    coalesce.as_ref(),
+                    &StatisticsArgs::new().with_partition(partition),
+                )
+                .map(|stats| stats.num_rows)
+        };
+        assert_eq!(num_rows(None)?, Precision::Inexact(40));
+        // The scan has no statistics for a single partition, so there the fetch
+        // alone bounds the estimate.
+        assert_eq!(num_rows(Some(0))?, Precision::Inexact(10));
+        Ok(())
     }
 }
