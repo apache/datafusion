@@ -55,7 +55,7 @@ use arrow::array::{
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::{self, take};
 use arrow::datatypes::{
-    ArrowNativeType, Field, Schema, SchemaBuilder, UInt32Type, UInt64Type,
+    ArrowNativeType, Field, Schema, SchemaBuilder, SchemaRef, UInt32Type, UInt64Type,
 };
 use arrow_ord::ord::{DynComparator, make_comparator};
 use arrow_schema::{DataType, SortOptions, TimeUnit};
@@ -1288,10 +1288,10 @@ pub(crate) fn apply_join_filter_to_indices(
 
 /// Creates a [RecordBatch] with zero columns but the given row count.
 /// Used when a join has an empty projection (e.g. `SELECT count(1) ...`).
-fn new_empty_schema_batch(schema: &Schema, row_count: usize) -> Result<RecordBatch> {
+fn new_empty_schema_batch(schema: &SchemaRef, row_count: usize) -> Result<RecordBatch> {
     let options = RecordBatchOptions::new().with_row_count(Some(row_count));
     Ok(RecordBatch::try_new_with_options(
-        Arc::new(schema.clone()),
+        Arc::clone(schema),
         vec![],
         &options,
     )?)
@@ -1301,7 +1301,7 @@ fn new_empty_schema_batch(schema: &Schema, row_count: usize) -> Result<RecordBat
 /// The resulting batch has [Schema] `schema`.
 #[expect(clippy::too_many_arguments)]
 pub(crate) fn build_batch_from_indices(
-    schema: &Schema,
+    schema: &SchemaRef,
     build_input_buffer: &RecordBatch,
     probe_batch: &RecordBatch,
     build_indices: &UInt64Array,
@@ -1358,7 +1358,7 @@ pub(crate) fn build_batch_from_indices(
 
         columns.push(array);
     }
-    Ok(RecordBatch::try_new(Arc::new(schema.clone()), columns)?)
+    Ok(RecordBatch::try_new(Arc::clone(schema), columns)?)
 }
 
 /// Builds the nullable mark column for a null-aware `LeftMark` join.
@@ -1426,7 +1426,7 @@ pub(crate) fn build_null_aware_left_mark_column(
 /// rows or because none of its rows has a matchable (non-NULL) join key.
 /// The resulting batch has [Schema] `schema`.
 pub(crate) fn build_batch_empty_build_side(
-    schema: &Schema,
+    schema: &SchemaRef,
     build_batch: &RecordBatch,
     probe_batch: &RecordBatch,
     column_indices: &[ColumnIndex],
@@ -1434,7 +1434,7 @@ pub(crate) fn build_batch_empty_build_side(
 ) -> Result<RecordBatch> {
     if join_type.empty_build_side_produces_empty_result() {
         // These join types only return data if the left side is not empty.
-        return Ok(RecordBatch::new_empty(Arc::new(schema.clone())));
+        return Ok(RecordBatch::new_empty(Arc::clone(schema)));
     }
 
     // The remaining joins return right-side rows and nulls for the left side.
@@ -1460,7 +1460,7 @@ pub(crate) fn build_batch_empty_build_side(
         })
         .collect();
 
-    Ok(RecordBatch::try_new(Arc::new(schema.clone()), columns)?)
+    Ok(RecordBatch::try_new(Arc::clone(schema), columns)?)
 }
 
 /// The input is the matched indices for left and right and
@@ -2286,12 +2286,21 @@ pub(crate) fn matchable_join_keys(
     }
 }
 
+/// Keeps only the candidate pairs whose join keys are equal.
+///
+/// `comparator` caches the general-path [`JoinKeyComparator`] between calls
+/// that share the same `left_arrays` and `right_arrays`, so its setup cost is
+/// paid once rather than per call. Pass an empty slot whenever either side's
+/// arrays change. Nothing checks this: a slot kept across different arrays
+/// silently returns wrong matches. An empty slot (`&mut None`) is always
+/// correct and only rebuilds the comparator on each call.
 pub(super) fn equal_rows_arr(
     indices_left: &UInt64Array,
     indices_right: &UInt32Array,
     left_arrays: &[ArrayRef],
     right_arrays: &[ArrayRef],
     null_equality: NullEquality,
+    comparator: &mut Option<JoinKeyComparator>,
 ) -> Result<(UInt64Array, UInt32Array)> {
     if indices_left.len() != indices_right.len() {
         return Err(internal_datafusion_err!(
@@ -2333,9 +2342,18 @@ pub(super) fn equal_rows_arr(
         return Ok(res);
     }
 
-    let sort_options = vec![SortOptions::default(); left_arrays.len()];
-    let comparator =
-        JoinKeyComparator::new(left_arrays, right_arrays, &sort_options, null_equality)?;
+    let comparator = match comparator {
+        Some(comparator) => comparator,
+        None => {
+            let sort_options = vec![SortOptions::default(); left_arrays.len()];
+            comparator.insert(JoinKeyComparator::new(
+                left_arrays,
+                right_arrays,
+                &sort_options,
+                null_equality,
+            )?)
+        }
+    };
 
     let mut left_filtered = Vec::with_capacity(indices_left.len());
     let mut right_filtered = Vec::with_capacity(indices_right.len());
@@ -2460,6 +2478,12 @@ fn equal_rows_single_col(
 pub struct JoinKeyComparator {
     first: DynComparator,
     rest: Vec<DynComparator>,
+}
+
+impl Debug for JoinKeyComparator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("JoinKeyComparator").finish_non_exhaustive()
+    }
 }
 
 impl JoinKeyComparator {
@@ -4625,7 +4649,7 @@ mod tests {
         // When the output schema has no fields (empty projection pushed into
         // the join), build_batch_empty_build_side should return a RecordBatch
         // with the correct row count but no columns.
-        let empty_schema = Schema::empty();
+        let empty_schema = Arc::new(Schema::empty());
 
         let build_batch = RecordBatch::try_new(
             Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)])),
@@ -4798,6 +4822,7 @@ mod tests {
             &[left_a, left_b],
             &[right_a, right_b],
             NullEquality::NullEqualsNothing,
+            &mut None,
         )
         .unwrap();
 
@@ -4816,6 +4841,7 @@ mod tests {
             &[],
             &[],
             NullEquality::NullEqualsNothing,
+            &mut None,
         )
         .unwrap();
 
@@ -4838,6 +4864,7 @@ mod tests {
             &[Arc::clone(&left)],
             &[Arc::clone(&right)],
             NullEquality::NullEqualsNothing,
+            &mut None,
         )
         .unwrap();
         assert_eq!(left_filtered, UInt64Array::from(vec![0, 2]));
@@ -4849,6 +4876,7 @@ mod tests {
             &[left],
             &[right],
             NullEquality::NullEqualsNull,
+            &mut None,
         )
         .unwrap();
         assert_eq!(left_filtered, UInt64Array::from(vec![0, 1, 2, 3]));
@@ -4881,6 +4909,7 @@ mod tests {
             &[Arc::clone(&left)],
             &[Arc::clone(&right)],
             NullEquality::NullEqualsNothing,
+            &mut None,
         )
         .unwrap();
         assert_eq!(left_filtered, UInt64Array::from(vec![0]));
@@ -4893,6 +4922,7 @@ mod tests {
             &[left],
             &[right],
             NullEquality::NullEqualsNull,
+            &mut None,
         )
         .unwrap();
         assert_eq!(left_filtered, UInt64Array::from(vec![0, 1]));
@@ -4911,6 +4941,7 @@ mod tests {
                 &[left],
                 &[right],
                 NullEquality::NullEqualsNothing,
+                &mut None,
             )
             .unwrap();
             assert_eq!(left_filtered, UInt64Array::from(vec![0]));
@@ -5020,6 +5051,7 @@ mod tests {
             &[left],
             &[right],
             NullEquality::NullEqualsNothing,
+            &mut None,
         )
         .unwrap();
         assert_eq!(left_filtered, UInt64Array::from(vec![0]));
@@ -5037,6 +5069,7 @@ mod tests {
             &[Arc::clone(&left)],
             &[Arc::clone(&right)],
             NullEquality::NullEqualsNothing,
+            &mut None,
         )
         .unwrap_err();
         assert!(
@@ -5050,6 +5083,7 @@ mod tests {
             &[left, Arc::new(Int32Array::from(vec![3, 4]))],
             &[right],
             NullEquality::NullEqualsNothing,
+            &mut None,
         )
         .unwrap_err();
         assert!(
