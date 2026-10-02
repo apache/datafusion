@@ -54,22 +54,21 @@ Contributors drive the project forward based on their own priorities and
 interests and thus you are free to work on any issue that interests you.
 
 If someone is already working on an issue that you want or need but hasn't
-been able to finish it yet, you should feel free to work on it as well. In
-general it is both polite and will help avoid unnecessary duplication of work if
-you leave a note on an issue when you start working on it.
+been able to finish it yet, feel free to help them out. 
 
 If there is a existing PR for an issue you plan to work on, please review that
 PR before opening a new one. Duplicate, unacknowledged PRs consume valuable
 reviewer time and we may close them. If there is an existing PR, please identify
 it in the PR description and explain why you are opening a new one and not
-helping with the previous one.
+helping with the previous one. In  general it is both polite and will help avoid
+unnecessary duplication of work if you also leave a note on an issue when you
+start working on it.
 
-If you want to work on an issue which is not already assigned to someone
-and there are no comment indicating that someone is already working on that
-issue you can assign the issue to yourself by submitting a single word
-comment `take`. This will assign the issue to yourself. However, if you are
-unable to make progress you should unassign the issue by commenting a single
-word `untake`.
+If you want to work on an issue which is not already assigned to someone and has
+no comment indicating someone is already working on it, you can assign the issue
+to yourself by submitting a single word issue you can assign the issue to
+yourself by submitting a single word comment `take`. However, if you are unable
+to make progress please unassign the issue by commenting a single word `untake`.
 
 # Developer's guide
 
@@ -77,7 +76,8 @@ word `untake`.
 
 We welcome pull requests (PRs) from anyone in the community.
 
-DataFusion is a rapidly evolving project and we try to review and merge PRs quickly.
+DataFusion is a rapidly evolving project and we try to review and merge PRs
+quickly.
 
 Review bandwidth is currently our most limited resource, and we highly encourage reviews by the broader community. If you are waiting for your PR to be reviewed, consider helping review other PRs that are waiting. Such review both helps the reviewer to learn the codebase and become more expert, as well as helps identify issues in the PR (such as lack of test coverage), that can be addressed and make future reviews faster and more efficient.
 
@@ -101,7 +101,7 @@ When possible, we recommend splitting your contributions into multiple smaller f
 
 1. The PR is more likely to be reviewed quickly -- our reviewers struggle to find the contiguous time needed to review large PRs.
 2. The PR discussions tend to be more focused and less likely to get lost among several different threads.
-3. It is often easier to accept and act on feedback when it comes early on in a small change, before a particular approach has been polished too much.
+3. It is often easier to accept and act on feedback when it comes early in a small change, before a particular approach has been polished too much.
 
 If you are concerned that a larger design will be lost in a string of small PRs, creating a large draft PR that shows how they all work together can help.
 
@@ -134,6 +134,80 @@ Please ensure your PR follows the [testing guide](testing.md). In particular:
   over Rust unit tests where possible. See
   [Choosing What Kind of Test to Write](testing.md#choosing-what-kind-of-test-to-write).
 - Run any relevant commands from the [testing quick start](testing.md#testing-quick-start).
+
+## AI-Assisted contributions
+
+DataFusion has the following policy for AI-assisted PRs:
+
+- We welcome AI assisted PRs from anyone. We do not welcome unreviewed "AI dumps" (defined below).
+- The PR author should have personally read the entire PR they submit, and **understand the core ideas** behind the implementation **end-to-end**. Authors should be ready to justify and help reviewers understand the design and code during review.
+- **Call out unknowns and assumptions**. It's okay to not fully understand some bits of AI generated code. Please point these cases out so we can work together to clear up any concerns.
+
+### What is an "AI dump" and why it is not helpful
+
+An "AI dump" is a PR, or a series of PRs, consisting largely of AI generated
+code and descriptions that the author has not reviewed and does not understand.
+The code may even be correct. The problem is that all the work of understanding
+falls on the reviewer.
+
+Code review serves two purposes:
+
+1. Finish the intended task.
+2. Share knowledge between authors and reviewers, as a long-term investment in
+   the project. For this reason, even if someone familiar with the codebase
+   could finish a task more quickly by themselves, we are still happy to help a new contributor
+   work on it.
+
+An AI dump meets neither purpose. Maintainers could finish the task faster by
+running the AI tool themselves, and an author who acts only as a pass-through
+proxy for the tool learns little from the review.
+
+Reviewing capacity for the project is **very limited**, so PRs that appear to be
+AI dumps may not get reviewed, and may eventually be closed.
+
+Multiple PRs created in a short amount of time, especially by a first time
+contributor, that in our judgment show lack of understanding or author
+engagement may be treated as spam and closed. One high quality PR that you work
+with maintainers to merge is far more valuable to you and the project, than ten
+PRs you have your agent generate and submit for you.
+
+### Responding to review comments
+
+The same policy applies to review discussion as to the code itself: reviewers
+want to talk to **you**, not to your AI tool. Please do not paste an AI
+generated response to a review comment verbatim or have your agent respond to
+reviewer comments. Some signs that a reply is an unreviewed AI dump:
+
+- It summarizes the diff rather than answering the question that was asked.
+- It lists the commands that were run locally (e.g. `cargo fmt`, `cargo test`)
+  and whether they passed. This is not useful to reviewers because CI already
+  runs these checks.
+- It contains statements that don't make sense in the context, such as claiming 
+  tests could not be run because `cargo` is not installed.
+
+For example, see [this review thread in arrow-rs][arrow-rs-review-example] where
+the reviewer asked a design question, and received several replies that
+described what had changed and which commands had been run, rather than an
+answer to the question.
+
+Our maintainers are more than capable of running coding agents themselves and
+iterating on the output. The point of code review is to help the project **and**
+to help you grow as an engineer, so please read each comment, make sure you
+understand it, and reply in your own words. If you used an AI tool to help
+address a comment, that's fine but remember you should be talking to the
+reviewer, not letting the AI tool talk for you.
+
+[arrow-rs-review-example]: https://github.com/apache/arrow-rs/pull/11209#discussion_r4145512124
+
+### Better ways to contribute than an “AI dump”
+
+It's recommended to write a high-quality issue with a clear problem statement
+and a minimal, reproducible example. The reproducer should focus on the end user
+visible behavior rather than explaining the details of some code defect. 
+
+This will make it easier for others to contribute as well as reviewers to
+understand the problem being addressed.
+
 
 ## Conventional Commits & Labeling PRs
 
@@ -198,68 +272,6 @@ The good thing about open code and open development is that any issues in one ch
 Pull requests will be marked with a `stale` label after 60 days of inactivity and then closed 7 days after that.
 Commenting on the PR will remove the `stale` label.
 
-## AI-Assisted contributions
-
-DataFusion has the following policy for AI-assisted PRs:
-
-- We welcome AI assisted PRs from anyone. We do not welcome unreviewed "AI dumps" (defined below).
-- The PR author should have personally read the entire PR they submit, and **understand the core ideas** behind the implementation **end-to-end**. Authors should be ready to justify and help reviewers understand the design and code during review.
-- **Calls out unknowns and assumptions**. It's okay to not fully understand some bits of AI generated code. Please point these cases out so we can work together to clear up any concerns.
-
-### What is an "AI dump" and why it is not helpful
-
-An "AI dump" is a PR, or a series of PRs, consisting largely of AI generated code and descriptions that the author has not personally reviewed and does not understand. The code may even be correct. The problem is that the author hasn't checked, so all of the work of understanding it falls on the reviewer.
-
-Code review serves two purposes:
-
-1. Finish the intended task.
-2. Share knowledge between authors and reviewers, as a long-term investment in
-   the project. For this reason, even if someone familiar with the codebase
-   could finish a task more quickly by themselves, we are still happy to help a new contributor
-   work on it.
-
-An AI dump meets neither purpose. Maintainers could finish the task faster by
-running the AI tool themselves, and an author who acts only as a pass-through
-proxy for the tool learns little from the review.
-
-Reviewing capacity for the project is **very limited**, so PRs that appear to be
-AI dumps may not get reviewed, and may eventually be closed.
-
-Multiple PRs created in a short amount of time, especially by a first time
-contributor, that are in our judgment show lack of review be treated as spam
-and closed. One high quality PR that you work with maintainers to merge is far
-more valuable to the project, and to you, than ten PRs opened at once.
-
-### Responding to review comments
-
-The same policy applies to review discussion as to the code itself: reviewers
-want to talk to **you**, not to your AI tool. Please do not paste an AI
-generated response to a review comment verbatim. Some signs that a reply is an
-unreviewed AI dump:
-
-- It summarizes the diff rather than answering the question that was asked.
-- It lists the commands that were run locally (e.g. `cargo fmt`, `cargo test`)
-  and whether they passed. This is not useful to reviewers because CI already
-  runs these checks on every PR.
-- It contains statements that a human would have caught, such as claiming that
-  tests could not be run because `cargo` is not installed.
-
-For example, see [this review thread in arrow-rs][arrow-rs-review-example]
-where the reviewer asked a design question, and received several replies that
-described what had changed and which commands had been run, without engaging
-with the question.
-
-Maintainers are more than capable of running coding agents themselves and
-iterating on the output. The point of code review is to help the project **and** to
-help you grow as an engineer, so please read each comment, make sure you
-understand it, and reply in your own words. If you used an AI tool to help
-address a comment, that's fine but remember if you aren't involved t.
-
-[arrow-rs-review-example]: https://github.com/apache/arrow-rs/pull/11209#discussion_r4145512124
-
-### Better ways to contribute than an “AI dump”
-
-It's recommended to write a high-quality issue with a clear problem statement and a minimal, reproducible example. This can make it easier for others to contribute.
 
 ### CI Runners
 
