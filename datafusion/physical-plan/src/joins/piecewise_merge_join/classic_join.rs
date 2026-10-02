@@ -622,6 +622,8 @@ fn matchable_rows(
         return Ok(BooleanArray::new(BooleanBuffer::new_unset(num_rows), None));
     };
 
+    // The comparator's nested ordering is itself wrong for `<`/`<=` (#25957). Once that is
+    // fixed, nested keys can go through `apply_cmp` too and this branch can be removed.
     if stream_values.data_type().is_nested() {
         let match_on_equal = matches_on_equal(operator)?;
         let cmp = JoinKeyComparator::new(
