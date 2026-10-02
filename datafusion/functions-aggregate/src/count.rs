@@ -431,11 +431,15 @@ impl AggregateUDFImpl for Count {
                 let count = i64::try_from(num_rows - val).ok()?;
                 return Some(ScalarValue::Int64(Some(count)));
             }
-        } else if let Some(lit_expr) = expr.downcast_ref::<expressions::Literal>()
-            && lit_expr.value() == &COUNT_STAR_EXPANSION
-        {
-            let num_rows = i64::try_from(num_rows).ok()?;
-            return Some(ScalarValue::Int64(Some(num_rows)));
+        } else if let Some(lit_expr) = expr.downcast_ref::<expressions::Literal>() {
+            // A non-null literal is counted once per row (this covers the common
+            // `count(*)` construct). A non-null literal is never counted.
+            let count = if lit_expr.value().is_null() {
+                0
+            } else {
+                i64::try_from(num_rows).ok()?
+            };
+            return Some(ScalarValue::Int64(Some(count)));
         }
 
         None
