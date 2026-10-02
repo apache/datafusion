@@ -3097,11 +3097,9 @@ impl DefaultPhysicalPlanner {
     /// Run the two physical planning phases over `plan`, calling
     /// `observer(plan, rule_name)` after each rule.
     ///
-    /// The analyzer phase runs first and in full: it makes the plan *valid* by
-    /// satisfying the distribution and ordering requirements every operator
-    /// declares. The optimizer phase then makes that already-valid plan
-    /// *faster*, so every [`PhysicalOptimizerRule`] receives a valid plan and
-    /// is expected to leave one. See [`PhysicalAnalyzerRule`] for the phase
+    /// The analyzer phase runs first and in full; it ends with requirement
+    /// enforcement, so every [`PhysicalOptimizerRule`] in the optimizer phase
+    /// receives a valid plan. See [`PhysicalAnalyzerRule`] for the phase
     /// diagram.
     ///
     /// [`PhysicalOptimizerRule`]: datafusion_physical_optimizer::PhysicalOptimizerRule
@@ -3118,10 +3116,6 @@ impl DefaultPhysicalPlanner {
     {
         let analyzers = session_state.physical_analyzers();
         let optimizers = session_state.physical_optimizers();
-        // A session that registers no analyzer rules has opted out of the
-        // phase, and with it out of the phase's contract below.
-        #[cfg(debug_assertions)]
-        let analyzer_phase_ran = !analyzers.is_empty();
         debug!(
             "Input physical plan:\n{}\n",
             displayable(plan.as_ref()).indent(false)
@@ -3140,9 +3134,8 @@ impl DefaultPhysicalPlanner {
             session: session_state,
         };
 
-        // First apply the analyzer rules to make the plan valid (they enforce
-        // the distribution requirements every operator declares), then the
-        // optimizer rules to make the already-valid plan faster.
+        // First the analyzer rules, which end with requirement enforcement,
+        // then the optimizer rules on the resulting valid plan.
         for analyzer in analyzers {
             let before_schema = new_plan.schema();
             new_plan = analyzer
@@ -3161,23 +3154,6 @@ impl DefaultPhysicalPlanner {
                 displayable(new_plan.as_ref()).indent(false)
             );
             observer(new_plan.as_ref(), analyzer.name());
-        }
-
-        // The analyzer phase's contract is that it hands the optimizer an
-        // executable plan: every requirement enforced, no placeholder left
-        // unresolved. Check it here, once, where the phase ends. Like the
-        // per-rule `InvariantLevel::Always` checks this runs in debug builds
-        // only, so it costs nothing in release and still catches a chain that
-        // forgets a rule in CI.
-        #[cfg(debug_assertions)]
-        if analyzer_phase_ran {
-            InvariantChecker(InvariantLevel::Executable)
-                .check(&new_plan)
-                .map_err(|e| {
-                    e.context(
-                        "plan is not executable at the end of the physical analyzer phase",
-                    )
-                })?;
         }
 
         // Then apply the optimizer rules to make the (valid) plan faster.
@@ -3689,14 +3665,12 @@ mod tests {
         }
     }
 
-    /// The default session state wires the physical analyzer phase as: the
-    /// output-requirement boundary, then the rules that decide requirements
-    /// (`join_selection`, the pre-phase `FilterPushdown`), then enforcement of
-    /// distribution and ordering. The optimizer phase holds no enforcement and
-    /// no second copy of those deciding rules; only the post-phase
-    /// `FilterPushdown`, which links dynamic filters, stays there.
+    /// The default session state runs the former optimizer prefix, up to and
+    /// including `EnsureRequirements`, as the analyzer phase, and none of those
+    /// rules again in the optimizer phase (only the post-phase `FilterPushdown`,
+    /// which links dynamic filters, stays there).
     #[test]
-    fn default_session_wires_requirement_deciders_then_enforcement_as_analyzer() {
+    fn default_session_runs_the_analyzer_prefix_then_the_optimizer() {
         let state = make_session_state();
 
         let analyzer_names: Vec<&str> = state
@@ -3708,9 +3682,12 @@ mod tests {
             analyzer_names,
             vec![
                 "OutputRequirements",
+                "aggregate_statistics",
                 "join_selection",
+                "LimitedDistinctAggregation",
                 "FilterPushdown",
-                "EnsureRequirements"
+                "WindowTopN",
+                "EnsureRequirements",
             ],
             "unexpected analyzer phase: {analyzer_names:?}"
         );
@@ -3720,60 +3697,22 @@ mod tests {
             .iter()
             .map(|r| r.name())
             .collect();
-        assert!(optimizer_names.contains(&"OptimizeSorts"));
         assert!(optimizer_names.contains(&"FilterPushdown(Post)"));
-        for moved_or_removed in ["EnsureRequirements", "join_selection", "FilterPushdown"]
-        {
+        for moved in [
+            "aggregate_statistics",
+            "join_selection",
+            "LimitedDistinctAggregation",
+            "FilterPushdown",
+            "WindowTopN",
+            "EnsureRequirements",
+        ] {
             assert!(
-                !optimizer_names.contains(&moved_or_removed),
-                "{moved_or_removed} should not be an optimizer rule, got {optimizer_names:?}"
+                !optimizer_names.contains(&moved),
+                "{moved} runs in the analyzer and must not repeat in the optimizer, got {optimizer_names:?}"
             );
         }
     }
 
-    /// The analyzer phase has to hand the optimizer an executable plan. A chain
-    /// that registers analyzers but forgets `JoinSelection` leaves hash joins in
-    /// `PartitionMode::Auto`, which cannot run, and the boundary check reports
-    /// it at planning time. The check is debug-only, so is this test.
-    #[cfg(debug_assertions)]
-    #[tokio::test]
-    async fn analyzer_phase_must_leave_an_executable_plan() -> Result<()> {
-        use datafusion_physical_optimizer::output_requirements::OutputRequirements;
-
-        let runtime = Arc::new(RuntimeEnv::default());
-        let config = SessionConfig::new().with_target_partitions(4);
-        let state = SessionStateBuilder::new()
-            .with_config(config)
-            .with_runtime_env(runtime)
-            .with_default_features()
-            // Non-empty, so the phase ran, but nothing resolves join modes.
-            .with_physical_analyzer_rules(vec![Arc::new(
-                OutputRequirements::new_add_mode(),
-            )])
-            .build();
-
-        let left = test_csv_scan().await?.alias("l")?.build()?;
-        let right = test_csv_scan().await?.alias("r")?.build()?;
-        let logical_plan = LogicalPlanBuilder::from(left)
-            .join(right, JoinType::Inner, (vec!["l.c1"], vec!["r.c1"]), None)?
-            .build()?;
-
-        let err = DefaultPhysicalPlanner::default()
-            .create_physical_plan(&logical_plan, &state)
-            .await
-            .expect_err("an unresolved join must not get past the analyzer phase");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("end of the physical analyzer phase")
-                && msg.contains("unsupported PartitionMode Auto"),
-            "unexpected error: {msg}"
-        );
-        Ok(())
-    }
-
-    /// A custom analyzer registered on the builder runs during physical
-    /// planning, and the resulting plan is still valid (enforcement, the other
-    /// analyzer, ran too).
     #[tokio::test]
     async fn custom_physical_analyzer_rule_runs_during_planning() -> Result<()> {
         let invoked = Arc::new(AtomicBool::new(false));

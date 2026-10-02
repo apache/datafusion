@@ -20,13 +20,10 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::aggregate_statistics::AggregateStatistics;
 use crate::combine_partial_final_agg::CombinePartialFinalAggregate;
 use crate::ensure_coop::EnsureCooperative;
-use crate::ensure_requirements::OptimizeSorts;
 use crate::filter_pushdown::FilterPushdown;
 use crate::limit_pushdown::LimitPushdown;
-use crate::limited_distinct_aggregation::LimitedDistinctAggregation;
 use crate::output_requirements::OutputRequirements;
 use crate::projection_pushdown::ProjectionPushdown;
 use crate::sanity_checker::SanityCheckPlan;
@@ -37,7 +34,6 @@ use crate::update_aggr_exprs::OptimizeAggregateOrder;
 use crate::hash_join_buffering::HashJoinBuffering;
 use crate::limit_pushdown_past_window::LimitPushPastWindows;
 use crate::pushdown_sort::PushdownSort;
-use crate::window_topn::WindowTopN;
 use datafusion_common::config::ConfigOptions;
 
 // Re-export from this module for backwards compatibility.
@@ -88,21 +84,9 @@ impl PhysicalOptimizer {
         //   queries, and will likely increase the optimization time. Please extend
         //   existing rules when possible, rather than adding a new rule.
         let rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = vec![
-            // Requirement enforcement runs in the analyzer phase (see
-            // `PhysicalAnalyzer`), so every rule here receives a valid plan.
-            Arc::new(AggregateStatistics::new()),
-            // Enforcement already ran, so a partial and final AggregateExec may be
-            // separated by a RepartitionExec; the rule looks through
-            // distribution-only operators to reach the partial aggregate.
-            Arc::new(LimitedDistinctAggregation::new()),
-            // WindowTopN: replaces Filter(rn<=K) → Window(ROW_NUMBER)
-            // with Window(ROW_NUMBER) → PartitionedTopKExec(fetch=K).
-            // It changes the window's input requirements and re-enforces them
-            // itself. Must run before ProjectionPushdown (which embeds
-            // projections into FilterExec).
-            Arc::new(WindowTopN::new()),
-            // Sort *optimizations* only; enforcement already ran in the analyzer.
-            Arc::new(OptimizeSorts::new()),
+            // The rules up to and including `EnsureRequirements` run in the
+            // analyzer phase (see `PhysicalAnalyzer`), so every rule here
+            // receives a plan whose requirements are already enforced.
             // The CombinePartialFinalAggregate rule should be applied after distribution enforcement
             Arc::new(CombinePartialFinalAggregate::new()),
             // Run once after the local sorting requirement is changed
@@ -119,7 +103,7 @@ impl PhysicalOptimizer {
             Arc::new(TopKAggregation::new()),
             // Tries to push limits down through window functions, growing as appropriate
             // This can possibly be combined with [LimitPushdown]
-            // It needs to come after sort enforcement (the EnsureRequirements analyzer rule)
+            // It needs to come after [EnsureRequirements] (which handles sort enforcement)
             Arc::new(LimitPushPastWindows::new()),
             // The HashJoinBuffering rule adds a BufferExec node with the configured capacity
             // in the prob side of hash joins. That way, the probe side gets eagerly polled before

@@ -53,4 +53,5 @@ pub mod utils;
 pub mod window_topn;
 
 pub use analyzer::{PhysicalAnalyzer, PhysicalAnalyzerRule};
+
 pub use optimizer::{ConfigOnlyContext, PhysicalOptimizerContext, PhysicalOptimizerRule};

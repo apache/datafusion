@@ -46,12 +46,14 @@ use crate::physical_optimizer::PhysicalOptimizerContext;
 ///
 /// Analyzer rules run as their own phase, before the optimizer rules, in
 /// [`DefaultPhysicalPlanner::optimize_physical_plan`]: every analyzer rule runs,
-/// then every optimizer rule. Within the analyzer, the rules that *decide* what
-/// the plan requires run first (a join's partition mode, which predicates reach
-/// a source), and requirement enforcement (`EnsureRequirements`: distribution,
-/// then ordering) runs last on that final shape. An optimizer rule can therefore assume it receives a valid
-/// plan. The one optimizer rule that still changes a requirement, `WindowTopN`,
-/// re-establishes validity itself.
+/// then every optimizer rule. The default analyzer list is the prefix of the
+/// former single optimizer list up to and including `EnsureRequirements`, in
+/// the same order, so the split changes no plan. The rules ahead of
+/// `EnsureRequirements` sit there because enforcement has to see their output
+/// (`join_selection` resolves `PartitionMode::Auto`, which declares no
+/// requirement); some of them are optimizations, and moving those into the
+/// optimizer phase is follow-up work. An optimizer rule can assume it receives
+/// a valid plan.
 ///
 /// ```text
 /// ExecutionPlan  (every operator declares its distribution and ordering
@@ -60,16 +62,17 @@ use crate::physical_optimizer::PhysicalOptimizerContext;
 ///                                ▼
 /// ┌─ PhysicalAnalyzer phase ── make the plan VALID ──────────────┐
 /// │ 1. OutputRequirements (add)   establish the output boundary  │
-/// │ 2. JoinSelection              resolve PartitionMode::Auto    │
-/// │ 3. FilterPushdown             push predicates into sources   │
-/// │ 4. EnsureRequirements         enforce distribution, ordering │
+/// │ 2. aggregate_statistics       answer aggregates from stats   │
+/// │ 3. join_selection             resolve PartitionMode::Auto    │
+/// │ 4. LimitedDistinctAggregation push limit hints into aggs     │
+/// │ 5. FilterPushdown             push predicates into sources   │
+/// │ 6. WindowTopN                 window + filter into TopK      │
+/// │ 7. EnsureRequirements         enforce distribution, ordering │
 /// └──────────────────────────────┬───────────────────────────────┘
 ///                                │  invariant: the plan is valid
 ///                                ▼
 /// ┌─ PhysicalOptimizer phase ── make the plan FASTER ────────────┐
 /// │ every rule receives a valid plan and leaves a valid plan     │
-/// │                                                              │
-/// │ WindowTopN  ───▶ re-enforce distribution + ordering          │
 /// └──────────────────────────────┬───────────────────────────────┘
 ///                                ▼
 ///                   valid, optimized ExecutionPlan
@@ -98,7 +101,7 @@ pub trait PhysicalAnalyzerRule: Debug + std::any::Any {
     ///
     /// The default implementation calls [`analyze`](Self::analyze) with the
     /// config options from the context. This mirrors
-    /// [`PhysicalOptimizerRule::optimize_with_context`], so enforcement passes
+    /// [`PhysicalOptimizerRule::optimize_with_context`], so analyzer rules
     /// have the same statistics-registry access as optimizer rules.
     ///
     /// [`PhysicalOptimizerRule::optimize_with_context`]: crate::physical_optimizer::PhysicalOptimizerRule::optimize_with_context
@@ -116,8 +119,8 @@ pub trait PhysicalAnalyzerRule: Debug + std::any::Any {
     /// A flag to indicate whether the physical planner should validate that
     /// the rule will not change the schema of the plan after the rewrite.
     ///
-    /// This mirrors [`PhysicalOptimizerRule::schema_check`]; enforcement passes
-    /// preserve the schema, so the default is `true`.
+    /// This mirrors [`PhysicalOptimizerRule::schema_check`]; the default is
+    /// `true`.
     ///
     /// [`PhysicalOptimizerRule::schema_check`]: crate::physical_optimizer::PhysicalOptimizerRule::schema_check
     fn schema_check(&self) -> bool {

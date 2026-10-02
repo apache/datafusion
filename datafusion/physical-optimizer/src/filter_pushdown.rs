@@ -416,37 +416,12 @@ impl Default for FilterPushdown {
     }
 }
 
-impl PhysicalAnalyzerRule for FilterPushdown {
-    fn analyze(
-        &self,
-        plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        PhysicalOptimizerRule::optimize(self, plan, config)
-    }
-
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn schema_check(&self) -> bool {
-        true
-    }
-}
-
 impl PhysicalOptimizerRule for FilterPushdown {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Pushing a predicate into a source changes the statistics the
-        // distribution decisions read: a source's row count flips Exact ->
-        // Inexact, which changes whether its scan is parallelized. The pre phase
-        // therefore runs in the analyzer, ahead of enforcement, so enforcement
-        // sees the statistics as they are after pushdown. The post phase runs
-        // after everything else and only links dynamic filters, which touches no
-        // requirement. Neither phase has anything to re-enforce.
         Ok(
             push_down_filters(&Arc::clone(&plan), vec![], config, self.phase)?
                 .updated_node
@@ -460,6 +435,27 @@ impl PhysicalOptimizerRule for FilterPushdown {
 
     fn schema_check(&self) -> bool {
         true // Filter pushdown does not change the schema of the plan
+    }
+}
+
+/// The same rewrite as the [`PhysicalOptimizerRule`] impl. The default
+/// analyzer registers this rule in the position it held in the optimizer list
+/// before the analyzer phase existed, ahead of `EnsureRequirements`.
+impl PhysicalAnalyzerRule for FilterPushdown {
+    fn analyze(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        config: &ConfigOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        PhysicalOptimizerRule::optimize(self, plan, config)
+    }
+
+    fn name(&self) -> &str {
+        PhysicalOptimizerRule::name(self)
+    }
+
+    fn schema_check(&self) -> bool {
+        PhysicalOptimizerRule::schema_check(self)
     }
 }
 

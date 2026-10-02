@@ -21,9 +21,7 @@
 use std::sync::Arc;
 
 use datafusion_physical_plan::aggregates::AggregateExec;
-use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use datafusion_common::Result;
@@ -31,6 +29,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 
 use crate::PhysicalOptimizerRule;
+use crate::analyzer::PhysicalAnalyzerRule;
 use itertools::Itertools;
 
 /// An optimizer rule that passes a `limit` hint into grouped aggregations which don't require all
@@ -118,15 +117,6 @@ impl LimitedDistinctAggregation {
                         return Ok(new_aggr);
                     }
                 }
-            } else if plan.downcast_ref::<RepartitionExec>().is_some()
-                || plan.downcast_ref::<CoalescePartitionsExec>().is_some()
-            {
-                // Distribution-only operators are transparent here: a partial
-                // and final aggregate that were directly connected when this
-                // rule runs pre-enforcement become separated by a repartition
-                // once enforcement runs first. Descend through them so the
-                // partial aggregate still receives the limit hint.
-                return Ok(Transformed::no(plan));
             }
             rewrite_applicable = false;
             Ok(Transformed::no(plan))
@@ -183,6 +173,27 @@ impl PhysicalOptimizerRule for LimitedDistinctAggregation {
 
     fn schema_check(&self) -> bool {
         true
+    }
+}
+
+/// The same rewrite as the [`PhysicalOptimizerRule`] impl. The default
+/// analyzer registers this rule in the position it held in the optimizer list
+/// before the analyzer phase existed, ahead of `EnsureRequirements`.
+impl PhysicalAnalyzerRule for LimitedDistinctAggregation {
+    fn analyze(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        config: &ConfigOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        PhysicalOptimizerRule::optimize(self, plan, config)
+    }
+
+    fn name(&self) -> &str {
+        PhysicalOptimizerRule::name(self)
+    }
+
+    fn schema_check(&self) -> bool {
+        PhysicalOptimizerRule::schema_check(self)
     }
 }
 

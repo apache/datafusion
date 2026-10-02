@@ -554,11 +554,6 @@ async fn symmetric_hash_join() {
             "Resources exhausted: Additional allocation failed", "with top memory consumers (across reservations) as:\n  SymmetricHashJoinStream",
         ])
         .with_memory_limit(1_000)
-        // Single partition so JoinSelection's distribution self-maintain does not
-        // add a Hash repartition (target_partitions defaults to num_cpus). This
-        // keeps the test measuring the symmetric hash join's own budget, as
-        // before the enforcement-in-analyzer split introduced the self-maintain.
-        .with_config(SessionConfig::new().with_target_partitions(1))
         .with_scenario(Scenario::AccessLogStreaming)
         .run()
         .await
@@ -1345,13 +1340,9 @@ impl TestCase {
             .with_runtime_env(runtime)
             .with_default_features();
         let builder = match scenario.rules() {
-            // A scenario that pins a custom physical optimizer rule set does so to
-            // keep memory-hungry operators (repartition / sort) out of the plan so
-            // the test measures a specific operator's budget. Enforcement now runs
-            // in the analyzer phase, which would re-introduce those operators, so
-            // clear the analyzer rules too to honor the scenario's intent (this
-            // matches the pre-analyzer-phase behavior, where enforcement lived
-            // among the optimizer rules the scenario replaced).
+            // A scenario that pins a custom rule set does so to keep
+            // memory-hungry operators out of the plan. The analyzer phase would
+            // reintroduce them, so clear it too.
             Some(rules) => builder
                 .with_physical_analyzer_rules(vec![])
                 .with_physical_optimizer_rules(rules),

@@ -51,11 +51,10 @@
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
-use crate::ensure_requirements::enforce_requirements;
-use crate::optimizer::{ConfigOnlyContext, PhysicalOptimizerContext};
+use crate::analyzer::PhysicalAnalyzerRule;
 use arrow::datatypes::DataType;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
@@ -264,19 +263,11 @@ impl PhysicalOptimizerRule for WindowTopN {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.optimize_with_context(plan, &ConfigOnlyContext::new(config))
-    }
-
-    fn optimize_with_context(
-        &self,
-        plan: Arc<dyn ExecutionPlan>,
-        context: &dyn PhysicalOptimizerContext,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        if !context.config_options().optimizer.enable_window_topn {
+        if !config.optimizer.enable_window_topn {
             return Ok(plan);
         }
 
-        let result = plan.transform_down(|node| {
+        plan.transform_down(|node| {
             Ok(
                 if let Some(transformed) = WindowTopN::try_transform(&node) {
                     Transformed::yes(transformed)
@@ -284,21 +275,8 @@ impl PhysicalOptimizerRule for WindowTopN {
                     Transformed::no(node)
                 },
             )
-        })?;
-
-        // Only re-enforce when we actually rewrote something: replacing
-        // `Filter -> Window` with `Window -> PartitionedTopKExec` changes both
-        // the window's input distribution (the operator wants a hash exchange on
-        // the partition keys) and its input ordering (the exchange that fed the
-        // window is gone), so re-establish full validity -- distribution and
-        // ordering -- here: the rule that breaks the invariant restores it. If
-        // nothing changed, the plan is already valid and re-enforcing would be a
-        // gratuitous remove-then-rederive pass that can perturb a stable plan.
-        if result.transformed {
-            enforce_requirements(result.data, context)
-        } else {
-            Ok(result.data)
-        }
+        })
+        .data()
     }
 
     fn name(&self) -> &str {
@@ -307,6 +285,27 @@ impl PhysicalOptimizerRule for WindowTopN {
 
     fn schema_check(&self) -> bool {
         true
+    }
+}
+
+/// The same rewrite as the [`PhysicalOptimizerRule`] impl. The default
+/// analyzer registers this rule in the position it held in the optimizer list
+/// before the analyzer phase existed, ahead of `EnsureRequirements`.
+impl PhysicalAnalyzerRule for WindowTopN {
+    fn analyze(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        config: &ConfigOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        PhysicalOptimizerRule::optimize(self, plan, config)
+    }
+
+    fn name(&self) -> &str {
+        PhysicalOptimizerRule::name(self)
+    }
+
+    fn schema_check(&self) -> bool {
+        PhysicalOptimizerRule::schema_check(self)
     }
 }
 

@@ -40,20 +40,21 @@ Rule order matters. The default pipeline may change between releases.
   ExecutionPlan       every operator declares its required input distribution
         │             and ordering; nothing satisfies them yet
         │
-        │  PhysicalAnalyzer ... make the plan VALID
-        │    1. OutputRequirements (add)  establish the output boundary
-        │    2. join_selection            resolve each join's PartitionMode::Auto
-        │    3. FilterPushdown            push predicates into sources
-        │    4. EnsureRequirements        satisfy required_input_distribution,
-        │                                 then required_input_ordering
+        │  PhysicalAnalyzer ... ends with enforcement, the plan is VALID
+        │    1. OutputRequirements (add)   establish the output boundary
+        │    2. aggregate_statistics
+        │    3. join_selection             resolve each join's PartitionMode::Auto
+        │    4. LimitedDistinctAggregation
+        │    5. FilterPushdown             push predicates into sources
+        │    6. WindowTopN
+        │    7. EnsureRequirements         satisfy required_input_distribution
+        │                                  and required_input_ordering
         │
         │  ==> from here on every PhysicalOptimizerRule receives a valid plan
         │      and must leave a valid plan
         │
         │  PhysicalOptimizer .. make the plan FASTER
-        │    aggregate_statistics
-        │    WindowTopN ───▶ re-enforces distribution + ordering for what it rewrote
-        │    OptimizeSorts
+        │    CombinePartialFinalAggregate
         │    ... (full list in the table below)
         │    OutputRequirements (remove)
         │    SanityCheckPlan
@@ -101,54 +102,49 @@ Rule order matters. The default pipeline may change between releases.
 
 ### Physical Analyzer Rules
 
-Analyzer rules run before the physical optimizer rules and make the plan
-_valid_: they enforce the invariants every operator declares. All enforcement
-lives here. `OutputRequirements` (add phase) first establishes the
-output-requirement boundary so enforcement can see it (top-level scan
-parallelism, final-ordering preservation); `EnsureRequirements` then enforces
-distribution and, on the distribution-fixed plan, ordering. Before that,
-`join_selection` resolves each join's partition mode and `FilterPushdown` pushes
-predicates into sources, so enforcement sees the plan's real requirements and
-final statistics and runs exactly once. The optimizer
-phase keeps only the sort _optimizations_ (`OptimizeSorts`), which make an
-already-valid plan faster; `WindowTopN` is the one optimizer rule that still
-changes a requirement, and it re-establishes validity itself.
+Analyzer rules run before the physical optimizer rules, as their own phase, and
+end with requirement enforcement, so every physical optimizer rule receives a
+valid plan. The default list is the prefix of the former single optimizer list
+up to and including `EnsureRequirements`, in the same order, so the split into
+two phases changes no plan. The rules ahead of `EnsureRequirements` run here
+because enforcement has to see their output: `join_selection` resolves each
+join's `PartitionMode::Auto`, which declares no requirement, and the others
+rewrite aggregates and windows that enforcement then repartitions and sorts.
+Some of them are optimizations; moving those into the optimizer phase is
+follow-up work.
 
-| order | rule                 | summary                                                                                   |
-| ----- | -------------------- | ----------------------------------------------------------------------------------------- |
-| 1     | `OutputRequirements` | Adds helper nodes so output requirements survive enforcement and later physical rewrites. |
-| 2     | `join_selection`     | Resolves each join's partition mode and build side, so enforcement sees its requirements. |
-| 3     | `FilterPushdown`     | Pushes supported physical filters into sources, so enforcement sees final statistics.     |
-| 4     | `EnsureRequirements` | Enforces the distribution and ordering requirements each operator declares.               |
+| order | rule                         | summary                                                                                         |
+| ----- | ---------------------------- | ----------------------------------------------------------------------------------------------- |
+| 1     | `OutputRequirements`         | Adds helper nodes so output requirements survive enforcement and later physical rewrites.       |
+| 2     | `aggregate_statistics`       | Uses exact source statistics to answer some aggregates without scanning data.                   |
+| 3     | `join_selection`             | Resolves each join's partition mode and build side, so enforcement sees its requirements.       |
+| 4     | `LimitedDistinctAggregation` | Pushes limit hints into grouped distinct-style aggregations when only a small result is needed. |
+| 5     | `FilterPushdown`             | Pushes supported physical filters into sources, so enforcement sees final statistics.           |
+| 6     | `WindowTopN`                 | Replaces eligible row-number window and filter patterns with per-partition TopK execution.      |
+| 7     | `EnsureRequirements`         | Enforces the distribution and ordering requirements each operator declares.                     |
 
 ### Physical Optimizer Rules
 
 The same rule name may appear more than once when the default pipeline runs it
 in multiple phases.
 
-All enforcement (the `OutputRequirements` add boundary, `EnsureRequirements`)
-runs first, in the analyzer phase (see above), so it does not appear in this
-list, and neither do `join_selection` and `FilterPushdown`, which
-run there ahead of it. The matching `OutputRequirements` remove phase still runs
-here, late, once planning is done.
+The rules up to and including `EnsureRequirements` run in the analyzer phase
+(see above), so they do not appear in this list. The matching
+`OutputRequirements` remove phase still runs here, late, once planning is done.
 
-| order | rule                           | phase                   | summary                                                                                                          |
-| ----- | ------------------------------ | ----------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| 1     | `aggregate_statistics`         | -                       | Uses exact source statistics to answer some aggregates without scanning data.                                    |
-| 2     | `LimitedDistinctAggregation`   | -                       | Pushes limit hints into grouped distinct-style aggregations when only a small result is needed.                  |
-| 3     | `WindowTopN`                   | -                       | Replaces eligible row-number window and filter patterns with per-partition TopK execution; re-enforces validity. |
-| 4     | `OptimizeSorts`                | -                       | Sort optimizations: parallelize sorts, order-preserving variants, sort pushdown, partial sort.                   |
-| 5     | `CombinePartialFinalAggregate` | -                       | Collapses adjacent partial and final aggregates when the distributed shape makes them redundant.                 |
-| 6     | `OptimizeAggregateOrder`       | -                       | Updates aggregate expressions to use the best ordering once sort requirements are known.                         |
-| 7     | `ProjectionPushdown`           | early pass              | Pushes projections toward inputs before later physical rewrites add more limit and TopK structure.               |
-| 8     | `OutputRequirements`           | remove phase            | Removes the temporary output-requirement helper nodes after requirement-sensitive planning is done.              |
-| 9     | `LimitAggregation`             | -                       | Passes a limit hint into eligible aggregations so they can keep fewer accumulator buckets.                       |
-| 10    | `LimitPushPastWindows`         | -                       | Pushes fetch limits through bounded window operators when doing so keeps the result correct.                     |
-| 11    | `HashJoinBuffering`            | -                       | Adds buffering on the probe side of hash joins so probing can start before build completion.                     |
-| 12    | `LimitPushdown`                | -                       | Moves physical limits into child operators or fetch-enabled variants to cut data early.                          |
-| 13    | `TopKRepartition`              | -                       | Pushes TopK below hash repartition when the partition key is a prefix of the sort key.                           |
-| 14    | `ProjectionPushdown`           | late pass               | Runs projection pushdown again after limit and TopK rewrites expose new pruning opportunities.                   |
-| 15    | `PushdownSort`                 | -                       | Pushes sort requirements into data sources that can already return sorted output.                                |
-| 16    | `EnsureCooperative`            | -                       | Wraps non-cooperative plan parts so long-running tasks yield fairly.                                             |
-| 17    | `FilterPushdown(Post)`         | post-optimization phase | Pushes dynamic filters at the end of optimization, after plan references stop moving.                            |
-| 18    | `SanityCheckPlan`              | -                       | Validates that the final physical plan meets ordering, distribution, and infinite-input safety requirements.     |
+| order | rule                           | phase                   | summary                                                                                                      |
+| ----- | ------------------------------ | ----------------------- | ------------------------------------------------------------------------------------------------------------ |
+| 1     | `CombinePartialFinalAggregate` | -                       | Collapses adjacent partial and final aggregates when the distributed shape makes them redundant.             |
+| 2     | `OptimizeAggregateOrder`       | -                       | Updates aggregate expressions to use the best ordering once sort requirements are known.                     |
+| 3     | `ProjectionPushdown`           | early pass              | Pushes projections toward inputs before later physical rewrites add more limit and TopK structure.           |
+| 4     | `OutputRequirements`           | remove phase            | Removes the temporary output-requirement helper nodes after requirement-sensitive planning is done.          |
+| 5     | `LimitAggregation`             | -                       | Passes a limit hint into eligible aggregations so they can keep fewer accumulator buckets.                   |
+| 6     | `LimitPushPastWindows`         | -                       | Pushes fetch limits through bounded window operators when doing so keeps the result correct.                 |
+| 7     | `HashJoinBuffering`            | -                       | Adds buffering on the probe side of hash joins so probing can start before build completion.                 |
+| 8     | `LimitPushdown`                | -                       | Moves physical limits into child operators or fetch-enabled variants to cut data early.                      |
+| 9     | `TopKRepartition`              | -                       | Pushes TopK below hash repartition when the partition key is a prefix of the sort key.                       |
+| 10    | `ProjectionPushdown`           | late pass               | Runs projection pushdown again after limit and TopK rewrites expose new pruning opportunities.               |
+| 11    | `PushdownSort`                 | -                       | Pushes sort requirements into data sources that can already return sorted output.                            |
+| 12    | `EnsureCooperative`            | -                       | Wraps non-cooperative plan parts so long-running tasks yield fairly.                                         |
+| 13    | `FilterPushdown(Post)`         | post-optimization phase | Pushes dynamic filters at the end of optimization, after plan references stop moving.                        |
+| 14    | `SanityCheckPlan`              | -                       | Validates that the final physical plan meets ordering, distribution, and infinite-input safety requirements. |

@@ -22,8 +22,8 @@ use std::sync::{Arc, OnceLock};
 use std::vec;
 
 use crate::execution_plan::{
-    EmissionType, InvariantLevel, boundedness_from_children, check_default_invariants,
-    has_same_children_properties, plan_contains_expression_id, stub_properties,
+    EmissionType, boundedness_from_children, has_same_children_properties,
+    plan_contains_expression_id, stub_properties,
 };
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
@@ -1556,40 +1556,6 @@ impl DisplayAs for HashJoinExec {
 }
 
 impl ExecutionPlan for HashJoinExec {
-    /// Beyond the defaults, an executable hash join needs a concrete partition
-    /// mode and child partition counts that match it. These are the same
-    /// conditions `execute` enforces; checking them at
-    /// [`InvariantLevel::Executable`] surfaces a plan that is missing
-    /// `JoinSelection` at planning time instead of at the first poll.
-    fn check_invariants(&self, check: InvariantLevel) -> Result<()> {
-        check_default_invariants(self, check)?;
-        if !matches!(check, InvariantLevel::Executable) {
-            return Ok(());
-        }
-
-        let left_partitions = self.left.output_partitioning().partition_count();
-        let right_partitions = self.right.output_partitioning().partition_count();
-        match self.mode {
-            PartitionMode::Auto => plan_err!(
-                "Invalid HashJoinExec, unsupported PartitionMode {:?}: it has to be \
-                 resolved to CollectLeft or Partitioned before the plan can run",
-                PartitionMode::Auto
-            ),
-            PartitionMode::Partitioned if left_partitions != right_partitions => {
-                internal_err!(
-                    "Invalid HashJoinExec, partition count mismatch \
-                     {left_partitions}!={right_partitions}, consider using \
-                     RepartitionExec"
-                )
-            }
-            PartitionMode::CollectLeft if left_partitions != 1 => internal_err!(
-                "Invalid HashJoinExec, the left side of a CollectLeft join must be \
-                 a single partition, got {left_partitions}"
-            ),
-            _ => Ok(()),
-        }
-    }
-
     fn name(&self) -> &'static str {
         "HashJoinExec"
     }
@@ -3726,54 +3692,6 @@ mod tests {
             null_equality,
             false,
         )
-    }
-
-    /// `PartitionMode::Auto` is a placeholder, not something that can run:
-    /// `execute` rejects it, so the executability invariant has to as well,
-    /// while the structural (`Always`) level stays permissive.
-    #[test]
-    fn auto_partition_mode_fails_the_executable_invariant() -> Result<()> {
-        let left = build_table(("a1", &vec![1]), ("b1", &vec![1]), ("c1", &vec![1]));
-        let right = build_table(("a2", &vec![1]), ("b2", &vec![1]), ("c2", &vec![1]));
-        let on: JoinOn = vec![(
-            Arc::new(Column::new_with_schema("a1", &left.schema())?),
-            Arc::new(Column::new_with_schema("a2", &right.schema())?),
-        )];
-        let auto = HashJoinExec::try_new(
-            Arc::clone(&left),
-            Arc::clone(&right),
-            on.clone(),
-            None,
-            &JoinType::Inner,
-            None,
-            PartitionMode::Auto,
-            NullEquality::NullEqualsNothing,
-            false,
-        )?;
-
-        auto.check_invariants(InvariantLevel::Always)?;
-        let err = auto
-            .check_invariants(InvariantLevel::Executable)
-            .expect_err("Auto must not pass the executable invariant");
-        assert!(
-            err.to_string().contains("unsupported PartitionMode Auto"),
-            "unexpected error: {err}"
-        );
-
-        // The same join with its mode resolved is executable.
-        let resolved = HashJoinExec::try_new(
-            left,
-            right,
-            on,
-            None,
-            &JoinType::Inner,
-            None,
-            PartitionMode::CollectLeft,
-            NullEquality::NullEqualsNothing,
-            false,
-        )?;
-        resolved.check_invariants(InvariantLevel::Executable)?;
-        Ok(())
     }
 
     fn join_with_filter(

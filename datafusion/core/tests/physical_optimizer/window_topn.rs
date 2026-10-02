@@ -59,17 +59,12 @@ fn plan_str(plan: &dyn ExecutionPlan) -> String {
 fn optimize(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
     let mut config = ConfigOptions::new();
     config.optimizer.enable_window_topn = true;
-    // Pin target_partitions so WindowTopN's distribution self-maintain renders a
-    // fixed Hash partition count in the snapshots instead of the machine's
-    // num_cpus (which fails on CI runners with a different core count).
-    config.execution.target_partitions = 4;
     WindowTopN::new().optimize(plan, &config)
 }
 
 fn optimize_disabled(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
     let mut config = ConfigOptions::new();
     config.optimizer.enable_window_topn = false;
-    config.execution.target_partitions = 4;
     WindowTopN::new().optimize(plan, &config)
 }
 
@@ -228,9 +223,8 @@ fn basic_row_number_rn_lteq_3() -> Result<()> {
     let optimized = optimize(plan)?;
     assert_snapshot!(plan_str(optimized.as_ref()), @r#"
     BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-      RepartitionExec: partitioning=Hash([pk@0], 4), input_partitions=1, maintains_sort_order=true
-        PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@0], order=[val@1 ASC]
-          PlaceholderRowExec
+      PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@0], order=[val@1 ASC]
+        PlaceholderRowExec
     "#);
     Ok(())
 }
@@ -241,9 +235,8 @@ fn rn_lt_3_becomes_fetch_2() -> Result<()> {
     let optimized = optimize(plan)?;
     assert_snapshot!(plan_str(optimized.as_ref()), @r#"
     BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-      RepartitionExec: partitioning=Hash([pk@0], 4), input_partitions=1, maintains_sort_order=true
-        PartitionedTopKExec: fn=row_number, fetch=2, partition=[pk@0], order=[val@1 ASC]
-          PlaceholderRowExec
+      PartitionedTopKExec: fn=row_number, fetch=2, partition=[pk@0], order=[val@1 ASC]
+        PlaceholderRowExec
     "#);
     Ok(())
 }
@@ -294,9 +287,8 @@ fn flipped_3_gteq_rn() -> Result<()> {
     let optimized = optimize(plan)?;
     assert_snapshot!(plan_str(optimized.as_ref()), @r#"
     BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-      RepartitionExec: partitioning=Hash([pk@0], 4), input_partitions=1, maintains_sort_order=true
-        PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@0], order=[val@1 ASC]
-          PlaceholderRowExec
+      PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@0], order=[val@1 ASC]
+        PlaceholderRowExec
     "#);
     Ok(())
 }
@@ -404,9 +396,8 @@ fn with_projection_between() -> Result<()> {
     assert_snapshot!(plan_str(optimized.as_ref()), @r#"
     ProjectionExec: expr=[pk@0 as pk, val@1 as val, row_number@2 as row_number]
       BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-        RepartitionExec: partitioning=Hash([pk@0], 4), input_partitions=1, maintains_sort_order=true
-          PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@0], order=[val@1 ASC]
-            PlaceholderRowExec
+        PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@0], order=[val@1 ASC]
+          PlaceholderRowExec
     "#);
     Ok(())
 }
@@ -518,9 +509,8 @@ fn basic_rank_rk_lteq_3() -> Result<()> {
     let optimized = optimize(plan)?;
     assert_snapshot!(plan_str(optimized.as_ref()), @r#"
     BoundedWindowAggExec: wdw=[rank: Field { "rank": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-      RepartitionExec: partitioning=Hash([pk@0], 4), input_partitions=1, maintains_sort_order=true
-        PartitionedTopKExec: fn=rank, fetch=3, partition=[pk@0], order=[val@1 ASC]
-          PlaceholderRowExec
+      PartitionedTopKExec: fn=rank, fetch=3, partition=[pk@0], order=[val@1 ASC]
+        PlaceholderRowExec
     "#);
     Ok(())
 }
@@ -531,9 +521,8 @@ fn rank_rk_lt_4_becomes_fetch_3() -> Result<()> {
     let optimized = optimize(plan)?;
     assert_snapshot!(plan_str(optimized.as_ref()), @r#"
     BoundedWindowAggExec: wdw=[rank: Field { "rank": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-      RepartitionExec: partitioning=Hash([pk@0], 4), input_partitions=1, maintains_sort_order=true
-        PartitionedTopKExec: fn=rank, fetch=3, partition=[pk@0], order=[val@1 ASC]
-          PlaceholderRowExec
+      PartitionedTopKExec: fn=rank, fetch=3, partition=[pk@0], order=[val@1 ASC]
+        PlaceholderRowExec
     "#);
     Ok(())
 }
@@ -544,9 +533,8 @@ fn rank_flipped_3_gteq_rk() -> Result<()> {
     let optimized = optimize(plan)?;
     assert_snapshot!(plan_str(optimized.as_ref()), @r#"
     BoundedWindowAggExec: wdw=[rank: Field { "rank": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-      RepartitionExec: partitioning=Hash([pk@0], 4), input_partitions=1, maintains_sort_order=true
-        PartitionedTopKExec: fn=rank, fetch=3, partition=[pk@0], order=[val@1 ASC]
-          PlaceholderRowExec
+      PartitionedTopKExec: fn=rank, fetch=3, partition=[pk@0], order=[val@1 ASC]
+        PlaceholderRowExec
     "#);
     Ok(())
 }
@@ -557,9 +545,8 @@ fn rank_flipped_4_gt_rk_becomes_fetch_3() -> Result<()> {
     let optimized = optimize(plan)?;
     assert_snapshot!(plan_str(optimized.as_ref()), @r#"
     BoundedWindowAggExec: wdw=[rank: Field { "rank": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-      RepartitionExec: partitioning=Hash([pk@0], 4), input_partitions=1, maintains_sort_order=true
-        PartitionedTopKExec: fn=rank, fetch=3, partition=[pk@0], order=[val@1 ASC]
-          PlaceholderRowExec
+      PartitionedTopKExec: fn=rank, fetch=3, partition=[pk@0], order=[val@1 ASC]
+        PlaceholderRowExec
     "#);
     Ok(())
 }
@@ -590,9 +577,8 @@ fn basic_dense_rank_dr_lteq_3() -> Result<()> {
     let optimized = optimize(plan)?;
     assert_snapshot!(plan_str(optimized.as_ref()), @r#"
     BoundedWindowAggExec: wdw=[dense_rank: Field { "dense_rank": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-      RepartitionExec: partitioning=Hash([pk@0], 4), input_partitions=1, maintains_sort_order=true
-        PartitionedTopKExec: fn=dense_rank, fetch=3, partition=[pk@0], order=[val@1 ASC]
-          PlaceholderRowExec
+      PartitionedTopKExec: fn=dense_rank, fetch=3, partition=[pk@0], order=[val@1 ASC]
+        PlaceholderRowExec
     "#);
     Ok(())
 }
@@ -603,9 +589,8 @@ fn dense_rank_dr_lt_4_becomes_fetch_3() -> Result<()> {
     let optimized = optimize(plan)?;
     assert_snapshot!(plan_str(optimized.as_ref()), @r#"
     BoundedWindowAggExec: wdw=[dense_rank: Field { "dense_rank": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-      RepartitionExec: partitioning=Hash([pk@0], 4), input_partitions=1, maintains_sort_order=true
-        PartitionedTopKExec: fn=dense_rank, fetch=3, partition=[pk@0], order=[val@1 ASC]
-          PlaceholderRowExec
+      PartitionedTopKExec: fn=dense_rank, fetch=3, partition=[pk@0], order=[val@1 ASC]
+        PlaceholderRowExec
     "#);
     Ok(())
 }
@@ -616,9 +601,8 @@ fn dense_rank_flipped_3_gteq_dr() -> Result<()> {
     let optimized = optimize(plan)?;
     assert_snapshot!(plan_str(optimized.as_ref()), @r#"
     BoundedWindowAggExec: wdw=[dense_rank: Field { "dense_rank": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-      RepartitionExec: partitioning=Hash([pk@0], 4), input_partitions=1, maintains_sort_order=true
-        PartitionedTopKExec: fn=dense_rank, fetch=3, partition=[pk@0], order=[val@1 ASC]
-          PlaceholderRowExec
+      PartitionedTopKExec: fn=dense_rank, fetch=3, partition=[pk@0], order=[val@1 ASC]
+        PlaceholderRowExec
     "#);
     Ok(())
 }
@@ -629,9 +613,8 @@ fn dense_rank_flipped_4_gt_dr_becomes_fetch_3() -> Result<()> {
     let optimized = optimize(plan)?;
     assert_snapshot!(plan_str(optimized.as_ref()), @r#"
     BoundedWindowAggExec: wdw=[dense_rank: Field { "dense_rank": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-      RepartitionExec: partitioning=Hash([pk@0], 4), input_partitions=1, maintains_sort_order=true
-        PartitionedTopKExec: fn=dense_rank, fetch=3, partition=[pk@0], order=[val@1 ASC]
-          PlaceholderRowExec
+      PartitionedTopKExec: fn=dense_rank, fetch=3, partition=[pk@0], order=[val@1 ASC]
+        PlaceholderRowExec
     "#);
     Ok(())
 }
