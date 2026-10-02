@@ -30,14 +30,14 @@ use datafusion_common::{
     Column, DFSchemaRef, HashMap, Result, ScalarValue, assert_or_internal_err, plan_err,
 };
 use datafusion_expr::expr::{Alias, GroupingSet};
-use datafusion_expr::logical_plan::Join;
+use datafusion_expr::logical_plan::{Join, JoinType};
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{
     collect_subquery_cols, conjunction, find_join_exprs, split_conjunction,
 };
 use datafusion_expr::{
     BinaryExpr, Cast, EmptyRelation, Expr, ExprSchemable, FetchType, LogicalPlan,
-    LogicalPlanBuilder, Operator, expr, lit,
+    LogicalPlanBuilder, Operator, SkipType, expr, lit,
 };
 
 /// This struct rewrite the sub query plan by pull up the correlated
@@ -76,6 +76,21 @@ pub struct PullUpCorrelatedExpr {
     /// whether we have converted a scalar aggregation into a group aggregation. When unnesting
     /// lateral joins, we need to produce a left outer join in such cases.
     pub pulled_up_scalar_agg: bool,
+    /// Every correlated conjunct that a `Filter` of the subquery applies,
+    /// before `remove_duplicated_filter` drops the ones that the `IN`
+    /// predicate already covers. The outer references are kept, so that a
+    /// subquery column and an outer column with the same qualified name stay
+    /// apart.
+    ///
+    /// `join_filters` holds only the conjuncts that the join still needs.
+    /// This list is what the subquery enforces on its own rows. The caller
+    /// uses it to tell if a join key can be NULL inside the scope of an outer
+    /// row: `x IN (SELECT y FROM .. WHERE y = x)` keeps every NULL `y` out of
+    /// its result, although `join_filters` no longer says so.
+    ///
+    /// The list is cleared when the pull up passes a node that can put a NULL
+    /// back into such a column: an outer join, a union or a grouping set.
+    pub correlated_filters: Vec<Expr>,
 }
 
 impl Default for PullUpCorrelatedExpr {
@@ -97,6 +112,7 @@ impl PullUpCorrelatedExpr {
             collected_count_expr_map: HashMap::new(),
             pull_up_having_expr: None,
             pulled_up_scalar_agg: false,
+            correlated_filters: Vec::new(),
         }
     }
 
@@ -118,6 +134,13 @@ impl PullUpCorrelatedExpr {
     pub fn with_exists_sub_query(mut self, exists_sub_query: bool) -> Self {
         self.exists_sub_query = exists_sub_query;
         self
+    }
+
+    /// Mark the plan as one whose correlated expressions cannot be pulled up
+    /// and stop descending into it
+    fn unsupported(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+        self.can_pull_up = false;
+        Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
     }
 }
 
@@ -158,34 +181,56 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             LogicalPlan::Union(_) | LogicalPlan::Sort(_) | LogicalPlan::Extension(_) => {
                 let plan_hold_outer = !plan.all_out_ref_exprs().is_empty();
                 if plan_hold_outer {
-                    // the unsupported case
-                    self.can_pull_up = false;
-                    Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
+                    self.unsupported(plan)
                 } else {
                     Ok(Transformed::no(plan))
                 }
             }
-            LogicalPlan::Limit(_) => {
-                let plan_hold_outer = !plan.all_out_ref_exprs().is_empty();
-                match (self.exists_sub_query, plan_hold_outer) {
-                    (false, true) => {
-                        // the unsupported case
-                        self.can_pull_up = false;
-                        Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
+            LogicalPlan::Limit(ref limit) => {
+                if plan.all_out_ref_exprs().is_empty() {
+                    return Ok(Transformed::no(plan));
+                }
+                if !self.exists_sub_query {
+                    return self.unsupported(plan);
+                }
+                // Only emptiness matters for EXISTS, so remove a limit that
+                // cannot make its input empty and replace one that always does
+                // with an empty relation.
+                let fetch = limit.get_fetch_type()?;
+                if matches!(fetch, FetchType::Literal(Some(0))) {
+                    return Ok(Transformed::yes(LogicalPlan::EmptyRelation(
+                        EmptyRelation {
+                            produce_one_row: false,
+                            schema: Arc::clone(limit.input.schema()),
+                        },
+                    )));
+                }
+                match (limit.get_skip_type()?, fetch) {
+                    (SkipType::Literal(0), FetchType::Literal(_)) => {
+                        // The rewriter does not call `f_down` on the returned
+                        // node, so do it here
+                        let mut t = self.f_down((*limit.input).clone())?;
+                        t.transformed = true;
+                        Ok(t)
                     }
-                    _ => Ok(Transformed::no(plan)),
+                    _ => self.unsupported(plan),
                 }
             }
             _ if plan.contains_outer_reference() => {
                 // the unsupported cases, the plan expressions contain out reference columns(like window expressions)
-                self.can_pull_up = false;
-                Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
+                self.unsupported(plan)
             }
             _ => Ok(Transformed::no(plan)),
         }
     }
 
     fn f_up(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+        // A node that null-extends or regroups rows can put a NULL back into
+        // a column that a correlated filter below it rejected, so the filters
+        // recorded so far no longer bound what the subquery returns.
+        if !self.correlated_filters.is_empty() && may_reintroduce_nulls(&plan) {
+            self.correlated_filters.clear();
+        }
         let subquery_schema = plan.schema();
         match &plan {
             LogicalPlan::Filter(plan_filter) => {
@@ -195,6 +240,11 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         .iter()
                         .filter(|e| e.contains_outer())
                         .all(|&e| can_pullup_over_aggregation(e));
+                for expr in &subquery_filter_exprs {
+                    if expr.contains_outer() && !self.correlated_filters.contains(expr) {
+                        self.correlated_filters.push((*expr).clone());
+                    }
+                }
                 let (mut join_filters, subquery_filters) =
                     find_join_exprs(subquery_filter_exprs)?;
                 if let Some(in_predicate) = &self.in_predicate_opt {
@@ -428,28 +478,13 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 }
             }
             LogicalPlan::Limit(limit) => {
-                let input_expr_map =
-                    self.collected_count_expr_map.get(&*limit.input).cloned();
-                // handling the limit clause in the subquery
-                let new_plan = match (self.exists_sub_query, self.join_filters.is_empty())
+                if let Some(input_map) =
+                    self.collected_count_expr_map.get(&*limit.input).cloned()
                 {
-                    // Correlated exist subquery, remove the limit(so that correlated expressions can pull up)
-                    (true, false) => Transformed::yes(match limit.get_fetch_type()? {
-                        FetchType::Literal(Some(0)) => {
-                            LogicalPlan::EmptyRelation(EmptyRelation {
-                                produce_one_row: false,
-                                schema: Arc::clone(limit.input.schema()),
-                            })
-                        }
-                        _ => LogicalPlanBuilder::from((*limit.input).clone()).build()?,
-                    }),
-                    _ => Transformed::no(plan),
-                };
-                if let Some(input_map) = input_expr_map {
                     self.collected_count_expr_map
-                        .insert(new_plan.data.clone(), input_map);
+                        .insert(plan.clone(), input_map);
                 }
-                Ok(new_plan)
+                Ok(Transformed::no(plan))
             }
             _ => Ok(Transformed::no(plan)),
         }
@@ -545,6 +580,27 @@ impl PullUpCorrelatedExpr {
             }
         }
         Ok(missing_exprs)
+    }
+}
+
+/// Whether `plan` can output a NULL in a column that a filter below it keeps
+/// free of NULLs: an outer join fills the columns of its unmatched side with
+/// NULL, a union adds the rows of its other inputs, and a grouping set fills
+/// the columns it leaves out with NULL, such as the grand total row of `ROLLUP`.
+fn may_reintroduce_nulls(plan: &LogicalPlan) -> bool {
+    match plan {
+        LogicalPlan::Join(join) => {
+            matches!(
+                join.join_type,
+                JoinType::Left | JoinType::Right | JoinType::Full
+            )
+        }
+        LogicalPlan::Union(_) => true,
+        LogicalPlan::Aggregate(aggregate) => aggregate
+            .group_expr
+            .iter()
+            .any(|expr| matches!(expr, Expr::GroupingSet(_))),
+        _ => false,
     }
 }
 

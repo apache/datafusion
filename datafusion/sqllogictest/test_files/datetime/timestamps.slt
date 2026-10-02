@@ -1796,6 +1796,59 @@ ORDER BY b ASC NULLS LAST
 NULL
 NULL
 
+# Default bounds from nested functions retain their resolved output type.
+statement ok
+SET datafusion.explain.physical_plan_only = true;
+
+statement ok
+CREATE VIEW nested_trunc_ordering AS
+SELECT arrow_cast(column1, 'Timestamp(Second)') AS ts
+FROM (VALUES (90001::bigint), (3601::bigint))
+ORDER BY ts
+LIMIT 2;
+
+query I
+SELECT arrow_cast(date_trunc('day', date_trunc('hour', ts)), 'Int64') AS bucket
+FROM nested_trunc_ordering
+ORDER BY bucket;
+----
+0
+86400
+
+query TT
+EXPLAIN SELECT date_trunc('day', date_trunc('hour', ts)) AS bucket
+FROM nested_trunc_ordering
+ORDER BY bucket;
+----
+physical_plan
+01)ProjectionExec: expr=[date_trunc(day, date_trunc(hour, ts@0)) as bucket]
+02)--SortExec: TopK(fetch=2), expr=[ts@0 ASC NULLS LAST], preserve_partitioning=[false]
+03)----ProjectionExec: expr=[CAST(column1@0 AS Timestamp(s)) as ts]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP VIEW nested_trunc_ordering;
+
+# Recovering a named timezone must still retain the outer sort.
+query TT
+EXPLAIN SELECT date_trunc('hour', from_unixtime(c, 'America/Goose_Bay')) AS bucket
+FROM (
+  SELECT column1 AS c
+  FROM (VALUES (562129260::bigint), (562129259::bigint))
+  ORDER BY c
+  LIMIT 2
+)
+ORDER BY bucket;
+----
+physical_plan
+01)SortExec: expr=[bucket@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[date_trunc(hour, from_unixtime(column1@0, America/Goose_Bay)) as bucket]
+03)----SortExec: TopK(fetch=2), expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+RESET datafusion.explain.physical_plan_only;
+
 statement ok
 CREATE TABLE timestamp_strings(ts varchar)
 AS VALUES
@@ -2687,9 +2740,32 @@ SELECT arrow_typeof(date_trunc('hour', TIME '14:30:45'));
 ----
 Time64(ns)
 
+# date_trunc accepts the same timestamps as a scalar as it does as a column,
+# including ones beyond the range of a nanosecond timestamp
+query P
+SELECT date_trunc('second', to_timestamp_seconds(10000000000));
+----
+2286-11-20T17:46:40
+
+query P
+SELECT date_trunc('second', to_timestamp_seconds(ts))
+FROM (VALUES (10000000000)) AS timestamps(ts);
+----
+2286-11-20T17:46:40
+
+query P
+SELECT date_trunc('minute', to_timestamp_millis(10000000019999));
+----
+2286-11-20T17:46:00
+
+query P
+SELECT date_trunc('millisecond', to_timestamp_micros(10000000000123456));
+----
+2286-11-20T17:46:40.123
+
 query error DataFusion error: Execution error: Timestamp 9223372036854775807 out of range
 SELECT date_trunc(
-  'hour',
+  'week',
   arrow_cast(9223372036854775807, 'Timestamp(Second, None)')
 );
 
@@ -3962,6 +4038,13 @@ query T
 select to_char('2000-02-03'::date, '%Y:%d:%m');
 ----
 2000:03:02
+
+# scalar datetime with a column of formats
+query T
+select to_char('2000-01-01'::date, time_format) from formats;
+----
+00-00-00
+00::00::00
 
 query T
 select to_char(arrow_cast(12345::int, 'Time32(Second)'), '%H-%M-%S')

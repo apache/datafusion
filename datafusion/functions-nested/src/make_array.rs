@@ -142,20 +142,13 @@ pub(crate) fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
     });
 
     let data_type = data_type.unwrap_or(&Null);
-    if data_type.is_null() {
-        // Either an empty array or all nulls:
-        let length = arrays.iter().map(|a| a.len()).sum();
-        let array = new_null_array(&Null, length);
-        Ok(Arc::new(
-            SingleRowListArrayBuilder::new(array).build_list_array(),
-        ))
-    } else {
-        array_array::<i32>(arrays, data_type.clone(), Field::LIST_FIELD_DEFAULT_NAME)
-    }
+    array_array::<i32>(arrays, data_type.clone(), Field::LIST_FIELD_DEFAULT_NAME)
 }
 
-/// Convert one or more [`ArrayRef`] of the same type into a
+/// Convert zero or more [`ArrayRef`] of the same type into a
 /// `ListArray` or 'LargeListArray' depending on the offset size.
+///
+/// Returns empty `ListArray` if input has zero array.
 ///
 /// # Example (non nested)
 ///
@@ -194,14 +187,22 @@ pub(crate) fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
 /// └──────────────┘   └──────────────┘        └─────────────────────────────┘
 ///      col1               col2                         output
 /// ```
+///
+/// # Public Only for Internal Use:
+/// `datafusion-spark` uses this helper to construct arrays with its element field
+/// name. This implementation detail is not part of the supported public API.
+#[doc(hidden)]
 pub fn array_array<O: OffsetSizeTrait>(
     args: &[ArrayRef],
     data_type: DataType,
     field_name: &str,
 ) -> Result<ArrayRef> {
-    // do not accept 0 arguments.
     if args.is_empty() {
-        return plan_err!("Array requires at least one argument");
+        // If input is empty, combined output is an empty array with `Null` data type
+        let array = new_null_array(&Null, 0);
+        return Ok(Arc::new(
+            SingleRowListArrayBuilder::new(array).build_list_array(),
+        ));
     }
 
     let mut data = vec![];
