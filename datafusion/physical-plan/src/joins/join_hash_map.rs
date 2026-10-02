@@ -48,7 +48,7 @@ const MAX_CONTROL_GROUP_WIDTH: usize = 16;
 /// `estimate_memory_size` helper does not account for. Join entries contain a
 /// u64 hash and a u32/u64 index, so their size is a multiple of every supported
 /// control-group alignment.
-fn lookup_allocation_size<T>(capacity: usize) -> Result<usize> {
+pub(crate) fn lookup_allocation_size<T>(capacity: usize) -> Result<usize> {
     if capacity == 0 {
         return Ok(0);
     }

@@ -286,19 +286,20 @@ pub(crate) fn to_substrait_literal(
                 }?;
                 LiteralType::EmptyMap(mt)
             } else {
-                let keys = (0..m.keys().len())
+                let entries = m.value(0);
+                let keys = (0..entries.len())
                     .map(|i| {
                         to_substrait_literal(
                             producer,
-                            &ScalarValue::try_from_array(&m.keys(), i)?,
+                            &ScalarValue::try_from_array(entries.column(0), i)?,
                         )
                     })
                     .collect::<datafusion::common::Result<Vec<_>>>()?;
-                let values = (0..m.values().len())
+                let values = (0..entries.len())
                     .map(|i| {
                         to_substrait_literal(
                             producer,
-                            &ScalarValue::try_from_array(&m.values(), i)?,
+                            &ScalarValue::try_from_array(entries.column(1), i)?,
                         )
                     })
                     .collect::<datafusion::common::Result<Vec<_>>>()?;
@@ -545,6 +546,32 @@ mod tests {
             57, 123456,
         ))))?;
 
+        Ok(())
+    }
+
+    #[test]
+    fn round_trip_sliced_map_literals() -> Result<()> {
+        let mut builder =
+            MapBuilder::new(None, StringBuilder::new(), Int64Builder::new());
+        builder.keys().append_value("prefix");
+        builder.values().append_value(10);
+        builder.append(true)?;
+        builder.keys().append_value("selected");
+        builder.values().append_value(20);
+        builder.keys().append_value("null_value");
+        builder.values().append_null();
+        builder.append(true)?;
+        builder.append(true)?;
+        builder.append(false)?;
+        builder.keys().append_value("suffix");
+        builder.values().append_value(30);
+        builder.append(true)?;
+        let maps = builder.finish();
+
+        // Scalar extraction retains the other rows' entries in the backing arrays.
+        for row in 0..maps.len() {
+            round_trip_literal(ScalarValue::try_from_array(&maps, row)?)?;
+        }
         Ok(())
     }
 
