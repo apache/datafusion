@@ -17,9 +17,10 @@
 
 //! Defines the FIRST_VALUE/LAST_VALUE aggregations.
 
+use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::mem::size_of_val;
+use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder};
@@ -36,8 +37,8 @@ use arrow::datatypes::{
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::utils::{compare_rows, extract_row_at_idx_to_buf, get_row_at_idx};
 use datafusion_common::{
-    DataFusionError, Result, ScalarValue, arrow_datafusion_err, internal_err,
-    not_impl_err,
+    DataFusionError, Result, ScalarValue, arrow_datafusion_err, assert_or_internal_err,
+    internal_err, not_impl_err,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{
@@ -323,6 +324,13 @@ impl AggregateUDFImpl for FirstValue {
             self.is_input_pre_ordered,
             acc_args.ignore_nulls,
         )?))
+    }
+
+    fn create_sliding_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn Accumulator>> {
+        create_sliding_accumulator(self, args, SlidingPosition::First)
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
@@ -1245,6 +1253,13 @@ impl AggregateUDFImpl for LastValue {
         )?))
     }
 
+    fn create_sliding_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn Accumulator>> {
+        create_sliding_accumulator(self, args, SlidingPosition::Last)
+    }
+
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         let mut fields = vec![
             Field::new(
@@ -1557,6 +1572,188 @@ impl Accumulator for LastValueAccumulator {
             + self.last.size()
             + ScalarValue::size_of_vec(&self.orderings)
             - size_of_val(&self.orderings)
+    }
+}
+
+/// Creates the accumulator for `first_value` / `last_value` over a window
+/// frame whose start can move, such as `ROWS BETWEEN 1 PRECEDING AND CURRENT ROW`.
+///
+/// Window aggregates are evaluated over the rows of the frame in frame order
+/// and do not have an `ORDER BY` of their own. Should one be present, this
+/// falls back to the regular accumulator, which does not support retraction.
+fn create_sliding_accumulator(
+    udaf: &dyn AggregateUDFImpl,
+    args: AccumulatorArgs,
+    position: SlidingPosition,
+) -> Result<Box<dyn Accumulator>> {
+    if !args.order_bys.is_empty() {
+        return udaf.accumulator(args);
+    }
+    Ok(Box::new(SlidingFirstLastValueAccumulator::try_new(
+        args.return_field.data_type(),
+        position,
+        args.ignore_nulls,
+    )?))
+}
+
+/// Which row of the window frame a [`SlidingFirstLastValueAccumulator`] returns
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SlidingPosition {
+    /// The first row, for `first_value`
+    First,
+    /// The last row, for `last_value`
+    Last,
+}
+
+/// `first_value` / `last_value` accumulator that supports [`retract_batch`],
+/// so that they can be evaluated over sliding window frames.
+///
+/// Sliding window frames add rows at their end with [`update_batch`] and
+/// remove rows from their start with [`retract_batch`], in the order in which
+/// the rows were added. Every row is numbered in that order, and the
+/// accumulator keeps the rows that can still be the result (all rows, or only
+/// the non-null rows when ignoring nulls), oldest first:
+///
+/// * for `first_value`, every such row is kept, as each one becomes the result
+///   once the rows before it have been retracted;
+/// * for `last_value`, only the newest such row is kept, as it remains the
+///   result until it is retracted itself, which empties the frame of
+///   candidates.
+///
+/// Retracting `n` rows drops the kept rows numbered below the total number of
+/// retracted rows. Each row is added and removed at most once, so all
+/// operations take amortized constant time per row.
+///
+/// [`update_batch`]: Accumulator::update_batch
+/// [`retract_batch`]: Accumulator::retract_batch
+#[derive(Debug)]
+struct SlidingFirstLastValueAccumulator {
+    /// The rows that can be the result, as (row number, value), oldest first
+    candidates: VecDeque<(u64, ScalarValue)>,
+    /// The number of rows added so far, which numbers the next added row
+    rows_added: u64,
+    /// The number of rows retracted so far: rows numbered below this are no
+    /// longer in the frame
+    rows_retracted: u64,
+    position: SlidingPosition,
+    ignore_nulls: bool,
+    /// Typed NULL returned when there is no candidate in the frame
+    null: ScalarValue,
+}
+
+impl SlidingFirstLastValueAccumulator {
+    fn try_new(
+        data_type: &DataType,
+        position: SlidingPosition,
+        ignore_nulls: bool,
+    ) -> Result<Self> {
+        Ok(Self {
+            candidates: VecDeque::new(),
+            rows_added: 0,
+            rows_retracted: 0,
+            position,
+            ignore_nulls,
+            null: ScalarValue::try_from(data_type)?,
+        })
+    }
+
+    fn push(&mut self, values: &ArrayRef, index: usize) -> Result<()> {
+        let mut value = ScalarValue::try_from_array(values, index)?;
+        // Do not keep the whole input array alive through the scalar
+        value.compact();
+        self.candidates
+            .push_back((self.rows_added + index as u64, value));
+        Ok(())
+    }
+
+    fn result(&self) -> Option<&ScalarValue> {
+        let candidate = match self.position {
+            SlidingPosition::First => self.candidates.front(),
+            SlidingPosition::Last => self.candidates.back(),
+        };
+        candidate.map(|(_, value)| value)
+    }
+}
+
+impl Accumulator for SlidingFirstLastValueAccumulator {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        // Same layout as the state of the trivial accumulators
+        let result = self.result();
+        Ok(vec![
+            result.unwrap_or(&self.null).clone(),
+            ScalarValue::from(result.is_some()),
+        ])
+    }
+
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let [values, ..] = values else {
+            return internal_err!("Empty row in sliding first_value/last_value");
+        };
+        let ignore_nulls = self.ignore_nulls;
+        let is_candidate = |i: &usize| !(ignore_nulls && values.is_null(*i));
+        match self.position {
+            SlidingPosition::First => {
+                for i in (0..values.len()).filter(is_candidate) {
+                    self.push(values, i)?;
+                }
+            }
+            SlidingPosition::Last => {
+                if let Some(i) = (0..values.len()).rev().find(is_candidate) {
+                    self.candidates.clear();
+                    self.push(values, i)?;
+                }
+            }
+        }
+        self.rows_added += values.len() as u64;
+        Ok(())
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let [values, ..] = values else {
+            return internal_err!("Empty row in sliding first_value/last_value");
+        };
+        self.rows_retracted += values.len() as u64;
+        assert_or_internal_err!(
+            self.rows_retracted <= self.rows_added,
+            "sliding first_value/last_value retracted more rows than were added"
+        );
+        while self
+            .candidates
+            .front()
+            .is_some_and(|(row, _)| *row < self.rows_retracted)
+        {
+            self.candidates.pop_front();
+        }
+        Ok(())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        // States are `[value, is_set]`, see `state`
+        let flags = states[1].as_boolean();
+        validate_is_set_flags(flags, "first_value/last_value")?;
+        let filtered_states = filter_states_according_to_is_set(&states[0..1], flags)?;
+        // A state is only set by a candidate row, so every value left is a
+        // candidate (and only NULL when NULLs are respected)
+        self.update_batch(&filtered_states)
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        Ok(self.result().unwrap_or(&self.null).clone())
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self) - size_of_val(&self.null)
+            + self.null.size()
+            + self.candidates.capacity() * size_of::<(u64, ScalarValue)>()
+            + self
+                .candidates
+                .iter()
+                .map(|(_, value)| value.size() - size_of_val(value))
+                .sum::<usize>()
     }
 }
 
@@ -2973,6 +3170,193 @@ mod tests {
         acc.update_batch(&vo_batch(&[Some(500)], &[5], &[1]), &[0], None, 1)?;
         let out = acc.evaluate(EmitTo::All)?;
         assert_eq!(int64_values(&out), vec![Some(500)]);
+        Ok(())
+    }
+
+    // ---- sliding accumulator (retract_batch) tests ----
+
+    fn sliding_acc(
+        udaf: &dyn AggregateUDFImpl,
+        ignore_nulls: bool,
+        order_bys: &[PhysicalSortExpr],
+    ) -> Result<Box<dyn Accumulator>> {
+        let schema = Schema::new(vec![Field::new("v", DataType::Int64, true)]);
+        let expr = col("v", &schema)?;
+        udaf.create_sliding_accumulator(AccumulatorArgs {
+            return_field: Arc::new(Field::new("f", DataType::Int64, true)),
+            schema: &schema,
+            expr_fields: &[Arc::new(Field::new("v", DataType::Int64, true))],
+            ignore_nulls,
+            order_bys,
+            is_reversed: false,
+            name: "",
+            is_distinct: false,
+            exprs: &[expr],
+        })
+    }
+
+    fn int64_array(values: &[Option<i64>]) -> ArrayRef {
+        Arc::new(Int64Array::from(values.to_vec()))
+    }
+
+    #[test]
+    fn sliding_first_last_value_retract() -> Result<()> {
+        let mut first = sliding_acc(&FirstValue::new(), false, &[])?;
+        let mut last = sliding_acc(&LastValue::new(), false, &[])?;
+        assert!(first.supports_retract_batch());
+        assert!(last.supports_retract_batch());
+
+        // Frame [1, 2, 3]
+        for acc in [&mut first, &mut last] {
+            acc.update_batch(&[int64_array(&[Some(1), Some(2), Some(3)])])?;
+        }
+        assert_eq!(first.evaluate()?, ScalarValue::Int64(Some(1)));
+        assert_eq!(last.evaluate()?, ScalarValue::Int64(Some(3)));
+
+        // Frame [2, 3, NULL]: NULLs are respected
+        for acc in [&mut first, &mut last] {
+            acc.update_batch(&[int64_array(&[None])])?;
+            acc.retract_batch(&[int64_array(&[Some(1)])])?;
+        }
+        assert_eq!(first.evaluate()?, ScalarValue::Int64(Some(2)));
+        assert_eq!(last.evaluate()?, ScalarValue::Int64(None));
+
+        // Frame [NULL]
+        for acc in [&mut first, &mut last] {
+            acc.retract_batch(&[int64_array(&[Some(2), Some(3)])])?;
+        }
+        assert_eq!(first.evaluate()?, ScalarValue::Int64(None));
+        assert_eq!(last.evaluate()?, ScalarValue::Int64(None));
+
+        // Empty frame, then frame [4]
+        for acc in [&mut first, &mut last] {
+            acc.retract_batch(&[int64_array(&[None])])?;
+            assert_eq!(acc.evaluate()?, ScalarValue::Int64(None));
+            assert_eq!(
+                acc.state()?,
+                vec![ScalarValue::Int64(None), ScalarValue::Boolean(Some(false))]
+            );
+            acc.update_batch(&[int64_array(&[Some(4)])])?;
+            assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(4)));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn sliding_first_last_value_retract_ignore_nulls() -> Result<()> {
+        let mut first = sliding_acc(&FirstValue::new(), true, &[])?;
+        let mut last = sliding_acc(&LastValue::new(), true, &[])?;
+
+        // Frame [NULL, 1, NULL, 2, NULL]
+        for acc in [&mut first, &mut last] {
+            acc.update_batch(&[int64_array(&[None, Some(1), None, Some(2), None])])?;
+        }
+        assert_eq!(first.evaluate()?, ScalarValue::Int64(Some(1)));
+        assert_eq!(last.evaluate()?, ScalarValue::Int64(Some(2)));
+
+        // Frame [NULL, 2, NULL]
+        for acc in [&mut first, &mut last] {
+            acc.retract_batch(&[int64_array(&[None, Some(1)])])?;
+        }
+        assert_eq!(first.evaluate()?, ScalarValue::Int64(Some(2)));
+        assert_eq!(last.evaluate()?, ScalarValue::Int64(Some(2)));
+
+        // Frame [NULL, NULL]: only NULLs are left
+        for acc in [&mut first, &mut last] {
+            acc.update_batch(&[int64_array(&[None])])?;
+            acc.retract_batch(&[int64_array(&[None, Some(2)])])?;
+            assert_eq!(acc.evaluate()?, ScalarValue::Int64(None));
+        }
+
+        // Frame [NULL, 3]
+        for acc in [&mut first, &mut last] {
+            acc.update_batch(&[int64_array(&[Some(3)])])?;
+            acc.retract_batch(&[int64_array(&[None])])?;
+            assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(3)));
+        }
+        Ok(())
+    }
+
+    /// Slides frames of every size over the same values and compares the
+    /// results with the first and last (non-null) value of each frame.
+    #[test]
+    fn sliding_first_last_value_matches_frames() -> Result<()> {
+        let values: Vec<Option<i64>> = (0..40_i64)
+            .map(|i| (i % 3 != 1 && i % 7 != 0).then_some(i * 10))
+            .collect();
+        for ignore_nulls in [false, true] {
+            for frame_len in 1..6 {
+                let mut first = sliding_acc(&FirstValue::new(), ignore_nulls, &[])?;
+                let mut last = sliding_acc(&LastValue::new(), ignore_nulls, &[])?;
+                for end in 1..=values.len() {
+                    // Add the new row, then retract the row that left the frame
+                    for acc in [&mut first, &mut last] {
+                        acc.update_batch(&[int64_array(&values[end - 1..end])])?;
+                        if end > frame_len {
+                            let start = end - frame_len - 1;
+                            acc.retract_batch(&[int64_array(&values[start..=start])])?;
+                        }
+                    }
+                    let frame = &values[end.saturating_sub(frame_len)..end];
+                    let mut candidates =
+                        frame.iter().filter(|v| !ignore_nulls || v.is_some());
+                    let expected_first = candidates.next().copied().flatten();
+                    let expected_last = frame
+                        .iter()
+                        .rev()
+                        .find(|v| !ignore_nulls || v.is_some())
+                        .copied()
+                        .flatten();
+                    let context = format!("{ignore_nulls} {frame_len} {end}");
+                    assert_eq!(
+                        first.evaluate()?,
+                        ScalarValue::Int64(expected_first),
+                        "{context}"
+                    );
+                    assert_eq!(
+                        last.evaluate()?,
+                        ScalarValue::Int64(expected_last),
+                        "{context}"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn sliding_first_last_value_merge() -> Result<()> {
+        let states = [
+            int64_array(&[Some(1), None, Some(2), Some(3)]),
+            Arc::new(BooleanArray::from(vec![false, true, true, false])) as ArrayRef,
+        ];
+        let mut first = sliding_acc(&FirstValue::new(), false, &[])?;
+        first.merge_batch(&states)?;
+        assert_eq!(first.evaluate()?, ScalarValue::Int64(None));
+        let mut last = sliding_acc(&LastValue::new(), false, &[])?;
+        last.merge_batch(&states)?;
+        assert_eq!(last.evaluate()?, ScalarValue::Int64(Some(2)));
+        assert_eq!(
+            last.state()?,
+            vec![
+                ScalarValue::Int64(Some(2)),
+                ScalarValue::Boolean(Some(true))
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sliding_first_last_value_with_order_by_falls_back() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("v", DataType::Int64, true)]);
+        let order_bys = [PhysicalSortExpr::new_default(col("v", &schema)?)];
+        for udaf in [
+            &FirstValue::new() as &dyn AggregateUDFImpl,
+            &LastValue::new() as &dyn AggregateUDFImpl,
+        ] {
+            let acc = sliding_acc(udaf, false, &order_bys)?;
+            assert!(!acc.supports_retract_batch());
+        }
         Ok(())
     }
 }
