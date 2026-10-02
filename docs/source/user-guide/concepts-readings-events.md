@@ -217,6 +217,7 @@ This is a list of DataFusion related blog posts, articles, and other resources. 
 The [DataFusion Community Showcase](https://github.com/apache/datafusion/issues/22963) is a
 regular virtual event where community members share what they are building with DataFusion.
 
+- **2026-10-01** [Vol. 6: Hotdata (Shefeek Jinaah) & Veeva Systems (Bruce Ritchie)](https://www.youtube.com/watch?v=0QGbk6gnAX4)
 - **2026-09-17** [Vol. 5: Zarr DataFusion (Jayendra Parmar) & Rerun.io (Timothy Saucer)](https://www.youtube.com/watch?v=vD113GhJwaM)
 - **2026-08-20** [Vol. 4: RDF Fusion & Cloudflare R2 SQL](https://www.youtube.com/watch?v=oKEtmUzdPoM)
 - **2026-08-06** [Vol. 3: ASAPQuery (Milind Srivastava) & Streamling (Yaroslav Tkachenko)](https://www.youtube.com/watch?v=0-BIHyzODH8)
