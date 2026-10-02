@@ -463,16 +463,11 @@ pub fn aggregate_functional_dependencies(
     let target_indices = (0..aggr_schema.fields().len()).collect::<Vec<_>>();
     // Get functional dependencies of the schema:
     let func_dependencies = aggr_input_schema.functional_dependencies();
-    // If the input carries no functional dependencies, the loop below can
-    // never turn one into an aggregate dependency (it only re-expresses
-    // dependencies that already exist on the input), so skip building the
-    // input field names and resolving target indices for it entirely. The
-    // GROUP BY-key dependency added after this block does not depend on the
-    // input's functional dependencies, so it still runs unconditionally.
+    // The loop below only re-expresses input dependencies. Skip it when the
+    // input has none. The GROUP BY-key dependency below always runs.
     if !func_dependencies.is_empty() {
         let aggr_input_fields = aggr_input_schema.field_names();
-        // Loop-invariant: does not depend on the per-dependence loop
-        // variables, so compute it once instead of on every iteration.
+        // Compute once: this does not change in the loop.
         let existing_target_indices =
             get_target_functional_dependencies(aggr_input_schema, group_by_expr_names);
         for FunctionalDependence {
@@ -483,7 +478,7 @@ pub fn aggregate_functional_dependencies(
             ..
         } in &func_dependencies.deps
         {
-            // Keep source indices in a `HashSet` to prevent duplicate entries:
+            // Indices into the GROUP BY list for this determinant:
             let mut new_source_indices = vec![];
             let mut new_source_field_names = vec![];
             let source_field_names = source_indices
@@ -575,8 +570,11 @@ pub fn get_target_functional_dependencies(
     schema: &DFSchema,
     group_by_expr_names: &[String],
 ) -> Option<Vec<usize>> {
-    let mut combined_target_indices = HashSet::new();
     let dependencies = schema.functional_dependencies();
+    if dependencies.is_empty() {
+        return None;
+    }
+    let mut combined_target_indices = HashSet::new();
     let field_names = schema.field_names();
     for FunctionalDependence {
         source_indices,
