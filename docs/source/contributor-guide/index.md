@@ -203,7 +203,7 @@ verbose with unnecessary details, and it can take substantial effort to figure
 out what is actually being asked.
 
 If you review PRs with the help of an AI tool, read all comments first, remove
-detail that is unecessary or you don't understand, and explain the rest in your
+detail that is unnecessary or you don't understand, and explain the rest in your
 own words so that each comment makes a clear, specific request.
 
 ### Better ways to contribute than an “AI dump”
