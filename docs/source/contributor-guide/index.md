@@ -195,6 +195,17 @@ in your own words.
 
 [arrow-rs-review-example]: https://github.com/apache/arrow-rs/pull/11209#discussion_r4145512124
 
+### AI-assisted reviews
+
+The same standard applies to AI-generated reviews as to AI-generated code: you
+should have read and understand anything you post. Raw AI review output is often
+verbose with unnecessary details, and it can take substantial effort to figure
+out what is actually being asked.
+
+If you review PRs with the help of an AI tool, read all comments first, remove
+detail that is unecessary or you don't understand, and explain the rest in your
+own words so that each comment makes a clear, specific request.
+
 ### Better ways to contribute than an “AI dump”
 
 It's recommended to write a high-quality issue with a clear problem statement
