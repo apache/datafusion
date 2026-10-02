@@ -35,7 +35,7 @@ use datafusion_common::{
 };
 use datafusion_physical_expr::LexRequirement;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::{ExecutionPlan, PhysicalExpr};
 use datafusion_session::Session;
 
 use async_trait::async_trait;
@@ -187,10 +187,22 @@ pub trait FileFormat: Any + Send + Sync + fmt::Debug {
 
     /// Take a list of files and convert it to the appropriate executor
     /// according to this file format.
+    ///
+    /// `filters` are the filters of the query that apply to this scan,
+    /// expressed against the table schema (file columns plus partition
+    /// columns) and combined with an implicit `AND`. An empty slice means there
+    /// are no filters.
+    ///
+    /// The filters are hints: callers still evaluate them on the output of the
+    /// returned plan, so a format may use them to skip data that provably
+    /// cannot match (e.g. to refine statistics during planning), but must not
+    /// rely on them for correctness. They are distinct from filters pushed into
+    /// the [`FileSource`] by the physical optimizer.
     async fn create_physical_plan(
         &self,
         state: &dyn Session,
         conf: FileScanConfig,
+        filters: &[Arc<dyn PhysicalExpr>],
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
     /// Take a list of files and the configuration to convert it to the

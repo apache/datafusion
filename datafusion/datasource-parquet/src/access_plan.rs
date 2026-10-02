@@ -380,6 +380,42 @@ impl ParquetAccessPlan {
         &self.fully_matched
     }
 
+    /// Clears all fully matched flags.
+    ///
+    /// Fully matched flags are only valid for the predicate they were computed
+    /// with. They must be cleared before the plan is reused with a predicate
+    /// that may differ, such as a plan computed while planning a scan that is
+    /// later executed with additional (e.g. dynamic) filters.
+    pub(crate) fn clear_fully_matched(&mut self) {
+        self.fully_matched.fill(false);
+    }
+
+    /// Returns the number of rows this plan selects, given the metadata of
+    /// the file's row groups.
+    ///
+    /// Returns an error if `row_group_meta_data` does not describe the same
+    /// number of row groups as this plan.
+    pub fn selected_row_count(
+        &self,
+        row_group_meta_data: &[RowGroupMetaData],
+    ) -> Result<usize> {
+        assert_eq_or_internal_err!(
+            row_group_meta_data.len(),
+            self.len(),
+            "ParquetAccessPlan and row group metadata describe a different number of row groups"
+        );
+        Ok(self
+            .row_groups
+            .iter()
+            .zip(row_group_meta_data)
+            .map(|(access, row_group)| match access {
+                RowGroupAccess::Skip => 0,
+                RowGroupAccess::Scan => row_group.num_rows() as usize,
+                RowGroupAccess::Selection(selection) => selection.row_count(),
+            })
+            .sum())
+    }
+
     /// Set to scan only the [`RowSelection`] in the specified row group.
     ///
     /// Behavior is different depending on the existing access

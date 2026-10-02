@@ -57,7 +57,9 @@ use datafusion_datasource::file_format::{FileFormat, FileFormatFactory};
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
-use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
+use datafusion_physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr,
+};
 use datafusion_session::Session;
 use futures::StreamExt;
 use futures::stream::BoxStream;
@@ -185,6 +187,7 @@ impl FileFormat for ArrowFormat {
         &self,
         state: &dyn Session,
         conf: FileScanConfig,
+        _filters: &[Arc<dyn PhysicalExpr>],
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let object_store = state.runtime_env().object_store(&conf.object_store_url)?;
         let object_location = &conf

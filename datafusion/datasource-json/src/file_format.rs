@@ -55,7 +55,9 @@ use datafusion_datasource::write::orchestration::spawn_writer_tasks_and_join;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
-use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
+use datafusion_physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr,
+};
 use datafusion_session::Session;
 
 use crate::utils::JsonArrayToNdjsonReader;
@@ -345,6 +347,7 @@ impl FileFormat for JsonFormat {
         &self,
         _state: &dyn Session,
         conf: FileScanConfig,
+        _filters: &[Arc<dyn PhysicalExpr>],
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let conf = FileScanConfigBuilder::from(conf)
             .with_file_compression_type(FileCompressionType::from(

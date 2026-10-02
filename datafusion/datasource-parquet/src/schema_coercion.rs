@@ -42,6 +42,41 @@ use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, TimeUnit};
 use parquet::basic::Type;
 use parquet::schema::types::SchemaDescriptor;
 
+/// Applies all type coercions DataFusion performs when reading a parquet file
+/// to `physical_file_schema`, the arrow schema read from the file's metadata:
+/// the coercions of [`apply_file_schema_type_coercions`] followed by the
+/// optional INT96 timestamp coercion (see [`Int96Coercer`]).
+///
+/// Returns `None` if no coercion is needed.
+pub(crate) fn coerce_physical_file_schema(
+    logical_file_schema: &Schema,
+    physical_file_schema: &Arc<Schema>,
+    parquet_schema: &SchemaDescriptor,
+    coerce_int96: Option<&TimeUnit>,
+    coerce_int96_tz: Option<Arc<str>>,
+) -> Option<Arc<Schema>> {
+    let mut coerced = None;
+    if let Some(merged) =
+        apply_file_schema_type_coercions(logical_file_schema, physical_file_schema)
+    {
+        coerced = Some(Arc::new(merged));
+    }
+
+    if let Some(coerce) = coerce_int96
+        && let Some(merged) = Int96Coercer::new(
+            parquet_schema,
+            coerced.as_deref().unwrap_or(physical_file_schema),
+            coerce,
+        )
+        .with_timezone(coerce_int96_tz)
+        .coerce()
+    {
+        coerced = Some(Arc::new(merged));
+    }
+
+    coerced
+}
+
 /// Apply necessary schema type coercions to make file schema match table schema.
 ///
 /// This function performs two main types of transformations in a single pass:

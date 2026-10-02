@@ -626,6 +626,14 @@ message ParquetOptions {
 
   uint64 max_in_list_size = 38;
 
+  string eager_pruning = 39; // default = "disabled"
+
+  // Optional so that messages without it decode to the default (256) rather
+  // than 0, which would skip eager pruning for every scan
+  oneof eager_pruning_file_limit_opt {
+    uint64 eager_pruning_file_limit = 40;
+  }
+
   string created_by = 16;
 
   oneof coerce_int96_opt {
