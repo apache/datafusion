@@ -118,6 +118,10 @@ github:
     allow_auto_merge: true
     # auto-delete head branches after being merged
     del_branch_on_merge: true
+    # Limit open pull requests per user without write access.
+    creation_cap:
+      enabled: true
+      max_open_pull_requests: 3
 
 # publishes the content of the `asf-site` branch to
 # https://datafusion.apache.org/
