@@ -6221,3 +6221,62 @@ reset datafusion.optimizer.repartition_file_scans;
 
 statement ok
 set datafusion.execution.target_partitions = 4;
+
+# Projecting away a temporary join-filter column must preserve the equivalence
+# between a struct field and its extracted scalar column. The parallel sort and
+# merge can use different members of that equivalence class.
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+CREATE TABLE projection_events (id BIGINT) AS VALUES (1), (2), (3);
+
+# UNION ALL gives the right input two partitions, so ordering needs a merge.
+statement ok
+CREATE TABLE projection_networks AS
+SELECT 'b' AS label UNION ALL SELECT 'a' AS label;
+
+query TT
+EXPLAIN SELECT * FROM projection_networks;
+----
+logical_plan TableScan: projection_networks projection=[label]
+physical_plan DataSourceExec: partitions=2, partition_sizes=[1, 1]
+
+query I?
+SELECT id, n
+FROM projection_events
+LEFT JOIN (
+  SELECT named_struct('label', label) AS n FROM projection_networks
+) ON id > 1
+ORDER BY id, n['label'];
+----
+1 NULL
+2 {label: a}
+2 {label: b}
+3 {label: a}
+3 {label: b}
+
+# Also exercise the equivalence with an explicitly projected scalar alias.
+query I?
+SELECT id, n
+FROM projection_events
+LEFT JOIN (
+  SELECT named_struct('label', label) AS n, label AS extracted
+  FROM projection_networks
+) ON id > 1
+ORDER BY id, extracted;
+----
+1 NULL
+2 {label: a}
+2 {label: b}
+3 {label: a}
+3 {label: b}
+
+statement ok
+DROP TABLE projection_events;
+
+statement ok
+DROP TABLE projection_networks;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
