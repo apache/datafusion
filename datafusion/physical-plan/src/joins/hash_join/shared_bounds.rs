@@ -142,8 +142,11 @@ fn create_membership_predicate(
             hash_map,
             "hash_lookup".to_string(),
         )) as Arc<dyn PhysicalExpr>)),
-        // Empty partition - should not create a filter for this
-        PushdownStrategy::Empty => Ok(None),
+        // No membership term for either of the remaining variants. They look
+        // alike only here: the pruning difference between them is applied by
+        // the caller, which gives an `Empty` partition a `false` branch without
+        // consulting this function at all.
+        PushdownStrategy::Empty | PushdownStrategy::Unknown => Ok(None),
     }
 }
 
@@ -273,14 +276,42 @@ pub(crate) struct SharedBuildAccumulator {
 }
 
 /// Strategy for filter pushdown (decided at collection time)
+///
+/// The first two variants carry a structure a probe row can be tested against.
+/// The last two carry none, for opposite reasons, and that difference decides
+/// whether the partition's probe rows may be discarded: see [`Self::Empty`] and
+/// [`Self::Unknown`].
 #[derive(Clone)]
 pub(crate) enum PushdownStrategy {
     /// Use InList for small build sides (< 128MB)
     InList(ArrayRef),
     /// Use map lookup for large build sides
     Map(Arc<Map>),
-    /// There was no data in this partition, do not build a dynamic filter for it
+    /// This partition's build side is known to hold no rows at all, so nothing
+    /// routed to it can ever match and every such probe row may be discarded.
+    ///
+    /// This is a statement about the *data*, and the pushdown machinery acts on
+    /// it: [`SharedBuildAccumulator::build_partitioned_filter`] gives such a
+    /// partition a `false` branch in the routing `CASE`, and collapses the whole
+    /// filter to `false` when every partition reports it.
     Empty,
+    /// This partition's build side may hold rows, but no structure exists to
+    /// test membership against, so no probe row may be discarded on membership
+    /// grounds.
+    ///
+    /// This is a statement about our *knowledge*, not about the data, and it is
+    /// why the variant cannot be folded into [`Self::Empty`]: reporting `Empty`
+    /// for a partition that actually holds rows would push `false` for it and
+    /// silently drop every match it owns. Only the bounds, which remain exact,
+    /// are pushed down.
+    ///
+    /// Reported when the sort-merge fallback of a memory-pressured hash join
+    /// sorted the build side instead of hashing it (see the
+    /// `sort_merge_fallback` module). The existing `CanceledUnknown` partition
+    /// status is also permissive but not a substitute: it additionally assumes
+    /// the build side may contain NULL keys and discards the bounds, because a
+    /// canceled partition never reported either.
+    Unknown,
 }
 
 /// Build-side data reported by a single partition
@@ -655,8 +686,13 @@ impl SharedBuildAccumulator {
     }
 
     /// Builds one routed probe-side filter from finalized partitioned build data.
-    /// Empty partitions reject their routed rows, while canceled partitions stay
-    /// permissive because their build contents are unknown.
+    ///
+    /// Only a partition that reported [`PushdownStrategy::Empty`] rejects the
+    /// probe rows routed to it, because only that report proves the partition
+    /// holds nothing to match. Every other partition keeps whatever it can
+    /// filter on and admits the rest: a canceled one is fully permissive since
+    /// it reported nothing at all, and a partition whose membership is
+    /// [`PushdownStrategy::Unknown`] is filtered by its bounds alone.
     fn build_partitioned_filter(&self, partitions: Vec<PartitionStatus>) -> Result<()> {
         let mut partition_filters = Vec::with_capacity(partitions.len());
         let mut real_partition_ids = Vec::new();
@@ -1124,6 +1160,85 @@ mod tests {
         );
         let expr = current_expr(&acc);
         assert_literal_bool(&expr, true);
+    }
+
+    /// How many of `keys` the accumulator's finalized filter keeps.
+    fn kept_by_filter(acc: &SharedBuildAccumulator, keys: &[i32]) -> Result<usize> {
+        let expr = current_expr(acc);
+        let batch = RecordBatch::try_new(
+            test_probe_schema(),
+            vec![Arc::new(Int32Array::from(keys.to_vec()))],
+        )?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = result
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .expect("dynamic filter should evaluate to BooleanArray");
+        Ok((0..result.len()).filter(|i| result.value(*i)).count())
+    }
+
+    /// A partition whose membership is unknown must keep the probe rows routed
+    /// to it, because it may hold rows that match them.
+    ///
+    /// Guards the distinction from [`PushdownStrategy::Empty`]: if this report
+    /// were folded into `Empty`, the other partition's `InList` would become the
+    /// whole filter and every probe row outside that list would be discarded,
+    /// silently dropping the matches the unknown partition owns. The `Empty`
+    /// case below is the control showing exactly that pruning.
+    #[test]
+    fn partitioned_unknown_membership_keeps_its_probe_rows() -> Result<()> {
+        let keys: Vec<i32> = (0..64).collect();
+
+        let unknown = make_partitioned_expr_accumulator_for_test(2);
+        unknown.build_filter(FinalizeInput::Partitioned(vec![
+            reported(PushdownStrategy::Unknown, no_bounds()),
+            reported(in_list(&[2]), no_bounds()),
+        ]))?;
+        let kept_with_unknown = kept_by_filter(&unknown, &keys)?;
+
+        let empty = make_partitioned_expr_accumulator_for_test(2);
+        empty.build_filter(FinalizeInput::Partitioned(vec![
+            reported(PushdownStrategy::Empty, no_bounds()),
+            reported(in_list(&[2]), no_bounds()),
+        ]))?;
+        let kept_with_empty = kept_by_filter(&empty, &keys)?;
+
+        // An empty partition proves nothing routed to it can match, so only the
+        // other partition's single in-list value survives.
+        assert_eq!(
+            kept_with_empty, 1,
+            "an empty partition should prune every probe row routed to it"
+        );
+        // An unknown partition proves nothing, so its share of the keys stays.
+        assert!(
+            kept_with_unknown > kept_with_empty,
+            "unknown membership must keep its routed probe rows, kept {kept_with_unknown} of {} \
+             but an empty partition keeps {kept_with_empty}",
+            keys.len()
+        );
+
+        Ok(())
+    }
+
+    /// Unknown membership still narrows the probe side by the bounds it did
+    /// report, so it is not simply permissive.
+    #[test]
+    fn partitioned_unknown_membership_still_applies_its_bounds() -> Result<()> {
+        let acc = make_partitioned_expr_accumulator_for_test(2);
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(PushdownStrategy::Unknown, bounds(10, 20)),
+            reported(in_list(&[2]), no_bounds()),
+        ]))?;
+
+        // Every key routed to partition 0 outside 10..=20 is rejected by the
+        // bounds, so far from all 64 keys survive.
+        let kept = kept_by_filter(&acc, &(0..64).collect::<Vec<i32>>())?;
+        assert!(
+            kept < 32,
+            "bounds reported alongside unknown membership must still prune, kept {kept}"
+        );
+
+        Ok(())
     }
 
     #[test]
