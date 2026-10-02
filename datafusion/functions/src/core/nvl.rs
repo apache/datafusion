@@ -17,7 +17,7 @@
 
 use crate::core::coalesce::CoalesceFunc;
 use arrow::datatypes::{DataType, FieldRef};
-use datafusion_common::Result;
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
@@ -59,26 +59,6 @@ pub struct NVLFunc {
     aliases: Vec<String>,
 }
 
-/// Currently supported types by the nvl/ifnull function.
-/// The order of these types correspond to the order on which coercion applies
-/// This should thus be from least informative to most informative
-static SUPPORTED_NVL_TYPES: &[DataType] = &[
-    DataType::Boolean,
-    DataType::UInt8,
-    DataType::UInt16,
-    DataType::UInt32,
-    DataType::UInt64,
-    DataType::Int8,
-    DataType::Int16,
-    DataType::Int32,
-    DataType::Int64,
-    DataType::Float32,
-    DataType::Float64,
-    DataType::Utf8View,
-    DataType::Utf8,
-    DataType::LargeUtf8,
-];
-
 impl Default for NVLFunc {
     fn default() -> Self {
         Self::new()
@@ -89,11 +69,7 @@ impl NVLFunc {
     pub fn new() -> Self {
         Self {
             coalesce: CoalesceFunc {
-                signature: Signature::uniform(
-                    2,
-                    SUPPORTED_NVL_TYPES.to_vec(),
-                    Volatility::Immutable,
-                ),
+                signature: Signature::user_defined(Volatility::Immutable),
             },
             aliases: vec![String::from("ifnull")],
         }
@@ -138,6 +114,20 @@ impl ScalarUDFImpl for NVLFunc {
 
     fn short_circuits(&self) -> bool {
         self.coalesce.short_circuits()
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 2 {
+            return exec_err!(
+                "nvl expects exactly two arguments, but received {}",
+                arg_types.len()
+            );
+        }
+        if arg_types.iter().all(DataType::is_null) {
+            return Ok(vec![DataType::Boolean; arg_types.len()]);
+        }
+
+        self.coalesce.coerce_types(arg_types)
     }
 
     fn aliases(&self) -> &[String] {

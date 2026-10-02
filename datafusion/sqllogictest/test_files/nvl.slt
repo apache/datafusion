@@ -183,3 +183,50 @@ physical_plan
 01)ProjectionExec: expr=[CASE WHEN __common_expr_1@0 IS NOT NULL THEN __common_expr_1@0 ELSE 9999 END as nvl(test.int_field,Int64(9999))]
 02)--ProjectionExec: expr=[CAST(int_field@0 AS Int64) as __common_expr_1]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+CREATE TABLE nvl_type_coercion AS SELECT
+  CAST('12345678901234567890123456789012345678' AS DECIMAL(38,0)) AS big,
+  CAST(1.23 AS DECIMAL(5,2)) AS d,
+  TIMESTAMP '2024-01-01 10:00:00' AS ts,
+  DATE '2024-01-01' AS dt
+;
+
+query TR
+SELECT
+  arrow_typeof(nvl(big, 0)),
+  nvl(big, 0)
+FROM nvl_type_coercion;
+----
+Decimal128(38, 0) 12345678901234567890123456789012345678
+
+query TTT
+SELECT
+  arrow_typeof(nvl(d, d)),
+  arrow_typeof(ifnull(d, d)),
+  arrow_typeof(coalesce(d, d))
+FROM nvl_type_coercion;
+----
+Decimal128(5, 2) Decimal128(5, 2) Decimal128(5, 2)
+
+query TTT
+SELECT
+  arrow_typeof(nvl(ts, ts)),
+  arrow_typeof(ifnull(ts, ts)),
+  arrow_typeof(coalesce(ts, ts))
+FROM nvl_type_coercion;
+----
+Timestamp(ns) Timestamp(ns) Timestamp(ns)
+
+query TT
+SELECT
+  arrow_typeof(nvl(dt, dt)),
+  arrow_typeof(coalesce(dt, dt))
+FROM nvl_type_coercion;
+----
+Date32 Date32
+
+query P
+SELECT ifnull(ts, ts) + INTERVAL '1 hour' FROM nvl_type_coercion;
+----
+2024-01-01T11:00:00
