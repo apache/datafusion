@@ -47,7 +47,6 @@ use crate::spill::get_record_batch_memory_size;
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
 use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
 use crate::statistics::{ChildStats, StatisticsArgs};
-use crate::stream::ReservationStream;
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 use crate::topk::TopK;
 use crate::topk::TopKDynamicFilters;
@@ -62,6 +61,7 @@ use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::SpillCompression;
 use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::utils::memory::RecordBatchMemoryCounter;
 use datafusion_common::{
     DataFusionError, Result, assert_or_internal_err, internal_datafusion_err,
     unwrap_or_internal_err,
@@ -774,8 +774,8 @@ impl ExternalSorter {
     /// sorted data and the target batch size.
     /// For single-batch output cases, `reservation` will be freed immediately after sorting,
     /// as the batch will be output and is expected to be reserved by the consumer of the stream.
-    /// For multi-batch output cases, `reservation` and any borrowed spill workspace
-    /// cover the sorted output, releasing its memory as each batch is output.
+    /// For multi-batch output cases, `reservation` covers the sorted output,
+    /// releasing its memory as each batch is output.
     /// (This leads to the same behaviour, as futures are only evaluated when polled by the consumer.)
     fn sort_batch_stream(
         &self,
@@ -790,7 +790,6 @@ impl ExternalSorter {
         let schema = batch.schema();
         let expressions = self.expr.clone();
         let batch_size = self.batch_size;
-        let merge_pool = Arc::clone(&self.merge_pool);
 
         let stream = futures::stream::once(async move {
             let schema = batch.schema();
@@ -798,39 +797,26 @@ impl ExternalSorter {
             // Sort the batch immediately and get all output batches
             let sorted_batches = sort_batch_chunked(&batch, &expressions, batch_size)?;
 
-            // Chunked output can retain shared buffers in every batch and
-            // exceed the input estimate. Borrow only already-reserved spill
-            // workspace; any remainder still uses the original sort consumer.
-            let total_sorted_size: usize = sorted_batches
+            // Charge each shared buffer to its last chunk, since it is freed with that chunk
+            let mut counter = RecordBatchMemoryCounter::new();
+            let mut sizes: Vec<usize> = sorted_batches
                 .iter()
-                .map(get_record_batch_memory_size)
-                .sum();
-            let mut workspace =
-                merge_pool.borrow(total_sorted_size.saturating_sub(reservation.size()));
+                .rev()
+                .map(|batch| counter.count_batch(batch))
+                .collect();
+            sizes.reverse();
             reservation
-                .try_resize(total_sorted_size - workspace.size())
+                .try_resize(counter.memory_usage())
                 .map_err(Self::err_with_oom_context)?;
 
-            if workspace.size() == 0 {
-                return Ok(Box::pin(ReservationStream::new(
-                    Arc::clone(&schema),
-                    Box::pin(RecordBatchStreamAdapter::new(
-                        Arc::clone(&schema),
-                        futures::stream::iter(sorted_batches.into_iter().map(Ok)),
-                    )),
-                    reservation,
-                )) as SendableRecordBatchStream);
-            }
-
-            // Return borrowed workspace first so the merge's cursors can reuse
-            // it immediately. Both reservations also release on stream drop.
-            let batches = sorted_batches.into_iter().map(move |batch| {
-                let size = get_record_batch_memory_size(&batch);
-                let borrowed = size.min(workspace.size());
-                workspace.shrink(borrowed);
-                reservation.shrink(size - borrowed);
-                Ok(batch)
-            });
+            let batches =
+                sorted_batches
+                    .into_iter()
+                    .zip(sizes)
+                    .map(move |(batch, size)| {
+                        reservation.shrink(size);
+                        Ok(batch)
+                    });
             Result::<_, DataFusionError>::Ok(Box::pin(RecordBatchStreamAdapter::new(
                 Arc::clone(&schema),
                 futures::stream::iter(batches),
@@ -2530,6 +2516,55 @@ mod tests {
             "The sort should have returned all memory used back to the memory manager"
         );
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_sort_charges_shared_output_buffers_once() -> Result<()> {
+        let values = StringViewArray::from_iter_values(
+            (0..4096)
+                .rev()
+                .map(|i| format!("row-{i:08}-{}", "x".repeat(87))),
+        );
+        let data_buffers: usize =
+            values.data_buffers().iter().map(|b| b.capacity()).sum();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            DataType::Utf8View,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(values)])?;
+
+        // Each sorted chunk references the same data buffers, and there is no spill workspace
+        let session_config = SessionConfig::new()
+            .with_batch_size(1024)
+            .with_sort_spill_reservation_bytes(0);
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(get_reserved_bytes_for_record_batch(&batch)?, 1.0)
+            .build_arc()?;
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(session_config)
+                .with_runtime(Arc::clone(&runtime)),
+        );
+
+        let sort_exec = Arc::new(SortExec::new(
+            [PhysicalSortExpr {
+                expr: col("s", &schema)?,
+                options: SortOptions::default(),
+            }]
+            .into(),
+            TestMemoryExec::try_new_exec(&[vec![batch]], schema, None)?,
+        ));
+
+        let mut stream = sort_exec.execute(0, task_ctx)?;
+        // The remaining chunks still hold the shared buffers, so they stay reserved
+        let mut rows = stream.next().await.unwrap()?.num_rows();
+        assert!(runtime.memory_pool.reserved() >= data_buffers);
+        while let Some(batch) = stream.next().await {
+            rows += batch?.num_rows();
+        }
+        assert_eq!(rows, 4096);
         Ok(())
     }
 
