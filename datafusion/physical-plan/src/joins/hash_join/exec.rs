@@ -40,6 +40,7 @@ use crate::joins::hash_join::stream::{
     BuildSide, BuildSideInitialState, HashJoinStream, HashJoinStreamState,
 };
 use crate::joins::join_hash_map::{JoinHashMapU32, JoinHashMapU64};
+use crate::joins::key_range_bitmap::KeyRangeBitmap;
 use crate::joins::utils::{
     OnceAsync, OnceFut, asymmetric_join_output_partitioning, emits_unmatched_left_rows,
     is_existence_join, reorder_output_after_swap, swap_join_projection, update_hash,
@@ -51,7 +52,7 @@ use crate::projection::{
     try_pushdown_through_join_with_column_indices,
 };
 use crate::repartition::REPARTITION_RANDOM_STATE;
-use crate::statistics::{ChildStats, StatisticsArgs};
+use crate::statistics::{ChildStats, StatisticsArgs, with_per_partition_fetch};
 use crate::{
     ChildrenPropertiesMode, ExecutionPlanProperties, ReplaceChildrenOptions,
     validate_child_count,
@@ -1883,7 +1884,7 @@ impl ExecutionPlan for HashJoinExec {
     fn statistics_from_inputs(
         &self,
         input_stats: &[Arc<Statistics>],
-        _args: &StatisticsArgs,
+        args: &StatisticsArgs,
     ) -> Result<Arc<Statistics>> {
         let left_stats = if let Some(prepared) = &self.prepared_build {
             // The declared left child supplies the schema but is never executed.
@@ -1903,8 +1904,13 @@ impl ExecutionPlan for HashJoinExec {
         )?;
         // Project statistics if there is a projection
         let stats = stats.project(self.projection.as_ref());
-        // Apply fetch limit to statistics
-        Ok(Arc::new(stats.with_fetch(self.fetch, 0, 1)?))
+        // Apply the fetch, which limits each output partition separately
+        Ok(Arc::new(with_per_partition_fetch(
+            stats,
+            self.fetch,
+            self.properties().output_partitioning().partition_count(),
+            args,
+        )?))
     }
 
     /// Tries to push `projection` down through `hash_join`. If possible, performs the
@@ -3313,7 +3319,10 @@ async fn collect_left_input(
 
     let map = Arc::new(join_hash_map);
 
-    let membership = if num_rows == 0 {
+    // For an ordinary build, nothing reads the strategy unless this join's own
+    // dynamic filter accumulator exists. A prepared build is shared with joins
+    // decided later, so it must always be ready to serve one.
+    let membership = if num_rows == 0 || (!prepared && !should_compute_dynamic_filters) {
         PushdownStrategy::Empty
     } else {
         // If the build side is small enough we can use IN list pushdown.
@@ -3323,19 +3332,45 @@ async fn collect_left_input(
             .iter()
             .map(|arr| arr.get_array_memory_size())
             .sum::<usize>();
-        if left_values.is_empty()
-            || left_values[0].is_empty()
-            || estimated_size > config.optimizer.hash_join_inlist_pushdown_max_size
-            || map.num_of_distinct_key()
-                > config
+
+        let pushdown_inlist = !left_values.is_empty()
+            && !left_values[0].is_empty()
+            && estimated_size <= config.optimizer.hash_join_inlist_pushdown_max_size
+            && map.num_of_distinct_key()
+                <= config
                     .optimizer
-                    .hash_join_inlist_pushdown_max_distinct_values
+                    .hash_join_inlist_pushdown_max_distinct_values;
+
+        if pushdown_inlist
+            && let Some(in_list_values) = build_struct_inlist_values(&left_values)?
         {
-            PushdownStrategy::Map(Arc::clone(&map))
-        } else if let Some(in_list_values) = build_struct_inlist_values(&left_values)? {
             PushdownStrategy::InList(in_list_values)
         } else {
-            PushdownStrategy::Map(Arc::clone(&map))
+            // Past the InList threshold use a bucket bitmap for container pruning.
+            let pruning_bitmap = match (left_values.as_slice(), bounds.as_ref()) {
+                ([keys], Some(bounds)) if !keys.is_empty() => bounds
+                    .get_column_bounds(0)
+                    .and_then(|b| {
+                        KeyRangeBitmap::try_new(
+                            keys,
+                            &b.min,
+                            &b.max,
+                            map.num_of_distinct_key(),
+                        )
+                    })
+                    .map(Arc::new),
+                _ => None,
+            };
+            // Held for the join's lifetime, so charge it like the maps; it is
+            // optional, so skip it rather than fail when the pool is full.
+            let pruning_bitmap = pruning_bitmap.filter(|bitmap| {
+                let ok = reservation.try_grow(bitmap.size()).is_ok();
+                if ok {
+                    metrics.build_mem_used.add(bitmap.size());
+                }
+                ok
+            });
+            PushdownStrategy::Map(Arc::clone(&map), pruning_bitmap)
         }
     };
 
@@ -3443,6 +3478,7 @@ mod tests {
     use crate::execution_plan::Boundedness;
     use crate::filter::FilterExecBuilder;
     use crate::joins::hash_join::stream::lookup_join_hashmap;
+    use crate::statistics::StatisticsContext;
     use crate::test::{TestMemoryExec, assert_join_metrics};
     use crate::{ChildrenPropertiesMode, ReplaceChildrenOptions};
     use crate::{
@@ -3452,12 +3488,13 @@ mod tests {
 
     use arrow::array::{
         Array, ArrayRef, AsArray, BinaryViewArray, Date32Array, DictionaryArray,
-        Int32Array, Int64Array, StringArray, StringViewArray, StructArray, UInt32Array,
-        UInt64Array,
+        Float64Array, Int32Array, Int64Array, StringArray, StringViewArray, StructArray,
+        UInt32Array, UInt64Array,
     };
     use arrow::buffer::NullBuffer;
     use arrow::datatypes::{DataType, Field, Int32Type};
     use datafusion_common::hash_utils::create_hashes;
+    use datafusion_common::stats::Precision;
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{
         ScalarValue, assert_batches_eq, assert_batches_sorted_eq, assert_contains,
@@ -3509,6 +3546,71 @@ mod tests {
             drop(reservation);
             assert_eq!(pool.reserved(), 0);
         }
+        Ok(())
+    }
+
+    /// Runs a join whose 200 keys spread over 2M would size a pruning bitmap
+    /// at the 128 KiB cap, and reports the bytes the build side reserved.
+    ///
+    /// Forces the IN-list threshold off: under `force_hash_collisions` every
+    /// key hashes to the same bucket, so `num_of_distinct_key()` no longer
+    /// reflects the real 200 distinct keys and would otherwise take the
+    /// IN-list branch instead of the one under test.
+    async fn build_mem_used(limit: usize, dynamic_filters: bool) -> Result<usize> {
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+        let batch = |keys: Vec<i64>| {
+            let column = Arc::new(Int64Array::from(keys)) as ArrayRef;
+            let batch = RecordBatch::try_new(Arc::clone(&schema), vec![column])?;
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)
+        };
+        let on = vec![(
+            Arc::new(Column::new_with_schema("k", &schema)?) as _,
+            Arc::new(Column::new_with_schema("k", &schema)?) as _,
+        )];
+        let build = batch((0..200).map(|i| i * 10_000).collect())?;
+        let probe = batch(vec![0, 500_000, 1_500_000])?;
+        let join = if dynamic_filters {
+            hash_join_with_dynamic_filter(build, probe, on, JoinType::Inner)?.0
+        } else {
+            join(
+                build,
+                probe,
+                on,
+                &JoinType::Inner,
+                NullEquality::NullEqualsNothing,
+            )?
+        };
+
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(limit, 1.0)
+            .build_arc()?;
+        let mut config = SessionConfig::new();
+        config
+            .options_mut()
+            .optimizer
+            .hash_join_inlist_pushdown_max_size = 0;
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_runtime(runtime)
+                .with_session_config(config),
+        );
+        let batches = common::collect(join.execute(0, task_ctx)?).await?;
+        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 3);
+        Ok(join
+            .metrics()
+            .unwrap()
+            .sum_by_name("build_mem_used")
+            .unwrap()
+            .as_usize())
+    }
+
+    /// The bitmap is pruning-only: never built when no dynamic filter will read
+    /// it, and dropped rather than fatal when the pool cannot fit it.
+    #[tokio::test]
+    async fn pruning_bitmap_is_optional() -> Result<()> {
+        assert!(build_mem_used(1_000_000, false).await? < 100_000);
+        assert!(build_mem_used(1_000_000, true).await? > 100_000);
+        build_mem_used(100_000, true).await?;
         Ok(())
     }
 
@@ -4060,6 +4162,221 @@ mod tests {
 
         assert_join_metrics!(metrics, 3);
         assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
+        Ok(())
+    }
+
+    /// Two-column keys (Int32, Float64) take the general comparator path.
+    /// Small batch sizes split each probe batch into several lookup chunks,
+    /// so the key comparison must stay correct across chunk boundaries:
+    /// `-0.0` still equals `0.0`. NULL keys are also present on both sides;
+    /// under `NullEqualsNothing` those rows are skipped by the lookup before
+    /// any key comparison, so they must not appear in the output.
+    #[rstest]
+    #[tokio::test]
+    async fn join_inner_multi_key_float_zero_and_nulls_across_chunks(
+        #[values(8192, 3, 2, 1)] batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        let schema = |suffix: &str| {
+            Arc::new(Schema::new(vec![
+                Field::new(format!("k{suffix}"), DataType::Int32, true),
+                Field::new(format!("f{suffix}"), DataType::Float64, true),
+                Field::new(format!("v{suffix}"), DataType::Int32, true),
+            ]))
+        };
+        let table = |suffix: &str,
+                     k: Vec<Option<i32>>,
+                     f: Vec<Option<f64>>,
+                     v: Vec<i32>|
+         -> Result<Arc<dyn ExecutionPlan>> {
+            let schema = schema(suffix);
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(k)),
+                    Arc::new(Float64Array::from(f)),
+                    Arc::new(Int32Array::from(v)),
+                ],
+            )?;
+            TestMemoryExec::try_new_exec(&[vec![batch]], schema, None)
+                .map(|exec| exec as _)
+        };
+
+        let left = table(
+            "1",
+            vec![Some(1), Some(1), Some(1), Some(2), Some(1)],
+            vec![Some(-0.0), Some(0.0), None, Some(1.5), Some(-0.0)],
+            vec![10, 11, 12, 13, 14],
+        )?;
+        let right = table(
+            "2",
+            vec![Some(1), Some(1), Some(2), Some(1)],
+            vec![Some(0.0), None, Some(1.5), Some(-0.0)],
+            vec![100, 101, 102, 103],
+        )?;
+
+        let on = vec![
+            (
+                Arc::new(Column::new_with_schema("k1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("k2", &right.schema())?) as _,
+            ),
+            (
+                Arc::new(Column::new_with_schema("f1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("f2", &right.schema())?) as _,
+            ),
+        ];
+
+        let (_, batches, _) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
+
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+------+----+----+------+-----+
+            | k1 | f1   | v1 | k2 | f2   | v2  |
+            +----+------+----+----+------+-----+
+            | 1  | -0.0 | 10 | 1  | -0.0 | 103 |
+            | 1  | -0.0 | 10 | 1  | 0.0  | 100 |
+            | 1  | -0.0 | 14 | 1  | -0.0 | 103 |
+            | 1  | -0.0 | 14 | 1  | 0.0  | 100 |
+            | 1  | 0.0  | 11 | 1  | -0.0 | 103 |
+            | 1  | 0.0  | 11 | 1  | 0.0  | 100 |
+            | 2  | 1.5  | 13 | 2  | 1.5  | 102 |
+            +----+------+----+----+------+-----+
+            ");
+        }
+
+        Ok(())
+    }
+
+    /// Two probe batches carry different multi-column keys at the same row
+    /// positions. Each batch has to be compared against its own key arrays;
+    /// a comparator left over from the first batch would drop the second
+    /// batch's match.
+    #[rstest]
+    #[tokio::test]
+    async fn join_inner_multi_key_across_probe_batches(
+        #[values(8192, 1)] batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+        let left = build_table_two_cols(
+            ("a1", &vec![Some(1), Some(1)]),
+            ("b1", &vec![Some(10), Some(20)]),
+        );
+
+        let right_schema = Arc::new(Schema::new(vec![
+            Field::new("a2", DataType::Int32, true),
+            Field::new("b2", DataType::Int32, true),
+        ]));
+        let probe_batch = |b: i32| {
+            RecordBatch::try_new(
+                Arc::clone(&right_schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![1])),
+                    Arc::new(Int32Array::from(vec![b])),
+                ],
+            )
+        };
+        let right = TestMemoryExec::try_new_exec(
+            &[vec![probe_batch(10)?, probe_batch(20)?]],
+            Arc::clone(&right_schema),
+            None,
+        )?;
+
+        let on = vec![
+            (
+                Arc::new(Column::new_with_schema("a1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("a2", &right.schema())?) as _,
+            ),
+            (
+                Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+            ),
+        ];
+
+        let (_, batches, _) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
+
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+----+----+----+
+            | a1 | b1 | a2 | b2 |
+            +----+----+----+----+
+            | 1  | 10 | 1  | 10 |
+            | 1  | 20 | 1  | 20 |
+            +----+----+----+----+
+            ");
+        }
+
+        Ok(())
+    }
+
+    /// An integer key joined through the perfect hash (array map) path, with
+    /// more candidate pairs than the batch size so each probe batch is
+    /// emitted over several chunks.
+    #[rstest]
+    #[tokio::test]
+    async fn join_inner_array_map_across_chunks(
+        #[values(8192, 3, 2, 1)] batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, true);
+        let left = build_table(
+            ("a1", &vec![1, 2, 3, 4, 5, 6]),
+            ("b1", &vec![1, 1, 1, 2, 2, 3]),
+            ("c1", &vec![7, 8, 9, 10, 11, 12]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 30, 40]),
+            ("b1", &vec![1, 2, 3, 4]),
+            ("c2", &vec![70, 80, 90, 100]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        )];
+
+        let (_, batches, metrics) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
+
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b1 | c2 |
+            +----+----+----+----+----+----+
+            | 1  | 1  | 7  | 10 | 1  | 70 |
+            | 2  | 1  | 8  | 10 | 1  | 70 |
+            | 3  | 1  | 9  | 10 | 1  | 70 |
+            | 4  | 2  | 10 | 20 | 2  | 80 |
+            | 5  | 2  | 11 | 20 | 2  | 80 |
+            | 6  | 3  | 12 | 30 | 3  | 90 |
+            +----+----+----+----+----+----+
+            ");
+        }
+
+        assert_join_metrics!(metrics, 6);
+        assert_phj_used(&metrics, true);
 
         Ok(())
     }
@@ -4851,6 +5168,50 @@ mod tests {
             assert!(expected.contains(&row), "unexpected output row {row:?}");
         }
 
+        Ok(())
+    }
+
+    /// `fetch` stops each output partition separately, so the overall
+    /// statistics must allow for the rows of every partition.
+    #[tokio::test]
+    async fn join_fetch_statistics_count_every_output_partition() -> Result<()> {
+        let values: Vec<i32> = (0..100).collect();
+        let left = build_table(("a1", &values), ("b1", &values), ("c1", &values));
+        let batch = build_table_i32(("a2", &values), ("b2", &values), ("c2", &values));
+        let schema = batch.schema();
+        let right = TestMemoryExec::try_new_exec(&vec![vec![batch]; 4], schema, None)?;
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+        )];
+        let join: Arc<dyn ExecutionPlan> = Arc::new(
+            HashJoinExecBuilder::new(left, right, on, JoinType::Inner)
+                .with_partition_mode(PartitionMode::CollectLeft)
+                .with_fetch(Some(10))
+                .build()?,
+        );
+        assert_eq!(join.properties().output_partitioning().partition_count(), 4);
+
+        // Each right row matches one left row, and each of the four output
+        // partitions stops after 10 rows.
+        let emitted: usize =
+            crate::collect(Arc::clone(&join), prepare_task_ctx(8192, false))
+                .await?
+                .iter()
+                .map(|batch| batch.num_rows())
+                .sum();
+        assert_eq!(emitted, 40);
+
+        let num_rows = |partition| {
+            StatisticsContext::new()
+                .compute(
+                    join.as_ref(),
+                    &StatisticsArgs::new().with_partition(partition),
+                )
+                .map(|stats| stats.num_rows)
+        };
+        assert_eq!(num_rows(None)?, Precision::Inexact(40));
+        assert_eq!(num_rows(Some(0))?, Precision::Inexact(10));
         Ok(())
     }
 
@@ -6389,6 +6750,7 @@ mod tests {
             (0, None),
             &mut probe_indices_buffer,
             &mut build_indices_buffer,
+            &mut None,
         )?;
 
         let left_ids: UInt64Array = vec![0, 1].into();
@@ -6451,6 +6813,7 @@ mod tests {
             (0, None),
             &mut probe_indices_buffer,
             &mut build_indices_buffer,
+            &mut None,
         )?;
 
         // We still expect to match rows 0 and 1 on both sides
@@ -9909,6 +10272,153 @@ mod tests {
             | 4  | 40 | true  |
             | 5  | 1  | false |
             +----+----+-------+
+            ");
+        }
+
+        Ok(())
+    }
+
+    /// Correlated null-aware `LeftAnti` with a two-column correlation scope,
+    /// so scope lookups compare keys with the general multi-column comparator.
+    ///
+    /// Each NULL-marking direction yields several scope matches for a single
+    /// probe batch, which small batch sizes split across many lookup chunks.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_left_anti_multi_column_scope(
+        batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        fn table(
+            id: Vec<Option<i32>>,
+            g1: Vec<Option<i32>>,
+            g2: Vec<Option<i32>>,
+        ) -> Arc<dyn ExecutionPlan> {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int32, true),
+                Field::new("g1", DataType::Int32, true),
+                Field::new("g2", DataType::Int32, true),
+            ]));
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(id)),
+                    Arc::new(Int32Array::from(g1)),
+                    Arc::new(Int32Array::from(g2)),
+                ],
+            )
+            .unwrap();
+            TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap()
+        }
+
+        let left = table(
+            vec![
+                Some(1),
+                Some(2),
+                None,
+                None,
+                Some(6),
+                Some(8),
+                Some(9),
+                Some(10),
+                None,
+            ],
+            vec![
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(2),
+                Some(3),
+            ],
+            vec![
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(2),
+                Some(2),
+                Some(2),
+                Some(1),
+                Some(3),
+            ],
+        );
+        let right = table(
+            vec![
+                Some(2),
+                Some(3),
+                Some(4),
+                Some(5),
+                None,
+                None,
+                Some(7),
+                Some(11),
+            ],
+            vec![
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(2),
+            ],
+            vec![
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(2),
+                Some(2),
+                Some(2),
+                Some(1),
+            ],
+        );
+
+        let on = ["id", "g1", "g2"]
+            .into_iter()
+            .map(|name| {
+                Ok((
+                    Arc::new(Column::new_with_schema(name, &left.schema())?) as _,
+                    Arc::new(Column::new_with_schema(name, &right.schema())?) as _,
+                ))
+            })
+            .collect::<Result<JoinOn>>()?;
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::LeftAnti,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true,
+        )?;
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        // Scope (1, 1) holds 2, 3, 4 and 5: `(1, 1, 1)` is kept, `(2, 1, 1)`
+        // matches, and both NULL-valued build rows there are UNKNOWN. Scope
+        // (1, 2) holds two NULLs, so all of its build rows are UNKNOWN. Scope
+        // (2, 1) holds only 11, so `(10, 2, 1)` is kept, and `(NULL, 3, 3)`
+        // has an empty scope.
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+----+----+
+            | id | g1 | g2 |
+            +----+----+----+
+            |    | 3  | 3  |
+            | 1  | 1  | 1  |
+            | 10 | 2  | 1  |
+            +----+----+----+
             ");
         }
 
