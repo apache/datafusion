@@ -230,3 +230,13 @@ query P
 SELECT ifnull(ts, ts) + INTERVAL '1 hour' FROM nvl_type_coercion;
 ----
 2024-01-01T11:00:00
+
+# Types the original signature listed keep its coercion, and types coalesce
+# cannot unify fall back to it.
+query TT
+SELECT
+  arrow_typeof(nvl(1, false)),
+  arrow_typeof(nvl(ts, '2024-01-01T00:00:00'))
+FROM nvl_type_coercion;
+----
+Utf8View Utf8View
