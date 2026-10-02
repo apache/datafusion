@@ -106,3 +106,7 @@ name = "sha2"
 [[bench]]
 harness = false
 name = "floor"
+
+[[bench]]
+harness = false
+name = "from_utc_timestamp"
