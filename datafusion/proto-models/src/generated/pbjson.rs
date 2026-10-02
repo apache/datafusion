@@ -19390,6 +19390,15 @@ impl serde::Serialize for PhysicalDynamicFilterNode {
         if self.is_complete {
             len += 1;
         }
+        if self.partitioning.is_some() {
+            len += 1;
+        }
+        if !self.partition_filters.is_empty() {
+            len += 1;
+        }
+        if self.partition_index.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalDynamicFilterNode", len)?;
         if !self.children.is_empty() {
             struct_ser.serialize_field("children", &self.children)?;
@@ -19407,6 +19416,17 @@ impl serde::Serialize for PhysicalDynamicFilterNode {
         }
         if self.is_complete {
             struct_ser.serialize_field("isComplete", &self.is_complete)?;
+        }
+        if let Some(v) = self.partitioning.as_ref() {
+            struct_ser.serialize_field("partitioning", v)?;
+        }
+        if !self.partition_filters.is_empty() {
+            struct_ser.serialize_field("partitionFilters", &self.partition_filters)?;
+        }
+        if let Some(v) = self.partition_index.as_ref() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("partitionIndex", ToString::to_string(&v).as_str())?;
         }
         struct_ser.end()
     }
@@ -19426,6 +19446,11 @@ impl<'de> serde::Deserialize<'de> for PhysicalDynamicFilterNode {
             "innerExpr",
             "is_complete",
             "isComplete",
+            "partitioning",
+            "partition_filters",
+            "partitionFilters",
+            "partition_index",
+            "partitionIndex",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -19435,6 +19460,9 @@ impl<'de> serde::Deserialize<'de> for PhysicalDynamicFilterNode {
             Generation,
             InnerExpr,
             IsComplete,
+            Partitioning,
+            PartitionFilters,
+            PartitionIndex,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -19461,6 +19489,9 @@ impl<'de> serde::Deserialize<'de> for PhysicalDynamicFilterNode {
                             "generation" => Ok(GeneratedField::Generation),
                             "innerExpr" | "inner_expr" => Ok(GeneratedField::InnerExpr),
                             "isComplete" | "is_complete" => Ok(GeneratedField::IsComplete),
+                            "partitioning" => Ok(GeneratedField::Partitioning),
+                            "partitionFilters" | "partition_filters" => Ok(GeneratedField::PartitionFilters),
+                            "partitionIndex" | "partition_index" => Ok(GeneratedField::PartitionIndex),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -19485,6 +19516,9 @@ impl<'de> serde::Deserialize<'de> for PhysicalDynamicFilterNode {
                 let mut generation__ = None;
                 let mut inner_expr__ = None;
                 let mut is_complete__ = None;
+                let mut partitioning__ = None;
+                let mut partition_filters__ = None;
+                let mut partition_index__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Children => {
@@ -19519,6 +19553,26 @@ impl<'de> serde::Deserialize<'de> for PhysicalDynamicFilterNode {
                             }
                             is_complete__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Partitioning => {
+                            if partitioning__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("partitioning"));
+                            }
+                            partitioning__ = map_.next_value()?;
+                        }
+                        GeneratedField::PartitionFilters => {
+                            if partition_filters__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("partitionFilters"));
+                            }
+                            partition_filters__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::PartitionIndex => {
+                            if partition_index__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("partitionIndex"));
+                            }
+                            partition_index__ =
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
                     }
                 }
                 Ok(PhysicalDynamicFilterNode {
@@ -19527,6 +19581,9 @@ impl<'de> serde::Deserialize<'de> for PhysicalDynamicFilterNode {
                     generation: generation__.unwrap_or_default(),
                     inner_expr: inner_expr__,
                     is_complete: is_complete__.unwrap_or_default(),
+                    partitioning: partitioning__,
+                    partition_filters: partition_filters__.unwrap_or_default(),
+                    partition_index: partition_index__,
                 })
             }
         }

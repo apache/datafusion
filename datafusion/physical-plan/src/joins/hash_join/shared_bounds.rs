@@ -794,8 +794,33 @@ impl SharedBuildAccumulator {
             )?)
         };
 
-        self.dynamic_filter
-            .update(self.preserve_probe_nulls(filter_expr, keys_have_null)?)
+        // Retain the predicates alongside the total expression. A consumer with
+        // matching routing can select its own predicate without evaluating CASE
+        // and hashing/range-routing every probe row.
+        let partitioning = match &self.probe_range_partitioning {
+            Some(range) => Partitioning::Range(range.clone()),
+            None => {
+                // Hash metadata describes DataFusion's standard repartition seed.
+                // An accumulator with another seed can only publish a total filter.
+                if self.repartition_random_state.seed()
+                    != crate::repartition::REPARTITION_RANDOM_STATE.seed()
+                {
+                    return self
+                        .dynamic_filter
+                        .update(self.preserve_probe_nulls(filter_expr, keys_have_null)?);
+                }
+                Partitioning::Hash(self.on_right.clone(), partition_filters.len())
+            }
+        };
+        let partition_filters = partition_filters
+            .into_iter()
+            .map(|filter| self.preserve_probe_nulls(filter, keys_have_null))
+            .collect::<Result<Vec<_>>>()?;
+        self.dynamic_filter.update_partitioned(
+            partitioning,
+            partition_filters,
+            self.preserve_probe_nulls(filter_expr, keys_have_null)?,
+        )
     }
 
     /// Keeps probe rows with a NULL key when the join semantics need them.
