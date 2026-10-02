@@ -1580,6 +1580,7 @@ fn for_each_scope_match(
     mut f: impl FnMut(UInt64Array, UInt32Array) -> Result<()>,
 ) -> Result<()> {
     let mut offset = (0, None);
+    let mut key_comparator = None;
     loop {
         let (build_indices, probe_indices, next_offset) = lookup_join_hashmap(
             scope_map,
@@ -1592,7 +1593,7 @@ fn for_each_scope_match(
             offset,
             probe_indices_buffer,
             build_indices_buffer,
-            &mut None,
+            &mut key_comparator,
         )?;
 
         if !build_indices.is_empty() {

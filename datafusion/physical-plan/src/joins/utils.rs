@@ -2291,7 +2291,9 @@ pub(crate) fn matchable_join_keys(
 /// `comparator` caches the general-path [`JoinKeyComparator`] between calls
 /// that share the same `left_arrays` and `right_arrays`, so its setup cost is
 /// paid once rather than per call. Pass an empty slot whenever either side's
-/// arrays change.
+/// arrays change. Nothing checks this: a slot kept across different arrays
+/// silently returns wrong matches. An empty slot (`&mut None`) is always
+/// correct and only rebuilds the comparator on each call.
 pub(super) fn equal_rows_arr(
     indices_left: &UInt64Array,
     indices_right: &UInt32Array,

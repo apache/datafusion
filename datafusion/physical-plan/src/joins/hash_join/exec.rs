@@ -10132,6 +10132,153 @@ mod tests {
         Ok(())
     }
 
+    /// Correlated null-aware `LeftAnti` with a two-column correlation scope,
+    /// so scope lookups compare keys with the general multi-column comparator.
+    ///
+    /// Each NULL-marking direction yields several scope matches for a single
+    /// probe batch, which small batch sizes split across many lookup chunks.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_left_anti_multi_column_scope(
+        batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        fn table(
+            id: Vec<Option<i32>>,
+            g1: Vec<Option<i32>>,
+            g2: Vec<Option<i32>>,
+        ) -> Arc<dyn ExecutionPlan> {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int32, true),
+                Field::new("g1", DataType::Int32, true),
+                Field::new("g2", DataType::Int32, true),
+            ]));
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(id)),
+                    Arc::new(Int32Array::from(g1)),
+                    Arc::new(Int32Array::from(g2)),
+                ],
+            )
+            .unwrap();
+            TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap()
+        }
+
+        let left = table(
+            vec![
+                Some(1),
+                Some(2),
+                None,
+                None,
+                Some(6),
+                Some(8),
+                Some(9),
+                Some(10),
+                None,
+            ],
+            vec![
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(2),
+                Some(3),
+            ],
+            vec![
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(2),
+                Some(2),
+                Some(2),
+                Some(1),
+                Some(3),
+            ],
+        );
+        let right = table(
+            vec![
+                Some(2),
+                Some(3),
+                Some(4),
+                Some(5),
+                None,
+                None,
+                Some(7),
+                Some(11),
+            ],
+            vec![
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(2),
+            ],
+            vec![
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(2),
+                Some(2),
+                Some(2),
+                Some(1),
+            ],
+        );
+
+        let on = ["id", "g1", "g2"]
+            .into_iter()
+            .map(|name| {
+                Ok((
+                    Arc::new(Column::new_with_schema(name, &left.schema())?) as _,
+                    Arc::new(Column::new_with_schema(name, &right.schema())?) as _,
+                ))
+            })
+            .collect::<Result<JoinOn>>()?;
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::LeftAnti,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true,
+        )?;
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        // Scope (1, 1) holds 2, 3, 4 and 5: `(1, 1, 1)` is kept, `(2, 1, 1)`
+        // matches, and both NULL-valued build rows there are UNKNOWN. Scope
+        // (1, 2) holds two NULLs, so all of its build rows are UNKNOWN. Scope
+        // (2, 1) holds only 11, so `(10, 2, 1)` is kept, and `(NULL, 3, 3)`
+        // has an empty scope.
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+----+----+
+            | id | g1 | g2 |
+            +----+----+----+
+            |    | 3  | 3  |
+            | 1  | 1  | 1  |
+            | 10 | 2  | 1  |
+            +----+----+----+
+            ");
+        }
+
+        Ok(())
+    }
+
     #[test]
     fn test_lr_is_preserved() {
         assert_eq!(lr_is_preserved(JoinType::Inner), (true, true));
