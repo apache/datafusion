@@ -132,10 +132,7 @@ fn with_probe_filter(join: HashJoinExec) -> Result<HashJoinExec> {
     )?);
     join.builder()
         .with_new_children(vec![Arc::clone(join.left()), probe])?
-        .with_dynamic_filter(Some(HashJoinExecDynamicFilter {
-            filter,
-            build_accumulator: OnceLock::new(),
-        }))
+        .with_dynamic_filter(Some(HashJoinExecDynamicFilter::new(Some(filter), None)))
         .build()
 }
 
@@ -378,7 +375,8 @@ async fn prepared_build_reuses_data_with_independent_dynamic_filters() -> Result
         );
         assert_eq!(metrics.output_rows(), Some(1));
         let dynamic = plan.dynamic_filter.as_ref().unwrap();
-        assert!(futures::poll!(Box::pin(dynamic.filter.wait_complete())).is_ready());
+        let filter = dynamic.membership.as_ref().unwrap();
+        assert!(futures::poll!(Box::pin(filter.wait_complete())).is_ready());
     }
     assert_eq!(pool.reserved(), bytes);
     drop(plans);
@@ -896,7 +894,13 @@ async fn prepared_byte_keys_use_hash_membership() -> Result<()> {
             .build()?;
         let output = run(&task).await?;
         assert_eq!(output.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
-        let filter = &task.dynamic_filter.as_ref().unwrap().filter;
+        let filter = task
+            .dynamic_filter
+            .as_ref()
+            .unwrap()
+            .membership
+            .as_ref()
+            .unwrap();
         assert!(futures::poll!(Box::pin(filter.wait_complete())).is_ready());
         drop(task);
         assert_eq!(pool.reserved(), 0);

@@ -1,0 +1,32 @@
+description = "Hash join dynamic filter on a probe table sorted by the join key, where the build side matches an ordered subset of the key range. The load SQL writes a fact table of HJOS_DAYS x HJOS_ROWS_PER_DAY events sorted by event_id, and build tables that select 1 day, 10 days, or 1% of the events scattered over the whole range (control). The bounds of the dynamic filter can prune the probe row groups outside the matched range, and the membership check passes almost every remaining row. Subgroups: partitioned (HashJoinExec mode=Partitioned) and collect_left (mode=CollectLeft). Toggle parquet filter pushdown with its DATAFUSION_* environment variable."
+
+query_pattern = "q{QUERY_ID_PADDED}.benchmark"
+
+[[options]]
+name = "days"
+env = "HJOS_DAYS"
+default = "100"
+values = ["100", "..."]
+help = "Sets the number of days in the generated events table (at least 50; the queries select days 40..49)."
+
+[[options]]
+name = "rows-per-day"
+env = "HJOS_ROWS_PER_DAY"
+default = "200000"
+values = ["200000", "..."]
+help = "Sets the number of events per day. The build side of the 1-day queries has this many rows."
+
+[[options]]
+name = "rg-size"
+env = "HJOS_RG_SIZE"
+default = "100000"
+values = ["100000", "..."]
+help = "Sets the Parquet max_row_group_size used when writing the generated tables."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- hj_ordered_subset"
+description = "Run every query with 100 days x 200,000 events (20M rows) and 100,000-row row groups."
+
+[[examples]]
+command = "DATAFUSION_EXECUTION_PARQUET_PUSHDOWN_FILTERS=true cargo run --release --bin benchmark_runner -- hj_ordered_subset --subgroup partitioned"
+description = "Run only the partitioned joins, with parquet filter pushdown."

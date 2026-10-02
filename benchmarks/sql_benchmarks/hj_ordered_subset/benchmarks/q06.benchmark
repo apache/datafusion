@@ -1,0 +1,9 @@
+# Control: same as Q03 with a CollectLeft join.
+subgroup collect_left
+
+template sql_benchmarks/hj_ordered_subset/hj_ordered_subset.benchmark.template
+NAME=Q06_collect_left_scattered_1_pct
+JOIN_MODE=collect_left
+PLAN_MODE=CollectLeft
+BUILD_TABLE=labels_by_bucket
+BUILD_FILTER=l.bucket = 42

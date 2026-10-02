@@ -1,0 +1,41 @@
+# Shared template for the hj_ordered_subset suite. Each qNN.benchmark sets its
+# `subgroup` directive and includes this template with parameters:
+#   NAME          criterion display name
+#   JOIN_MODE     init script stem under init/ (partitioned, collect_left)
+#   PLAN_MODE     expected HashJoinExec mode (Partitioned, CollectLeft)
+#   BUILD_TABLE   build table (labels_by_day, labels_by_bucket)
+#   BUILD_FILTER  filter on the build table, which selects the build side
+#
+# Every query joins the full `events` table (probe side) to a filtered build
+# table on `event_id`. Every build row matches exactly one event.
+
+load sql_benchmarks/hj_ordered_subset/init/load.sql
+
+init sql_benchmarks/hj_ordered_subset/init/${JOIN_MODE}.sql
+
+name ${NAME}
+group hj_ordered_subset
+
+# The queries select days 40..49 and bucket 42 of 100.
+assert I
+SELECT max(day) >= 49 FROM events;
+----
+true
+
+# Correctness canary: every build row matches exactly one event. A dynamic
+# filter that drops a matching row group or row trips this assert.
+assert I
+SELECT (SELECT count(*) FROM events e JOIN ${BUILD_TABLE} l ON e.event_id = l.event_id WHERE ${BUILD_FILTER})
+     = (SELECT count(*) FROM ${BUILD_TABLE} l WHERE ${BUILD_FILTER});
+----
+true
+
+expect_plan HashJoinExec: mode=${PLAN_MODE}
+
+run
+SELECT count(*) AS n, sum(e.amount_cents) AS amount_cents, sum(e.v1) AS v1, max(e.note) AS note
+FROM events e
+JOIN ${BUILD_TABLE} l ON e.event_id = l.event_id
+WHERE ${BUILD_FILTER};
+
+cleanup sql_benchmarks/hj_ordered_subset/init/cleanup.sql
