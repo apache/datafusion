@@ -37,10 +37,11 @@ use tokio::runtime::Handle;
 
 use crate::execution::FFI_TaskContextProvider;
 use crate::execution_plan::FFI_ExecutionPlan;
+use crate::proto::scalar_subquery_results::FFI_ScalarSubqueryResults;
 use crate::udaf::FFI_AggregateUDF;
 use crate::udf::FFI_ScalarUDF;
 use crate::udwf::FFI_WindowUDF;
-use crate::util::FFI_Result;
+use crate::util::{FFI_Option, FFI_Result};
 use crate::{df_result, sresult_return};
 
 /// A stable struct for sharing [`PhysicalExtensionCodec`] across FFI boundaries.
@@ -52,6 +53,17 @@ pub struct FFI_PhysicalExtensionCodec {
         &Self,
         buf: SSlice<u8>,
         inputs: SVec<FFI_ExecutionPlan>,
+    ) -> FFI_Result<FFI_ExecutionPlan>,
+
+    /// Decode bytes into an execution plan, forwarding the active scalar
+    /// subquery results scope (if any) from the caller's decode context so a
+    /// `ScalarSubqueryExpr` decoded on this side of the boundary shares the
+    /// same populated results as the `ScalarSubqueryExec` that owns them.
+    try_decode_with_ctx: unsafe extern "C" fn(
+        &Self,
+        buf: SSlice<u8>,
+        inputs: SVec<FFI_ExecutionPlan>,
+        scalar_subquery_results: FFI_Option<FFI_ScalarSubqueryResults>,
     ) -> FFI_Result<FFI_ExecutionPlan>,
 
     /// Encode an execution plan into bytes.
@@ -151,6 +163,38 @@ unsafe extern "C" fn try_decode_fn_wrapper(
     // The caller's decode context cannot cross the FFI boundary, so decode
     // with a root context for this side's codec.
     let decode_ctx = PhysicalPlanDecodeContext::new(task_ctx.as_ref(), codec.as_ref());
+    let plan = sresult_return!(codec.try_decode_with_ctx(
+        buf.as_ref(),
+        &inputs,
+        &decode_ctx,
+        &DefaultPhysicalProtoConverter {},
+    ));
+
+    FFI_Result::Ok(FFI_ExecutionPlan::new(plan, runtime))
+}
+
+unsafe extern "C" fn try_decode_with_ctx_fn_wrapper(
+    codec: &FFI_PhysicalExtensionCodec,
+    buf: SSlice<u8>,
+    inputs: SVec<FFI_ExecutionPlan>,
+    scalar_subquery_results: FFI_Option<FFI_ScalarSubqueryResults>,
+) -> FFI_Result<FFI_ExecutionPlan> {
+    let runtime = codec.runtime().cloned();
+    let task_ctx: Arc<TaskContext> =
+        sresult_return!((&codec.task_ctx_provider).try_into());
+    let codec = codec.inner();
+    let inputs = inputs
+        .into_iter()
+        .map(|plan| <Arc<dyn ExecutionPlan>>::try_from(&plan))
+        .collect::<Result<Vec<_>>>();
+    let inputs = sresult_return!(inputs);
+
+    let decode_ctx = PhysicalPlanDecodeContext::new(task_ctx.as_ref(), codec.as_ref());
+    let decode_ctx = match scalar_subquery_results.into_option() {
+        Some(results) => decode_ctx.with_scalar_subquery_results(results.into()),
+        None => decode_ctx,
+    };
+
     let plan = sresult_return!(codec.try_decode_with_ctx(
         buf.as_ref(),
         &inputs,
@@ -313,6 +357,7 @@ impl FFI_PhysicalExtensionCodec {
 
         Self {
             try_decode: try_decode_fn_wrapper,
+            try_decode_with_ctx: try_decode_with_ctx_fn_wrapper,
             try_encode: try_encode_fn_wrapper,
             try_decode_udf: try_decode_udf_fn_wrapper,
             try_encode_udf: try_encode_udf_fn_wrapper,
@@ -372,6 +417,37 @@ impl PhysicalExtensionCodec for ForeignPhysicalExtensionCodec {
 
         let plan =
             df_result!(unsafe { (self.0.try_decode)(&self.0, buf.into(), inputs) })?;
+        let plan: Arc<dyn ExecutionPlan> = (&plan).try_into()?;
+
+        Ok(plan)
+    }
+
+    fn try_decode_with_ctx(
+        &self,
+        buf: &[u8],
+        inputs: &[Arc<dyn ExecutionPlan>],
+        ctx: &PhysicalPlanDecodeContext<'_>,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let inputs = inputs
+            .iter()
+            .map(|plan| FFI_ExecutionPlan::new(Arc::clone(plan), None))
+            .collect();
+
+        let scalar_subquery_results = ctx
+            .scalar_subquery_results()
+            .cloned()
+            .map(FFI_ScalarSubqueryResults::new)
+            .into();
+
+        let plan = df_result!(unsafe {
+            (self.0.try_decode_with_ctx)(
+                &self.0,
+                buf.into(),
+                inputs,
+                scalar_subquery_results,
+            )
+        })?;
         let plan: Arc<dyn ExecutionPlan> = (&plan).try_into()?;
 
         Ok(plan)
@@ -452,18 +528,37 @@ pub(crate) mod tests {
     use std::sync::Arc;
 
     use arrow_schema::{DataType, Field, Schema};
-    use datafusion_common::{Result, exec_err};
+    use datafusion_common::tree_node::TreeNodeRecursion;
+    use datafusion_common::{Result, exec_err, internal_datafusion_err};
     use datafusion_execution::TaskContext;
+    use datafusion_expr::physical_planning_context::{
+        ScalarSubqueryResults, SubqueryIndex,
+    };
     use datafusion_expr::ptr_eq::arc_ptr_eq;
     use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF, WindowUDFImpl};
     use datafusion_functions::math::abs::AbsFunc;
     use datafusion_functions_aggregate::sum::Sum;
     use datafusion_functions_window::rank::{Rank, RankType};
-    use datafusion_physical_plan::ExecutionPlan;
+    use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
+    use datafusion_physical_plan::empty::EmptyExec as RealEmptyExec;
+    use datafusion_physical_plan::scalar_subquery::{
+        ScalarSubqueryExec, ScalarSubqueryLink,
+    };
+    use datafusion_physical_plan::{
+        ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan,
+        PhysicalExpr, PlanProperties, ReplaceChildrenOptions, SendableRecordBatchStream,
+        apply_expression_roots,
+    };
+    use datafusion_proto::bytes::{
+        physical_plan_from_bytes_with_proto_converter,
+        physical_plan_to_bytes_with_proto_converter,
+    };
     use datafusion_proto::physical_plan::{
         DefaultPhysicalProtoConverter, PhysicalExtensionCodec, PhysicalPlanDecodeContext,
         PhysicalProtoConverterExtension,
     };
+    use datafusion_proto::protobuf::PhysicalExprNode;
+    use prost::Message;
 
     use crate::execution_plan::tests::EmptyExec;
     use crate::proto::physical_extension_codec::{
@@ -682,8 +777,14 @@ pub(crate) mod tests {
         }
     }
 
+    /// Calls the foreign adapter's legacy `try_decode`, which has no decode
+    /// context to forward, but the far side's own codec still reaches its
+    /// `try_decode_with_ctx` override (with a root context) because
+    /// `try_decode_fn_wrapper` always calls that method rather than
+    /// `try_decode` directly.
     #[test]
-    fn ffi_physical_extension_codec_decodes_through_try_decode_with_ctx() -> Result<()> {
+    fn ffi_physical_extension_codec_legacy_decode_uses_context_aware_default()
+    -> Result<()> {
         let codec = Arc::new(ContextOnlyCodec);
         let (ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
 
@@ -816,5 +917,220 @@ pub(crate) mod tests {
             .try_into()
             .expect("rebound codec resolves");
         assert_eq!(task_ctx.session_id(), ctx_b.task_ctx().session_id());
+    }
+
+    /// An extension plan that carries a single physical expression, so its
+    /// codec has to decode that expression itself.
+    #[derive(Debug)]
+    struct ScalarSubqueryExprExec {
+        expr: Arc<dyn PhysicalExpr>,
+        child: Arc<dyn ExecutionPlan>,
+    }
+
+    impl DisplayAs for ScalarSubqueryExprExec {
+        fn fmt_as(
+            &self,
+            _t: DisplayFormatType,
+            f: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            write!(f, "ScalarSubqueryExprExec")
+        }
+    }
+
+    impl ExecutionPlan for ScalarSubqueryExprExec {
+        fn name(&self) -> &str {
+            "ScalarSubqueryExprExec"
+        }
+
+        fn properties(&self) -> &Arc<PlanProperties> {
+            self.child.properties()
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![&self.child]
+        }
+
+        fn apply_expressions(
+            &self,
+            f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            apply_expression_roots(std::slice::from_ref(&self.expr), f)
+        }
+
+        fn replace_children(
+            self: Arc<Self>,
+            _: Vec<Arc<dyn ExecutionPlan>>,
+            _: ReplaceChildrenOptions,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            unreachable!()
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
+        }
+
+        fn execute(
+            &self,
+            _partition: usize,
+            _context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            unreachable!()
+        }
+    }
+
+    #[derive(Clone, PartialEq, Message)]
+    struct ScalarSubqueryExprExecProto {
+        #[prost(message, optional, tag = "1")]
+        expr: Option<PhysicalExprNode>,
+    }
+
+    /// Decodes [`ScalarSubqueryExprExec`] through `try_decode_with_ctx`,
+    /// passing the decode context on to its expression. `try_decode` fails so
+    /// a caller that drops the context (by routing through the plain
+    /// `try_decode` FFI entry point instead of `try_decode_with_ctx`) is
+    /// caught by this test.
+    #[derive(Debug)]
+    struct ScalarSubqueryExprExecCodec;
+
+    impl PhysicalExtensionCodec for ScalarSubqueryExprExecCodec {
+        fn try_decode(
+            &self,
+            _buf: &[u8],
+            _inputs: &[Arc<dyn ExecutionPlan>],
+            _ctx: &TaskContext,
+            _proto_converter: &dyn PhysicalProtoConverterExtension,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            exec_err!("ScalarSubqueryExprExecCodec decodes through try_decode_with_ctx")
+        }
+
+        fn try_decode_with_ctx(
+            &self,
+            buf: &[u8],
+            inputs: &[Arc<dyn ExecutionPlan>],
+            ctx: &PhysicalPlanDecodeContext<'_>,
+            proto_converter: &dyn PhysicalProtoConverterExtension,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            let proto = ScalarSubqueryExprExecProto::decode(buf).map_err(|e| {
+                internal_datafusion_err!("failed to decode ScalarSubqueryExprExec: {e}")
+            })?;
+            let expr_proto = proto.expr.ok_or_else(|| {
+                internal_datafusion_err!("ScalarSubqueryExprExec is missing its expr")
+            })?;
+            let schema = inputs[0].schema();
+            let expr =
+                proto_converter.proto_to_physical_expr(&expr_proto, &schema, ctx)?;
+            Ok(Arc::new(ScalarSubqueryExprExec {
+                expr,
+                child: Arc::clone(&inputs[0]),
+            }))
+        }
+
+        fn try_encode(
+            &self,
+            node: Arc<dyn ExecutionPlan>,
+            buf: &mut Vec<u8>,
+            proto_converter: &dyn PhysicalProtoConverterExtension,
+        ) -> Result<()> {
+            let exec =
+                node.downcast_ref::<ScalarSubqueryExprExec>()
+                    .ok_or_else(|| {
+                        internal_datafusion_err!("expected ScalarSubqueryExprExec")
+                    })?;
+            let proto = ScalarSubqueryExprExecProto {
+                expr: Some(proto_converter.physical_expr_to_proto(&exec.expr, self)?),
+            };
+            proto.encode(buf).map_err(|e| {
+                internal_datafusion_err!("failed to encode ScalarSubqueryExprExec: {e}")
+            })
+        }
+    }
+
+    /// The decode context's active scalar subquery results scope must reach a
+    /// `ScalarSubqueryExpr` decoded by a codec that is forced foreign through
+    /// the FFI boundary, not just a local one. Without the fix, the far side
+    /// always decodes with a root context (no scope), so the embedded
+    /// `ScalarSubqueryExpr` fails to deserialize.
+    #[test]
+    fn ffi_physical_extension_codec_forced_foreign_scalar_subquery_roundtrip()
+    -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let subquery_schema =
+            Arc::new(Schema::new(vec![Field::new("x", DataType::Int64, true)]));
+
+        let results = ScalarSubqueryResults::new(1);
+        let sq_expr: Arc<dyn PhysicalExpr> = Arc::new(ScalarSubqueryExpr::new(
+            DataType::Int64,
+            true,
+            SubqueryIndex::new(0),
+            results.clone(),
+        ));
+        let extension_plan: Arc<dyn ExecutionPlan> = Arc::new(ScalarSubqueryExprExec {
+            expr: sq_expr,
+            child: Arc::new(RealEmptyExec::new(Arc::clone(&schema))),
+        });
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(ScalarSubqueryExec::new(
+            extension_plan,
+            vec![ScalarSubqueryLink {
+                plan: Arc::new(RealEmptyExec::new(subquery_schema)),
+                index: SubqueryIndex::new(0),
+            }],
+            results,
+        ));
+
+        let bytes = physical_plan_to_bytes_with_proto_converter(
+            Arc::clone(&plan),
+            &ScalarSubqueryExprExecCodec,
+            &DefaultPhysicalProtoConverter {},
+        )?;
+
+        let (ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
+        let mut ffi_codec = FFI_PhysicalExtensionCodec::new(
+            Arc::new(ScalarSubqueryExprExecCodec),
+            None,
+            task_ctx_provider,
+        );
+        ffi_codec.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_codec: Arc<dyn PhysicalExtensionCodec> = (&ffi_codec).into();
+
+        let deserialized = physical_plan_from_bytes_with_proto_converter(
+            bytes.as_ref(),
+            ctx.task_ctx().as_ref(),
+            foreign_codec.as_ref(),
+            &DefaultPhysicalProtoConverter {},
+        )?;
+
+        let sq_exec = deserialized
+            .downcast_ref::<ScalarSubqueryExec>()
+            .expect("expected ScalarSubqueryExec");
+        let decoded_extension = sq_exec
+            .input()
+            .downcast_ref::<ScalarSubqueryExprExec>()
+            .expect(
+                "expected ScalarSubqueryExprExec decoded through the forced-foreign codec",
+            );
+        let decoded_sq_expr = decoded_extension
+            .expr
+            .downcast_ref::<ScalarSubqueryExpr>()
+            .expect("expected ScalarSubqueryExpr");
+
+        // The expression decoded by the forced-foreign codec must observe
+        // values written to the host's ScalarSubqueryExec results container.
+        assert_eq!(decoded_sq_expr.results().get(SubqueryIndex::new(0)), None);
+        sq_exec.results().set(
+            SubqueryIndex::new(0),
+            datafusion_common::ScalarValue::Int64(Some(42)),
+        )?;
+        assert_eq!(
+            decoded_sq_expr.results().get(SubqueryIndex::new(0)),
+            Some(datafusion_common::ScalarValue::Int64(Some(42)))
+        );
+
+        Ok(())
     }
 }
