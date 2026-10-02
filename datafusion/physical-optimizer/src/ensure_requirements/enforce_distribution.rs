@@ -1010,7 +1010,7 @@ fn get_repartition_requirement_status(
         // Decide whether adding a round robin is beneficial depending on
         // the statistical information we have on the number of rows:
         let roundrobin_beneficial_stats = match stats_ctx
-            .compute(child.as_ref(), &StatisticsArgs::new())?
+            .compute_arc(&child, &StatisticsArgs::new())?
             .num_rows
         {
             Precision::Exact(n_rows) => n_rows > batch_size,
@@ -1353,9 +1353,7 @@ pub fn ensure_distribution(
 /// `stats_ctx` carries the memoization cache used to answer the child
 /// statistics queries behind the repartition decisions. Share one context
 /// across the whole traversal so each subtree is computed once rather than
-/// once per ancestor. The cache is keyed by raw plan-node pointers, so reset
-/// it (via [`StatisticsContext::reset_cache`]) after any node whose plan
-/// pointer actually changed.
+/// once per ancestor.
 #[expect(
     deprecated,
     reason = "HashPartitioned is accepted during the KeyPartitioned migration"
