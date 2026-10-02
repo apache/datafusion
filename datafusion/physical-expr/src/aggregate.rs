@@ -347,6 +347,11 @@ impl AggregateExprBuilder {
         self
     }
 
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
     #[doc(hidden)]
     pub fn human_display_alias(mut self, alias: impl Into<String>) -> Self {
         let alias = alias.into();
@@ -696,6 +701,11 @@ impl AggregateFunctionExpr {
             .map(AggregateHumanDisplay::expression)
     }
 
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
     #[doc(hidden)]
     pub fn human_display_alias(&self) -> Option<&str> {
         self.human_display

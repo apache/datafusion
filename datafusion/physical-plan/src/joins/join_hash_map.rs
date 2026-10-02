@@ -97,11 +97,16 @@ use hashbrown::hash_table::Entry::{Occupied, Vacant};
 /// At runtime we choose between using `JoinHashMapU32` and `JoinHashMapU64` which oth implement
 /// `JoinHashMapType`.
 ///
-/// ## Note on use of this trait as a public API
-/// This is currently a public trait but is mainly intended for internal use within DataFusion.
 /// For example, we may compare references to `JoinHashMapType` implementations by pointer equality
 /// rather than deep equality of contents, as deep equality would be expensive and in our usage
 /// patterns it is impossible for two different hash maps to have identical contents in a practical sense.
+///
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
 pub trait JoinHashMapType: Send + Sync {
     fn extend_zero(&mut self, len: usize);
 
