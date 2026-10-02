@@ -1,6 +1,6 @@
--- Shape: IN correlated on `<` instead of `=`. There is no equality to hash on,
--- so this query keeps the nested-loop mark joins. It is the control: its cost
--- must stay the same when the hashable cases get faster.
+-- Shape: IN correlated on `<` instead of `=`. The `IN` equality is the hash key
+-- and the `<` correlation stays a residual filter of the one null-aware mark
+-- join, which applies it when it decides whether a NULL makes the mark UNKNOWN.
 SELECT
   count(*) FILTER (WHERE m) AS true_count,
   count(*) FILTER (WHERE m IS NULL) AS null_count

@@ -61,7 +61,8 @@ use range_partitioning::{
 use async_trait::async_trait;
 use datafusion::common::cast::as_float64_array;
 use datafusion::execution::SessionStateBuilder;
-use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::execution::memory_pool::UnboundedMemoryPool;
+use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::physical_plan::operator_statistics::StatisticsRegistry;
 use log::info;
 use sqlparser::ast;
@@ -110,7 +111,14 @@ impl TestContext {
         let config = SessionConfig::new()
             // hardcode target partitions so plans are deterministic
             .with_target_partitions(4);
-        let runtime = Arc::new(RuntimeEnv::default());
+        let pool = crate::memory_drift::wrap_pool(
+            Arc::new(UnboundedMemoryPool::default()),
+            &relative_path.display().to_string(),
+        );
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(pool)
+            .build_arc()
+            .expect("default runtime builds");
 
         let mut state_builder = SessionStateBuilder::new()
             .with_config(config)

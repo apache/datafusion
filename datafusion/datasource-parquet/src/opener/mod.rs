@@ -18,6 +18,7 @@
 //! [`ParquetMorselizer`] state machines for opening Parquet files
 
 mod early_stop;
+#[cfg(feature = "parquet_encryption")]
 mod encryption;
 
 use self::early_stop::EarlyStoppingStream;
@@ -1482,6 +1483,10 @@ impl RowGroupsPrunedParquetOpen {
             self.prepared.pruning_predicate.as_ref().map(|p| p.as_ref())
             && self.prepared.loaded.prepared.enable_bloom_filter
             && !self.row_groups.is_empty()
+            && self
+                .row_groups
+                .row_group_indexes()
+                .any(|idx| !self.row_groups.access_plan().is_fully_matched(idx))
         {
             // Use the existing reader for bloom filter I/O;
             // replace with a fresh reader for decoding below.
@@ -1521,6 +1526,11 @@ impl RowGroupsPrunedParquetOpen {
                 .collect();
 
             for idx in self.row_groups.row_group_indexes() {
+                // Statistics have already proved that every row in this group
+                // matches the predicate, so its Bloom filters cannot prune it.
+                if self.row_groups.access_plan().is_fully_matched(idx) {
+                    continue;
+                }
                 let mut row_group_filters =
                     BloomFilterStatistics::with_capacity(parquet_columns.len());
                 for (column_name, column_idx, physical_type, type_length) in
@@ -1665,8 +1675,8 @@ impl RowGroupsPrunedParquetOpen {
         //
         // 2. `reverse`: flip the iteration order for DESC requests, applied
         //    AFTER any reorder so the reversed order is correct whether or
-        //    not reorder changed anything. Also handles `row_selection`
-        //    remapping.
+        //    not reorder changed anything. Local selections move with their
+        //    row groups.
         //
         // For sorted data: reorder is a no-op, reverse gives perfect DESC.
         // For unsorted data: reorder fixes the order, reverse flips for DESC.
@@ -1685,7 +1695,7 @@ impl RowGroupsPrunedParquetOpen {
                     )?;
                 }
                 if prepared.reverse_row_groups {
-                    prepared_plan = prepared_plan.reverse(file_metadata.as_ref())?;
+                    prepared_plan = prepared_plan.reverse();
                 }
                 Ok(prepared_plan)
             };
@@ -1720,9 +1730,9 @@ impl RowGroupsPrunedParquetOpen {
         } = {
             // Build the prepared access plan first — `prepare_access_plan` may
             // call `reorder_by_statistics` (for `sort_order_for_reorder`) and
-            // `reverse` (for `reverse_row_groups`), both of which mutate
-            // `row_group_indexes` to the physical scan order the decoder will
-            // actually read. We MUST build our `rg_plan` from this reordered
+            // `reverse` (for `reverse_row_groups`), both of which arrange row
+            // groups in the physical scan order the decoder will read.
+            // We MUST build our `rg_plan` from this reordered
             // list, otherwise our per-RG pruner check would consult the
             // metadata of a different RG than the decoder is about to yield.
             let decoder_config = DecoderBuilderConfig {
@@ -1734,35 +1744,23 @@ impl RowGroupsPrunedParquetOpen {
             };
 
             let prepared_access_plan = prepare_access_plan(access_plan)?;
-            // #24355: a row selection (from page-index pruning, or an externally
-            // supplied `ParquetRowSelection`) is carried by the decoder as one
-            // flat selection over the concatenation of the remaining row groups.
-            // The runtime pruner's `into_builder().with_row_groups(...)` rebuild
-            // drops row groups without slicing that selection to match, so record
-            // whether a selection is present and disable runtime pruning below
-            // when it is (mirroring `reorder_by_statistics`, which also bails when
-            // a row selection is present). The proper fix that keeps pruning
-            // under a live selection is tracked in
-            // https://github.com/apache/arrow-rs/issues/10624 /
-            // https://github.com/apache/datafusion/issues/24358.
-            let has_row_selection = prepared_access_plan.row_selection.is_some();
-            // Build `rg_plan` parallel to the decoder's view: the
-            // `prepared_access_plan` has already had its empty-selection
-            // row groups stripped, so 1:1 correspondence with the readers
-            // arrow-rs will hand back is restored. We zip with the
-            // `fully_matched` flag so the stream can toggle the per-row
-            // `RowFilter` per RG.
-            let rg_plan: VecDeque<RgPlanEntry> = prepared_access_plan
-                .row_group_indexes
-                .iter()
-                .copied()
-                .zip(prepared_access_plan.fully_matched.iter().copied())
-                .map(|(rg_index, fully_matched)| RgPlanEntry {
-                    rg_index,
-                    fully_matched,
-                    bytes: row_group_bytes(&rg_metadata[rg_index]),
-                })
-                .collect();
+            let has_row_selection = prepared_access_plan.has_row_selection;
+            // Move selections into the decoder, retaining only the metadata
+            // needed for pruning, filter toggles, and byte accounting.
+            let (selections, rg_plan): (Vec<_>, VecDeque<RgPlanEntry>) =
+                prepared_access_plan
+                    .row_groups
+                    .into_iter()
+                    .map(|rg| {
+                        let rg_index = rg.selection.row_group_index();
+                        let entry = RgPlanEntry {
+                            rg_index,
+                            bytes: row_group_bytes(&rg_metadata[rg_index]),
+                            fully_matched: rg.fully_matched,
+                        };
+                        (rg.selection, entry)
+                    })
+                    .unzip();
 
             // Decide the initial row filter state based on the first RG to
             // read. If that RG is `fully_matched` the per-row predicate is
@@ -1778,8 +1776,7 @@ impl RowGroupsPrunedParquetOpen {
             let first_rg_fully_matched = rg_plan.front().is_some_and(|e| e.fully_matched);
             let row_filter_context = precomputed_context;
 
-            let mut builder =
-                decoder_config.build(prepared_access_plan, reader_metadata.clone());
+            let mut builder = decoder_config.build(selections, reader_metadata.clone());
             let mut filter_installed = false;
             if let Some(ctx) = row_filter_context.as_ref() {
                 if first_rg_fully_matched {
@@ -1857,11 +1854,9 @@ impl RowGroupsPrunedParquetOpen {
         // via the `DynamicFilterTracker` watch channel (#22460), so detecting
         // a threshold change is a single atomic load — not a tree walk per
         // RG check.
-        // Also disabled when a row selection is live (#24355) — page-index
-        // pruning is the common source: the pruner rebuilds the decoder via
-        // `with_row_groups(...)`, which drops row groups without slicing the
-        // carried selection to match, so pruning under a live selection returns
-        // wrong results. Decline to prune in that case.
+        // Preserve the current policy for scans with selections. Enabling
+        // runtime pruning for them is separate from adopting the local API
+        // and is tracked in https://github.com/apache/datafusion/issues/24358.
         let row_group_pruner =
             match (&prepared.predicate, rg_plan.len() > 1, has_row_selection) {
                 (Some(predicate), true, false)
@@ -2497,6 +2492,11 @@ mod test {
         /// Enable page index.
         fn with_enable_page_index(mut self, enable: bool) -> Self {
             self.enable_page_index = enable;
+            self
+        }
+
+        fn with_enable_bloom_filter(mut self, enable: bool) -> Self {
+            self.enable_bloom_filter = enable;
             self
         }
 
@@ -4583,6 +4583,86 @@ mod test {
             rows_without_page_index, 100,
             "without page index all rows are returned"
         );
+    }
+
+    #[tokio::test]
+    async fn fully_matched_row_groups_skip_bloom_filter_reads() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let batches = vec![
+            record_batch!(("a", Int32, vec![1, 1, 1])).unwrap(),
+            record_batch!(("a", Int32, vec![0, 1, 2])).unwrap(),
+        ];
+        let schema = batches[0].schema();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(3))
+            .set_bloom_filter_enabled(true)
+            .set_statistics_enabled(EnabledStatistics::Chunk)
+            .build();
+        let data_size = write_parquet_batches(
+            Arc::clone(&store),
+            "bloom.parquet",
+            batches,
+            Some(props),
+        )
+        .await;
+        let file = PartitionedFile::new("bloom.parquet".to_string(), data_size as u64);
+        let predicate = logical2physical(&col("a").eq(lit(1)), &schema);
+
+        let mut bloom_bytes = Vec::new();
+        for stats_pruning in [false, true] {
+            let metrics = ExecutionPlanMetricsSet::new();
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_predicate(Arc::clone(&predicate))
+                .with_pushdown_filters(true)
+                .with_row_group_stats_pruning(stats_pruning)
+                .with_enable_bloom_filter(true)
+                .with_metrics(metrics.clone())
+                .build();
+            let stream = open_file(&morselizer, file.clone()).await.unwrap();
+            // The decoder has not been polled yet, so only Bloom filter reads
+            // contribute to this metric.
+            bloom_bytes.push(counter_metric_value(&metrics, "bytes_scanned"));
+            assert_eq!(collect_int32_values(stream).await, vec![1, 1, 1, 1]);
+        }
+        assert!(bloom_bytes[1] > 0, "partial row group needs Bloom I/O");
+        assert!(
+            bloom_bytes[1] < bloom_bytes[0],
+            "fully matched row group should not load Bloom filters: {bloom_bytes:?}"
+        );
+
+        let all_matched = record_batch!(("a", Int32, vec![1, 1, 1])).unwrap();
+        let data_size = write_parquet_batches(
+            Arc::clone(&store),
+            "all-matched.parquet",
+            vec![all_matched],
+            Some(
+                WriterProperties::builder()
+                    .set_bloom_filter_enabled(true)
+                    .set_statistics_enabled(EnabledStatistics::Chunk)
+                    .build(),
+            ),
+        )
+        .await;
+        let metrics = ExecutionPlanMetricsSet::new();
+        let morselizer = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_predicate(predicate)
+            .with_pushdown_filters(true)
+            .with_row_group_stats_pruning(true)
+            .with_enable_bloom_filter(true)
+            .with_metrics(metrics.clone())
+            .build();
+        let stream = open_file(
+            &morselizer,
+            PartitionedFile::new("all-matched.parquet".to_string(), data_size as u64),
+        )
+        .await
+        .unwrap();
+        assert_eq!(counter_metric_value(&metrics, "bytes_scanned"), 0);
+        assert_eq!(collect_int32_values(stream).await, vec![1, 1, 1]);
     }
 
     #[test]

@@ -385,11 +385,11 @@ impl ExecutionPlan for DataSinkExec {
 /// Create a output record batch with a count
 ///
 /// ```text
-/// +-------+,
-/// | count |,
-/// +-------+,
-/// | 6     |,
-/// +-------+,
+/// +-------+
+/// | count |
+/// +-------+
+/// | 6     |
+/// +-------+
 /// ```
 fn make_count_batch(count: u64) -> RecordBatch {
     let array = Arc::new(UInt64Array::from(vec![count])) as ArrayRef;

@@ -295,7 +295,14 @@ impl StandardWindowFunctionExpr for WindowUDFExpr {
     }
 
     fn limit_effect(&self) -> LimitEffect {
-        self.fun.inner().limit_effect(self.args.as_slice())
+        match self.fun.inner().limit_effect(self.args.as_slice()) {
+            // The function's offset counts non-null values, so it cannot bound
+            // the number of input rows needed when NULLs are skipped.
+            LimitEffect::Relative(_) | LimitEffect::Absolute(_) if self.ignore_nulls => {
+                LimitEffect::Unknown
+            }
+            effect => effect,
+        }
     }
 }
 
