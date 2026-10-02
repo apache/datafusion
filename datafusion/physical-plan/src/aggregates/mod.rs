@@ -197,7 +197,7 @@ use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, lit};
 use datafusion_physical_expr::{
-    ConstExpr, EquivalenceProperties, physical_exprs_contains,
+    ConstExpr, EquivalenceProperties, physical_exprs_contains, physical_exprs_equal,
 };
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, fmt_sql};
 use datafusion_physical_expr_common::sort_expr::{
@@ -848,13 +848,8 @@ impl LimitOptions {
 }
 
 /// Mutually exclusive aggregation implementations and their configuration.
-///
-/// # Public Only for Internal Use:
-/// `datafusion-physical-optimizer` inspects and combines aggregate kinds.
-/// This enum is not part of the supported public API.
-#[doc(hidden)]
 #[derive(Debug, Clone)]
-pub enum AggregateKind {
+enum AggregateKind {
     /// Ordinary aggregation, with no limit on the groups retained.
     General {
         group_by: Arc<PhysicalGroupBy>,
@@ -889,13 +884,7 @@ pub struct AggregateExec {
     /// Aggregation mode (full, partial)
     mode: AggregateMode,
     /// Aggregation implementation and its configuration.
-    ///
-    /// # Public Only for Internal Use:
-    /// `datafusion-physical-optimizer` updates this when combining aggregates.
-    /// Changes must preserve the expressions, schema, and plan properties.
-    /// This field is not part of the supported public API.
-    #[doc(hidden)]
-    pub kind: AggregateKind,
+    kind: AggregateKind,
     /// Input plan, could be a partial aggregate or the input to the aggregate
     pub input: Arc<dyn ExecutionPlan>,
     /// Schema after the aggregate is applied. Contains the group by columns followed by the
@@ -1160,6 +1149,129 @@ impl AggregateExec {
             limit,
         };
         Some(Transformed::yes(self))
+    }
+
+    /// Combine adjacent partial and final aggregates in the given plan if they are
+    /// compatible. See comments at [`CombinePartialFinalAggregate`] for background.
+    ///
+    /// If input plan is not aggregate, this function will short-circuit with
+    /// `Transformed::No`.
+    ///
+    /// ```txt
+    /// Before Plan:
+    /// AggregateExec(mode=Final)          <-- current plan
+    ///   AggregateExec(mode=Partial)
+    ///     DataSourceExec
+    ///
+    /// After Plan:
+    /// AggregateExec(mode=Single)         <-- current plan
+    ///   DataSourceExec
+    /// ```
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only in physical optimizer;
+    /// see [API policy] for details.
+    ///
+    /// [`CombinePartialFinalAggregate`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/combine_partial_final_agg/struct.CombinePartialFinalAggregate.html
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
+    pub fn try_combine_partial_final(
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        // Step 1: Ensure the below plan shape
+        //
+        // AggregateExec(mode=final) <-- current plan
+        //   AggregateExec(mode=partial)
+
+        let Some(final_agg) = plan.downcast_ref::<Self>() else {
+            return Ok(Transformed::no(plan));
+        };
+        let mode = match final_agg.mode {
+            AggregateMode::Final => AggregateMode::Single,
+            AggregateMode::FinalPartitioned => AggregateMode::SinglePartitioned,
+            _ => return Ok(Transformed::no(plan)),
+        };
+        let Some(partial) = final_agg.input.downcast_ref::<Self>() else {
+            return Ok(Transformed::no(plan));
+        };
+        if partial.mode != AggregateMode::Partial {
+            return Ok(Transformed::no(plan));
+        }
+
+        // Step 2: Check compatibility between partial and final `AggregateExec`
+
+        let final_group_by = final_agg.group_expr();
+        let input_group_by = partial.group_expr();
+        let final_aggr_expr = final_agg.aggr_expr();
+        let input_aggr_expr = partial.aggr_expr();
+        let final_filter_expr = final_agg.filter_expr();
+        let input_filter_expr = partial.filter_expr();
+
+        // Compare the partial's output expressions with the final's input expressions.
+        let can_combine = physical_exprs_equal(
+            &input_group_by.output_exprs(),
+            &final_group_by.input_exprs(),
+        ) && input_group_by.groups() == final_group_by.groups()
+            && input_group_by.null_expr().len() == final_group_by.null_expr().len()
+            && input_group_by
+                .null_expr()
+                .iter()
+                .zip(final_group_by.null_expr().iter())
+                .all(|((lhs_expr, lhs_str), (rhs_expr, rhs_str))| {
+                    lhs_expr.eq(rhs_expr) && lhs_str == rhs_str
+                })
+            && final_aggr_expr.len() == input_aggr_expr.len()
+            && final_aggr_expr
+                .iter()
+                .zip(input_aggr_expr.iter())
+                .all(|(final_expr, partial_expr)| final_expr.eq(partial_expr))
+            && final_filter_expr.len() == input_filter_expr.len()
+            && final_filter_expr.iter().zip(input_filter_expr.iter()).all(
+                |(final_expr, partial_expr)| match (final_expr, partial_expr) {
+                    (Some(l), Some(r)) => l.eq(r),
+                    (None, None) => true,
+                    _ => false,
+                },
+            );
+        if !can_combine {
+            return Ok(Transformed::no(plan));
+        }
+
+        let Ok(mut combined) = Self::try_new(
+            mode,
+            input_group_by.clone(),
+            input_aggr_expr.to_vec(),
+            input_filter_expr.to_vec(),
+            Arc::clone(partial.input()),
+            partial.input_schema(),
+        ) else {
+            return Ok(Transformed::no(plan));
+        };
+
+        // LimitedDistinctAggregation runs before this optimization. Preserve its
+        // limit while using the partial's grouping expressions over raw input.
+        combined.kind = match (&final_agg.kind, &partial.kind) {
+            (AggregateKind::General { .. }, AggregateKind::General { .. }) => {
+                combined.kind
+            }
+            (
+                AggregateKind::DistinctLimit { limit, .. },
+                AggregateKind::DistinctLimit {
+                    group_by,
+                    limit: partial_limit,
+                },
+            ) if limit == partial_limit => AggregateKind::DistinctLimit {
+                group_by: Arc::clone(group_by),
+                limit: *limit,
+            },
+            _ => {
+                return internal_err!(
+                    "The AggregateKind should stay either (a) General (b) DistinctLimit introduced with the previous optimizer pass `LimitedDistinctAggregation`, it's impossible to have other variant"
+                );
+            }
+        };
+        Ok(Transformed::yes(Arc::new(combined)))
     }
 
     /// Clone with replacement aggregate expressions.
