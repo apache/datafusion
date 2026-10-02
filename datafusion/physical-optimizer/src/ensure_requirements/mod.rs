@@ -37,29 +37,31 @@
 //!
 //! # Architecture
 //!
-//! `optimize` runs several tree traversals. The defining property of this
-//! rule is **Phase 2**: a single combined bottom-up pass that resolves
-//! distribution *and* sorting for each node together. The surrounding phases
-//! are independent traversals (top-down join-key reorder, then several
-//! follow-up sort/order rewrites). Some of those could be consolidated
-//! further in a follow-up.
+//! Enforcement is a sequence of tree traversals. Phase 2a settles distribution
+//! bottom-up; Phase 2b then settles ordering bottom-up on the
+//! distribution-fixed plan, so every sorting decision has full distribution
+//! context. Phases 0 and 1 are top-down preparation. Phase 3 is optimization
+//! and runs separately, after the optimizer rules that create the operators
+//! it parallelizes.
 //!
 //! ```text
-//! EnsureRequirements::optimize(plan)
+//! enforce_requirements(plan)         EnsureRequirements as an analyzer rule
 //! │
 //! ├─ Phase 0: top-down Interleave → Union      (replace_interleave_with_union)
 //! │
 //! ├─ Phase 1: top-down join-key reorder        (adjust_input_keys_ordering)
 //! │
-//! ├─ Phase 2: combined distribution + sorting  (single bottom-up pass)
-//! │   └─ For each node (bottom-up), for each child:
-//! │       Step 1: ensure distribution requirement
-//! │         └─ insert RepartitionExec / CoalescePartitionsExec /
-//! │            SortPreservingMergeExec as needed
-//! │       Step 2: ensure ordering requirement (distribution-aware)
-//! │         └─ insert SortExec with the correct `preserve_partitioning`,
-//! │            with SortPreservingMergeExec on top if needed
+//! ├─ Phase 2a: distribution enforcement        (bottom-up)
+//! │   └─ insert RepartitionExec / CoalescePartitionsExec /
+//! │      SortPreservingMergeExec as each child's requirement needs
 //! │
+//! └─ Phase 2b: ordering enforcement            (bottom-up, distribution-aware)
+//!     └─ insert SortExec with the correct `preserve_partitioning`,
+//!        with SortPreservingMergeExec on top if needed
+//!
+//! optimize_sorts(plan)               OptimizeSorts, later in the optimizer
+//! │                                  (EnsureRequirements as an optimizer rule
+//! │                                   runs this in the same pass)
 //! └─ Phase 3: small follow-up passes (bottom-up unless noted)
 //!     ├─ parallelize_sorts
 //!     ├─ replace_with_order_preserving_variants
@@ -69,16 +71,15 @@
 //!
 //! # Key Properties
 //!
-//! - **Distribution before sorting**: For each child, distribution is
-//!   resolved before ordering, so sorting decisions always have full
-//!   distribution context.
-//! - **Sort pushdown is implicit**: Phase 2 only adds `SortExec` where the
+//! - **Distribution before sorting**: Phase 2a finishes before Phase 2b
+//!   starts, so sorting decisions always have full distribution context.
+//! - **Sort pushdown is implicit**: Phase 2b only adds `SortExec` where the
 //!   child doesn't already satisfy the ordering requirement, so sorts land
 //!   at the deepest valid position without a separate destructive pass.
 //!
 //! # Behavior: parallelism via repartitioning
 //!
-//! Phase 2 Step 1 inserts `RepartitionExec` to satisfy distribution
+//! Phase 2a inserts `RepartitionExec` to satisfy distribution
 //! requirements. When configuration allows, it also increases parallelism by
 //! repartitioning over otherwise-serial inputs. For example, given two
 //! 1-partition inputs feeding an operator that can run with more
@@ -117,7 +118,7 @@
 //!
 //! # Behavior: joint distribution + sorting
 //!
-//! Resolving distribution and sorting together lets Phase 2 produce a
+//! Settling distribution before sorting lets Phase 2b produce a
 //! parallel sort plan in cases where the two-rule pipeline historically
 //! risked a serial one. Given `Sort(DESC) ← Coalesce ← MultiPartitionSource`,
 //! `EnsureRequirements` rewrites it into:
@@ -196,13 +197,13 @@ pub fn enforce_distribution_requirements(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let config = context.config_options();
     // Phase 0: Normalize `InterleaveExec` back to `UnionExec` (top-down).
-    // Interleaves are distribution artifacts of Phase 2, which re-derives
+    // Interleaves are distribution artifacts of Phase 2a, which re-derives
     // them from the children's final partitioning. Keeping them would
     // fail as soon as a child loses the partitioning they depend on.
     use super::enforce_distribution::replace_interleave_with_union;
     let plan = plan.transform_down(replace_interleave_with_union).data()?;
 
-    // Phase 1: Join key reordering (top-down, from EnforceDistribution)
+    // Phase 1: Join key reordering (top-down)
     use super::enforce_distribution::{
         PlanWithKeyRequirements, adjust_input_keys_ordering,
     };
