@@ -133,7 +133,9 @@ impl SubqueryIndex {
 /// [`ScalarSubqueryResults`] backed by a proxy that calls back into the
 /// near side's real container for every operation, so both sides observe the
 /// same populated values.
-pub trait ScalarSubqueryResultsBackend: fmt::Debug + Send + Sync {
+pub trait ScalarSubqueryResultsBackend:
+    fmt::Debug + Send + Sync + std::panic::RefUnwindSafe
+{
     /// Returns the scalar value stored at `index`, if it has been populated.
     fn get(&self, index: usize) -> Option<ScalarValue>;
 
@@ -290,6 +292,15 @@ impl Hash for ScalarSubqueryResults {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `ScalarSubqueryResults` must stay `UnwindSafe`/`RefUnwindSafe` so a
+    /// `ScalarSubqueryResultsBackend` implementation (e.g. `datafusion-ffi`'s
+    /// FFI proxy) doesn't regress these auto traits for callers.
+    #[test]
+    fn scalar_subquery_results_is_unwind_safe() {
+        fn assert_bounds<T: std::panic::UnwindSafe + std::panic::RefUnwindSafe>() {}
+        assert_bounds::<ScalarSubqueryResults>();
+    }
 
     #[test]
     fn scalar_subquery_results_set_and_get() -> Result<()> {

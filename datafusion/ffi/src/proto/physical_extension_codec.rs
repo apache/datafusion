@@ -55,17 +55,6 @@ pub struct FFI_PhysicalExtensionCodec {
         inputs: SVec<FFI_ExecutionPlan>,
     ) -> FFI_Result<FFI_ExecutionPlan>,
 
-    /// Decode bytes into an execution plan, forwarding the active scalar
-    /// subquery results scope (if any) from the caller's decode context so a
-    /// `ScalarSubqueryExpr` decoded on this side of the boundary shares the
-    /// same populated results as the `ScalarSubqueryExec` that owns them.
-    try_decode_with_ctx: unsafe extern "C" fn(
-        &Self,
-        buf: SSlice<u8>,
-        inputs: SVec<FFI_ExecutionPlan>,
-        scalar_subquery_results: FFI_Option<FFI_ScalarSubqueryResults>,
-    ) -> FFI_Result<FFI_ExecutionPlan>,
-
     /// Encode an execution plan into bytes.
     try_encode:
         unsafe extern "C" fn(&Self, node: FFI_ExecutionPlan) -> FFI_Result<SVec<u8>>,
@@ -123,6 +112,21 @@ pub struct FFI_PhysicalExtensionCodec {
     /// Utility to identify when FFI objects are accessed locally through
     /// the foreign interface.
     pub library_marker_id: extern "C" fn() -> usize,
+
+    /// Decode bytes into an execution plan, forwarding the active scalar
+    /// subquery results scope (if any) from the caller's decode context so a
+    /// `ScalarSubqueryExpr` decoded on this side of the boundary shares the
+    /// same populated results as the `ScalarSubqueryExec` that owns them.
+    ///
+    /// Added after the original fields, at the end of the struct, so that
+    /// older code built against this `repr(C)` struct without this field
+    /// still sees every field it knows about at its original offset.
+    try_decode_with_ctx: unsafe extern "C" fn(
+        &Self,
+        buf: SSlice<u8>,
+        inputs: SVec<FFI_ExecutionPlan>,
+        scalar_subquery_results: FFI_Option<FFI_ScalarSubqueryResults>,
+    ) -> FFI_Result<FFI_ExecutionPlan>,
 }
 
 unsafe impl Send for FFI_PhysicalExtensionCodec {}
