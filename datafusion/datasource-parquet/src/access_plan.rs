@@ -299,39 +299,54 @@ impl ParquetAccessPlan {
         selection: RowSelection,
         row_group_meta_data: &[RowGroupMetaData],
     ) -> Result<Self> {
-        if let Some(mask) = selection.as_mask() {
-            let selection_rows = mask.len();
-            let file_rows = row_group_meta_data
-                .iter()
-                .map(|rg| rg.num_rows() as usize)
-                .sum::<usize>();
-            if selection_rows != file_rows {
-                return exec_err!(
-                    "Invalid Parquet RowSelection. File has {file_rows} rows, \
-                    but selection specifies {selection_rows} rows."
-                );
-            }
+        if selection.as_mask().is_some() {
+            Self::try_new_from_overall_row_selection_mask(selection, row_group_meta_data)
+        } else {
+            Self::try_new_from_overall_row_selection_selectors(
+                selection,
+                row_group_meta_data,
+            )
+        }
+    }
 
-            // Slice the bitmap without materializing selectors. Use row_count()
-            // to cache each partial group's count for later preparation.
-            let mut offset = 0;
-            let row_groups = row_group_meta_data
-                .iter()
-                .map(|rg| {
-                    let row_count = rg.num_rows() as usize;
-                    let group_selection =
-                        RowSelection::from(mask.slice(offset, row_count));
-                    offset += row_count;
-                    match group_selection.row_count() {
-                        0 => RowGroupAccess::Skip,
-                        selected if selected == row_count => RowGroupAccess::Scan,
-                        _ => RowGroupAccess::Selection(group_selection),
-                    }
-                })
-                .collect();
-            return Ok(Self::new(row_groups));
+    fn try_new_from_overall_row_selection_mask(
+        mut selection: RowSelection,
+        row_group_meta_data: &[RowGroupMetaData],
+    ) -> Result<Self> {
+        let selection_rows = selection.total_row_count();
+        let file_rows = row_group_meta_data
+            .iter()
+            .map(|rg| rg.num_rows() as usize)
+            .sum::<usize>();
+        if selection_rows != file_rows {
+            return exec_err!(
+                "Invalid Parquet RowSelection. File has {file_rows} rows, \
+                but selection specifies {selection_rows} rows."
+            );
         }
 
+        // For masks, split_off uses bitmap slices without materializing
+        // selectors. Use row_count() to cache each partial group's count
+        // for later preparation.
+        let row_groups = row_group_meta_data
+            .iter()
+            .map(|rg| {
+                let row_count = rg.num_rows() as usize;
+                let group_selection = selection.split_off(row_count);
+                match group_selection.row_count() {
+                    0 => RowGroupAccess::Skip,
+                    selected if selected == row_count => RowGroupAccess::Scan,
+                    _ => RowGroupAccess::Selection(group_selection),
+                }
+            })
+            .collect();
+        Ok(Self::new(row_groups))
+    }
+
+    fn try_new_from_overall_row_selection_selectors(
+        selection: RowSelection,
+        row_group_meta_data: &[RowGroupMetaData],
+    ) -> Result<Self> {
         // Keep this as a single pass over the selector stream rather than
         // repeatedly calling `RowSelection::split_off` per row group. The
         // `split_off` version is simpler, but it clones/retains substantially
@@ -1109,32 +1124,36 @@ mod test {
         bits.extend((0..30).map(|i| i % 2 == 1));
         bits.extend(vec![true; 40]);
         let mask = BooleanBuffer::from(bits).slice(3, 100);
-        let plan = ParquetAccessPlan::try_new_from_overall_row_selection(
-            RowSelection::from(mask.clone()),
-            &ROW_GROUP_METADATA,
-        )
-        .unwrap();
-        assert_eq!(plan.inner()[0], RowGroupAccess::Scan);
-        assert_eq!(plan.inner()[1], RowGroupAccess::Skip);
-        assert_eq!(plan.inner()[3], RowGroupAccess::Scan);
-        let RowGroupAccess::Selection(selection) = &plan.inner()[2] else {
-            panic!("expected selection");
-        };
-        assert_eq!(selection.as_mask(), Some(&mask.slice(30, 30)));
+        for cache_row_count in [false, true] {
+            let selection = RowSelection::from(mask.clone());
+            if cache_row_count {
+                // Exercise split_off's propagation of an already cached count.
+                assert_eq!(selection.row_count(), 65);
+            }
+            let plan = ParquetAccessPlan::try_new_from_overall_row_selection(
+                selection,
+                &ROW_GROUP_METADATA,
+            )
+            .unwrap();
+            assert_eq!(plan.inner()[0], RowGroupAccess::Scan);
+            assert_eq!(plan.inner()[1], RowGroupAccess::Skip);
+            assert_eq!(plan.inner()[3], RowGroupAccess::Scan);
+            let RowGroupAccess::Selection(selection) = &plan.inner()[2] else {
+                panic!("expected selection");
+            };
+            assert_eq!(selection.row_count(), 15);
+            let group_mask = mask.slice(30, 30);
+            assert!(selection.as_mask().unwrap().ptr_eq(&group_mask));
 
-        // The local selection must also survive preparation and reversal.
-        let prepared = plan.prepare(&ROW_GROUP_METADATA).unwrap().reverse();
-        assert_eq!(prepared.row_group_indexes(), vec![3, 2, 0]);
-        assert!(prepared.row_groups[0].selection.selection().is_none());
-        assert!(prepared.row_groups[2].selection.selection().is_none());
-        assert_eq!(
-            prepared.row_groups[1]
-                .selection
-                .selection()
-                .unwrap()
-                .as_mask(),
-            Some(&mask.slice(30, 30))
-        );
+            // The local selection must also survive preparation and reversal.
+            let prepared = plan.prepare(&ROW_GROUP_METADATA).unwrap().reverse();
+            assert_eq!(prepared.row_group_indexes(), vec![3, 2, 0]);
+            assert!(prepared.row_groups[0].selection.selection().is_none());
+            assert!(prepared.row_groups[2].selection.selection().is_none());
+            let selection = prepared.row_groups[1].selection.selection().unwrap();
+            assert_eq!(selection.row_count(), 15);
+            assert!(selection.as_mask().unwrap().ptr_eq(&group_mask));
+        }
     }
 
     #[test]
