@@ -47,12 +47,9 @@ When creating a PR, you MUST follow the [PR template](.github/pull_request_templ
 
 ## Testing
 
-<<<<<<< HEAD
-=======
 When adding tests, you MUST follow
 [Choosing What Kind of Test to Write](docs/source/contributor-guide/testing.md#choosing-what-kind-of-test-to-write):
 
->>>>>>> apache/main
 If documentation files changed then run
 ```bash
 ./ci/scripts/doc_prettier_check.sh --write --allow-dirty
