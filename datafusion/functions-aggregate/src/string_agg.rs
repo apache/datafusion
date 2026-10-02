@@ -32,8 +32,8 @@ use datafusion_common::{
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, EmitTo, GroupsAccumulator, Signature,
-    TypeSignature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, EmitTo, GroupSelection,
+    GroupsAccumulator, Signature, TypeSignature, Volatility,
 };
 use datafusion_functions_aggregate_common::accumulator::StateFieldsArgs;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::apply_filter_as_nulls;
@@ -405,8 +405,29 @@ impl GroupsAccumulator for StringAggGroupsAccumulator {
         Ok(result)
     }
 
+    fn evaluate_preserving(&mut self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
+        selection.validate_num_groups(self.values.len())?;
+        let values = selection.iter().map(|index| self.values[index].as_deref());
+        Ok(Arc::new(LargeStringArray::from_iter(values)))
+    }
+
+    fn supports_evaluate_preserving(&self) -> bool {
+        true
+    }
+
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         self.evaluate(emit_to).map(|arr| vec![arr])
+    }
+
+    fn state_preserving(
+        &mut self,
+        selection: GroupSelection<'_>,
+    ) -> Result<Vec<ArrayRef>> {
+        self.evaluate_preserving(selection).map(|array| vec![array])
+    }
+
+    fn supports_state_preserving(&self) -> bool {
+        true
     }
 
     fn merge_batch(
@@ -795,6 +816,48 @@ mod tests {
         let result = acc.evaluate(emit_to).unwrap();
         let arr = result.as_any().downcast_ref::<LargeStringArray>().unwrap();
         arr.iter().map(|v| v.map(|s| s.to_string())).collect()
+    }
+
+    #[test]
+    fn groups_preserving_reads() -> Result<()> {
+        let mut acc = make_groups_acc(",");
+        let values: ArrayRef = Arc::new(LargeStringArray::from(vec![
+            Some("a"),
+            Some("b"),
+            None,
+            Some("c"),
+        ]));
+        acc.update_batch(&[values], &[0, 1, 2, 0], None, 4)?;
+
+        let selection = GroupSelection::try_from_indices(&[1, 0, 3, 1], 4)?;
+        let expected =
+            LargeStringArray::from(vec![Some("b"), Some("a,c"), None, Some("b")]);
+        let bytes_before = acc.total_data_bytes;
+        for _ in 0..2 {
+            assert_eq!(
+                acc.evaluate_preserving(selection)?.as_string::<i64>(),
+                &expected
+            );
+            assert_eq!(
+                acc.state_preserving(selection)?[0].as_string::<i64>(),
+                &expected
+            );
+            assert_eq!(acc.total_data_bytes, bytes_before);
+        }
+
+        assert!(
+            acc.evaluate_preserving(GroupSelection::try_from_indices(&[], 4)?)?
+                .is_empty()
+        );
+
+        let values: ArrayRef = Arc::new(LargeStringArray::from(vec!["d", "e"]));
+        acc.update_batch(&[values], &[2, 3], None, 4)?;
+        assert_eq!(
+            acc.evaluate_preserving(GroupSelection::all(4))?
+                .as_string::<i64>(),
+            &LargeStringArray::from(vec!["a,c", "b", "d", "e"])
+        );
+        Ok(())
     }
 
     #[test]

@@ -17,33 +17,17 @@
 
 use datafusion_expr::JoinType;
 
-// Returns boolean for whether the join is a right existence join
+// Returns boolean for whether the join is a right existence join served by
+// `RightExistencePWMJStream`, which reads nothing but a single min/max off the buffered side.
+//
+// `RightMark` belongs here too: deciding its mark column is the same one-key comparison as
+// `RightSemi`/`RightAnti`, just kept instead of used to filter, so it needs no more of the
+// buffered side than they do.
 pub(super) fn is_right_existence_join(join_type: JoinType) -> bool {
     matches!(
         join_type,
-        JoinType::RightAnti | JoinType::RightSemi | JoinType::RightMark
+        JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark
     )
-}
-
-// Returns boolean for whether the join is an existence join
-pub(super) fn is_existence_join(join_type: JoinType) -> bool {
-    matches!(
-        join_type,
-        JoinType::LeftAnti
-            | JoinType::RightAnti
-            | JoinType::LeftSemi
-            | JoinType::RightSemi
-            | JoinType::LeftMark
-            | JoinType::RightMark
-    )
-}
-
-// Returns boolean for whether the join is a left existence join that is currently
-// supported by `PiecewiseMergeJoin`. These do not require swapping the inputs: the
-// marked (left) side is already the buffered side, so `ExistencePWMJStream` can track the
-// matched suffix and slice the buffered batch at its start.
-pub(super) fn is_supported_existence_join(join_type: JoinType) -> bool {
-    matches!(join_type, JoinType::LeftSemi | JoinType::LeftAnti)
 }
 
 // Returns boolean to check if the join type needs to record

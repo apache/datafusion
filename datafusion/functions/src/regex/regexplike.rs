@@ -17,24 +17,27 @@
 
 //! Regex expressions
 
-use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, GenericStringArray};
+use arrow::array::{
+    Array, ArrayRef, AsArray, BooleanArray, GenericStringArray, StringArray,
+};
 use arrow::compute::kernels::regexp;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
 use datafusion_common::types::logical_string;
-use datafusion_common::{
-    Result, ScalarValue, arrow_datafusion_err, exec_err, internal_err, plan_err,
-};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDFImpl,
     Signature, TypeSignature, TypeSignatureClass, Volatility, binary_expr, cast,
 };
 use datafusion_macros::user_doc;
 
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
+use datafusion_expr::simplify::{
+    ExprSimplifyResult, REGEX_PLANNING_SIZE_LIMIT_BYTES, SimplifyContext,
+};
 use datafusion_expr_common::operator::Operator;
 use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
-use regex::Regex;
+use regex::{Error as RegexError, RegexBuilder};
+use std::borrow::Cow;
 use std::sync::Arc;
 
 #[user_doc(
@@ -160,6 +163,35 @@ impl ScalarUDFImpl for RegexpLikeFunc {
         }
     }
 
+    fn should_evaluate_const(&self, args: &[&ScalarValue]) -> bool {
+        let Some(pattern) = args.get(1).and_then(|arg| arg.try_as_str()).flatten() else {
+            return true;
+        };
+        let flags = args.get(2).and_then(|arg| arg.try_as_str()).flatten();
+
+        // Preserve normal error handling for unsupported and malformed flags.
+        if flags.is_some_and(|flags| flags.contains('g')) {
+            return true;
+        }
+
+        // regexp_like returns NULL without compiling the pattern when the
+        // value is NULL. Preserve that fast path during constant folding.
+        if args.first().is_some_and(|arg| arg.is_null()) {
+            return true;
+        }
+
+        let pattern = match flags.filter(|flags| !flags.is_empty()) {
+            Some(flags) => Cow::Owned(format!("(?{flags}){pattern}")),
+            None => Cow::Borrowed(pattern),
+        };
+        !matches!(
+            RegexBuilder::new(pattern.as_ref())
+                .size_limit(REGEX_PLANNING_SIZE_LIMIT_BYTES)
+                .build(),
+            Err(RegexError::CompiledTooBig(_))
+        )
+    }
+
     fn simplify(
         &self,
         mut args: Vec<Expr>,
@@ -276,10 +308,11 @@ pub fn regexp_like(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args.len() {
         2 => handle_regexp_like(&args[0], &args[1], None),
         3 => {
-            let flags = match args[2].data_type() {
-                Utf8 => args[2].as_string::<i32>(),
+            let flags = super::normalize_empty_flags(&args[2])?;
+            let flags = match flags.data_type() {
+                Utf8 => flags.as_string::<i32>(),
                 LargeUtf8 => {
-                    let large_string_array = args[2].as_string::<i64>();
+                    let large_string_array = flags.as_string::<i64>();
                     let string_vec: Vec<Option<&str>> = (0..large_string_array.len())
                         .map(|i| {
                             if large_string_array.is_null(i) {
@@ -293,7 +326,7 @@ pub fn regexp_like(args: &[ArrayRef]) -> Result<ArrayRef> {
                     &GenericStringArray::<i32>::from(string_vec)
                 }
                 _ => {
-                    let string_view_array = args[2].as_string_view();
+                    let string_view_array = flags.as_string_view();
                     let string_vec: Vec<Option<String>> = (0..string_view_array.len())
                         .map(|i| {
                             if string_view_array.is_null(i) {
@@ -342,25 +375,37 @@ fn regexp_like_array_scalar(
     let Some(pattern) = pattern else {
         return Ok(Arc::new(BooleanArray::new_null(values.len())));
     };
+    let flags = flags.filter(|flags| !flags.is_empty());
     let array = match values.data_type() {
-        Utf8 => {
-            let array = values.as_string::<i32>();
-            regexp::regexp_is_match_scalar(array, pattern, flags)?
-        }
+        Utf8 => regexp::regexp_is_match_scalar(values.as_string::<i32>(), pattern, flags),
         Utf8View => {
-            let array = values.as_string_view();
-            regexp::regexp_is_match_scalar(array, pattern, flags)?
+            regexp::regexp_is_match_scalar(values.as_string_view(), pattern, flags)
         }
         LargeUtf8 => {
-            let array = values.as_string::<i64>();
-            regexp::regexp_is_match_scalar(array, pattern, flags)?
+            regexp::regexp_is_match_scalar(values.as_string::<i64>(), pattern, flags)
         }
         other => {
             return internal_err!(
                 "Unsupported data type {other:?} for function `regexp_like`"
             );
         }
-    };
+    }
+    // The kernel compiles the pattern itself. Describe the scalar pattern and
+    // flags as arrays of one value, so that a failure is explained the same
+    // way as on the paths that pass arrays.
+    .map_err(|error| {
+        let patterns = StringArray::from(vec![pattern]);
+        let flags = flags.map(|flags| StringArray::from(vec![flags]));
+        super::explain_regexp_kernel_error(
+            "regexp_like",
+            error,
+            // The kernel compiles the one pattern up front, whatever the
+            // values are.
+            None,
+            &patterns,
+            flags.as_ref().map(|flags| flags as &dyn Array),
+        )
+    })?;
 
     Ok(Arc::new(array))
 }
@@ -380,20 +425,15 @@ fn regexp_like_scalar(
 
     let value = value.unwrap();
     let pattern = pattern.unwrap();
-    let pattern = match flags {
-        Some(flagz) => format!("(?{flagz}){pattern}"),
-        None => pattern.to_string(),
-    };
+    let flags = flags.filter(|flags| !flags.is_empty());
 
-    let result = if pattern.is_empty() {
+    // An empty pattern matches every value and needs no compilation. Every
+    // other pattern is compiled exactly once, as on the paths that call a
+    // kernel.
+    let result = if pattern.is_empty() && flags.is_none() {
         true
     } else {
-        let re = Regex::new(pattern.as_str()).map_err(|e| {
-            datafusion_common::DataFusionError::Execution(format!(
-                "Regular expression did not compile: {e:?}"
-            ))
-        })?;
-        re.is_match(value)
+        super::compile_regex("regexp_like", pattern, flags)?.is_match(value)
     };
 
     Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(result))))
@@ -410,70 +450,74 @@ fn handle_regexp_like(
             let pattern = patterns.as_string::<i32>();
 
             regexp::regexp_is_match(value, pattern, flags)
-                .map_err(|e| arrow_datafusion_err!(e))?
         }
         (Utf8View, Utf8View) => {
             let value = values.as_string_view();
             let pattern = patterns.as_string_view();
 
             regexp::regexp_is_match(value, pattern, flags)
-                .map_err(|e| arrow_datafusion_err!(e))?
         }
         (Utf8View, LargeUtf8) => {
             let value = values.as_string_view();
             let pattern = patterns.as_string::<i64>();
 
             regexp::regexp_is_match(value, pattern, flags)
-                .map_err(|e| arrow_datafusion_err!(e))?
         }
         (Utf8, Utf8) => {
             let value = values.as_string::<i32>();
             let pattern = patterns.as_string::<i32>();
 
             regexp::regexp_is_match(value, pattern, flags)
-                .map_err(|e| arrow_datafusion_err!(e))?
         }
         (Utf8, Utf8View) => {
             let value = values.as_string::<i32>();
             let pattern = patterns.as_string_view();
 
             regexp::regexp_is_match(value, pattern, flags)
-                .map_err(|e| arrow_datafusion_err!(e))?
         }
         (Utf8, LargeUtf8) => {
             let value = values.as_string::<i32>();
             let pattern = patterns.as_string::<i64>();
 
             regexp::regexp_is_match(value, pattern, flags)
-                .map_err(|e| arrow_datafusion_err!(e))?
         }
         (LargeUtf8, Utf8) => {
             let value = values.as_string::<i64>();
             let pattern = patterns.as_string::<i32>();
 
             regexp::regexp_is_match(value, pattern, flags)
-                .map_err(|e| arrow_datafusion_err!(e))?
         }
         (LargeUtf8, Utf8View) => {
             let value = values.as_string::<i64>();
             let pattern = patterns.as_string_view();
 
             regexp::regexp_is_match(value, pattern, flags)
-                .map_err(|e| arrow_datafusion_err!(e))?
         }
         (LargeUtf8, LargeUtf8) => {
             let value = values.as_string::<i64>();
             let pattern = patterns.as_string::<i64>();
 
             regexp::regexp_is_match(value, pattern, flags)
-                .map_err(|e| arrow_datafusion_err!(e))?
         }
         other => {
             return internal_err!(
                 "Unsupported data type {other:?} for function `regexp_like`"
             );
         }
-    };
+    }
+    // Every arm hands its pattern to the kernel, which compiles it. Explain a
+    // failure in one place, for every arm.
+    .map_err(|error| {
+        super::explain_regexp_kernel_error(
+            "regexp_like",
+            error,
+            // The kernel compiles the pattern of a row only if that row has a
+            // value.
+            Some(values.as_ref()),
+            patterns.as_ref(),
+            flags.map(|flags| flags as &dyn Array),
+        )
+    })?;
 
     Ok(Arc::new(array) as ArrayRef)
 }
@@ -625,6 +669,40 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Boolean(Some(true))) => {}
             other => panic!("Unexpected result {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_const_evaluation_budget() {
+        let function = RegexpLikeFunc::new();
+        let args = |pattern: &str, flags: Option<&str>| {
+            let mut args = vec![
+                ScalarValue::Utf8(Some("aaaaa".to_string())),
+                ScalarValue::Utf8(Some(pattern.to_string())),
+            ];
+            if let Some(flags) = flags {
+                args.push(ScalarValue::Utf8(Some(flags.to_string())));
+            }
+            args
+        };
+        let should_evaluate = |args: Vec<ScalarValue>| {
+            let args = args.iter().collect::<Vec<_>>();
+            function.should_evaluate_const(&args)
+        };
+
+        assert!(should_evaluate(args("^a+$", None)));
+        assert!(!should_evaluate(args("a{5}{5}{5}{5}{5}{5}", None)));
+        assert!(!should_evaluate(args("a{5}{5}{5}{5}{5}{5}", Some(""))));
+        assert!(!should_evaluate(args("a{5}{5}{5}{5}{5}{5}", Some("m"))));
+
+        let null_value = vec![
+            ScalarValue::Utf8(None),
+            ScalarValue::Utf8(Some("a{5}{5}{5}{5}{5}{5}{5}{5}".to_string())),
+        ];
+        assert!(should_evaluate(null_value));
+
+        // Unsupported flags and syntax errors retain their existing error paths.
+        assert!(should_evaluate(args("^a+$", Some("g"))));
+        assert!(should_evaluate(args("[", None)));
     }
 
     #[test]

@@ -25,7 +25,7 @@ use arrow::array::{
 };
 use arrow::array::{Int8Array, UInt64Array, as_string_array, create_array, record_batch};
 use arrow::compute::kernels::numeric::add;
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, Metadata, Schema};
 use arrow_schema::extension::{Bool8, CanonicalExtensionType, ExtensionType};
 use arrow_schema::{ArrowError, FieldRef, SchemaRef};
 use datafusion::common::test_util::batches_to_string;
@@ -1647,10 +1647,8 @@ async fn test_metadata_based_udf() -> Result<()> {
     let data_array = Arc::new(UInt64Array::from(vec![0, 5, 10, 15, 20])) as ArrayRef;
     let schema = Arc::new(Schema::new(vec![
         Field::new("no_metadata", DataType::UInt64, true),
-        Field::new("with_metadata", DataType::UInt64, true).with_metadata(
-            std::iter::once(("modify_values".to_string(), "double_output".to_string()))
-                .collect(),
-        ),
+        Field::new("with_metadata", DataType::UInt64, true)
+            .with_metadata(Metadata::new().with("modify_values", "double_output")),
     ]));
     let batch = RecordBatch::try_new(
         schema,
@@ -2253,5 +2251,101 @@ async fn test_extension_metadata_preserve_in_subquery() -> Result<()> {
         )
         .await?;
     assert!(!df.collect().await?.is_empty());
+    Ok(())
+}
+
+/// Uncorrelated scalar subqueries must keep Arrow field metadata on the
+/// physical expression so UDFs that distinguish extension types still type-check.
+/// https://github.com/apache/datafusion/issues/24933
+#[tokio::test]
+async fn test_extension_metadata_preserve_in_uncorrelated_scalar_subquery() -> Result<()>
+{
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct MetadataRequired {
+        signature: Signature,
+    }
+
+    impl Default for MetadataRequired {
+        fn default() -> Self {
+            Self {
+                signature: Signature::user_defined(Volatility::Immutable),
+            }
+        }
+    }
+
+    impl ScalarUDFImpl for MetadataRequired {
+        fn name(&self) -> &str {
+            "metadata_required"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+            Ok(arg_types.to_vec())
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            unreachable!("return_field_from_args is implemented")
+        }
+
+        fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+            for (i, field) in args.arg_fields.iter().enumerate() {
+                if !field.metadata().contains_key("ARROW:extension:name") {
+                    return exec_err!(
+                        "argument {i} lost ARROW:extension:name; field={field:?} metadata={:?}",
+                        field.metadata()
+                    );
+                }
+            }
+
+            Ok(Field::new("metadata_required", DataType::Boolean, true).into())
+        }
+
+        fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(
+                args.arg_fields
+                    .iter()
+                    .all(|field| field.metadata().contains_key("ARROW:extension:name")),
+            ))))
+        }
+    }
+
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("geometry", DataType::Utf8, false).with_metadata(HashMap::from([(
+            "ARROW:extension:name".to_string(),
+            "example.extension".to_string(),
+        )])),
+    ]);
+
+    let batch = RecordBatch::try_new(
+        schema.clone().into(),
+        vec![
+            create_array!(Int64, [1, 2]),
+            create_array!(Utf8, [Some("a"), Some("b")]),
+        ],
+    )?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("l", batch.clone())?;
+    ctx.register_batch("r", batch)?;
+    ctx.register_udf(MetadataRequired::default().into());
+
+    let df = ctx
+        .sql(
+            "
+        SELECT id
+        FROM l
+        WHERE metadata_required(
+            l.geometry,
+            (SELECT r.geometry FROM r WHERE r.id = 1)
+        )
+        ",
+        )
+        .await?;
+    let batches = df.collect().await?;
+    assert!(!batches.is_empty());
     Ok(())
 }

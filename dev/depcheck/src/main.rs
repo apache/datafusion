@@ -23,7 +23,7 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::path::Path;
 
-use cargo::util::context::GlobalContext;
+use cargo::GlobalContext;
 
 /// Verifies that there are no circular dependencies between DataFusion crates
 /// (which prevents publishing on crates.io) by parsing the Cargo.toml files and
@@ -47,7 +47,7 @@ fn main() -> CargoResult<()> {
         "Checking for circular dependencies in {}",
         root_cargo_toml.display()
     );
-    let workspace = cargo::core::Workspace::new(&root_cargo_toml, &gctx)?;
+    let workspace = cargo::workspace::Workspace::new(&root_cargo_toml, &gctx)?;
     let (_, resolve) = cargo::ops::resolve_ws(&workspace, false)?;
 
     let mut package_deps = HashMap::new();

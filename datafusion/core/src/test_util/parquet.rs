@@ -110,11 +110,11 @@ impl TestParquetFile {
             canonical_path = canonical_path
                 .to_str()
                 .unwrap()
-                .replace("\\", "/")
+                .replace('\\', "/")
                 .strip_prefix("//?/")
                 .unwrap()
                 .into();
-        };
+        }
 
         let object_store_url =
             ListingTableUrl::parse(canonical_path.to_str().unwrap_or_default())?

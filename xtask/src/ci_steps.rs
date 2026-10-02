@@ -20,6 +20,7 @@
 use crate::Result;
 use std::env;
 use std::ffi::OsStr;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -54,7 +55,7 @@ static CI_STEPS: &[StepInfo] = &[
     },
     StepInfo {
         command: "test",
-        help_usage: "test <workspace|cli|doctest|ffi|benchmark-plan|benchmark-sqllogic|postgres|substrait> [--explain]",
+        help_usage: "test <workspace|cli|doctest|ffi|benchmark-plan|benchmark-sqllogic|postgres|substrait|extended|hash-collisions|sqlite> [--explain]",
         help_examples: &["test cli", "test workspace"],
         help_description: "Run a CI test suite",
         error_message: "Cargo test step failed",
@@ -68,10 +69,10 @@ pub(crate) fn help() -> String {
     );
     for step in CI_STEPS {
         if let Some(example) = step.help_examples.first() {
-            help.push_str(&format!("  {CI_COMMAND} {example}\n"));
+            writeln!(help, "  {CI_COMMAND} {example}").ok();
         }
     }
-    help.push_str(&format!("  {CI_COMMAND} test workspace --explain\n"));
+    writeln!(help, "  {CI_COMMAND} test workspace --explain").ok();
 
     let command_width = CI_STEPS
         .iter()
@@ -80,15 +81,17 @@ pub(crate) fn help() -> String {
         .unwrap_or_default();
     help.push_str("\nAvailable steps:\n");
     for step in CI_STEPS {
-        help.push_str(&format!(
-            "  {:command_width$}  {}\n",
+        writeln!(
+            help,
+            "  {:command_width$}  {}",
             step.command, step.help_description
-        ));
+        )
+        .ok();
     }
 
-    help.push_str(&format!(
+    write!(help,
         "\nShortcut:\n  # `{CI_SHORTCUT}` is short for `{CI_COMMAND}`.\n  {CI_SHORTCUT} check workspace\n\nFor more details:\n  {CI_COMMAND} check --help\n"
-    ));
+    ).ok();
     help
 }
 
@@ -98,12 +101,12 @@ fn step_help(step: &StepInfo) -> String {
         step.command, step.help_description, step.help_usage,
     );
     for example in step.help_examples {
-        help.push_str(&format!("  {CI_COMMAND} {example}\n"));
+        writeln!(help, "  {CI_COMMAND} {example}").ok();
     }
     if let Some(example) = step.help_examples.first() {
-        help.push_str(&format!(
+        write!(help,
             "\nUse '--explain' to show the full command:\n  {CI_COMMAND} {example} --explain\n"
-        ));
+        ).ok();
     }
     help
 }
@@ -355,6 +358,70 @@ impl StepContext {
                     "limit.slt",
                 ]);
             }
+            "extended" => {
+                command
+                    .args([
+                        "test",
+                        "--profile",
+                        "ci",
+                        "--exclude",
+                        "datafusion-examples",
+                        "--exclude",
+                        "datafusion-benchmarks",
+                        "--exclude",
+                        "datafusion-cli",
+                        "--workspace",
+                        "--lib",
+                        "--tests",
+                        "--bins",
+                        "--features",
+                        "avro,json,backtrace,extended_tests,recursive_protection,parquet_encryption",
+                    ])
+                    .env("RUST_BACKTRACE", "1")
+                    // Run more random scenarios of the spill pool fuzzer than the
+                    // default suite does (about a minute).
+                    .env("DATAFUSION_SPILL_POOL_FUZZ_ITERATIONS", "1000");
+            }
+            "hash-collisions" => {
+                // Check answers are correct when hash values collide. The CI job
+                // runs from the `datafusion` directory with the builder setup,
+                // which sets `RUST_BACKTRACE=1`.
+                command
+                    .args([
+                        "test",
+                        "--profile",
+                        "ci",
+                        "--exclude",
+                        "datafusion-examples",
+                        "--exclude",
+                        "datafusion-benchmarks",
+                        "--exclude",
+                        "datafusion-sqllogictest",
+                        "--exclude",
+                        "datafusion-cli",
+                        "--workspace",
+                        "--lib",
+                        "--tests",
+                        "--features=force_hash_collisions,avro",
+                    ])
+                    .current_dir(self.root.join("datafusion"))
+                    .env("RUST_BACKTRACE", "1");
+            }
+            "sqlite" => {
+                // The CI job skips the builder setup because backtraces make this
+                // suite expensive, so `RUST_BACKTRACE` is deliberately not set.
+                command.args([
+                    "test",
+                    "--features",
+                    "backtrace,parquet_encryption",
+                    "--profile",
+                    "ci-optimized",
+                    "--test",
+                    "sqllogictests",
+                    "--",
+                    "--include-sqlite",
+                ]);
+            }
             _ => return Err(StepError::Usage),
         }
 
@@ -543,6 +610,8 @@ fn required_env(name: &str) -> Result<String> {
 mod tests {
     use super::*;
 
+    const TEST_USAGE: &str = "usage: cargo xtask ci step test <workspace|cli|doctest|ffi|benchmark-plan|benchmark-sqllogic|postgres|substrait|extended|hash-collisions|sqlite> [--explain]";
+
     fn args(args: &[&str]) -> Vec<String> {
         args.iter().map(|arg| (*arg).to_string()).collect()
     }
@@ -587,10 +656,17 @@ mod tests {
             .err()
             .unwrap();
 
-        assert_eq!(
-            error,
-            "usage: cargo xtask ci step test <workspace|cli|doctest|ffi|benchmark-plan|benchmark-sqllogic|postgres|substrait> [--explain]"
-        );
+        assert_eq!(error, TEST_USAGE);
+    }
+
+    #[test]
+    fn unknown_test_variant_is_rejected() {
+        let error = context()
+            .ci_step(&args(&["test", "extended_tests", "--explain"]))
+            .err()
+            .unwrap();
+
+        assert_eq!(error, TEST_USAGE);
     }
 
     // Test all available commands, ensure their executed command is expected
@@ -772,6 +848,58 @@ cargo test \
 --test sqllogictests \
 --features substrait \
 -- --substrait-round-trip limit.slt
+")
+                },
+            },
+            Cmd {
+                command: &["test", "extended"],
+                expected: |actual| {
+                    insta::assert_snapshot!(actual, @r"
+cd /workspace && \
+DATAFUSION_SPILL_POOL_FUZZ_ITERATIONS=1000 \
+RUST_BACKTRACE=1 \
+cargo test \
+--profile ci \
+--exclude datafusion-examples \
+--exclude datafusion-benchmarks \
+--exclude datafusion-cli \
+--workspace \
+--lib \
+--tests \
+--bins \
+--features avro,json,backtrace,extended_tests,recursive_protection,parquet_encryption
+")
+                },
+            },
+            Cmd {
+                command: &["test", "hash-collisions"],
+                expected: |actual| {
+                    insta::assert_snapshot!(actual, @r"
+cd /workspace/datafusion && \
+RUST_BACKTRACE=1 \
+cargo test \
+--profile ci \
+--exclude datafusion-examples \
+--exclude datafusion-benchmarks \
+--exclude datafusion-sqllogictest \
+--exclude datafusion-cli \
+--workspace \
+--lib \
+--tests \
+--features=force_hash_collisions,avro
+")
+                },
+            },
+            Cmd {
+                command: &["test", "sqlite"],
+                expected: |actual| {
+                    insta::assert_snapshot!(actual, @r"
+cd /workspace && \
+cargo test \
+--features backtrace,parquet_encryption \
+--profile ci-optimized \
+--test sqllogictests \
+-- --include-sqlite
 ")
                 },
             },

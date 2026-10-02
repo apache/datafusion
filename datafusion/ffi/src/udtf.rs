@@ -172,7 +172,7 @@ unsafe extern "C" fn release_fn_wrapper(udtf: &mut FFI_TableFunction) {
     unsafe {
         debug_assert!(!udtf.private_data.is_null());
         let private_data =
-            Box::from_raw(udtf.private_data as *mut TableFunctionPrivateData);
+            Box::from_raw(udtf.private_data.cast::<TableFunctionPrivateData>());
         drop(private_data);
         udtf.private_data = std::ptr::null_mut();
     }
@@ -234,7 +234,7 @@ impl FFI_TableFunction {
             logical_codec,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
         }
     }

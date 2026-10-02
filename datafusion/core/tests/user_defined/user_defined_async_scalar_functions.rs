@@ -89,6 +89,35 @@ async fn test_async_udf_with_non_modular_batch_size() -> Result<()> {
     Ok(())
 }
 
+// An async UDF may return a scalar when all of its arguments are scalars. The
+// scalar applies to every row, so it must be expanded to the number of rows in
+// each chunk rather than to a single row.
+#[tokio::test]
+async fn test_async_udf_with_scalar_result() -> Result<()> {
+    let ctx = register_table_and_udf()?;
+
+    let df = ctx
+        .sql("SELECT id, test_async_udf('constant') as result FROM test_table")
+        .await?;
+
+    let result = df.collect().await?;
+
+    assert_batches_eq!(
+        &[
+            "+----+----------+",
+            "| id | result   |",
+            "+----+----------+",
+            "| 0  | constant |",
+            "| 1  | constant |",
+            "| 2  | constant |",
+            "+----+----------+"
+        ],
+        &result
+    );
+
+    Ok(())
+}
+
 // This test checks if metrics are printed for `AsyncFuncExec`
 #[tokio::test]
 async fn test_async_udf_metrics() -> Result<()> {
@@ -104,7 +133,7 @@ async fn test_async_udf_metrics() -> Result<()> {
 
     let explain_analyze_str = format_batches(&result)?.to_string();
     let async_func_exec_without_metrics =
-        explain_analyze_str.split("\n").any(|metric_line| {
+        explain_analyze_str.split('\n').any(|metric_line| {
             metric_line.contains("AsyncFuncExec")
                 && !metric_line.contains("output_rows=3")
         });

@@ -200,7 +200,7 @@ impl EnforceSortingTest {
             .to_string();
 
         if input_plan_string == optimized_plan_string {
-            format!("Input / Optimized Plan:\n{input_plan_string}",)
+            format!("Input / Optimized Plan:\n{input_plan_string}")
         } else {
             format!(
                 "Input Plan:\n{input_plan_string}\nOptimized Plan:\n{optimized_plan_string}",
@@ -1465,7 +1465,7 @@ async fn test_sort_merge_join_order_by_left() -> Result<()> {
                       DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
                 ");
             }
-        };
+        }
         })
         }
     }
@@ -1577,7 +1577,7 @@ async fn test_sort_merge_join_order_by_right() -> Result<()> {
                       DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
                 ");
             }
-        };
+        }
         })
         }
     }
@@ -2095,7 +2095,7 @@ async fn test_remove_unnecessary_sort3() -> Result<()> {
         EnforceSortingTest::new(physical_plan.clone()).with_repartition_sorts(true);
     assert_snapshot!(test.run(), @r"
     Input Plan:
-    AggregateExec: mode=Final, gby=[], aggr=[]
+    AggregateExec: mode=Single, gby=[], aggr=[COUNT(*)]
       SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]
         SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[true]
           RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
@@ -2104,7 +2104,7 @@ async fn test_remove_unnecessary_sort3() -> Result<()> {
                 DataSourceExec: partitions=1, partition_sizes=[0]
 
     Optimized Plan:
-    AggregateExec: mode=Final, gby=[], aggr=[]
+    AggregateExec: mode=Single, gby=[], aggr=[COUNT(*)]
       DataSourceExec: partitions=1, partition_sizes=[0]
     ");
 
@@ -2327,7 +2327,9 @@ async fn test_remove_unnecessary_spm2() -> Result<()> {
       DataSourceExec: partitions=1, partition_sizes=[0]
 
     Optimized Plan:
-    DataSourceExec: partitions=1, partition_sizes=[0]
+    LocalLimitExec: fetch=100
+      SortExec: expr=[non_nullable_col@1 ASC], preserve_partitioning=[false]
+        DataSourceExec: partitions=1, partition_sizes=[0]
     ");
 
     Ok(())
@@ -2922,7 +2924,7 @@ async fn test_partial_sort_with_homogeneous_batches() -> Result<()> {
             .downcast_ref::<Int32Array>()
             .unwrap();
         let actual = c_array.values().iter().copied().collect::<Vec<i32>>();
-        assert_eq!(actual, expected_values[i], "Batch {i} not sorted correctly",);
+        assert_eq!(actual, expected_values[i], "Batch {i} not sorted correctly");
     }
 
     assert_eq!(

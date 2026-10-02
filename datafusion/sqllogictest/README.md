@@ -101,6 +101,45 @@ SLT_TIMING_SUMMARY=1 cargo test --test sqllogictests
 SLT_TIMING_DEBUG_SLOW_FILES=1 cargo test --test sqllogictests
 ```
 
+### Memory drift
+
+The runner compares the bytes reserved in `MemoryPool`s with the bytes actually
+allocated, to find operators whose memory is not tracked by the pool (see
+[#25650](https://github.com/apache/datafusion/issues/25650)). It is enabled by
+default and prints the largest drift seen at the end of the run. It only logs
+and never fails a test.
+
+Test files run concurrently by default, so the comparison is process-wide:
+allocated bytes across the whole process against reservations summed across all
+files. In this mode, the file in the output can be wrong. To attribute drift to
+one file, run one file at a time:
+
+```shell
+cargo test --test sqllogictests -- --test-threads 1
+```
+
+In both modes, the consumer in the output is the reservation change that took
+the sample, not necessarily the code that allocated the untracked memory. Most
+drift at this scale is memory that `MemoryPool` does not track by design (for
+example, in-flight batches and Parquet read buffers), so a large drift is a lead
+to investigate, not necessarily a bug.
+
+```shell
+# Log each 64 MB rise in drift, with the file and consumer that took the sample
+RUST_LOG=datafusion_execution::memory_pool=info cargo test --test sqllogictests
+```
+
+```shell
+# Log each 4 MB rise instead (also settable via SLT_MEMORY_DRIFT_LOG_THRESHOLD)
+RUST_LOG=datafusion_execution::memory_pool=info cargo test --test sqllogictests -- \
+  --test-threads 1 --memory-drift-log-threshold 4194304
+```
+
+```shell
+# Disable (allocations are still counted, but pools are not wrapped)
+cargo test --test sqllogictests -- --memory-drift false
+```
+
 ## Cookbook: Adding Tests
 
 1. Add queries
@@ -349,7 +388,7 @@ export RUST_MIN_STACK=30485760;
 PG_COMPAT=true INCLUDE_SQLITE=true cargo test --features=postgres --test sqllogictests
 ```
 
-To update the sqllite expected answers use the `datafusion/sqllogictest/regenerate_sqlite_files.sh` script.
+To update the sqlite expected answers use the `datafusion/sqllogictest/regenerate_sqlite_files.sh` script.
 
 Note this must be run with an empty postgres instance. For example
 
@@ -391,23 +430,24 @@ running tests.
 
 ## Running tests: Substrait round-trip mode
 
-This mode will run all the .slt test files in validation mode, adding a Substrait conversion round-trip for each
+This mode runs the selected `.slt` test files in validation mode, adding a Substrait conversion round-trip for each
 generated DataFusion logical plan (SQL statement → DF logical → Substrait → DF logical → DF physical → execute).
 
 Not all statements will be round-tripped, some statements like CREATE, INSERT, SET or EXPLAIN statements will be
 issued as is, but any other statement will be round-tripped to/from Substrait.
 
-_WARNING_: as there are still a lot of failures in this mode (https://github.com/apache/datafusion/issues/16248),
-it is not enforced in the CI, instead, it needs to be run manually with the following command:
+_WARNING_: this mode lives behind the `substrait` feature, and the full suite still reports failures. CI therefore
+runs it over a single file, through `cargo xtask ci step test substrait`, which filters to `limit.slt`. Some of the
+failures are collected in https://github.com/apache/datafusion/issues/16248. To run the default suite in this mode:
 
 ```shell
-cargo test --test sqllogictests -- --substrait-round-trip
+cargo test --test sqllogictests --features substrait -- --substrait-round-trip
 ```
 
 For focusing on one specific failing test, a file:line filter can be used:
 
 ```shell
-cargo test --test sqllogictests -- --substrait-round-trip binary.slt:23
+cargo test --test sqllogictests --features substrait -- --substrait-round-trip binary.slt:23
 ```
 
 ## `.slt` file format
@@ -449,7 +489,7 @@ query <type_string> <sort_mode>
   - 'T' - **T**ext,
   - "?" - any other types
 - `expected_result`: In the results section, some values are converted according to some rules:
-  - floating point values are rounded to the scale of "12",
+  - floating point values are rounded to the scale of "12" and "15" for Spark,
   - NULL values are rendered as `NULL`,
   - empty strings are rendered as `(empty)`,
   - boolean values are rendered as `true`/`false`,

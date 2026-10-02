@@ -458,7 +458,7 @@ mod tests {
                     "to_date created wrong value for date with 2 format strings"
                 );
             }
-            _ => panic!("Conversion failed",),
+            _ => panic!("Conversion failed"),
         }
     }
 

@@ -179,6 +179,13 @@ pub trait PhysicalExprAdapterFactory: Send + Sync + std::fmt::Debug {
         logical_file_schema: SchemaRef,
         physical_file_schema: SchemaRef,
     ) -> Result<Arc<dyn PhysicalExprAdapter>>;
+
+    /// Whether replacing this factory with [`DefaultPhysicalExprAdapterFactory`]
+    /// preserves execution behavior. Plan serializers may safely omit factories
+    /// that return `true` because decoders use the default when none is configured.
+    fn is_equivalent_to_default(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -194,6 +201,10 @@ impl PhysicalExprAdapterFactory for DefaultPhysicalExprAdapterFactory {
             logical_file_schema,
             physical_file_schema,
         }))
+    }
+
+    fn is_equivalent_to_default(&self) -> bool {
+        true
     }
 }
 
@@ -761,7 +772,8 @@ impl DefaultPhysicalExprAdapterRewriter {
         // resolving by name ensures we match the correct physical slot. Once we know the
         // proper index we rebuild the `Column` with `new_with_schema` so callers can rely
         // on `column.index()` later without having to re-query the schema.
-        let Ok(physical_column_index) = self.physical_file_schema.index_of(column.name())
+        let Some((physical_column_index, _)) =
+            self.physical_file_schema.fields().find(column.name())
         else {
             return Ok(None);
         };

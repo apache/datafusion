@@ -24,6 +24,7 @@ use arrow::array::{
     Array as _, ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder, NullBufferBuilder,
 };
 use datafusion_common::Result;
+use datafusion_expr::GroupSelection;
 
 /// An implementation of [`GroupColumn`] for booleans
 ///
@@ -78,7 +79,7 @@ impl<const NULLABLE: bool> GroupColumn for BooleanGroupValueBuilder<NULLABLE> {
     }
 
     fn vectorized_equal_to(
-        &self,
+        &mut self,
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
@@ -179,6 +180,20 @@ impl<const NULLABLE: bool> GroupColumn for BooleanGroupValueBuilder<NULLABLE> {
         Arc::new(arr)
     }
 
+    fn values_preserving(&self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
+        selection.validate_num_groups(self.buffer.len())?;
+        let mut values = BooleanBufferBuilder::new(selection.len());
+        for index in selection.iter() {
+            values.append(self.buffer.get_bit(index));
+        }
+        let nulls = if NULLABLE {
+            self.nulls.build_preserving(selection)?
+        } else {
+            None
+        };
+        Ok(Arc::new(BooleanArray::new(values.finish(), nulls)))
+    }
+
     fn take_n(&mut self, n: usize) -> ArrayRef {
         let first_n_nulls = if NULLABLE { self.nulls.take_n(n) } else { None };
 
@@ -220,7 +235,7 @@ mod tests {
         };
 
         let equal_to =
-            |builder: &BooleanGroupValueBuilder<true>,
+            |builder: &mut BooleanGroupValueBuilder<true>,
              lhs_rows: &[usize],
              input_array: &ArrayRef,
              rhs_rows: &[usize],
@@ -246,7 +261,7 @@ mod tests {
         };
 
         let equal_to =
-            |builder: &BooleanGroupValueBuilder<true>,
+            |builder: &mut BooleanGroupValueBuilder<true>,
              lhs_rows: &[usize],
              input_array: &ArrayRef,
              rhs_rows: &[usize],
@@ -266,7 +281,7 @@ mod tests {
     where
         A: FnMut(&mut BooleanGroupValueBuilder<true>, &ArrayRef, &[usize]),
         E: FnMut(
-            &BooleanGroupValueBuilder<true>,
+            &mut BooleanGroupValueBuilder<true>,
             &[usize],
             &ArrayRef,
             &[usize],
@@ -317,7 +332,7 @@ mod tests {
         // Check
         let mut equal_to_results = make_true_buffer(builder.len());
         equal_to(
-            &builder,
+            &mut builder,
             &[0, 1, 2, 3, 4, 5],
             &input_array,
             &[0, 1, 2, 3, 4, 5],
@@ -344,7 +359,7 @@ mod tests {
         };
 
         let equal_to =
-            |builder: &BooleanGroupValueBuilder<false>,
+            |builder: &mut BooleanGroupValueBuilder<false>,
              lhs_rows: &[usize],
              input_array: &ArrayRef,
              rhs_rows: &[usize],
@@ -370,7 +385,7 @@ mod tests {
         };
 
         let equal_to =
-            |builder: &BooleanGroupValueBuilder<false>,
+            |builder: &mut BooleanGroupValueBuilder<false>,
              lhs_rows: &[usize],
              input_array: &ArrayRef,
              rhs_rows: &[usize],
@@ -390,7 +405,7 @@ mod tests {
     where
         A: FnMut(&mut BooleanGroupValueBuilder<false>, &ArrayRef, &[usize]),
         E: FnMut(
-            &BooleanGroupValueBuilder<false>,
+            &mut BooleanGroupValueBuilder<false>,
             &[usize],
             &ArrayRef,
             &[usize],
@@ -422,7 +437,7 @@ mod tests {
         // Check
         let mut equal_to_results = make_true_buffer(builder.len());
         equal_to(
-            &builder,
+            &mut builder,
             &[0, 1, 2, 3],
             &input_array,
             &[0, 1, 2, 3],
