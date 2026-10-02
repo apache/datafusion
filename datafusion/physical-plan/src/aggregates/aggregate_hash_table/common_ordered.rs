@@ -45,6 +45,7 @@ use super::common::{
     AggregateAccumulator, AggregateBatchFn, AggregateHashTable, EvaluatedAggregateBatch,
     MaterializeAccumulatorFn, create_group_accumulator,
 };
+use super::storage::{AccumulatorStorage, Emit, GroupIndices};
 
 #[derive(Clone)]
 pub(in crate::aggregates) struct OrderedAggregateTableMetrics {
@@ -220,7 +221,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
                     Arc::clone(agg_expr),
                     arguments,
                     filter,
-                    accumulator,
+                    AccumulatorStorage::Flat(accumulator),
                     Arc::clone(submetrics),
                 ))
             })
@@ -339,11 +340,14 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         let output = self.group_by_metrics.time_emitting(|| {
             let mut output = self.buffer.group_values.emit(EmitTo::All)?;
             for (idx, acc) in self.buffer.accumulators.iter_mut().enumerate() {
-                output.extend(accumulator_metrics.time(
-                    idx,
-                    AccumulatorPhase::State,
-                    || acc.state(EmitTo::All),
-                )?);
+                output.extend(
+                    accumulator_metrics
+                        .time(idx, AccumulatorPhase::State, || {
+                            acc.state(Emit::Flat(EmitTo::All))
+                        })?
+                        .into_iter()
+                        .flatten(),
+                );
             }
             Ok::<_, datafusion_common::DataFusionError>(output)
         })?;
@@ -406,7 +410,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
                         aggregate_fn(
                             acc,
                             values,
-                            &self.buffer.group_indices,
+                            GroupIndices::Flat(&self.buffer.group_indices),
                             total_num_groups,
                         )
                     })?;
@@ -468,11 +472,14 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             }
 
             for (idx, acc) in self.buffer.accumulators.iter_mut().enumerate() {
-                output.extend(accumulator_metrics.time(
-                    idx,
-                    accumulator_phase,
-                    || materialize_accumulator_fn(acc, emit_to),
-                )?);
+                output.extend(
+                    accumulator_metrics
+                        .time(idx, accumulator_phase, || {
+                            materialize_accumulator_fn(acc, Emit::Flat(emit_to))
+                        })?
+                        .into_iter()
+                        .flatten(),
+                );
             }
             Ok::<_, datafusion_common::DataFusionError>(output)
         })?;

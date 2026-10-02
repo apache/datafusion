@@ -34,8 +34,8 @@ use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
 use super::aggregate_hash_table::{
-    AggregateHashTable, FinalMarker, OrderedAggregateTableMetrics, PartialMarker,
-    PartialSkipMarker,
+    AggregateHashTable, FinalMarker, MaterializedBatch, OrderedAggregateTableMetrics,
+    PartialMarker, PartialSkipMarker,
 };
 use super::skip_partial::SkipAggregationProbe;
 use super::spill::AggregateSpill;
@@ -316,20 +316,44 @@ impl PartialHashAggregateStream {
                         break;
                     }
                     HandleInputResult::OOM => {
-                        let materialized_group_states = hash_table.take_state_batch()?.ok_or_else(|| {
-                            internal_datafusion_err!(
+                        let materialized_group_states =
+                            hash_table.take_state_batches()?;
+                        if materialized_group_states.is_empty() {
+                            return Err(internal_datafusion_err!(
                                 "Partial hash aggregate ran out of memory with no aggregated groups"
-                            )
-                        })?;
+                            ));
+                        }
 
                         self.early_emit_count.add(1);
                         timer.done();
-                        self.emit_on_memory_pressure(
-                            materialized_group_states,
-                            &mut emitter,
-                            hash_table.memory_size(),
-                        )
-                        .await?;
+
+                        // Blocked storage returns one batch per block, moved out of
+                        // the table without copying. Emit them in turn, keeping the
+                        // batches not emitted yet in the reservation.
+                        let pending_memory: usize = materialized_group_states
+                            .iter()
+                            // Don't include the first batch since we will emit it right away and release its memory
+                            // if it needs slicing then a we will try to hold on that reservation while slicing
+                            .skip(1)
+                            .map(|b| b.memory_size)
+                            .sum();
+
+                        // Make sure we can hold on the hash tables and all the batches that need to be emitted (except the first one)
+                        // if we can't hold it than we can't do anything about it.
+                        self.reservation.try_resize(
+                            hash_table.memory_size()
+                              // The batches that need to be held while emitting each one
+                              + pending_memory,
+                        )?;
+
+                        for (i, batch) in
+                            materialized_group_states.into_iter().enumerate()
+                        {
+                            if i != 0 {
+                                self.reservation.try_shrink(batch.memory_size)?;
+                            }
+                            self.emit_on_memory_pressure(batch, &mut emitter).await?;
+                        }
                     }
                 }
             }
@@ -434,62 +458,61 @@ impl PartialHashAggregateStream {
         &mut self,
         // After each incremental emitting step, the `remaining_groups` will be updated
         // with batch slicing.
-        mut remaining_groups: RecordBatch,
+        remaining_groups: MaterializedBatch,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
-        hash_table_mem_size: usize,
     ) -> Result<()> {
-        let remaining_groups_memory = remaining_groups.get_array_memory_size();
+        let MaterializedBatch {
+            batch: mut remaining_groups,
+            memory_size: remaining_groups_memory,
+        } = remaining_groups;
 
-        // Emitting clears the aggregate table and releases its
-        // accumulated memory. Update the reservation accordingly.
-        // We account here for the remaining groups memory to see if we can return batch size states
-        // if there is not enough memory, fallback to emit large batch
-        match self
-            .reservation
-            .try_resize(hash_table_mem_size + remaining_groups_memory)
-        {
-            Ok(_) => {
-                // Continue with slicing
+        // If we should slice the batch
+        if remaining_groups.num_rows() > self.batch_size {
+            // Emitting clears the aggregate table and releases its
+            // accumulated memory. Update the reservation accordingly.
+            // We account here for the remaining groups memory to see if we can return batch size states
+            // if there is not enough memory, fallback to emit large batch
+            match self.reservation.try_grow(remaining_groups_memory) {
+                Ok(_) => {
+                    // Continue with slicing
+                }
+                Err(DataFusionError::ResourcesExhausted(_)) => {
+                    // Fail to reserve memory for the hash table + state batch while slicing so emit a huge batch
+
+                    self.reduction_factor.add_part(remaining_groups.num_rows());
+                    emitter
+                        .emit(remaining_groups.record_output(&self.baseline_metrics))
+                        .await;
+
+                    return Ok(());
+                }
+                Err(e) => return Err(e),
             }
-            Err(DataFusionError::ResourcesExhausted(_)) => {
-                // Fail to reserve memory for the hash table + state batch while slicing so emit a huge batch
 
-                // Try resize without holding the state batch, if it fails there is nothing we can do
-                self.reservation.try_resize(hash_table_mem_size)?;
+            while remaining_groups.num_rows() > self.batch_size {
+                // More batch to output, continue in the current state.
+                let output = remaining_groups.slice(0, self.batch_size);
 
-                self.reduction_factor.add_part(remaining_groups.num_rows());
+                remaining_groups = remaining_groups.slice(
+                    self.batch_size,
+                    remaining_groups.num_rows() - self.batch_size,
+                );
+
+                self.reduction_factor.add_part(output.num_rows());
+                debug_assert!(output.num_rows() > 0);
+
                 emitter
-                    .emit(remaining_groups.record_output(&self.baseline_metrics))
+                    .emit(output.record_output(&self.baseline_metrics))
                     .await;
-
-                return Ok(());
             }
-            Err(e) => return Err(e),
-        }
 
-        while remaining_groups.num_rows() > self.batch_size {
-            // More batch to output, continue in the current state.
-            let output = remaining_groups.slice(0, self.batch_size);
-
-            remaining_groups = remaining_groups.slice(
-                self.batch_size,
-                remaining_groups.num_rows() - self.batch_size,
-            );
-
-            self.reduction_factor.add_part(output.num_rows());
-            debug_assert!(output.num_rows() > 0);
-
-            emitter
-                .emit(output.record_output(&self.baseline_metrics))
-                .await;
+            // We are no longer holding on the batch while slicing, so release the memory.
+            // The memory will now equal to the hash table size
+            self.reservation.try_shrink(remaining_groups_memory)?;
         }
 
         self.reduction_factor.add_part(remaining_groups.num_rows());
         debug_assert!(remaining_groups.num_rows() > 0);
-
-        // We are no longer holding on the batch while slicing, so release the memory.
-        // The memory will now equal to the hash table size
-        self.reservation.try_shrink(remaining_groups_memory)?;
 
         emitter
             .emit(remaining_groups.record_output(&self.baseline_metrics))
@@ -757,8 +780,8 @@ impl FinalHashAggregateStream {
                     // Go to the next state to perform spilling the aggregated
                     // groups so far.
                     let result = hash_table
-                        .take_state_batch()
-                        .and_then(|batch| spill_context.sort_and_spill(batch));
+                        .take_state_batches()
+                        .and_then(|batch| spill_context.sort_and_spill_batches(batch));
 
                     // Spilling shrinks the aggregate table and releases its accumulated
                     // memory. Update the reservation accordingly.
@@ -796,8 +819,8 @@ impl FinalHashAggregateStream {
 
         // Input was exhausted after spilling. Spill the last in-memory run
         hash_table
-            .take_state_batch()
-            .and_then(|batch| spill_context.sort_and_spill(batch))?;
+            .take_state_batches()
+            .and_then(|batch| spill_context.sort_and_spill_batches(batch))?;
 
         // Construct the ordered input used to merge all spill files.
         let mut output_stream =

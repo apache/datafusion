@@ -22,7 +22,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, assert_eq_or_internal_err};
 
-use crate::aggregates::group_values::{AccumulatorPhase, new_group_values};
+use crate::aggregates::group_values::AccumulatorPhase;
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{AggregateExec, evaluate_group_by};
 
@@ -30,6 +30,7 @@ use super::common::{
     AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState,
     HashAggregateAccumulator, PartialMarker, PartialSkipMarker,
 };
+use super::storage::{GroupKeys, block_size};
 
 /// Implementation specific to partial aggregation, where the table stores
 /// partial aggregate states and the input rows are raw rows.
@@ -78,12 +79,23 @@ impl AggregateHashTable<PartialMarker> {
     ) -> Result<AggregateHashTable<PartialSkipMarker>> {
         let state = self.state.building();
         let group_schema = state.group_by.group_schema(&self.input_schema)?;
-        let group_values = new_group_values(group_schema, &GroupOrdering::None)?;
+        // Skipping aggregation only converts input rows to state, which needs
+        // no per-group storage, so the skip table always uses flat storage.
         let accumulators = state
             .accumulators
             .iter()
             .map(HashAggregateAccumulator::empty_like)
             .collect::<Result<Vec<_>>>()?;
+        let keys = GroupKeys::try_new(
+            group_schema,
+            &GroupOrdering::None,
+            false,
+            block_size(self.batch_size),
+            &accumulators
+                .iter()
+                .map(|acc| acc.storage())
+                .collect::<Vec<_>>(),
+        )?;
 
         Ok(AggregateHashTable {
             group_by_metrics: self.group_by_metrics.clone(),
@@ -98,8 +110,7 @@ impl AggregateHashTable<PartialMarker> {
             batch_size: self.batch_size,
             state: AggregateHashTableState::Building(AggregateHashTableBuffer {
                 group_by: Arc::clone(&state.group_by),
-                group_values,
-                batch_group_indices: Default::default(),
+                keys,
                 accumulators,
             }),
             _mode: PhantomData,
