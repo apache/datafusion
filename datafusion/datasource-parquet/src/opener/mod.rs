@@ -1274,7 +1274,7 @@ impl FiltersPreparedParquetOpen {
 
         // If there is a range restricting what parts of the file to read
         if let Some(range) = prepared.file_range.as_ref() {
-            row_groups.prune_by_range_with_assignment(
+            row_groups.prune_by_range(
                 rg_metadata,
                 range,
                 prepared.row_group_range_assignment,

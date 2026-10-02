@@ -356,11 +356,6 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
             "" => ParquetOptions::default().writer_version,
             version => version.parse()?,
         };
-        let row_group_range_assignment = match proto.row_group_range_assignment.as_str() {
-            // Empty when encoded before this option existed
-            "" => RowGroupRangeAssignment::default(),
-            assignment => assignment.parse()?,
-        };
         let to_usize =
             |value: u64, field: &str| usize_from_wire(value, "ParquetOptions", field);
 
@@ -417,7 +412,9 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
                 .transpose()?,
             max_row_group_size: to_usize(proto.max_row_group_size, "max_row_group_size")?,
             max_in_list_size: to_usize(proto.max_in_list_size, "max_in_list_size")?,
-            row_group_range_assignment,
+            row_group_range_assignment: RowGroupRangeAssignment::from_proto_str(
+                &proto.row_group_range_assignment,
+            )?,
             created_by: proto.created_by.clone(),
             column_index_truncate_length: proto
                 .column_index_truncate_length_opt

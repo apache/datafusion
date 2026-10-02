@@ -145,6 +145,18 @@ impl Display for RowGroupRangeAssignment {
     }
 }
 
+impl RowGroupRangeAssignment {
+    /// Parses the protobuf form, where an empty string (options encoded before
+    /// this setting existed) means the default
+    pub fn from_proto_str(s: &str) -> Result<Self> {
+        if s.is_empty() {
+            Ok(Self::default())
+        } else {
+            s.parse()
+        }
+    }
+}
+
 crate::config_field!(RowGroupRangeAssignment, value => RowGroupRangeAssignment::from_str(value)?);
 
 /// Parquet statistics levels supported by the writer

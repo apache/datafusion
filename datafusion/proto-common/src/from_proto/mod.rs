@@ -1220,11 +1220,9 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                 .transpose()?,
             max_row_group_size: to_usize(value.max_row_group_size, "max_row_group_size")?,
             max_in_list_size: to_usize(value.max_in_list_size, "max_in_list_size")?,
-            row_group_range_assignment: match value.row_group_range_assignment.as_str() {
-                // Empty when encoded before this option existed
-                "" => RowGroupRangeAssignment::default(),
-                assignment => assignment.parse()?,
-            },
+            row_group_range_assignment: RowGroupRangeAssignment::from_proto_str(
+                &value.row_group_range_assignment,
+            )?,
             created_by: value.created_by.clone(),
             column_index_truncate_length: value
                 .column_index_truncate_length_opt.as_ref()

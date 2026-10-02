@@ -62,6 +62,8 @@ pub(crate) fn row_group_in_range(
     let col = metadata.column(0);
     let data_page_offset = col.data_page_offset();
     let offset = match assignment {
+        // The rule from before this option existed. Unlike `Midpoint`, it
+        // keeps a dictionary page offset that follows the first data page.
         RowGroupRangeAssignment::StartOffset => {
             col.dictionary_page_offset().unwrap_or(data_page_offset)
         }
@@ -255,22 +257,14 @@ impl RowGroupAccessPlanFilter {
         }
     }
 
-    /// Prune remaining row groups to only those  within the specified range.
+    /// Prune remaining row groups to only those that `assignment` assigns to
+    /// the specified range.
     ///
     /// Updates this set to mark row groups that should not be scanned
     ///
     /// # Panics
     /// if `groups.len() != self.len()`
-    pub fn prune_by_range(&mut self, groups: &[RowGroupMetaData], range: &FileRange) {
-        self.prune_by_range_with_assignment(
-            groups,
-            range,
-            RowGroupRangeAssignment::StartOffset,
-        );
-    }
-
-    /// Like [`Self::prune_by_range`], assigning row groups with `assignment`.
-    pub(crate) fn prune_by_range_with_assignment(
+    pub fn prune_by_range(
         &mut self,
         groups: &[RowGroupMetaData],
         range: &FileRange,
@@ -739,11 +733,7 @@ mod tests {
     ) -> Vec<usize> {
         let mut filter =
             RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(groups.len()));
-        filter.prune_by_range_with_assignment(
-            groups,
-            &FileRange { start, end },
-            assignment,
-        );
+        filter.prune_by_range(groups, &FileRange { start, end }, assignment);
         filter.build().row_group_indexes()
     }
 
