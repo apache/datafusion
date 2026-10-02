@@ -23,7 +23,9 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, PrimitiveArray};
-use arrow::compute::{BatchCoalescer, take_arrays};
+use arrow::compute::{
+    BatchCoalescer, InProgressArray, create_in_progress_array, take_arrays,
+};
 use arrow::datatypes::{SchemaRef, UInt32Type};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::Result;
@@ -79,7 +81,7 @@ const POOR_COMPACTION_FACTOR: f64 = 4.0;
 /// One hash bucket: its completed batches, held in memory or appended to a
 /// spill file, plus the rows not yet forming a full batch.
 struct Bucket {
-    coalescer: BatchCoalescer,
+    coalescer: ColumnBatchBuilder,
     batches: VecDeque<RecordBatch>,
     /// Memory held by `batches`
     batches_bytes: usize,
@@ -89,6 +91,143 @@ struct Bucket {
     rows: usize,
     /// The bucket is due for compaction once it holds this many rows
     compact_at: usize,
+}
+
+/// Builds full batches directly from the columns of a reordered input batch.
+/// The input has already been gathered into bucket order. Source slices use
+/// the same copy and compaction decisions as `BatchCoalescer`, without
+/// allocating a small record batch for every destination.
+struct ColumnBatchBuilder {
+    schema: SchemaRef,
+    columns: Vec<Box<dyn InProgressArray>>,
+    batch_size: usize,
+    column_rows: Vec<usize>,
+    finished_columns: Vec<VecDeque<ArrayRef>>,
+    completed: VecDeque<RecordBatch>,
+}
+
+impl ColumnBatchBuilder {
+    fn new(schema: SchemaRef, batch_size: usize) -> Self {
+        let columns: Vec<_> = schema
+            .fields()
+            .iter()
+            .map(|field| create_in_progress_array(field.data_type(), batch_size))
+            .collect();
+        Self {
+            schema,
+            column_rows: vec![0; columns.len()],
+            finished_columns: vec![VecDeque::new(); columns.len()],
+            columns,
+            batch_size,
+            completed: VecDeque::new(),
+        }
+    }
+
+    fn push_column(
+        &mut self,
+        column: usize,
+        source: &ArrayRef,
+        offset: usize,
+        mut len: usize,
+    ) -> Result<()> {
+        let target = &mut self.columns[column];
+        // The range-aware source setup avoids an array slice and preserves
+        // byte-view's bucket-local compaction decision.
+        let mut offset = target.set_source_range(Arc::clone(source), offset, len);
+        let result = (|| -> Result<()> {
+            while len != 0 {
+                let rows = &mut self.column_rows[column];
+                let copied = len.min(self.batch_size - *rows);
+                target.copy_rows(offset, copied)?;
+                *rows += copied;
+                offset += copied;
+                len -= copied;
+                if *rows == self.batch_size {
+                    self.finished_columns[column].push_back(target.finish()?);
+                    *rows = 0;
+                }
+            }
+            Ok(())
+        })();
+        target.set_source(None);
+        result
+    }
+
+    fn finish_buffered_batch(&mut self) -> Result<()> {
+        for ((column, rows), finished) in self
+            .columns
+            .iter_mut()
+            .zip(&mut self.column_rows)
+            .zip(&mut self.finished_columns)
+        {
+            if *rows != 0 {
+                finished.push_back(column.finish()?);
+                *rows = 0;
+            }
+        }
+        self.collect_columns()
+    }
+
+    fn collect_columns(&mut self) -> Result<()> {
+        if self.finished_columns.is_empty() {
+            return Ok(());
+        }
+        while self
+            .finished_columns
+            .iter()
+            .all(|column| !column.is_empty())
+        {
+            let columns = self
+                .finished_columns
+                .iter_mut()
+                .map(|column| column.pop_front().expect("checked nonempty"))
+                .collect::<Vec<_>>();
+            let options =
+                RecordBatchOptions::new().with_row_count(Some(columns[0].len()));
+            self.completed.push_back(RecordBatch::try_new_with_options(
+                Arc::clone(&self.schema),
+                columns,
+                &options,
+            )?);
+        }
+        Ok(())
+    }
+
+    fn next_completed_batch(&mut self) -> Option<RecordBatch> {
+        self.completed.pop_front()
+    }
+
+    fn size(&self) -> usize {
+        self.columns.capacity() * size_of::<Box<dyn InProgressArray>>()
+            + self
+                .columns
+                .iter()
+                .map(|column| column.size())
+                .sum::<usize>()
+            + self.column_rows.capacity() * size_of::<usize>()
+            + self.finished_columns.capacity() * size_of::<VecDeque<ArrayRef>>()
+            + self
+                .finished_columns
+                .iter()
+                .map(|finished| {
+                    finished.capacity() * size_of::<ArrayRef>()
+                        + finished
+                            .iter()
+                            .map(|array| array.get_array_memory_size())
+                            .sum::<usize>()
+                })
+                .sum::<usize>()
+            + self.completed.capacity() * size_of::<RecordBatch>()
+            + self
+                .completed
+                .iter()
+                .map(|batch| batch.get_array_memory_size())
+                .sum::<usize>()
+    }
+
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
 }
 
 /// Rows of partial aggregate state, split by a hash of their group keys.
@@ -140,7 +279,7 @@ impl FinalBuckets {
         let min_compaction_rows = MIN_COMPACTION_BATCHES * batch_size;
         let buckets = (0..NUM_BUCKETS)
             .map(|_| Bucket {
-                coalescer: BatchCoalescer::new(Arc::clone(schema), batch_size),
+                coalescer: ColumnBatchBuilder::new(Arc::clone(schema), batch_size),
                 batches: VecDeque::new(),
                 batches_bytes: 0,
                 spill_file: None,
@@ -213,34 +352,57 @@ impl FinalBuckets {
             *cursor += 1;
         }
 
-        // One gather for the whole batch, then a slice per bucket. The
-        // coalescer copies the slice, so a bucket owns its batches.
+        // Gather once in bucket order. Then visit every destination of one
+        // column before moving to the next column. Each destination column
+        // accumulates across input batches until it reaches batch_size.
         let indices: PrimitiveArray<UInt32Type> =
             std::mem::take(&mut self.reordered_indices).into();
         let columns = take_arrays(batch.columns(), &indices, None)?;
-        let options = RecordBatchOptions::new().with_row_count(Some(num_rows));
-        let reordered =
-            RecordBatch::try_new_with_options(batch.schema(), columns, &options)?;
-
-        for (bucket, (&start, &size)) in self
-            .buckets
-            .iter_mut()
-            .zip(starts.iter().zip(&self.bucket_sizes))
-        {
-            if size == 0 {
-                continue;
-            }
-            let slice = reordered.slice(start as usize, size as usize);
-            match &mut bucket.spill_file {
-                // A spilled bucket holds no memory: its rows go straight to
-                // the file and are combined into batches when read back.
-                Some(spill_file) => {
-                    spill_file.append_batch(&slice)?;
+        for (column_index, source) in columns.iter().enumerate() {
+            for (bucket, (&start, &size)) in self
+                .buckets
+                .iter_mut()
+                .zip(starts.iter().zip(&self.bucket_sizes))
+            {
+                if size != 0 && bucket.spill_file.is_none() {
+                    bucket.coalescer.push_column(
+                        column_index,
+                        source,
+                        start as usize,
+                        size as usize,
+                    )?;
                 }
-                None => {
-                    bucket.coalescer.push_batch(slice)?;
-                    bucket.rows += size as usize;
-                    bucket.collect_completed()?;
+            }
+        }
+
+        for (bucket, &size) in self.buckets.iter_mut().zip(&self.bucket_sizes) {
+            if size != 0 && bucket.spill_file.is_none() {
+                bucket.rows += size as usize;
+                bucket.coalescer.collect_columns()?;
+                bucket.collect_completed()?;
+            }
+        }
+
+        // Spilled buckets own no in-memory columns. Write their slices to the
+        // spill file after all in-memory destinations have been updated.
+        if self
+            .buckets
+            .iter()
+            .any(|bucket| bucket.spill_file.is_some())
+        {
+            let options = RecordBatchOptions::new().with_row_count(Some(num_rows));
+            let reordered =
+                RecordBatch::try_new_with_options(batch.schema(), columns, &options)?;
+            for (bucket, (&start, &size)) in self
+                .buckets
+                .iter_mut()
+                .zip(starts.iter().zip(&self.bucket_sizes))
+            {
+                if size != 0
+                    && let Some(spill_file) = &mut bucket.spill_file
+                {
+                    spill_file
+                        .append_batch(&reordered.slice(start as usize, size as usize))?;
                 }
             }
         }
@@ -325,7 +487,7 @@ impl FinalBuckets {
         // coalescer is replaced to give up the buffers it allocated.
         bucket.coalescer.finish_buffered_batch()?;
         bucket.collect_completed()?;
-        bucket.coalescer = BatchCoalescer::new(bucket.coalescer.schema(), 1);
+        bucket.coalescer = ColumnBatchBuilder::new(bucket.coalescer.schema(), 1);
         Ok(true)
     }
 
@@ -445,7 +607,7 @@ fn coalesce_stream(
 mod tests {
     use super::*;
 
-    use arrow::array::{AsArray, Int64Array, StringArray};
+    use arrow::array::{Array, AsArray, Int64Array, StringArray, StringViewArray};
     use arrow::datatypes::{DataType, Field, Int64Type, Schema};
     use std::collections::HashMap;
 
@@ -503,6 +665,53 @@ mod tests {
         }
         assert_eq!(rows, 40_000);
         assert_eq!(bucket_of_key.len(), 30_000);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn column_batches_preserve_view_values_and_release_sources() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int64, false),
+            Field::new("name", DataType::Utf8View, true),
+        ]));
+        let mut buckets = FinalBuckets::new(&schema, 1, 7, 0, None);
+        let expected = (0..41)
+            .map(|k| {
+                let name = match k % 3 {
+                    0 => None,
+                    1 => Some("short".to_string()),
+                    _ => Some(format!("long bucket-local string value {k:04}")),
+                };
+                (k, name)
+            })
+            .collect::<HashMap<_, _>>();
+        for range in [0..13, 13..29, 29..41] {
+            let keys = Int64Array::from_iter_values(range.clone());
+            let names =
+                StringViewArray::from_iter(range.map(|k| expected[&k].as_deref()));
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(keys), Arc::new(names)],
+            )?;
+            buckets.route(&batch)?;
+        }
+
+        let mut actual = HashMap::new();
+        let sources = buckets.into_sources()?;
+        for source in sources {
+            let mut stream = source.into_stream(&schema);
+            while let Some(batch) = stream.next().await.transpose()? {
+                assert!(batch.num_rows() <= 7);
+                let keys = batch.column(0).as_primitive::<Int64Type>();
+                let names = batch.column(1).as_string_view();
+                for row in 0..batch.num_rows() {
+                    let value =
+                        (!names.is_null(row)).then(|| names.value(row).to_string());
+                    assert!(actual.insert(keys.value(row), value).is_none());
+                }
+            }
+        }
+        assert_eq!(actual, expected);
         Ok(())
     }
 

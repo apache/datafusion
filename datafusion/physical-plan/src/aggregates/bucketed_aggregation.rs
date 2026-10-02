@@ -66,6 +66,8 @@ pub(super) struct BucketedAggregation {
     bucket_splits: metrics::Count,
     /// Number of times the rows of a bucket were replaced by their aggregated state
     bucket_compactions: metrics::Count,
+    /// Time spent routing rows into buckets, excluding compaction.
+    bucket_routing_time: metrics::Time,
 }
 
 /// What [`BucketedAggregation::output_stream`] works with while it runs.
@@ -92,6 +94,8 @@ impl BucketedAggregation {
             MetricBuilder::new(&agg.metrics).counter("bucket_splits", partition);
         let bucket_compactions =
             MetricBuilder::new(&agg.metrics).counter("bucket_compactions", partition);
+        let bucket_routing_time = MetricBuilder::new(&agg.metrics)
+            .subset_time("bucket_routing_time", partition);
         Self {
             threshold,
             agg,
@@ -102,7 +106,17 @@ impl BucketedAggregation {
             spill_manager,
             bucket_splits,
             bucket_compactions,
+            bucket_routing_time,
         }
+    }
+
+    pub(super) fn route(
+        &self,
+        buckets: &mut FinalBuckets,
+        batch: &RecordBatch,
+    ) -> Result<()> {
+        let _timer = self.bucket_routing_time.timer();
+        buckets.route(batch)
     }
 
     /// True if a schema of partial state rows can be bucketed.
@@ -167,7 +181,7 @@ impl BucketedAggregation {
         self.bucket_splits.add(1);
         buckets.expect_kept(kept);
         if let Some(state) = state {
-            buckets.route(&state)?;
+            self.route(&mut buckets, &state)?;
         }
         Ok(buckets)
     }
@@ -308,7 +322,7 @@ impl BucketedAggregation {
                     let held_bytes = waiting_bytes + source_bytes;
 
                     if let Some(sub_buckets) = sub_buckets.as_mut() {
-                        sub_buckets.route(&batch)?;
+                        self.route(sub_buckets, &batch)?;
                         self.compact(sub_buckets, &mut compaction_table)?;
                         self.reserve(&output.reservation, held_bytes, sub_buckets)?;
                         continue;

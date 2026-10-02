@@ -968,7 +968,7 @@ impl FinalHashAggregateStream {
             if let (Some(buckets), Some(bucketing)) =
                 (buckets.as_mut(), self.bucketing.as_ref())
             {
-                buckets.route(&batch)?;
+                bucketing.route(buckets, &batch)?;
                 bucketing.compact(buckets, &mut compaction_table)?;
                 bucketing.reserve(&self.reservation, 0, buckets)?;
                 continue;

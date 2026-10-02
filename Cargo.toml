@@ -83,6 +83,25 @@ rust-version = "1.94.0"
 # Define DataFusion version
 version = "55.1.0"
 
+[patch.crates-io]
+arrow = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "2686c17d36190e1eeebae9140d2c2efb713edde2" }
+arrow-arith = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "2686c17d36190e1eeebae9140d2c2efb713edde2" }
+arrow-array = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "2686c17d36190e1eeebae9140d2c2efb713edde2" }
+arrow-avro = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "2686c17d36190e1eeebae9140d2c2efb713edde2" }
+arrow-buffer = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "2686c17d36190e1eeebae9140d2c2efb713edde2" }
+arrow-cast = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "2686c17d36190e1eeebae9140d2c2efb713edde2" }
+arrow-cmp = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "2686c17d36190e1eeebae9140d2c2efb713edde2" }
+arrow-csv = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "2686c17d36190e1eeebae9140d2c2efb713edde2" }
+arrow-data = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "2686c17d36190e1eeebae9140d2c2efb713edde2" }
+arrow-flight = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "2686c17d36190e1eeebae9140d2c2efb713edde2" }
+arrow-ipc = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "2686c17d36190e1eeebae9140d2c2efb713edde2" }
+arrow-json = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "2686c17d36190e1eeebae9140d2c2efb713edde2" }
+arrow-ord = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "2686c17d36190e1eeebae9140d2c2efb713edde2" }
+arrow-row = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "2686c17d36190e1eeebae9140d2c2efb713edde2" }
+arrow-schema = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "2686c17d36190e1eeebae9140d2c2efb713edde2" }
+arrow-select = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "2686c17d36190e1eeebae9140d2c2efb713edde2" }
+arrow-string = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "2686c17d36190e1eeebae9140d2c2efb713edde2" }
+
 [workspace.dependencies]
 # We turn off default-features for some dependencies here so the workspaces which inherit them can
 # selectively turn them on if needed, since we can override default-features = true (from false)
