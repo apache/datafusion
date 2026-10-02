@@ -58,16 +58,15 @@ been able to finish it yet, you should feel free to work on it as well. In
 general it is both polite and will help avoid unnecessary duplication of work if
 you leave a note on an issue when you start working on it.
 
-If there is already a recent/active PR for an issue you plan to work on, please
-check said PR before considering opening up a new one. Duplicate PRs cause unnecessary
-maintenance burden and are only preferable when either the existing PR is inactive/stale
-or if you believe you have a different way of accomplishing the issue at hand.
-If the latter is the case, please make sure to call this out in the PR description
-to acknowledge that you have done your due diligence.
+If there is a existing PR for an issue you plan to work on, please review that
+PR before opening a new one. Duplicate, unacknowledged PRs consume valuable
+reviewer time and we may close them. If there is an existing PR, please identify
+it in the PR description and explain why you are opening a new one and not
+helping with the previous one.
 
-If you want to work on an issue which is not already assigned to someone else
+If you want to work on an issue which is not already assigned to someone
 and there are no comment indicating that someone is already working on that
-issue then you can assign the issue to yourself by submitting a single word
+issue you can assign the issue to yourself by submitting a single word
 comment `take`. This will assign the issue to yourself. However, if you are
 unable to make progress you should unassign the issue by commenting a single
 word `untake`.
@@ -203,14 +202,10 @@ Commenting on the PR will remove the `stale` label.
 
 DataFusion has the following policy for AI-assisted PRs:
 
-- The PR author should **understand the core ideas** behind the implementation **end-to-end**, and be able to justify the design and code during review.
-- **Calls out unknowns and assumptions**. It's okay to not fully understand some bits of AI generated code. You should comment on these cases and point them out to reviewers so that they can use their knowledge of the codebase to clear up any concerns. For example, you might comment "calling this function here seems to work but I'm not familiar with how it works internally, I wonder if there's a race condition if it is called concurrently".
+- We welcome AI assisted PRs from anyone. We do not welcome unreviewed AI dumps.
+- The PR author should have personally read all lines in any PR they submit, and **understand the core ideas** behind the implementation **end-to-end**. Authors should be able to justify the design and code during review.
+- **Calls out unknowns and assumptions**. It's okay to not fully understand some bits of AI generated code. Please point these cases out to reviewers so we can work together to clear up any concerns.
 
-If we see multiple PRs being created in a short amount of time, especially from
-a first time contributor, and we suspect AI involvement, we are at liberty to
-close them due to AI spam. We welcome new contributors, but creating 10 PRs at
-once creates high maintenance burden for us and it is often the result of a contributor
-simply asking their AI to do the work for them.
 
 ### Why fully AI-generated PRs without understanding are not helpful
 
@@ -224,6 +219,40 @@ The purposes of code review are:
 An AI dump for an issue doesn’t meet these purposes. Maintainers could finish the task faster by using AI directly, and the submitters gain little knowledge if they act only as a pass through AI proxy without understanding.
 
 Please understand the reviewing capacity is **very limited** for the project, so large PRs which appear to not have the requisite understanding might not get reviewed, and eventually closed or redirected.
+
+### Why AI Dumps are not helpful
+
+An AI dump is one or more PRs with large amounts of unreviewed, AI generated descriptions and code. 
+
+Multiple PRs created in a short amount of time, especially from a first time contributors that are in (our judgment) of dubious quality may be be treated as spam. creating 10 PRs at once is much less valuable than creating 1 high quality PR and working with the maintainers to merge it.
+
+### Responding to review comments
+
+The same policy applies to review discussion as to the code itself: reviewers
+want to talk to **you**, not to your AI tool. Please do not paste an AI
+generated response to a review comment verbatim. Some signs that a reply is an
+unreviewed AI dump:
+
+- It summarizes the diff rather than answering the question that was asked.
+- It lists the commands that were run locally (e.g. `cargo fmt`, `cargo test`)
+  and whether they passed. This is not useful to reviewers because CI already
+  runs these checks on every PR.
+- It contains statements that a human would have caught, such as claiming that
+  tests could not be run because `cargo` is not installed.
+
+For a concrete example of how this plays out, see [this review thread in
+arrow-rs](https://github.com/apache/arrow-rs/pull/11209#discussion_r4145512124).
+The reviewer asked a design question, and received several replies that
+described what had changed and which commands had been run, without engaging
+with the question. This made it hard for the reviewer to tell whether anyone
+had actually read or understood the feedback, and the time spent on the review
+was largely wasted.
+
+Maintainers are more than capable of running coding agents themselves and
+iterating on the output. The point of review is to help the project **and** to
+help you grow as an engineer, so please read each comment, make sure you
+understand it, and reply in your own words. If you used an AI tool to help
+address a comment, that's fine, but say so and describe what you checked.
 
 ### Better ways to contribute than an “AI dump”
 
