@@ -111,7 +111,10 @@ async fn group_by_row_hash() {
             "Resources exhausted: Additional allocation failed",
             "for FinalHashAggregateStream[0]",
         ])
-        .with_memory_limit(2_000)
+        // Every aggregate stream reserves its initial table (~4 KB) when created, so
+        // pin the partition count and fit the two partial and two final tables.
+        .with_config(SessionConfig::new().with_target_partitions(2))
+        .with_memory_limit(20_000)
         .run()
         .await
 }
@@ -233,10 +236,46 @@ async fn nested_key_spill_keeps_groups_unique() {
     const NESTED_KEY_GROUPS: i64 = 16;
     const NESTED_KEY_BATCH_ROWS: usize = 8_192;
 
-    /// Small enough that the final stages must spill their `count(distinct)`
-    /// state, large enough that the migrated final stream can hold one merged
-    /// batch under a `FairSpillPool` shared by four partitions.
-    const NESTED_KEY_MEMORY_LIMIT: usize = 8 * 1024 * 1024;
+    /// Small enough that the final stage must spill its `count(distinct)` state
+    /// under the plan shape each stream implementation runs with, see
+    /// `nested_key_session_config` for why they differ.
+    const LEGACY_MEMORY_LIMIT: usize = 8 * 1024 * 1024;
+    const MIGRATED_MEMORY_LIMIT: usize = 2 * 1024 * 1024;
+
+    /// A `FairSpillPool` splits the limit evenly between the spillable consumers
+    /// registered at the time of each allocation, so what a stream may hold
+    /// depends on which other streams are still alive. Each implementation gets
+    /// a plan shape under which that does not matter.
+    ///
+    /// The legacy bug needs several new groups per merged batch: 64 row batches
+    /// over 4 hash partitioned final streams reproduce it, and the legacy replay
+    /// of the merged spill holds at most ~340 KiB, within the ~680 KiB share it
+    /// gets even while all 12 consumers (partials, repartitions and finals) are
+    /// registered.
+    ///
+    /// The migrated final stream replays the merged spill through an ordered
+    /// table that accounts for every group of a merged batch before emitting
+    /// the completed ones, and one group's `count(distinct)` state here is
+    /// ~675 KiB. With 64 row batches over 4 partitions that reached ~2.7 MiB,
+    /// which only fit once the other partitions had finished and released
+    /// their share, so the run depended on scheduling. It therefore runs a
+    /// single final stream (no hash repartition), which is the only spillable
+    /// consumer left once the partials are done, with 8 row batches so a
+    /// merged batch holds one or two groups.
+    fn nested_key_session_config(legacy: bool) -> SessionConfig {
+        let config = SessionConfig::new()
+            .with_target_partitions(4)
+            .set_bool("datafusion.execution.enable_migration_aggregate", !legacy);
+        if legacy {
+            // small batches: the merged spill stream arrives in many batches and
+            // groups span batch boundaries
+            config.with_batch_size(64)
+        } else {
+            config
+                .with_batch_size(8)
+                .set_bool("datafusion.optimizer.repartition_aggregations", false)
+        }
+    }
 
     fn nested_key_struct_fields() -> Fields {
         Fields::from(vec![
@@ -297,14 +336,10 @@ async fn nested_key_spill_keeps_groups_unique() {
         if let Some(limit) = memory_limit {
             runtime = runtime.with_memory_pool(Arc::new(FairSpillPool::new(limit)));
         }
-        let config = SessionConfig::new()
-            .with_target_partitions(4)
-            // small batches: the merged spill stream arrives in many batches and
-            // groups span batch boundaries
-            .with_batch_size(64)
-            .set_bool("datafusion.execution.enable_migration_aggregate", !legacy);
-        let ctx =
-            SessionContext::new_with_config_rt(config, runtime.build_arc().unwrap());
+        let ctx = SessionContext::new_with_config_rt(
+            nested_key_session_config(legacy),
+            runtime.build_arc().unwrap(),
+        );
         ctx.register_table("t", Arc::new(nested_key_table()))
             .unwrap();
 
@@ -338,9 +373,11 @@ async fn nested_key_spill_keeps_groups_unique() {
         "unbounded, legacy=true"
     );
 
-    for legacy in [true, false] {
+    for (legacy, memory_limit) in
+        [(true, LEGACY_MEMORY_LIMIT), (false, MIGRATED_MEMORY_LIMIT)]
+    {
         assert_eq!(
-            run_nested_key_query(Some(NESTED_KEY_MEMORY_LIMIT), legacy).await,
+            run_nested_key_query(Some(memory_limit), legacy).await,
             expected,
             "spilling, legacy={legacy}"
         );

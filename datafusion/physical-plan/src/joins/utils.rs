@@ -152,10 +152,11 @@ pub fn adjust_right_output_partitioning(
                     "Offsetting range partitioning produced an empty ordering"
                 )
             })?;
-            Partitioning::Range(RangePartitioning::new(
+            Partitioning::Range(RangePartitioning::try_new_with_samples(
                 ordering,
-                range.split_points().to_vec(),
-            ))
+                range.samples().to_vec(),
+                range.partition_count(),
+            )?)
         }
         result => result.clone(),
     };
@@ -340,12 +341,8 @@ pub fn build_join_schema(
         _ => (right, left),
     };
 
-    let metadata = schema1
-        .metadata()
-        .clone()
-        .into_iter()
-        .chain(schema2.metadata().clone())
-        .collect();
+    let mut metadata = schema1.metadata().clone();
+    metadata.extend(schema2.metadata().clone());
 
     (fields.finish().with_metadata(metadata), column_indices)
 }
@@ -1982,6 +1979,20 @@ pub(crate) fn symmetric_join_output_partitioning(
         }
     };
     Ok(result)
+}
+
+/// Convert a boolean filter array into a unified mask bitmap.
+///
+/// Caution: The filter result is NOT a bitmap; it contains true/false/null values.
+/// For example, `1 < NULL` evaluates to NULL. Therefore, we must combine (AND)
+/// the boolean array with its null bitmap to construct a unified bitmap.
+#[inline]
+pub(crate) fn boolean_mask_from_filter(filter_arr: &BooleanArray) -> BooleanArray {
+    let (values, nulls) = filter_arr.clone().into_parts();
+    match nulls {
+        Some(nulls) => BooleanArray::new(nulls.inner() & &values, None),
+        None => BooleanArray::new(values, None),
+    }
 }
 
 pub(crate) fn asymmetric_join_output_partitioning(
@@ -4399,8 +4410,20 @@ mod tests {
                 ScalarValue::Int32(Some(20)),
                 ScalarValue::Int32(Some(50)),
             ]),
+            SplitPoint::new(vec![
+                ScalarValue::Int32(Some(30)),
+                ScalarValue::Int32(Some(40)),
+            ]),
+            SplitPoint::new(vec![
+                ScalarValue::Int32(Some(40)),
+                ScalarValue::Int32(Some(30)),
+            ]),
+            SplitPoint::new(vec![
+                ScalarValue::Int32(Some(50)),
+                ScalarValue::Int32(Some(20)),
+            ]),
         ];
-        let range = RangePartitioning::try_new(
+        let range = RangePartitioning::try_new_with_samples(
             LexOrdering::new([
                 PhysicalSortExpr::new(
                     Arc::new(Column::new("a", 0)),
@@ -4413,10 +4436,16 @@ mod tests {
             ])
             .unwrap(),
             split_points.clone(),
+            3,
         )?;
 
         let adjusted = adjust_right_output_partitioning(&Partitioning::Range(range), 3)?;
-        let expected = Partitioning::Range(RangePartitioning::new(
+        let Partitioning::Range(adjusted_range) = &adjusted else {
+            panic!("expected range partitioning");
+        };
+        assert_eq!(adjusted_range.max_partition_count(), 6);
+        assert_eq!(adjusted_range.samples(), split_points);
+        let expected = Partitioning::Range(RangePartitioning::try_new_with_samples(
             LexOrdering::new([
                 PhysicalSortExpr::new(
                     Arc::new(Column::new("a", 3)),
@@ -4429,7 +4458,8 @@ mod tests {
             ])
             .unwrap(),
             split_points,
-        ));
+            3,
+        )?);
 
         assert_eq!(adjusted, expected);
         Ok(())

@@ -110,6 +110,7 @@ use crate::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, Gauge, MetricBuilder, MetricsSet,
     RecordOutput, Time,
 };
+use crate::projection::{EmbeddedProjection, ProjectionExec, try_embed_projection};
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{
@@ -250,6 +251,18 @@ impl AsOfJoinExec {
         })
     }
 
+    /// Returns this join emitting only the columns in `projection`, in that order.
+    /// The indices address the join's own schema, before any projection.
+    pub fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
+        Self::try_new(
+            Arc::clone(&self.left),
+            Arc::clone(&self.right),
+            self.on.clone(),
+            self.match_condition.clone(),
+            projection,
+        )
+    }
+
     fn compute_properties(
         left: &Arc<dyn ExecutionPlan>,
         join_schema: &SchemaRef,
@@ -290,6 +303,12 @@ impl AsOfJoinExec {
             EmissionType::Incremental,
             Boundedness::Bounded,
         ))
+    }
+}
+
+impl EmbeddedProjection for AsOfJoinExec {
+    fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
+        self.with_projection(projection)
     }
 }
 
@@ -384,6 +403,16 @@ impl ExecutionPlan for AsOfJoinExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.left, &self.right]
+    }
+
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        if self.projection.is_some() {
+            return Ok(None);
+        }
+        try_embed_projection(projection, self)
     }
 
     fn apply_expressions(
@@ -552,6 +581,180 @@ impl ExecutionPlan for AsOfJoinExec {
             total_byte_size: Precision::Absent,
             column_statistics,
         }))
+    }
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+
+        // Destructure exhaustively (no `..`) so that a newly added field is a
+        // compile error here instead of being silently left out of the proto.
+        let Self {
+            left,
+            right,
+            on,
+            match_condition,
+            projection,
+            // derived from the children's schemas by `try_new` on decode
+            join_schema: _,
+            // derived from the children's schemas by `try_new` on decode
+            column_indices: _,
+            // runtime metrics, not part of the plan
+            metrics: _,
+            // recomputed from `on` and `match_condition.op` by `try_new`
+            left_ordering: _,
+            // recomputed from `on` and `match_condition.op` by `try_new`
+            right_ordering: _,
+            // right input collected at execution time, not part of the plan
+            right_fut: _,
+            // recomputed by `try_new` on decode
+            cache: _,
+        } = self;
+
+        let left = ctx.encode_child(left)?;
+        let right = ctx.encode_child(right)?;
+        let on = on
+            .iter()
+            .map(|(left, right)| {
+                Ok(protobuf::JoinOn {
+                    left: Some(ctx.encode_expr(left)?),
+                    right: Some(ctx.encode_expr(right)?),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let match_operator = match match_condition.op {
+            Operator::Lt => protobuf::AsOfMatchOperator::Lt,
+            Operator::LtEq => protobuf::AsOfMatchOperator::LtEq,
+            Operator::Gt => protobuf::AsOfMatchOperator::Gt,
+            Operator::GtEq => protobuf::AsOfMatchOperator::GtEq,
+            op => {
+                return internal_err!(
+                    "AsOfJoinExec cannot serialize unsupported match operator {op}"
+                );
+            }
+        };
+
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::AsOfJoin(Box::new(
+                    protobuf::AsOfJoinExecNode {
+                        left: Some(Box::new(left)),
+                        right: Some(Box::new(right)),
+                        on,
+                        left_match_expr: Some(ctx.encode_expr(&match_condition.left)?),
+                        right_match_expr: Some(ctx.encode_expr(&match_condition.right)?),
+                        match_operator: match_operator.into(),
+                        // Proto3 `repeated` cannot distinguish `None` from
+                        // `Some(vec![])`; preserve the empty projection with
+                        // the invalid column-index sentinel used by hash join.
+                        projection: match projection.as_ref() {
+                            None => Vec::new(),
+                            Some(projection) if projection.is_empty() => vec![u32::MAX],
+                            Some(projection) => {
+                                projection.iter().map(|index| *index as u32).collect()
+                            }
+                        },
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl AsOfJoinExec {
+    /// Reconstruct an [`AsOfJoinExec`] from its protobuf representation.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+
+        let asof_join = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::AsOfJoin,
+            "AsOfJoinExec",
+        );
+        // Destructure exhaustively (no `..`) so that a newly added proto field
+        // is a compile error here instead of being silently ignored.
+        let protobuf::AsOfJoinExecNode {
+            left,
+            right,
+            on,
+            left_match_expr,
+            right_match_expr,
+            match_operator,
+            projection,
+        } = &**asof_join;
+
+        let left = ctx.decode_required_child(left.as_deref(), "AsOfJoinExec", "left")?;
+        let right =
+            ctx.decode_required_child(right.as_deref(), "AsOfJoinExec", "right")?;
+        let left_schema = left.schema();
+        let right_schema = right.schema();
+        let on = on
+            .iter()
+            .map(|pair| {
+                let left = ctx.decode_required_expr(
+                    pair.left.as_ref(),
+                    left_schema.as_ref(),
+                    "AsOfJoinExec",
+                    "on.left",
+                )?;
+                let right = ctx.decode_required_expr(
+                    pair.right.as_ref(),
+                    right_schema.as_ref(),
+                    "AsOfJoinExec",
+                    "on.right",
+                )?;
+                Ok((left, right))
+            })
+            .collect::<Result<_>>()?;
+        let left_match = ctx.decode_required_expr(
+            left_match_expr.as_ref(),
+            left_schema.as_ref(),
+            "AsOfJoinExec",
+            "left_match_expr",
+        )?;
+        let right_match = ctx.decode_required_expr(
+            right_match_expr.as_ref(),
+            right_schema.as_ref(),
+            "AsOfJoinExec",
+            "right_match_expr",
+        )?;
+        let match_operator = protobuf::AsOfMatchOperator::try_from(*match_operator)
+            .map_err(|_| {
+                datafusion_common::internal_datafusion_err!(
+                    "AsOfJoinExec: unknown AsOfMatchOperator {}",
+                    match_operator
+                )
+            })?;
+        let op = match match_operator {
+            protobuf::AsOfMatchOperator::Lt => Operator::Lt,
+            protobuf::AsOfMatchOperator::LtEq => Operator::LtEq,
+            protobuf::AsOfMatchOperator::Gt => Operator::Gt,
+            protobuf::AsOfMatchOperator::GtEq => Operator::GtEq,
+            protobuf::AsOfMatchOperator::Unspecified => {
+                return internal_err!("AsOfJoinExec match operator must be specified");
+            }
+        };
+
+        // Preserve the empty-projection sentinel written by `try_to_proto`.
+        let projection = match projection.as_slice() {
+            [] => None,
+            [u32::MAX] => Some(Vec::new()),
+            indices => Some(indices.iter().map(|index| *index as usize).collect()),
+        };
+
+        Ok(Arc::new(Self::try_new(
+            left,
+            right,
+            on,
+            AsOfMatchExpr::new(left_match, op, right_match),
+            projection,
+        )?))
     }
 }
 
@@ -1319,6 +1522,7 @@ mod tests {
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::ColumnarValue;
     use datafusion_physical_expr::expressions::{BinaryExpr, CastExpr};
+    use datafusion_physical_expr::projection::ProjectionExpr;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use insta::assert_snapshot;
 
@@ -1493,6 +1697,95 @@ mod tests {
         let metrics = exec.metrics().expect("ASOF metrics must be present");
         assert_eq!(metrics.output_rows(), Some(7));
         assert!(metrics.elapsed_compute().is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn embeds_output_projection() -> Result<()> {
+        let exec = Arc::new(test_exec()?.with_projection(None)?);
+        let input = Arc::clone(&exec) as Arc<dyn ExecutionPlan>;
+        let projection = ProjectionExec::try_new(
+            [
+                ProjectionExpr {
+                    expr: Arc::new(PhysicalColumn::new("id", 2)),
+                    alias: "id".to_string(),
+                },
+                ProjectionExpr {
+                    expr: Arc::new(PhysicalColumn::new("price", 5)),
+                    alias: "price".to_string(),
+                },
+            ],
+            input,
+        )?;
+
+        let embedded = exec
+            .try_swapping_with_projection(&projection)?
+            .expect("projection should be embedded");
+        let embedded_exec = embedded
+            .downcast_ref::<AsOfJoinExec>()
+            .expect("identity projection should be removed");
+        assert_eq!(embedded_exec.projection.as_deref(), Some(&[2, 5][..]));
+        assert_eq!(
+            embedded_exec
+                .schema()
+                .fields()
+                .iter()
+                .map(|field| field.name().as_str())
+                .collect::<Vec<_>>(),
+            vec!["id", "price"]
+        );
+
+        let batches = collect(embedded, Arc::new(TaskContext::default())).await?;
+        assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+-------+
+        | id | price |
+        +----+-------+
+        | 0  |       |
+        | 1  |       |
+        | 2  |       |
+        | 3  | 40    |
+        | 4  | 60    |
+        | 5  | 101   |
+        | 6  |       |
+        +----+-------+
+        ");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn empty_projection_preserves_row_count() -> Result<()> {
+        let exec = Arc::new(test_exec()?.with_projection(None)?);
+        let input = Arc::clone(&exec) as Arc<dyn ExecutionPlan>;
+        let projection = ProjectionExec::try_new(Vec::<ProjectionExpr>::new(), input)?;
+
+        let embedded = exec
+            .try_swapping_with_projection(&projection)?
+            .expect("empty projection should be embedded");
+        let embedded_exec = embedded
+            .downcast_ref::<AsOfJoinExec>()
+            .expect("empty projection should remove ProjectionExec");
+        assert_eq!(embedded_exec.projection.as_deref(), Some(&[][..]));
+        assert!(embedded_exec.schema().fields().is_empty());
+
+        let batches = collect(embedded, Arc::new(TaskContext::default())).await?;
+        assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 7);
+        assert!(batches.iter().all(|batch| batch.num_columns() == 0));
+        Ok(())
+    }
+
+    #[test]
+    fn declines_projection_when_already_embedded() -> Result<()> {
+        let exec = test_exec()?;
+        let input = Arc::clone(&exec) as Arc<dyn ExecutionPlan>;
+        let projection = ProjectionExec::try_new(
+            [ProjectionExpr {
+                expr: Arc::new(PhysicalColumn::new("id", 2)),
+                alias: "id".to_string(),
+            }],
+            input,
+        )?;
+
+        assert!(exec.try_swapping_with_projection(&projection)?.is_none());
         Ok(())
     }
 

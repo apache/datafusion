@@ -36,9 +36,12 @@ use super::HashJoinExecBuilder;
 use super::selection::SelectionExchange;
 use crate::joins::PartitionMode;
 use crate::joins::utils::{ColumnIndex, JoinFilter};
+use crate::metrics::MetricValue;
 use crate::repartition::RepartitionExec;
 use crate::test::TestMemoryExec;
 use crate::{ExecutionPlan, Partitioning, collect};
+
+const SOURCE_ROWS: usize = 137;
 
 fn source(seed: usize, width: usize) -> Result<Arc<dyn ExecutionPlan>> {
     let schema = Arc::new(Schema::new(vec![
@@ -50,18 +53,21 @@ fn source(seed: usize, width: usize) -> Result<Arc<dyn ExecutionPlan>> {
         Arc::clone(&schema),
         vec![
             Arc::new(Int64Array::from_iter(
-                (0..137).map(|i| (i % 11 != 0).then_some(((i * 17 + seed) % 23) as i64)),
+                (0..SOURCE_ROWS)
+                    .map(|i| (i % 11 != 0).then_some(((i * 17 + seed) % 23) as i64)),
             )) as ArrayRef,
-            Arc::new(Int64Array::from_iter_values((0..137).map(|i| i as i64))),
+            Arc::new(Int64Array::from_iter_values(
+                (0..SOURCE_ROWS).map(|i| i as i64),
+            )),
             Arc::new(StringArray::from_iter_values(
-                (0..137).map(|i| format!("row-{i}-{}", "x".repeat(width))),
+                (0..SOURCE_ROWS).map(|i| format!("row-{i}-{}", "x".repeat(width))),
             )),
         ],
     )?;
     let mut partitions = vec![vec![], vec![], vec![]];
     let step = 7 + seed;
-    for start in (0..137).step_by(step) {
-        partitions[start % 3].push(batch.slice(start, step.min(137 - start)));
+    for start in (0..SOURCE_ROWS).step_by(step) {
+        partitions[start % 3].push(batch.slice(start, step.min(SOURCE_ROWS - start)));
     }
     Ok(TestMemoryExec::try_new_exec(&partitions, schema, None)?)
 }
@@ -157,11 +163,22 @@ async fn run_join(
     )
     .await
     .expect("join must not deadlock")?;
-    let used = join
-        .metrics()
-        .unwrap()
+    let metrics = join.metrics().unwrap();
+    let used = metrics
         .sum_by_name("probe_selection_partitions")
         .map_or(0, |m| m.as_usize());
+    let Some(MetricValue::Ratio { ratio_metrics, .. }) =
+        metrics.sum_by_name("probe_hit_rate")
+    else {
+        panic!("probe hit rate must be recorded");
+    };
+    // Chunked lookups count each selected row once, not the full retained
+    // source batch once per output chunk or once per destination partition.
+    assert_eq!(
+        ratio_metrics.total(),
+        SOURCE_ROWS,
+        "probe hit rate must count each source probe row exactly once"
+    );
     drop(join);
     // Producers abort asynchronously when the last output is dropped.
     tokio::time::timeout(Duration::from_secs(5), async {

@@ -41,9 +41,10 @@ use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement, WriteOp};
 use crate::utils::{
-    check_aggregate_and_window_nesting, enumerate_grouping_sets, expr_to_columns,
-    exprlist_to_fields, find_out_reference_exprs, grouping_set_expr_count,
-    grouping_set_to_exprlist, merge_schema, split_conjunction,
+    check_aggregate_and_window_nesting, check_no_window_functions,
+    enumerate_grouping_sets, expr_to_columns, exprlist_to_fields,
+    find_out_reference_exprs, grouping_set_expr_count, grouping_set_to_exprlist,
+    merge_schema, split_conjunction,
 };
 use crate::{
     BinaryExpr, CreateMemoryTable, CreateView, Execute, Expr, ExprSchemable, GroupingSet,
@@ -54,7 +55,7 @@ use crate::{
 
 use crate::statistics::StatisticsRequest;
 use arrow::compute::SortOptions;
-use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, FieldRef, Metadata, Schema, SchemaRef};
 use datafusion_common::cse::{NormalizeEq, Normalizeable};
 use datafusion_common::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
 use datafusion_common::metadata::check_metadata_with_storage_equal;
@@ -130,7 +131,7 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// # fn main() -> Result<()> {
 /// let plan = table_scan(Some("employee"), &employee_schema(), None)?
 ///  .filter(col("salary").gt(lit(1000)))?
-///  .project(vec![col("name")])?
+///  .project(vec![col("name"), col("salary")])?
 ///  .build()?;
 ///
 /// // use apply to walk the plan and collect all expressions
@@ -145,14 +146,16 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// }).unwrap();
 ///
 /// // we found the expression in projection and filter
-/// assert_eq!(expressions.len(), 2);
+/// assert_eq!(expressions.len(), 3);
 /// println!("Found expressions: {:?}", expressions);
 /// // found predicate in the Filter: employee.salary > 1000
 /// let salary = Expr::Column(Column::new(Some("employee"), "salary"));
 /// assert!(expressions.contains(&salary.gt(lit(1000))));
-/// // found projection in the Projection: employee.name
+/// // found projection in the Projection: employee.name, employee.salary
 /// let name = Expr::Column(Column::new(Some("employee"), "name"));
+/// let salary = Expr::Column(Column::new(Some("employee"), "salary"));
 /// assert!(expressions.contains(&name));
+/// assert!(expressions.contains(&salary));
 /// # Ok(())
 /// # }
 /// ```
@@ -179,7 +182,7 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// use datafusion_common::tree_node::Transformed;
 /// let plan = table_scan(Some("employee"), &employee_schema(), None)?
 ///  .filter(col("salary").gt(lit(1000)))?
-///  .project(vec![col("name")])?
+///  .project(vec![col("name"), col("salary")])?
 ///  .build()?;
 ///
 /// // use transform to rewrite the plan
@@ -202,7 +205,7 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 ///
 /// // we found the filter
 /// assert_eq!(rewritten_plan.display_indent().to_string(),
-/// "Projection: employee.name\
+/// "Projection: employee.name, employee.salary\
 /// \n  Filter: employee.salary < Int32(2000)\
 /// \n    TableScan: employee");
 /// # Ok(())
@@ -2106,6 +2109,7 @@ impl LogicalPlan {
                         projection,
                         filters,
                         fetch,
+                        skip,
                         ..
                     }) => {
                         let projected_fields = match projection {
@@ -2171,6 +2175,10 @@ impl LogicalPlan {
 
                         if let Some(n) = fetch {
                             write!(f, ", fetch={n}")?;
+                        }
+
+                        if let Some(n) = skip {
+                            write!(f, ", skip={n}")?;
                         }
 
                         Ok(())
@@ -2822,18 +2830,23 @@ pub struct Filter {
 impl Filter {
     /// Create a new filter operator.
     ///
-    /// Skips the type-checking and dealiasing done in [Self::try_new].
-    /// For internal use in DataFusion only.
+    /// Skips the type-checking, window function check and dealiasing done in
+    /// [Self::try_new]. For internal use in DataFusion only.
     ///
     /// **Preconditions:**
     /// - the `predicate` expression returns a boolean value
     /// - the `predicate` expression is not aliased
+    /// - the `predicate` expression contains no window function calls
     #[doc(hidden)]
     pub fn new(predicate: Expr, input: Arc<LogicalPlan>) -> Self {
         Self { predicate, input }
     }
 
     /// Create a new filter operator.
+    ///
+    /// Returns an error if the predicate is not boolean or contains a window
+    /// function call, which cannot be evaluated by a filter (see
+    /// [`check_no_window_functions`]).
     ///
     /// Notes: as Aliases have no effect on the output of a filter operator,
     /// they are removed from the predicate expression.
@@ -2853,6 +2866,11 @@ impl Filter {
     }
 
     fn try_new_internal(predicate: Expr, input: Arc<LogicalPlan>) -> Result<Self> {
+        // Filters are evaluated before window functions are computed, so a
+        // window call in the predicate has no physical equivalent. Reject it
+        // here rather than failing during physical planning.
+        check_no_window_functions(&predicate, "filter predicates")?;
+
         // Filter predicates must return a boolean value so we try and validate that here.
         // Note that it is not always possible to resolve the predicate expression during plan
         // construction (such as with correlated subqueries) so we make a best effort here and
@@ -3116,12 +3134,18 @@ pub struct TableScan {
     pub filters: Vec<Expr>,
     /// Optional number of rows to read
     pub fetch: Option<usize>,
+    /// Optional number of rows to skip
+    pub skip: Option<usize>,
     /// Statistics the planner would like the provider to answer for this
     /// scan, typically attached by a custom optimizer rule from the
     /// surrounding plan (e.g. Min/Max for sort keys).
     ///
     /// A [`BTreeSet`], not a `Vec` to keep the resulting plan deterministic.
-    pub statistics_requests: BTreeSet<StatisticsRequest>,
+    ///
+    // Boxed to keep this rarely-populated field from growing every
+    // `TableScan` (and thus `LogicalPlan`) by its own size;
+    // see `test_size_of_logical_plan`.
+    pub statistics_requests: Box<BTreeSet<StatisticsRequest>>,
 }
 
 impl Debug for TableScan {
@@ -3133,6 +3157,7 @@ impl Debug for TableScan {
             .field("projected_schema", &self.projected_schema)
             .field("filters", &self.filters)
             .field("fetch", &self.fetch)
+            .field("skip", &self.skip)
             .finish_non_exhaustive()
     }
 }
@@ -3225,7 +3250,9 @@ pub struct TableScanBuilder {
     projection: Option<Vec<usize>>,
     filters: Vec<Expr>,
     fetch: Option<usize>,
-    statistics_requests: BTreeSet<StatisticsRequest>,
+    skip: Option<usize>,
+    #[expect(clippy::box_collection)] // additional indirection for smaller size_of()
+    statistics_requests: Box<BTreeSet<StatisticsRequest>>,
 }
 
 impl TableScanBuilder {
@@ -3240,7 +3267,8 @@ impl TableScanBuilder {
             projection: None,
             filters: vec![],
             fetch: None,
-            statistics_requests: BTreeSet::new(),
+            skip: None,
+            statistics_requests: Box::default(),
         }
     }
 
@@ -3262,13 +3290,19 @@ impl TableScanBuilder {
         self
     }
 
+    /// Set the number of rows to skip.
+    pub fn with_skip(mut self, skip: Option<usize>) -> Self {
+        self.skip = skip;
+        self
+    }
+
     /// Set the statistics requests for the scan. See
     /// [`TableScan::statistics_requests`].
     pub fn with_statistics_requests(
         mut self,
         statistics_requests: BTreeSet<StatisticsRequest>,
     ) -> Self {
-        self.statistics_requests = statistics_requests;
+        self.statistics_requests = Box::new(statistics_requests);
         self
     }
 
@@ -3281,6 +3315,7 @@ impl TableScanBuilder {
             projection,
             filters,
             fetch,
+            skip,
             statistics_requests,
         } = self;
 
@@ -3322,6 +3357,7 @@ impl TableScanBuilder {
             projected_schema,
             filters,
             fetch,
+            skip,
             statistics_requests,
         })
     }
@@ -3335,6 +3371,7 @@ impl From<TableScan> for TableScanBuilder {
             projection: scan.projection,
             filters: scan.filters,
             fetch: scan.fetch,
+            skip: scan.skip,
             statistics_requests: scan.statistics_requests,
         }
     }
@@ -3447,8 +3484,7 @@ impl Union {
         inputs: &[Arc<LogicalPlan>],
         loose_types: bool,
     ) -> Result<DFSchemaRef> {
-        type FieldData<'a> =
-            (&'a DataType, bool, Vec<&'a HashMap<String, String>>, usize);
+        type FieldData<'a> = (&'a DataType, bool, Vec<&'a Metadata>, usize);
         let mut cols: Vec<(&str, FieldData)> = Vec::new();
         for input in inputs.iter() {
             for field in input.schema().fields() {
@@ -5113,7 +5149,7 @@ impl Unnest {
                                 ));
                                 Ok(get_unnested_columns(
                                     &r.output_column.name,
-                                    original_field.data_type(),
+                                    original_field,
                                     r.depth,
                                 )?
                                 .into_iter()
@@ -5124,7 +5160,7 @@ impl Unnest {
                         if transformed_columns.is_empty() {
                             transformed_columns = get_unnested_columns(
                                 &column_to_unnest.name,
-                                original_field.data_type(),
+                                original_field,
                                 1,
                             )?;
                             match original_field.data_type() {
@@ -5204,9 +5240,10 @@ impl Unnest {
 // the recursion level
 fn get_unnested_columns(
     col_name: &String,
-    data_type: &DataType,
+    field: &Field,
     depth: usize,
 ) -> Result<Vec<(Column, Arc<Field>)>> {
+    let data_type = field.data_type();
     let mut qualified_columns = Vec::with_capacity(1);
 
     match data_type {
@@ -5230,7 +5267,11 @@ fn get_unnested_columns(
             qualified_columns.extend(fields.iter().map(|f| {
                 let new_name = format!("{}.{}", col_name, f.name());
                 let column = Column::from_name(&new_name);
-                let new_field = f.as_ref().clone().with_name(new_name);
+                let new_field = f
+                    .as_ref()
+                    .clone()
+                    .with_name(new_name)
+                    .with_nullable(field.is_nullable() || f.is_nullable());
                 // let column = Column::from((None, &f));
                 (column, Arc::new(new_field))
             }))
@@ -6054,7 +6095,7 @@ mod tests {
         let schema_with_metadata = || {
             DFSchema::from_unqualified_fields(
                 vec![Field::new("count", DataType::Int64, false)].into(),
-                [("key".to_string(), "value".to_string())].into(),
+                Metadata::new().with("key", "value"),
             )
             .unwrap()
         };
@@ -6397,7 +6438,8 @@ mod tests {
             projected_schema: Arc::clone(&schema),
             filters: vec![],
             fetch: None,
-            statistics_requests: BTreeSet::new(),
+            skip: None,
+            statistics_requests: Box::default(),
         }));
         let col = schema.field_names()[0].clone();
 
@@ -6428,7 +6470,8 @@ mod tests {
             projected_schema: Arc::clone(&unique_schema),
             filters: vec![],
             fetch: None,
-            statistics_requests: BTreeSet::new(),
+            skip: None,
+            statistics_requests: Box::default(),
         }));
         let col = schema.field_names()[0].clone();
 
