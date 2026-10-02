@@ -15,8 +15,7 @@
 
 Before you start work on an issue, you MUST follow the instructions in
 [Open Contribution and Assigning tickets](docs/source/contributor-guide/index.md#open-contribution-and-assigning-tickets). You must ensure duplicate work is not being created.
-You must ensure a high volume of PRs aren't being created in a short amount of
-time by your GitHub user if this is your first time contributing.
+Do not create multiple PRs if this is your first time contributing.
 
 ## Before Committing
 

@@ -202,29 +202,33 @@ Commenting on the PR will remove the `stale` label.
 
 DataFusion has the following policy for AI-assisted PRs:
 
-- We welcome AI assisted PRs from anyone. We do not welcome unreviewed AI dumps.
-- The PR author should have personally read all lines in any PR they submit, and **understand the core ideas** behind the implementation **end-to-end**. Authors should be able to justify the design and code during review.
-- **Calls out unknowns and assumptions**. It's okay to not fully understand some bits of AI generated code. Please point these cases out to reviewers so we can work together to clear up any concerns.
+- We welcome AI assisted PRs from anyone. We do not welcome unreviewed "AI dumps" (defined below).
+- The PR author should have personally read the entire PR they submit, and **understand the core ideas** behind the implementation **end-to-end**. Authors should be ready to justify and help reviewers understand the design and code during review.
+- **Calls out unknowns and assumptions**. It's okay to not fully understand some bits of AI generated code. Please point these cases out so we can work together to clear up any concerns.
 
+### What is an "AI dump" and why it is not helpful
 
-### Why fully AI-generated PRs without understanding are not helpful
+An "AI dump" is a PR, or a series of PRs, consisting largely of AI generated code and descriptions that the author has not personally reviewed and does not understand. The code may even be correct. The problem is that the author hasn't checked, so all of the work of understanding it falls on the reviewer.
 
-Today, AI tools cannot reliably make complex changes to DataFusion on their own, which is why we rely on pull requests and code review.
-
-The purposes of code review are:
+Code review serves two purposes:
 
 1. Finish the intended task.
-2. Share knowledge between authors and reviewers, as a long-term investment in the project. For this reason, even if someone familiar with the codebase can finish a task quickly, we're still happy to help a new contributor work on it even if it takes longer.
+2. Share knowledge between authors and reviewers, as a long-term investment in
+   the project. For this reason, even if someone familiar with the codebase
+   could finish a task more quickly by themselves, we are still happy to help a new contributor
+   work on it.
 
-An AI dump for an issue doesn’t meet these purposes. Maintainers could finish the task faster by using AI directly, and the submitters gain little knowledge if they act only as a pass through AI proxy without understanding.
+An AI dump meets neither purpose. Maintainers could finish the task faster by
+running the AI tool themselves, and an author who acts only as a pass-through
+proxy for the tool learns little from the review.
 
-Please understand the reviewing capacity is **very limited** for the project, so large PRs which appear to not have the requisite understanding might not get reviewed, and eventually closed or redirected.
+Reviewing capacity for the project is **very limited**, so PRs that appear to be
+AI dumps may not get reviewed, and may eventually be closed.
 
-### Why AI Dumps are not helpful
-
-An AI dump is one or more PRs with large amounts of unreviewed, AI generated descriptions and code. 
-
-Multiple PRs created in a short amount of time, especially from a first time contributors that are in (our judgment) of dubious quality may be be treated as spam. creating 10 PRs at once is much less valuable than creating 1 high quality PR and working with the maintainers to merge it.
+Multiple PRs created in a short amount of time, especially by a first time
+contributor, that are in our judgment show lack of review be treated as spam
+and closed. One high quality PR that you work with maintainers to merge is far
+more valuable to the project, and to you, than ten PRs opened at once.
 
 ### Responding to review comments
 
@@ -240,19 +244,18 @@ unreviewed AI dump:
 - It contains statements that a human would have caught, such as claiming that
   tests could not be run because `cargo` is not installed.
 
-For a concrete example of how this plays out, see [this review thread in
-arrow-rs](https://github.com/apache/arrow-rs/pull/11209#discussion_r4145512124).
-The reviewer asked a design question, and received several replies that
+For example, see [this review thread in arrow-rs][arrow-rs-review-example]
+where the reviewer asked a design question, and received several replies that
 described what had changed and which commands had been run, without engaging
-with the question. This made it hard for the reviewer to tell whether anyone
-had actually read or understood the feedback, and the time spent on the review
-was largely wasted.
+with the question.
 
 Maintainers are more than capable of running coding agents themselves and
-iterating on the output. The point of review is to help the project **and** to
+iterating on the output. The point of code review is to help the project **and** to
 help you grow as an engineer, so please read each comment, make sure you
 understand it, and reply in your own words. If you used an AI tool to help
-address a comment, that's fine, but say so and describe what you checked.
+address a comment, that's fine but remember if you aren't involved t.
+
+[arrow-rs-review-example]: https://github.com/apache/arrow-rs/pull/11209#discussion_r4145512124
 
 ### Better ways to contribute than an “AI dump”
 
