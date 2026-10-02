@@ -39,13 +39,6 @@ use crate::joins::Map;
 ///
 /// This is needed because `RandomState` doesn't expose its seed after creation,
 /// but we need them for serialization (e.g., protobuf serde).
-///
-/// # Public Only for Internal Use:
-///
-/// This is not a public API and is for internal use only; see [API policy] for details.
-///
-/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
-#[doc(hidden)]
 #[derive(Clone, Debug)]
 pub struct SeededRandomState {
     random_state: RandomState,
@@ -80,13 +73,6 @@ impl SeededRandomState {
 /// This is used for:
 /// - Computing routing hashes (with RepartitionExec's 0,0,0,0 seeds)
 /// - Computing lookup hashes (with HashJoin's 'J','O','I','N' seeds)
-///
-/// # Public Only for Internal Use:
-///
-/// This is not a public API and is for internal use only; see [API policy] for details.
-///
-/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
-#[doc(hidden)]
 pub struct HashExpr {
     /// Columns to hash
     on_columns: Vec<PhysicalExprRef>,

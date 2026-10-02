@@ -3253,13 +3253,6 @@ fn get_aggregate_expr_req(
 }
 
 /// Concatenates the given slices.
-///
-/// # Public Only for Internal Use:
-///
-/// This is not a public API and is for internal use only; see [API policy] for details.
-///
-/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
-#[doc(hidden)]
 pub fn concat_slices<T: Clone>(lhs: &[T], rhs: &[T]) -> Vec<T> {
     [lhs, rhs].concat()
 }

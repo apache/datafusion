@@ -594,13 +594,6 @@ pub(crate) fn window_equivalence_properties(
 ///   windowing operation.
 /// - A `Some(window exec)` value contains the optimal windowing operator (a
 ///   `WindowAggExec` or a `BoundedWindowExec`) for the given input.
-///
-/// # Public Only for Internal Use:
-///
-/// This is not a public API and is for internal use only; see [API policy] for details.
-///
-/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
-#[doc(hidden)]
 pub fn get_best_fitting_window(
     window_exprs: &[Arc<dyn WindowExpr>],
     input: &Arc<dyn ExecutionPlan>,
