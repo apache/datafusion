@@ -50,6 +50,7 @@ use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_functions::core::file_row_index::FileRowIndexFunc;
 use datafusion_physical_expr::expressions::{Column, DynamicFilterTracking};
 use datafusion_physical_expr::projection::ProjectionExprs;
+use datafusion_physical_expr::utils::split_conjunction;
 use datafusion_physical_expr::{EquivalenceProperties, conjunction};
 use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
 use datafusion_physical_expr_adapter::rewrite::{
@@ -400,12 +401,6 @@ impl ParquetSource {
         &self.table_parquet_options
     }
 
-    /// Optional predicate.
-    #[deprecated(since = "50.2.0", note = "use `filter` instead")]
-    pub fn predicate(&self) -> Option<&Arc<dyn PhysicalExpr>> {
-        self.predicate.as_ref()
-    }
-
     /// return the optional file reader factory
     pub fn parquet_file_reader_factory(
         &self,
@@ -708,6 +703,23 @@ impl FileSource for ParquetSource {
         self.predicate.clone()
     }
 
+    /// The predicate is applied to every row only when filter pushdown is
+    /// enabled, and then only the conjuncts that can become a `RowFilter`.
+    /// Otherwise the predicate is used only for pruning.
+    fn exact_filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        if !self.pushdown_filters() {
+            return None;
+        }
+        let predicate = self.predicate.as_ref()?;
+        let pushable_schema = self.table_schema.schema_without_virtual_columns();
+        let exact = split_conjunction(predicate)
+            .into_iter()
+            .filter(|expr| can_expr_be_pushed_down_with_schemas(expr, pushable_schema))
+            .cloned()
+            .collect::<Vec<_>>();
+        (!exact.is_empty()).then(|| conjunction(exact))
+    }
+
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
         conf.batch_size = Some(batch_size);
@@ -780,7 +792,7 @@ impl FileSource for ParquetSource {
                 // the parquet opener will pause the single decoder at row
                 // group boundaries and consult `RowGroupPruner` to drop
                 // RGs the current threshold proves unwinnable, rebuilding
-                // the decoder via `into_builder().with_row_groups(...)` to
+                // the decoder via `into_builder().with_row_group_selections(...)` to
                 // skip them. The actual pruning count appears as
                 // `row_groups_pruned_dynamic_filter` in EXPLAIN ANALYZE.
                 // We use `contains_dynamic_filter()` (matches both `Watching`
@@ -1365,14 +1377,39 @@ mod tests {
     use datafusion_physical_expr::expressions::lit;
 
     #[test]
-    #[expect(deprecated)]
-    fn test_parquet_source_predicate_same_as_filter() {
-        let predicate = lit(true);
+    fn partition_metrics_exclude_derived_plan_metrics() {
+        use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+        use datafusion_datasource::source::DataSourceExec;
+        use datafusion_execution::object_store::ObjectStoreUrl;
+        use datafusion_physical_plan::ExecutionPlan;
+        use datafusion_physical_plan::metrics::MetricBuilder;
 
-        let parquet_source =
-            ParquetSource::new(Arc::new(Schema::empty())).with_predicate(predicate);
-        // same value. but filter() call Arc::clone internally
-        assert_eq!(parquet_source.predicate(), parquet_source.filter().as_ref());
+        let source = Arc::new(ParquetSource::new(Arc::new(Schema::empty())));
+        let metrics = source.metrics().clone();
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+                .build();
+        let plan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(config);
+        assert_eq!(plan.metrics().unwrap().for_partition(0).iter().count(), 0);
+        MetricBuilder::new(&metrics).output_rows(0).add(10);
+        MetricBuilder::new(&metrics).output_rows(1).add(20);
+        MetricBuilder::new(&metrics).global_counter("global").add(1);
+        let selected = plan.metrics().unwrap().for_partition(0);
+        assert_eq!(selected.output_rows(), Some(10));
+        assert!(selected.iter().all(|m| m.partition() == Some(0)));
+        let full = plan.metrics().unwrap();
+        assert_eq!(full.output_rows(), Some(30));
+        assert!(
+            full.iter().any(
+                |m| m.value().name() == "output_rows_skew" && m.partition().is_none()
+            )
+        );
+        MetricBuilder::new(&metrics).output_rows(0).add(5);
+        assert_eq!(selected.output_rows(), Some(10));
+        assert_eq!(
+            plan.metrics().unwrap().for_partition(0).output_rows(),
+            Some(15)
+        );
     }
 
     #[test]

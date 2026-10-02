@@ -1364,8 +1364,9 @@ logical_plan
 05)--------TableScan: join_t1 projection=[t1_id, t1_int]
 06)--------TableScan: join_t2 projection=[t2_id]
 
-# A similar query with two DISTINCT aggregates is currently not rewritten
-# TODO: https://github.com/apache/datafusion/issues/22644
+# A similar query with two DISTINCT aggregates is also rewritten: each
+# `count(DISTINCT ...)` removes its own duplicates, so the join's duplicates
+# are not observable.
 query TT
 EXPLAIN
 select join_t1.t1_id, count(distinct join_t1.t1_int), count(distinct join_t1.t1_name)
@@ -1375,10 +1376,9 @@ group by join_t1.t1_id
 ----
 logical_plan
 01)Aggregate: groupBy=[[join_t1.t1_id]], aggr=[[count(DISTINCT join_t1.t1_int), count(DISTINCT join_t1.t1_name)]]
-02)--Projection: join_t1.t1_id, join_t1.t1_name, join_t1.t1_int
-03)----Inner Join: join_t1.t1_id = join_t2.t2_id
-04)------TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
-05)------TableScan: join_t2 projection=[t2_id]
+02)--LeftSemi Join: join_t1.t1_id = join_t2.t2_id
+03)----TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
+04)----TableScan: join_t2 projection=[t2_id]
 
 statement ok
 set datafusion.explain.logical_plan_only = false;
@@ -6296,6 +6296,65 @@ DROP TABLE collect_left_src;
 
 statement ok
 reset datafusion.optimizer.repartition_file_scans;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+# Projecting away a temporary join-filter column must preserve the equivalence
+# between a struct field and its extracted scalar column. The parallel sort and
+# merge can use different members of that equivalence class.
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+CREATE TABLE projection_events (id BIGINT) AS VALUES (1), (2), (3);
+
+# UNION ALL gives the right input two partitions, so ordering needs a merge.
+statement ok
+CREATE TABLE projection_networks AS
+SELECT 'b' AS label UNION ALL SELECT 'a' AS label;
+
+query TT
+EXPLAIN SELECT * FROM projection_networks;
+----
+logical_plan TableScan: projection_networks projection=[label]
+physical_plan DataSourceExec: partitions=2, partition_sizes=[1, 1]
+
+query I?
+SELECT id, n
+FROM projection_events
+LEFT JOIN (
+  SELECT named_struct('label', label) AS n FROM projection_networks
+) ON id > 1
+ORDER BY id, n['label'];
+----
+1 NULL
+2 {label: a}
+2 {label: b}
+3 {label: a}
+3 {label: b}
+
+# Also exercise the equivalence with an explicitly projected scalar alias.
+query I?
+SELECT id, n
+FROM projection_events
+LEFT JOIN (
+  SELECT named_struct('label', label) AS n, label AS extracted
+  FROM projection_networks
+) ON id > 1
+ORDER BY id, extracted;
+----
+1 NULL
+2 {label: a}
+2 {label: b}
+3 {label: a}
+3 {label: b}
+
+statement ok
+DROP TABLE projection_events;
+
+statement ok
+DROP TABLE projection_networks;
 
 statement ok
 set datafusion.execution.target_partitions = 4;

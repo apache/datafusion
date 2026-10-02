@@ -142,10 +142,7 @@ impl ScalarUDFImpl for ArrowMetadataFunc {
                 StringBuilder::new(),
             );
 
-            let mut entries: Vec<_> = metadata.iter().collect();
-            entries.sort_by_key(|(k, _)| *k);
-
-            for (k, v) in entries {
+            for (k, v) in metadata {
                 map_builder.keys().append_value(k);
                 map_builder.values().append_value(v);
             }

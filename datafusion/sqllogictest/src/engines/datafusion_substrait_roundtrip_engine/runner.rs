@@ -21,6 +21,7 @@ use std::{path::PathBuf, time::Duration};
 use crate::engines::currently_executed_sql::CurrentlyExecutingSqlTracker;
 use crate::engines::datafusion_engine::Result;
 use crate::engines::output::{DFColumnType, DFOutput};
+use crate::memory_drift::rewrap_replaced_pool;
 use crate::{DFSqlLogicTestError, convert_batches, convert_schema_to_types};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
@@ -102,6 +103,7 @@ impl sqllogictest::AsyncDB for DataFusionSubstraitRoundTrip {
         let start = Instant::now();
         let result = run_query_substrait_round_trip(&self.ctx, sql).await;
         let duration = start.elapsed();
+        rewrap_replaced_pool(&self.ctx, &self.relative_path.display().to_string());
 
         self.currently_executing_sql_tracker.remove_sql(tracked_sql);
 
