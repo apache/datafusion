@@ -27,12 +27,14 @@ use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
 use crate::joins::Map;
 use crate::joins::MapOffset;
 use crate::joins::PartitionMode;
-use crate::joins::hash_join::exec::{JoinLeftData, NullAwareMode};
+use crate::joins::hash_join::exec::{JoinLeftData, MultiBatchBuildData, NullAwareMode};
 use crate::joins::hash_join::probe_completion::ProbeSideSummary;
 use crate::joins::hash_join::shared_bounds::{
     PartitionBounds, PartitionBuildData, SharedBuildAccumulator,
 };
-use crate::joins::utils::{OnceFut, equal_rows_arr, matchable_join_keys};
+use crate::joins::utils::{
+    OnceFut, equal_rows_arr, equal_rows_arr_multi, matchable_join_keys,
+};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{
     RecordBatchStream, SendableRecordBatchStream, handle_state,
@@ -40,14 +42,15 @@ use crate::{
     joins::utils::{
         BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMapType,
         StatefulStreamResult, adjust_indices_by_join_type, apply_join_filter_to_indices,
-        build_batch_empty_build_side, build_batch_from_indices,
+        apply_join_filter_to_indices_multi, build_batch_empty_build_side,
+        build_batch_from_indices, build_batch_from_indices_multi,
         build_null_aware_left_mark_column, need_produce_result_in_final,
     },
 };
 
-use arrow::array::{Array, ArrayRef, UInt32Array, UInt64Array};
+use arrow::array::{Array, ArrayRef, AsArray, UInt32Array, UInt64Array};
 use arrow::buffer::{BooleanBuffer, NullBuffer};
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, internal_datafusion_err, internal_err,
@@ -55,8 +58,57 @@ use datafusion_common::{
 use datafusion_physical_expr::PhysicalExprRef;
 
 use datafusion_common::hash_utils::RandomState;
+use datafusion_common::utils::offset_span_len;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::{Stream, StreamExt, ready};
+
+/// Avoid a second materialization for byte-large output from retained builds.
+const MIN_OUTPUT_COALESCE_COPY_BYTES: usize = 2 * 1024 * 1024;
+
+fn push_join_output(
+    output: &mut LimitedBatchCoalescer,
+    batch: RecordBatch,
+    multi_batch: bool,
+) -> Result<PushBatchStatus> {
+    let mut copy_bytes = 0usize;
+    let bypass = multi_batch
+        && batch.columns().iter().any(|array| {
+            // This allocation-free lower bound omits offsets, null metadata and
+            // encoded/nested children. View payload buffers remain shared.
+            let data_type = array.data_type();
+            let bytes = if let Some(width) = data_type.primitive_width() {
+                array.len().saturating_mul(width)
+            } else {
+                match data_type {
+                    DataType::Boolean => array.len().div_ceil(8),
+                    DataType::Utf8 => offset_span_len(array.as_string::<i32>().offsets()),
+                    DataType::LargeUtf8 => {
+                        offset_span_len(array.as_string::<i64>().offsets())
+                    }
+                    DataType::Binary => {
+                        offset_span_len(array.as_binary::<i32>().offsets())
+                    }
+                    DataType::LargeBinary => {
+                        offset_span_len(array.as_binary::<i64>().offsets())
+                    }
+                    DataType::Utf8View | DataType::BinaryView => {
+                        array.len().saturating_mul(size_of::<u128>())
+                    }
+                    DataType::FixedSizeBinary(width) => array
+                        .len()
+                        .saturating_mul(usize::try_from(*width).unwrap_or_default()),
+                    _ => 0,
+                }
+            };
+            copy_bytes = copy_bytes.saturating_add(bytes);
+            copy_bytes >= MIN_OUTPUT_COALESCE_COPY_BYTES
+        });
+    if bypass {
+        output.push_batch_without_coalescing(batch)
+    } else {
+        output.push_batch(batch)
+    }
+}
 
 /// Represents build-side of hash join.
 pub(super) enum BuildSide {
@@ -467,6 +519,7 @@ impl RecordBatchStream for HashJoinStream {
 pub(super) fn lookup_join_hashmap(
     build_hashmap: &dyn JoinHashMapType,
     build_side_values: &[ArrayRef],
+    multi_batch: Option<&MultiBatchBuildData>,
     probe_side_values: &[ArrayRef],
     null_equality: NullEquality,
     hashes_buffer: &[u64],
@@ -492,13 +545,25 @@ pub(super) fn lookup_join_hashmap(
 
     // TODO: optimize equal_rows_arr to avoid allocation of intermediate arrays
     // https://github.com/apache/datafusion/issues/12131
-    let (build_indices, probe_indices) = equal_rows_arr(
-        &build_indices_unfiltered,
-        &probe_indices_unfiltered,
-        build_side_values,
-        probe_side_values,
-        null_equality,
-    )?;
+    let (build_indices, probe_indices) = if let Some(multi_batch) = multi_batch {
+        let gather_indices = multi_batch.gather_indices(&build_indices_unfiltered);
+        equal_rows_arr_multi(
+            &build_indices_unfiltered,
+            &probe_indices_unfiltered,
+            multi_batch.values(),
+            probe_side_values,
+            &gather_indices,
+            null_equality,
+        )?
+    } else {
+        equal_rows_arr(
+            &build_indices_unfiltered,
+            &probe_indices_unfiltered,
+            build_side_values,
+            probe_side_values,
+            null_equality,
+        )?
+    };
 
     // Reclaim buffers
     *build_indices_buffer = build_indices_unfiltered.into_parts().1.into();
@@ -638,10 +703,18 @@ impl HashJoinStream {
         // Use the logical null count: a dictionary key whose entry points at a
         // NULL dictionary value is a NULL key even though the key bitmap has no
         // physical nulls (`null_count() == 0` but `logical_null_count() > 0`).
-        let keys_have_null = left_data
-            .values()
-            .iter()
-            .any(|array| array.logical_null_count() > 0);
+        let keys_have_null = if let Some(multi_batch) = left_data.multi_batch() {
+            multi_batch
+                .values()
+                .iter()
+                .flatten()
+                .any(|array| array.logical_null_count() > 0)
+        } else {
+            left_data
+                .values()
+                .iter()
+                .any(|array| array.logical_null_count() > 0)
+        };
 
         let build_data = match self.mode {
             PartitionMode::Partitioned => PartitionBuildData::Partitioned {
@@ -886,6 +959,7 @@ impl HashJoinStream {
             Map::HashMap(map) => lookup_join_hashmap(
                 map.as_ref(),
                 build_side.left_data.values(),
+                build_side.left_data.multi_batch(),
                 &state.values,
                 self.null_equality,
                 &self.hashes_buffer,
@@ -923,16 +997,29 @@ impl HashJoinStream {
 
         // apply join filter if exists
         let (left_indices, right_indices) = if let Some(filter) = &self.filter {
-            apply_join_filter_to_indices(
-                build_side.left_data.batch(),
-                &state.batch,
-                left_indices,
-                right_indices,
-                filter,
-                JoinSide::Left,
-                None,
-                self.join_type,
-            )?
+            if let Some(multi_batch) = build_side.left_data.multi_batch() {
+                let gather_indices = multi_batch.gather_indices(&left_indices);
+                apply_join_filter_to_indices_multi(
+                    multi_batch.batches(),
+                    &gather_indices,
+                    &state.batch,
+                    left_indices,
+                    right_indices,
+                    filter,
+                    self.join_type,
+                )?
+            } else {
+                apply_join_filter_to_indices(
+                    build_side.left_data.batch(),
+                    &state.batch,
+                    left_indices,
+                    right_indices,
+                    filter,
+                    JoinSide::Left,
+                    None,
+                    self.join_type,
+                )?
+            }
         } else {
             (left_indices, right_indices)
         };
@@ -989,26 +1076,50 @@ impl HashJoinStream {
         }
 
         // Build output batch and push to coalescer
-        let (build_batch, probe_batch, join_side) =
-            if self.join_type == JoinType::RightMark {
-                (&state.batch, build_side.left_data.batch(), JoinSide::Right)
-            } else {
-                (build_side.left_data.batch(), &state.batch, JoinSide::Left)
-            };
+        let batch = if self.join_type != JoinType::RightMark
+            && let Some(multi_batch) = build_side.left_data.multi_batch()
+        {
+            let gather_indices = multi_batch.gather_indices(&left_indices);
+            build_batch_from_indices_multi(
+                &self.schema,
+                multi_batch.batches(),
+                &gather_indices,
+                &state.batch,
+                &left_indices,
+                &right_indices,
+                &self.column_indices,
+                self.join_type,
+                None,
+            )?
+        } else {
+            // RightMark emits only probe columns and a mark. Its aligned left
+            // indices refer to the probe batch, not to retained build rows.
+            let (build_batch, probe_batch, join_side) =
+                if self.join_type == JoinType::RightMark {
+                    (&state.batch, build_side.left_data.batch(), JoinSide::Right)
+                } else {
+                    (build_side.left_data.batch(), &state.batch, JoinSide::Left)
+                };
 
-        let batch = build_batch_from_indices(
-            &self.schema,
-            build_batch,
-            probe_batch,
-            &left_indices,
-            &right_indices,
-            &self.column_indices,
-            join_side,
-            self.join_type,
-            None,
+            build_batch_from_indices(
+                &self.schema,
+                build_batch,
+                probe_batch,
+                &left_indices,
+                &right_indices,
+                &self.column_indices,
+                join_side,
+                self.join_type,
+                None,
+            )?
+        };
+
+        let push_status = push_join_output(
+            &mut self.output_buffer,
+            batch,
+            self.join_type != JoinType::RightMark
+                && build_side.left_data.multi_batch().is_some(),
         )?;
-
-        let push_status = self.output_buffer.push_batch(batch)?;
 
         timer.done();
 
@@ -1148,18 +1259,37 @@ impl HashJoinStream {
         // Push this chunk of final indices to output buffer
         if !left_side.is_empty() {
             let empty_right_batch = RecordBatch::new_empty(self.right.schema());
-            let batch = build_batch_from_indices(
-                &self.schema,
-                build_side.left_data.batch(),
-                &empty_right_batch,
-                &left_side,
-                &right_side,
-                &self.column_indices,
-                JoinSide::Left,
-                self.join_type,
-                mark_column.as_ref(),
+            let batch = if let Some(multi_batch) = build_side.left_data.multi_batch() {
+                let gather_indices = multi_batch.gather_indices(&left_side);
+                build_batch_from_indices_multi(
+                    &self.schema,
+                    multi_batch.batches(),
+                    &gather_indices,
+                    &empty_right_batch,
+                    &left_side,
+                    &right_side,
+                    &self.column_indices,
+                    self.join_type,
+                    mark_column.as_ref(),
+                )?
+            } else {
+                build_batch_from_indices(
+                    &self.schema,
+                    build_side.left_data.batch(),
+                    &empty_right_batch,
+                    &left_side,
+                    &right_side,
+                    &self.column_indices,
+                    JoinSide::Left,
+                    self.join_type,
+                    mark_column.as_ref(),
+                )?
+            };
+            let push_status = push_join_output(
+                &mut self.output_buffer,
+                batch,
+                build_side.left_data.multi_batch().is_some(),
             )?;
-            let push_status = self.output_buffer.push_batch(batch)?;
 
             // If limit reached, finish the coalescer and stop emitting
             if push_status == PushBatchStatus::LimitReached {
@@ -1560,6 +1690,7 @@ fn for_each_scope_match(
         let (build_indices, probe_indices, next_offset) = lookup_join_hashmap(
             scope_map,
             build_scope_values,
+            None,
             probe_scope_values,
             NullEquality::NullEqualsNothing,
             hashes_buffer,
@@ -1674,6 +1805,93 @@ mod tests {
         PushdownStrategy, completed_partitions_for_test,
         make_partitioned_accumulator_for_test,
     };
+    use arrow::array::{
+        DictionaryArray, Int32Array, ListArray, StringArray, StringViewArray,
+    };
+    use arrow::buffer::OffsetBuffer;
+    use arrow::datatypes::{Field, Int32Type};
+
+    #[test]
+    fn large_multi_batch_output_bypasses_only_at_copy_threshold() -> Result<()> {
+        for bytes in [
+            MIN_OUTPUT_COALESCE_COPY_BYTES - 1,
+            MIN_OUTPUT_COALESCE_COPY_BYTES,
+        ] {
+            for multi_batch in [false, true] {
+                let array: ArrayRef =
+                    Arc::new(StringArray::from(vec!["x".repeat(bytes)]));
+                let batch =
+                    RecordBatch::try_from_iter(vec![("payload", Arc::clone(&array))])?;
+                let mut output = LimitedBatchCoalescer::new(batch.schema(), 128, None);
+                push_join_output(&mut output, batch, multi_batch)?;
+                let bypass = multi_batch && bytes >= MIN_OUTPUT_COALESCE_COPY_BYTES;
+                if bypass {
+                    let batch = output.next_completed_batch().unwrap();
+                    assert!(Arc::ptr_eq(batch.column(0), &array));
+                } else {
+                    assert!(output.next_completed_batch().is_none());
+                    output.finish()?;
+                    assert_eq!(output.next_completed_batch().unwrap().num_rows(), 1);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn output_copy_policy_ignores_retained_child_and_view_buffers() -> Result<()> {
+        let large = "x".repeat(MIN_OUTPUT_COALESCE_COPY_BYTES);
+        let strings: ArrayRef =
+            Arc::new(StringArray::from(vec![large.as_str(), "small"]));
+        let views: ArrayRef =
+            Arc::new(StringViewArray::from(vec![large.as_str(), "small"]));
+        let dictionary: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![1]),
+            Arc::clone(&strings),
+        ));
+        let list: ArrayRef = Arc::new(ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Utf8, false)),
+            OffsetBuffer::new(vec![1i32, 2].into()),
+            Arc::clone(&strings),
+            None,
+        ));
+        for array in [strings.slice(1, 1), views.slice(1, 1), dictionary, list] {
+            assert!(array.get_buffer_memory_size() >= MIN_OUTPUT_COALESCE_COPY_BYTES);
+            let batch = RecordBatch::try_from_iter(vec![("payload", array)])?;
+            let mut output = LimitedBatchCoalescer::new(batch.schema(), 128, None);
+            push_join_output(&mut output, batch, true)?;
+            assert!(output.next_completed_batch().is_none());
+            output.finish()?;
+            assert_eq!(output.next_completed_batch().unwrap().num_rows(), 1);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn output_copy_policy_counts_columns_but_not_zero_column_rows() -> Result<()> {
+        let payload =
+            StringArray::from(vec!["x".repeat(MIN_OUTPUT_COALESCE_COPY_BYTES / 2)]);
+        let batch = RecordBatch::try_from_iter(vec![
+            ("a", Arc::new(payload.clone()) as ArrayRef),
+            ("b", Arc::new(payload) as ArrayRef),
+        ])?;
+        let mut output = LimitedBatchCoalescer::new(batch.schema(), 128, None);
+        push_join_output(&mut output, batch, true)?;
+        assert_eq!(output.next_completed_batch().unwrap().num_rows(), 1);
+
+        let schema = Arc::new(Schema::empty());
+        let batch = RecordBatch::try_new_with_options(
+            Arc::clone(&schema),
+            vec![],
+            &arrow::record_batch::RecordBatchOptions::new().with_row_count(Some(1)),
+        )?;
+        let mut output = LimitedBatchCoalescer::new(schema, 128, None);
+        push_join_output(&mut output, batch, true)?;
+        assert!(output.next_completed_batch().is_none());
+        output.finish()?;
+        assert_eq!(output.next_completed_batch().unwrap().num_rows(), 1);
+        Ok(())
+    }
 
     fn empty_build_data(partition_id: usize) -> PartitionBuildData {
         PartitionBuildData::Partitioned {

@@ -17,6 +17,13 @@
 
 //! Join related functionality used both on logical and physical plans
 
+mod multi_batch;
+
+pub(crate) use multi_batch::{
+    apply_join_filter_to_indices_multi, build_batch_from_indices_multi,
+    equal_rows_arr_multi,
+};
+
 use std::cmp::{Ordering, min};
 use std::collections::HashSet;
 use std::fmt::{self, Debug};
@@ -2462,6 +2469,31 @@ pub struct JoinKeyComparator {
     rest: Vec<DynComparator>,
 }
 
+/// Probe-side preprocessing shared when one probe batch is compared against
+/// several retained build batches. Ordinary pairwise comparators need no cache.
+struct PreparedJoinKeyProbe {
+    columns: Vec<(ArrayRef, Option<NullBuffer>)>,
+    null_equality: NullEquality,
+}
+
+impl PreparedJoinKeyProbe {
+    fn new(arrays: &[ArrayRef], null_equality: NullEquality) -> Self {
+        let columns = arrays
+            .iter()
+            .map(|array| {
+                let nulls = (null_equality == NullEquality::NullEqualsNothing)
+                    .then(|| array.logical_nulls().filter(|nulls| nulls.null_count() > 0))
+                    .flatten();
+                (normalize_float_zero(array), nulls)
+            })
+            .collect();
+        Self {
+            columns,
+            null_equality,
+        }
+    }
+}
+
 impl JoinKeyComparator {
     /// Build comparators for each join key column pair.
     pub fn new(
@@ -2473,7 +2505,7 @@ impl JoinKeyComparator {
         debug_assert_eq!(left_arrays.len(), right_arrays.len());
         debug_assert_eq!(left_arrays.len(), sort_options.len());
 
-        let mut iter = left_arrays
+        let iter = left_arrays
             .iter()
             .zip(right_arrays.iter())
             .zip(sort_options.iter())
@@ -2487,28 +2519,76 @@ impl JoinKeyComparator {
                 // valid.
                 let l_norm = normalize_float_zero(l);
                 let r_norm = normalize_float_zero(r);
-                let inner = make_comparator(l_norm.as_ref(), r_norm.as_ref(), *opts)?;
-                if null_equality == NullEquality::NullEqualsNothing {
-                    let ln = l.logical_nulls().filter(|n| n.null_count() > 0);
-                    let rn = r.logical_nulls().filter(|n| n.null_count() > 0);
-                    match (ln, rn) {
-                        // Both sides have nulls — wrap to override both-null.
-                        (Some(ln), Some(rn)) => Ok(Box::new(move |i, j| {
-                            if ln.is_null(i) && rn.is_null(j) {
-                                Ordering::Less
-                            } else {
-                                inner(i, j)
-                            }
-                        })
-                            as DynComparator),
-                        // One side has no nulls — both-null impossible, no wrap.
-                        _ => Ok(inner),
-                    }
-                } else {
-                    Ok(inner)
-                }
+                Self::make_key_comparator(&l_norm, &r_norm, *opts, null_equality, || {
+                    (
+                        l.logical_nulls().filter(|n| n.null_count() > 0),
+                        r.logical_nulls().filter(|n| n.null_count() > 0),
+                    )
+                })
             });
 
+        Self::from_comparators(iter)
+    }
+
+    fn new_with_prepared_probe(
+        left_arrays: &[ArrayRef],
+        probe: &PreparedJoinKeyProbe,
+        sort_options: &[SortOptions],
+    ) -> Result<Self> {
+        debug_assert_eq!(left_arrays.len(), probe.columns.len());
+        debug_assert_eq!(left_arrays.len(), sort_options.len());
+
+        let iter = left_arrays
+            .iter()
+            .zip(&probe.columns)
+            .zip(sort_options)
+            .map(|((left, (right, right_nulls)), opts)| {
+                let left_normalized = normalize_float_zero(left);
+                Self::make_key_comparator(
+                    &left_normalized,
+                    right,
+                    *opts,
+                    probe.null_equality,
+                    || {
+                        (
+                            left.logical_nulls().filter(|n| n.null_count() > 0),
+                            right_nulls.clone(),
+                        )
+                    },
+                )
+            });
+        Self::from_comparators(iter)
+    }
+
+    fn make_key_comparator(
+        left: &ArrayRef,
+        right: &ArrayRef,
+        options: SortOptions,
+        null_equality: NullEquality,
+        logical_nulls: impl FnOnce() -> (Option<NullBuffer>, Option<NullBuffer>),
+    ) -> Result<DynComparator> {
+        let inner = make_comparator(left.as_ref(), right.as_ref(), options)?;
+        if null_equality == NullEquality::NullEqualsNothing {
+            match logical_nulls() {
+                // Both sides have nulls: override Arrow's both-null equality.
+                (Some(left), Some(right)) => Ok(Box::new(move |i, j| {
+                    if left.is_null(i) && right.is_null(j) {
+                        Ordering::Less
+                    } else {
+                        inner(i, j)
+                    }
+                })),
+                // One side has no nulls, so both-null is impossible.
+                _ => Ok(inner),
+            }
+        } else {
+            Ok(inner)
+        }
+    }
+
+    fn from_comparators(
+        mut iter: impl Iterator<Item = Result<DynComparator>>,
+    ) -> Result<Self> {
         let first = iter.next().expect("join must have at least one key")?;
         let rest = iter.collect::<Result<Vec<_>>>()?;
         Ok(Self { first, rest })

@@ -202,6 +202,62 @@ impl ArrayMap {
         })
     }
 
+    /// Builds a map over several key arrays, using their concatenated row order
+    /// without concatenating the arrays themselves.
+    pub(crate) fn try_new_batched(
+        arrays: &[ArrayRef],
+        min_val: u64,
+        max_val: u64,
+    ) -> Result<Self> {
+        let Some(first) = arrays.first() else {
+            return internal_err!("ArrayMap requires at least one build-side key array");
+        };
+        if arrays.len() == 1 {
+            return Self::try_new(first, min_val, max_val);
+        }
+        let Some(num_rows) = arrays
+            .iter()
+            .try_fold(0usize, |rows, array| rows.checked_add(array.len()))
+            .filter(|&rows| u32::try_from(rows).is_ok())
+        else {
+            return internal_err!("ArrayMap build-side row count exceeds u32::MAX");
+        };
+        if arrays
+            .iter()
+            .any(|array| array.data_type() != first.data_type())
+        {
+            return internal_err!(
+                "ArrayMap build-side key arrays must have the same type"
+            );
+        }
+        let range = Self::calculate_range(min_val, max_val);
+        if range >= usize::MAX as u64 {
+            return internal_err!("ArrayMap key range is too large to be allocated.");
+        }
+        let mut data = vec![0; (range + 1) as usize];
+        let mut next = vec![];
+        let mut num_of_distinct_key = 0;
+
+        downcast_supported_integer!(
+            first.data_type() => (
+                fill_data_batched,
+                arrays,
+                num_rows,
+                min_val,
+                &mut data,
+                &mut next,
+                &mut num_of_distinct_key
+            )
+        )?;
+
+        Ok(Self {
+            data,
+            offset: min_val,
+            next,
+            num_of_distinct_key,
+        })
+    }
+
     fn fill_data<T: ArrowNumericType>(
         array: &ArrayRef,
         offset_val: u64,
@@ -230,6 +286,46 @@ impl ArrayMap {
                     *num_of_distinct_key += 1;
                 }
                 data[idx] = (i) as u32 + 1;
+            }
+        }
+        Ok(())
+    }
+
+    fn fill_data_batched<T: ArrowNumericType>(
+        arrays: &[ArrayRef],
+        num_rows: usize,
+        offset_val: u64,
+        data: &mut [u32],
+        next: &mut Vec<u32>,
+        num_of_distinct_key: &mut usize,
+    ) -> Result<()>
+    where
+        T::Native: AsPrimitive<u64>,
+    {
+        // Reverse both dimensions so duplicate chains retain the original
+        // global row order, including duplicates in different batches.
+        let mut batch_offset = num_rows;
+        for array in arrays.iter().rev() {
+            let array = array.as_primitive::<T>();
+            batch_offset -= array.len();
+            for (row, value) in array.iter().enumerate().rev() {
+                if let Some(value) = value {
+                    let Some(index) =
+                        Self::key_to_index(value.as_(), offset_val, data.len())
+                    else {
+                        return internal_err!("failed build Array idx >= data.len()");
+                    };
+                    let global_row = batch_offset + row;
+                    if data[index] != 0 {
+                        if next.is_empty() {
+                            *next = vec![0; num_rows];
+                        }
+                        next[global_row] = data[index];
+                    } else {
+                        *num_of_distinct_key += 1;
+                    }
+                    data[index] = global_row as u32 + 1;
+                }
             }
         }
         Ok(())
@@ -424,6 +520,82 @@ mod tests {
     use arrow::array::Int64Array;
     use arrow::array::UInt64Array;
     use std::sync::Arc;
+
+    #[test]
+    fn test_array_map_batched_duplicate_order_and_nulls() -> Result<()> {
+        let first: ArrayRef = Arc::new(Int64Array::from(vec![
+            Some(99),
+            Some(-2),
+            None,
+            Some(2),
+            Some(-2),
+        ]));
+        let arrays = vec![
+            first.slice(1, 4),
+            Arc::new(Int64Array::from(Vec::<i64>::new())) as ArrayRef,
+            Arc::new(Int64Array::from(vec![Some(2), None, Some(-2), Some(0)])),
+            Arc::new(Int64Array::from(vec![None, None])),
+        ];
+        let map = ArrayMap::try_new_batched(&arrays, -2_i64 as u64, 2)?;
+        assert_eq!(map.num_of_distinct_key(), 3);
+        let probe = [Arc::new(Int64Array::from(vec![
+            None,
+            Some(-3),
+            Some(-2),
+            Some(0),
+            Some(2),
+            Some(3),
+        ])) as ArrayRef];
+
+        for limit in [1, 2, 4, 16] {
+            let mut next = Some((0, None));
+            let mut probe_indices = vec![];
+            let mut build_indices = vec![];
+            let mut actual = vec![];
+            while let Some(offset) = next {
+                next = map.get_matched_indices_with_limit_offset(
+                    &probe,
+                    limit,
+                    offset,
+                    &mut probe_indices,
+                    &mut build_indices,
+                )?;
+                assert!(build_indices.len() <= limit);
+                actual.extend(
+                    probe_indices
+                        .iter()
+                        .copied()
+                        .zip(build_indices.iter().copied()),
+                );
+            }
+            assert_eq!(actual, vec![(2, 0), (2, 3), (2, 6), (3, 7), (4, 2), (4, 4)]);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_map_batched_unique_and_all_null_keys() -> Result<()> {
+        let arrays = vec![
+            Arc::new(Int32Array::from(vec![Some(-1), None])) as ArrayRef,
+            Arc::new(Int32Array::from(vec![None, Some(1)])),
+        ];
+        let map = ArrayMap::try_new_batched(&arrays, -1_i64 as u64, 1)?;
+        assert!(map.next.is_empty());
+        assert_eq!(map.num_of_distinct_key(), 2);
+        assert_eq!(map.get_value(-1_i64 as u64), Some(1));
+        assert_eq!(map.get_value(1), Some(4));
+        assert_eq!(map.get_value(0), None);
+
+        let nulls = vec![
+            Arc::new(Int32Array::from(vec![None, None])) as ArrayRef,
+            Arc::new(Int32Array::from(vec![None])),
+        ];
+        let map = ArrayMap::try_new_batched(&nulls, 0, 0)?;
+        assert!(map.next.is_empty());
+        assert_eq!(map.num_of_distinct_key(), 0);
+        assert_eq!(map.get_value(0), None);
+        Ok(())
+    }
 
     #[test]
     fn test_array_map_limit_offset_duplicate_elements() -> Result<()> {

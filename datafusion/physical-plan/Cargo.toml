@@ -185,6 +185,11 @@ required-features = ["test_utils"]
 
 [[bench]]
 harness = false
+name = "hash_join_batches"
+required-features = ["test_utils"]
+
+[[bench]]
+harness = false
 name = "multi_group_by"
 required-features = ["test_utils"]
 

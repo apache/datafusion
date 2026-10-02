@@ -29,6 +29,8 @@ pub use partitioned_hash_eval::{HashExpr, SeededRandomState};
 
 mod exec;
 mod inlist_builder;
+#[cfg(test)]
+mod multi_batch_tests;
 mod partitioned_hash_eval;
 mod probe_completion;
 mod shared_bounds;
