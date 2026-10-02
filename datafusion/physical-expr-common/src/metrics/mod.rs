@@ -234,10 +234,6 @@ impl Metric {
 /// The set's members remain fixed as execution registers more metrics, but their
 /// values continue to reflect execution progress. Use [`Self::for_partition`] to
 /// select the metrics belonging to one partition.
-///
-/// Snapshots from [`ExecutionPlanMetricsSet::clone_inner`] retain the source
-/// registry, including later registrations, until dropped. A partition selection
-/// retains only the selected metrics.
 #[derive(Default, Debug, Clone)]
 pub struct MetricsSet {
     metrics: Snapshot,
