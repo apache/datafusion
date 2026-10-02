@@ -31,7 +31,9 @@ use arrow::array::{
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::Result;
-use datafusion_common::utils::{coerced_fixed_size_list_to_list, offset_span_len};
+use datafusion_common::utils::{
+    base_type, coerced_fixed_size_list_to_list, offset_span_len,
+};
 use datafusion_common::{
     cast::as_generic_list_array,
     exec_err, internal_err, plan_err,
@@ -349,6 +351,21 @@ fn array_concat_return_type(name: &str, arg_types: &[DataType]) -> Result<DataTy
 
     if max_dims == 0 {
         return Ok(DataType::Null);
+    }
+
+    if max_dims == 1 {
+        let element_types: Vec<DataType> = arg_types.iter().map(base_type).collect();
+        let Some(element_type) = type_union_resolution(&element_types) else {
+            return plan_err!(
+                "Failed to unify argument types of {name}: [{}]",
+                arg_types.iter().join(", ")
+            );
+        };
+        return Ok(if wrap_with_large_list {
+            DataType::new_large_list(element_type, true)
+        } else {
+            DataType::new_list(element_type, true)
+        });
     }
 
     for arg_type in arg_types {

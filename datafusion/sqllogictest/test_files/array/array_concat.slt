@@ -437,6 +437,18 @@ from values (make_array(1, 2));
 ----
 [1, 2, 3] List(Int64)
 
+# One-dimensional inputs that share a named or non-nullable field still get the
+# default nullable item field.
+query ?T
+select
+  array_concat(a, a),
+  arrow_typeof(array_concat(a, a))
+from (
+  select arrow_cast([1], 'List(non-null Int64, field: ''element'')') as a
+);
+----
+[1, 1] List(Int64)
+
 # array_concat preserves nested list fields in the planned and executed type
 query ?T
 select
