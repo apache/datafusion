@@ -864,7 +864,7 @@ statement ok
 CREATE TABLE test_non_nullable_decimal(c1 DECIMAL(9,2) NOT NULL);
 
 query I
-INSERT INTO test_non_nullable_decimal VALUES(1)
+INSERT INTO test_non_nullable_decimal VALUES(1.50)
 ----
 1
 
@@ -878,6 +878,16 @@ SELECT c1/0 FROM test_non_nullable_decimal
 
 query error DataFusion error: Arrow error: Divide by zero error
 SELECT c1%0 FROM test_non_nullable_decimal
+
+query RR
+SELECT c1 % 1 AS int_literal, c1 % CAST(1 AS DECIMAL(9,2)) AS decimal_literal FROM test_non_nullable_decimal
+----
+0.50 0.50
+
+query I
+SELECT count(*) FROM test_non_nullable_decimal WHERE c1 % 1 = 0
+----
+0
 
 statement ok
 drop table test_non_nullable_decimal

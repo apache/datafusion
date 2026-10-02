@@ -828,6 +828,16 @@ impl<'a> Simplifier<'a> {
     }
 }
 
+fn modulo_one_is_zero_type(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Decimal32(_, scale)
+        | DataType::Decimal64(_, scale)
+        | DataType::Decimal128(_, scale)
+        | DataType::Decimal256(_, scale) => *scale <= 0,
+        data_type => !data_type.is_floating(),
+    }
+}
+
 impl TreeNodeRewriter for Simplifier<'_> {
     type Node = Expr;
 
@@ -1207,13 +1217,13 @@ impl TreeNodeRewriter for Simplifier<'_> {
             // Rules for Modulo
             //
 
-            // A % 1 --> 0 (if A is not nullable and not floating, since NAN % 1 --> NAN)
+            // A % 1 --> 0 (if A is not nullable and has no fractional part, since NAN % 1 --> NAN and 1.50 % 1 --> 0.50)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Modulo,
                 right,
             }) if !info.nullable(&left)?
-                && !info.get_data_type(&left)?.is_floating()
+                && modulo_one_is_zero_type(&info.get_data_type(&left)?)
                 && is_one(&right) =>
             {
                 Transformed::yes(Expr::Literal(
