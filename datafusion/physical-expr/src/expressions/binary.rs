@@ -21,7 +21,6 @@ use crate::PhysicalExpr;
 use crate::expressions::SqlSimilarToPattern;
 use crate::expressions::translate_scalar;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
-use crate::utils::split_conjunction;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::hash::Hash;
@@ -1213,22 +1212,20 @@ impl BinaryExpr {
     /// filters before conjuncts that may be costly or fail, so they never see
     /// rows nested evaluation would skip. `NULL` rows stay for a later `false`.
     fn evaluate_conjunction(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let mut conjuncts = split_conjunction(&self.left);
-        conjuncts.extend(split_conjunction(&self.right));
-
         // Keep each filter mask for the final scatter.
         let mut selections = vec![];
         let mut input = Cow::Borrowed(batch);
         let mut result = ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)));
 
-        for conjunct in conjuncts {
+        // Returns whether to go on to the next conjunct.
+        let mut evaluate = |conjunct: &Arc<dyn PhysicalExpr>| -> Result<bool> {
             if let Some(undecided) = rows_to_filter_before(
                 conjunct,
                 &result,
                 batch.schema_ref(),
                 batch.num_rows(),
             ) {
-                let array = result.into_array(input.num_rows())?;
+                let array = result.to_array(input.num_rows())?;
                 // Every kept row is true when there are no NULLs.
                 result = if array.null_count() == 0 {
                     ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)))
@@ -1240,10 +1237,13 @@ impl BinaryExpr {
             }
 
             let value = conjunct.evaluate(&input)?;
-            result = and_kleene_columnar(result, value, input.num_rows())?;
-            if is_all_false(&result) {
-                break;
-            }
+            let so_far =
+                std::mem::replace(&mut result, ColumnarValue::Scalar(ScalarValue::Null));
+            result = and_kleene_columnar(so_far, value, input.num_rows())?;
+            Ok(!is_all_false(&result))
+        };
+        if for_each_conjunct(&self.left, &mut evaluate)? {
+            for_each_conjunct(&self.right, &mut evaluate)?;
         }
 
         selections
@@ -1459,6 +1459,21 @@ fn is_cheap_and_infallible(expr: &Arc<dyn PhysicalExpr>, schema: &Schema) -> boo
             .children()
             .into_iter()
             .all(|child| is_cheap_and_infallible(child, schema))
+}
+
+/// Calls `f` on each conjunct of the `AND` chain under `expr`, left to right,
+/// until it returns `false`. Walks the tree in place, so it doesn't allocate.
+fn for_each_conjunct(
+    expr: &Arc<dyn PhysicalExpr>,
+    f: &mut impl FnMut(&Arc<dyn PhysicalExpr>) -> Result<bool>,
+) -> Result<bool> {
+    match expr.downcast_ref::<BinaryExpr>() {
+        Some(binary) if binary.op == Operator::And => {
+            Ok(for_each_conjunct(&binary.left, f)?
+                && for_each_conjunct(&binary.right, f)?)
+        }
+        _ => f(expr),
+    }
 }
 
 /// Whether every row is already `false`.
