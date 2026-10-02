@@ -37,7 +37,7 @@ use arrow_schema::DataType;
 use arrow_schema::FieldRef;
 use datafusion_catalog::MemoryCatalogProviderList;
 use datafusion_catalog::information_schema::{
-    INFORMATION_SCHEMA, InformationSchemaProvider,
+    INFORMATION_SCHEMA, INFORMATION_SCHEMA_TABLES, InformationSchemaProvider,
 };
 use datafusion_catalog::{TableFunction, TableFunctionImpl};
 use datafusion_common::alias::AliasGenerator;
@@ -95,7 +95,9 @@ use log::{debug, info};
 use object_store::ObjectStore;
 #[cfg(feature = "sql")]
 use sqlparser::{
-    ast::{Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias},
+    ast::{
+        Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias, Statement as SQLStatement,
+    },
     dialect::dialect_from_str,
 };
 use url::Url;
@@ -671,7 +673,34 @@ impl SessionState {
         &self,
         statement: Statement,
     ) -> datafusion_common::Result<LogicalPlan> {
-        let references = self.resolve_table_references(&statement)?;
+        let mut references = self.resolve_table_references(&statement)?;
+        let require_info_schema = match &statement {
+            Statement::Statement(s) => matches!(
+                s.as_ref(),
+                SQLStatement::ShowCreate { .. }
+                    | SQLStatement::ShowTables { .. }
+                    | SQLStatement::ShowColumns { .. }
+                    | SQLStatement::ShowVariable { .. }
+                    | SQLStatement::ShowFunctions { .. }
+            ),
+            _ => false,
+        };
+
+        if require_info_schema {
+            let info_tables = INFORMATION_SCHEMA_TABLES.iter();
+            let info_table_refs: Vec<_> = if let Some(system_catalog) =
+                self.config().system_catalog()
+            {
+                info_tables
+                    .map(|n| TableReference::full(system_catalog, INFORMATION_SCHEMA, *n))
+                    .collect()
+            } else {
+                info_tables
+                    .map(|n| TableReference::partial(INFORMATION_SCHEMA, *n))
+                    .collect()
+            };
+            references.extend(info_table_refs);
+        }
 
         let mut provider = SessionContextProvider {
             state: self,
