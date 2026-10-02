@@ -180,6 +180,7 @@ mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::common::{DFSchema, assert_contains};
     use datafusion::execution::SessionStateBuilder;
+    use datafusion::functions_aggregate::count::count_all_window;
     use datafusion::functions_aggregate::sum::sum_udaf;
     use datafusion::logical_expr::expr::WindowFunction;
     use datafusion::prelude::col;
@@ -207,6 +208,32 @@ mod tests {
         };
         // `sum` over a nullable i64 yields a nullable i64.
         let expected = to_substrait_type(&mut producer, &DataType::Int64, true)?;
+        assert_eq!(window.output_type, Some(expected));
+        Ok(())
+    }
+
+    /// `COUNT(*) OVER ()` always yields a non-null count, so this guards
+    /// against a regression where `output_type` is emitted as nullable
+    /// unconditionally.
+    #[test]
+    fn count_window_function_output_type_is_non_nullable()
+    -> datafusion::common::Result<()> {
+        let state = SessionStateBuilder::default().build();
+        let schema =
+            DFSchemaRef::new(DFSchema::try_from(Schema::new(vec![Field::new(
+                "i",
+                DataType::Int64,
+                true,
+            )]))?);
+        let mut producer = DefaultSubstraitProducer::new(&state);
+
+        let substrait_expr = producer.handle_expr(&count_all_window(), &schema)?;
+
+        let Some(RexType::WindowFunction(window)) = substrait_expr.rex_type else {
+            panic!("Substrait WindowFunction expected")
+        };
+        // `count(*)` never produces a null, regardless of input nullability.
+        let expected = to_substrait_type(&mut producer, &DataType::Int64, false)?;
         assert_eq!(window.output_type, Some(expected));
         Ok(())
     }
