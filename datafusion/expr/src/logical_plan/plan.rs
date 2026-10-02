@@ -2123,6 +2123,7 @@ impl LogicalPlan {
                         projection,
                         filters,
                         fetch,
+                        skip,
                         ..
                     }) => {
                         let projected_fields = match projection {
@@ -2188,6 +2189,10 @@ impl LogicalPlan {
 
                         if let Some(n) = fetch {
                             write!(f, ", fetch={n}")?;
+                        }
+
+                        if let Some(n) = skip {
+                            write!(f, ", skip={n}")?;
                         }
 
                         Ok(())
@@ -3143,12 +3148,18 @@ pub struct TableScan {
     pub filters: Vec<Expr>,
     /// Optional number of rows to read
     pub fetch: Option<usize>,
+    /// Optional number of rows to skip
+    pub skip: Option<usize>,
     /// Statistics the planner would like the provider to answer for this
     /// scan, typically attached by a custom optimizer rule from the
     /// surrounding plan (e.g. Min/Max for sort keys).
     ///
     /// A [`BTreeSet`], not a `Vec` to keep the resulting plan deterministic.
-    pub statistics_requests: BTreeSet<StatisticsRequest>,
+    ///
+    // Boxed to keep this rarely-populated field from growing every
+    // `TableScan` (and thus `LogicalPlan`) by its own size;
+    // see `test_size_of_logical_plan`.
+    pub statistics_requests: Box<BTreeSet<StatisticsRequest>>,
 }
 
 impl Debug for TableScan {
@@ -3160,6 +3171,7 @@ impl Debug for TableScan {
             .field("projected_schema", &self.projected_schema)
             .field("filters", &self.filters)
             .field("fetch", &self.fetch)
+            .field("skip", &self.skip)
             .finish_non_exhaustive()
     }
 }
@@ -3252,7 +3264,9 @@ pub struct TableScanBuilder {
     projection: Option<Vec<usize>>,
     filters: Vec<Expr>,
     fetch: Option<usize>,
-    statistics_requests: BTreeSet<StatisticsRequest>,
+    skip: Option<usize>,
+    #[expect(clippy::box_collection)] // additional indirection for smaller size_of()
+    statistics_requests: Box<BTreeSet<StatisticsRequest>>,
 }
 
 impl TableScanBuilder {
@@ -3267,7 +3281,8 @@ impl TableScanBuilder {
             projection: None,
             filters: vec![],
             fetch: None,
-            statistics_requests: BTreeSet::new(),
+            skip: None,
+            statistics_requests: Box::default(),
         }
     }
 
@@ -3289,13 +3304,19 @@ impl TableScanBuilder {
         self
     }
 
+    /// Set the number of rows to skip.
+    pub fn with_skip(mut self, skip: Option<usize>) -> Self {
+        self.skip = skip;
+        self
+    }
+
     /// Set the statistics requests for the scan. See
     /// [`TableScan::statistics_requests`].
     pub fn with_statistics_requests(
         mut self,
         statistics_requests: BTreeSet<StatisticsRequest>,
     ) -> Self {
-        self.statistics_requests = statistics_requests;
+        self.statistics_requests = Box::new(statistics_requests);
         self
     }
 
@@ -3308,6 +3329,7 @@ impl TableScanBuilder {
             projection,
             filters,
             fetch,
+            skip,
             statistics_requests,
         } = self;
 
@@ -3349,6 +3371,7 @@ impl TableScanBuilder {
             projected_schema,
             filters,
             fetch,
+            skip,
             statistics_requests,
         })
     }
@@ -3362,6 +3385,7 @@ impl From<TableScan> for TableScanBuilder {
             projection: scan.projection,
             filters: scan.filters,
             fetch: scan.fetch,
+            skip: scan.skip,
             statistics_requests: scan.statistics_requests,
         }
     }
@@ -6428,7 +6452,8 @@ mod tests {
             projected_schema: Arc::clone(&schema),
             filters: vec![],
             fetch: None,
-            statistics_requests: BTreeSet::new(),
+            skip: None,
+            statistics_requests: Box::default(),
         }));
         let col = schema.field_names()[0].clone();
 
@@ -6459,7 +6484,8 @@ mod tests {
             projected_schema: Arc::clone(&unique_schema),
             filters: vec![],
             fetch: None,
-            statistics_requests: BTreeSet::new(),
+            skip: None,
+            statistics_requests: Box::default(),
         }));
         let col = schema.field_names()[0].clone();
 
