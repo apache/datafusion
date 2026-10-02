@@ -549,6 +549,10 @@ mod tests {
         let truncated_properties =
             date_trunc.get_properties(&[precision_properties, time_properties])?;
         assert_eq!(
+            truncated_properties.range,
+            Interval::make_unbounded(&time_type)?
+        );
+        assert_eq!(
             truncated_properties.sort_properties,
             SortProperties::Ordered(SortOptions::default())
         );
