@@ -2949,6 +2949,22 @@ FROM insensitive_order_by GROUP BY g ORDER BY g;
 1 4.5 2 7 5 4.5 2.25 1.5 2.1213
 2 11 8 14 6 2 1 1 1.4142
 
+# The same aggregates without GROUP BY. The filter splits the input across
+# partitions, so this runs as a Partial and a Final aggregate.
+query RIIIRRRR
+SELECT
+  avg(v ORDER BY k),
+  bit_and(v ORDER BY k),
+  bit_or(v ORDER BY k),
+  bit_xor(v ORDER BY k),
+  var_samp(v ORDER BY k),
+  var_pop(v ORDER BY k),
+  round(stddev_pop(v ORDER BY k), 4),
+  round(stddev(v ORDER BY k), 4)
+FROM insensitive_order_by WHERE v > 0;
+----
+7.75 0 15 3 16.25 12.1875 3.4911 4.0311
+
 statement ok
 DROP TABLE insensitive_order_by;
 
