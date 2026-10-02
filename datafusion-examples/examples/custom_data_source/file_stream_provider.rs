@@ -32,7 +32,7 @@
     target_os = "windows",
     expect(
         clippy::unused_async,
-        reason = "The Windows stub shares the async example API"
+        reason = "keep the same async entry point on all platforms"
     )
 )]
 pub async fn file_stream_provider() -> datafusion::error::Result<()> {
