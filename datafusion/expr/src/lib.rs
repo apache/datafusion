@@ -70,7 +70,7 @@ pub mod dml {
 }
 pub mod planner;
 /// Protobuf conversions for [`WindowFrame`], [`WindowFrameBound`],
-/// [`WindowFrameUnits`], [`MergeIntoClauseKind`](dml::MergeIntoClauseKind) and
+/// [`WindowFrameUnits`], [`MergeIntoClauseKind`] and
 /// [`NullTreatment`](expr::NullTreatment), gated on the `proto` feature.
 #[cfg(feature = "proto")]
 mod proto;
