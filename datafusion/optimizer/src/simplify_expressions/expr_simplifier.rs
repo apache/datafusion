@@ -828,14 +828,9 @@ impl<'a> Simplifier<'a> {
     }
 }
 
+/// Returns whether values of the given type are guaranteed to satisfy `value % 1 == 0`.
 fn modulo_one_is_zero_type(data_type: &DataType) -> bool {
-    match data_type {
-        DataType::Decimal32(_, scale)
-        | DataType::Decimal64(_, scale)
-        | DataType::Decimal128(_, scale)
-        | DataType::Decimal256(_, scale) => *scale <= 0,
-        data_type => !data_type.is_floating(),
-    }
+    data_type.is_integer()
 }
 
 impl TreeNodeRewriter for Simplifier<'_> {
@@ -1217,7 +1212,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
             // Rules for Modulo
             //
 
-            // A % 1 --> 0 (if A is not nullable and has no fractional part, since NAN % 1 --> NAN and 1.50 % 1 --> 0.50)
+            // A % 1 --> 0 (if A is a non-null integer, since NAN % 1 --> NAN and 1.50 % 1 --> 0.50)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Modulo,
