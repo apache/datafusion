@@ -54,20 +54,19 @@ Contributors drive the project forward based on their own priorities and
 interests and thus you are free to work on any issue that interests you.
 
 If someone is already working on an issue that you want or need but hasn't
-been able to finish it yet, feel free to help them out. 
+been able to finish it yet, feel free to help them out.
 
-If there is a existing PR for an issue you plan to work on, please review that
+If there is an existing PR for an issue you plan to work on, please review that
 PR before opening a new one. Duplicate, unacknowledged PRs consume valuable
 reviewer time and we may close them. If there is an existing PR, please identify
 it in the PR description and explain why you are opening a new one and not
-helping with the previous one. In  general it is both polite and will help avoid
+helping with the previous one. In general it is both polite and will help avoid
 unnecessary duplication of work if you also leave a note on an issue when you
 start working on it.
 
 If you want to work on an issue which is not already assigned to someone and has
 no comment indicating someone is already working on it, you can assign the issue
-to yourself by submitting a single word issue you can assign the issue to
-yourself by submitting a single word comment `take`. However, if you are unable
+to yourself by submitting a single word comment `take`. However, if you are unable
 to make progress please unassign the issue by commenting a single word `untake`.
 
 # Developer's guide
@@ -139,13 +138,13 @@ Please ensure your PR follows the [testing guide](testing.md). In particular:
 
 DataFusion has the following policy for AI-assisted PRs:
 
-- We welcome AI assisted PRs from anyone. We do not welcome unreviewed "AI dumps" (defined below).
+- We welcome AI-assisted PRs from anyone. We do not welcome unreviewed "AI dumps" (defined below).
 - The PR author should have personally read the entire PR they submit, and **understand the core ideas** behind the implementation **end-to-end**. Authors should be ready to justify and help reviewers understand the design and code during review.
-- **Call out unknowns and assumptions**. It's okay to not fully understand some bits of AI generated code. Please point these cases out so we can work together to clear up any concerns.
+- **Call out unknowns and assumptions**. It's okay to not fully understand some bits of AI-generated code. Please point these cases out so we can work together to clear up any concerns.
 
 ### What is an "AI dump" and why it is not helpful
 
-An "AI dump" is a PR, or a series of PRs, consisting largely of AI generated
+An "AI dump" is a PR, or a series of PRs, consisting largely of AI-generated
 code and descriptions that the author has not reviewed and does not understand.
 The code may even be correct. The problem is that all the work of understanding
 falls on the reviewer.
@@ -155,8 +154,8 @@ Code review serves two purposes:
 1. Finish the intended task.
 2. Share knowledge between authors and reviewers, as a long-term investment in
    the project. For this reason, even if someone familiar with the codebase
-   could finish a task more quickly by themselves, we are still happy to help a new contributor
-   work on it.
+   could finish a task more quickly by themselves, we are still happy to help
+   a new contributor work on it.
 
 An AI dump meets neither purpose. Maintainers could finish the task faster by
 running the AI tool themselves, and an author who acts only as a pass-through
@@ -165,24 +164,24 @@ proxy for the tool learns little from the review.
 Reviewing capacity for the project is **very limited**, so PRs that appear to be
 AI dumps may not get reviewed, and may eventually be closed.
 
-Multiple PRs created in a short amount of time, especially by a first time
-contributor, that in our judgment show lack of understanding or author
+Multiple PRs created in a short amount of time, especially by a first-time
+contributor, that in our judgment show a lack of understanding or author
 engagement may be treated as spam and closed. One high quality PR that you work
-with maintainers to merge is far more valuable to you and the project, than ten
+with maintainers to merge is far more valuable to you and the project than ten
 PRs you have your agent generate and submit for you.
 
 ### Responding to review comments
 
 The same policy applies to review discussion as to the code itself: reviewers
-want to talk to **you**, not to your AI tool. Please do not paste an AI
-generated response to a review comment verbatim or have your agent respond to
+want to talk to **you**, not to your AI tool. Please do not paste an AI-generated
+response to a review comment verbatim or have your agent respond to
 reviewer comments. Some signs that a reply is an unreviewed AI dump:
 
 - It summarizes the diff rather than answering the question that was asked.
 - It lists the commands that were run locally (e.g. `cargo fmt`, `cargo test`)
   and whether they passed. This is not useful to reviewers because CI already
   runs these checks.
-- It contains statements that don't make sense in the context, such as claiming 
+- It contains statements that don't make sense in context, such as claiming
   tests could not be run because `cargo` is not installed.
 
 For example, see [this review thread in arrow-rs][arrow-rs-review-example] where
@@ -190,24 +189,20 @@ the reviewer asked a design question, and received several replies that
 described what had changed and which commands had been run, rather than an
 answer to the question.
 
-Our maintainers are more than capable of running coding agents themselves and
-iterating on the output. The point of code review is to help the project **and**
-to help you grow as an engineer, so please read each comment, make sure you
-understand it, and reply in your own words. If you used an AI tool to help
-address a comment, that's fine but remember you should be talking to the
-reviewer, not letting the AI tool talk for you.
+The point of code review is to help the project **and** to help you grow as an
+engineer, so please read each comment, make sure you understand it, and reply
+in your own words.
 
 [arrow-rs-review-example]: https://github.com/apache/arrow-rs/pull/11209#discussion_r4145512124
 
 ### Better ways to contribute than an “AI dump”
 
 It's recommended to write a high-quality issue with a clear problem statement
-and a minimal, reproducible example. The reproducer should focus on the end user
-visible behavior rather than explaining the details of some code defect. 
+and a minimal, reproducible example. The reproducer should focus on the end-user-visible
+behavior rather than explaining the details of some code defect.
 
-This will make it easier for others to contribute as well as reviewers to
+This will make it easier for others to contribute and for reviewers to
 understand the problem being addressed.
-
 
 ## Conventional Commits & Labeling PRs
 
@@ -272,10 +267,9 @@ The good thing about open code and open development is that any issues in one ch
 Pull requests will be marked with a `stale` label after 60 days of inactivity and then closed 7 days after that.
 Commenting on the PR will remove the `stale` label.
 
+## CI Runners
 
-### CI Runners
-
-#### Runs-On
+### Runs-On
 
 We use [Runs-On](https://runs-on.com/) for some actions in the main repository, which run in the ASF AWS account to speed up CI. In forks, these actions run on the default GitHub runners since forks do not have access to ASF infrastructure.
 
@@ -291,7 +285,7 @@ For those actions we also use the [Runs-On action](https://runs-on.com/caching/m
 
 For the standard GitHub runners, this action will do nothing.
 
-##### Spot Instances
+#### Spot Instances
 
 By default, Runs-On actions run as [spot instances](https://runs-on.com/configuration/spot-instances/), which means they might occasionally be interrupted. In the CI you would see:
 
@@ -301,6 +295,6 @@ Error: The operation was canceled.
 
 According to Runs-On, spot instance termination is extremely rare for instances running for less than 1h. Those actions will be restarted automatically.
 
-#### GitHub Runners
+### GitHub Runners
 
 We also use standard GitHub runners for some actions in the main repository; these are also runnable in forks.

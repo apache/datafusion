@@ -11,7 +11,7 @@
 - [Contributor Guide](docs/source/contributor-guide/index.md)
 - [Architecture Guide](docs/source/contributor-guide/architecture.md)
 
-## Before starting work
+## Before Starting Work
 
 Before you start work on an issue, you MUST follow the instructions in
 [Open Contribution and Assigning tickets](docs/source/contributor-guide/index.md#open-contribution-and-assigning-tickets). You must ensure duplicate work is not being created.
