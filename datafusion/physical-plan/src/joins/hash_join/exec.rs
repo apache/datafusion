@@ -40,6 +40,7 @@ use crate::joins::hash_join::stream::{
     BuildSide, BuildSideInitialState, HashJoinStream, HashJoinStreamState,
 };
 use crate::joins::join_hash_map::{JoinHashMapU32, JoinHashMapU64};
+use crate::joins::key_range_bitmap::KeyRangeBitmap;
 use crate::joins::utils::{
     OnceAsync, OnceFut, asymmetric_join_output_partitioning, emits_unmatched_left_rows,
     is_existence_join, reorder_output_after_swap, swap_join_projection, update_hash,
@@ -51,7 +52,7 @@ use crate::projection::{
     try_pushdown_through_join_with_column_indices,
 };
 use crate::repartition::REPARTITION_RANDOM_STATE;
-use crate::statistics::{ChildStats, StatisticsArgs};
+use crate::statistics::{ChildStats, StatisticsArgs, with_per_partition_fetch};
 use crate::{
     ChildrenPropertiesMode, ExecutionPlanProperties, ReplaceChildrenOptions,
     validate_child_count,
@@ -1890,7 +1891,7 @@ impl ExecutionPlan for HashJoinExec {
     fn statistics_from_inputs(
         &self,
         input_stats: &[Arc<Statistics>],
-        _args: &StatisticsArgs,
+        args: &StatisticsArgs,
     ) -> Result<Arc<Statistics>> {
         let left_stats = if let Some(prepared) = &self.prepared_build {
             // The declared left child supplies the schema but is never executed.
@@ -1910,8 +1911,13 @@ impl ExecutionPlan for HashJoinExec {
         )?;
         // Project statistics if there is a projection
         let stats = stats.project(self.projection.as_ref());
-        // Apply fetch limit to statistics
-        Ok(Arc::new(stats.with_fetch(self.fetch, 0, 1)?))
+        // Apply the fetch, which limits each output partition separately
+        Ok(Arc::new(with_per_partition_fetch(
+            stats,
+            self.fetch,
+            self.properties().output_partitioning().partition_count(),
+            args,
+        )?))
     }
 
     /// Tries to push `projection` down through `hash_join`. If possible, performs the
@@ -3328,7 +3334,10 @@ async fn collect_left_input(
 
     let map = Arc::new(join_hash_map);
 
-    let membership = if num_rows == 0 {
+    // For an ordinary build, nothing reads the strategy unless this join's own
+    // dynamic filter accumulator exists. A prepared build is shared with joins
+    // decided later, so it must always be ready to serve one.
+    let membership = if num_rows == 0 || (!prepared && !should_compute_dynamic_filters) {
         PushdownStrategy::Empty
     } else {
         // If the build side is small enough we can use IN list pushdown.
@@ -3338,19 +3347,45 @@ async fn collect_left_input(
             .iter()
             .map(|arr| arr.get_array_memory_size())
             .sum::<usize>();
-        if left_values.is_empty()
-            || left_values[0].is_empty()
-            || estimated_size > config.optimizer.hash_join_inlist_pushdown_max_size
-            || map.num_of_distinct_key()
-                > config
+
+        let pushdown_inlist = !left_values.is_empty()
+            && !left_values[0].is_empty()
+            && estimated_size <= config.optimizer.hash_join_inlist_pushdown_max_size
+            && map.num_of_distinct_key()
+                <= config
                     .optimizer
-                    .hash_join_inlist_pushdown_max_distinct_values
+                    .hash_join_inlist_pushdown_max_distinct_values;
+
+        if pushdown_inlist
+            && let Some(in_list_values) = build_struct_inlist_values(&left_values)?
         {
-            PushdownStrategy::Map(Arc::clone(&map))
-        } else if let Some(in_list_values) = build_struct_inlist_values(&left_values)? {
             PushdownStrategy::InList(in_list_values)
         } else {
-            PushdownStrategy::Map(Arc::clone(&map))
+            // Past the InList threshold use a bucket bitmap for container pruning.
+            let pruning_bitmap = match (left_values.as_slice(), bounds.as_ref()) {
+                ([keys], Some(bounds)) if !keys.is_empty() => bounds
+                    .get_column_bounds(0)
+                    .and_then(|b| {
+                        KeyRangeBitmap::try_new(
+                            keys,
+                            &b.min,
+                            &b.max,
+                            map.num_of_distinct_key(),
+                        )
+                    })
+                    .map(Arc::new),
+                _ => None,
+            };
+            // Held for the join's lifetime, so charge it like the maps; it is
+            // optional, so skip it rather than fail when the pool is full.
+            let pruning_bitmap = pruning_bitmap.filter(|bitmap| {
+                let ok = reservation.try_grow(bitmap.size()).is_ok();
+                if ok {
+                    metrics.build_mem_used.add(bitmap.size());
+                }
+                ok
+            });
+            PushdownStrategy::Map(Arc::clone(&map), pruning_bitmap)
         }
     };
 
@@ -3458,6 +3493,7 @@ mod tests {
     use crate::execution_plan::Boundedness;
     use crate::filter::FilterExecBuilder;
     use crate::joins::hash_join::stream::lookup_join_hashmap;
+    use crate::statistics::StatisticsContext;
     use crate::test::{TestMemoryExec, assert_join_metrics};
     use crate::{ChildrenPropertiesMode, ReplaceChildrenOptions};
     use crate::{
@@ -3473,6 +3509,7 @@ mod tests {
     use arrow::buffer::NullBuffer;
     use arrow::datatypes::{DataType, Field, Float32Type, Float64Type, Int32Type};
     use datafusion_common::hash_utils::create_hashes;
+    use datafusion_common::stats::Precision;
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{
         ScalarValue, assert_batches_eq, assert_batches_sorted_eq, assert_contains,
@@ -3524,6 +3561,71 @@ mod tests {
             drop(reservation);
             assert_eq!(pool.reserved(), 0);
         }
+        Ok(())
+    }
+
+    /// Runs a join whose 200 keys spread over 2M would size a pruning bitmap
+    /// at the 128 KiB cap, and reports the bytes the build side reserved.
+    ///
+    /// Forces the IN-list threshold off: under `force_hash_collisions` every
+    /// key hashes to the same bucket, so `num_of_distinct_key()` no longer
+    /// reflects the real 200 distinct keys and would otherwise take the
+    /// IN-list branch instead of the one under test.
+    async fn build_mem_used(limit: usize, dynamic_filters: bool) -> Result<usize> {
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+        let batch = |keys: Vec<i64>| {
+            let column = Arc::new(Int64Array::from(keys)) as ArrayRef;
+            let batch = RecordBatch::try_new(Arc::clone(&schema), vec![column])?;
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)
+        };
+        let on = vec![(
+            Arc::new(Column::new_with_schema("k", &schema)?) as _,
+            Arc::new(Column::new_with_schema("k", &schema)?) as _,
+        )];
+        let build = batch((0..200).map(|i| i * 10_000).collect())?;
+        let probe = batch(vec![0, 500_000, 1_500_000])?;
+        let join = if dynamic_filters {
+            hash_join_with_dynamic_filter(build, probe, on, JoinType::Inner)?.0
+        } else {
+            join(
+                build,
+                probe,
+                on,
+                &JoinType::Inner,
+                NullEquality::NullEqualsNothing,
+            )?
+        };
+
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(limit, 1.0)
+            .build_arc()?;
+        let mut config = SessionConfig::new();
+        config
+            .options_mut()
+            .optimizer
+            .hash_join_inlist_pushdown_max_size = 0;
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_runtime(runtime)
+                .with_session_config(config),
+        );
+        let batches = common::collect(join.execute(0, task_ctx)?).await?;
+        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 3);
+        Ok(join
+            .metrics()
+            .unwrap()
+            .sum_by_name("build_mem_used")
+            .unwrap()
+            .as_usize())
+    }
+
+    /// The bitmap is pruning-only: never built when no dynamic filter will read
+    /// it, and dropped rather than fatal when the pool cannot fit it.
+    #[tokio::test]
+    async fn pruning_bitmap_is_optional() -> Result<()> {
+        assert!(build_mem_used(1_000_000, false).await? < 100_000);
+        assert!(build_mem_used(1_000_000, true).await? > 100_000);
+        build_mem_used(100_000, true).await?;
         Ok(())
     }
 
@@ -5240,6 +5342,50 @@ mod tests {
             assert!(expected.contains(&row), "unexpected output row {row:?}");
         }
 
+        Ok(())
+    }
+
+    /// `fetch` stops each output partition separately, so the overall
+    /// statistics must allow for the rows of every partition.
+    #[tokio::test]
+    async fn join_fetch_statistics_count_every_output_partition() -> Result<()> {
+        let values: Vec<i32> = (0..100).collect();
+        let left = build_table(("a1", &values), ("b1", &values), ("c1", &values));
+        let batch = build_table_i32(("a2", &values), ("b2", &values), ("c2", &values));
+        let schema = batch.schema();
+        let right = TestMemoryExec::try_new_exec(&vec![vec![batch]; 4], schema, None)?;
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+        )];
+        let join: Arc<dyn ExecutionPlan> = Arc::new(
+            HashJoinExecBuilder::new(left, right, on, JoinType::Inner)
+                .with_partition_mode(PartitionMode::CollectLeft)
+                .with_fetch(Some(10))
+                .build()?,
+        );
+        assert_eq!(join.properties().output_partitioning().partition_count(), 4);
+
+        // Each right row matches one left row, and each of the four output
+        // partitions stops after 10 rows.
+        let emitted: usize =
+            crate::collect(Arc::clone(&join), prepare_task_ctx(8192, false))
+                .await?
+                .iter()
+                .map(|batch| batch.num_rows())
+                .sum();
+        assert_eq!(emitted, 40);
+
+        let num_rows = |partition| {
+            StatisticsContext::new()
+                .compute(
+                    join.as_ref(),
+                    &StatisticsArgs::new().with_partition(partition),
+                )
+                .map(|stats| stats.num_rows)
+        };
+        assert_eq!(num_rows(None)?, Precision::Inexact(40));
+        assert_eq!(num_rows(Some(0))?, Precision::Inexact(10));
         Ok(())
     }
 
