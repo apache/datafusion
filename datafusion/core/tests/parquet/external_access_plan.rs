@@ -311,6 +311,36 @@ async fn two_selections() {
 }
 
 #[tokio::test]
+async fn mixed_bitmap_and_selector_selections() {
+    // RG 0 selects a/c with a bitmap, RG 1 selects f/h with selectors.
+    // Each representation must keep coordinates local to its row group.
+    TestFull {
+        access_plan: Some(ParquetAccessPlan::new(vec![
+            RowGroupAccess::Selection(RowSelection::from(
+                arrow::buffer::BooleanBuffer::from(vec![true, false, true, false, false]),
+            )),
+            RowGroupAccess::Selection(select_two_rows()),
+        ])),
+        row_selection: None,
+        expected_rows: 4,
+        expected_output: Some(&[
+            "+------+------------+",
+            "| utf8 | large_utf8 |",
+            "+------+------------+",
+            "| a    | a          |",
+            "| c    | c          |",
+            "| f    | f          |",
+            "| h    | h          |",
+            "+------+------------+",
+        ]),
+        predicate: None,
+    }
+    .run()
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
 async fn bad_row_groups() {
     let err = TestFull {
         access_plan: Some(ParquetAccessPlan::new(vec![

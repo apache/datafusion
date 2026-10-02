@@ -112,7 +112,10 @@ async fn group_by_row_hash() {
             "Resources exhausted: Additional allocation failed",
             "for FinalHashAggregateStream[0]",
         ])
-        .with_memory_limit(2_000)
+        // Every aggregate stream reserves its initial table (~4 KB) when created, so
+        // pin the partition count and fit the two partial and two final tables.
+        .with_config(SessionConfig::new().with_target_partitions(2))
+        .with_memory_limit(20_000)
         .run()
         .await
 }
