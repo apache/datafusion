@@ -844,15 +844,14 @@ impl FileSource for ParquetSource {
                         )?;
                     }
                 }
-                Ok(())
             }
             DisplayFormatType::TreeRender => {
                 if let Some(predicate) = self.filter() {
                     writeln!(f, "predicate={}", fmt_sql(predicate.as_ref()))?;
                 }
-                Ok(())
             }
         }
+        Ok(())
     }
 
     fn try_pushdown_filters(

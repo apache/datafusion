@@ -88,6 +88,54 @@ select make_array(NULL), make_array(NULL, NULL, NULL), make_array(make_array(NUL
 ----
 [NULL] [NULL, NULL, NULL] [[NULL, NULL], [NULL, NULL]]
 
+# https://github.com/apache/datafusion/issues/21841
+# An all-NULL column still contains one input value per row.
+query ?
+SELECT make_array(n) FROM (VALUES (NULL), (NULL), (NULL)) AS t(n);
+----
+[NULL]
+[NULL]
+[NULL]
+
+query ??
+SELECT make_array(n, n), [n, NULL] FROM (VALUES (NULL), (NULL)) AS t(n);
+----
+[NULL, NULL] [NULL, NULL]
+[NULL, NULL] [NULL, NULL]
+
+query ???
+SELECT make_array(), make_array(NULL), make_array(NULL, NULL);
+----
+[] [NULL] [NULL, NULL]
+
+query ?
+SELECT make_array(n) FROM (VALUES (CAST(NULL AS INT)), (NULL)) AS t(n);
+----
+[NULL]
+[NULL]
+
+query I
+SELECT count(*) FROM (SELECT make_array(n) FROM (VALUES (NULL)) AS t(n) WHERE false);
+----
+0
+
+# Mix an all-NULL column with a non-NULL column in either argument order.
+query ??
+SELECT make_array(n, v), make_array(v, n)
+FROM (VALUES (NULL, 1), (NULL, 2)) AS t(n, v);
+----
+[NULL, 1] [1, NULL]
+[NULL, 2] [2, NULL]
+
+# Preserve NULL and non-NULL rows when combining a column with scalar arguments.
+query ???
+SELECT make_array(v), make_array(v, NULL), make_array(NULL, v, 42)
+FROM (VALUES (1), (NULL), (3)) AS t(v);
+----
+[1] [1, NULL] [NULL, 1, 42]
+[NULL] [NULL, NULL] [NULL, NULL, 42]
+[3] [3, NULL] [NULL, 3, 42]
+
 # make_array with 1 columns
 query ???
 select make_array(a), make_array(d), make_array(e) from values;
