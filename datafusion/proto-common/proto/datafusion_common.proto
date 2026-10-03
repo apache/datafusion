@@ -543,6 +543,10 @@ message ParquetColumnOptions {
   oneof compression_opt {
     string compression = 4;
   }
+  
+  oneof data_page_compression_ratio_threshold_opt {
+    double data_page_compression_ratio_threshold = 9;
+  }
 
   oneof statistics_enabled_opt {
     string statistics_enabled = 5;
@@ -586,6 +590,10 @@ message ParquetOptions {
 
   oneof compression_opt {
     string compression = 10;
+  }
+
+  oneof data_page_compression_ratio_threshold_opt {
+    double data_page_compression_ratio_threshold = 39;
   }
 
   oneof dictionary_enabled_opt {

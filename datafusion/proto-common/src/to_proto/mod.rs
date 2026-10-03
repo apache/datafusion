@@ -943,6 +943,7 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             write_batch_size: value.write_batch_size as u64,
             writer_version: value.writer_version.to_string(),
             compression_opt: value.compression.map(|v| protobuf::parquet_options::CompressionOpt::Compression(v.to_string())),
+            data_page_compression_ratio_threshold_opt: value.data_page_compression_ratio_threshold.map(protobuf::parquet_options::DataPageCompressionRatioThresholdOpt::DataPageCompressionRatioThreshold),
             dictionary_enabled_opt: value.dictionary_enabled.map(protobuf::parquet_options::DictionaryEnabledOpt::DictionaryEnabled),
             dictionary_page_size_limit: value.dictionary_page_size_limit as u64,
             statistics_enabled_opt: value.statistics_enabled.map(|v| protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled(v.to_string())),
@@ -994,6 +995,9 @@ impl TryFrom<&ParquetColumnOptions> for protobuf::ParquetColumnOptions {
                 .compression
                 .clone()
                 .map(protobuf::parquet_column_options::CompressionOpt::Compression),
+            data_page_compression_ratio_threshold_opt: value
+                .data_page_compression_ratio_threshold
+                .map(protobuf::parquet_column_options::DataPageCompressionRatioThresholdOpt::DataPageCompressionRatioThreshold),
             dictionary_enabled_opt: value
                 .dictionary_enabled
                 .map(protobuf::parquet_column_options::DictionaryEnabledOpt::DictionaryEnabled),
