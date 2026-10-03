@@ -48,6 +48,169 @@ SELECT 0.0 IS DISTINCT FROM -0.0 AS is_distinct;
 false
 
 #####
+## IN / NOT IN predicates
+#####
+
+statement ok
+CREATE TABLE signed_zero_in_list AS
+SELECT 1 AS id,
+       arrow_cast(0.0, 'Float16') AS f16,
+       arrow_cast(0.0, 'Float32') AS f32,
+       0.0 AS f64
+UNION ALL
+SELECT 2, arrow_cast(-0.0, 'Float16'), arrow_cast(-0.0, 'Float32'), -0.0
+UNION ALL
+SELECT 3, arrow_cast(NULL, 'Float16'), arrow_cast(NULL, 'Float32'), CAST(NULL AS DOUBLE);
+
+# A one-item list becomes equality, so opposite zero signs match.
+# SQL-correct output for every non-null row is true true false false.
+query ITBBBBTBBBBTBBBB
+SELECT id,
+       'Float16',
+       f16 IN (arrow_cast(0.0, 'Float16')),
+       f16 IN (arrow_cast(-0.0, 'Float16')),
+       f16 NOT IN (arrow_cast(0.0, 'Float16')),
+       f16 NOT IN (arrow_cast(-0.0, 'Float16')),
+       'Float32',
+       f32 IN (arrow_cast(0.0, 'Float32')),
+       f32 IN (arrow_cast(-0.0, 'Float32')),
+       f32 NOT IN (arrow_cast(0.0, 'Float32')),
+       f32 NOT IN (arrow_cast(-0.0, 'Float32')),
+       'Float64',
+       f64 IN (arrow_cast(0.0, 'Float64')),
+       f64 IN (arrow_cast(-0.0, 'Float64')),
+       f64 NOT IN (arrow_cast(0.0, 'Float64')),
+       f64 NOT IN (arrow_cast(-0.0, 'Float64'))
+FROM signed_zero_in_list
+ORDER BY id;
+----
+1 Float16 true true false false Float32 true true false false Float64 true true false false
+2 Float16 true true false false Float32 true true false false Float64 true true false false
+3 Float16 NULL NULL NULL NULL Float32 NULL NULL NULL NULL Float64 NULL NULL NULL NULL
+
+# Static lists with two or more items retain specialized filters. Those filters
+# currently compare float bits, so opposite zero signs incorrectly fail to match.
+# The expected output below records this known behavior until #25186 is merged:
+# https://github.com/apache/datafusion/pull/25186
+# SQL-correct output for every non-null row is true true false false, as above.
+query ITBBBBTBBBBTBBBB
+SELECT id,
+       'Float16',
+       f16 IN (arrow_cast(0.0, 'Float16'), 1),
+       f16 IN (arrow_cast(-0.0, 'Float16'), 1),
+       f16 NOT IN (arrow_cast(0.0, 'Float16'), 1),
+       f16 NOT IN (arrow_cast(-0.0, 'Float16'), 1),
+       'Float32',
+       f32 IN (arrow_cast(0.0, 'Float32'), 1),
+       f32 IN (arrow_cast(-0.0, 'Float32'), 1),
+       f32 NOT IN (arrow_cast(0.0, 'Float32'), 1),
+       f32 NOT IN (arrow_cast(-0.0, 'Float32'), 1),
+       'Float64',
+       f64 IN (arrow_cast(0.0, 'Float64'), 1),
+       f64 IN (arrow_cast(-0.0, 'Float64'), 1),
+       f64 NOT IN (arrow_cast(0.0, 'Float64'), 1),
+       f64 NOT IN (arrow_cast(-0.0, 'Float64'), 1)
+FROM signed_zero_in_list
+ORDER BY id;
+----
+1 Float16 true false false true Float32 true false false true Float64 true false false true
+2 Float16 false true true false Float32 false true true false Float64 false true true false
+3 Float16 NULL NULL NULL NULL Float32 NULL NULL NULL NULL Float64 NULL NULL NULL NULL
+
+# Three-item static lists use the same signed-zero behavior.
+query ITBBBBTBBBBTBBBB
+SELECT id,
+       'Float16',
+       f16 IN (arrow_cast(0.0, 'Float16'), 1, 2),
+       f16 IN (arrow_cast(-0.0, 'Float16'), 1, 2),
+       f16 NOT IN (arrow_cast(0.0, 'Float16'), 1, 2),
+       f16 NOT IN (arrow_cast(-0.0, 'Float16'), 1, 2),
+       'Float32',
+       f32 IN (arrow_cast(0.0, 'Float32'), 1, 2),
+       f32 IN (arrow_cast(-0.0, 'Float32'), 1, 2),
+       f32 NOT IN (arrow_cast(0.0, 'Float32'), 1, 2),
+       f32 NOT IN (arrow_cast(-0.0, 'Float32'), 1, 2),
+       'Float64',
+       f64 IN (arrow_cast(0.0, 'Float64'), 1, 2),
+       f64 IN (arrow_cast(-0.0, 'Float64'), 1, 2),
+       f64 NOT IN (arrow_cast(0.0, 'Float64'), 1, 2),
+       f64 NOT IN (arrow_cast(-0.0, 'Float64'), 1, 2)
+FROM signed_zero_in_list
+ORDER BY id;
+----
+1 Float16 true false false true Float32 true false false true Float64 true false false true
+2 Float16 false true true false Float32 false true true false Float64 false true true false
+3 Float16 NULL NULL NULL NULL Float32 NULL NULL NULL NULL Float64 NULL NULL NULL NULL
+
+# Four-item static lists already retained their specialized filters.
+query ITBBBBTBBBBTBBBB
+SELECT id,
+       'Float16',
+       f16 IN (arrow_cast(0.0, 'Float16'), 1, 2, 3),
+       f16 IN (arrow_cast(-0.0, 'Float16'), 1, 2, 3),
+       f16 NOT IN (arrow_cast(0.0, 'Float16'), 1, 2, 3),
+       f16 NOT IN (arrow_cast(-0.0, 'Float16'), 1, 2, 3),
+       'Float32',
+       f32 IN (arrow_cast(0.0, 'Float32'), 1, 2, 3),
+       f32 IN (arrow_cast(-0.0, 'Float32'), 1, 2, 3),
+       f32 NOT IN (arrow_cast(0.0, 'Float32'), 1, 2, 3),
+       f32 NOT IN (arrow_cast(-0.0, 'Float32'), 1, 2, 3),
+       'Float64',
+       f64 IN (arrow_cast(0.0, 'Float64'), 1, 2, 3),
+       f64 IN (arrow_cast(-0.0, 'Float64'), 1, 2, 3),
+       f64 NOT IN (arrow_cast(0.0, 'Float64'), 1, 2, 3),
+       f64 NOT IN (arrow_cast(-0.0, 'Float64'), 1, 2, 3)
+FROM signed_zero_in_list
+ORDER BY id;
+----
+1 Float16 true false false true Float32 true false false true Float64 true false false true
+2 Float16 false true true false Float32 false true true false Float64 false true true false
+3 Float16 NULL NULL NULL NULL Float32 NULL NULL NULL NULL Float64 NULL NULL NULL NULL
+
+# An outer NULL list item turns the incorrect missing match into NULL.
+# SQL-correct output for every non-null row is true true false false.
+query ITBBBBTBBBBTBBBB
+SELECT id,
+       'Float16',
+       f16 IN (arrow_cast(0.0, 'Float16'), NULL),
+       f16 IN (arrow_cast(-0.0, 'Float16'), NULL),
+       f16 NOT IN (arrow_cast(0.0, 'Float16'), NULL),
+       f16 NOT IN (arrow_cast(-0.0, 'Float16'), NULL),
+       'Float32',
+       f32 IN (arrow_cast(0.0, 'Float32'), NULL),
+       f32 IN (arrow_cast(-0.0, 'Float32'), NULL),
+       f32 NOT IN (arrow_cast(0.0, 'Float32'), NULL),
+       f32 NOT IN (arrow_cast(-0.0, 'Float32'), NULL),
+       'Float64',
+       f64 IN (arrow_cast(0.0, 'Float64'), NULL),
+       f64 IN (arrow_cast(-0.0, 'Float64'), NULL),
+       f64 NOT IN (arrow_cast(0.0, 'Float64'), NULL),
+       f64 NOT IN (arrow_cast(-0.0, 'Float64'), NULL)
+FROM signed_zero_in_list
+ORDER BY id;
+----
+1 Float16 true NULL false NULL Float32 true NULL false NULL Float64 true NULL false NULL
+2 Float16 NULL true NULL false Float32 NULL true NULL false Float64 NULL true NULL false
+3 Float16 NULL NULL NULL NULL Float32 NULL NULL NULL NULL Float64 NULL NULL NULL NULL
+
+# A column-valued RHS keeps two-item lists on the comparison rewrite path.
+# Both opposite-sign directions match, for all floating-point widths.
+query IIBBBBBB
+SELECT l.id, r.id,
+       l.f16 IN (r.f16, 1), l.f16 NOT IN (r.f16, 1),
+       l.f32 IN (r.f32, 1), l.f32 NOT IN (r.f32, 1),
+       l.f64 IN (r.f64, 1), l.f64 NOT IN (r.f64, 1)
+FROM signed_zero_in_list l CROSS JOIN signed_zero_in_list r
+WHERE l.id < 3 AND r.id < 3 AND l.id <> r.id
+ORDER BY l.id, r.id;
+----
+1 2 true false true false true false
+2 1 true false true false true false
+
+statement ok
+DROP TABLE signed_zero_in_list;
+
+#####
 ## SELECT DISTINCT with +0.0 / -0.0 (Float64)
 #####
 

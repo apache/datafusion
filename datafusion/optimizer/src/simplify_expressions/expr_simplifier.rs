@@ -117,6 +117,10 @@ pub struct ExprSimplifier {
     max_simplifier_cycles: u32,
 }
 
+/// Largest `IN` list considered for expansion into binary comparisons.
+///
+/// The final decision also accounts for whether the list can use a specialized
+/// physical filter.
 pub const THRESHOLD_INLINE_INLIST: usize = 3;
 pub const DEFAULT_MAX_SIMPLIFIER_CYCLES: u32 = 3;
 
@@ -199,7 +203,8 @@ impl ExprSimplifier {
         let mut simplifier = Simplifier::new(&self.info);
         let config_options = Some(Arc::clone(self.info.config_options()));
         let mut const_evaluator = ConstEvaluator::try_new(config_options)?;
-        let mut shorten_in_list_simplifier = ShortenInListSimplifier::new();
+        let mut shorten_in_list_simplifier =
+            ShortenInListSimplifier::new(self.info.schema());
         let guarantees_map: HashMap<&Expr, &NullableInterval> =
             self.guarantees.iter().map(|(k, v)| (k, v)).collect();
 
@@ -1852,25 +1857,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 op: Or,
                 right,
             }) if are_inlist_and_eq(left.as_ref(), right.as_ref()) => {
-                let lhs = to_inlist(*left).unwrap();
-                let rhs = to_inlist(*right).unwrap();
-                #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
-                // Expr contains Arc with interior mutability but is intentionally used as hash key
-                let mut seen: HashSet<Expr> = HashSet::new();
-                let list = lhs
-                    .list
-                    .into_iter()
-                    .chain(rhs.list)
-                    .filter(|e| seen.insert(e.to_owned()))
-                    .collect::<Vec<_>>();
-
-                let merged_inlist = InList {
-                    expr: lhs.expr,
-                    list,
-                    negated: false,
-                };
-
-                Transformed::yes(Expr::InList(merged_inlist))
+                Transformed::yes(merge_inlist_disjunction(*left, *right))
             }
 
             // Simplify expressions that is guaranteed to be true or false to a literal boolean expression
@@ -2325,6 +2312,50 @@ fn inlists_have_set_comparable_literals(left: &Expr, right: &Expr) -> bool {
     }
 }
 
+/// Apply only the OR-to-IN and short-list rewrites to a newly extracted predicate.
+///
+/// Join filter pushdown can recreate an OR chain after expression simplification
+/// has retained the equivalent IN list. Using the same representation here lets
+/// pushdown recognize duplicates without running full expression simplification.
+pub(crate) fn simplify_inlist_disjunction(expr: Expr, schema: &DFSchema) -> Result<Expr> {
+    expr.transform_up(|expr| {
+        Ok(match expr {
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::Or,
+                right,
+            }) if are_inlist_and_eq(&left, &right) => {
+                Transformed::yes(merge_inlist_disjunction(*left, *right))
+            }
+            expr => Transformed::no(expr),
+        })
+    })?
+    .data
+    .rewrite(&mut ShortenInListSimplifier::new(schema))
+    .data()
+}
+
+/// Merge operands already checked by [`are_inlist_and_eq`].
+fn merge_inlist_disjunction(left: Expr, right: Expr) -> Expr {
+    let lhs = to_inlist(left).unwrap();
+    let rhs = to_inlist(right).unwrap();
+    #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
+    // Expr contains Arc with interior mutability but is intentionally used as hash key
+    let mut seen: HashSet<Expr> = HashSet::new();
+    let list = lhs
+        .list
+        .into_iter()
+        .chain(rhs.list)
+        .filter(|e| seen.insert(e.to_owned()))
+        .collect::<Vec<_>>();
+
+    Expr::InList(InList {
+        expr: lhs.expr,
+        list,
+        negated: false,
+    })
+}
+
 // TODO: We might not need this after defer pattern for Box is stabilized. https://github.com/rust-lang/rust/issues/87121
 fn are_inlist_and_eq(left: &Expr, right: &Expr) -> bool {
     let left = as_inlist(left);
@@ -2525,7 +2556,9 @@ mod tests {
     use super::*;
     use crate::test::test_table_scan_with_name;
     use arrow::{
-        array::{BooleanArray, Float64Array, Int32Array, StructArray},
+        array::{
+            BooleanArray, Float64Array, Int32Array, MAX_INLINE_VIEW_LEN, StructArray,
+        },
         datatypes::{FieldRef, Fields},
     };
     use datafusion_common::{DFSchemaRef, ToDFSchema, assert_contains};
@@ -4727,6 +4760,25 @@ mod tests {
             (col("c1") * lit(10)).eq(lit(2))
         );
 
+        let expr = in_list(col("c3"), vec![lit(1_i64), lit(2_i64)], false);
+        assert_eq!(simplify(expr.clone()), expr);
+
+        let expr = in_list(col("c3"), vec![lit(1_i64), lit(2_i64), lit(3_i64)], true);
+        assert_eq!(simplify(expr.clone()), expr);
+
+        // Dynamic lists cannot use a static filter and retain the existing
+        // comparison expansion even for a specialized primitive type.
+        assert_eq!(
+            simplify(in_list(
+                col("c3"),
+                vec![lit(1_i64), col("c3_non_null")],
+                false,
+            )),
+            col("c3")
+                .eq(lit(1_i64))
+                .or(col("c3").eq(col("c3_non_null")))
+        );
+
         assert_eq!(
             simplify(in_list(col("c1"), vec![lit(1), lit(2)], false)),
             col("c1").eq(lit(1)).or(col("c1").eq(lit(2)))
@@ -5041,35 +5093,47 @@ mod tests {
                     .build(),
             )
             .with_canonicalize(false);
-            // Cover both inlined comparisons and lists that reach the set rewrites.
+            // Cover singleton comparisons and retained lists on both sides of
+            // the old comparison-expansion threshold.
             assert!(left_list.len() > THRESHOLD_INLINE_INLIST);
             assert!(right_list.len() > THRESHOLD_INLINE_INLIST);
-            for list_len in [2, left_list.len()] {
+            for list_len in [1, 2, 3, left_list.len()] {
                 let left =
                     |negated| in_list(col("x"), left_list[..list_len].to_vec(), negated);
                 let right =
                     |negated| in_list(col("x"), right_list[..list_len].to_vec(), negated);
-                for (expr, expected) in [
-                    (left(false).and(right(false)), vec![true, true]),
-                    (left(false).and(right(true)), vec![false, false]),
-                    (left(true).and(right(false)), vec![false, false]),
-                    (left(true).or(right(true)), vec![false, false]),
+                for (expr, sql_expected, bitwise_expected) in [
+                    (left(false).and(right(false)), [true, true], [false, false]),
+                    (left(false).and(right(true)), [false, false], [true, false]),
+                    (left(true).and(right(false)), [false, false], [false, true]),
+                    (left(true).or(right(true)), [false, false], [true, true]),
                 ] {
                     let simplified = simplifier.simplify(expr.clone())?;
-                    if list_len > THRESHOLD_INLINE_INLIST {
+                    if list_len > 1 {
                         // Floating-point literals must bypass structural set rewrites.
                         assert_eq!(simplified, expr);
-                    } else {
-                        let actual = create_physical_expr(
-                            &simplified,
-                            &schema,
-                            &ExecutionProps::new(),
-                            &PhysicalPlanningContext::default(),
-                        )?
-                        .evaluate(&batch)?
-                        .into_array(batch.num_rows())?;
-                        assert_eq!(actual.as_boolean(), &BooleanArray::from(expected));
                     }
+                    let actual = create_physical_expr(
+                        &simplified,
+                        &schema,
+                        &ExecutionProps::new(),
+                        &PhysicalPlanningContext::default(),
+                    )?
+                    .evaluate(&batch)?
+                    .into_array(batch.num_rows())?;
+                    // Known limitation until https://github.com/apache/datafusion/pull/25186:
+                    // retained static filters distinguish signed zeros, producing
+                    // bitwise_expected instead of the correct SQL sql_expected.
+                    // Singleton equality comparisons already use SQL equality.
+                    let expected = if list_len == 1 {
+                        sql_expected
+                    } else {
+                        bitwise_expected
+                    };
+                    assert_eq!(
+                        actual.as_boolean(),
+                        &BooleanArray::from(expected.to_vec())
+                    );
                 }
             }
         }
@@ -5123,6 +5187,117 @@ mod tests {
             };
             assert_eq!(simplify_no_canonicalize(expr.clone()), expr);
         }
+    }
+
+    #[test]
+    fn simplify_short_inlist_specialized_filter_boundaries() {
+        fn simplify_typed(expr: Expr, data_type: DataType) -> Expr {
+            let schema = Schema::new(vec![Field::new("value", data_type, true)])
+                .to_dfschema_ref()
+                .unwrap();
+            ExprSimplifier::new(SimplifyContext::builder().with_schema(schema).build())
+                .simplify(expr)
+                .unwrap()
+        }
+
+        let expr = in_list(col("value"), vec![lit(0.0_f64), lit(-0.0_f64)], false);
+        assert_eq!(simplify_typed(expr.clone(), DataType::Float64), expr);
+
+        let expr = in_list(
+            col("value"),
+            vec![lit(1_i64), lit(ScalarValue::Int64(None))],
+            false,
+        );
+        assert_eq!(simplify_typed(expr.clone(), DataType::Int64), expr);
+
+        let expr = in_list(
+            col("value"),
+            vec![lit(1_i64), lit(2_i64), lit(ScalarValue::Int64(None))],
+            true,
+        );
+        assert_eq!(simplify_typed(expr.clone(), DataType::Int64), expr);
+
+        let dictionary_type = DataType::Dictionary(
+            Box::new(DataType::Int8),
+            Box::new(DataType::Dictionary(
+                Box::new(DataType::Int16),
+                Box::new(DataType::Int64),
+            )),
+        );
+        let dictionary_literal = |value| {
+            lit(ScalarValue::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(ScalarValue::Dictionary(
+                    Box::new(DataType::Int16),
+                    Box::new(ScalarValue::Int64(Some(value))),
+                )),
+            ))
+        };
+        let expr = in_list(
+            col("value"),
+            vec![dictionary_literal(1), dictionary_literal(2)],
+            false,
+        );
+        assert_eq!(simplify_typed(expr.clone(), dictionary_type), expr);
+
+        let fixed_size_literal = |width, byte| {
+            lit(ScalarValue::FixedSizeBinary(
+                width,
+                Some(vec![byte; width as usize]),
+            ))
+        };
+        let expr = in_list(
+            col("value"),
+            vec![fixed_size_literal(16, 1), fixed_size_literal(16, 2)],
+            false,
+        );
+        assert_eq!(
+            simplify_typed(expr.clone(), DataType::FixedSizeBinary(16)),
+            expr
+        );
+
+        let list = vec![fixed_size_literal(3, 1), fixed_size_literal(3, 2)];
+        let expr = in_list(col("value"), list.clone(), false);
+        let expected = col("value")
+            .eq(list[0].clone())
+            .or(col("value").eq(list[1].clone()));
+        assert_eq!(simplify_typed(expr, DataType::FixedSizeBinary(3)), expected);
+
+        let inline = vec![
+            lit(ScalarValue::Utf8View(Some("abcdefghijkl".into()))),
+            lit(ScalarValue::Utf8View(Some("short".into()))),
+        ];
+        let expr = in_list(col("value"), inline, false);
+        assert_eq!(simplify_typed(expr.clone(), DataType::Utf8View), expr);
+
+        let mixed = vec![
+            lit(ScalarValue::Utf8View(Some("abcdefghijklm".into()))),
+            lit(ScalarValue::Utf8View(Some("short".into()))),
+        ];
+        let expr = in_list(col("value"), mixed.clone(), false);
+        let expected = col("value")
+            .eq(mixed[0].clone())
+            .or(col("value").eq(mixed[1].clone()));
+        assert_eq!(simplify_typed(expr, DataType::Utf8View), expected);
+
+        let binary_view_literal =
+            |len, byte| lit(ScalarValue::BinaryView(Some(vec![byte; len])));
+        let inline = vec![
+            binary_view_literal(MAX_INLINE_VIEW_LEN as usize, 1),
+            binary_view_literal(1, 2),
+        ];
+        let expr = in_list(col("value"), inline, false);
+        assert_eq!(simplify_typed(expr.clone(), DataType::BinaryView), expr);
+
+        let mixed = vec![
+            binary_view_literal(MAX_INLINE_VIEW_LEN as usize + 1, 1),
+            binary_view_literal(1, 2),
+        ];
+        let expr = in_list(col("value"), mixed.clone(), false);
+        let expected = col("value")
+            .eq(mixed[0].clone())
+            .or(col("value").eq(mixed[1].clone()));
+        assert_eq!(simplify_typed(expr, DataType::BinaryView), expected);
     }
 
     #[test]
