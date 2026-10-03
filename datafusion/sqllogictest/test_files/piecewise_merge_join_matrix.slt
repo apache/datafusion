@@ -199,6 +199,49 @@ SELECT l.lid, l.lv, r.rid, r.rv FROM cj_fl l FULL JOIN cj_fr r ON l.lv < r.rv;
 NULL NULL 1 0
 NULL NULL 2 -1
 
+# The same signed-zero agreement with dictionary-encoded float keys, whose
+# values are normalized one level down. -0.0 is the smallest buffered key for
+# `<` and the largest for `>=`.
+statement ok
+CREATE TABLE cj_dfl(lid INT, lv DOUBLE);
+
+statement ok
+INSERT INTO cj_dfl VALUES (1, -0.0), (2, 0.5);
+
+statement ok
+CREATE TABLE cj_dfr(rid INT, rv DOUBLE);
+
+statement ok
+INSERT INTO cj_dfr VALUES (1, 0.0), (2, 0.25);
+
+query I?I? rowsort
+SELECT l.lid, l.lv, r.rid, r.rv
+FROM (SELECT lid, arrow_cast(lv, 'Dictionary(Int32, Float64)') AS lv FROM cj_dfl) l
+JOIN (SELECT rid, arrow_cast(rv, 'Dictionary(Int32, Float64)') AS rv FROM cj_dfr) r
+  ON l.lv < r.rv;
+----
+1 0 2 0.25
+
+statement ok
+CREATE TABLE cj_dfl2(lid INT, lv DOUBLE);
+
+statement ok
+INSERT INTO cj_dfl2 VALUES (1, -1.0), (2, -0.0);
+
+statement ok
+CREATE TABLE cj_dfr2(rid INT, rv DOUBLE);
+
+statement ok
+INSERT INTO cj_dfr2 VALUES (1, 0.0);
+
+query I?I? rowsort
+SELECT l.lid, l.lv, r.rid, r.rv
+FROM (SELECT lid, arrow_cast(lv, 'Dictionary(Int32, Float64)') AS lv FROM cj_dfl2) l
+RIGHT JOIN (SELECT rid, arrow_cast(rv, 'Dictionary(Int32, Float64)') AS rv FROM cj_dfr2) r
+  ON l.lv >= r.rv;
+----
+2 0 1 0
+
 # One unsorted streamed batch mixing matching, non-matching and NULL keys. The
 # non-matching and NULL rows are set aside before the sort, and the rest are
 # sorted and mapped back to their rows in the batch. Against cj_l.lv = {1,3,5,

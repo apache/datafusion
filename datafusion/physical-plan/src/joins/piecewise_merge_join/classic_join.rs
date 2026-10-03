@@ -26,6 +26,7 @@ use arrow::{
 };
 use arrow_schema::{Schema, SchemaRef, SortOptions};
 use datafusion_common::NullEquality;
+use datafusion_common::utils::normalize_float_zero;
 use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 use datafusion_expr::{ColumnarValue, JoinType, Operator};
@@ -591,9 +592,14 @@ fn build_matched_indices_and_mark_buffered(
 // NULLs sort first, so the last key is NULL only when every buffered key is.
 fn buffered_extreme(values: &ArrayRef) -> Result<Option<ColumnarValue>> {
     Ok(match values.len().checked_sub(1) {
-        Some(last) if values.is_valid(last) => Some(ColumnarValue::Scalar(
-            ScalarValue::try_from_array(values, last)?,
-        )),
+        // `apply_cmp` normalizes `-0.0` only in flat float scalars, not inside a
+        // `ScalarValue::Dictionary`, so normalize the key before taking it.
+        Some(last) if values.is_valid(last) => {
+            let extreme = normalize_float_zero(&values.slice(last, 1));
+            Some(ColumnarValue::Scalar(ScalarValue::try_from_array(
+                &extreme, 0,
+            )?))
+        }
         _ => None,
     })
 }
@@ -1346,6 +1352,30 @@ mod tests {
                         .into_iter()
                         .collect::<DictionaryArray<Int32Type>>(),
                 ),
+            ),
+            (
+                // `-0.0` as the buffered extreme inside a dictionary: the smallest
+                // key for `<`/`<=`, the largest for `>`/`>=`.
+                "dictionary_float64_neg_zero_min",
+                Arc::new(DictionaryArray::<Int32Type>::new(
+                    Int32Array::from(vec![0, 1]),
+                    Arc::new(Float64Array::from(vec![-0.0, 0.5])),
+                )),
+                Arc::new(DictionaryArray::<Int32Type>::new(
+                    Int32Array::from(vec![0, 1, 2]),
+                    Arc::new(Float64Array::from(vec![0.0, -0.0, 0.25])),
+                )),
+            ),
+            (
+                "dictionary_float64_neg_zero_max",
+                Arc::new(DictionaryArray::<Int32Type>::new(
+                    Int32Array::from(vec![0, 1]),
+                    Arc::new(Float64Array::from(vec![-1.0, -0.0])),
+                )),
+                Arc::new(DictionaryArray::<Int32Type>::new(
+                    Int32Array::from(vec![0, 1, 2]),
+                    Arc::new(Float64Array::from(vec![0.0, -0.0, -0.5])),
+                )),
             ),
             (
                 "decimal128",
