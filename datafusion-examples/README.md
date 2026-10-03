@@ -185,6 +185,7 @@ cargo run --example dataframe -- dataframe
 | optimizer_rule | [`query_planning/optimizer_rule.rs`](examples/query_planning/optimizer_rule.rs) | Replace predicates via a custom OptimizerRule          |
 | parse_sql_expr | [`query_planning/parse_sql_expr.rs`](examples/query_planning/parse_sql_expr.rs) | Parse SQL into DataFusion Expr                         |
 | plan_to_sql    | [`query_planning/plan_to_sql.rs`](examples/query_planning/plan_to_sql.rs)       | Generate SQL from expressions or plans                 |
+| plan_walk      | [`query_planning/plan_walk.rs`](examples/query_planning/plan_walk.rs)           | Walk and rewrite LogicalPlans with TreeNode APIs       |
 | planner_api    | [`query_planning/planner_api.rs`](examples/query_planning/planner_api.rs)       | APIs for logical and physical plan manipulation        |
 | pruning        | [`query_planning/pruning.rs`](examples/query_planning/pruning.rs)               | Use pruning to skip irrelevant files                   |
 | thread_pools   | [`query_planning/thread_pools.rs`](examples/query_planning/thread_pools.rs)     | Configure custom thread pools for DataFusion execution |
