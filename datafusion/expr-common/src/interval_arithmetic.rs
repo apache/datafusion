@@ -847,8 +847,10 @@ impl Interval {
         let zero = ScalarValue::new_zero(&dt)?;
         // We want 0 to be approachable from both negative and positive sides.
         let zero_point = match &dt {
-            DataType::Float32 | DataType::Float64 => Self::new(zero.clone(), zero),
-            _ => Self::new(prev_value(zero.clone()), next_value(zero)),
+            DataType::Float32 | DataType::Float64 => {
+                Self::new(zero.clone(), zero.clone())
+            }
+            _ => Self::new(prev_value(zero.clone()), next_value(zero.clone())),
         };
 
         // Exit early with an unbounded interval if zero is strictly inside the
@@ -861,19 +863,9 @@ impl Interval {
         else if lhs_ref.contains(&zero_point)? == Self::TRUE
             && !dt.is_unsigned_integer()
         {
-            Ok(div_helper_lhs_zero_inclusive(
-                &dt,
-                lhs_ref,
-                rhs_ref,
-                &zero_point,
-            ))
+            Ok(div_helper_lhs_zero_inclusive(&dt, lhs_ref, rhs_ref, &zero))
         } else {
-            Ok(div_helper_zero_exclusive(
-                &dt,
-                lhs_ref,
-                rhs_ref,
-                &zero_point,
-            ))
+            Ok(div_helper_zero_exclusive(&dt, lhs_ref, rhs_ref, &zero))
         }
     }
 
@@ -1640,10 +1632,10 @@ fn div_helper_lhs_zero_inclusive(
     dt: &DataType,
     lhs: &Interval,
     rhs: &Interval,
-    zero_point: &Interval,
+    zero: &ScalarValue,
 ) -> Interval {
     // With the following interval bounds, there is no possibility to create an invalid interval.
-    if rhs.upper <= zero_point.lower && !rhs.upper.is_null() {
+    if rhs.upper <= *zero && !rhs.upper.is_null() {
         // <-------=====0=====------->
         // <--======----0------------>
         let lower = div_bounds::<false>(dt, &lhs.upper, &rhs.upper);
@@ -1659,12 +1651,12 @@ fn div_helper_lhs_zero_inclusive(
 }
 
 /// Divides the left-hand side interval by the right-hand side interval when
-/// neither interval contains zero.
+/// neither interval straddles zero (zero endpoints are allowed).
 ///
 /// This function takes in two intervals (`lhs` and `rhs`) as arguments and
 /// returns their quotient (whose data type is known to be `dt`). It is
-/// specifically designed to handle intervals that do not contain zero within
-/// their ranges. Returns an error if the division of bounds fails.
+/// specifically designed to handle intervals that do not straddle zero.
+/// Returns an error if the division of bounds fails.
 ///
 /// ``` text
 /// Left-hand side:  <--======----0------------>
@@ -1693,11 +1685,13 @@ fn div_helper_zero_exclusive(
     dt: &DataType,
     lhs: &Interval,
     rhs: &Interval,
-    zero_point: &Interval,
+    zero: &ScalarValue,
 ) -> Interval {
+    // An interval ending at zero is non-positive. Compare against zero itself,
+    // not the negative endpoint of the integer zero neighborhood [-1, 1].
     let (lower, upper) = match (
-        lhs.upper <= zero_point.lower && !lhs.upper.is_null(),
-        rhs.upper <= zero_point.lower && !rhs.upper.is_null(),
+        lhs.upper <= *zero && !lhs.upper.is_null(),
+        rhs.upper <= *zero && !rhs.upper.is_null(),
     ) {
         // With the following interval bounds, there is no possibility to create an invalid interval.
         (true, true) => (
@@ -3671,6 +3665,55 @@ mod tests {
             }
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_div_zero_endpoints() -> Result<()> {
+        let cases = [
+            ((-3_i64, 0_i64), (-2_i64, -1_i64), (0_i64, 3_i64)),
+            ((-3, 0), (1, 2), (-3, 0)),
+            ((0, 3), (-2, -1), (-3, 0)),
+            ((0, 3), (1, 2), (0, 3)),
+        ];
+        for ((lo, hi), (rlo, rhi), (expected_lo, expected_hi)) in cases {
+            let lhs = Interval::make(Some(lo), Some(hi))?;
+            let rhs = Interval::make(Some(rlo), Some(rhi))?;
+            assert_eq!(
+                lhs.div(&rhs)?,
+                Interval::make(Some(expected_lo), Some(expected_hi))?,
+                "{lhs:?} / {rhs:?}",
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_div_small_integer_intervals_contain_runtime_results() -> Result<()> {
+        // Include zero at either endpoint, inside the range, and as a singleton.
+        for lo in -3_i64..=3 {
+            for hi in lo..=3 {
+                for rlo in -3_i64..=3 {
+                    for rhi in rlo..=3 {
+                        let lhs = Interval::make(Some(lo), Some(hi))?;
+                        let rhs = Interval::make(Some(rlo), Some(rhi))?;
+                        let result = lhs.div(&rhs)?;
+                        for a in lo..=hi {
+                            for b in rlo..=rhi {
+                                if b != 0 {
+                                    assert!(
+                                        result.contains_value(ScalarValue::Int64(
+                                            Some(a / b)
+                                        ))?,
+                                        "{lhs:?} / {rhs:?} = {result:?} excludes {a} / {b}",
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
