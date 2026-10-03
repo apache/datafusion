@@ -308,7 +308,8 @@ impl ExternalSorter {
             metrics.spill_metrics.clone(),
             Arc::clone(&schema),
         )
-        .with_compression_type(spill_compression);
+        .with_compression_type(spill_compression)
+        .with_max_batch_bytes(spill_max_batch_bytes(sort_spill_reservation_bytes));
 
         Ok(Self {
             schema,
@@ -913,6 +914,29 @@ impl ExternalSorter {
         stream
     }
 }
+
+/// The bound on the in-memory size of each batch that [`ExternalSorter`] spills, and of
+/// each batch its merge of spill files outputs.
+///
+/// The merge starts with `sort_spill_reservation_bytes` of headroom. It needs at least two
+/// spill files, and reserves [`get_reserved_bytes_for_record_batch_size`] (twice the
+/// largest batch) per file and read-ahead slot, with read-ahead reduced down to one slot
+/// under pressure. So the minimum merge reserves four times the largest batch, and a
+/// quarter of the headroom is the largest batch that still fits it.
+///
+/// The bound is at least [`MIN_SPILL_MAX_BATCH_BYTES`]: a smaller headroom cannot seat
+/// the merge anyway (it then takes memory from the pool), and a bound of a few bytes
+/// would write, read and merge one-row batches. It is `None`, no bound, when
+/// `sort_spill_reservation_bytes` is 0.
+fn spill_max_batch_bytes(sort_spill_reservation_bytes: usize) -> Option<usize> {
+    const MIN_MERGE_BATCHES: usize = 4;
+    (sort_spill_reservation_bytes > 0).then(|| {
+        (sort_spill_reservation_bytes / MIN_MERGE_BATCHES).max(MIN_SPILL_MAX_BATCH_BYTES)
+    })
+}
+
+/// The smallest bound [`spill_max_batch_bytes`] returns.
+const MIN_SPILL_MAX_BATCH_BYTES: usize = 1024 * 1024;
 
 /// Estimate how much memory is needed to sort a `RecordBatch`.
 ///
@@ -2412,6 +2436,16 @@ mod tests {
             let array_ref: ArrayRef = Arc::new(array);
             RecordBatch::try_new(schema, vec![array_ref]).unwrap()
         }
+    }
+
+    #[test]
+    fn test_spill_max_batch_bytes_fits_minimum_merge() {
+        assert_eq!(spill_max_batch_bytes(0), None);
+        assert_eq!(spill_max_batch_bytes(3), Some(MIN_SPILL_MAX_BATCH_BYTES));
+        let headroom = 10 * 1024 * 1024;
+        let bound = spill_max_batch_bytes(headroom).unwrap();
+        // Two spill files, one read-ahead slot each, reserved at twice the batch size.
+        assert!(2 * get_reserved_bytes_for_record_batch_size(bound, bound) <= headroom);
     }
 
     #[tokio::test]
