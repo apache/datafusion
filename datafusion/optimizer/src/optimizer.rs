@@ -52,6 +52,7 @@ use crate::eliminate_group_by_constant::EliminateGroupByConstant;
 use crate::eliminate_join::EliminateJoin;
 use crate::eliminate_limit::EliminateLimit;
 use crate::eliminate_outer_join::EliminateOuterJoin;
+use crate::evaluation_sites::EvaluationSites;
 use crate::extract_equijoin_predicate::ExtractEquijoinPredicate;
 use crate::extract_leaf_expressions::{ExtractLeafExpressions, PushDownLeafProjections};
 use crate::filter_null_join_keys::FilterNullJoinKeys;
@@ -611,6 +612,10 @@ impl Optimizer {
         plan.check_invariants(InvariantLevel::Executable)
             .map_err(|e| e.context("Invalid input plan before LP Optimizers"))?;
 
+        // The evaluation sites of the plan the optimizer was given. Empty, and
+        // free, while the check is off. See `EvaluationSites`.
+        let starting_evaluation_sites = EvaluationSites::of(&plan);
+
         let start_time = Instant::now();
         let options = config.options();
         let mut new_plan = plan;
@@ -757,6 +762,15 @@ impl Optimizer {
         assert_valid_optimization(&new_plan, &starting_schema).map_err(|e| {
             e.context("Check optimizer-specific invariants after all passes")
         })?;
+
+        // verify invariant: the optimized plan must not evaluate a volatile
+        // expression at more sites than the input plan does. Checked one time,
+        // over the whole run, because rules cooperate. See `EvaluationSites`.
+        starting_evaluation_sites
+            .check_no_new_evaluations(&new_plan)
+            .map_err(|e| {
+                e.context("Check optimizer-specific invariants after all passes")
+            })?;
 
         // verify LP is valid, after the last optimizer pass.
         new_plan
