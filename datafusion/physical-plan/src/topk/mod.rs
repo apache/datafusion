@@ -609,6 +609,18 @@ impl TopK {
 
         let mut prev_sort_expr: Option<Arc<dyn PhysicalExpr>> = None;
         for (sort_expr, value) in sort_exprs.iter().zip(thresholds.iter()) {
+            // Comparisons on nested types (List, Struct, ...) order NULL elements
+            // with fixed default options rather than the sort's `nulls_first`, so
+            // `col < threshold` could drop rows that belong in the TopK. Stop at
+            // the first nested key: keep rows whose earlier keys equal the
+            // threshold and do not filter on this or any later key.
+            if value.data_type().is_nested() {
+                if let Some(prev) = prev_sort_expr.take() {
+                    filters.push(prev);
+                }
+                break;
+            }
+
             // Create the appropriate operator based on sort order
             let op = if sort_expr.options.descending {
                 // For descending sort, we want col > threshold (exclude smaller values)
