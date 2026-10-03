@@ -202,6 +202,11 @@ name = "range_repartition"
 
 [[bench]]
 harness = false
+name = "hash_join_selection"
+required-features = ["test_utils"]
+
+[[bench]]
+harness = false
 name = "unnest"
 
 [[bench]]
