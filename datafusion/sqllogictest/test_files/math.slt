@@ -88,6 +88,11 @@ SELECT round(125.2345, -3), round(125.2345, -2), round(125.2345, -1), round(125.
 ----
 0 100 130 125 125 125.2 125.23 125.235
 
+query RR
+SELECT 1.0 / trunc(column1), 1.0 / trunc(column1, 0) FROM (VALUES (CAST(-0.0 AS DOUBLE)));
+----
+-Infinity -Infinity
+
 # Round signed and unsigned integer scalar widths
 query IIIIIIII
 SELECT
