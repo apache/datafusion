@@ -164,6 +164,16 @@ pub trait Dialect: Send + Sync {
         BinaryOperator::Divide
     }
 
+    /// Whether the dialect's parser accepts DuckDB-style dictionary syntax
+    /// (`{'a': 1, 'b': 2}`) for struct literals.
+    ///
+    /// When false, `named_struct` is unparsed as a `named_struct(...)`
+    /// function call instead of a dictionary literal, so the emitted SQL can
+    /// be parsed back under the same dialect.
+    fn supports_dictionary_syntax(&self) -> bool {
+        true
+    }
+
     /// Allows the dialect to override scalar function unparsing if the dialect has specific rules.
     /// Returns None if the default unparsing should be used, or Some(ast::Expr) if there is
     /// a custom implementation for the function.
@@ -372,6 +382,10 @@ impl Dialect for PostgreSqlDialect {
         true
     }
 
+    fn supports_dictionary_syntax(&self) -> bool {
+        false
+    }
+
     fn supports_qualify(&self) -> bool {
         false
     }
@@ -562,6 +576,10 @@ impl Dialect for MySqlDialect {
         false
     }
 
+    fn supports_dictionary_syntax(&self) -> bool {
+        false
+    }
+
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
         Some('`')
     }
@@ -631,6 +649,10 @@ impl Dialect for SqliteDialect {
         false
     }
 
+    fn supports_dictionary_syntax(&self) -> bool {
+        false
+    }
+
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
         Some('`')
     }
@@ -689,6 +711,10 @@ pub struct BigQueryDialect {}
 impl Dialect for BigQueryDialect {
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
         Some('`')
+    }
+
+    fn supports_dictionary_syntax(&self) -> bool {
+        false
     }
 
     fn col_alias_overrides(&self, alias: &str) -> Result<Option<String>> {
@@ -827,6 +853,7 @@ impl Dialect for SnowflakeDialect {
 pub struct CustomDialect {
     identifier_quote_style: Option<char>,
     supports_nulls_first_in_sort: bool,
+    supports_dictionary_syntax: bool,
     use_timestamp_for_date64: bool,
     interval_style: IntervalStyle,
     float64_ast_dtype: ast::DataType,
@@ -854,6 +881,7 @@ impl Default for CustomDialect {
         Self {
             identifier_quote_style: None,
             supports_nulls_first_in_sort: true,
+            supports_dictionary_syntax: true,
             use_timestamp_for_date64: false,
             interval_style: IntervalStyle::SQLStandard,
             float64_ast_dtype: ast::DataType::Double(ast::ExactNumberInfo::None),
@@ -888,6 +916,10 @@ impl Dialect for CustomDialect {
 
     fn supports_nulls_first_in_sort(&self) -> bool {
         self.supports_nulls_first_in_sort
+    }
+
+    fn supports_dictionary_syntax(&self) -> bool {
+        self.supports_dictionary_syntax
     }
 
     fn use_timestamp_for_date64(&self) -> bool {
@@ -1014,6 +1046,7 @@ impl Dialect for CustomDialect {
 pub struct CustomDialectBuilder {
     identifier_quote_style: Option<char>,
     supports_nulls_first_in_sort: bool,
+    supports_dictionary_syntax: bool,
     use_timestamp_for_date64: bool,
     interval_style: IntervalStyle,
     float64_ast_dtype: ast::DataType,
@@ -1047,6 +1080,7 @@ impl CustomDialectBuilder {
         Self {
             identifier_quote_style: None,
             supports_nulls_first_in_sort: true,
+            supports_dictionary_syntax: true,
             use_timestamp_for_date64: false,
             interval_style: IntervalStyle::PostgresVerbose,
             float64_ast_dtype: ast::DataType::Double(ast::ExactNumberInfo::None),
@@ -1077,6 +1111,7 @@ impl CustomDialectBuilder {
         CustomDialect {
             identifier_quote_style: self.identifier_quote_style,
             supports_nulls_first_in_sort: self.supports_nulls_first_in_sort,
+            supports_dictionary_syntax: self.supports_dictionary_syntax,
             use_timestamp_for_date64: self.use_timestamp_for_date64,
             interval_style: self.interval_style,
             float64_ast_dtype: self.float64_ast_dtype,
@@ -1113,6 +1148,15 @@ impl CustomDialectBuilder {
         supports_nulls_first_in_sort: bool,
     ) -> Self {
         self.supports_nulls_first_in_sort = supports_nulls_first_in_sort;
+        self
+    }
+
+    /// Customize whether the dialect supports dictionary syntax for struct literals
+    pub fn with_supports_dictionary_syntax(
+        mut self,
+        supports_dictionary_syntax: bool,
+    ) -> Self {
+        self.supports_dictionary_syntax = supports_dictionary_syntax;
         self
     }
 
