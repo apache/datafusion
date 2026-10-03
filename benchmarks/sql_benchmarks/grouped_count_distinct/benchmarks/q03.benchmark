@@ -1,0 +1,25 @@
+name Q03
+group grouped_count_distinct
+
+load sql_benchmarks/grouped_count_distinct/init/load.sql
+
+assert I
+WITH actual AS (
+  SELECT few_g AS g, count(DISTINCT x) AS n FROM grouped_distinct GROUP BY few_g
+), expected AS (
+  SELECT g, count(x) AS n
+  FROM (SELECT DISTINCT few_g AS g, x AS x FROM grouped_distinct)
+  GROUP BY g
+)
+SELECT NOT EXISTS (SELECT * FROM actual EXCEPT SELECT * FROM expected)
+   AND NOT EXISTS (SELECT * FROM expected EXCEPT SELECT * FROM actual);
+----
+true
+
+expect_plan AggregateExec
+
+run
+-- Int64, eight groups, high distinct cardinality.
+SELECT few_g, count(DISTINCT x) FROM grouped_distinct GROUP BY few_g;
+
+cleanup sql_benchmarks/grouped_count_distinct/init/cleanup.sql

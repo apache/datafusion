@@ -1,0 +1,176 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Grouped integer DISTINCT counts should keep their specialized accumulator.
+# String and floating-point keys still use the two-phase rewrite.
+
+statement ok
+CREATE TABLE numeric_counts(g INT, x INT, s VARCHAR, f DOUBLE);
+
+statement ok
+INSERT INTO numeric_counts VALUES
+  (1, 1, '1', 1.0),
+  (1, 1, '1', 1.0),
+  (1, 2, '2', 2.0),
+  (1, NULL, NULL, NULL),
+  (2, NULL, NULL, NULL),
+  (3, 3, '3', 3.0);
+
+statement ok
+SET datafusion.explain.logical_plan_only = true;
+
+query TT
+EXPLAIN SELECT g, count(DISTINCT x) FROM numeric_counts GROUP BY g;
+----
+logical_plan
+01)Aggregate: groupBy=[[numeric_counts.g]], aggr=[[count(DISTINCT numeric_counts.x)]]
+02)--TableScan: numeric_counts projection=[g, x]
+
+query TT
+EXPLAIN SELECT g, count(DISTINCT s) FROM numeric_counts GROUP BY g;
+----
+logical_plan
+01)Projection: numeric_counts.g, count(alias1) AS count(DISTINCT numeric_counts.s)
+02)--Aggregate: groupBy=[[numeric_counts.g]], aggr=[[count(alias1)]]
+03)----Aggregate: groupBy=[[numeric_counts.g, numeric_counts.s AS alias1]], aggr=[[]]
+04)------TableScan: numeric_counts projection=[g, s]
+
+query TT
+EXPLAIN SELECT g, count(DISTINCT f) FROM numeric_counts GROUP BY g;
+----
+logical_plan
+01)Projection: numeric_counts.g, count(alias1) AS count(DISTINCT numeric_counts.f)
+02)--Aggregate: groupBy=[[numeric_counts.g]], aggr=[[count(alias1)]]
+03)----Aggregate: groupBy=[[numeric_counts.g, numeric_counts.f AS alias1]], aggr=[[]]
+04)------TableScan: numeric_counts projection=[g, f]
+
+# The global aggregate does not use a GroupsAccumulator.
+query TT
+EXPLAIN SELECT count(DISTINCT x) FROM numeric_counts;
+----
+logical_plan
+01)Projection: count(alias1) AS count(DISTINCT numeric_counts.x)
+02)--Aggregate: groupBy=[[]], aggr=[[count(alias1)]]
+03)----Aggregate: groupBy=[[numeric_counts.x AS alias1]], aggr=[[]]
+04)------TableScan: numeric_counts projection=[x]
+
+statement ok
+SET datafusion.explain.logical_plan_only = false;
+
+# Specialized accumulator for Int8; duplicate and all-NULL groups.
+query II rowsort
+SELECT g, count(DISTINCT arrow_cast(x, 'Int8')) FROM numeric_counts GROUP BY g;
+----
+1 2
+2 0
+3 1
+
+# Specialized accumulator for Int16; duplicate and all-NULL groups.
+query II rowsort
+SELECT g, count(DISTINCT arrow_cast(x, 'Int16')) FROM numeric_counts GROUP BY g;
+----
+1 2
+2 0
+3 1
+
+# Specialized accumulator for Int32; duplicate and all-NULL groups.
+query II rowsort
+SELECT g, count(DISTINCT arrow_cast(x, 'Int32')) FROM numeric_counts GROUP BY g;
+----
+1 2
+2 0
+3 1
+
+# Specialized accumulator for Int64; duplicate and all-NULL groups.
+query II rowsort
+SELECT g, count(DISTINCT arrow_cast(x, 'Int64')) FROM numeric_counts GROUP BY g;
+----
+1 2
+2 0
+3 1
+
+# Specialized accumulator for UInt8; duplicate and all-NULL groups.
+query II rowsort
+SELECT g, count(DISTINCT arrow_cast(x, 'UInt8')) FROM numeric_counts GROUP BY g;
+----
+1 2
+2 0
+3 1
+
+# Specialized accumulator for UInt16; duplicate and all-NULL groups.
+query II rowsort
+SELECT g, count(DISTINCT arrow_cast(x, 'UInt16')) FROM numeric_counts GROUP BY g;
+----
+1 2
+2 0
+3 1
+
+# Specialized accumulator for UInt32; duplicate and all-NULL groups.
+query II rowsort
+SELECT g, count(DISTINCT arrow_cast(x, 'UInt32')) FROM numeric_counts GROUP BY g;
+----
+1 2
+2 0
+3 1
+
+# Specialized accumulator for UInt64; duplicate and all-NULL groups.
+query II rowsort
+SELECT g, count(DISTINCT arrow_cast(x, 'UInt64')) FROM numeric_counts GROUP BY g;
+----
+1 2
+2 0
+3 1
+
+query III rowsort
+SELECT g, count(DISTINCT x), count(DISTINCT x) AS again FROM numeric_counts GROUP BY g;
+----
+1 2 2
+2 0 0
+3 1 1
+
+query II rowsort
+SELECT g + 1, count(DISTINCT x) FROM numeric_counts GROUP BY g + 1;
+----
+2 2
+3 0
+4 1
+
+query IIII rowsort
+SELECT g, count(DISTINCT x), sum(x), count(*) FROM numeric_counts GROUP BY g;
+----
+1 2 4 4
+2 0 NULL 1
+3 1 3 1
+
+query III rowsort
+SELECT g, count(DISTINCT s), count(DISTINCT f) FROM numeric_counts GROUP BY g;
+----
+1 2 2
+2 0 0
+3 1 1
+
+query I
+SELECT count(DISTINCT x) FROM numeric_counts WHERE g = 42;
+----
+0
+
+query II
+SELECT g, count(DISTINCT x) FROM numeric_counts WHERE g = 42 GROUP BY g;
+----
+
+statement ok
+DROP TABLE numeric_counts;
