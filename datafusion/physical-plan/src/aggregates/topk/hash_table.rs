@@ -30,15 +30,11 @@ use datafusion_common::Result;
 use datafusion_common::exec_datafusion_err;
 use datafusion_common::hash_utils::RandomState;
 use half::f16;
-use hashbrown::hash_table::HashTable;
+use hashbrown::hash_table::{Entry, HashTable};
+use std::borrow::BorrowMut;
 use std::fmt::Debug;
 use std::hash::BuildHasher;
 use std::sync::Arc;
-
-/// A "type alias" for Keys which are stored in our map
-pub trait KeyType: Clone + Comparable + Debug {}
-
-impl<T> KeyType for T where T: Clone + Comparable + Debug {}
 
 /// `heap_idx` assigned to groups whose aggregate values are all NULL. Such
 /// groups are tracked in the hash table only (they never enter the heap), so
@@ -49,9 +45,9 @@ const NULL_HEAP_IDX: usize = usize::MAX;
 /// 1. memoizes the hash
 /// 2. contains the key (ID)
 /// 3. contains the value (heap_idx - an index into the corresponding heap)
-pub struct HashTableItem<ID: KeyType> {
+pub struct HashTableItem<ID> {
     hash: u64,
-    pub id: ID,
+    pub id: Option<ID>,
     pub heap_idx: usize,
 }
 
@@ -59,12 +55,14 @@ pub struct HashTableItem<ID: KeyType> {
 /// 1. limits the number of entries to the top K
 /// 2. Allocates a capacity greater than top K to maintain a low-fill factor and prevent resizing
 /// 3. Tracks indexes to allow corresponding heap to refer to entries by index vs hash
-struct TopKHashTable<ID: KeyType> {
+struct TopKHashTable<ID> {
     map: HashTable<usize>,
     // Store the actual items separately to allow for index-based access
-    store: Vec<Option<HashTableItem<ID>>>,
+    store: Vec<HashTableItem<ID>>,
     // Free indexes in the store for reuse
     free_indices: Vec<usize>,
+    // Pool of reusable value locations, usually Strings
+    free_slots: Vec<ID>,
     // The maximum number of entries allowed
     limit: usize,
     // Number of entries registered as all-NULL (heap_idx == NULL_HEAP_IDX)
@@ -126,7 +124,7 @@ where
     for<'a> &'a S: StringArrayType<'a>,
 {
     owned: S,
-    map: TopKHashTable<Option<String>>,
+    map: TopKHashTable<String>,
     rnd: RandomState,
 }
 
@@ -136,8 +134,9 @@ where
     Option<<VAL as ArrowPrimitiveType>::Native>: Comparable,
 {
     owned: PrimitiveArray<VAL>,
-    map: TopKHashTable<Option<VAL::Native>>,
+    map: TopKHashTable<VAL::Native>,
     rnd: RandomState,
+    value_type: DataType,
 }
 
 impl<S> StringHashTable<S>
@@ -146,9 +145,8 @@ where
     for<'a> &'a S: StringArrayType<'a>,
 {
     pub fn new(limit: usize) -> Self {
-        let owned = S::from(Vec::new());
         Self {
-            owned,
+            owned: S::from(Vec::new()),
             map: TopKHashTable::new(limit, limit * 10),
             rnd: RandomState::default(),
         }
@@ -200,19 +198,14 @@ where
         let hash = self.rnd.hash_one(id);
 
         // Use entry API to avoid double lookup
-        self.map.find_or_insert(
-            hash,
-            id.map(ToOwned::to_owned),
-            replace_idx,
-            Self::eq_fn(id),
-        )
+        self.map
+            .find_or_insert(hash, id, replace_idx, Self::eq_fn(id))
     }
 
     fn insert_null(&mut self, row_idx: usize) -> bool {
         let id = some_value(&self.owned, row_idx);
         let hash = self.rnd.hash_one(id);
-        self.map
-            .insert_null(hash, id.map(ToOwned::to_owned), Self::eq_fn(id))
+        self.map.insert_null(hash, id, Self::eq_fn(id))
     }
 
     fn remove_if_null(&mut self, row_idx: usize) -> bool {
@@ -230,14 +223,12 @@ impl<VAL: ArrowPrimitiveType> PrimitiveHashTable<VAL>
 where
     Option<<VAL as ArrowPrimitiveType>::Native>: Comparable + HashValue,
 {
-    pub fn new(limit: usize, kt: DataType) -> Self {
-        let owned = PrimitiveArray::<VAL>::builder(0)
-            .with_data_type(kt)
-            .finish();
+    pub fn new(limit: usize, value_type: DataType) -> Self {
         Self {
-            owned,
+            owned: PrimitiveArray::<VAL>::new_null(0).with_data_type(value_type.clone()),
             map: TopKHashTable::new(limit, limit * 10),
             rnd: RandomState::default(),
+            value_type,
         }
     }
 
@@ -277,13 +268,10 @@ where
 
     fn take_all(&mut self, indexes: Vec<usize>) -> ArrayRef {
         let ids = self.map.take_all(indexes);
-        let mut builder: PrimitiveBuilder<VAL> = PrimitiveArray::builder(ids.len())
-            .with_data_type(self.owned.data_type().clone());
+        let mut builder: PrimitiveBuilder<VAL> =
+            PrimitiveArray::builder(ids.len()).with_data_type(self.value_type.clone());
         for id in ids.into_iter() {
-            match id {
-                None => builder.append_null(),
-                Some(id) => builder.append_value(id),
-            }
+            builder.append_option(id);
         }
         let ids = builder.finish();
         Arc::new(ids)
@@ -297,12 +285,12 @@ where
         let (id, hash) = self.id_and_hash(row_idx);
         // Use entry API to avoid double lookup
         self.map
-            .find_or_insert(hash, id, replace_idx, Self::eq_fn(id))
+            .find_or_insert(hash, id.as_ref(), replace_idx, Self::eq_fn(id))
     }
 
     fn insert_null(&mut self, row_idx: usize) -> bool {
         let (id, hash) = self.id_and_hash(row_idx);
-        self.map.insert_null(hash, id, Self::eq_fn(id))
+        self.map.insert_null(hash, id.as_ref(), Self::eq_fn(id))
     }
 
     fn remove_if_null(&mut self, row_idx: usize) -> bool {
@@ -315,34 +303,39 @@ where
     }
 }
 
-use hashbrown::hash_table::Entry;
-impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
+impl<ID: PartialEq> TopKHashTable<ID> {
     pub fn new(limit: usize, capacity: usize) -> Self {
         Self {
             map: HashTable::with_capacity(capacity),
             store: Vec::with_capacity(capacity),
             free_indices: Vec::new(),
+            free_slots: Vec::new(),
             limit,
             null_count: 0,
         }
     }
 
     pub fn heap_idx_at(&self, map_idx: usize) -> usize {
-        self.store[map_idx].as_ref().unwrap().heap_idx
+        self.store[map_idx].heap_idx
     }
 
     /// Remove the entry stored at `map_idx`, freeing its store slot for reuse
     fn remove_at(&mut self, map_idx: usize) {
-        let item_to_remove = self.store[map_idx].as_ref().unwrap();
+        let item_to_remove = &self.store[map_idx];
         let hash = item_to_remove.hash;
         let id_to_remove = &item_to_remove.id;
 
-        let eq = |&idx: &usize| self.store[idx].as_ref().unwrap().id == *id_to_remove;
-        let hasher = |idx: &usize| self.store[*idx].as_ref().unwrap().hash;
+        let eq = |&idx: &usize| self.store[idx].id == *id_to_remove;
+        let hasher = |idx: &usize| self.store[*idx].hash;
         match self.map.entry(hash, eq, hasher) {
             Entry::Occupied(entry) => {
                 let (removed_idx, _) = entry.remove();
-                self.store[removed_idx] = None;
+                match self.store[removed_idx].id.take() {
+                    Some(slot) if Self::use_free_slots() => {
+                        self.free_slots.push(slot);
+                    }
+                    _ => (),
+                }
                 self.free_indices.push(removed_idx);
             }
             Entry::Vacant(_) => unreachable!(),
@@ -363,57 +356,48 @@ impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
 
     fn update_heap_idx(&mut self, mapper: &[(usize, usize)]) {
         for (m, h) in mapper {
-            self.store[*m].as_mut().unwrap().heap_idx = *h;
+            self.store[*m].heap_idx = *h;
         }
+    }
+
+    /// Used to avoid pushing pointless copies of primitives to the `free_slots` pool.
+    const fn use_free_slots() -> bool {
+        std::mem::needs_drop::<ID>()
     }
 
     /// Find an existing entry or insert a new one, avoiding double hash table lookup.
     /// Returns (map_idx, kind) where kind describes whether the group already
     /// existed, was newly inserted, or was converted from an all-NULL group.
     /// If inserting a new entry and the table is full, replaces the entry at replace_idx.
-    pub fn find_or_insert(
+    pub fn find_or_insert<Q>(
         &mut self,
         hash: u64,
-        id: ID,
+        id: Option<&Q>,
         replace_idx: usize,
-        mut eq: impl FnMut(&ID) -> bool,
-    ) -> (usize, InsertKind) {
+        mut eq: impl FnMut(&Option<ID>) -> bool,
+    ) -> (usize, InsertKind)
+    where
+        Q: ToOwned<Owned = ID> + ?Sized,
+    {
         // Check if entry exists - this is the only hash table lookup
         let mut replaced_null = false;
-        {
-            let eq_fn = |idx: &usize| eq(&self.store[*idx].as_ref().unwrap().id);
-            if let Some(&map_idx) = self.map.find(hash, eq_fn) {
-                if self.store[map_idx].as_ref().unwrap().heap_idx == NULL_HEAP_IDX {
-                    // This group was registered as all-NULL but now produced a
-                    // value: unregister it so it is inserted as a valued group
-                    self.remove_at(map_idx);
-                    self.null_count -= 1;
-                    replaced_null = true;
-                } else {
-                    return (map_idx, InsertKind::Existing);
-                }
+
+        let eq_fn = |idx: &usize| eq(&self.store[*idx].id);
+        if let Some(&map_idx) = self.map.find(hash, eq_fn) {
+            if self.store[map_idx].is_null() {
+                // This group was registered as all-NULL but now produced a
+                // value: unregister it so it is inserted as a valued group
+                self.remove_at(map_idx);
+                self.null_count -= 1;
+                replaced_null = true;
+            } else {
+                return (map_idx, InsertKind::Existing);
             }
         }
 
         // Entry doesn't exist - compute heap_idx and prepare item
         let heap_idx = self.remove_if_full(replace_idx);
-        let mi = HashTableItem::new(hash, id, heap_idx);
-        let store_idx = if let Some(idx) = self.free_indices.pop() {
-            self.store[idx] = Some(mi);
-            idx
-        } else {
-            self.store.push(Some(mi));
-            self.store.len() - 1
-        };
-
-        // Reserve space if needed
-        let hasher = |idx: &usize| self.store[*idx].as_ref().unwrap().hash;
-        if self.map.len() == self.map.capacity() {
-            self.map.reserve(self.limit, hasher);
-        }
-
-        // Insert without checking again since we already confirmed it doesn't exist
-        self.map.insert_unique(hash, store_idx, hasher);
+        let store_idx = self.push_store_item(hash, id, heap_idx);
         let kind = if replaced_null {
             InsertKind::ReplacedNull
         } else {
@@ -422,18 +406,59 @@ impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
         (store_idx, kind)
     }
 
+    fn push_store_item<Q>(&mut self, hash: u64, id: Option<&Q>, heap_idx: usize) -> usize
+    where
+        Q: ToOwned<Owned = ID> + ?Sized,
+    {
+        let id = if Self::use_free_slots() {
+            id.map(|id| match self.free_slots.pop() {
+                Some(mut slot) => {
+                    id.clone_into(&mut slot);
+                    slot
+                }
+                _ => id.to_owned(),
+            })
+        } else {
+            debug_assert!(self.free_slots.is_empty(), "primitives should not pool");
+            id.map(ToOwned::to_owned)
+        };
+        let mi = HashTableItem::new(hash, id, heap_idx);
+        let store_idx = if let Some(idx) = self.free_indices.pop() {
+            debug_assert!(self.store[idx].id.is_none(), "slot should be empty");
+            self.store[idx] = mi;
+            idx
+        } else {
+            self.store.push(mi);
+            self.store.len() - 1
+        };
+
+        // Reserve space if needed
+        let hasher = |idx: &usize| self.store[*idx].hash;
+        if self.map.len() == self.map.capacity() {
+            self.map.reserve(self.limit, hasher);
+        }
+
+        // Insert without checking again since we already confirmed it doesn't exist
+        self.map.insert_unique(hash, store_idx, hasher);
+        store_idx
+    }
+
     /// Register a group whose aggregate values are all NULL, unless it is
     /// already tracked. NULL groups are stored with a sentinel `heap_idx` and
     /// never enter the heap. At most `limit` NULL groups are tracked: they all
     /// tie on the sort key, so any `limit` of them is a valid top-k superset.
     /// Returns true if the group was newly registered.
-    pub fn insert_null(
+    pub fn insert_null<Q>(
         &mut self,
         hash: u64,
-        id: ID,
-        mut eq: impl FnMut(&ID) -> bool,
-    ) -> bool {
-        let eq_fn = |idx: &usize| eq(&self.store[*idx].as_ref().unwrap().id);
+        id: Option<&Q>,
+        mut eq: impl FnMut(&Option<ID>) -> bool,
+    ) -> bool
+    where
+        Q: ToOwned<Owned = ID> + ?Sized,
+        ID: BorrowMut<Q::Owned>,
+    {
+        let eq_fn = |idx: &usize| eq(&self.store[*idx].id);
         if self.map.find(hash, eq_fn).is_some() {
             return false;
         }
@@ -442,20 +467,7 @@ impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
             return false;
         }
 
-        let mi = HashTableItem::new(hash, id, NULL_HEAP_IDX);
-        let store_idx = if let Some(idx) = self.free_indices.pop() {
-            self.store[idx] = Some(mi);
-            idx
-        } else {
-            self.store.push(Some(mi));
-            self.store.len() - 1
-        };
-
-        let hasher = |idx: &usize| self.store[*idx].as_ref().unwrap().hash;
-        if self.map.len() == self.map.capacity() {
-            self.map.reserve(self.limit, hasher);
-        }
-        self.map.insert_unique(hash, store_idx, hasher);
+        _ = self.push_store_item(hash, id, NULL_HEAP_IDX);
         self.null_count += 1;
         true
     }
@@ -464,10 +476,14 @@ impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
     /// all-NULL group produces a value that loses to the current top-k: the
     /// group can no longer reach the top-k, but it must not be emitted with a
     /// NULL value either. Returns true if a NULL registration was removed.
-    pub fn remove_if_null(&mut self, hash: u64, mut eq: impl FnMut(&ID) -> bool) -> bool {
-        let eq_fn = |idx: &usize| eq(&self.store[*idx].as_ref().unwrap().id);
+    pub fn remove_if_null(
+        &mut self,
+        hash: u64,
+        mut eq: impl FnMut(&Option<ID>) -> bool,
+    ) -> bool {
+        let eq_fn = |idx: &usize| eq(&self.store[*idx].id);
         if let Some(&map_idx) = self.map.find(hash, eq_fn)
-            && self.store[map_idx].as_ref().unwrap().heap_idx == NULL_HEAP_IDX
+            && self.store[map_idx].is_null()
         {
             self.remove_at(map_idx);
             self.null_count -= 1;
@@ -482,9 +498,7 @@ impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
             .iter()
             .enumerate()
             .filter_map(|(idx, item)| {
-                item.as_ref()
-                    .filter(|item| item.heap_idx == NULL_HEAP_IDX)
-                    .map(|_| idx)
+                (item.id.is_some() && item.is_null()).then_some(idx)
             })
             .collect()
     }
@@ -493,10 +507,10 @@ impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
         self.map.len()
     }
 
-    pub fn take_all(&mut self, idxs: Vec<usize>) -> Vec<ID> {
+    pub fn take_all(&mut self, idxs: Vec<usize>) -> Vec<Option<ID>> {
         let ids = idxs
             .into_iter()
-            .map(|idx| self.store[idx].take().unwrap().id)
+            .map(|idx| self.store[idx].id.take())
             .collect();
         self.map.clear();
         self.store.clear();
@@ -506,9 +520,14 @@ impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
     }
 }
 
-impl<ID: KeyType> HashTableItem<ID> {
-    pub fn new(hash: u64, id: ID, heap_idx: usize) -> Self {
+impl<ID> HashTableItem<ID> {
+    pub fn new(hash: u64, id: Option<ID>, heap_idx: usize) -> Self {
         Self { hash, id, heap_idx }
+    }
+
+    #[inline]
+    pub fn is_null(&self) -> bool {
+        self.heap_idx == NULL_HEAP_IDX
     }
 }
 
@@ -603,14 +622,14 @@ mod tests {
     fn should_resize_properly() -> Result<()> {
         let mut heap_to_map = BTreeMap::<usize, usize>::new();
         // Create TopKHashTable with limit=5 and capacity=3 to force resizing
-        let mut map = TopKHashTable::<Option<String>>::new(5, 3);
+        let mut map = TopKHashTable::<String>::new(5, 3);
 
         // Insert 5 entries, tracking the heap-to-map index mapping
         for (heap_idx, id) in ["1", "2", "3", "4", "5"].iter().enumerate() {
             let value = Some(id.to_string());
             let hash = heap_idx as u64;
             let (map_idx, kind) =
-                map.find_or_insert(hash, value.clone(), heap_idx, |v| *v == value);
+                map.find_or_insert(hash, value.as_ref(), heap_idx, |v| *v == value);
             assert_eq!(kind, InsertKind::New, "Entry should be new");
             heap_to_map.insert(heap_idx, map_idx);
         }
@@ -636,23 +655,23 @@ mod tests {
 
     #[test]
     fn should_track_null_groups() -> Result<()> {
-        let mut map = TopKHashTable::<Option<String>>::new(2, 10);
+        let mut map = TopKHashTable::<String>::new(2, 10);
 
         let a = Some("a".to_string());
         let b = Some("b".to_string());
         let c = Some("c".to_string());
 
         // register two all-NULL groups; the third exceeds the NULL group limit
-        assert!(map.insert_null(100, a.clone(), |v| *v == a));
-        assert!(map.insert_null(200, b.clone(), |v| *v == b));
-        assert!(!map.insert_null(300, c.clone(), |v| *v == c));
+        assert!(map.insert_null(100, a.as_ref(), |v| *v == a));
+        assert!(map.insert_null(200, b.as_ref(), |v| *v == b));
+        assert!(!map.insert_null(300, c.as_ref(), |v| *v == c));
         // re-registering an existing NULL group is a no-op
-        assert!(!map.insert_null(100, a.clone(), |v| *v == a));
+        assert!(!map.insert_null(100, a.as_ref(), |v| *v == a));
         assert_eq!(map.null_count, 2);
         assert_eq!(map.null_map_idxs(), vec![0, 1]);
 
         // a valued insert for a NULL group converts it to a valued group
-        let (map_idx, kind) = map.find_or_insert(200, b.clone(), 0, |v| *v == b);
+        let (map_idx, kind) = map.find_or_insert(200, b.as_ref(), 0, |v| *v == b);
         assert_eq!(kind, InsertKind::ReplacedNull, "NULL group should convert");
         assert_eq!(map.heap_idx_at(map_idx), 0, "Heap should append at 0");
         assert_eq!(map.null_count, 1);
@@ -672,24 +691,24 @@ mod tests {
 
     #[test]
     fn should_reuse_all_freed_store_slots() -> Result<()> {
-        let mut map = TopKHashTable::<Option<String>>::new(1, 10);
+        let mut map = TopKHashTable::<String>::new(1, 10);
 
         let a = Some("a".to_string());
         let b = Some("b".to_string());
         let c = Some("c".to_string());
 
-        let (b_idx, kind) = map.find_or_insert(100, b.clone(), 0, |v| *v == b);
+        let (b_idx, kind) = map.find_or_insert(100, b.as_ref(), 0, |v| *v == b);
         assert_eq!(kind, InsertKind::New);
-        assert!(map.insert_null(200, a.clone(), |v| *v == a));
+        assert!(map.insert_null(200, a.as_ref(), |v| *v == a));
 
         // Converting a NULL group while the valued heap is full frees two
         // slots: the NULL registration and the evicted valued group.
-        let (_, kind) = map.find_or_insert(200, a.clone(), b_idx, |v| *v == a);
+        let (_, kind) = map.find_or_insert(200, a.as_ref(), b_idx, |v| *v == a);
         assert_eq!(kind, InsertKind::ReplacedNull);
 
         // Both freed slots must remain reusable. Otherwise repeated
         // conversions make the backing store grow without bound.
-        assert!(map.insert_null(300, c.clone(), |v| *v == c));
+        assert!(map.insert_null(300, c.as_ref(), |v| *v == c));
         assert_eq!(map.store.len(), 2);
 
         Ok(())
