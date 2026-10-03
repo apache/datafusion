@@ -40,7 +40,8 @@ use datafusion::physical_plan::aggregates::{
 };
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{
-    BinaryExpr, Column, DynamicFilterPhysicalExpr, PhysicalSortExpr, lit,
+    BinaryExpr, Column, DynamicFilterPhysicalExpr, OptionalFilterPhysicalExpr,
+    PhysicalSortExpr, lit,
 };
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
@@ -322,6 +323,68 @@ fn test_dynamic_filter_roundtrip_dedupe() -> Result<()> {
         &filter_expr_1_after_roundtrip,
         &filter_expr_2_after_roundtrip,
     )?;
+
+    Ok(())
+}
+
+// An `Optional` wrapper survives the roundtrip, and a dynamic filter inside it
+// is deduped with an unwrapped clone of the same dynamic filter.
+#[test]
+fn test_optional_dynamic_filter_roundtrip_dedupe() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let dynamic_filter = make_dynamic_filter();
+    let optional_filter =
+        Arc::new(OptionalFilterPhysicalExpr::new(Arc::clone(&dynamic_filter)))
+            as Arc<dyn PhysicalExpr>;
+
+    let (optional_after_roundtrip, dynamic_after_roundtrip) =
+        roundtrip_dynamic_filter_expr_pair(
+            Arc::clone(&optional_filter),
+            Arc::clone(&dynamic_filter),
+            schema,
+        )?;
+
+    assert_eq!(
+        optional_filter.to_string(),
+        optional_after_roundtrip.to_string()
+    );
+    let inner_after_roundtrip = optional_after_roundtrip
+        .downcast_ref::<OptionalFilterPhysicalExpr>()
+        .expect("Expected OptionalFilterPhysicalExpr")
+        .inner();
+    assert_dynamic_filters_equal(&dynamic_filter, inner_after_roundtrip);
+    assert_dynamic_filters_equal(&dynamic_filter, &dynamic_after_roundtrip);
+
+    // Assert referential integrity through the wrapper.
+    assert_dynamic_filter_update_is_visible(
+        inner_after_roundtrip,
+        &dynamic_after_roundtrip,
+    )?;
+
+    Ok(())
+}
+
+// An `Optional` wrapper around a static expression survives the roundtrip.
+#[test]
+fn test_optional_filter_roundtrip() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let expr = Arc::new(OptionalFilterPhysicalExpr::new(Arc::new(BinaryExpr::new(
+        Arc::new(Column::new("a", 0)),
+        Operator::Gt,
+        lit(5_i64),
+    )))) as Arc<dyn PhysicalExpr>;
+
+    let codec = DefaultPhysicalExtensionCodec {};
+    let converter = DefaultPhysicalProtoConverter {};
+    let proto = converter.physical_expr_to_proto(&expr, &codec)?;
+    let ctx = SessionContext::new();
+    let task_ctx = ctx.task_ctx();
+    let decode_ctx = PhysicalPlanDecodeContext::new(task_ctx.as_ref(), &codec);
+    let roundtrip = converter.proto_to_physical_expr(&proto, &schema, &decode_ctx)?;
+
+    assert!(roundtrip.is::<OptionalFilterPhysicalExpr>());
+    assert_eq!(&expr, &roundtrip);
+    assert_eq!(roundtrip.to_string(), "Optional(a@0 > 5)");
 
     Ok(())
 }

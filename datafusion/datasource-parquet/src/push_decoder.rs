@@ -55,6 +55,7 @@ use parquet::arrow::push_decoder::{
 };
 use parquet::file::metadata::ParquetMetaData;
 
+use datafusion_common::instant::Instant;
 use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_physical_expr::expressions::DynamicFilterTracking;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -64,9 +65,12 @@ use datafusion_pruning::{PruningPredicate, PruningPredicateBuilder};
 use crate::ParquetFileMetrics;
 use crate::decoder_projection::DecoderProjection;
 use crate::metrics::{ByteProgress, RowFilterSkippedFullyMatchedMetric};
+use crate::optional_filter::OptionalFilterSavings;
 use crate::row_filter::{
-    PrebuiltRowFilterCandidate, prebuild_row_filter_candidates, row_filter_from_prebuilt,
+    OptionalFilterRowFilterContext, PrebuiltRowFilterCandidate, candidate_order,
+    prebuild_row_filter_candidates, row_filter_in_order,
 };
+use crate::row_filter_cost::ChangeHysteresis;
 use crate::row_group_filter::RowGroupPruningStatistics;
 
 /// Shared options applied to the [`ParquetPushDecoderBuilder`] for a file
@@ -355,6 +359,27 @@ pub(crate) struct RowFilterContext {
     pub(crate) reorder_predicates: bool,
     pub(crate) file_metrics: ParquetFileMetrics,
     pub(crate) max_predicate_cache_size: Option<usize>,
+    /// Measures the decode time of the output batches for the gates of the
+    /// optional filters. `None` if the file has no gated optional filter.
+    pub(crate) optional_savings: Option<OptionalFilterSavings>,
+    /// See [`Self::start_reader`].
+    decode_measurement: DecodeMeasurement,
+    /// The evaluation order of the candidates in the installed `RowFilter`
+    /// (see [`Self::refresh_order`]).
+    order: Vec<usize>,
+    /// Hysteresis on the changes of `order`.
+    order_changes: ChangeHysteresis,
+}
+
+/// Which output batches measure the decode speed, see
+/// [`RowFilterContext::start_reader`].
+struct DecodeMeasurement {
+    /// Value of `pushdown_rows_pruned` when the decoder handed out the last
+    /// reader.
+    rows_pruned: usize,
+    /// True if the row filter removed no rows of the row group of the
+    /// current reader.
+    unfiltered: bool,
 }
 
 impl RowFilterContext {
@@ -368,24 +393,70 @@ impl RowFilterContext {
         reorder_predicates: bool,
         file_metrics: ParquetFileMetrics,
         max_predicate_cache_size: Option<usize>,
+        optional: Option<OptionalFilterRowFilterContext<'_>>,
     ) -> Option<Self> {
         match prebuild_row_filter_candidates(
             predicate,
             physical_file_schema,
             file_metadata.as_ref(),
+            optional,
         ) {
-            Ok(Some(prebuilt)) => Some(Self {
-                prebuilt: PrebuiltRowFilterCandidateList::new(prebuilt),
-                reorder_predicates,
-                file_metrics,
-                max_predicate_cache_size,
-            }),
+            Ok(Some(prebuilt)) => {
+                let optional_savings = optional.and_then(|optional| {
+                    OptionalFilterSavings::try_new(
+                        Arc::clone(&optional.options.decode_cost),
+                        file_metadata,
+                        optional.output_projection?,
+                        prebuilt
+                            .iter()
+                            .filter_map(|c| c.optional_saving().cloned())
+                            .collect(),
+                    )
+                });
+                let decode_measurement = DecodeMeasurement {
+                    rows_pruned: file_metrics.pushdown_rows_pruned.value(),
+                    unfiltered: true,
+                };
+                Some(Self {
+                    order: candidate_order(&prebuilt, reorder_predicates),
+                    prebuilt: PrebuiltRowFilterCandidateList::new(prebuilt),
+                    reorder_predicates,
+                    file_metrics,
+                    max_predicate_cache_size,
+                    optional_savings,
+                    decode_measurement,
+                    order_changes: ChangeHysteresis::default(),
+                })
+            }
             Ok(None) => None,
             Err(e) => {
                 debug!("Ignoring error prebuilding row filter candidates: {e}");
                 None
             }
         }
+    }
+
+    /// Call when the decoder hands out the reader of the next row group. The
+    /// decoder evaluated the row filter of the row group before: if the row
+    /// filter removed rows, the decode time of the output batches of the
+    /// reader is not measured. A row filter that removes rows spread over
+    /// the row group makes each decoded output row much more expensive
+    /// (the decoder decodes all pages and drops most rows), thus the
+    /// measured decode speed would be too slow, and the saving of a removed
+    /// row too large (see [`crate::optional_filter`]).
+    pub(crate) fn start_reader(&mut self) {
+        let rows_pruned = self.file_metrics.pushdown_rows_pruned.value();
+        let measurement = &mut self.decode_measurement;
+        measurement.unfiltered = rows_pruned == measurement.rows_pruned;
+        measurement.rows_pruned = rows_pruned;
+    }
+
+    /// The decode time of the output batches of the current reader for the
+    /// gates of the optional filters, or `None` if it is not measured.
+    pub(crate) fn measured_optional_savings(&self) -> Option<&OptionalFilterSavings> {
+        self.optional_savings
+            .as_ref()
+            .filter(|_| self.decode_measurement.unfiltered)
     }
 
     /// Whether any pushed-down predicate reads this Parquet leaf column.
@@ -397,17 +468,31 @@ impl RowFilterContext {
     }
 
     /// Build a fresh [`RowFilter`] for the next non-fully-matched run using
-    /// the cached candidates. Cheap: no tree walks, only counter allocation
-    /// and (optionally) a sort by `required_bytes`.
+    /// the cached candidates, in [`Self::refresh_order`] order. Cheap: no
+    /// tree walks, only counter allocation.
     ///
     /// Infallible by construction: [`Self::try_new`] only produces a context
     /// when the prebuilt candidate list is non-empty.
     pub(crate) fn build_row_filter(&self) -> RowFilter {
-        row_filter_from_prebuilt(
-            self.prebuilt.as_slice(),
-            self.reorder_predicates,
-            &self.file_metrics,
-        )
+        let candidates = self.prebuilt.as_slice();
+        let ordered = self.order.iter().map(|&index| &candidates[index]).collect();
+        row_filter_in_order(ordered, &self.file_metrics)
+    }
+
+    /// At a row group boundary, updates the evaluation order of the
+    /// candidates from their measurements (see [`candidate_order`]).
+    /// Returns true if it changed: then rebuild the `RowFilter`.
+    pub(crate) fn refresh_order(&mut self) -> bool {
+        if !self.order_changes.boundary() {
+            return false;
+        }
+        let order = candidate_order(self.prebuilt.as_slice(), self.reorder_predicates);
+        if order == self.order {
+            return false;
+        }
+        self.order = order;
+        self.order_changes.changed();
+        true
     }
 }
 
@@ -447,8 +532,20 @@ impl PushDecoderStreamState {
         loop {
             // Step 1: drain a batch from the active reader if any.
             if let Some(reader) = self.active_reader.as_mut() {
+                // The gates of optional filters need the decode time of the
+                // output columns (the reader does not evaluate the row
+                // filter: the decoder did that before it returned the reader).
+                let optional_savings = self
+                    .row_filter_context
+                    .as_ref()
+                    .and_then(|ctx| ctx.measured_optional_savings());
+                let start = optional_savings.map(|_| Instant::now());
                 match reader.next() {
                     Some(Ok(batch)) => {
+                        if let (Some(savings), Some(start)) = (optional_savings, start) {
+                            savings
+                                .record_output_batch(batch.num_rows(), start.elapsed());
+                        }
                         self.copy_arrow_reader_metrics();
                         let result = self.project_batch(&batch);
                         return Some((result, self));
@@ -546,6 +643,9 @@ impl PushDecoderStreamState {
                     // closes.
                     if let Some(entry) = self.rg_plan.pop_front() {
                         self.byte_progress.credit(entry.bytes);
+                    }
+                    if let Some(ctx) = self.row_filter_context.as_mut() {
+                        ctx.start_reader();
                     }
                     self.active_reader = Some(reader);
                 }
@@ -651,6 +751,12 @@ impl PushDecoderStreamState {
         &mut self,
         pruned_count: usize,
     ) -> Result<bool, DataFusionError> {
+        // The evaluation order of the `RowFilter` for the next RG.
+        let row_filter_changed = self
+            .row_filter_context
+            .as_mut()
+            .is_some_and(RowFilterContext::refresh_order);
+
         // `desired_filter` is `Some(true)` when the next RG needs a real
         // filter, `Some(false)` when it is fully-matched (filter is a no-op, so
         // we suppress it), and `None` when there is no pushdown predicate at
@@ -659,8 +765,9 @@ impl PushDecoderStreamState {
             .row_filter_context
             .as_ref()
             .and_then(|_| self.rg_plan.front().map(|e| !e.fully_matched));
-        let filter_needs_toggle =
-            desired_filter.is_some_and(|want| want != self.filter_installed);
+        let filter_needs_toggle = desired_filter.is_some_and(|want| {
+            want != self.filter_installed || (want && row_filter_changed)
+        });
 
         if pruned_count == 0 && !filter_needs_toggle {
             return Ok(false);
@@ -801,6 +908,52 @@ mod tests {
             Operator::Gt,
             lit(ScalarValue::Int64(Some(threshold))),
         ))
+    }
+
+    /// The `RowFilter` order follows the measurements, with hysteresis on
+    /// the changes.
+    #[test]
+    fn row_filter_order_follows_measurements() {
+        let (meta, schema) = build_three_rg_file();
+        let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            gt_predicate(0),
+            Operator::And,
+            gt_predicate(2000),
+        ));
+        let metrics = ExecutionPlanMetricsSet::new();
+        let mut context = RowFilterContext::try_new(
+            &predicate,
+            &schema,
+            &meta,
+            false,
+            ParquetFileMetrics::new(0, "file", &metrics),
+            None,
+            None,
+        )
+        .unwrap();
+        // Before any measurement: the written order.
+        assert_eq!(context.order, vec![0, 1]);
+        assert!(!context.refresh_order());
+
+        // `v > 2000` removes more rows for each nanosecond: it goes first.
+        let rows = 10 * 8192;
+        let candidates = context.prebuilt.as_slice();
+        candidates[0].cost().record(rows, rows, rows as u64);
+        candidates[1].cost().record(rows, rows / 3, rows as u64);
+        assert!(context.refresh_order());
+        assert_eq!(context.order, vec![1, 0]);
+
+        // A flip back waits for the hysteresis: after the first change the
+        // hold is 0 boundaries, after the second 1 boundary.
+        let candidates = context.prebuilt.as_slice();
+        candidates[0].cost().record(10 * rows, 0, rows as u64);
+        assert!(context.refresh_order());
+        assert_eq!(context.order, vec![0, 1]);
+        let candidates = context.prebuilt.as_slice();
+        candidates[1].cost().record(100 * rows, 0, rows as u64);
+        assert!(!context.refresh_order());
+        assert!(context.refresh_order());
+        assert_eq!(context.order, vec![1, 0]);
     }
 
     #[test]
