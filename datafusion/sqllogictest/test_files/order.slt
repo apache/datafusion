@@ -1008,8 +1008,9 @@ SELECT log(0.5, x) AS l FROM (SELECT x FROM (VALUES (1.0), (2.0), (4.0), (8.0)) 
 -1
 0
 
-# log with a base > 1 is increasing, so the outer sort on `l` can be removed:
-# its input is already sorted by x (the inner TopK), so `l` is sorted too
+# log with a base > 1 is increasing for x >= 0, but the bounds of x are unknown
+# at plan time and log of a negative number is NaN (which sorts last), so the
+# outer sort on `l` must be kept even though its input is sorted by x
 query TT
 EXPLAIN SELECT log(2.0, x) AS l FROM (SELECT x FROM (VALUES (1.0), (2.0), (4.0), (8.0)) AS t(x) ORDER BY x LIMIT 10) ORDER BY l ASC;
 ----
@@ -1021,9 +1022,10 @@ logical_plan
 05)--------Projection: column1 AS x
 06)----------Values: (Float64(1)), (Float64(2)), (Float64(4)), (Float64(8))
 physical_plan
-01)ProjectionExec: expr=[log(2, column1@0) as l]
-02)--SortExec: TopK(fetch=10), expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortExec: expr=[l@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[log(2, column1@0) as l]
+03)----SortExec: TopK(fetch=10), expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query R
 SELECT log(2.0, x) AS l FROM (SELECT x FROM (VALUES (1.0), (2.0), (4.0), (8.0)) AS t(x) ORDER BY x LIMIT 10) ORDER BY l ASC;
@@ -1032,6 +1034,14 @@ SELECT log(2.0, x) AS l FROM (SELECT x FROM (VALUES (1.0), (2.0), (4.0), (8.0)) 
 1
 2
 3
+
+# log of a negative number is NaN, which sorts after every number
+query RR
+SELECT x, log(2.0, x) AS l FROM (SELECT x FROM (VALUES (-1.0), (1.0), (4.0)) AS t(x) ORDER BY x LIMIT 3) ORDER BY l ASC;
+----
+1 0
+4 2
+-1 NaN
 
 statement ok
 drop table aggregate_test_100;

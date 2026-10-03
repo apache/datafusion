@@ -110,6 +110,13 @@ fn is_gt_one(range: &Interval) -> bool {
         .is_ok_and(|gt| gt == Interval::TRUE)
 }
 
+/// Returns true if every value in `range` is provably greater than or equal to zero.
+fn is_ge_zero(range: &Interval) -> bool {
+    Interval::make_zero(&range.data_type())
+        .and_then(|zero| range.gt_eq(zero))
+        .is_ok_and(|ge| ge == Interval::TRUE)
+}
+
 /// Calculate logarithm for Decimal32 values.
 /// For integer bases >= 2 with zero scale, return an exact integer log when the
 /// value is a perfect power of the base. Otherwise falls back to f64 computation.
@@ -223,6 +230,14 @@ impl ScalarUDFImpl for LogFunc {
         // (e.g. `log(0.5, x)`, or a column with unknown bounds), make no claim.
         // `log(x)` always uses base 10.
         if input.len() == 2 && !is_gt_one(&input[0].range) {
+            return Ok(SortProperties::Unordered);
+        }
+        // log_b(x) is NaN for x < 0, and NaN sorts after every number, so an
+        // ordered x is only preserved if it is provably >= 0 (log_b(0) = -inf
+        // sorts first). This matches `ln`, `log2` and `log10`.
+        if matches!(num_sort_properties, SortProperties::Ordered(_))
+            && !is_ge_zero(&input[input.len() - 1].range)
+        {
             return Ok(SortProperties::Unordered);
         }
 
@@ -882,6 +897,30 @@ mod tests {
             ExprProperties::new_unknown().with_order(SortProperties::Singleton);
         assert_eq!(
             log.output_ordering(&[unknown_base, asc_num]).unwrap(),
+            SortProperties::Unordered
+        );
+
+        // Test num that may be negative: log_b(x) is NaN for x < 0, which sorts
+        // last, so even with base > 1 the order of x is not preserved
+        let maybe_negative_range =
+            Interval::try_new(ScalarValue::from(-1.0), ScalarValue::from(10.0)).unwrap();
+        let gt_one_base = ExprProperties::new_unknown()
+            .with_range(gt_one_range.clone())
+            .with_order(SortProperties::Singleton);
+        let maybe_negative_num = ExprProperties::new_unknown()
+            .with_range(maybe_negative_range)
+            .with_order(SortProperties::Ordered(SortOptions {
+                descending: false,
+                nulls_first: true,
+            }));
+        assert_eq!(
+            log.output_ordering(&[gt_one_base, maybe_negative_num.clone()])
+                .unwrap(),
+            SortProperties::Unordered
+        );
+        // log(x) with the default base 10
+        assert_eq!(
+            log.output_ordering(&[maybe_negative_num]).unwrap(),
             SortProperties::Unordered
         );
     }
