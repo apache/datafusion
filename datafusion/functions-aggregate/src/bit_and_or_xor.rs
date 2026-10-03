@@ -256,6 +256,10 @@ impl AggregateUDFImpl for BitwiseOperation {
         downcast_bitwise_accumulator!(acc_args, self.operation, acc_args.is_distinct)
     }
 
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        AggregateOrderSensitivity::Insensitive
+    }
+
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         if args.input_fields[0].data_type().is_null() {
             Ok(vec![

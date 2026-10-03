@@ -96,6 +96,10 @@ impl AggregateUDFImpl for Stddev {
         Ok(DataType::Float64)
     }
 
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        AggregateOrderSensitivity::Insensitive
+    }
+
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         Ok(vec![
             Field::new(
@@ -202,6 +206,10 @@ impl AggregateUDFImpl for StddevPop {
 
     fn signature(&self) -> &Signature {
         &self.signature
+    }
+
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        AggregateOrderSensitivity::Insensitive
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
