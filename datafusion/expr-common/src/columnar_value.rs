@@ -294,7 +294,7 @@ impl ColumnarValue {
     pub fn cast_to(
         &self,
         cast_type: &DataType,
-        cast_options: Option<&CastOptions<'static>>,
+        cast_options: Option<&CastOptions<'_>>,
     ) -> Result<ColumnarValue> {
         let cast_options = cast_options.cloned().unwrap_or(DEFAULT_CAST_OPTIONS);
         match self {
@@ -312,7 +312,7 @@ impl ColumnarValue {
 fn cast_array_by_name(
     array: &ArrayRef,
     cast_type: &DataType,
-    cast_options: &CastOptions<'static>,
+    cast_options: &CastOptions<'_>,
 ) -> Result<ArrayRef> {
     // If types are already equal, no cast needed
     if array.data_type() == cast_type {
