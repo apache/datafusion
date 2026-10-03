@@ -2056,7 +2056,23 @@ impl ExecutionPlan for HashJoinExec {
             && self.allow_join_dynamic_filter_pushdown(config)
         {
             // Add actual dynamic filter to right side (probe side)
-            let dynamic_filter = Self::create_dynamic_filter(&self.on);
+            let dynamic_filter = if self.mode == PartitionMode::Partitioned {
+                let right_keys = self.on.iter().map(|(_, r)| Arc::clone(r)).collect();
+                let partitioning = match self.right.output_partitioning() {
+                    Partitioning::Range(range) => Partitioning::Range(range.clone()),
+                    other => Partitioning::Hash(
+                        self.on.iter().map(|(_, r)| Arc::clone(r)).collect(),
+                        other.partition_count(),
+                    ),
+                };
+                Arc::new(DynamicFilterPhysicalExpr::new_partitioned(
+                    right_keys,
+                    partitioning,
+                    lit(true),
+                )?)
+            } else {
+                Self::create_dynamic_filter(&self.on)
+            };
             right_child = right_child.with_self_filter(dynamic_filter);
         }
 

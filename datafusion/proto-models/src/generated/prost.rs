@@ -1714,6 +1714,13 @@ pub struct PhysicalDynamicFilterNode {
     pub inner_expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
     #[prost(bool, tag = "5")]
     pub is_complete: bool,
+    /// The total expression above remains usable by consumers without partition metadata.
+    #[prost(message, optional, tag = "6")]
+    pub partitioning: ::core::option::Option<Partitioning>,
+    #[prost(message, repeated, tag = "7")]
+    pub partition_filters: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(uint64, optional, tag = "8")]
+    pub partition_index: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalSqlSimilarToPatternNode {

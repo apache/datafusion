@@ -1962,6 +1962,29 @@ ORDER BY b.range_key;
 5 50 50
 20 200 200
 
+# The producer and scan key positions differ after projection. The partition
+# predicate must be remapped into the scan schema along with its routing keys.
+query III
+SELECT p.value, b.range_key, p.non_range_key
+FROM (SELECT range_key FROM range_partitioned WHERE range_key IN (5, 20)) b
+JOIN (SELECT value, non_range_key, range_key FROM range_partitioned) p
+  ON b.range_key = p.range_key
+ORDER BY b.range_key;
+----
+50 5 2
+200 20 1
+
+# These sources have the same number of partitions but different split points.
+# A filter reaching a scan below a repartition must retain its total expression.
+query II
+SELECT b.range_key, p.value
+FROM (SELECT range_key FROM range_partitioned WHERE range_key IN (10, 20)) b
+JOIN range_partitioned_shifted p ON b.range_key = p.range_key
+ORDER BY b.range_key;
+----
+10 100
+20 200
+
 statement ok
 reset datafusion.optimizer.preserve_file_partitions;
 

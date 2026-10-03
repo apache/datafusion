@@ -45,6 +45,7 @@ use datafusion_expr::{AggregateUDF, HigherOrderUDF, ScalarUDF, WindowUDF};
 use datafusion_functions_table::generate_series::{
     Empty, GenSeriesArgs, GenerateSeriesTable, GenericSeriesState, TimestampValue,
 };
+use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
 use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
 use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
 use datafusion_physical_plan::aggregates::AggregateExec;
@@ -1949,6 +1950,14 @@ impl PhysicalProtoConverterExtension for DeduplicatingDeserializer {
 
         let mut cache = self.cache.borrow_mut();
         if let Some(cached) = cache.get(&id) {
+            // A dynamic filter's consumer view can select a producer partition
+            // as well as remap columns. Preserve both while sharing its state.
+            if let (Some(parsed), Some(cached)) = (
+                parsed.downcast_ref::<DynamicFilterPhysicalExpr>(),
+                cached.downcast_ref::<DynamicFilterPhysicalExpr>(),
+            ) {
+                return Ok(Arc::new(parsed.with_shared_state_from(cached)?));
+            }
             // Since expressions may manage their own internal state when deriving
             // expressions via `with_new_children`, we use `with_new_children`
             // to opt into the same behavior.
