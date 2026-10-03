@@ -1,0 +1,730 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+//! Tests for the cost-based join order enumeration in [`JoinSelection`].
+
+use std::sync::Arc;
+
+use arrow::array::{Int32Array, RecordBatch};
+use arrow::compute::SortOptions;
+use arrow::datatypes::{DataType, Field, Schema};
+use arrow::util::pretty::pretty_format_batches;
+use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::{
+    ColumnStatistics, JoinSide, JoinType, NullEquality, Result, ScalarValue,
+};
+use datafusion_common::{Statistics, stats::Precision};
+use datafusion_expr::Operator;
+use datafusion_physical_expr::expressions::BinaryExpr;
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::join_enumeration::graph::{
+    JoinGraph, RelSet, iter_rels,
+};
+use datafusion_physical_optimizer::join_enumeration::{
+    Combine, DefaultJoinCostModel, Exchange, JoinCostModel, JoinCostModelFactory,
+    JoinEnumeration, PartSet,
+};
+use datafusion_physical_optimizer::join_selection::JoinSelection;
+use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
+use datafusion_physical_plan::joins::{
+    CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
+};
+use datafusion_physical_plan::{ExecutionPlan, displayable};
+use insta::assert_snapshot;
+
+use crate::physical_optimizer::join_selection::StatisticsExec;
+
+/// A table of `rows` rows with `(name, distinct_count)` columns. Each gets a
+/// `[0, distinct_count)` range, as a real scan with min/max statistics would.
+fn table(rows: usize, columns: &[(&str, usize)]) -> (Statistics, Schema) {
+    let column_statistics = columns
+        .iter()
+        .map(|(_, distinct)| ColumnStatistics {
+            distinct_count: Precision::Inexact(*distinct),
+            min_value: Precision::Inexact(ScalarValue::Int32(Some(0))),
+            max_value: Precision::Inexact(ScalarValue::Int32(Some(*distinct as i32 - 1))),
+            ..Default::default()
+        })
+        .collect();
+    let schema = Schema::new(
+        columns
+            .iter()
+            .map(|(name, _)| Field::new(*name, DataType::Int32, false))
+            .collect::<Vec<_>>(),
+    );
+    (
+        Statistics {
+            num_rows: Precision::Inexact(rows),
+            total_byte_size: Precision::Absent,
+            column_statistics,
+        },
+        schema,
+    )
+}
+
+fn scan(rows: usize, columns: &[(&str, usize)]) -> Arc<dyn ExecutionPlan> {
+    let (statistics, schema) = table(rows, columns);
+    Arc::new(StatisticsExec::new(statistics, schema))
+}
+
+fn scan_without_statistics(columns: &[&str]) -> Arc<dyn ExecutionPlan> {
+    let schema = Schema::new(
+        columns
+            .iter()
+            .map(|name| Field::new(*name, DataType::Int32, false))
+            .collect::<Vec<_>>(),
+    );
+    let statistics = Statistics {
+        num_rows: Precision::Absent,
+        total_byte_size: Precision::Absent,
+        column_statistics: vec![ColumnStatistics::new_unknown(); columns.len()],
+    };
+    Arc::new(StatisticsExec::new(statistics, schema))
+}
+
+fn join(
+    left: Arc<dyn ExecutionPlan>,
+    right: Arc<dyn ExecutionPlan>,
+    on: &[(&str, &str)],
+) -> Result<Arc<dyn ExecutionPlan>> {
+    join_of_type(left, right, on, JoinType::Inner, None)
+}
+
+/// The same shape as [`late_reducer_plan`], joined by sort merge instead of hash.
+fn sort_merge_late_reducer_plan() -> Result<Arc<dyn ExecutionPlan>> {
+    let fact = scan(1_000_000, &[("f_id", 1_000_000), ("f_type", 1_000)]);
+    let other = scan(1_000_000, &[("o_id", 1_000_000)]);
+    let types = scan(10, &[("t_type", 10)]);
+
+    let joined = sort_merge_join(fact, other, &[("f_id", "o_id")])?;
+    sort_merge_join(joined, types, &[("f_type", "t_type")])
+}
+
+fn sort_merge_join(
+    left: Arc<dyn ExecutionPlan>,
+    right: Arc<dyn ExecutionPlan>,
+    on: &[(&str, &str)],
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let keys = on
+        .iter()
+        .map(|(left_key, right_key)| {
+            Ok((
+                Arc::new(Column::new_with_schema(left_key, &left.schema())?) as _,
+                Arc::new(Column::new_with_schema(right_key, &right.schema())?) as _,
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Arc::new(SortMergeJoinExec::try_new(
+        left,
+        right,
+        keys,
+        None,
+        JoinType::Inner,
+        vec![SortOptions::default(); on.len()],
+        NullEquality::NullEqualsNothing,
+    )?))
+}
+
+fn join_of_type(
+    left: Arc<dyn ExecutionPlan>,
+    right: Arc<dyn ExecutionPlan>,
+    on: &[(&str, &str)],
+    join_type: JoinType,
+    filter: Option<JoinFilter>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let keys = on
+        .iter()
+        .map(|(left_key, right_key)| {
+            Ok((
+                Arc::new(Column::new_with_schema(left_key, &left.schema())?) as _,
+                Arc::new(Column::new_with_schema(right_key, &right.schema())?) as _,
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Arc::new(HashJoinExec::try_new(
+        left,
+        right,
+        keys,
+        filter,
+        &join_type,
+        None,
+        PartitionMode::Auto,
+        NullEquality::NullEqualsNothing,
+        false,
+    )?))
+}
+
+/// A `left_col > right_col` filter over one column of each side.
+fn greater_than_filter(
+    left_col: (&str, usize),
+    right_col: (&str, usize),
+) -> Result<JoinFilter> {
+    let schema = Schema::new(vec![
+        Field::new(left_col.0, DataType::Int32, false),
+        Field::new(right_col.0, DataType::Int32, false),
+    ]);
+    let expression = Arc::new(BinaryExpr::new(
+        Arc::new(Column::new(left_col.0, 0)),
+        Operator::Gt,
+        Arc::new(Column::new(right_col.0, 1)),
+    ));
+    Ok(JoinFilter::new(
+        expression,
+        vec![
+            ColumnIndex {
+                index: left_col.1,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: right_col.1,
+                side: JoinSide::Right,
+            },
+        ],
+        Arc::new(schema),
+    ))
+}
+
+/// A three way join in its expensive `FROM` order: the two large tables first produce a
+/// million rows, where either of them with the tiny table first gives ten thousand.
+fn late_reducer_plan() -> Result<Arc<dyn ExecutionPlan>> {
+    let fact = scan(1_000_000, &[("f_id", 1_000_000), ("f_type", 1_000)]);
+    let other = scan(1_000_000, &[("o_id", 1_000_000)]);
+    let types = scan(10, &[("t_type", 10)]);
+
+    let fact_other = join(fact, other, &[("f_id", "o_id")])?;
+    join(fact_other, types, &[("f_type", "t_type")])
+}
+
+/// Both rules in pipeline order: shape first, then build side and partition mode.
+fn optimize(
+    plan: Arc<dyn ExecutionPlan>,
+    config: &ConfigOptions,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let plan = JoinEnumeration::new().optimize(plan, config)?;
+    JoinSelection::new().optimize(plan, config)
+}
+
+fn formatted(plan: &Arc<dyn ExecutionPlan>) -> String {
+    displayable(plan.as_ref()).indent(true).to_string()
+}
+
+#[test]
+fn reorders_a_late_reducer() -> Result<()> {
+    let plan = late_reducer_plan()?;
+    // The planner's order: the two million row tables are joined first.
+    assert_snapshot!(formatted(&plan), @r"
+    HashJoinExec: mode=Auto, join_type=Inner, on=[(f_type@1, t_type@0)]
+      HashJoinExec: mode=Auto, join_type=Inner, on=[(f_id@0, o_id@0)]
+        StatisticsExec: col_count=2, row_count=Inexact(1000000)
+        StatisticsExec: col_count=1, row_count=Inexact(1000000)
+      StatisticsExec: col_count=1, row_count=Inexact(10)
+    ");
+
+    // The reducing join moves down so the large tables never join directly.
+    assert_snapshot!(formatted(&optimize(plan, &ConfigOptions::new())?), @r"
+    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(f_id@0, o_id@0)], projection=[f_id@0, f_type@1, o_id@3, t_type@2]
+      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t_type@0, f_type@1)], projection=[f_id@1, f_type@2, t_type@0]
+        StatisticsExec: col_count=1, row_count=Inexact(10)
+        StatisticsExec: col_count=2, row_count=Inexact(1000000)
+      StatisticsExec: col_count=1, row_count=Inexact(1000000)
+    ");
+    Ok(())
+}
+
+#[test]
+fn respects_the_config_flag() -> Result<()> {
+    let mut config = ConfigOptions::new();
+    config.optimizer.join_enumeration = false;
+    let optimized = optimize(late_reducer_plan()?, &config)?;
+    // Without enumeration the large tables still join first, for a million rows.
+    assert_snapshot!(formatted(&optimized), @r"
+    ProjectionExec: expr=[f_id@1 as f_id, f_type@2 as f_type, o_id@3 as o_id, t_type@0 as t_type]
+      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t_type@0, f_type@1)]
+        StatisticsExec: col_count=1, row_count=Inexact(10)
+        HashJoinExec: mode=Partitioned, join_type=Inner, on=[(f_id@0, o_id@0)]
+          StatisticsExec: col_count=2, row_count=Inexact(1000000)
+          StatisticsExec: col_count=1, row_count=Inexact(1000000)
+    ");
+    Ok(())
+}
+
+#[test]
+fn leaves_plans_without_statistics_alone() -> Result<()> {
+    let fact = scan_without_statistics(&["f_id", "f_type"]);
+    let other = scan_without_statistics(&["o_id"]);
+    let types = scan_without_statistics(&["t_type"]);
+    let plan = join(
+        join(fact, other, &[("f_id", "o_id")])?,
+        types,
+        &[("f_type", "t_type")],
+    )?;
+
+    let optimized = optimize(Arc::clone(&plan), &ConfigOptions::new())?;
+    assert_snapshot!(formatted(&optimized), @r"
+    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(f_type@1, t_type@0)]
+      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(f_id@0, o_id@0)]
+        StatisticsExec: col_count=2, row_count=Absent
+        StatisticsExec: col_count=1, row_count=Absent
+      StatisticsExec: col_count=1, row_count=Absent
+    ");
+    Ok(())
+}
+
+#[test]
+fn keeps_an_already_optimal_order() -> Result<()> {
+    // Already in the cheap order, so the enumerator must not churn the plan.
+    let fact = scan(1_000_000, &[("f_id", 1_000_000), ("f_type", 1_000)]);
+    let other = scan(1_000_000, &[("o_id", 1_000_000)]);
+    let types = scan(10, &[("t_type", 10)]);
+
+    let reduced = join(fact, types, &[("f_type", "t_type")])?;
+    let plan = join(reduced, other, &[("f_id", "o_id")])?;
+
+    let mut disabled = ConfigOptions::new();
+    disabled.optimizer.join_enumeration = false;
+    assert_eq!(
+        formatted(&optimize(Arc::clone(&plan), &ConfigOptions::new())?),
+        formatted(&optimize(plan, &disabled)?),
+    );
+    Ok(())
+}
+
+/// Row counts from outside the plan, keyed by the first column a relation emits. The
+/// tiny dimension table is claimed to be the largest of the three.
+fn external_rows(column: &str) -> f64 {
+    match column {
+        "t_type" => 1e9,
+        _ => 1e6,
+    }
+}
+
+/// Hands out [`ExternalStatisticsCostModel`].
+#[derive(Debug)]
+struct ExternalStatistics {}
+
+impl JoinCostModelFactory for ExternalStatistics {
+    fn create<'graph>(
+        &self,
+        graph: &'graph JoinGraph,
+        config: &ConfigOptions,
+    ) -> Result<Box<dyn JoinCostModel + 'graph>> {
+        Ok(Box::new(ExternalStatisticsCostModel {
+            graph,
+            inner: DefaultJoinCostModel::new(graph, config),
+        }))
+    }
+}
+
+/// Counts rows from statistics the plan does not carry, and leaves the rest of the model
+/// to the built-in one.
+struct ExternalStatisticsCostModel<'a> {
+    graph: &'a JoinGraph,
+    inner: DefaultJoinCostModel<'a>,
+}
+
+impl JoinCostModel for ExternalStatisticsCostModel<'_> {
+    fn cardinality(&self, mask: RelSet) -> f64 {
+        iter_rels(mask)
+            .map(|rel| {
+                let schema = self.graph.relations[rel].plan.schema();
+                external_rows(schema.field(0).name())
+            })
+            .product::<f64>()
+            .max(1.0)
+    }
+
+    fn combine(&self, left: RelSet, right: RelSet) -> Option<Combine> {
+        self.inner.combine(left, right)
+    }
+
+    fn exchanges(
+        &self,
+        left: RelSet,
+        right: RelSet,
+        left_part: PartSet,
+        right_part: PartSet,
+        collect_only: Option<RelSet>,
+        into: &mut Vec<Exchange>,
+    ) {
+        self.inner
+            .exchanges(left, right, left_part, right_part, collect_only, into)
+    }
+}
+
+#[test]
+fn searches_under_a_plugged_in_cost_model() -> Result<()> {
+    let plan = late_reducer_plan()?;
+    // Under the plan's own statistics this order is the expensive one, and
+    // `reorders_a_late_reducer` shows the built-in model rewriting it. Told the dimension
+    // table is the largest of the three, the search keeps it.
+    let enumerated = JoinEnumeration::new()
+        .with_cost_model(Arc::new(ExternalStatistics {}))
+        .optimize(Arc::clone(&plan), &ConfigOptions::new())?;
+    assert_eq!(formatted(&enumerated), formatted(&plan));
+    Ok(())
+}
+
+/// A session over four in-memory tables shaped like a small star schema.
+fn star_schema_context(
+    join_enumeration: bool,
+    prefer_hash_join: bool,
+) -> Result<SessionContext> {
+    let mut config = SessionConfig::new();
+    config.options_mut().optimizer.join_enumeration = join_enumeration;
+    config.options_mut().optimizer.prefer_hash_join = prefer_hash_join;
+    let ctx = SessionContext::new_with_config(config);
+
+    let ints = |name: &str, values: Vec<i32>| -> Result<RecordBatch> {
+        Ok(RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(name, DataType::Int32, false)])),
+            vec![Arc::new(Int32Array::from(values))],
+        )?)
+    };
+
+    // fact(f_id, f_type, f_region), 240 rows.
+    let fact = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("f_id", DataType::Int32, false),
+            Field::new("f_type", DataType::Int32, false),
+            Field::new("f_region", DataType::Int32, false),
+        ])),
+        vec![
+            Arc::new(Int32Array::from((0..240).collect::<Vec<_>>())),
+            Arc::new(Int32Array::from(
+                (0..240).map(|i| i % 12).collect::<Vec<_>>(),
+            )),
+            Arc::new(Int32Array::from(
+                (0..240).map(|i| i % 5).collect::<Vec<_>>(),
+            )),
+        ],
+    )?;
+    ctx.register_batch("fact", fact)?;
+    ctx.register_batch("ids", ints("o_id", (0..240).rev().collect())?)?;
+    ctx.register_batch("types", ints("t_type", vec![3, 7])?)?;
+    ctx.register_batch("regions", ints("r_region", vec![1, 2, 4])?)?;
+    Ok(ctx)
+}
+
+/// A plain join tree, `EXISTS`, `NOT EXISTS`, a non-equi predicate, a left outer join
+/// whose right side matches only a few of the rows it extends, and an `EXISTS` inside a
+/// disjunction, which the planner decorrelates into a mark join.
+const STAR_QUERIES: [&str; 6] = [
+    "select f_id, f_type, f_region from fact, ids, types, regions \
+     where f_id = o_id and f_type = t_type and f_region = r_region order by f_id",
+    "select f_id, f_type from fact where exists \
+     (select 1 from types where t_type = f_type) \
+     and f_id in (select o_id from ids) order by f_id",
+    "select f_id, f_type from fact where not exists \
+     (select 1 from types where t_type = f_type) \
+     and f_id in (select o_id from ids) order by f_id",
+    "select f_id, f_type, t_type from fact, ids, types \
+     where f_id = o_id and f_type = t_type and f_id > t_type order by f_id",
+    "select f_id, f_type, r_region from fact \
+     left outer join regions on f_region = r_region \
+     join types on f_type = t_type order by f_id, r_region",
+    "select f_id, f_type from fact, ids where f_id = o_id \
+     and (exists (select 1 from types where t_type = f_type) or f_id < 5) order by f_id",
+];
+
+#[tokio::test]
+async fn reordering_returns_the_same_rows() -> Result<()> {
+    for prefer_hash_join in [true, false] {
+        reordering_returns_the_same_rows_with(prefer_hash_join).await?;
+    }
+    Ok(())
+}
+
+async fn reordering_returns_the_same_rows_with(prefer_hash_join: bool) -> Result<()> {
+    let enumerated = star_schema_context(true, prefer_hash_join)?;
+    let baseline = star_schema_context(false, prefer_hash_join)?;
+    let mut reordered_any = false;
+    for query in STAR_QUERIES {
+        let enumerated_plan = enumerated.sql(query).await?.create_physical_plan().await?;
+        let baseline_plan = baseline.sql(query).await?.create_physical_plan().await?;
+        reordered_any |= formatted(&enumerated_plan) != formatted(&baseline_plan);
+
+        let enumerated_rows = enumerated.sql(query).await?.collect().await?;
+        let baseline_rows = baseline.sql(query).await?.collect().await?;
+        assert_eq!(
+            pretty_format_batches(&enumerated_rows)?.to_string(),
+            pretty_format_batches(&baseline_rows)?.to_string(),
+            "rows differ for: {query}"
+        );
+        assert!(enumerated_rows.iter().map(|b| b.num_rows()).sum::<usize>() > 0);
+    }
+    // Rows matching would prove nothing if no plan had changed.
+    assert!(reordered_any);
+    Ok(())
+}
+
+/// A selective semi join sitting above a join of two large tables, as TPC-H q18
+/// has it.
+fn late_semi_join_plan(anti: bool) -> Result<Arc<dyn ExecutionPlan>> {
+    let fact = scan(1_000_000, &[("f_id", 1_000_000), ("f_type", 1_000)]);
+    let other = scan(1_000_000, &[("o_id", 1_000_000)]);
+    // Sized so the reducer keeps one percent either way round: ten of the thousand types
+    // match for the semi join, all but ten for the anti join.
+    let wanted = if anti {
+        scan(990, &[("w_type", 990)])
+    } else {
+        scan(10, &[("w_type", 10)])
+    };
+
+    let joined = join(fact, other, &[("f_id", "o_id")])?;
+    let join_type = if anti {
+        JoinType::LeftAnti
+    } else {
+        JoinType::LeftSemi
+    };
+    join_of_type(joined, wanted, &[("f_type", "w_type")], join_type, None)
+}
+
+#[test]
+fn applies_a_selective_semi_join_first() -> Result<()> {
+    let plan = late_semi_join_plan(false)?;
+    assert_snapshot!(formatted(&plan), @r"
+    HashJoinExec: mode=Auto, join_type=LeftSemi, on=[(f_type@1, w_type@0)]
+      HashJoinExec: mode=Auto, join_type=Inner, on=[(f_id@0, o_id@0)]
+        StatisticsExec: col_count=2, row_count=Inexact(1000000)
+        StatisticsExec: col_count=1, row_count=Inexact(1000000)
+      StatisticsExec: col_count=1, row_count=Inexact(10)
+    ");
+
+    // A `RightSemi` filtering the fact table before the inner join.
+    assert_snapshot!(formatted(&optimize(plan, &ConfigOptions::new())?), @r"
+    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(f_id@0, o_id@0)]
+      HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(w_type@0, f_type@1)]
+        StatisticsExec: col_count=1, row_count=Inexact(10)
+        StatisticsExec: col_count=2, row_count=Inexact(1000000)
+      StatisticsExec: col_count=1, row_count=Inexact(1000000)
+    ");
+    Ok(())
+}
+
+#[test]
+fn applies_an_anti_join_first() -> Result<()> {
+    let optimized = optimize(late_semi_join_plan(true)?, &ConfigOptions::new())?;
+    // The anti join is pushed down the same way.
+    assert_snapshot!(formatted(&optimized), @r"
+    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(f_id@0, o_id@0)]
+      HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(w_type@0, f_type@1)]
+        StatisticsExec: col_count=1, row_count=Inexact(990)
+        StatisticsExec: col_count=2, row_count=Inexact(1000000)
+      StatisticsExec: col_count=1, row_count=Inexact(1000000)
+    ");
+    Ok(())
+}
+
+/// A left outer join over a large table, with a selective join above it. An outer join
+/// only ever adds rows, so the cheap order applies it to the join's result instead.
+fn late_inner_join_over_an_outer_plan() -> Result<Arc<dyn ExecutionPlan>> {
+    let fact = scan(1_000_000, &[("f_id", 1_000_000), ("f_type", 1_000)]);
+    let types = scan(1_000, &[("t_type", 1_000)]);
+    let other = scan(100, &[("o_id", 100)]);
+
+    let extended =
+        join_of_type(fact, types, &[("f_type", "t_type")], JoinType::Left, None)?;
+    join(extended, other, &[("f_id", "o_id")])
+}
+
+#[test]
+fn applies_an_outer_join_last() -> Result<()> {
+    let plan = late_inner_join_over_an_outer_plan()?;
+    assert_snapshot!(formatted(&plan), @r"
+    HashJoinExec: mode=Auto, join_type=Inner, on=[(f_id@0, o_id@0)]
+      HashJoinExec: mode=Auto, join_type=Left, on=[(f_type@1, t_type@0)]
+        StatisticsExec: col_count=2, row_count=Inexact(1000000)
+        StatisticsExec: col_count=1, row_count=Inexact(1000)
+      StatisticsExec: col_count=1, row_count=Inexact(100)
+    ");
+
+    // The hundred surviving rows are extended, not the million. Enumeration emits this
+    // as a `Right` join with the null-supplying side building; `JoinSelection` then finds
+    // the other side smaller and swaps it back to a `Left` join.
+    assert_snapshot!(formatted(&optimize(plan, &ConfigOptions::new())?), @r"
+    HashJoinExec: mode=CollectLeft, join_type=Left, on=[(f_type@0, t_type@0)], projection=[f_id@1, f_type@0, t_type@3, o_id@2]
+      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(o_id@0, f_id@0)], projection=[f_type@2, f_id@1, o_id@0]
+        StatisticsExec: col_count=1, row_count=Inexact(100)
+        StatisticsExec: col_count=2, row_count=Inexact(1000000)
+      StatisticsExec: col_count=1, row_count=Inexact(1000)
+    ");
+    Ok(())
+}
+
+/// A mark join never changes the row count, so it neither wants reordering itself nor
+/// stops the joins around it from being reordered.
+fn marked_join_plan() -> Result<Arc<dyn ExecutionPlan>> {
+    let fact = scan(1_000_000, &[("f_id", 1_000_000), ("f_type", 1_000)]);
+    let other = scan(1_000_000, &[("o_id", 1_000_000)]);
+    let wanted = scan(10, &[("w_type", 10)]);
+    let types = scan(10, &[("t_type", 10)]);
+
+    let joined = join(fact, other, &[("f_id", "o_id")])?;
+    let marked = join_of_type(
+        joined,
+        wanted,
+        &[("f_type", "w_type")],
+        JoinType::LeftMark,
+        None,
+    )?;
+    join(marked, types, &[("f_type", "t_type")])
+}
+
+#[test]
+fn reorders_around_a_mark_join() -> Result<()> {
+    let plan = marked_join_plan()?;
+    assert_snapshot!(formatted(&plan), @r"
+    HashJoinExec: mode=Auto, join_type=Inner, on=[(f_type@1, t_type@0)]
+      HashJoinExec: mode=Auto, join_type=LeftMark, on=[(f_type@1, w_type@0)]
+        HashJoinExec: mode=Auto, join_type=Inner, on=[(f_id@0, o_id@0)]
+          StatisticsExec: col_count=2, row_count=Inexact(1000000)
+          StatisticsExec: col_count=1, row_count=Inexact(1000000)
+        StatisticsExec: col_count=1, row_count=Inexact(10)
+      StatisticsExec: col_count=1, row_count=Inexact(10)
+    ");
+
+    // The selective join runs first and the mark join is applied to its result, as a
+    // `RightMark` with the marking side building. The flag keeps its output position.
+    assert_snapshot!(formatted(&optimize(plan, &ConfigOptions::new())?), @r"
+    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(f_id@0, o_id@0)], projection=[f_id@0, f_type@1, o_id@4, mark@2, t_type@3]
+      HashJoinExec: mode=CollectLeft, join_type=RightMark, on=[(w_type@0, f_type@0)], projection=[f_id@1, f_type@0, mark@3, t_type@2]
+        StatisticsExec: col_count=1, row_count=Inexact(10)
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t_type@0, f_type@1)], projection=[f_type@2, f_id@1, t_type@0]
+          StatisticsExec: col_count=1, row_count=Inexact(10)
+          StatisticsExec: col_count=2, row_count=Inexact(1000000)
+      StatisticsExec: col_count=1, row_count=Inexact(1000000)
+    ");
+    Ok(())
+}
+
+/// A predicate over a null-supplied column has to stay with the outer join that made it
+/// nullable, so a subtree holding one is left alone.
+#[test]
+fn leaves_a_predicate_over_a_null_supplied_column_alone() -> Result<()> {
+    let fact = scan(1_000_000, &[("f_id", 1_000_000), ("f_type", 1_000)]);
+    let types = scan(1_000, &[("t_type", 1_000), ("t_group", 10)]);
+    let groups = scan(10, &[("g_group", 10)]);
+
+    let extended =
+        join_of_type(fact, types, &[("f_type", "t_type")], JoinType::Left, None)?;
+    // `t_group` comes from the null-supplied side.
+    let plan = join(extended, groups, &[("t_group", "g_group")])?;
+
+    let optimized =
+        JoinEnumeration::new().optimize(Arc::clone(&plan), &ConfigOptions::new())?;
+    assert_eq!(formatted(&optimized), formatted(&plan));
+    Ok(())
+}
+
+#[test]
+fn moves_a_non_equi_filter_with_its_join() -> Result<()> {
+    // `f_type > t_type` rides on the fact/types join, which moves below the join
+    // with the second large table.
+    let fact = scan(1_000_000, &[("f_id", 1_000_000), ("f_type", 1_000)]);
+    let other = scan(1_000_000, &[("o_id", 1_000_000)]);
+    let types = scan(10, &[("t_type", 10)]);
+
+    let joined = join(fact, other, &[("f_id", "o_id")])?;
+    let plan = join_of_type(
+        joined,
+        types,
+        &[("f_type", "t_type")],
+        JoinType::Inner,
+        Some(greater_than_filter(("f_type", 1), ("t_type", 0))?),
+    )?;
+
+    // Re-attached to the join that now brings its two columns together.
+    assert_snapshot!(formatted(&optimize(plan, &ConfigOptions::new())?), @r"
+    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(f_id@0, o_id@0)], projection=[f_id@0, f_type@1, o_id@3, t_type@2]
+      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t_type@0, f_type@1)], filter=f_type@1 > t_type@0, projection=[f_id@1, f_type@2, t_type@0]
+        StatisticsExec: col_count=1, row_count=Inexact(10)
+        StatisticsExec: col_count=2, row_count=Inexact(1000000)
+      StatisticsExec: col_count=1, row_count=Inexact(1000000)
+    ");
+    Ok(())
+}
+
+#[test]
+fn reorders_sort_merge_joins() -> Result<()> {
+    // A sort merge join carries no projection, so the columns the subtree used to
+    // emit are restored by one projection above it.
+    assert_snapshot!(
+        formatted(&optimize(sort_merge_late_reducer_plan()?, &ConfigOptions::new())?),
+        @r"
+    ProjectionExec: expr=[f_id@1 as f_id, f_type@2 as f_type, o_id@3 as o_id, t_type@0 as t_type]
+      SortMergeJoinExec: join_type=Inner, on=[(f_id@1, o_id@0)]
+        SortMergeJoinExec: join_type=Inner, on=[(t_type@0, f_type@1)]
+          StatisticsExec: col_count=1, row_count=Inexact(10)
+          StatisticsExec: col_count=2, row_count=Inexact(1000000)
+        StatisticsExec: col_count=1, row_count=Inexact(1000000)
+    "
+    );
+    Ok(())
+}
+
+#[test]
+fn reorders_around_a_cross_join() -> Result<()> {
+    // Only `types` has a predicate, so `other` can only join by cross product,
+    // which belongs on the small pair rather than under the reducing join.
+    let fact = scan(1_000_000, &[("f_id", 1_000_000), ("f_type", 1_000)]);
+    let other = scan(10, &[("o_id", 10)]);
+    let types = scan(10, &[("t_type", 10)]);
+
+    let crossed: Arc<dyn ExecutionPlan> = Arc::new(CrossJoinExec::new(fact, other));
+    let plan = join(crossed, types, &[("f_type", "t_type")])?;
+
+    assert_snapshot!(formatted(&optimize(plan, &ConfigOptions::new())?), @r"
+    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t_type@1, f_type@1)], projection=[f_id@2, f_type@3, o_id@0, t_type@1]
+      CrossJoinExec
+        StatisticsExec: col_count=1, row_count=Inexact(10)
+        StatisticsExec: col_count=1, row_count=Inexact(10)
+      StatisticsExec: col_count=2, row_count=Inexact(1000000)
+    ");
+    Ok(())
+}
+
+#[test]
+fn reorders_a_nested_loop_join() -> Result<()> {
+    // The equi join inflates its inputs a hundredfold, so the non-equi predicate is
+    // cheaper applied first, even at the default selectivity a filter gets.
+    let a = scan(1_000, &[("a_k", 10), ("a_t", 1_000)]);
+    let b = scan(1_000, &[("b_k", 10)]);
+    let t = scan(10, &[("t_t", 10)]);
+
+    let joined = join(a, b, &[("a_k", "b_k")])?;
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(NestedLoopJoinExec::try_new(
+        joined,
+        t,
+        Some(greater_than_filter(("a_t", 1), ("t_t", 0))?),
+        &JoinType::Inner,
+        None,
+    )?);
+
+    // Enumeration alone: `JoinSelection` swaps nested loop inputs itself, which
+    // would otherwise look like the reordering under test.
+    let enumerated = JoinEnumeration::new().optimize(plan, &ConfigOptions::new())?;
+    assert_snapshot!(formatted(&enumerated), @r"
+    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(b_k@0, a_k@0)], projection=[a_k@1, a_t@2, b_k@0, t_t@3]
+      StatisticsExec: col_count=1, row_count=Inexact(1000)
+      NestedLoopJoinExec: join_type=Inner, filter=a_t@1 > t_t@0, projection=[a_k@1, a_t@2, t_t@0]
+        StatisticsExec: col_count=1, row_count=Inexact(10)
+        StatisticsExec: col_count=2, row_count=Inexact(1000)
+    ");
+    Ok(())
+}
