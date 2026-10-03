@@ -982,8 +982,8 @@ physical_plan
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11, c12], output_orderings=[[c11@0 ASC NULLS LAST], [c12@1 DESC NULLS LAST]], file_type=csv, has_header=true
 
-# log with a base in (0, 1) is decreasing, so the sort must not be removed
-# even though the input is sorted by x
+# log with a base in (0, 1) is decreasing, so the outer sort on `l` must be
+# kept even though its input is already sorted by x (the inner TopK)
 query TT
 EXPLAIN SELECT log(0.5, x) AS l FROM (SELECT x FROM (VALUES (1.0), (2.0), (4.0), (8.0)) AS t(x) ORDER BY x LIMIT 10) ORDER BY l ASC;
 ----
@@ -1008,7 +1008,8 @@ SELECT log(0.5, x) AS l FROM (SELECT x FROM (VALUES (1.0), (2.0), (4.0), (8.0)) 
 -1
 0
 
-# log with a base > 1 is increasing, so the sort can still be removed
+# log with a base > 1 is increasing, so the outer sort on `l` can be removed:
+# its input is already sorted by x (the inner TopK), so `l` is sorted too
 query TT
 EXPLAIN SELECT log(2.0, x) AS l FROM (SELECT x FROM (VALUES (1.0), (2.0), (4.0), (8.0)) AS t(x) ORDER BY x LIMIT 10) ORDER BY l ASC;
 ----
