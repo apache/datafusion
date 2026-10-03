@@ -1017,9 +1017,10 @@ mod tests {
     use crate::assert_optimized_plan_eq_display_indent_snapshot;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_expr::builder::table_source;
+    use datafusion_expr::expr::WindowFunction;
     use datafusion_expr::{
-        TableScanBuilder, and, binary_expr, col, cube, grouping_set, out_ref_col, rollup,
-        table_scan,
+        ExprFunctionExt, TableScanBuilder, WindowFunctionDefinition, and, binary_expr,
+        col, cube, grouping_set, out_ref_col, rollup, table_scan,
     };
 
     macro_rules! assert_optimized_plan_equal {
@@ -3107,6 +3108,54 @@ mod tests {
                   Filter: sq.arr = outer_ref(outer_t.arr) [id:Int32;N, arr:List(Int32);N]
                     TableScan: sq [id:Int32;N, arr:List(Int32);N]
             TableScan: outer_t [id:Int32;N, arr:List(Int32);N]
+        "
+        )
+    }
+
+    /// Partitioning `rank() ORDER BY sq.b` by the correlated column `sq.a`
+    /// makes it equal to the other window function of the same Window, which
+    /// then computes it once.
+    #[test]
+    fn exists_subquery_window_functions_become_equal() -> Result<()> {
+        let rank = || {
+            Expr::from(WindowFunction::new(
+                WindowFunctionDefinition::WindowUDF(
+                    datafusion_functions_window::rank::rank_udwf(),
+                ),
+                vec![],
+            ))
+        };
+        let subquery = Arc::new(
+            LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
+                .filter(col("sq.a").eq(out_ref_col(DataType::UInt32, "test.a")))?
+                .window(vec![
+                    rank()
+                        .order_by(vec![col("sq.b").sort(true, true)])
+                        .build()?,
+                    rank()
+                        .partition_by(vec![col("sq.a")])
+                        .order_by(vec![col("sq.b").sort(true, true)])
+                        .build()?,
+                ])?
+                .project(vec![col("sq.b")])?
+                .build()?,
+        );
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(exists(subquery))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.b [b:UInt32]
+          LeftSemi Join:  Filter: __correlated_sq_1.a = test.a [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            SubqueryAlias: __correlated_sq_1 [b:UInt32, a:UInt32]
+              Projection: sq.b, sq.a [b:UInt32, a:UInt32]
+                Projection: sq.a, sq.b, sq.c, rank() PARTITION BY [sq.a] ORDER BY [sq.b ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rank() ORDER BY [sq.b ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, rank() PARTITION BY [sq.a] ORDER BY [sq.b ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rank() PARTITION BY [sq.a] ORDER BY [sq.b ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW [a:UInt32, b:UInt32, c:UInt32, rank() ORDER BY [sq.b ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:UInt64, rank() PARTITION BY [sq.a] ORDER BY [sq.b ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:UInt64]
+                  WindowAggr: windowExpr=[[rank() PARTITION BY [sq.a] ORDER BY [sq.b ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]] [a:UInt32, b:UInt32, c:UInt32, rank() PARTITION BY [sq.a] ORDER BY [sq.b ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:UInt64]
+                    TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
