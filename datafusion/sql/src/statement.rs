@@ -16,6 +16,7 @@
 // under the License.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::ops::Deref;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -1675,14 +1676,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     /// Generate a logical plan from a "SHOW TABLES" query
     fn show_tables_to_plan(&self) -> Result<LogicalPlan> {
-        if self.has_table("information_schema", "tables") {
-            let query = "SELECT * FROM information_schema.tables;";
-            let mut rewrite = DFParser::parse_sql(query)?;
-            assert_eq!(rewrite.len(), 1);
-            self.statement_to_plan(rewrite.pop_front().unwrap()) // length of rewrite is 1
-        } else {
-            plan_err!("SHOW TABLES is not supported unless information_schema is enabled")
-        }
+        let Some(tables_table_ref) = self.resolve_info_table("tables") else {
+            return plan_err!(
+                "SHOW TABLES is not supported unless information_schema is enabled"
+            );
+        };
+
+        let query = format!("SELECT * FROM {tables_table_ref};");
+        let mut rewrite = DFParser::parse_sql(&query)?;
+        assert_eq!(rewrite.len(), 1);
+        self.statement_to_plan(rewrite.pop_front().unwrap()) // length of rewrite is 1
     }
 
     fn describe_table_to_plan(&self, table_name: ObjectName) -> Result<LogicalPlan> {
@@ -2210,11 +2213,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 
     fn show_variable_to_plan(&self, variable: &[Ident]) -> Result<LogicalPlan> {
-        if !self.has_table("information_schema", "df_settings") {
+        let Some(df_settings_table_ref) = self.resolve_info_table("df_settings") else {
             return plan_err!(
                 "SHOW [VARIABLE] is not supported unless information_schema is enabled"
             );
-        }
+        };
 
         let verbose = variable
             .last()
@@ -2229,7 +2232,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
 
         let variable = object_name_to_string(&ObjectName::from(variable_vec));
-        let base_query = format!("SELECT {columns} FROM information_schema.df_settings");
+        let base_query = format!("SELECT {columns} FROM {df_settings_table_ref}");
         let query = if variable == "all" {
             // Add an ORDER BY so the output comes out in a consistent order
             format!("{base_query} ORDER BY name")
@@ -2998,11 +3001,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             self.options.enable_ident_normalization,
         )?;
 
-        if !self.has_table("information_schema", "columns") {
+        let Some(columns_table_ref) = self.resolve_info_table("columns") else {
             return plan_err!(
                 "SHOW COLUMNS is not supported unless information_schema is enabled"
             );
-        }
+        };
 
         // Do a table lookup to verify the table exists
         let table_ref = self.object_name_to_table_reference(sql_table_name)?;
@@ -3015,9 +3018,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             "table_catalog, table_schema, table_name, column_name, data_type, is_nullable"
         };
 
-        let query = format!(
-            "SELECT {select_list} FROM information_schema.columns WHERE {where_clause}"
-        );
+        let query =
+            format!("SELECT {select_list} FROM {columns_table_ref} WHERE {where_clause}");
 
         let mut rewrite = DFParser::parse_sql(&query)?;
         assert_eq!(rewrite.len(), 1);
@@ -3146,11 +3148,12 @@ FROM (
         &self,
         sql_table_name: ObjectName,
     ) -> Result<LogicalPlan> {
-        if !self.has_table("information_schema", "tables") {
+        let Some(tables_table_ref) = self.resolve_info_table("views") else {
             return plan_err!(
                 "SHOW CREATE TABLE is not supported unless information_schema is enabled"
             );
-        }
+        };
+
         // Figure out the where clause
         let where_clause = object_name_to_qualifier(
             &sql_table_name,
@@ -3162,7 +3165,7 @@ FROM (
         let _ = self.context_provider.get_table_source(table_ref)?;
 
         let query = format!(
-            "SELECT table_catalog, table_schema, table_name, definition FROM information_schema.views WHERE {where_clause}"
+            "SELECT table_catalog, table_schema, table_name, definition FROM {tables_table_ref} WHERE {where_clause}"
         );
 
         let mut rewrite = DFParser::parse_sql(&query)?;
@@ -3171,14 +3174,31 @@ FROM (
     }
 
     /// Return true if there is a table provider available for "schema.table"
-    fn has_table(&self, schema: &str, table: &str) -> bool {
-        let tables_reference = TableReference::Partial {
-            schema: schema.into(),
-            table: table.into(),
+    fn resolve_info_table(&self, table: &str) -> Option<TableReference> {
+        let table_reference = if let Some(system_catalog) =
+            &self.context_provider.options().catalog.system_catalog
+        {
+            TableReference::Full {
+                catalog: system_catalog.deref().into(),
+                schema: "information_schema".into(),
+                table: table.into(),
+            }
+        } else {
+            TableReference::Partial {
+                schema: "information_schema".into(),
+                table: table.into(),
+            }
         };
-        self.context_provider
-            .get_table_source(tables_reference)
+
+        if self
+            .context_provider
+            .get_table_source(table_reference.clone())
             .is_ok()
+        {
+            Some(table_reference)
+        } else {
+            None
+        }
     }
 
     fn validate_transaction_kind(

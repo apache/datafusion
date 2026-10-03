@@ -83,6 +83,7 @@ impl InformationSchemaProvider {
     pub fn new(catalog_list: Arc<dyn CatalogProviderList>) -> Self {
         Self {
             config: InformationSchemaConfig {
+                system_catalog_name: None,
                 catalog_list,
                 table_functions: HashMap::new(),
             },
@@ -98,10 +99,16 @@ impl InformationSchemaProvider {
         self.config.table_functions = table_functions;
         self
     }
+
+    pub fn with_system_catalog(mut self, catalog_name: String) -> Self {
+        self.config.system_catalog_name = Some(catalog_name);
+        self
+    }
 }
 
 #[derive(Clone, Debug)]
 struct InformationSchemaConfig {
+    system_catalog_name: Option<String>,
     catalog_list: Arc<dyn CatalogProviderList>,
     table_functions: HashMap<String, Arc<TableFunction>>,
 }
@@ -148,6 +155,17 @@ impl InformationSchemaConfig {
             }
         }
 
+        if let Some(system_catalog_name) = &self.system_catalog_name {
+            for table_name in INFORMATION_SCHEMA_TABLES {
+                builder.add_table(
+                    system_catalog_name,
+                    INFORMATION_SCHEMA,
+                    table_name,
+                    TableType::View,
+                );
+            }
+        }
+
         Ok(())
     }
 
@@ -177,21 +195,46 @@ impl InformationSchemaConfig {
                 if schema_name != INFORMATION_SCHEMA {
                     // schema name may not exist in the catalog, so we need to check
                     if let Some(schema) = catalog.schema(&schema_name) {
-                        for table_name in schema.table_names() {
-                            if let Some(table) = schema.table(&table_name).await? {
-                                builder.add_view(
-                                    &catalog_name,
-                                    &schema_name,
-                                    &table_name,
-                                    table.get_table_definition(),
-                                )
-                            }
-                        }
+                        Self::add_views(
+                            builder,
+                            &catalog_name,
+                            &schema_name,
+                            schema.as_ref(),
+                        )
+                        .await?;
                     }
                 }
+
+                // Add the information schema views themselves
+                Self::add_views(builder, &catalog_name, INFORMATION_SCHEMA, self).await?;
             }
         }
 
+        // Add the system information schema
+        if let Some(system_catalog_name) = &self.system_catalog_name {
+            Self::add_views(builder, system_catalog_name, INFORMATION_SCHEMA, self)
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    async fn add_views(
+        builder: &mut InformationSchemaViewBuilder,
+        catalog_name: &str,
+        schema_name: &str,
+        schema: &dyn SchemaProvider,
+    ) -> Result<(), DataFusionError> {
+        for table_name in schema.table_names() {
+            if let Some(table) = schema.table(&table_name).await? {
+                builder.add_view(
+                    catalog_name,
+                    schema_name,
+                    &table_name,
+                    table.get_table_definition(),
+                )
+            }
+        }
         Ok(())
     }
 
@@ -207,26 +250,41 @@ impl InformationSchemaConfig {
                 if schema_name != INFORMATION_SCHEMA {
                     // schema name may not exist in the catalog, so we need to check
                     if let Some(schema) = catalog.schema(&schema_name) {
-                        for table_name in schema.table_names() {
-                            if let Some(table) = schema.table(&table_name).await? {
-                                for (field_position, field) in
-                                    table.schema().fields().iter().enumerate()
-                                {
-                                    builder.add_column(
-                                        &catalog_name,
-                                        &schema_name,
-                                        &table_name,
-                                        field_position,
-                                        field,
-                                    )
-                                }
-                            }
-                        }
+                        Self::add_columns(
+                            builder,
+                            &catalog_name,
+                            &schema_name,
+                            schema.as_ref(),
+                        )
+                        .await?;
                     }
                 }
             }
         }
 
+        Ok(())
+    }
+
+    async fn add_columns(
+        builder: &mut InformationSchemaColumnsBuilder,
+        catalog_name: &str,
+        schema_name: &str,
+        schema: &dyn SchemaProvider,
+    ) -> Result<(), DataFusionError> {
+        for table_name in schema.table_names() {
+            if let Some(table) = schema.table(&table_name).await? {
+                for (field_position, field) in table.schema().fields().iter().enumerate()
+                {
+                    builder.add_column(
+                        catalog_name,
+                        schema_name,
+                        &table_name,
+                        field_position,
+                        field,
+                    )
+                }
+            }
+        }
         Ok(())
     }
 
@@ -576,6 +634,24 @@ fn remove_native_type_prefix(native_type: &NativeType) -> String {
 #[async_trait]
 impl SchemaProvider for InformationSchemaProvider {
     fn table_names(&self) -> Vec<String> {
+        self.config.table_names()
+    }
+
+    async fn table(
+        &self,
+        name: &str,
+    ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError> {
+        self.config.get_table(name)
+    }
+
+    fn table_exist(&self, name: &str) -> bool {
+        self.config.table_exist(name)
+    }
+}
+
+#[async_trait]
+impl SchemaProvider for InformationSchemaConfig {
+    fn table_names(&self) -> Vec<String> {
         INFORMATION_SCHEMA_TABLES
             .iter()
             .map(|t| (*t).to_string())
@@ -586,7 +662,20 @@ impl SchemaProvider for InformationSchemaProvider {
         &self,
         name: &str,
     ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError> {
-        let config = self.config.clone();
+        self.get_table(name)
+    }
+
+    fn table_exist(&self, name: &str) -> bool {
+        INFORMATION_SCHEMA_TABLES.contains(&name.to_ascii_lowercase().as_str())
+    }
+}
+
+impl InformationSchemaConfig {
+    fn get_table(
+        &self,
+        name: &str,
+    ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError> {
+        let config = self.clone();
         let table: Arc<dyn PartitionStream> = match name.to_ascii_lowercase().as_str() {
             TABLES => Arc::new(InformationSchemaTables::new(config)),
             COLUMNS => Arc::new(InformationSchemaColumns::new(config)),
@@ -601,10 +690,6 @@ impl SchemaProvider for InformationSchemaProvider {
         Ok(Some(Arc::new(
             StreamingTable::try_new(Arc::clone(table.schema()), vec![table]).unwrap(),
         )))
-    }
-
-    fn table_exist(&self, name: &str) -> bool {
-        INFORMATION_SCHEMA_TABLES.contains(&name.to_ascii_lowercase().as_str())
     }
 }
 
@@ -1564,6 +1649,7 @@ mod tests {
     #[tokio::test]
     async fn make_tables_uses_table_type() {
         let config = InformationSchemaConfig {
+            system_catalog_name: None,
             catalog_list: Arc::new(Fixture),
             table_functions: HashMap::new(),
         };
