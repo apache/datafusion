@@ -35,7 +35,9 @@ use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, NegativeExpr};
 use datafusion_physical_expr::intervals::utils::check_support;
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
+use datafusion_physical_expr::{
+    EquivalenceProperties, Partitioning, PhysicalExpr, RangePartitioning, SplitPoint,
+};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_optimizer::PhysicalOptimizerContext;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
@@ -1220,6 +1222,230 @@ async fn test_join_selection_partitioned() {
     check_join_partition_mode(big, empty, join_on, false, PartitionMode::Partitioned);
 }
 
+#[derive(Clone, Copy, Debug)]
+enum PartitionCase {
+    CoPartitionedHash,
+    CoPartitionedRange,
+    MismatchedRange,
+    NonJoinKeyHash,
+    SinglePartition,
+}
+
+struct PartitionedTestInputs {
+    left: Arc<StatisticsExec>,
+    right: Arc<StatisticsExec>,
+    on: Vec<(PhysicalExprRef, PhysicalExprRef)>,
+}
+
+fn create_partitioned_test_inputs(
+    case: PartitionCase,
+    left_stats: Statistics,
+    right_stats: Statistics,
+) -> Result<PartitionedTestInputs> {
+    let schema_left = Schema::new(vec![
+        Field::new("k1", DataType::Int32, false),
+        Field::new("other1", DataType::Int32, false),
+    ]);
+    let schema_right = Schema::new(vec![
+        Field::new("k2", DataType::Int32, false),
+        Field::new("other2", DataType::Int32, false),
+    ]);
+
+    let key_left = col("k1", &schema_left)?;
+    let key_right = col("k2", &schema_right)?;
+    let other_left = col("other1", &schema_left)?;
+    let other_right = col("other2", &schema_right)?;
+
+    let (left_part, right_part) = match case {
+        PartitionCase::CoPartitionedHash => (
+            Partitioning::Hash(vec![Arc::clone(&key_left)], 2),
+            Partitioning::Hash(vec![Arc::clone(&key_right)], 2),
+        ),
+        PartitionCase::CoPartitionedRange => {
+            let split_points = vec![SplitPoint::new(vec![ScalarValue::Int32(Some(100))])];
+            (
+                Partitioning::Range(RangePartitioning::try_new(
+                    [PhysicalSortExpr::new_default(Arc::clone(&key_left))].into(),
+                    split_points.clone(),
+                )?),
+                Partitioning::Range(RangePartitioning::try_new(
+                    [PhysicalSortExpr::new_default(Arc::clone(&key_right))].into(),
+                    split_points,
+                )?),
+            )
+        }
+        PartitionCase::MismatchedRange => (
+            Partitioning::Range(RangePartitioning::try_new(
+                [PhysicalSortExpr::new_default(Arc::clone(&key_left))].into(),
+                vec![SplitPoint::new(vec![ScalarValue::Int32(Some(100))])],
+            )?),
+            Partitioning::Range(RangePartitioning::try_new(
+                [PhysicalSortExpr::new_default(Arc::clone(&key_right))].into(),
+                vec![SplitPoint::new(vec![ScalarValue::Int32(Some(200))])],
+            )?),
+        ),
+        PartitionCase::NonJoinKeyHash => (
+            Partitioning::Hash(vec![other_left], 2),
+            Partitioning::Hash(vec![other_right], 2),
+        ),
+        PartitionCase::SinglePartition => (
+            Partitioning::Hash(vec![Arc::clone(&key_left)], 1),
+            Partitioning::Hash(vec![Arc::clone(&key_right)], 1),
+        ),
+    };
+
+    let make_stats = |base: Statistics| Statistics {
+        num_rows: base.num_rows,
+        total_byte_size: base.total_byte_size,
+        column_statistics: vec![
+            ColumnStatistics::new_unknown(),
+            ColumnStatistics::new_unknown(),
+        ],
+    };
+
+    let left = Arc::new(
+        StatisticsExec::new(make_stats(left_stats), schema_left)
+            .with_partitioning(left_part),
+    );
+    let right = Arc::new(
+        StatisticsExec::new(make_stats(right_stats), schema_right)
+            .with_partitioning(right_part),
+    );
+    let on = vec![(key_left, key_right)];
+
+    Ok(PartitionedTestInputs { left, right, on })
+}
+
+#[rstest(
+    case,
+    expected_mode,
+    case::co_partitioned_hash(
+        PartitionCase::CoPartitionedHash,
+        PartitionMode::Partitioned
+    ),
+    case::co_partitioned_range(
+        PartitionCase::CoPartitionedRange,
+        PartitionMode::Partitioned
+    ),
+    case::mismatched_range(PartitionCase::MismatchedRange, PartitionMode::CollectLeft),
+    case::non_join_key_hash(PartitionCase::NonJoinKeyHash, PartitionMode::CollectLeft),
+    case::single_partition(PartitionCase::SinglePartition, PartitionMode::CollectLeft)
+)]
+#[tokio::test]
+async fn test_join_selection_co_partitioned_scenarios(
+    case: PartitionCase,
+    expected_mode: PartitionMode,
+) -> Result<()> {
+    let inputs =
+        create_partitioned_test_inputs(case, small_statistics(), small_statistics())?;
+    check_join_partition_mode(inputs.left, inputs.right, inputs.on, false, expected_mode);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_join_selection_co_partitioned_initial_collect_left_switches_to_partitioned()
+-> Result<()> {
+    let inputs = create_partitioned_test_inputs(
+        PartitionCase::CoPartitionedHash,
+        small_statistics(),
+        small_statistics(),
+    )?;
+    let join = Arc::new(HashJoinExec::try_new(
+        inputs.left,
+        inputs.right,
+        inputs.on,
+        None,
+        &JoinType::Inner,
+        None,
+        PartitionMode::CollectLeft,
+        NullEquality::NullEqualsNothing,
+        false,
+    )?);
+    check_hash_join_mode(join, false, PartitionMode::Partitioned);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_join_selection_co_partitioned_swaps_smaller_side_to_build() -> Result<()> {
+    let inputs = create_partitioned_test_inputs(
+        PartitionCase::CoPartitionedHash,
+        big_statistics(),
+        small_statistics(),
+    )?;
+    let join = Arc::new(HashJoinExec::try_new(
+        inputs.left,
+        inputs.right,
+        inputs.on,
+        None,
+        &JoinType::Inner,
+        None,
+        PartitionMode::Auto,
+        NullEquality::NullEqualsNothing,
+        false,
+    )?);
+    let optimized = check_hash_join_mode(join, true, PartitionMode::Partitioned);
+    let swapped_join = optimized
+        .downcast_ref::<ProjectionExec>()
+        .unwrap()
+        .input()
+        .downcast_ref::<HashJoinExec>()
+        .unwrap();
+    // Right (smaller) became the left (build) child
+    assert_eq!(swapped_join.left().schema().field(0).name(), "k2");
+    assert_eq!(swapped_join.right().schema().field(0).name(), "k1");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_join_selection_co_partitioned_null_aware_remains_collect_left() -> Result<()>
+{
+    let inputs = create_partitioned_test_inputs(
+        PartitionCase::CoPartitionedHash,
+        small_statistics(),
+        small_statistics(),
+    )?;
+    let join = Arc::new(HashJoinExec::try_new(
+        inputs.left,
+        inputs.right,
+        inputs.on,
+        None,
+        &JoinType::LeftAnti,
+        None,
+        PartitionMode::CollectLeft,
+        NullEquality::NullEqualsNothing,
+        true,
+    )?);
+    check_hash_join_mode(join, false, PartitionMode::CollectLeft);
+    Ok(())
+}
+
+fn check_hash_join_mode(
+    join: Arc<HashJoinExec>,
+    is_swapped: bool,
+    expected_mode: PartitionMode,
+) -> Arc<dyn ExecutionPlan> {
+    let optimized_join = JoinSelection::new()
+        .optimize(join, &ConfigOptions::new())
+        .unwrap();
+
+    let hash_join = if !is_swapped {
+        optimized_join
+            .downcast_ref::<HashJoinExec>()
+            .expect("The type of the plan should not be changed")
+    } else {
+        let swapping_projection = optimized_join
+            .downcast_ref::<ProjectionExec>()
+            .expect("A proj is required to swap columns back to their original order");
+        swapping_projection
+            .input()
+            .downcast_ref::<HashJoinExec>()
+            .expect("The type of the plan should not be changed")
+    };
+
+    assert_eq!(*hash_join.partition_mode(), expected_mode);
+    optimized_join
+}
+
 fn check_join_partition_mode(
     left: Arc<StatisticsExec>,
     right: Arc<StatisticsExec>,
@@ -1241,27 +1467,7 @@ fn check_join_partition_mode(
         )
         .unwrap(),
     );
-
-    let optimized_join = JoinSelection::new()
-        .optimize(join, &ConfigOptions::new())
-        .unwrap();
-
-    if !is_swapped {
-        let swapped_join = optimized_join
-            .downcast_ref::<HashJoinExec>()
-            .expect("The type of the plan should not be changed");
-        assert_eq!(*swapped_join.partition_mode(), expected_mode);
-    } else {
-        let swapping_projection = optimized_join
-            .downcast_ref::<ProjectionExec>()
-            .expect("A proj is required to swap columns back to their original order");
-        let swapped_join = swapping_projection
-            .input()
-            .downcast_ref::<HashJoinExec>()
-            .expect("The type of the plan should not be changed");
-
-        assert_eq!(*swapped_join.partition_mode(), expected_mode);
-    }
+    check_hash_join_mode(join, is_swapped, expected_mode);
 }
 
 #[derive(Debug)]
@@ -1441,6 +1647,16 @@ impl StatisticsExec {
             schema: Arc::new(schema),
             cache: Arc::new(cache),
         }
+    }
+
+    pub fn with_partitioning(mut self, partitioning: Partitioning) -> Self {
+        self.cache = Arc::new(PlanProperties::new(
+            EquivalenceProperties::new(Arc::clone(&self.schema)),
+            partitioning,
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        ));
+        self
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
