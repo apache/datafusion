@@ -1,0 +1,1031 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Query Optimizer &#8212; Apache DataFusion 55.1.0 documentation</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../_static/theme_overrides.css?v=d08b24aa" />
+  
+  <!-- So that users can add custom icons -->
+  <script defer src="../_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
+
+    <script src="../_static/documentation_options.js?v=ec4754ca"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'library-user-guide/query-optimizer';</script>
+    <script>
+        DOCUMENTATION_OPTIONS.theme_version = '0.20.0';
+        DOCUMENTATION_OPTIONS.theme_switcher_json_url = 'https://yiaany.github.io/datafusion/_static/versions.json';
+        DOCUMENTATION_OPTIONS.theme_switcher_version_match = '55.1.0';
+        DOCUMENTATION_OPTIONS.show_version_warning_banner =
+            false;
+        </script>
+    <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
+    <link rel="canonical" href="https://yiaany.github.io/datafusion/versions/55.1.0/library-user-guide/query-optimizer.html" />
+    <link rel="icon" href="../_static/favicon.svg"/>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Introduction" href="../contributor-guide/index.html" />
+    <link rel="prev" title="Profiling Cookbook" href="profiling.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="55.1.0" />
+  
+    
+    <script src="../_static/searchtools.js"></script>
+    <script src="../_static/language_data.js"></script>
+    <script src="../searchindex.js"></script>
+  
+  </head>
+  <body data-default-mode="">
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+  
+  
+  
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header id="pst-header" class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class="col-lg-3 navbar-header-items__start">
+    
+      <div class="navbar-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/original.svg" class="logo__image only-light" alt="Apache DataFusion 55.1.0 documentation - Home"/>
+    <img src="../_static/original_dark.svg" class="logo__image only-dark pst-js-only" alt="Apache DataFusion 55.1.0 documentation - Home"/>
+  
+  
+</a></div>
+    
+  </div>
+  
+  <div class="col-lg-9 navbar-header-items">
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+        <div class="navbar-item">
+<div class="version-switcher__container dropdown pst-js-only">
+  <button id="pst-version-switcher-button-2"
+    type="button"
+    class="version-switcher__button btn btn-sm dropdown-toggle"
+    data-bs-toggle="dropdown"
+    aria-haspopup="listbox"
+    aria-controls="pst-version-switcher-list-2"
+    aria-label="Version switcher list"
+  >
+    Choose version  <!-- this text may get changed later by javascript -->
+    <span class="caret"></span>
+  </button>
+  <div id="pst-version-switcher-list-2"
+    class="version-switcher__menu dropdown-menu list-group-flush py-0"
+    role="listbox" aria-labelledby="pst-version-switcher-button-2">
+    <!-- dropdown will be populated by javascript on page load -->
+  </div>
+</div></div>
+      
+        <div class="navbar-item">
+
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
+  </ul>
+</div></div>
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+      <div class="sidebar-header-items__end">
+        
+          <div class="navbar-item">
+<div class="version-switcher__container dropdown pst-js-only">
+  <button id="pst-version-switcher-button-3"
+    type="button"
+    class="version-switcher__button btn btn-sm dropdown-toggle"
+    data-bs-toggle="dropdown"
+    aria-haspopup="listbox"
+    aria-controls="pst-version-switcher-list-3"
+    aria-label="Version switcher list"
+  >
+    Choose version  <!-- this text may get changed later by javascript -->
+    <span class="caret"></span>
+  </button>
+  <div id="pst-version-switcher-list-3"
+    class="version-switcher__menu dropdown-menu list-group-flush py-0"
+    role="listbox" aria-labelledby="pst-version-switcher-button-3">
+    <!-- dropdown will be populated by javascript on page load -->
+  </div>
+</div></div>
+        
+          <div class="navbar-item">
+
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
+  </ul>
+</div></div>
+        
+      </div>
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item"><nav class="bd-links" id="bd-docs-nav" aria-label="Main navigation">
+
+  <div class="bd-toc-item active">
+    
+    <p aria-level="2" class="caption" role="heading"><span class="caption-text">ASF Links</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://apache.org">Apache Software Foundation</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/licenses/">License</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/foundation/sponsorship.html">Donate</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/foundation/thanks.html">Thanks</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/security/">Security</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Links</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://github.com/apache/datafusion">GitHub and Issue Tracker</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://crates.io/crates/datafusion">crates.io</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/">API Docs</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/blog/">Blog</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://github.com/apache/datafusion/blob/main/CODE_OF_CONDUCT.md">Code of conduct</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../download.html">Download</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">User Guide</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/example-usage.html">Example Usage</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/features.html">Features</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/concepts-readings-events.html">Concepts, Readings, Events</a></li>
+
+
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/crate-configuration.html">Crate Configuration</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../user-guide/cli/index.html">DataFusion CLI</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/cli/overview.html">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/cli/installation.html">Installation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/cli/usage.html">Usage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/cli/datasources.html">Local Files / Directories</a></li>
+
+
+
+
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/cli/functions.html">CLI Specific Functions</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/dataframe.html">DataFrame API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/arrow-introduction.html">Gentle Arrow Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/expressions.html">Expression API</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../user-guide/sql/index.html">SQL Reference</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/data_types.html">Data Types</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/struct_coercion.html">Struct Type Coercion and Field Mapping</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/select.html">SELECT syntax</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/subqueries.html">Subqueries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/ddl.html">DDL</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/dml.html">DML</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/explain.html">EXPLAIN</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/information_schema.html">Information Schema</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/operators.html">Operators and Literals</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/aggregate_functions.html">Aggregate Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/window_functions.html">Window Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/scalar_functions.html">Scalar Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/special_functions.html">Special Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/format_options.html">Format Options</a></li>
+
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/prepared_statements.html">Prepared Statements</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/configs.html">Configuration Settings</a></li>
+
+
+
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/explain-usage.html">Reading Explain Plans</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/parquet-content-defined-chunking.html">Parquet Content-Defined Chunking</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/metrics.html">Metrics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/faq.html">Frequently Asked Questions</a></li>
+
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Library User Guide</span></p>
+<ul class="current nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="index.html">Introduction</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="upgrading/index.html">Upgrade Guides</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="upgrading/55.0.0.html">DataFusion 55.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="upgrading/54.0.0.html">DataFusion 54.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="upgrading/53.0.0.html">DataFusion 53.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="upgrading/52.0.0.html">DataFusion 52.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="upgrading/51.0.0.html">DataFusion 51.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="upgrading/50.0.0.html">DataFusion 50.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="upgrading/49.0.0.html">DataFusion 49.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="upgrading/48.0.1.html">DataFusion 48.0.1</a></li>
+<li class="toctree-l2"><a class="reference internal" href="upgrading/48.0.0.html">DataFusion 48.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="upgrading/47.0.0.html">DataFusion 47.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="upgrading/46.0.0.html">DataFusion 46.0.0</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="extensions.html">Extensions List</a></li>
+<li class="toctree-l1"><a class="reference internal" href="using-the-sql-api.html">Using the SQL API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="extending-sql.html">Extending SQL Syntax</a></li>
+<li class="toctree-l1"><a class="reference internal" href="working-with-exprs.html">Working with <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s</a></li>
+<li class="toctree-l1"><a class="reference internal" href="using-the-dataframe-api.html">Using the DataFrame API</a></li>
+
+<li class="toctree-l1"><a class="reference internal" href="building-logical-plans.html">Building Logical Plans</a></li>
+<li class="toctree-l1"><a class="reference internal" href="catalogs.html">Catalogs, Schemas, and Tables</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="functions/index.html">Functions</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="functions/adding-udfs.html">Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="functions/spark.html">Spark Compatible Functions</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="custom-table-providers.html">Custom Table Provider</a></li>
+<li class="toctree-l1"><a class="reference internal" href="table-constraints.html">Table Constraint Enforcement</a></li>
+<li class="toctree-l1"><a class="reference internal" href="extending-operators.html">Extending Operators</a></li>
+<li class="toctree-l1"><a class="reference internal" href="profiling.html">Profiling Cookbook</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">Query Optimizer</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Contributor Guide</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/index.html">Introduction</a></li>
+
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/pr_review.html">Reviewing Pull Requests</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/communication.html">Community Communication</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/development_environment.html">Development Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/architecture.html">Architecture</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/architecture/dependency-graph.html">Workspace Dependency Graph</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/testing.html">Testing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/api-health.html">API health policy</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/howtos.html">HOWTOs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/release_management.html">Release Management</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/roadmap.html">Roadmap and Improvement Proposals</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/governance.html">Governance</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/inviting.html">Inviting New Committers and PMC Members</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../contributor-guide/specification/index.html">Specifications</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../contributor-guide/specification/invariants.html">Invariants</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../contributor-guide/specification/output-field-name-semantic.html">Output field name semantics</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../contributor-guide/gsoc/index.html">Google Summer of Code (GSOC)</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../contributor-guide/gsoc/gsoc_application_guidelines_2025.html">GSoC Application Guidelines (2025)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../contributor-guide/gsoc/gsoc_project_ideas_2025.html">GSoC Project Ideas (2025)</a></li>
+</ul>
+</details></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">DataFusion Subprojects</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/ballista/">DataFusion Ballista</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/comet/">DataFusion Comet</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/java/">DataFusion Java</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/python/">DataFusion Python</a></li>
+</ul>
+
+    
+  </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item">
+
+<nav aria-label="Breadcrumb" class="d-print-none">
+  <ul class="bd-breadcrumbs">
+    
+    <li class="breadcrumb-item breadcrumb-home">
+      <a href="../index.html" class="nav-link" aria-label="Home">
+        <i class="fa-solid fa-home"></i>
+      </a>
+    </li>
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Query Optimizer</span></li>
+  </ul>
+</nav>
+</div>
+      
+    </div>
+  
+  
+</div>
+</div>
+              
+              
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <!---
+  Licensed to the Apache Software Foundation (ASF) under one
+  or more contributor license agreements.  See the NOTICE file
+  distributed with this work for additional information
+  regarding copyright ownership.  The ASF licenses this file
+  to you under the Apache License, Version 2.0 (the
+  "License"); you may not use this file except in compliance
+  with the License.  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing,
+  software distributed under the License is distributed on an
+  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, either express or implied.  See the License for the
+  specific language governing permissions and limitations
+  under the License.
+-->
+<section id="query-optimizer">
+<h1>Query Optimizer<a class="headerlink" href="#query-optimizer" title="Link to this heading">#</a></h1>
+<p><a class="reference external" href="https://crates.io/crates/datafusion">DataFusion</a> is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory
+format.</p>
+<p>DataFusion has modular design, allowing individual crates to be re-used in other projects.</p>
+<p>This crate is a submodule of DataFusion that provides a query optimizer for logical plans, and
+contains an extensive set of <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/optimizer/trait.OptimizerRule.html"><code class="docutils literal notranslate"><span class="pre">OptimizerRule</span></code></a>s and <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/physical_optimizer/trait.PhysicalOptimizerRule.html"><code class="docutils literal notranslate"><span class="pre">PhysicalOptimizerRule</span></code></a>s that may rewrite the plan and/or its expressions so
+they execute more quickly while still computing the same result.</p>
+<p>For a reference list of the built-in analyzer, logical optimizer, and physical optimizer rules,
+see <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/index.html#built-in-optimizer-rules">Optimizer Rule Reference</a>.</p>
+<p>For a deeper background on optimizer architecture and rule types and predicates, see
+<a class="reference external" href="https://datafusion.apache.org/blog/2025/06/15/optimizing-sql-dataframes-part-one">Optimizing SQL (and DataFrames) in DataFusion, Part 1</a>, <a class="reference external" href="https://datafusion.apache.org/blog/2025/06/15/optimizing-sql-dataframes-part-two">Part 2</a>,
+<a class="reference external" href="https://datafusion.apache.org/blog/2025/03/11/ordering-analysis">Using Ordering for Better Plans in Apache DataFusion</a>, and
+<a class="reference external" href="https://datafusion.apache.org/blog/2025/09/10/dynamic-filters">Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries</a>.</p>
+<section id="running-the-optimizer">
+<h2>Running the Optimizer<a class="headerlink" href="#running-the-optimizer" title="Link to this heading">#</a></h2>
+<p>The following code demonstrates the basic flow of creating the optimizer with a default set of optimization rules
+and applying it to a logical plan to produce an optimized logical plan.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">sync</span><span class="p">::</span><span class="n">Arc</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">logical_expr</span><span class="p">::{</span><span class="n">col</span><span class="p">,</span><span class="w"> </span><span class="n">lit</span><span class="p">,</span><span class="w"> </span><span class="n">LogicalPlan</span><span class="p">,</span><span class="w"> </span><span class="n">LogicalPlanBuilder</span><span class="p">};</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">optimizer</span><span class="p">::{</span><span class="n">OptimizerRule</span><span class="p">,</span><span class="w"> </span><span class="n">OptimizerContext</span><span class="p">,</span><span class="w"> </span><span class="n">Optimizer</span><span class="p">};</span>
+
+<span class="c1">// We need a logical plan as the starting point. There are many ways to build a logical plan:</span>
+<span class="c1">//</span>
+<span class="c1">// The `datafusion-expr` crate provides a LogicalPlanBuilder</span>
+<span class="c1">// The `datafusion-sql` crate provides a SQL query planner that can create a LogicalPlan from SQL</span>
+<span class="c1">// The `datafusion` crate provides a DataFrame API that can create a LogicalPlan</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="n">initial_logical_plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LogicalPlanBuilder</span><span class="p">::</span><span class="n">empty</span><span class="p">(</span><span class="kc">false</span><span class="p">).</span><span class="n">build</span><span class="p">().</span><span class="n">unwrap</span><span class="p">();</span>
+
+<span class="c1">// use builtin rules or customized rules</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">rules</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">OptimizerRule</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nb">Send</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nb">Sync</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="fm">vec!</span><span class="p">[];</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="n">optimizer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Optimizer</span><span class="p">::</span><span class="n">with_rules</span><span class="p">(</span><span class="n">rules</span><span class="p">);</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="n">config</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">OptimizerContext</span><span class="p">::</span><span class="n">new</span><span class="p">().</span><span class="n">with_max_passes</span><span class="p">(</span><span class="mi">16</span><span class="p">);</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="n">optimized_plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">optimizer</span><span class="p">.</span><span class="n">optimize</span><span class="p">(</span><span class="n">initial_logical_plan</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span><span class="w"> </span><span class="o">&amp;</span><span class="n">config</span><span class="p">,</span><span class="w"> </span><span class="n">observer</span><span class="p">);</span>
+
+<span class="k">fn</span><span class="w"> </span><span class="nf">observer</span><span class="p">(</span><span class="n">plan</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">LogicalPlan</span><span class="p">,</span><span class="w"> </span><span class="n">rule</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">dyn</span><span class="w"> </span><span class="n">OptimizerRule</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="fm">println!</span><span class="p">(</span>
+<span class="w">        </span><span class="s">&quot;After applying rule &#39;{}&#39;:</span><span class="se">\n</span><span class="s">{}&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="n">rule</span><span class="p">.</span><span class="n">name</span><span class="p">(),</span>
+<span class="w">        </span><span class="n">plan</span><span class="p">.</span><span class="n">display_indent</span><span class="p">()</span>
+<span class="w">    </span><span class="p">)</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="writing-optimization-rules">
+<h2>Writing Optimization Rules<a class="headerlink" href="#writing-optimization-rules" title="Link to this heading">#</a></h2>
+<p>Please refer to the
+<a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/optimizer_rule.rs">optimizer_rule.rs</a>
+example to learn more about the general approach to writing optimizer rules and
+then move onto studying the existing rules.</p>
+<p><code class="docutils literal notranslate"><span class="pre">OptimizerRule</span></code> transforms one <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.LogicalPlan.html"><code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code></a> into another which
+computes the same results, but in a potentially more efficient
+way. If there are no suitable transformations for the input plan,
+the optimizer can simply return it as is.</p>
+<p>All rules must implement the <code class="docutils literal notranslate"><span class="pre">OptimizerRule</span></code> trait.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="cp">#[derive(Default, Debug)]</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">MyOptimizerRule</span><span class="w"> </span><span class="p">{}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">OptimizerRule</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MyOptimizerRule</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">name</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="s">&quot;my_optimizer_rule&quot;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">rewrite</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">plan</span><span class="p">:</span><span class="w"> </span><span class="nc">LogicalPlan</span><span class="p">,</span>
+<span class="w">        </span><span class="n">_config</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">dyn</span><span class="w"> </span><span class="n">OptimizerConfig</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Transformed</span><span class="o">&lt;</span><span class="n">LogicalPlan</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="fm">unimplemented!</span><span class="p">()</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="providing-custom-rules">
+<h2>Providing Custom Rules<a class="headerlink" href="#providing-custom-rules" title="Link to this heading">#</a></h2>
+<p>The optimizer can be created with a custom set of rules.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">optimizer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Optimizer</span><span class="p">::</span><span class="n">with_rules</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span>
+<span class="w">    </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">MyOptimizerRule</span><span class="w"> </span><span class="p">{})</span>
+<span class="p">]);</span>
+</pre></div>
+</div>
+<section id="general-guidelines">
+<h3>General Guidelines<a class="headerlink" href="#general-guidelines" title="Link to this heading">#</a></h3>
+<p>Rules typical walk the logical plan and walk the expression trees inside operators and selectively mutate
+individual operators or expressions.</p>
+<p>Sometimes there is an initial pass that visits the plan and builds state that is used in a second pass that performs
+the actual optimization. This approach is used in projection push down and filter push down.</p>
+</section>
+<section id="expression-naming">
+<h3>Expression Naming<a class="headerlink" href="#expression-naming" title="Link to this heading">#</a></h3>
+<p>Every expression in DataFusion has a name, which is used as the column name. For example, in this example the output
+contains a single column with the name <code class="docutils literal notranslate"><span class="pre">&quot;COUNT(aggregate_test_100.c9)&quot;</span></code>:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>&gt; select count(c9) from aggregate_test_100;
++------------------------------+
+| COUNT(aggregate_test_100.c9) |
++------------------------------+
+| 100                          |
++------------------------------+
+</pre></div>
+</div>
+<p>These names are used to refer to the columns in both subqueries as well as internally from one stage of the LogicalPlan
+to another. For example:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>&gt; select &quot;COUNT(aggregate_test_100.c9)&quot; + 1 from (select count(c9) from aggregate_test_100) as sq;
++--------------------------------------------+
+| sq.COUNT(aggregate_test_100.c9) + Int64(1) |
++--------------------------------------------+
+| 101                                        |
++--------------------------------------------+
+</pre></div>
+</div>
+</section>
+<section id="implication">
+<h3>Implication<a class="headerlink" href="#implication" title="Link to this heading">#</a></h3>
+<p>Because DataFusion identifies columns using a string name, it means it is critical that the names of expressions are
+not changed by the optimizer when it rewrites expressions. This is typically accomplished by renaming a rewritten
+expression by adding an alias.</p>
+<p>Here is a simple example of such a rewrite. The expression <code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">+</span> <span class="pre">2</span></code> can be internally simplified to 3 but must still be
+displayed the same as <code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">+</span> <span class="pre">2</span></code>:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>&gt; select 1 + 2;
++---------------------+
+| Int64(1) + Int64(2) |
++---------------------+
+| 3                   |
++---------------------+
+</pre></div>
+</div>
+<p>Looking at the <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span></code> output we can see that the optimizer has effectively rewritten <code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">+</span> <span class="pre">2</span></code> into effectively
+<code class="docutils literal notranslate"><span class="pre">3</span> <span class="pre">as</span> <span class="pre">&quot;1</span> <span class="pre">+</span> <span class="pre">2&quot;</span></code>:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>&gt; explain format indent select 1 + 2;
++---------------+-------------------------------------------------+
+| plan_type     | plan                                            |
++---------------+-------------------------------------------------+
+| logical_plan  | Projection: Int64(3) AS Int64(1) + Int64(2)     |
+|               |   EmptyRelation                                 |
+| physical_plan | ProjectionExec: expr=[3 as Int64(1) + Int64(2)] |
+|               |   PlaceholderRowExec                            |
+|               |                                                 |
++---------------+-------------------------------------------------+
+</pre></div>
+</div>
+<p>If the expression name is not preserved, bugs such as <a class="reference external" href="https://github.com/apache/datafusion/issues/3704">#3704</a>
+and <a class="reference external" href="https://github.com/apache/datafusion/issues/3555">#3555</a> occur where the expected columns can not be found.</p>
+</section>
+<section id="building-expression-names">
+<h3>Building Expression Names<a class="headerlink" href="#building-expression-names" title="Link to this heading">#</a></h3>
+<p>There are currently two ways to create a name for an expression in the logical plan.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">impl</span><span class="w"> </span><span class="n">Expr</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="sd">/// Returns the name of this expression as it should appear in a schema. This name</span>
+<span class="w">    </span><span class="sd">/// will not include any CAST expressions.</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">display_name</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="s">&quot;display_name&quot;</span><span class="p">.</span><span class="n">to_string</span><span class="p">())</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="sd">/// Returns a full and complete string representation of this expression.</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">canonical_name</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">String</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="s">&quot;canonical_name&quot;</span><span class="p">.</span><span class="n">to_string</span><span class="p">()</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>When comparing expressions to determine if they are equivalent, <code class="docutils literal notranslate"><span class="pre">canonical_name</span></code> should be used, and when creating a
+name to be used in a schema, <code class="docutils literal notranslate"><span class="pre">display_name</span></code> should be used.</p>
+</section>
+<section id="utilities">
+<h3>Utilities<a class="headerlink" href="#utilities" title="Link to this heading">#</a></h3>
+<p>There are a number of <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion/expr/src/utils.rs">utility methods</a> provided that take care of some common tasks.</p>
+</section>
+<section id="recursively-walk-an-expression-tree">
+<h3>Recursively walk an expression tree<a class="headerlink" href="#recursively-walk-an-expression-tree" title="Link to this heading">#</a></h3>
+<p>The <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/common/tree_node/trait.TreeNode.html">TreeNode API</a> provides a convenient way to recursively walk an expression or plan tree.</p>
+<p>For example, to find all subquery references in a logical plan, the following code can be used:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Return all subquery references in an expression</span>
+<span class="k">fn</span><span class="w"> </span><span class="nf">extract_subquery_filters</span><span class="p">(</span><span class="n">expression</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Expr</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">Vec</span><span class="o">&lt;&amp;</span><span class="n">Expr</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">extracted</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="fm">vec!</span><span class="p">[];</span>
+<span class="w">    </span><span class="n">expression</span><span class="p">.</span><span class="n">apply</span><span class="p">(</span><span class="o">|</span><span class="n">expr</span><span class="o">|</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="kd">let</span><span class="w"> </span><span class="n">Expr</span><span class="p">::</span><span class="n">InSubquery</span><span class="p">(</span><span class="n">_</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">expr</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="n">extracted</span><span class="p">.</span><span class="n">push</span><span class="p">(</span><span class="n">expr</span><span class="p">);</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">            </span><span class="nb">Ok</span><span class="p">(</span><span class="n">TreeNodeRecursion</span><span class="p">::</span><span class="n">Continue</span><span class="p">)</span>
+<span class="w">    </span><span class="p">})</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(</span><span class="n">extracted</span><span class="p">)</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Likewise you can use the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/common/tree_node/trait.TreeNode.html">TreeNode API</a> to rewrite a <code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code> or <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Return all joins in a logical plan</span>
+<span class="k">fn</span><span class="w"> </span><span class="nf">find_joins</span><span class="p">(</span><span class="n">overall_plan</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">LogicalPlan</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">Vec</span><span class="o">&lt;&amp;</span><span class="n">Join</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">extracted</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="fm">vec!</span><span class="p">[];</span>
+<span class="w">    </span><span class="n">overall_plan</span><span class="p">.</span><span class="n">apply</span><span class="p">(</span><span class="o">|</span><span class="n">plan</span><span class="o">|</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="kd">let</span><span class="w"> </span><span class="n">LogicalPlan</span><span class="p">::</span><span class="n">Join</span><span class="p">(</span><span class="n">join</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="n">extracted</span><span class="p">.</span><span class="n">push</span><span class="p">(</span><span class="n">join</span><span class="p">);</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">            </span><span class="nb">Ok</span><span class="p">(</span><span class="n">TreeNodeRecursion</span><span class="p">::</span><span class="n">Continue</span><span class="p">)</span>
+<span class="w">    </span><span class="p">})</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(</span><span class="n">extracted</span><span class="p">)</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="rewriting-expressions">
+<h3>Rewriting expressions<a class="headerlink" href="#rewriting-expressions" title="Link to this heading">#</a></h3>
+<p>The <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/common/tree_node/trait.TreeNode.html">TreeNode API</a> also provides a convenient way to rewrite expressions and
+plans as well. For example to rewrite all expressions like</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">col</span><span class="w"> </span><span class="k">BETWEEN</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">AND</span><span class="w"> </span><span class="n">y</span>
+</pre></div>
+</div>
+<p>into</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">col</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">AND</span><span class="w"> </span><span class="n">col</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="n">y</span>
+</pre></div>
+</div>
+<p>you can use the following code:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Recursively rewrite all BETWEEN expressions</span>
+<span class="c1">// returns Transformed::yes if any changes were made</span>
+<span class="k">fn</span><span class="w"> </span><span class="nf">rewrite_between</span><span class="p">(</span><span class="n">expr</span><span class="p">:</span><span class="w"> </span><span class="nc">Expr</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Transformed</span><span class="o">&lt;</span><span class="n">Expr</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// transform_up does a bottom up rewrite</span>
+<span class="w">    </span><span class="n">expr</span><span class="p">.</span><span class="n">transform_up</span><span class="p">(</span><span class="o">|</span><span class="n">expr</span><span class="o">|</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// only handle BETWEEN expressions</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">Expr</span><span class="p">::</span><span class="n">Between</span><span class="p">(</span><span class="n">Between</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="n">negated</span><span class="p">,</span>
+<span class="w">                </span><span class="n">expr</span><span class="p">,</span>
+<span class="w">                </span><span class="n">low</span><span class="p">,</span>
+<span class="w">                </span><span class="n">high</span><span class="p">,</span>
+<span class="w">        </span><span class="p">})</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">expr</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nb">Ok</span><span class="p">(</span><span class="n">Transformed</span><span class="p">::</span><span class="n">no</span><span class="p">(</span><span class="n">expr</span><span class="p">))</span>
+<span class="w">        </span><span class="p">};</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">rewritten_expr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">negated</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="c1">// don&#39;t rewrite NOT BETWEEN</span>
+<span class="w">            </span><span class="n">Expr</span><span class="p">::</span><span class="n">Between</span><span class="p">(</span><span class="n">Between</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">expr</span><span class="p">,</span><span class="w"> </span><span class="n">negated</span><span class="p">,</span><span class="w"> </span><span class="n">low</span><span class="p">,</span><span class="w"> </span><span class="n">high</span><span class="p">))</span>
+<span class="w">        </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="c1">// rewrite to (expr &gt;= low) AND (expr &lt;= high)</span>
+<span class="w">            </span><span class="n">expr</span><span class="p">.</span><span class="n">clone</span><span class="p">().</span><span class="n">gt_eq</span><span class="p">(</span><span class="o">*</span><span class="n">low</span><span class="p">).</span><span class="n">and</span><span class="p">(</span><span class="n">expr</span><span class="p">.</span><span class="n">lt_eq</span><span class="p">(</span><span class="o">*</span><span class="n">high</span><span class="p">))</span>
+<span class="w">        </span><span class="p">};</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">Transformed</span><span class="p">::</span><span class="n">yes</span><span class="p">(</span><span class="n">rewritten_expr</span><span class="p">))</span>
+<span class="w">    </span><span class="p">})</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="writing-tests">
+<h3>Writing Tests<a class="headerlink" href="#writing-tests" title="Link to this heading">#</a></h3>
+<p>There should be unit tests in the same file as the new rule that test the effect of the rule being applied to a plan
+in isolation (without any other rule being applied).</p>
+<p>There should also be a test in <code class="docutils literal notranslate"><span class="pre">integration-tests.rs</span></code> that tests the rule as part of the overall optimization process.</p>
+</section>
+<section id="debugging">
+<h3>Debugging<a class="headerlink" href="#debugging" title="Link to this heading">#</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">VERBOSE</span></code> command can be used to show the effect of each optimization rule on a query.</p>
+<p>In the following example, the <code class="docutils literal notranslate"><span class="pre">type_coercion</span></code> and <code class="docutils literal notranslate"><span class="pre">simplify_expressions</span></code> passes have simplified the plan so that it returns the constant <code class="docutils literal notranslate"><span class="pre">&quot;3.2&quot;</span></code> rather than doing a computation at execution time.</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>&gt; explain verbose select cast(1 + 2.2 as string) as foo;
++------------------------------------------------------------+---------------------------------------------------------------------------+
+| plan_type                                                  | plan                                                                      |
++------------------------------------------------------------+---------------------------------------------------------------------------+
+| initial_logical_plan                                       | Projection: CAST(Int64(1) + Float64(2.2) AS Utf8) AS foo                  |
+|                                                            |   EmptyRelation                                                           |
+| logical_plan after type_coercion                           | Projection: CAST(CAST(Int64(1) AS Float64) + Float64(2.2) AS Utf8) AS foo |
+|                                                            |   EmptyRelation                                                           |
+| logical_plan after simplify_expressions                    | Projection: Utf8(&quot;3.2&quot;) AS foo                                            |
+|                                                            |   EmptyRelation                                                           |
+| logical_plan after unwrap_cast_in_comparison               | SAME TEXT AS ABOVE                                                        |
+| logical_plan after decorrelate_where_exists                | SAME TEXT AS ABOVE                                                        |
+| logical_plan after decorrelate_where_in                    | SAME TEXT AS ABOVE                                                        |
+| logical_plan after scalar_subquery_to_join                 | SAME TEXT AS ABOVE                                                        |
+| logical_plan after subquery_filter_to_join                 | SAME TEXT AS ABOVE                                                        |
+| logical_plan after simplify_expressions                    | SAME TEXT AS ABOVE                                                        |
+| logical_plan after eliminate_filter                        | SAME TEXT AS ABOVE                                                        |
+| logical_plan after reduce_cross_join                       | SAME TEXT AS ABOVE                                                        |
+| logical_plan after common_sub_expression_eliminate         | SAME TEXT AS ABOVE                                                        |
+| logical_plan after eliminate_limit                         | SAME TEXT AS ABOVE                                                        |
+| logical_plan after projection_push_down                    | SAME TEXT AS ABOVE                                                        |
+| logical_plan after rewrite_disjunctive_predicate           | SAME TEXT AS ABOVE                                                        |
+| logical_plan after reduce_outer_join                       | SAME TEXT AS ABOVE                                                        |
+| logical_plan after filter_push_down                        | SAME TEXT AS ABOVE                                                        |
+| logical_plan after limit_push_down                         | SAME TEXT AS ABOVE                                                        |
+| logical_plan after single_distinct_aggregation_to_group_by | SAME TEXT AS ABOVE                                                        |
+| logical_plan                                               | Projection: Utf8(&quot;3.2&quot;) AS foo                                            |
+|                                                            |   EmptyRelation                                                           |
+| initial_physical_plan                                      | ProjectionExec: expr=[3.2 as foo]                                         |
+|                                                            |   PlaceholderRowExec                                                      |
+|                                                            |                                                                           |
+| physical_plan after aggregate_statistics                   | SAME TEXT AS ABOVE                                                        |
+| physical_plan after join_selection                         | SAME TEXT AS ABOVE                                                        |
+| physical_plan after coalesce_batches                       | SAME TEXT AS ABOVE                                                        |
+| physical_plan after repartition                            | SAME TEXT AS ABOVE                                                        |
+| physical_plan after add_merge_exec                         | SAME TEXT AS ABOVE                                                        |
+| physical_plan                                              | ProjectionExec: expr=[3.2 as foo]                                         |
+|                                                            |   PlaceholderRowExec                                                      |
+|                                                            |                                                                           |
++------------------------------------------------------------+---------------------------------------------------------------------------+
+</pre></div>
+</div>
+</section>
+</section>
+<section id="thinking-about-query-optimization">
+<h2>Thinking about Query Optimization<a class="headerlink" href="#thinking-about-query-optimization" title="Link to this heading">#</a></h2>
+<p>Query optimization in DataFusion uses a cost based model. The cost based model
+relies on table and column level statistics to estimate selectivity; selectivity
+estimates are an important piece in cost analysis for filters and projections
+as they allow estimating the cost of joins and filters.</p>
+<p>An important piece of building these estimates is <em>boundary analysis</em> which uses
+interval arithmetic to take an expression such as <code class="docutils literal notranslate"><span class="pre">a</span> <span class="pre">&gt;</span> <span class="pre">2500</span> <span class="pre">AND</span> <span class="pre">a</span> <span class="pre">&lt;=</span> <span class="pre">5000</span></code> and
+build an accurate selectivity estimate that can then be used to find more efficient
+plans.</p>
+<section id="analysiscontext-api">
+<h3><code class="docutils literal notranslate"><span class="pre">AnalysisContext</span></code> API<a class="headerlink" href="#analysiscontext-api" title="Link to this heading">#</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">AnalysisContext</span></code> serves as a shared knowledge base during expression evaluation
+and boundary analysis. Think of it as a dynamic repository that maintains information about:</p>
+<ol class="arabic simple">
+<li><p>Current known boundaries for columns and expressions</p></li>
+<li><p>Statistics that have been gathered or inferred</p></li>
+<li><p>A mutable state that can be updated as analysis progresses</p></li>
+</ol>
+<p>What makes <code class="docutils literal notranslate"><span class="pre">AnalysisContext</span></code> particularly powerful is its ability to propagate information
+through the expression tree. As each node in the expression tree is analyzed, it can both
+read from and write to this shared context, allowing for sophisticated boundary analysis and inference.</p>
+</section>
+<section id="columnstatistics-for-cardinality-estimation">
+<h3><code class="docutils literal notranslate"><span class="pre">ColumnStatistics</span></code> for Cardinality Estimation<a class="headerlink" href="#columnstatistics-for-cardinality-estimation" title="Link to this heading">#</a></h3>
+<p>Column statistics form the foundation of optimization decisions. Rather than just tracking
+simple metrics, DataFusion’s <code class="docutils literal notranslate"><span class="pre">ColumnStatistics</span></code> provides a rich set of information including:</p>
+<ul class="simple">
+<li><p>Null value counts</p></li>
+<li><p>Maximum and minimum values</p></li>
+<li><p>Value sums (for numeric columns)</p></li>
+<li><p>Distinct value counts</p></li>
+</ul>
+<p>Each of these statistics is wrapped in a <code class="docutils literal notranslate"><span class="pre">Precision</span></code> type that indicates whether the value is
+exact or estimated, allowing the optimizer to make informed decisions about the reliability
+of its cardinality estimates.</p>
+</section>
+<section id="boundary-analysis-flow">
+<h3>Boundary Analysis Flow<a class="headerlink" href="#boundary-analysis-flow" title="Link to this heading">#</a></h3>
+<p>The boundary analysis process flows through several stages, with each stage building
+upon the information gathered in previous stages. The <code class="docutils literal notranslate"><span class="pre">AnalysisContext</span></code> is continuously
+updated as the analysis progresses through the expression tree.</p>
+<section id="expression-boundary-analysis">
+<h4>Expression Boundary Analysis<a class="headerlink" href="#expression-boundary-analysis" title="Link to this heading">#</a></h4>
+<p>When analyzing expressions, DataFusion runs boundary analysis using interval arithmetic.
+Consider a simple predicate like age &gt; 18 AND age &lt;= 25. The analysis flows as follows:</p>
+<ol class="arabic simple">
+<li><p>Context Initialization</p>
+<ul class="simple">
+<li><p>Begin with known column statistics</p></li>
+<li><p>Set up initial boundaries based on column constraints</p></li>
+<li><p>Initialize the shared analysis context</p></li>
+</ul>
+</li>
+<li><p>Expression Tree Walk</p>
+<ul class="simple">
+<li><p>Analyze each node in the expression tree</p></li>
+<li><p>Propagate boundary information upward</p></li>
+<li><p>Allow child nodes to influence parent boundaries</p></li>
+</ul>
+</li>
+<li><p>Boundary Updates</p>
+<ul class="simple">
+<li><p>Each expression can update the shared context</p></li>
+<li><p>Changes flow through the entire expression tree</p></li>
+<li><p>Final boundaries inform optimization decisions</p></li>
+</ul>
+</li>
+</ol>
+</section>
+</section>
+<section id="working-with-the-analysis-api">
+<h3>Working with the analysis API<a class="headerlink" href="#working-with-the-analysis-api" title="Link to this heading">#</a></h3>
+<p>The following example shows how you can run an analysis pass on a physical expression
+to infer the selectivity of the expression and the space of possible values it can
+take.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">fn</span><span class="w"> </span><span class="nf">analyze_filter_example</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Create a schema with an &#39;age&#39; column</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">age</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Field</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;age&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span><span class="p">::</span><span class="n">Int64</span><span class="p">,</span><span class="w"> </span><span class="kc">false</span><span class="p">);</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">schema</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">Schema</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="n">age</span><span class="p">]));</span>
+
+<span class="w">    </span><span class="c1">// Define column statistics</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">column_stats</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ColumnStatistics</span><span class="p">::</span><span class="n">default</span><span class="p">()</span>
+<span class="w">        </span><span class="p">.</span><span class="n">with_min_value</span><span class="p">(</span><span class="n">Precision</span><span class="p">::</span><span class="n">Exact</span><span class="p">(</span><span class="n">ScalarValue</span><span class="p">::</span><span class="n">Int64</span><span class="p">(</span><span class="nb">Some</span><span class="p">(</span><span class="mi">14</span><span class="p">))))</span>
+<span class="w">        </span><span class="p">.</span><span class="n">with_max_value</span><span class="p">(</span><span class="n">Precision</span><span class="p">::</span><span class="n">Exact</span><span class="p">(</span><span class="n">ScalarValue</span><span class="p">::</span><span class="n">Int64</span><span class="p">(</span><span class="nb">Some</span><span class="p">(</span><span class="mi">79</span><span class="p">))))</span>
+<span class="w">        </span><span class="p">.</span><span class="n">with_null_count</span><span class="p">(</span><span class="n">Precision</span><span class="p">::</span><span class="n">Exact</span><span class="p">(</span><span class="mi">0</span><span class="p">));</span>
+
+<span class="w">    </span><span class="c1">// Create expression: age &gt; 18 AND age &lt;= 25</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">expr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">col</span><span class="p">(</span><span class="s">&quot;age&quot;</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="n">gt</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">18</span><span class="k">i64</span><span class="p">))</span>
+<span class="w">        </span><span class="p">.</span><span class="n">and</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s">&quot;age&quot;</span><span class="p">).</span><span class="n">lt_eq</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">25</span><span class="k">i64</span><span class="p">)));</span>
+
+<span class="w">    </span><span class="c1">// Initialize analysis context</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">initial_boundaries</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="fm">vec!</span><span class="p">[</span><span class="n">ExprBoundaries</span><span class="p">::</span><span class="n">try_from_column</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="n">schema</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">column_stats</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="o">?</span><span class="p">];</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">context</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">AnalysisContext</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">initial_boundaries</span><span class="p">);</span>
+
+<span class="w">    </span><span class="c1">// Analyze expression</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">df_schema</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DFSchema</span><span class="p">::</span><span class="n">try_from</span><span class="p">(</span><span class="n">schema</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">physical_expr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span><span class="p">::</span><span class="n">new</span><span class="p">().</span><span class="n">create_physical_expr</span><span class="p">(</span><span class="n">expr</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">df_schema</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">analysis</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">analyze</span><span class="p">(</span><span class="o">&amp;</span><span class="n">physical_expr</span><span class="p">,</span><span class="w"> </span><span class="n">context</span><span class="p">,</span><span class="w"> </span><span class="n">df_schema</span><span class="p">.</span><span class="n">as_ref</span><span class="p">())</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+</section>
+</section>
+
+
+                </article>
+              
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="profiling.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">Profiling Cookbook</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="../contributor-guide/index.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Introduction</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#running-the-optimizer">Running the Optimizer</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#writing-optimization-rules">Writing Optimization Rules</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#providing-custom-rules">Providing Custom Rules</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#general-guidelines">General Guidelines</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#expression-naming">Expression Naming</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#implication">Implication</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#building-expression-names">Building Expression Names</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#utilities">Utilities</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#recursively-walk-an-expression-tree">Recursively walk an expression tree</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rewriting-expressions">Rewriting expressions</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#writing-tests">Writing Tests</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#debugging">Debugging</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#thinking-about-query-optimization">Thinking about Query Optimization</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#analysiscontext-api"><code class="docutils literal notranslate"><span class="pre">AnalysisContext</span></code> API</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#columnstatistics-for-cardinality-estimation"><code class="docutils literal notranslate"><span class="pre">ColumnStatistics</span></code> for Cardinality Estimation</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#boundary-analysis-flow">Boundary Analysis Flow</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#expression-boundary-analysis">Expression Boundary Analysis</a></li>
+</ul>
+</li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#working-with-the-analysis-api">Working with the analysis API</a></li>
+</ul>
+</li>
+</ul>
+  </nav></div>
+
+  <div class="sidebar-secondary-item">
+
+  
+  <div class="tocsection editthispage">
+    <a href="https://github.com/apache/datafusion/edit/55.1.0/docs/source/library-user-guide/query-optimizer.md">
+      <i class="fa-solid fa-pencil"></i>
+      
+      
+        
+          Edit on GitHub
+        
+      
+    </a>
+  </div>
+</div>
+
+  <div class="sidebar-secondary-item">
+
+  <div class="tocsection sourcelink">
+    <a href="../_sources/library-user-guide/query-optimizer.md.txt">
+      <i class="fa-solid fa-file-lines"></i> Show Source
+    </a>
+  </div>
+</div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+          </footer>
+        
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9"></script>
+
+<!-- Based on pydata_sphinx_theme/footer.html -->
+<footer class="footer mt-5 mt-md-0">
+  <div class="container">
+    
+    <div class="footer-item">
+      <p>Apache DataFusion, Apache, the Apache feather logo, and the Apache DataFusion project logo</p>
+      <p>are either registered trademarks or trademarks of The Apache Software Foundation in the United States and other countries.</p>
+    </div>
+  </div>
+</footer>
+
+
+  </body>
+</html>

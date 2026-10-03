@@ -1,0 +1,827 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Introduction &#8212; Apache DataFusion 55.0.0 documentation</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../_static/theme_overrides.css?v=d08b24aa" />
+  
+  <!-- So that users can add custom icons -->
+  <script defer src="../_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
+
+    <script src="../_static/documentation_options.js?v=9d921e93"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'contributor-guide/index';</script>
+    <script>
+        DOCUMENTATION_OPTIONS.theme_version = '0.20.0';
+        DOCUMENTATION_OPTIONS.theme_switcher_json_url = 'https://yiaany.github.io/datafusion/_static/versions.json';
+        DOCUMENTATION_OPTIONS.theme_switcher_version_match = '55.0.0';
+        DOCUMENTATION_OPTIONS.show_version_warning_banner =
+            false;
+        </script>
+    <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
+    <link rel="canonical" href="https://yiaany.github.io/datafusion/versions/55.0.0/contributor-guide/index.html" />
+    <link rel="icon" href="../_static/favicon.svg"/>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Reviewing Pull Requests" href="pr_review.html" />
+    <link rel="prev" title="Query Optimizer" href="../library-user-guide/query-optimizer.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="55.0.0" />
+  
+    
+    <script src="../_static/searchtools.js"></script>
+    <script src="../_static/language_data.js"></script>
+    <script src="../searchindex.js"></script>
+  
+  </head>
+  <body data-default-mode="">
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+  
+  
+  
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header id="pst-header" class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class="col-lg-3 navbar-header-items__start">
+    
+      <div class="navbar-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/original.svg" class="logo__image only-light" alt="Apache DataFusion 55.0.0 documentation - Home"/>
+    <img src="../_static/original_dark.svg" class="logo__image only-dark pst-js-only" alt="Apache DataFusion 55.0.0 documentation - Home"/>
+  
+  
+</a></div>
+    
+  </div>
+  
+  <div class="col-lg-9 navbar-header-items">
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+        <div class="navbar-item">
+<div class="version-switcher__container dropdown pst-js-only">
+  <button id="pst-version-switcher-button-2"
+    type="button"
+    class="version-switcher__button btn btn-sm dropdown-toggle"
+    data-bs-toggle="dropdown"
+    aria-haspopup="listbox"
+    aria-controls="pst-version-switcher-list-2"
+    aria-label="Version switcher list"
+  >
+    Choose version  <!-- this text may get changed later by javascript -->
+    <span class="caret"></span>
+  </button>
+  <div id="pst-version-switcher-list-2"
+    class="version-switcher__menu dropdown-menu list-group-flush py-0"
+    role="listbox" aria-labelledby="pst-version-switcher-button-2">
+    <!-- dropdown will be populated by javascript on page load -->
+  </div>
+</div></div>
+      
+        <div class="navbar-item">
+
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
+  </ul>
+</div></div>
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+      <div class="sidebar-header-items__end">
+        
+          <div class="navbar-item">
+<div class="version-switcher__container dropdown pst-js-only">
+  <button id="pst-version-switcher-button-3"
+    type="button"
+    class="version-switcher__button btn btn-sm dropdown-toggle"
+    data-bs-toggle="dropdown"
+    aria-haspopup="listbox"
+    aria-controls="pst-version-switcher-list-3"
+    aria-label="Version switcher list"
+  >
+    Choose version  <!-- this text may get changed later by javascript -->
+    <span class="caret"></span>
+  </button>
+  <div id="pst-version-switcher-list-3"
+    class="version-switcher__menu dropdown-menu list-group-flush py-0"
+    role="listbox" aria-labelledby="pst-version-switcher-button-3">
+    <!-- dropdown will be populated by javascript on page load -->
+  </div>
+</div></div>
+        
+          <div class="navbar-item">
+
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
+  </ul>
+</div></div>
+        
+      </div>
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item"><nav class="bd-links" id="bd-docs-nav" aria-label="Main navigation">
+
+  <div class="bd-toc-item active">
+    
+    <p aria-level="2" class="caption" role="heading"><span class="caption-text">ASF Links</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://apache.org">Apache Software Foundation</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/licenses/">License</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/foundation/sponsorship.html">Donate</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/foundation/thanks.html">Thanks</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/security/">Security</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Links</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://github.com/apache/datafusion">GitHub and Issue Tracker</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://crates.io/crates/datafusion">crates.io</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/">API Docs</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/blog/">Blog</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://github.com/apache/datafusion/blob/main/CODE_OF_CONDUCT.md">Code of conduct</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../download.html">Download</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">User Guide</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/example-usage.html">Example Usage</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/features.html">Features</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/concepts-readings-events.html">Concepts, Readings, Events</a></li>
+
+
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/crate-configuration.html">Crate Configuration</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../user-guide/cli/index.html">DataFusion CLI</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/cli/overview.html">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/cli/installation.html">Installation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/cli/usage.html">Usage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/cli/datasources.html">Local Files / Directories</a></li>
+
+
+
+
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/cli/functions.html">CLI Specific Functions</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/dataframe.html">DataFrame API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/arrow-introduction.html">Gentle Arrow Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/expressions.html">Expression API</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../user-guide/sql/index.html">SQL Reference</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/data_types.html">Data Types</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/struct_coercion.html">Struct Type Coercion and Field Mapping</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/select.html">SELECT syntax</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/subqueries.html">Subqueries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/ddl.html">DDL</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/dml.html">DML</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/explain.html">EXPLAIN</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/information_schema.html">Information Schema</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/operators.html">Operators and Literals</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/aggregate_functions.html">Aggregate Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/window_functions.html">Window Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/scalar_functions.html">Scalar Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/special_functions.html">Special Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/format_options.html">Format Options</a></li>
+
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/prepared_statements.html">Prepared Statements</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/configs.html">Configuration Settings</a></li>
+
+
+
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/explain-usage.html">Reading Explain Plans</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/parquet-content-defined-chunking.html">Parquet Content-Defined Chunking</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/metrics.html">Metrics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/faq.html">Frequently Asked Questions</a></li>
+
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Library User Guide</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/index.html">Introduction</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../library-user-guide/upgrading/index.html">Upgrade Guides</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/55.0.0.html">DataFusion 55.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/54.0.0.html">DataFusion 54.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/53.0.0.html">DataFusion 53.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/52.0.0.html">DataFusion 52.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/51.0.0.html">DataFusion 51.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/50.0.0.html">DataFusion 50.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/49.0.0.html">DataFusion 49.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/48.0.1.html">DataFusion 48.0.1</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/48.0.0.html">DataFusion 48.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/47.0.0.html">DataFusion 47.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/46.0.0.html">DataFusion 46.0.0</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/extensions.html">Extensions List</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/using-the-sql-api.html">Using the SQL API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/extending-sql.html">Extending SQL Syntax</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/working-with-exprs.html">Working with <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/using-the-dataframe-api.html">Using the DataFrame API</a></li>
+
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/building-logical-plans.html">Building Logical Plans</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/catalogs.html">Catalogs, Schemas, and Tables</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../library-user-guide/functions/index.html">Functions</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/functions/adding-udfs.html">Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/functions/spark.html">Spark Compatible Functions</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/custom-table-providers.html">Custom Table Provider</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/table-constraints.html">Table Constraint Enforcement</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/extending-operators.html">Extending Operators</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/profiling.html">Profiling Cookbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/query-optimizer.html">Query Optimizer</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Contributor Guide</span></p>
+<ul class="current nav bd-sidenav">
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">Introduction</a></li>
+
+<li class="toctree-l1"><a class="reference internal" href="pr_review.html">Reviewing Pull Requests</a></li>
+<li class="toctree-l1"><a class="reference internal" href="communication.html">Community Communication</a></li>
+<li class="toctree-l1"><a class="reference internal" href="development_environment.html">Development Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="architecture.html">Architecture</a></li>
+<li class="toctree-l1"><a class="reference internal" href="architecture/dependency-graph.html">Workspace Dependency Graph</a></li>
+<li class="toctree-l1"><a class="reference internal" href="testing.html">Testing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api-health.html">API health policy</a></li>
+<li class="toctree-l1"><a class="reference internal" href="howtos.html">HOWTOs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="release_management.html">Release Management</a></li>
+<li class="toctree-l1"><a class="reference internal" href="roadmap.html">Roadmap and Improvement Proposals</a></li>
+<li class="toctree-l1"><a class="reference internal" href="governance.html">Governance</a></li>
+<li class="toctree-l1"><a class="reference internal" href="inviting.html">Inviting New Committers and PMC Members</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="specification/index.html">Specifications</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="specification/invariants.html">Invariants</a></li>
+<li class="toctree-l2"><a class="reference internal" href="specification/output-field-name-semantic.html">Output field name semantics</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="gsoc/index.html">Google Summer of Code (GSOC)</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="gsoc/gsoc_application_guidelines_2025.html">GSoC Application Guidelines (2025)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gsoc/gsoc_project_ideas_2025.html">GSoC Project Ideas (2025)</a></li>
+</ul>
+</details></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">DataFusion Subprojects</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/ballista/">DataFusion Ballista</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/comet/">DataFusion Comet</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/java/">DataFusion Java</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/python/">DataFusion Python</a></li>
+</ul>
+
+    
+  </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item">
+
+<nav aria-label="Breadcrumb" class="d-print-none">
+  <ul class="bd-breadcrumbs">
+    
+    <li class="breadcrumb-item breadcrumb-home">
+      <a href="../index.html" class="nav-link" aria-label="Home">
+        <i class="fa-solid fa-home"></i>
+      </a>
+    </li>
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Introduction</span></li>
+  </ul>
+</nav>
+</div>
+      
+    </div>
+  
+  
+</div>
+</div>
+              
+              
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <!---
+  Licensed to the Apache Software Foundation (ASF) under one
+  or more contributor license agreements.  See the NOTICE file
+  distributed with this work for additional information
+  regarding copyright ownership.  The ASF licenses this file
+  to you under the Apache License, Version 2.0 (the
+  "License"); you may not use this file except in compliance
+  with the License.  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing,
+  software distributed under the License is distributed on an
+  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, either express or implied.  See the License for the
+  specific language governing permissions and limitations
+  under the License.
+-->
+<section id="introduction">
+<h1>Introduction<a class="headerlink" href="#introduction" title="Link to this heading">#</a></h1>
+<p>We welcome and encourage contributions of all kinds, from all levels, such as:</p>
+<ol class="arabic simple">
+<li><p>Tickets with issue reports or feature requests</p></li>
+<li><p>Discussions</p></li>
+<li><p>Documentation improvements</p></li>
+<li><p>Code, both PR and (especially) PR Review.</p></li>
+</ol>
+<p>In addition to submitting new PRs, we have a healthy tradition of community
+members reviewing each other’s PRs. Doing so is a great way to help the
+community as well as get more familiar with Rust and the relevant codebases.</p>
+<section id="development-environment">
+<h2>Development Environment<a class="headerlink" href="#development-environment" title="Link to this heading">#</a></h2>
+<p>Start with the <a class="reference internal" href="development_environment.html#quick-start"><span class="std std-ref">Development Environment Quick Start</span></a>.</p>
+<p>For more detail, see the full <a class="reference internal" href="development_environment.html"><span class="std std-doc">development environment guide</span></a>
+and the <a class="reference internal" href="testing.html"><span class="std std-doc">testing guide</span></a>.</p>
+</section>
+<section id="finding-and-creating-issues-to-work-on">
+<h2>Finding and Creating Issues to Work On<a class="headerlink" href="#finding-and-creating-issues-to-work-on" title="Link to this heading">#</a></h2>
+<p>You can find a curated <a class="reference external" href="https://github.com/apache/datafusion/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22">good-first-issue</a> list to help you get started.
+You can read about how we plan larger projects in the <a class="reference internal" href="roadmap.html"><span class="std std-doc">Roadmap and Improvement Proposals</span></a> section.</p>
+<section id="open-contribution-and-assigning-tickets">
+<h3>Open Contribution and Assigning tickets<a class="headerlink" href="#open-contribution-and-assigning-tickets" title="Link to this heading">#</a></h3>
+<p>DataFusion is an open contribution project, and thus there is no particular
+project imposed deadline for completing issues or restrictions on who can
+work on an issue, nor limits to how many people can work on an issue at the same time.</p>
+<p>Contributors drive the project forward based on their own priorities and
+interests and thus you are free to work on any issue that interests you.</p>
+<p>If someone is already working on an issue that you want or need but hasn’t
+been able to finish it yet, you should feel free to work on it as well. In
+general it is both polite and will help avoid unnecessary duplication of work if
+you leave a note on an issue when you start working on it.</p>
+<p>If you want to work on an issue which is not already assigned to someone else
+and there are no comment indicating that someone is already working on that
+issue then you can assign the issue to yourself by submitting a single word
+comment <code class="docutils literal notranslate"><span class="pre">take</span></code>. This will assign the issue to yourself. However, if you are
+unable to make progress you should unassign the issue by commenting a single
+word <code class="docutils literal notranslate"><span class="pre">untake</span></code>.</p>
+</section>
+</section>
+</section>
+<section id="developer-s-guide">
+<h1>Developer’s guide<a class="headerlink" href="#developer-s-guide" title="Link to this heading">#</a></h1>
+<section id="pull-request-overview">
+<h2>Pull Request Overview<a class="headerlink" href="#pull-request-overview" title="Link to this heading">#</a></h2>
+<p>We welcome pull requests (PRs) from anyone in the community.</p>
+<p>DataFusion is a rapidly evolving project and we try to review and merge PRs quickly.</p>
+<p>Review bandwidth is currently our most limited resource, and we highly encourage reviews by the broader community. If you are waiting for your PR to be reviewed, consider helping review other PRs that are waiting. Such review both helps the reviewer to learn the codebase and become more expert, as well as helps identify issues in the PR (such as lack of test coverage), that can be addressed and make future reviews faster and more efficient.</p>
+<p>The lifecycle of a PR is:</p>
+<ol class="arabic simple">
+<li><p>Create a PR targeting the <code class="docutils literal notranslate"><span class="pre">main</span></code> branch.</p></li>
+<li><p>For new contributors a committer must first trigger the CI tasks. Please mention the members from committers list in the PR to help trigger the CI</p></li>
+<li><p>Your PR will be reviewed. Please respond to all feedback on the PR: you don’t have to change the code, but you should acknowledge the feedback. PRs waiting for the feedback for more than a few days will be marked as draft.</p></li>
+<li><p>Once the PR is approved, one of the <a class="reference external" href="https://people.apache.org/phonebook.html?unix=datafusion">committers</a> will merge your PR, typically within 24 hours. We leave approved “major” changes (see below) open for 24 hours prior to merging, and sometimes leave “minor” PRs open for the same time to permit additional feedback.</p></li>
+</ol>
+<p>Note that the above time frames are estimates. Due to limited committer
+bandwidth, it may take longer to merge your PR. Please wait
+patiently. If it has been several days you can friendly ping the
+committer who approved your PR to help remind them to merge it.</p>
+</section>
+<section id="creating-pull-requests">
+<h2>Creating Pull Requests<a class="headerlink" href="#creating-pull-requests" title="Link to this heading">#</a></h2>
+<p>When possible, we recommend splitting your contributions into multiple smaller focused PRs rather than large PRs (500+ lines) because:</p>
+<ol class="arabic simple">
+<li><p>The PR is more likely to be reviewed quickly – our reviewers struggle to find the contiguous time needed to review large PRs.</p></li>
+<li><p>The PR discussions tend to be more focused and less likely to get lost among several different threads.</p></li>
+<li><p>It is often easier to accept and act on feedback when it comes early on in a small change, before a particular approach has been polished too much.</p></li>
+</ol>
+<p>If you are concerned that a larger design will be lost in a string of small PRs, creating a large draft PR that shows how they all work together can help.</p>
+<p>Note all commits in a PR are squashed when merged to the <code class="docutils literal notranslate"><span class="pre">main</span></code> branch so there is one commit per PR after merge.</p>
+<p>For larger PRs, it is often helpful to leave a review on your own PR with
+comments calling out important changes or specific important choices. These
+annotations can help reviewers quickly find areas they should focus on, thus
+speeding up review.</p>
+</section>
+<section id="release-management-and-backports">
+<h2>Release Management and Backports<a class="headerlink" href="#release-management-and-backports" title="Link to this heading">#</a></h2>
+<p>Contributor-facing guidance for release branches, patch releases, and backports
+is documented in the <a class="reference internal" href="release_management.html"><span class="std std-doc">Release Management</span></a> guide.</p>
+</section>
+<section id="before-submitting-a-pr">
+<h2>Before Submitting a PR<a class="headerlink" href="#before-submitting-a-pr" title="Link to this heading">#</a></h2>
+<p>Before submitting a PR, run the standard non-functional checks. PRs must pass
+before merge.</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>./dev/rust_lint.sh
+<span class="c1"># use `--write` to automatically fix some formatting and lint errors</span>
+<span class="c1"># ./dev/rust_lint.sh --write --allow-dirty</span>
+</pre></div>
+</div>
+<p>You should also run any relevant commands from the <a class="reference internal" href="testing.html#testing-quick-start"><span class="std std-ref">testing quick start</span></a>.</p>
+</section>
+<section id="conventional-commits-labeling-prs">
+<h2>Conventional Commits &amp; Labeling PRs<a class="headerlink" href="#conventional-commits-labeling-prs" title="Link to this heading">#</a></h2>
+<p>We generate change logs for each release using an automated process that will categorize PRs based on the title
+and/or the GitHub labels attached to the PR.</p>
+<p>We follow the <a class="reference external" href="https://www.conventionalcommits.org/en/v1.0.0/">Conventional Commits</a> specification to categorize PRs based on the title. This most often simply means
+looking for titles starting with prefixes such as <code class="docutils literal notranslate"><span class="pre">fix:</span></code>, <code class="docutils literal notranslate"><span class="pre">feat:</span></code>, <code class="docutils literal notranslate"><span class="pre">docs:</span></code>, or <code class="docutils literal notranslate"><span class="pre">chore:</span></code>. We do not enforce this
+convention but encourage its use if you want your PR to feature in the correct section of the changelog.</p>
+<p>The change log generator will also look at GitHub labels such as <code class="docutils literal notranslate"><span class="pre">bug</span></code>, <code class="docutils literal notranslate"><span class="pre">enhancement</span></code>, or <code class="docutils literal notranslate"><span class="pre">api</span> <span class="pre">change</span></code>, and labels
+do take priority over the conventional commit approach, allowing maintainers to re-categorize PRs after they have been merged.</p>
+</section>
+<section id="reviewing-pull-requests">
+<h2>Reviewing Pull Requests<a class="headerlink" href="#reviewing-pull-requests" title="Link to this heading">#</a></h2>
+<p>See the <a class="reference internal" href="pr_review.html"><span class="std std-doc">Reviewing Pull Requests</span></a> guide for what we look for
+when reviewing PRs and how to prepare your own for review.</p>
+</section>
+<section id="performance-improvements">
+<h2>Performance Improvements<a class="headerlink" href="#performance-improvements" title="Link to this heading">#</a></h2>
+<p>Performance improvements are always welcome: performance is a key DataFusion
+feature.</p>
+<p>In general, the performance improvement from a change should be “enough” to
+justify any added code complexity. How much is “enough” is a judgement made by
+the committers, but generally means that the improvement should be noticeable in
+a real-world scenario and is greater than the noise of the benchmarking system.</p>
+<p>To help committers evaluate the potential improvement, performance PRs should
+in general be accompanied by benchmark results that demonstrate the improvement.</p>
+<p>The best way to demonstrate a performance improvement is with the existing
+benchmarks:</p>
+<ul class="simple">
+<li><p><a class="reference external" href="https://github.com/apache/datafusion/tree/main/benchmarks">System level SQL Benchmarks</a></p></li>
+<li><p>Microbenchmarks such as those in <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/functions/benches">functions/benches</a></p></li>
+</ul>
+<p>If there is no suitable existing benchmark, you can create a new one. It helps
+to isolate the effects of your change by creating a separate PR with the
+benchmark, and then a PR with the code change that improves the benchmark.</p>
+</section>
+<section id="major-and-minor-prs">
+<h2>“Major” and “Minor” PRs<a class="headerlink" href="#major-and-minor-prs" title="Link to this heading">#</a></h2>
+<p>Since we are a worldwide community, we have contributors in many timezones who review and comment. To ensure anyone who wishes has an opportunity to review a PR, our committers try to ensure that at least 24 hours passes between when a “major” PR is approved and when it is merged.</p>
+<p>A “major” PR means there is a substantial change in design or a change in the API. Committers apply their best judgment to determine what constitutes a substantial change. A “minor” PR might be merged without a 24 hour delay, again subject to the judgment of the committer. Examples of potential “minor” PRs are:</p>
+<ol class="arabic simple">
+<li><p>Documentation improvements/additions</p></li>
+<li><p>Small bug fixes</p></li>
+<li><p>Non-controversial build-related changes (clippy, version upgrades etc.)</p></li>
+<li><p>Smaller non-controversial feature additions</p></li>
+</ol>
+<p>The good thing about open code and open development is that any issues in one change can almost always be fixed with a follow on PR.</p>
+</section>
+<section id="stale-prs">
+<h2>Stale PRs<a class="headerlink" href="#stale-prs" title="Link to this heading">#</a></h2>
+<p>Pull requests will be marked with a <code class="docutils literal notranslate"><span class="pre">stale</span></code> label after 60 days of inactivity and then closed 7 days after that.
+Commenting on the PR will remove the <code class="docutils literal notranslate"><span class="pre">stale</span></code> label.</p>
+</section>
+<section id="ai-assisted-contributions">
+<h2>AI-Assisted contributions<a class="headerlink" href="#ai-assisted-contributions" title="Link to this heading">#</a></h2>
+<p>DataFusion has the following policy for AI-assisted PRs:</p>
+<ul class="simple">
+<li><p>The PR author should <strong>understand the core ideas</strong> behind the implementation <strong>end-to-end</strong>, and be able to justify the design and code during review.</p></li>
+<li><p><strong>Calls out unknowns and assumptions</strong>. It’s okay to not fully understand some bits of AI generated code. You should comment on these cases and point them out to reviewers so that they can use their knowledge of the codebase to clear up any concerns. For example, you might comment “calling this function here seems to work but I’m not familiar with how it works internally, I wonder if there’s a race condition if it is called concurrently”.</p></li>
+</ul>
+<section id="why-fully-ai-generated-prs-without-understanding-are-not-helpful">
+<h3>Why fully AI-generated PRs without understanding are not helpful<a class="headerlink" href="#why-fully-ai-generated-prs-without-understanding-are-not-helpful" title="Link to this heading">#</a></h3>
+<p>Today, AI tools cannot reliably make complex changes to DataFusion on their own, which is why we rely on pull requests and code review.</p>
+<p>The purposes of code review are:</p>
+<ol class="arabic simple">
+<li><p>Finish the intended task.</p></li>
+<li><p>Share knowledge between authors and reviewers, as a long-term investment in the project. For this reason, even if someone familiar with the codebase can finish a task quickly, we’re still happy to help a new contributor work on it even if it takes longer.</p></li>
+</ol>
+<p>An AI dump for an issue doesn’t meet these purposes. Maintainers could finish the task faster by using AI directly, and the submitters gain little knowledge if they act only as a pass through AI proxy without understanding.</p>
+<p>Please understand the reviewing capacity is <strong>very limited</strong> for the project, so large PRs which appear to not have the requisite understanding might not get reviewed, and eventually closed or redirected.</p>
+</section>
+<section id="better-ways-to-contribute-than-an-ai-dump">
+<h3>Better ways to contribute than an “AI dump”<a class="headerlink" href="#better-ways-to-contribute-than-an-ai-dump" title="Link to this heading">#</a></h3>
+<p>It’s recommended to write a high-quality issue with a clear problem statement and a minimal, reproducible example. This can make it easier for others to contribute.</p>
+</section>
+<section id="ci-runners">
+<h3>CI Runners<a class="headerlink" href="#ci-runners" title="Link to this heading">#</a></h3>
+<section id="runs-on">
+<h4>Runs-On<a class="headerlink" href="#runs-on" title="Link to this heading">#</a></h4>
+<p>We use <a class="reference external" href="https://runs-on.com/">Runs-On</a> for some actions in the main repository, which run in the ASF AWS account to speed up CI. In forks, these actions run on the default GitHub runners since forks do not have access to ASF infrastructure.</p>
+<p>To configure them, we use the following format:</p>
+<p><code class="docutils literal notranslate"><span class="pre">runs-on:</span> <span class="pre">${{</span> <span class="pre">github.repository_owner</span> <span class="pre">==</span> <span class="pre">'apache'</span> <span class="pre">&amp;&amp;</span> <span class="pre">format('runs-on={0},family=m8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion',</span> <span class="pre">github.run_id)</span> <span class="pre">||</span> <span class="pre">'ubuntu-latest'</span> <span class="pre">}}</span></code></p>
+<p>This is a conditional expression that uses Runs-On custom runners for the main repository and falls back to the standard GitHub runners for forks. Runs-On configuration follows the <a class="reference external" href="https://runs-on.com/configuration/job-labels/">Runs-On pattern</a>.</p>
+<p>For those actions we also use the <a class="reference external" href="https://runs-on.com/caching/magic-cache/#how-to-use">Runs-On action</a>, which adds support for external caching and reports job metrics:</p>
+<p><code class="docutils literal notranslate"><span class="pre">-</span> <span class="pre">uses:</span> <span class="pre">runs-on/action&#64;cd2b598b0515d39d78c38a02d529db87d2196d1e</span></code></p>
+<p>For the standard GitHub runners, this action will do nothing.</p>
+<section id="spot-instances">
+<h5>Spot Instances<a class="headerlink" href="#spot-instances" title="Link to this heading">#</a></h5>
+<p>By default, Runs-On actions run as <a class="reference external" href="https://runs-on.com/configuration/spot-instances/">spot instances</a>, which means they might occasionally be interrupted. In the CI you would see:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">Error</span><span class="p">:</span> <span class="n">The</span> <span class="n">operation</span> <span class="n">was</span> <span class="n">canceled</span><span class="o">.</span>
+</pre></div>
+</div>
+<p>According to Runs-On, spot instance termination is extremely rare for instances running for less than 1h. Those actions will be restarted automatically.</p>
+</section>
+</section>
+<section id="github-runners">
+<h4>GitHub Runners<a class="headerlink" href="#github-runners" title="Link to this heading">#</a></h4>
+<p>We also use standard GitHub runners for some actions in the main repository; these are also runnable in forks.</p>
+</section>
+</section>
+</section>
+</section>
+
+
+                </article>
+              
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="../library-user-guide/query-optimizer.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">Query Optimizer</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="pr_review.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Reviewing Pull Requests</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#">Introduction</a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#development-environment">Development Environment</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#finding-and-creating-issues-to-work-on">Finding and Creating Issues to Work On</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#open-contribution-and-assigning-tickets">Open Contribution and Assigning tickets</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#developer-s-guide">Developer’s guide</a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pull-request-overview">Pull Request Overview</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#creating-pull-requests">Creating Pull Requests</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#release-management-and-backports">Release Management and Backports</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#before-submitting-a-pr">Before Submitting a PR</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#conventional-commits-labeling-prs">Conventional Commits &amp; Labeling PRs</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#reviewing-pull-requests">Reviewing Pull Requests</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#performance-improvements">Performance Improvements</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#major-and-minor-prs">“Major” and “Minor” PRs</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#stale-prs">Stale PRs</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#ai-assisted-contributions">AI-Assisted contributions</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#why-fully-ai-generated-prs-without-understanding-are-not-helpful">Why fully AI-generated PRs without understanding are not helpful</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#better-ways-to-contribute-than-an-ai-dump">Better ways to contribute than an “AI dump”</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ci-runners">CI Runners</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#runs-on">Runs-On</a><ul class="nav section-nav flex-column">
+<li class="toc-h5 nav-item toc-entry"><a class="reference internal nav-link" href="#spot-instances">Spot Instances</a></li>
+</ul>
+</li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#github-runners">GitHub Runners</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+  </nav></div>
+
+  <div class="sidebar-secondary-item">
+
+  
+  <div class="tocsection editthispage">
+    <a href="https://github.com/apache/datafusion/edit/55.0.0/docs/source/contributor-guide/index.md">
+      <i class="fa-solid fa-pencil"></i>
+      
+      
+        
+          Edit on GitHub
+        
+      
+    </a>
+  </div>
+</div>
+
+  <div class="sidebar-secondary-item">
+
+  <div class="tocsection sourcelink">
+    <a href="../_sources/contributor-guide/index.md.txt">
+      <i class="fa-solid fa-file-lines"></i> Show Source
+    </a>
+  </div>
+</div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+          </footer>
+        
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9"></script>
+
+<!-- Based on pydata_sphinx_theme/footer.html -->
+<footer class="footer mt-5 mt-md-0">
+  <div class="container">
+    
+    <div class="footer-item">
+      <p>Apache DataFusion, Apache, the Apache feather logo, and the Apache DataFusion project logo</p>
+      <p>are either registered trademarks or trademarks of The Apache Software Foundation in the United States and other countries.</p>
+    </div>
+  </div>
+</footer>
+
+
+  </body>
+</html>

@@ -1,0 +1,765 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Concepts, Readings, Events &#8212; Apache DataFusion 55.1.0 documentation</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../_static/theme_overrides.css?v=d08b24aa" />
+  
+  <!-- So that users can add custom icons -->
+  <script defer src="../_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
+
+    <script src="../_static/documentation_options.js?v=ec4754ca"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'user-guide/concepts-readings-events';</script>
+    <script>
+        DOCUMENTATION_OPTIONS.theme_version = '0.20.0';
+        DOCUMENTATION_OPTIONS.theme_switcher_json_url = 'https://yiaany.github.io/datafusion/_static/versions.json';
+        DOCUMENTATION_OPTIONS.theme_switcher_version_match = '55.1.0';
+        DOCUMENTATION_OPTIONS.show_version_warning_banner =
+            false;
+        </script>
+    <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
+    <link rel="canonical" href="https://yiaany.github.io/datafusion/versions/55.1.0/user-guide/concepts-readings-events.html" />
+    <link rel="icon" href="../_static/favicon.svg"/>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Crate Configuration" href="crate-configuration.html" />
+    <link rel="prev" title="Features" href="features.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="55.1.0" />
+  
+    
+    <script src="../_static/searchtools.js"></script>
+    <script src="../_static/language_data.js"></script>
+    <script src="../searchindex.js"></script>
+  
+  </head>
+  <body data-default-mode="">
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+  
+  
+  
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header id="pst-header" class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class="col-lg-3 navbar-header-items__start">
+    
+      <div class="navbar-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/original.svg" class="logo__image only-light" alt="Apache DataFusion 55.1.0 documentation - Home"/>
+    <img src="../_static/original_dark.svg" class="logo__image only-dark pst-js-only" alt="Apache DataFusion 55.1.0 documentation - Home"/>
+  
+  
+</a></div>
+    
+  </div>
+  
+  <div class="col-lg-9 navbar-header-items">
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+        <div class="navbar-item">
+<div class="version-switcher__container dropdown pst-js-only">
+  <button id="pst-version-switcher-button-2"
+    type="button"
+    class="version-switcher__button btn btn-sm dropdown-toggle"
+    data-bs-toggle="dropdown"
+    aria-haspopup="listbox"
+    aria-controls="pst-version-switcher-list-2"
+    aria-label="Version switcher list"
+  >
+    Choose version  <!-- this text may get changed later by javascript -->
+    <span class="caret"></span>
+  </button>
+  <div id="pst-version-switcher-list-2"
+    class="version-switcher__menu dropdown-menu list-group-flush py-0"
+    role="listbox" aria-labelledby="pst-version-switcher-button-2">
+    <!-- dropdown will be populated by javascript on page load -->
+  </div>
+</div></div>
+      
+        <div class="navbar-item">
+
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
+  </ul>
+</div></div>
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+      <div class="sidebar-header-items__end">
+        
+          <div class="navbar-item">
+<div class="version-switcher__container dropdown pst-js-only">
+  <button id="pst-version-switcher-button-3"
+    type="button"
+    class="version-switcher__button btn btn-sm dropdown-toggle"
+    data-bs-toggle="dropdown"
+    aria-haspopup="listbox"
+    aria-controls="pst-version-switcher-list-3"
+    aria-label="Version switcher list"
+  >
+    Choose version  <!-- this text may get changed later by javascript -->
+    <span class="caret"></span>
+  </button>
+  <div id="pst-version-switcher-list-3"
+    class="version-switcher__menu dropdown-menu list-group-flush py-0"
+    role="listbox" aria-labelledby="pst-version-switcher-button-3">
+    <!-- dropdown will be populated by javascript on page load -->
+  </div>
+</div></div>
+        
+          <div class="navbar-item">
+
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
+  </ul>
+</div></div>
+        
+      </div>
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item"><nav class="bd-links" id="bd-docs-nav" aria-label="Main navigation">
+
+  <div class="bd-toc-item active">
+    
+    <p aria-level="2" class="caption" role="heading"><span class="caption-text">ASF Links</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://apache.org">Apache Software Foundation</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/licenses/">License</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/foundation/sponsorship.html">Donate</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/foundation/thanks.html">Thanks</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/security/">Security</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Links</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://github.com/apache/datafusion">GitHub and Issue Tracker</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://crates.io/crates/datafusion">crates.io</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/">API Docs</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/blog/">Blog</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://github.com/apache/datafusion/blob/main/CODE_OF_CONDUCT.md">Code of conduct</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../download.html">Download</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">User Guide</span></p>
+<ul class="current nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="example-usage.html">Example Usage</a></li>
+<li class="toctree-l1"><a class="reference internal" href="features.html">Features</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">Concepts, Readings, Events</a></li>
+
+
+<li class="toctree-l1"><a class="reference internal" href="crate-configuration.html">Crate Configuration</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="cli/index.html">DataFusion CLI</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="cli/overview.html">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cli/installation.html">Installation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cli/usage.html">Usage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cli/datasources.html">Local Files / Directories</a></li>
+
+
+
+
+<li class="toctree-l2"><a class="reference internal" href="cli/functions.html">CLI Specific Functions</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="dataframe.html">DataFrame API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="arrow-introduction.html">Gentle Arrow Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="expressions.html">Expression API</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="sql/index.html">SQL Reference</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="sql/data_types.html">Data Types</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/struct_coercion.html">Struct Type Coercion and Field Mapping</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/select.html">SELECT syntax</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/subqueries.html">Subqueries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/ddl.html">DDL</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/dml.html">DML</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/explain.html">EXPLAIN</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/information_schema.html">Information Schema</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/operators.html">Operators and Literals</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/aggregate_functions.html">Aggregate Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/window_functions.html">Window Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/scalar_functions.html">Scalar Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/special_functions.html">Special Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql/format_options.html">Format Options</a></li>
+
+<li class="toctree-l2"><a class="reference internal" href="sql/prepared_statements.html">Prepared Statements</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="configs.html">Configuration Settings</a></li>
+
+
+
+<li class="toctree-l1"><a class="reference internal" href="explain-usage.html">Reading Explain Plans</a></li>
+<li class="toctree-l1"><a class="reference internal" href="parquet-content-defined-chunking.html">Parquet Content-Defined Chunking</a></li>
+<li class="toctree-l1"><a class="reference internal" href="metrics.html">Metrics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="faq.html">Frequently Asked Questions</a></li>
+
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Library User Guide</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/index.html">Introduction</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../library-user-guide/upgrading/index.html">Upgrade Guides</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/55.0.0.html">DataFusion 55.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/54.0.0.html">DataFusion 54.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/53.0.0.html">DataFusion 53.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/52.0.0.html">DataFusion 52.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/51.0.0.html">DataFusion 51.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/50.0.0.html">DataFusion 50.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/49.0.0.html">DataFusion 49.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/48.0.1.html">DataFusion 48.0.1</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/48.0.0.html">DataFusion 48.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/47.0.0.html">DataFusion 47.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/46.0.0.html">DataFusion 46.0.0</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/extensions.html">Extensions List</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/using-the-sql-api.html">Using the SQL API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/extending-sql.html">Extending SQL Syntax</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/working-with-exprs.html">Working with <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/using-the-dataframe-api.html">Using the DataFrame API</a></li>
+
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/building-logical-plans.html">Building Logical Plans</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/catalogs.html">Catalogs, Schemas, and Tables</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../library-user-guide/functions/index.html">Functions</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/functions/adding-udfs.html">Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/functions/spark.html">Spark Compatible Functions</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/custom-table-providers.html">Custom Table Provider</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/table-constraints.html">Table Constraint Enforcement</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/extending-operators.html">Extending Operators</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/profiling.html">Profiling Cookbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/query-optimizer.html">Query Optimizer</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Contributor Guide</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/index.html">Introduction</a></li>
+
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/pr_review.html">Reviewing Pull Requests</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/communication.html">Community Communication</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/development_environment.html">Development Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/architecture.html">Architecture</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/architecture/dependency-graph.html">Workspace Dependency Graph</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/testing.html">Testing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/api-health.html">API health policy</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/howtos.html">HOWTOs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/release_management.html">Release Management</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/roadmap.html">Roadmap and Improvement Proposals</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/governance.html">Governance</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor-guide/inviting.html">Inviting New Committers and PMC Members</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../contributor-guide/specification/index.html">Specifications</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../contributor-guide/specification/invariants.html">Invariants</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../contributor-guide/specification/output-field-name-semantic.html">Output field name semantics</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../contributor-guide/gsoc/index.html">Google Summer of Code (GSOC)</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../contributor-guide/gsoc/gsoc_application_guidelines_2025.html">GSoC Application Guidelines (2025)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../contributor-guide/gsoc/gsoc_project_ideas_2025.html">GSoC Project Ideas (2025)</a></li>
+</ul>
+</details></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">DataFusion Subprojects</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/ballista/">DataFusion Ballista</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/comet/">DataFusion Comet</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/java/">DataFusion Java</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/python/">DataFusion Python</a></li>
+</ul>
+
+    
+  </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item">
+
+<nav aria-label="Breadcrumb" class="d-print-none">
+  <ul class="bd-breadcrumbs">
+    
+    <li class="breadcrumb-item breadcrumb-home">
+      <a href="../index.html" class="nav-link" aria-label="Home">
+        <i class="fa-solid fa-home"></i>
+      </a>
+    </li>
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Concepts, Readings, Events</span></li>
+  </ul>
+</nav>
+</div>
+      
+    </div>
+  
+  
+</div>
+</div>
+              
+              
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <!---
+  Licensed to the Apache Software Foundation (ASF) under one
+  or more contributor license agreements.  See the NOTICE file
+  distributed with this work for additional information
+  regarding copyright ownership.  The ASF licenses this file
+  to you under the Apache License, Version 2.0 (the
+  "License"); you may not use this file except in compliance
+  with the License.  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing,
+  software distributed under the License is distributed on an
+  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, either express or implied.  See the License for the
+  specific language governing permissions and limitations
+  under the License.
+-->
+<section id="concepts-readings-events">
+<h1>Concepts, Readings, Events<a class="headerlink" href="#concepts-readings-events" title="Link to this heading">#</a></h1>
+<section id="background-concepts">
+<h2>🧭 Background Concepts<a class="headerlink" href="#background-concepts" title="Link to this heading">#</a></h2>
+<ul class="simple">
+<li><p><strong>2024-06-13</strong>: <a class="reference external" href="https://dl.acm.org/doi/10.1145/3626246.3653368">2024 ACM SIGMOD International Conference on Management of Data: Apache Arrow DataFusion: A Fast, Embeddable, Modular Analytic Query Engine</a> - <a class="reference external" href="https://andrew.nerdnetworks.org/pdf/SIGMOD-2024-lamb.pdf">Download</a>, <a class="reference external" href="https://youtu.be/-DpKcPfnNms">Talk</a>, <a class="reference external" href="https://docs.google.com/presentation/d/1gqcxSNLGVwaqN0_yJtCbNm19-w5pqPuktII5_EDA6_k/edit#slide=id.p">Slides</a>, <a class="reference external" href="https://youtu.be/-DpKcPfnNms">Recording </a></p></li>
+<li><p><strong>2024-06-07</strong>: <a class="reference external" href="https://www.youtube.com/watch?v=-DpKcPfnNms&amp;t=5s">Video: SIGMOD 2024 Practice: Apache Arrow DataFusion A Fast, Embeddable, Modular Analytic Query Engine</a> - <a class="reference external" href="https://docs.google.com/presentation/d/1gqcxSNLGVwaqN0_yJtCbNm19-w5pqPuktII5_EDA6_k/edit#slide=id.p">Slides</a></p></li>
+<li><p><strong>2023-04-05</strong>: <a class="reference external" href="https://youtu.be/2jkWU3_w6z0">Video: DataFusion Architecture Part 3: Physical Plan and Execution</a> - <a class="reference external" href="https://docs.google.com/presentation/d/1cA2WQJ2qg6tx6y4Wf8FH2WVSm9JQ5UgmBWATHdik0hg">Slides</a></p></li>
+<li><p><strong>2023-04-04</strong>: <a class="reference external" href="https://youtu.be/EzZTLiSJnhY">Video: DataFusion Architecture Part 2: Logical Plans and Expressions</a> - <a class="reference external" href="https://docs.google.com/presentation/d/1ypylM3-w60kVDW7Q6S99AHzvlBgciTdjsAfqNP85K30">Slides</a></p></li>
+<li><p><strong>2023-03-31</strong>: <a class="reference external" href="https://youtu.be/NVKujPxwSBA">Video: DataFusion Architecture Part 1: Query Engines</a> - <a class="reference external" href="https://docs.google.com/presentation/d/1D3GDVas-8y0sA4c8EOgdCvEjVND4s2E7I6zfs67Y4j8">Slides</a></p></li>
+<li><p><strong>2020-02-27</strong>: <a class="reference external" href="https://andygrove.io/2020/02/how-query-engines-work/">Online Book: How Query Engines Work</a></p></li>
+</ul>
+</section>
+<section id="good-reads">
+<h2>✨ Good Reads<a class="headerlink" href="#good-reads" title="Link to this heading">#</a></h2>
+<p>This is a list of DataFusion related blog posts, articles, and other resources. Please open a PR to add any new resources you create or find</p>
+<ul class="simple">
+<li><p><strong>2026-04-10</strong> <a class="reference external" href="https://thedataquarry.com/blog/datafusion-and-the-rise-of-deconstructed-data-systems/">Blog: DataFusion and the Rise of Deconstructed Data Systems</a></p></li>
+<li><p><strong>2026-04-04</strong> <a class="reference external" href="https://www.youtube.com/watch?v=TeFsBVIYBis">Video: Generalized Consensus &amp; Native Top-K Joins in ParadeDB</a></p></li>
+<li><p><strong>2026-03-31</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2026/03/31/writing-table-providers/">Blog: Writing Custom Table Providers in Apache DataFusion</a></p></li>
+<li><p><strong>2026-03-24</strong> <a class="reference external" href="https://www.youtube.com/watch?v=HkYF2So6nHQ">Podcast: The Data Fusion Secret &amp; Why Custom Query Engines Fail with Nikita Lapkov</a></p></li>
+<li><p><strong>2026-03-20</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2026/03/20/multi-layer-pruning/">Blog: Turning LIMIT into an I/O Optimization: Inside DataFusion’s Multi-Layer Pruning Stack</a></p></li>
+<li><p><strong>2026-02-09</strong> <a class="reference external" href="https://blog.xiangpeng.systems/posts/vector-search-with-parquet-datafusion/">Blog: Vector search using only Parquet and DataFusion</a></p></li>
+<li><p><strong>2026-02-02</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2026/02/02/case-expression/">Blog: Optimizing SQL CASE Expression Evaluation</a></p></li>
+<li><p><strong>2026-01-12</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2026/01/12/extending-sql">Blog: Extending SQL in DataFusion: from -&gt;&gt; to TABLESAMPLE</a></p></li>
+<li><p><strong>2025-12-15</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2025/12/15/avoid-consecutive-repartitions">Blog: Optimizing Repartitions in DataFusion: How I Went From Database Noob to Core Contribution</a></p></li>
+<li><p><strong>2025-09-21</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2025/09/21/custom-types-using-metadata">Blog: Implementing User Defined Types and Custom Metadata in DataFusion</a></p></li>
+<li><p><strong>2025-09-10</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2025/09/10/dynamic-filters">Blog: Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries</a></p></li>
+<li><p><strong>2025-08-15</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2025/08/15/external-parquet-indexes">Blog: Using External Indexes, Metadata Stores, Catalogs and Caches to Accelerate Queries on Apache Parquet</a></p></li>
+<li><p><strong>2025-07-14</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2025/07/14/user-defined-parquet-indexes">Blog: Embedding User-Defined Indexes in Apache Parquet Files</a></p></li>
+<li><p><strong>2025-06-30</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2025/06/30/cancellation">Blog: Using Rust async for Query Execution and Cancelling Long-Running Queries</a></p></li>
+<li><p><strong>2025-06-15</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2025/06/15/optimizing-sql-dataframes-part-one">Blog: Optimizing SQL (and DataFrames) in DataFusion, Part 1: Query Optimization Overview</a></p></li>
+<li><p><strong>2025-06-15</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2025/06/15/optimizing-sql-dataframes-part-two">Blog: Optimizing SQL (and DataFrames) in DataFusion, Part 2: Optimizers in Apache DataFusion</a></p></li>
+<li><p><strong>2025-04-19</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2025/04/19/user-defined-window-functions">Blog: User defined Window Functions in DataFusion</a></p></li>
+<li><p><strong>2025-04-10</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2025/04/10/fastest-tpch-generator">Blog: tpchgen-rs World’s fastest open source TPC-H data generator, written in Rust</a></p></li>
+<li><p><strong>2025-03-11</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2025/03/11/ordering-analysis">Blog: Using Ordering for Better Plans in Apache DataFusion</a></p></li>
+<li><p><strong>2024-05-07</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2024/05/07/datafusion-tlp">Blog: Announcing Apache Arrow DataFusion is now Apache DataFusion</a></p></li>
+<li><p><strong>2024-03-06</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2024/03/06/comet-donation">Blog: Announcing Apache Arrow DataFusion Comet</a></p></li>
+<li><p><strong>2025-03-21</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2025/03/21/parquet-pushdown/">Blog: Efficient Filter Pushdown in Parquet</a></p></li>
+<li><p><strong>2025-03-20</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2025/03/20/parquet-pruning/">Blog: Parquet Pruning in DataFusion: Read Only What Matters</a></p></li>
+<li><p><strong>2025-02-12</strong> <a class="reference external" href="https://www.youtube.com/watch?v=6A4vFRpSq3k">Video: Alex Kesling on Apache Arrow DataFusion - Papers We Love NYC </a></p></li>
+<li><p><strong>2025-01-30</strong> <a class="reference external" href="https://www.youtube.com/watch?v=GruBeVDoWq4">Video: Data &amp; Drinks: Building Next-Gen Data Systems with Apache DataFusion</a></p></li>
+<li><p><strong>2024-11-22</strong> <a class="reference external" href="https://semyonsinchenko.github.io/ssinchenko/post/comet-first-contribution/">Blog: Apache Datafusion Comet and the story of my first contribution to it</a></p></li>
+<li><p><strong>2024-11-21</strong> <a class="reference external" href="https://www.crn.com/news/software/2024/the-10-coolest-open-source-software-tools-of-2024?page=3">Blog: DataFusion is featured as one of the coolest 10 open source software tools by CRN</a></p></li>
+<li><p><strong>2024-11-20</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2024/11/20/datafusion-comet-0.4.0/">Blog: Apache DataFusion Comet 0.4.0 Release</a></p></li>
+<li><p><strong>2024-11-19</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2024/11/19/datafusion-python-udf-comparisons/">Blog: Comparing approaches to User Defined Functions in Apache DataFusion using Python</a></p></li>
+<li><p><strong>2024-11-18</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2024/11/18/datafusion-fastest-single-node-parquet-clickbench/">Blog: Apache DataFusion is now the fastest single node engine for querying Apache Parquet files</a></p></li>
+<li><p><strong>2024-11-18</strong> <a class="reference external" href="https://www.denormalized.io/blog/building-databases">Blog: Building Databases over a Weekend</a></p></li>
+<li><p><strong>2024-10-29</strong> <a class="reference external" href="https://www.youtube.com/watch?v=CpnxuBwHbUc">Video: MiDAS Seminar Fall 2024 on “Apache DataFusion” by Andrew Lamb</a></p></li>
+<li><p><strong>2024-10-27</strong> <a class="reference external" href="https://blog.xiangpeng.systems/posts/caching-datafusion/">Blog: Caching in DataFusion: Don’t read twice</a></p></li>
+<li><p><strong>2024-10-24</strong> <a class="reference external" href="https://blog.xiangpeng.systems/posts/parquet-to-arrow/">Blog: Parquet pruning in DataFusion: Read no more than you need</a></p></li>
+<li><p><strong>2024-09-13</strong> <a class="reference external" href="https://www.influxdata.com/blog/faster-queries-with-stringview-part-two-influxdb/">Blog: Using StringView / German Style Strings to make Queries Faster: Part 2 - String Operations</a> | <a class="reference external" href="https://datafusion.apache.org/blog/2024/09/13/string-view-german-style-strings-part-2/">Reposted on DataFusion Blog</a></p></li>
+<li><p><strong>2024-09-13</strong> <a class="reference external" href="https://www.influxdata.com/blog/faster-queries-with-stringview-part-one-influxdb/">Blog: Using StringView / German Style Strings to Make Queries Faster: Part 1- Reading Parquet</a> | <a class="reference external" href="https://datafusion.apache.org/blog/2024/09/13/string-view-german-style-strings-part-1/">Reposted on Datafusion Blog</a></p></li>
+<li><p><strong>2024-09-23 → 2024-12-02</strong> <a class="reference external" href="https://db.cs.cmu.edu/seminar2024/">Talks: Carnegie Mellon University: Database Building Blocks Seminar Series - Fall 2024</a></p>
+<ul>
+<li><p><strong>2024-11-12</strong> <a class="reference external" href="https://www.youtube.com/watch?v=AGS4GNGDK_4">Video: Building InfluxDB 3.0 with the FDAP Stack: Apache Flight, DataFusion, Arrow and Parquet (Paul Dix)</a></p></li>
+<li><p><strong>2024-11-04</strong> <a class="reference external" href="https://www.youtube.com/watch?v=z38WY9uZtt4">Video: Synnada: Towards “Unified” Compute Engines: Opportunities and Challenges (Mehmet Ozan Kabak)</a></p></li>
+<li><p><strong>2024-10-28</strong> <a class="reference external" href="https://www.youtube.com/watch?v=fltZMO8EGl0&amp;list=PLSE8ODhjZXjZc2AdXq_Lc1JS62R48UX2L&amp;index=6">Video: Exon: A Built for Purpose Bioinformatics Database (Trent Hauck)</a></p></li>
+<li><p><strong>2024-10-21</strong> <a class="reference external" href="https://www.youtube.com/watch?v=tyM-ec1lKfU&amp;list=PLSE8ODhjZXjZc2AdXq_Lc1JS62R48UX2L&amp;index=5">Video: Accelerating Data and AI with Spice.ai Open-Source Software (Luke Kim)</a></p></li>
+<li><p><strong>2024-10-07</strong> <a class="reference external" href="https://www.youtube.com/watch?v=Vxb8TELNM98&amp;list=PLSE8ODhjZXjZc2AdXq_Lc1JS62R48UX2L&amp;index=4">Video: ParadeDB – Postgres for Search and Analytics (Philippe Noël)</a></p></li>
+<li><p><strong>2024-09-30</strong> <a class="reference external" href="https://www.youtube.com/watch?v=o59s0d3HE1k&amp;list=PLSE8ODhjZXjZc2AdXq_Lc1JS62R48UX2L&amp;index=3">Video: Accelerating Apache Spark Workloads with Apache DataFusion Comet (Andy Grove)</a></p></li>
+<li><p><strong>2024-09-23</strong> <a class="reference external" href="https://www.youtube.com/watch?v=iJhRbDFJjbg&amp;list=PLSE8ODhjZXjZc2AdXq_Lc1JS62R48UX2L&amp;index=2">Video: Apache Arrow DataFusion: A Fast, Embeddable, Modular Analytic Query Engine (Andrew Lamb)</a></p></li>
+</ul>
+</li>
+<li><p><strong>2024-09-17</strong> <a class="reference external" href="https://www.youtube.com/watch?v=2z11xtYw_xs">Video: Profiling Apache DataFusion using flamegraph</a></p></li>
+<li><p><strong>2024-08-25</strong> <a class="reference external" href="https://github.com/pydantic/logfire/issues/408">Blog: Pydantic/logfire: We’re changing database</a></p></li>
+<li><p><strong>2024-08-15</strong> <a class="reference external" href="https://www.youtube.com/watch?v=RVLshX6fbds">Video: Faster DataFusion with StringView - Xiangpeng Hao (Aug 15, 2024)</a></p></li>
+<li><p><strong>2024-08-14</strong> <a class="reference external" href="https://uwheel.rs/post/datafusion_uwheel/">Blog: DataFusion &#64; UWheel</a></p></li>
+<li><p><strong>2024-06-17</strong> <a class="reference external" href="https://blog.lancedb.com/columnar-file-readers-in-depth-apis-and-fusion/">Blog: Columnar File Readers In-Depth: APIs and Fusion</a></p></li>
+<li><p><strong>2024-06-14</strong> <a class="reference external" href="https://sfu-dis.github.io/simod/">Talk: 2024 Simplicity in Management of Data (SiMOD): DataFusion: The Case for Building Open Data Systems (Keynote)</a> - <a class="reference external" href="https://docs.google.com/presentation/d/1K3EdknzkqU2LhWi_eNKXdcvNk0OEvk9AqTLqhZkPxuI/edit">Slides</a></p></li>
+<li><p><strong>2024-05-29</strong> <a class="reference external" href="https://cube.dev/blog/query-push-down-in-cubes-semantic-layer">Blog: Query Push Down in Cube’s Semantic Layer</a></p></li>
+<li><p><strong>2024-06-26</strong> <a class="reference external" href="https://www.microsoft.com/en-us/research/group/gray-systems-lab">Talk: Microsoft Gray Systems Lab: Building InfluxDB 3.0 (and other systems)</a> - <a class="reference external" href="https://docs.google.com/presentation/d/1a4wHZij_69drdmD32TPombQ9zSaE6l26LZ87DAz2New/edit#slide=id.p">Slides</a></p></li>
+<li><p><strong>2024-04-06</strong> <a class="reference external" href="https://www.youtube.com/watch?v=Bc55FBwuJLA">Video: 1 billion row challenge in Rust using Apache Arrow</a></p></li>
+<li><p><strong>2024-03-26</strong> <a class="reference external" href="https://www.datacouncil.ai/talks24/building-influxdb-30-with-apache-arrow-datafusion-flight-and-parquet?hsLang=en">Talk: DataCouncil 2024: Building InfluxDB 3.0 with Apache Arrow, DataFusion, Flight, and Parquet</a> - <a class="reference external" href="https://docs.google.com/presentation/d/12kdYHLyH79B5__9xs3de_hZyG9geW4jC3vUpiy39VA0">Slides</a>, <a class="reference external" href="https://www.youtube.com/watch?v=I-Z7kFGsYRI">Recording</a></p></li>
+<li><p><strong>2024-03-20</strong> <a class="reference external" href="https://www.youtube.com/watch?v=P3dXH61Kr5U">Video: Profiling DataFusion with Instruments (part of XCode on Mac OSx)</a></p></li>
+<li><p><strong>2024-03-18</strong> <a class="reference external" href="https://www.influxdata.com/blog/making-recent-value-queries-hundreds-times-faster/">Blog: Making Recent Value Queries Hundreds of Times Faster</a></p></li>
+<li><p><strong>2023-10-25</strong> <a class="reference external" href="https://www.influxdata.com/blog/flight-datafusion-arrow-parquet-fdap-architecture-influxdb/">Blog: Flight, DataFusion, Arrow, and Parquet: Using the FDAP Architecture to build InfluxDB 3.0</a></p></li>
+<li><p><strong>2023-09-26</strong> <a class="reference external" href="https://www.kamu.dev/blog/2023-09-datafusion-flightsql/">Blog: 100x Faster Ingest with DataFusion + Better Connectivity with FlightSQL</a></p></li>
+<li><p><strong>2023-08-15</strong> <a class="reference external" href="https://www.synnada.ai/blog/running-window-query-in-stream-processing">Blog: Running Window Query in Stream Processing</a></p></li>
+<li><p><strong>2023-08-05</strong> <a class="reference external" href="https://www.influxdata.com/blog/aggregating-millions-groups-fast-apache-arrow-datafusion/">Blog: Aggregating Millions of Groups Fast in Apache Arrow DataFusion</a> | <a class="reference external" href="https://arrow.apache.org/blog/2023/08/05/datafusion_fast_grouping/">DataFusion Blog</a></p></li>
+<li><p><strong>2023-07-28</strong> <a class="reference external" href="https://www.synnada.ai/blog/sliding-window-hash-join-swhj">Blog: Sliding Window Hash Join (SWHJ)</a></p></li>
+<li><p><strong>2023-07-13</strong> <a class="reference external" href="https://www.synnada.ai/blog/probabilistic-data-structures-in-streaming-count-min-sketch">Blog: Probabilistic Data Structures in Streaming: Count-Min Sketch</a></p></li>
+<li><p><strong>2023-05-25</strong> <a class="reference external" href="https://www.youtube.com/watch?v=NEL6DluUxgw">Video: D3L2: Discussing Rust, Ballista, Ray SQL, Data Fusion with Andy Grove</a></p></li>
+<li><p><strong>2023-02-20</strong> <a class="reference external" href="https://www.synnada.ai/blog/general-purpose-stream-joins-via-pruning-symmetric-hash-joins">Blog: General Purpose Stream Joins via Pruning Symmetric Hash Joins</a></p></li>
+<li><p><strong>2023-09-27</strong> <a class="reference external" href="https://docs.google.com/presentation/d/1_JXxapY2jksCOm5hePK8FIjO3buDzsrBBy0jUEpJR4A">Slides: MIT Database Group: Implementing InfluxDB IOx</a></p></li>
+<li><p><strong>2023-06-02</strong> <a class="reference external" href="https://dsdsd.da.cwi.nl/past_talks/post_talks/Andrew-Lamb/">Talk: Dutch Seminar on Database System Design: Implementing InfluxDB IOx</a> - <a class="reference external" href="https://docs.google.com/presentation/d/1XTsO2zsHkgBCF6C0YVwk0BnhZzLBrm39oeapOBb-s9A">Slides</a>, <a class="reference external" href="https://youtu.be/Y5K2Ik2oo-8">Recording</a></p></li>
+<li><p><strong>2023-02-15</strong> <a class="reference external" href="https://docs.google.com/presentation/d/1SzqgTtSKVqpuFUDdOHhRNC3mLmJ7oyVp0OyrYwHvgPA">Slides: Invited Talk at Optum Labs: Building a New Time Series Database</a></p></li>
+<li><p><strong>2023-01-01</strong> <a class="reference external" href="https://andygrove.io/2023/01/what-i-want-from-datafusion-2023/">Blog: What I Want from DataFusion 2023</a></p></li>
+<li><p><strong>2022-12-07</strong> <a class="reference external" href="https://www.influxdata.com/blog/querying-parquet-millisecond-latency/">Blog: Querying Parquet with Millisecond Latency</a></p></li>
+<li><p><strong>2022-06-27</strong> <a class="reference external" href="https://www.databricks.com/dataaisummit/session/datafusion-and-arrow-supercharge-your-data-analytical-tool-rusty-query-engine">Talk: DataBricks Data+AI Summit: DataFusion and Arrow</a> - <a class="reference external" href="https://docs.google.com/presentation/d/1wLORMn23RD_sQ84W2w51s-Xysly5S8F5mGXzaeJ4QWY">Slides</a>, <a class="reference external" href="https://www.databricks.com/dataaisummit/session/datafusion-and-arrow-supercharge-your-data-analytical-tool-rusty-query-engine">Recording</a></p></li>
+<li><p><strong>2022-05-23</strong> <a class="reference external" href="https://www.youtube.com/watch?v=rb61lVH2vYc">Video: The Data Thread 2022: Apache Arrow and DataFusion</a> - <a class="reference external" href="https://docs.google.com/presentation/d/1Tkjfup5z_nsrBWIO7dXscEzC5toTQCXj0IsZeO3endc">Slides</a></p></li>
+<li><p><strong>2021-03-10</strong> <a class="reference external" href="https://www.youtube.com/watch?v=K6eCAVEk4kU">Video: InfluxData Tech Talk: Query Engine Design and Rust-Based DataFusion in Apache Arrow</a> - <a class="reference external" href="https://www.Slideshare.net/influxdata/influxdb-iox-tech-talks-query-engine-design-and-the-rustbased-datafusion-in-apache-arrow-244161934">Slides</a></p></li>
+</ul>
+</section>
+<section id="release-notes-updates">
+<h2>📅 Release Notes &amp; Updates<a class="headerlink" href="#release-notes-updates" title="Link to this heading">#</a></h2>
+<ul class="simple">
+<li><p><strong>2026-04-02</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2026/04/02/datafusion-53.0.0">Apache DataFusion 53.0.0 Released</a></p></li>
+<li><p><strong>2026-03-18</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2026/03/18/datafusion-comet-0.14.0">Apache DataFusion Comet 0.14.0 Release</a></p></li>
+<li><p><strong>2026-01-30</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2026/01/30/datafusion-comet-0.13.0">Apache DataFusion Comet 0.13.0 Release</a></p></li>
+<li><p><strong>2026-01-12</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2026/01/12/datafusion-52.0.0">Apache DataFusion 52.0.0 Released</a></p></li>
+<li><p><strong>2025-12-04</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2025/12/04/datafusion-comet-0.12.0">Apache DataFusion Comet 0.12.0 Release</a></p></li>
+<li><p><strong>2025-11-25</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2025/11/25/datafusion-51.0.0">Apache DataFusion 51.0.0 Released</a></p></li>
+<li><p><strong>2025-10-21</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2025/10/21/datafusion-comet-0.11.0">Apache DataFusion Comet 0.11.0 Release</a></p></li>
+<li><p><strong>2025-09-29</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2025/09/29/datafusion-50.0.0">Apache DataFusion 50.0.0 Released</a></p></li>
+<li><p><strong>2025-09-16</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2025/09/16/datafusion-comet-0.10.0">Apache DataFusion Comet 0.10.0 Release</a></p></li>
+<li><p><strong>2025-07-28</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2025/07/28/datafusion-49.0.0">Apache DataFusion 49.0.0 Released</a></p></li>
+<li><p><strong>2025-07-16</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2025/07/16/datafusion-48.0.0">Apache DataFusion 48.0.0 Released</a></p></li>
+<li><p><strong>2025-07-11</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2025/07/11/datafusion-47.0.0">Apache DataFusion 47.0.0 Released</a></p></li>
+<li><p><strong>2025-07-01</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2025/07/01/datafusion-comet-0.9.0">Apache DataFusion Comet 0.9.0 Release</a></p></li>
+<li><p><strong>2025-05-06</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2025/05/06/datafusion-comet-0.8.0">Apache DataFusion Comet 0.8.0 Release</a></p></li>
+<li><p><strong>2025-03-30</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2025/03/30/datafusion-python-46.0.0">Apache DataFusion Python 46.0.0 Released</a></p></li>
+<li><p><strong>2025-03-24</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2025/03/24/datafusion-46.0.0">Apache DataFusion 46.0.0 Released</a></p></li>
+<li><p><strong>2025-03-20</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2025/03/20/datafusion-comet-0.7.0">Apache DataFusion Comet 0.7.0 Release</a></p></li>
+<li><p><strong>2025-02-20</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2025/02/20/datafusion-45.0.0">Apache DataFusion 45.0.0 Released</a></p></li>
+<li><p><strong>2025-02-17</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2025/02/17/datafusion-comet-0.6.0">Apache DataFusion Comet 0.6.0 Release</a></p></li>
+<li><p><strong>2025-02-02</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2025/02/02/datafusion-ballista-43.0.0">Apache DataFusion Ballista 43.0.0 Released</a></p></li>
+<li><p><strong>2025-01-17</strong> <a class="reference external" href="https://datafusion.apache.org/blog/2025/01/17/datafusion-comet-0.5.0">Apache DataFusion Comet 0.5.0 Release</a></p></li>
+</ul>
+</section>
+</section>
+<section id="community-showcase">
+<h1>🎥 Community Showcase<a class="headerlink" href="#community-showcase" title="Link to this heading">#</a></h1>
+<p>The <a class="reference external" href="https://github.com/apache/datafusion/issues/22963">DataFusion Community Showcase</a> is a
+regular virtual event where community members share what they are building with DataFusion.</p>
+<ul class="simple">
+<li><p><strong>2026-08-06</strong> <a class="reference external" href="https://www.youtube.com/watch?v=0-BIHyzODH8">Vol. 3: ASAPQuery (Milind Srivastava) &amp; Streamling (Yaroslav Tkachenko)</a></p></li>
+<li><p><strong>2026-07-23</strong> <a class="reference external" href="https://www.youtube.com/watch?v=G8In--2RUwI">Vol. 2: DataFusion Comet (Jordan Epstein) &amp; DataFusion Ballista (Phillip LeBlanc)</a></p></li>
+<li><p><strong>2026-07-09</strong> <a class="reference external" href="https://www.youtube.com/watch?v=5o-4hL8vGPw">Vol. 1: SedonaDB (Dewey Dunnington) &amp; Xarray-SQL (Alex Merose)</a></p></li>
+</ul>
+</section>
+<section id="community-events">
+<h1>🌎 Community Events<a class="headerlink" href="#community-events" title="Link to this heading">#</a></h1>
+<ul class="simple">
+<li><p><strong>2026-09-03</strong> <a class="reference external" href="https://github.com/apache/datafusion/discussions/21541">Boston Apache DataFusion Meetup</a> - <a class="reference external" href="https://luma.com/yexgqifv">RSVP</a></p></li>
+<li><p><strong>2026-07-22</strong> <a class="reference external" href="https://github.com/apache/datafusion/discussions/18428">Denver Apache DataFusion Meetup</a> - <a class="reference external" href="https://luma.com/jsu6faie">RSVP</a></p></li>
+<li><p><strong>2026-06-28</strong> <a class="reference external" href="https://github.com/apache/datafusion/discussions/16334">Shanghai Apache DataFusion Meetup</a> - <a class="reference external" href="https://luma.com/7xrhm9rx">RSVP</a>, <a class="reference external" href="https://www.linkedin.com/posts/ruihang-xia_we-are-going-to-have-a-apache-datafusion-share-7473348653169160194-NcmY">LinkedIn</a></p></li>
+<li><p><strong>2026-05-12</strong> <a class="reference external" href="https://github.com/apache/datafusion/discussions/20030">New York City Apache DataFusion Meetup</a> - <a class="reference external" href="https://luma.com/adhshv92">RSVP</a></p></li>
+<li><p><strong>2026-05-11</strong> <a class="reference external" href="https://github.com/apache/datafusion/discussions/21638">San Francisco Apache DataFusion Meetup</a> - <a class="reference external" href="https://luma.com/k3ointcl">RSVP</a></p></li>
+<li><p><strong>2026-04-23</strong> <a class="reference external" href="https://github.com/apache/datafusion/discussions/13500">Seattle Apache DataFusion Meetup</a> - <a class="reference external" href="https://luma.com/hxshbp0m">RSVP</a></p></li>
+<li><p><strong>2026-04-22</strong> <a class="reference external" href="https://github.com/apache/datafusion/discussions/19817">Portland Apache DataFusion Meetup</a> - <a class="reference external" href="https://luma.com/dsp3ud82">RSVP</a></p></li>
+<li><p><strong>2026-03-05</strong> <a class="reference external" href="https://github.com/apache/datafusion/discussions/18429">Stockholm Apache DataFusion Meetup</a> - <a class="reference external" href="https://luma.com/ctqtiqap">RSVP</a>, <a class="reference external" href="https://youtu.be/9u4cNmL14Xs">Recording</a></p></li>
+<li><p><strong>2026-02-19</strong> <a class="reference external" href="https://github.com/apache/datafusion/discussions/19859">San Francisco Apache DataFusion Meetup</a> - <a class="reference external" href="https://luma.com/p7r6fp2z">RSVP</a>, <a class="reference external" href="https://www.youtube.com/playlist?list=PL42Ljm2tTt5peGUWMBN7WFkASq73j8PoU">Recording</a></p></li>
+<li><p><strong>2025-11-12</strong> <a class="reference external" href="https://github.com/apache/datafusion/discussions/16703">Boston Apache DataFusion Meetup</a> - <a class="reference external" href="https://youtu.be/wCAud478Dg8">Recording</a>, <a class="reference external" href="https://drive.google.com/file/d/18KGH_wGHkgdAfjy5sQVKFhnN1GyYXSzU">Slides</a></p></li>
+<li><p><strong>2025-09-15</strong> <a class="reference external" href="https://github.com/apache/datafusion/discussions/16265">New York City Apache DataFusion Meetup</a> - <a class="reference external" href="https://lu.ma/qkcyycg0">RSVP</a>, <a class="reference external" href="https://youtu.be/ElAiN_1fX_4">Recording</a></p></li>
+<li><p><strong>2025-01-23</strong> <a class="reference external" href="https://github.com/apache/datafusion/discussions/12988">Amsterdam Apache DataFusion Meetup</a> - <a class="reference external" href="https://github.com/apache/datafusion/discussions/12988">Slides</a></p></li>
+<li><p><strong>2025-01-22</strong> <a class="reference external" href="https://www.linkedin.com/posts/seshendranalla_apache-datafusion-community-meeting-2025-activity-7290384383201435648-8tqv">Datadog Apache DataFusion Community Meeting</a> - <a class="reference external" href="https://www.youtube.com/watch?v=ceTo2vUyRI0">Recording</a></p></li>
+<li><p><strong>2025-01-15</strong> <a class="reference external" href="https://github.com/apache/datafusion/discussions/13165">Boston Apache DataFusion Meetup</a> - <a class="reference external" href="https://docs.google.com/presentation/d/1_zBLHdqxPlhWuNK2oCA2d_hCpb6HWgHbVJBseiUXA80">Slides</a></p></li>
+<li><p><strong>2024-12-18</strong> <a class="reference external" href="https://lu.ma/eq5myc5i">Chicago Apache DataFusion Meetup</a> - <a class="reference external" href="https://github.com/apache/datafusion/discussions/12894">Slides</a>, <a class="reference external" href="https://www.youtube.com/playlist?list=PLrhIfEjaw9ilQEczOQlHyMznabtVRptyX">Recording</a></p></li>
+<li><p><strong>2024-10-14</strong> <a class="reference external" href="https://lu.ma/tnwl866b">Seattle Apache DataFusion Meetup</a></p></li>
+<li><p><strong>2024-09-27</strong> <a class="reference external" href="https://lu.ma/tmwuz4lg">Belgrade Apache DataFusion Meetup</a> - <a class="reference external" href="https://github.com/apache/datafusion/discussions/11431#discussioncomment-10832070">Recap</a>, <a class="reference external" href="https://github.com/apache/datafusion/discussions/11431#discussioncomment-10826169">Slides</a>, <a class="reference external" href="https://www.youtube.com/playlist?list=PLrhIfEjaw9ilQEczOQlHyMznabtVRptyX">Recording</a></p></li>
+<li><p><strong>2024-06-26</strong> <a class="reference external" href="https://lu.ma/2iwba0xm">New York City Apache DataFusion Meetup</a> - <a class="reference external" href="https://docs.google.com/presentation/d/1dOLPAFPEMLhLv4NN6O9QSDIyyeiIySqAjky5cVgdWAE/edit#slide=id.g26bebde4fcc_3_7">Slides</a></p></li>
+<li><p><strong>2024-06-25</strong> <a class="reference external" href="https://lu.ma/6bphole2">San Francisco Bay Area Apache DataFusion Meetup</a> - <a class="reference external" href="https://docs.google.com/presentation/d/1Oz2yGllrWBkNGyiRMLr8qXTt4vmvtJWuI_weGThaZak/edit#slide=id.g26bebde4fcc_3_7">Slides</a>, <a class="reference external" href="https://www.youtube.com/playlist?list=PLrhIfEjaw9ilQEczOQlHyMznabtVRptyX">Recording</a></p></li>
+<li><p><strong>2024-03-27</strong> <a class="reference external" href="https://github.com/apache/datafusion/discussions/8522">Austin Apache DataFusion Meetup</a> - <a class="reference external" href="https://docs.google.com/presentation/d/1S51TK8waxHEJaxi_-uiSMrgQZ09m_hfaasPk5X5ExEY">Slides</a>, <a class="reference external" href="https://www.youtube.com/watch?v=q1N3pH3tFw8">Recording</a></p></li>
+</ul>
+</section>
+
+
+                </article>
+              
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="features.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">Features</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="crate-configuration.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Crate Configuration</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#">Concepts, Readings, Events</a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#background-concepts">🧭 Background Concepts</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#good-reads">✨ Good Reads</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#release-notes-updates">📅 Release Notes &amp; Updates</a></li>
+</ul>
+</li>
+<li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#community-showcase">🎥 Community Showcase</a></li>
+<li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#community-events">🌎 Community Events</a></li>
+</ul>
+
+  </nav></div>
+
+  <div class="sidebar-secondary-item">
+
+  
+  <div class="tocsection editthispage">
+    <a href="https://github.com/apache/datafusion/edit/55.1.0/docs/source/user-guide/concepts-readings-events.md">
+      <i class="fa-solid fa-pencil"></i>
+      
+      
+        
+          Edit on GitHub
+        
+      
+    </a>
+  </div>
+</div>
+
+  <div class="sidebar-secondary-item">
+
+  <div class="tocsection sourcelink">
+    <a href="../_sources/user-guide/concepts-readings-events.md.txt">
+      <i class="fa-solid fa-file-lines"></i> Show Source
+    </a>
+  </div>
+</div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+          </footer>
+        
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9"></script>
+
+<!-- Based on pydata_sphinx_theme/footer.html -->
+<footer class="footer mt-5 mt-md-0">
+  <div class="container">
+    
+    <div class="footer-item">
+      <p>Apache DataFusion, Apache, the Apache feather logo, and the Apache DataFusion project logo</p>
+      <p>are either registered trademarks or trademarks of The Apache Software Foundation in the United States and other countries.</p>
+    </div>
+  </div>
+</footer>
+
+
+  </body>
+</html>
