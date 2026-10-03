@@ -1,0 +1,11 @@
+description = "Grouped COUNT(DISTINCT) across integer, string and floating-point keys, group counts and distinct cardinalities"
+
+[[options]]
+name = "rows"
+env = "GROUPED_DISTINCT_ROWS"
+default = "4000000"
+help = "Input rows generated outside the timed query."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- grouped_count_distinct --iterations 10 --partitions 1"
+description = "Compare grouped DISTINCT counts at the issue's four-million-row scale."

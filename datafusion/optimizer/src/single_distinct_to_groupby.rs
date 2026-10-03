@@ -125,6 +125,7 @@ fn is_single_distinct_agg(
     aggr_expr: &[Expr],
     input_schema: &DFSchema,
     count_rollup: Option<&CountRollup>,
+    has_group_by: bool,
 ) -> Result<bool> {
     let mut fields_set = HashSet::new();
     let mut aggregate_count = 0;
@@ -167,8 +168,35 @@ fn is_single_distinct_agg(
     if aggregate_count != aggr_expr.len() || fields_set.len() != 1 {
         return Ok(false);
     }
+    // Grouped DISTINCT aggregates with native GroupsAccumulators do not need
+    // the adapter this rewrite avoids. Keep them on the direct path instead of
+    // building an extra aggregate with a row per (group, distinct value) pair.
+    // Leave mixed aggregates and global DISTINCT aggregation unchanged.
+    if has_group_by
+        && distinct_aggs.len() == aggregate_count
+        && all_have_groups_accumulators(&distinct_aggs, input_schema)?
+    {
+        return Ok(false);
+    }
     if has_count_rollup && !rewrite_pays_for_count(&distinct_aggs, input_schema)? {
         return Ok(false);
+    }
+    Ok(true)
+}
+
+fn all_have_groups_accumulators(
+    distinct_aggs: &[(&Arc<AggregateUDF>, &[Expr])],
+    input_schema: &DFSchema,
+) -> Result<bool> {
+    for (func, args) in distinct_aggs {
+        let arg_types = args
+            .iter()
+            .map(|arg| arg.get_type(input_schema))
+            .collect::<Result<Vec<_>>>()?;
+        // An unknown answer must preserve the existing rewrite.
+        if func.groups_accumulator_supported_for_types(&arg_types, true) != Some(true) {
+            return Ok(false);
+        }
     }
     Ok(true)
 }
@@ -248,6 +276,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 &aggr_expr,
                 input.schema(),
                 count_rollup.as_ref(),
+                !group_expr.is_empty(),
             )? && !contains_grouping_set(&group_expr) =>
             {
                 let group_size = group_expr.len();
@@ -737,14 +766,12 @@ mod tests {
             .aggregate(vec![col("a")], vec![count_distinct(col("b"))])?
             .build()?;
 
-        // Should work
+        // The integer DISTINCT count already has a GroupsAccumulator.
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Projection: test.a, count(alias1) AS count(DISTINCT test.b) [a:UInt32, count(DISTINCT test.b):Int64]
-          Aggregate: groupBy=[[test.a]], aggr=[[count(alias1)]] [a:UInt32, count(alias1):Int64]
-            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]
-              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        Aggregate: groupBy=[[test.a]], aggr=[[count(DISTINCT test.b)]] [a:UInt32, count(DISTINCT test.b):Int64]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -914,20 +941,20 @@ mod tests {
 
     #[test]
     fn group_by_with_expr() -> Result<()> {
-        let table_scan = test_table_scan().unwrap();
+        let table_scan = test_table_scan_utf8_b()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(vec![col("a") + lit(1)], vec![count_distinct(col("c"))])?
+            .aggregate(vec![col("a") + lit(1)], vec![count_distinct(col("b"))])?
             .build()?;
 
         // Should work
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Projection: group_alias_0 AS test.a + Int32(1), count(alias1) AS count(DISTINCT test.c) [test.a + Int32(1):Int64, count(DISTINCT test.c):Int64]
+        Projection: group_alias_0 AS test.a + Int32(1), count(alias1) AS count(DISTINCT test.b) [test.a + Int32(1):Int64, count(DISTINCT test.b):Int64]
           Aggregate: groupBy=[[group_alias_0]], aggr=[[count(alias1)]] [group_alias_0:Int64, count(alias1):Int64]
-            Aggregate: groupBy=[[test.a + Int32(1) AS group_alias_0, test.c AS alias1]], aggr=[[]] [group_alias_0:Int64, alias1:UInt32]
-              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            Aggregate: groupBy=[[test.a + Int32(1) AS group_alias_0, test.b AS alias1]], aggr=[[]] [group_alias_0:Int64, alias1:Utf8]
+              TableScan: test [a:UInt32, b:Utf8, c:UInt32]
         "
         )
     }

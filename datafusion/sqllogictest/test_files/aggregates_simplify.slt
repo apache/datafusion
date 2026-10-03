@@ -543,23 +543,17 @@ query TT
 EXPLAIN SELECT g, count(DISTINCT v) FROM distinct_simplify_t GROUP BY g;
 ----
 logical_plan
-01)Projection: distinct_simplify_t.g, count(alias1) AS count(DISTINCT distinct_simplify_t.v)
-02)--Aggregate: groupBy=[[distinct_simplify_t.g]], aggr=[[count(alias1)]]
-03)----Aggregate: groupBy=[[distinct_simplify_t.g, distinct_simplify_t.v AS alias1]], aggr=[[]]
-04)------TableScan: distinct_simplify_t projection=[g, v]
+01)Aggregate: groupBy=[[distinct_simplify_t.g]], aggr=[[count(DISTINCT distinct_simplify_t.v)]]
+02)--TableScan: distinct_simplify_t projection=[g, v]
 physical_plan
-01)ProjectionExec: expr=[g@0 as g, count(alias1)@1 as count(DISTINCT distinct_simplify_t.v)]
-02)--AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[count(alias1)]
-03)----RepartitionExec: partitioning=Hash([g@0], 4), input_partitions=4
-04)------AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[count(alias1)]
-05)--------AggregateExec: mode=FinalPartitioned, gby=[g@0 as g, alias1@1 as alias1], aggr=[]
-06)----------RepartitionExec: partitioning=Hash([g@0, alias1@1], 4), input_partitions=1
-07)------------AggregateExec: mode=Partial, gby=[g@0 as g, v@1 as alias1], aggr=[]
-08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+01)AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[count(DISTINCT distinct_simplify_t.v)]
+02)--RepartitionExec: partitioning=Hash([g@0], 4), input_partitions=1
+03)----AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[count(DISTINCT distinct_simplify_t.v)]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Mixed: a node that still needs one DISTINCT keeps all of them, so this rule
-# cannot change which plans SingleDistinctToGroupBy rewrites. `count` needs the
-# rewrite, and the plan below shows that it still happens.
+# leaves min(DISTINCT) in place. The mixed min/count aggregate still gets the
+# existing SingleDistinctToGroupBy rewrite.
 query III
 SELECT g, min(DISTINCT v), count(DISTINCT v) FROM distinct_simplify_t GROUP BY g ORDER BY g;
 ----
