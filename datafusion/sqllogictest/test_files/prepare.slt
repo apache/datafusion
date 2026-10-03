@@ -391,6 +391,17 @@ statement ok
 DEALLOCATE limit_after_typed_filter;
 
 statement ok
+PREPARE limit_after_inferred_int32 AS SELECT $1 + CAST(1 AS INT) AS value LIMIT $1;
+
+query I
+EXECUTE limit_after_inferred_int32(1);
+----
+2
+
+statement ok
+DEALLOCATE limit_after_inferred_int32;
+
+statement ok
 DROP TABLE test;
 
 statement ok

@@ -618,6 +618,66 @@ async fn test_limit_offset_parameters_keep_inferred_type() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_limit_parameter_binding_with_inferred_type() -> Result<()> {
+    let ctx = SessionContext::new();
+    let df = ctx
+        .sql("SELECT $1 + CAST(1 AS INT) AS value LIMIT $1")
+        .await?;
+    assert_eq!(
+        df.logical_plan().get_parameter_types()?,
+        HashMap::from([("$1".to_string(), Some(DataType::Int32))])
+    );
+
+    let state = ctx.state();
+    let analyzed = state.analyzer().execute_and_check(
+        df.logical_plan().clone(),
+        &datafusion_common::config::ConfigOptions::default(),
+        |_, _| {},
+    )?;
+    let bound = analyzed.with_param_values(vec![ScalarValue::Int32(Some(1))])?;
+    let optimized = state.optimizer().optimize(
+        bound,
+        &datafusion::optimizer::OptimizerContext::new(),
+        |_, _| {},
+    )?;
+    let limit = match &optimized {
+        LogicalPlan::Limit(limit) => limit,
+        LogicalPlan::Projection(projection) => {
+            let LogicalPlan::Limit(limit) = projection.input.as_ref() else {
+                panic!("expected LIMIT under projection, got {optimized:?}");
+            };
+            limit
+        }
+        _ => panic!("expected LIMIT plan, got {optimized:?}"),
+    };
+    println!("optimized plan:\n{optimized}");
+    assert!(
+        matches!(
+            limit.get_fetch_type()?,
+            datafusion::logical_expr::FetchType::Literal(Some(1))
+        ),
+        "unexpected optimized LIMIT: {optimized}"
+    );
+
+    let results = df
+        .with_param_values(vec![ScalarValue::Int32(Some(1))])?
+        .collect()
+        .await?;
+
+    datafusion::assert_batches_eq!(
+        [
+            "+-------+",
+            "| value |",
+            "+-------+",
+            "| 2     |",
+            "+-------+"
+        ],
+        &results
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_limit_offset_parameters_reject_type_conflicts() -> Result<()> {
     let ctx = SessionContext::new();
     let df = ctx

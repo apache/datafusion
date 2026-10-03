@@ -355,14 +355,6 @@ impl<'a> TypeCoercionRewriter<'a> {
             schema: &DFSchema,
             expr_name: &str,
         ) -> Result<Expr> {
-            // An untyped placeholder has no type to coerce yet. Leave it bare so
-            // `LogicalPlan::get_parameter_fields` can still default it to Int64
-            // post-analysis; wrapping it in a `CAST` here would hide it from that
-            // inference because the cast's inner expression is no longer a
-            // top-level `Limit` operand.
-            if matches!(&expr, Expr::Placeholder(p) if p.field.is_none()) {
-                return Ok(expr);
-            }
             let dt = expr.get_type(schema)?;
             if dt.is_integer() || dt.is_null() {
                 expr.cast_to(&DataType::Int64, schema)

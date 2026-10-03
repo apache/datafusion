@@ -47,10 +47,10 @@ use crate::utils::{
     merge_schema, split_conjunction,
 };
 use crate::{
-    BinaryExpr, CreateMemoryTable, CreateView, Execute, Expr, ExprSchemable, GroupingSet,
-    LogicalPlanBuilder, Operator, Prepare, TableProviderFilterPushDown, TableSource,
-    WindowFunctionDefinition, build_asof_join_schema, build_join_schema, expr_vec_fmt,
-    requalify_sides_if_needed,
+    BinaryExpr, Cast, CreateMemoryTable, CreateView, Execute, Expr, ExprSchemable,
+    GroupingSet, LogicalPlanBuilder, Operator, Prepare, TableProviderFilterPushDown,
+    TableSource, WindowFunctionDefinition, build_asof_join_schema, build_join_schema,
+    expr_vec_fmt, requalify_sides_if_needed,
 };
 
 use crate::statistics::StatisticsRequest;
@@ -1846,10 +1846,19 @@ impl LogicalPlan {
 
         self.apply_with_subqueries(|plan| {
             plan.apply_expressions(|expr| {
-                if matches!(plan, LogicalPlan::Limit(_))
-                    && let Expr::Placeholder(Placeholder { id, field: None }) = expr
-                {
-                    row_count_parameters.insert(id.clone());
+                if matches!(plan, LogicalPlan::Limit(_)) {
+                    // Keep the analyzer's implicit Int64 cast transparent to row-count inference.
+                    let operand = match expr {
+                        Expr::Cast(Cast { expr, field })
+                            if field.data_type() == &DataType::Int64 =>
+                        {
+                            expr.as_ref()
+                        }
+                        expr => expr,
+                    };
+                    if let Expr::Placeholder(Placeholder { id, field: None }) = operand {
+                        row_count_parameters.insert(id.clone());
+                    }
                 }
                 expr.apply(|expr| {
                     if let Expr::Placeholder(Placeholder { id, field }) = expr {
