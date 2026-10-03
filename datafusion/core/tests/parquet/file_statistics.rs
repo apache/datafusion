@@ -49,6 +49,105 @@ use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 use tempfile::tempdir;
 
 #[tokio::test]
+async fn int96_format_statistics_use_configured_resolution() {
+    use arrow::datatypes::TimeUnit;
+    use datafusion::datasource::file_format::FileFormat;
+    use datafusion_common::ScalarValue;
+    use datafusion_common::config::TableParquetOptions;
+    use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory, path::Path};
+    use parquet::data_type::{Int96, Int96Type};
+    use parquet::file::properties::WriterProperties;
+    use parquet::file::writer::SerializedFileWriter;
+    use parquet::schema::parser::parse_message_type;
+
+    let values = [0_i64, 10_000_000_000].map(|seconds| {
+        let nanos = seconds.rem_euclid(86_400) as u64 * 1_000_000_000;
+        let mut value = Int96::new();
+        value.set_data(
+            nanos as u32,
+            (nanos >> 32) as u32,
+            (seconds.div_euclid(86_400) + 2_440_588) as u32,
+        );
+        value
+    });
+    let parquet_schema =
+        Arc::new(parse_message_type("message test { REQUIRED INT96 ts; }").unwrap());
+    let mut bytes = Vec::new();
+    let mut writer = SerializedFileWriter::new(
+        &mut bytes,
+        parquet_schema,
+        Arc::new(WriterProperties::default()),
+    )
+    .unwrap();
+    let mut row_group = writer.next_row_group().unwrap();
+    let mut column = row_group.next_column().unwrap().unwrap();
+    column
+        .typed::<Int96Type>()
+        .write_batch(&values, None, None)
+        .unwrap();
+    column.close().unwrap();
+    row_group.close().unwrap();
+    writer.close().unwrap();
+
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let path = Path::from("int96.parquet");
+    store.put(&path, bytes.into()).await.unwrap();
+    let object = store.head(&path).await.unwrap();
+    let state = SessionContext::new().state();
+    let mut options = TableParquetOptions::default();
+    options.global.coerce_int96 = Some("us".into());
+    options.global.coerce_int96_tz = Some("UTC".into());
+    let configured = ParquetFormat::default().with_options(options);
+    let schema = configured
+        .infer_schema(&state, &store, std::slice::from_ref(&object))
+        .await
+        .unwrap();
+    assert_eq!(
+        schema.field(0).data_type(),
+        &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
+    );
+
+    for (format, coerced) in [(configured, true), (ParquetFormat::default(), false)] {
+        let statistics = format
+            .infer_stats(&state, &store, schema.clone(), &object)
+            .await
+            .unwrap();
+        let combined = format
+            .infer_stats_and_ordering(&state, &store, schema.clone(), &object)
+            .await
+            .unwrap();
+        for statistics in [statistics, combined.statistics] {
+            assert_eq!(statistics.num_rows, Precision::Exact(2));
+            assert_eq!(
+                statistics.column_statistics[0].null_count,
+                Precision::Exact(0)
+            );
+            for (bound, value) in [
+                (&statistics.column_statistics[0].min_value, 0),
+                (
+                    &statistics.column_statistics[0].max_value,
+                    10_000_000_000_000_000,
+                ),
+            ] {
+                assert_eq!(
+                    bound,
+                    &if coerced {
+                        Precision::Exact(ScalarValue::TimestampMicrosecond(
+                            Some(value),
+                            Some("UTC".into()),
+                        ))
+                    } else {
+                        // A microsecond table schema does not change a default
+                        // reader's wrapping nanosecond conversion.
+                        Precision::Absent
+                    }
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn check_stats_precision_with_filter_pushdown() {
     let testdata = datafusion::test_util::parquet_test_data();
     let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
