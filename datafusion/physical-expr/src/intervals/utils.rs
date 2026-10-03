@@ -36,26 +36,54 @@ use datafusion_expr::interval_arithmetic::Interval;
 /// will relax as more types of `PhysicalExpr`s and `Operator`s are supported.
 /// Currently, [`CastExpr`], [`NegativeExpr`], [`BinaryExpr`], [`Column`] and [`Literal`] are supported.
 pub fn check_support(expr: &Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> bool {
+    check_support_with(expr, schema, is_datatype_supported)
+}
+
+/// Like [`check_support`], but additionally accepts decimal types. This is
+/// used when estimating filter statistics, where decimal predicates can be
+/// analyzed with interval arithmetic. Other users of [`check_support`], such
+/// as symmetric hash join pruning, do not support decimals yet.
+pub fn check_statistics_support(
+    expr: &Arc<dyn PhysicalExpr>,
+    schema: &SchemaRef,
+) -> bool {
+    check_support_with(expr, schema, |data_type| {
+        is_datatype_supported(data_type)
+            || matches!(
+                data_type,
+                DataType::Decimal32(_, _)
+                    | DataType::Decimal64(_, _)
+                    | DataType::Decimal128(_, _)
+                    | DataType::Decimal256(_, _)
+            )
+    })
+}
+
+fn check_support_with(
+    expr: &Arc<dyn PhysicalExpr>,
+    schema: &SchemaRef,
+    is_type_supported: fn(&DataType) -> bool,
+) -> bool {
     if let Some(binary_expr) = expr.downcast_ref::<BinaryExpr>() {
         is_operator_supported(binary_expr.op())
-            && check_support(binary_expr.left(), schema)
-            && check_support(binary_expr.right(), schema)
+            && check_support_with(binary_expr.left(), schema, is_type_supported)
+            && check_support_with(binary_expr.right(), schema, is_type_supported)
     } else if let Some(column) = expr.downcast_ref::<Column>() {
         if let Ok(field) = schema.field_with_name(column.name()) {
-            is_datatype_supported(field.data_type())
+            is_type_supported(field.data_type())
         } else {
             false
         }
     } else if let Some(literal) = expr.downcast_ref::<Literal>() {
         if let Ok(dt) = literal.data_type(schema) {
-            is_datatype_supported(&dt)
+            is_type_supported(&dt)
         } else {
             false
         }
     } else if let Some(cast) = expr.downcast_ref::<CastExpr>() {
-        check_support(cast.expr(), schema)
+        check_support_with(cast.expr(), schema, is_type_supported)
     } else if let Some(negative) = expr.downcast_ref::<NegativeExpr>() {
-        check_support(negative.arg(), schema)
+        check_support_with(negative.arg(), schema, is_type_supported)
     } else {
         false
     }
@@ -191,5 +219,35 @@ fn interval_dt_to_duration_ms(dt: &IntervalDayTime) -> Result<i64> {
         internal_err!(
             "The interval cannot have a non-zero day value for duration convertibility"
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use arrow::datatypes::{Field, Schema};
+
+    #[test]
+    fn check_statistics_support_decimal() {
+        for data_type in [
+            DataType::Decimal32(9, 2),
+            DataType::Decimal64(18, 2),
+            DataType::Decimal128(15, 2),
+            DataType::Decimal256(40, 2),
+        ] {
+            let schema =
+                Arc::new(Schema::new(vec![Field::new("a", data_type.clone(), false)]));
+            let literal = ScalarValue::try_from(&data_type).unwrap();
+            let expr = Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("a", 0)),
+                Operator::Lt,
+                Arc::new(Literal::new(literal)),
+            )) as Arc<dyn PhysicalExpr>;
+
+            assert!(check_statistics_support(&expr, &schema));
+            // Decimal support is limited to statistics estimation for now:
+            assert!(!check_support(&expr, &schema));
+        }
     }
 }
