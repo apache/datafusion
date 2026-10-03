@@ -146,21 +146,32 @@ fn fixture() -> Result<Fixture> {
         Field::new("sales", DataType::Decimal128(28, 2), true),
         Field::new("payload", DataType::Utf8, false),
     ]));
-    let categories = StringArray::from_iter(
-        (0..total).map(|i| (i % 11 != 0).then(|| format!("category-{:04}", i % 100))),
-    );
-    // Every non-null sales value is distinct, so sorting has no ambiguous ties.
-    let sales = Decimal128Array::from_iter(
-        (0..total).map(|i| (i != 1).then_some(((total - i) * 100) as i128)),
-    )
-    .with_precision_and_scale(28, 2)?;
-    let payload = StringArray::from_iter_values(
-        (0..total).map(|i| format!("row-{i:08}-{}", "x".repeat(64))),
-    );
-    let columns: Vec<ArrayRef> =
-        vec![Arc::new(categories), Arc::new(sales), Arc::new(payload)];
-    let parent = RecordBatch::try_new(schema, columns)?;
-    let batches: Vec<_> = (0..count).map(|i| parent.slice(i * rows, rows)).collect();
+    // Build each batch separately so it owns its buffers. Zero-copy slices of
+    // one parent would share them, and the sort reserves shared buffers once.
+    let batches = (0..count)
+        .map(|batch| {
+            let range = batch * rows..(batch + 1) * rows;
+            let categories = StringArray::from_iter(
+                range
+                    .clone()
+                    .map(|i| (i % 11 != 0).then(|| format!("category-{:04}", i % 100))),
+            );
+            // Every non-null sales value is distinct, so sorting has no ambiguous ties.
+            let sales = Decimal128Array::from_iter(
+                range
+                    .clone()
+                    .map(|i| (i != 1).then_some(((total - i) * 100) as i128)),
+            )
+            .with_precision_and_scale(28, 2)?;
+            let payload = StringArray::from_iter_values(
+                range.map(|i| format!("row-{i:08}-{}", "x".repeat(64))),
+            );
+            let columns: Vec<ArrayRef> =
+                vec![Arc::new(categories), Arc::new(sales), Arc::new(payload)];
+            Ok(RecordBatch::try_new(Arc::clone(&schema), columns)?)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let parent = concat_batches(&schema, &batches)?;
     let ordering = [
         PhysicalSortExpr::new(
             Arc::new(Column::new("category", 0)),
