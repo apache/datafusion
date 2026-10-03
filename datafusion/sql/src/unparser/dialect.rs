@@ -620,6 +620,10 @@ impl Dialect for MySqlDialect {
             return date_part_to_sql(unparser, self.date_field_extract_style(), args);
         }
 
+        if func_name == "random" {
+            return Ok(Some(unparser.scalar_function_to_sql("rand", args)?));
+        }
+
         Ok(None)
     }
 }
@@ -758,6 +762,10 @@ impl Dialect for BigQueryDialect {
     ) -> Result<Option<ast::Expr>> {
         if func_name == "date_part" {
             return date_part_to_sql(unparser, self.date_field_extract_style(), args);
+        }
+
+        if func_name == "random" {
+            return Ok(Some(unparser.scalar_function_to_sql("rand", args)?));
         }
 
         Ok(None)
