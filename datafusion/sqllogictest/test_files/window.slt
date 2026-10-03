@@ -2498,6 +2498,30 @@ select row_number() over (rows between '1' preceding and current row) from (sele
 ----
 1
 
+# RANGE interval offsets must be non-negative before execution.
+statement error Invalid window frame: RANGE frame offsets must be non-negative
+SELECT count(*) OVER (
+  ORDER BY ts RANGE BETWEEN INTERVAL '-1 month' PRECEDING AND CURRENT ROW
+) FROM (VALUES (arrow_cast(1, 'Timestamp(Second, None)'))) t(ts);
+
+# A positive month must not mask a negative day in a mixed-sign interval.
+statement error Invalid window frame: RANGE frame offsets must be non-negative
+SELECT count(*) OVER (
+  ORDER BY ts RANGE BETWEEN CURRENT ROW AND INTERVAL '1 month -40 days' FOLLOWING
+) FROM (VALUES (arrow_cast(1, 'Timestamp(Second, None)'))) t(ts);
+
+statement error Invalid window frame: RANGE frame offsets must be non-negative
+SELECT count(*) OVER (
+  ORDER BY n RANGE BETWEEN INTERVAL '-1' PRECEDING AND CURRENT ROW
+) FROM (VALUES (1)) t(n);
+
+# A negative offset outside the ORDER BY type must not become UNBOUNDED.
+statement error Invalid window frame: RANGE frame offsets must be non-negative
+SELECT count(*) OVER (
+  ORDER BY arrow_cast(n, 'Int8')
+  RANGE BETWEEN INTERVAL '-129' PRECEDING AND CURRENT ROW
+) FROM (VALUES (1)) t(n);
+
 # interval for groups
 query I
 select row_number() over (order by a groups between '1' preceding and current row) from (select 1 a) x
