@@ -716,7 +716,7 @@ impl From<StreamType> for SendableRecordBatchStream {
         match stream {
             StreamType::AggregateStream(stream) => Box::pin(stream),
             StreamType::PartialHash(stream) => stream.into_stream(),
-            StreamType::PartialReduceHash(stream) => Box::pin(stream),
+            StreamType::PartialReduceHash(stream) => stream.into_stream(),
             StreamType::FinalHash(stream) => stream.into_stream(),
             StreamType::SingleHash(stream) => stream.into_stream(),
             StreamType::OrderedPartialAggregate(stream) => stream.into_stream(),
