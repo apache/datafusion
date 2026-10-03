@@ -222,6 +222,123 @@ impl From<parquet::file::properties::EnabledStatistics> for DFParquetStatistics 
     }
 }
 
+/// Parquet encodings accepted by the writer.
+///
+/// Parsing the encoding when it is configured rejects unsupported values before
+/// a Parquet write begins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DFParquetEncoding {
+    /// Plain encoding
+    Plain,
+    /// Deprecated plain dictionary encoding
+    PlainDictionary,
+    /// Run-length encoding
+    Rle,
+    /// Deprecated bit-packed encoding
+    BitPacked,
+    /// Delta encoding for integers
+    DeltaBinaryPacked,
+    /// Delta length encoding for byte arrays
+    DeltaLengthByteArray,
+    /// Delta encoding for byte arrays
+    DeltaByteArray,
+    /// Run-length dictionary encoding
+    RleDictionary,
+    /// Byte stream split encoding
+    ByteStreamSplit,
+}
+
+impl FromStr for DFParquetEncoding {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "plain" => Ok(Self::Plain),
+            "plain_dictionary" => Ok(Self::PlainDictionary),
+            "rle" => Ok(Self::Rle),
+            "bit_packed" => Ok(Self::BitPacked),
+            "delta_binary_packed" => Ok(Self::DeltaBinaryPacked),
+            "delta_length_byte_array" => Ok(Self::DeltaLengthByteArray),
+            "delta_byte_array" => Ok(Self::DeltaByteArray),
+            "rle_dictionary" => Ok(Self::RleDictionary),
+            "byte_stream_split" => Ok(Self::ByteStreamSplit),
+            _ => Err(DataFusionError::Configuration(format!(
+                "Unknown or unsupported parquet encoding: \
+                {s}. Valid values are: plain, plain_dictionary, rle, \
+                bit_packed, delta_binary_packed, delta_length_byte_array, \
+                delta_byte_array, rle_dictionary, and byte_stream_split."
+            ))),
+        }
+    }
+}
+
+impl Display for DFParquetEncoding {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Plain => "plain",
+            Self::PlainDictionary => "plain_dictionary",
+            Self::Rle => "rle",
+            Self::BitPacked => "bit_packed",
+            Self::DeltaBinaryPacked => "delta_binary_packed",
+            Self::DeltaLengthByteArray => "delta_length_byte_array",
+            Self::DeltaByteArray => "delta_byte_array",
+            Self::RleDictionary => "rle_dictionary",
+            Self::ByteStreamSplit => "byte_stream_split",
+        })
+    }
+}
+
+impl ConfigField for Option<DFParquetEncoding> {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        match self {
+            Some(encoding) => v.some(key, encoding, description),
+            None => v.none(key, description),
+        }
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        if !key.is_empty() {
+            return crate::error::_config_err!(
+                "Config field parquet.encoding is a scalar Option<DFParquetEncoding> and does not have nested field \"{}\"",
+                key
+            );
+        }
+
+        *self = Some(value.parse()?);
+        Ok(())
+    }
+
+    fn reset(&mut self, key: &str) -> Result<()> {
+        if key.is_empty() {
+            *self = None;
+            Ok(())
+        } else {
+            crate::error::_config_err!(
+                "Config field parquet.encoding is a scalar Option<DFParquetEncoding> and does not have nested field \"{}\"",
+                key
+            )
+        }
+    }
+}
+
+#[cfg(feature = "parquet")]
+impl From<DFParquetEncoding> for parquet::basic::Encoding {
+    fn from(value: DFParquetEncoding) -> Self {
+        match value {
+            DFParquetEncoding::Plain => Self::PLAIN,
+            DFParquetEncoding::PlainDictionary => Self::PLAIN_DICTIONARY,
+            DFParquetEncoding::Rle => Self::RLE,
+            #[expect(deprecated)]
+            DFParquetEncoding::BitPacked => Self::BIT_PACKED,
+            DFParquetEncoding::DeltaBinaryPacked => Self::DELTA_BINARY_PACKED,
+            DFParquetEncoding::DeltaLengthByteArray => Self::DELTA_LENGTH_BYTE_ARRAY,
+            DFParquetEncoding::DeltaByteArray => Self::DELTA_BYTE_ARRAY,
+            DFParquetEncoding::RleDictionary => Self::RLE_DICTIONARY,
+            DFParquetEncoding::ByteStreamSplit => Self::BYTE_STREAM_SPLIT,
+        }
+    }
+}
+
 /// Parquet compression codec, with a level for the codecs that take one
 ///
 /// This enum validates compression settings at configuration time. An unknown
@@ -432,6 +549,67 @@ impl From<DFParquetCompression> for parquet::basic::Compression {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "parquet")]
+    #[test]
+    fn parquet_encoding_parses_displays_and_converts() {
+        use parquet::basic::Encoding;
+
+        for (input, expected, parquet_encoding) in [
+            ("PLAIN", DFParquetEncoding::Plain, Encoding::PLAIN),
+            (
+                "plain_dictionary",
+                DFParquetEncoding::PlainDictionary,
+                Encoding::PLAIN_DICTIONARY,
+            ),
+            ("rle", DFParquetEncoding::Rle, Encoding::RLE),
+            #[expect(deprecated)]
+            (
+                "bit_packed",
+                DFParquetEncoding::BitPacked,
+                Encoding::BIT_PACKED,
+            ),
+            (
+                "delta_binary_packed",
+                DFParquetEncoding::DeltaBinaryPacked,
+                Encoding::DELTA_BINARY_PACKED,
+            ),
+            (
+                "delta_length_byte_array",
+                DFParquetEncoding::DeltaLengthByteArray,
+                Encoding::DELTA_LENGTH_BYTE_ARRAY,
+            ),
+            (
+                "delta_byte_array",
+                DFParquetEncoding::DeltaByteArray,
+                Encoding::DELTA_BYTE_ARRAY,
+            ),
+            (
+                "rle_dictionary",
+                DFParquetEncoding::RleDictionary,
+                Encoding::RLE_DICTIONARY,
+            ),
+            (
+                "byte_stream_split",
+                DFParquetEncoding::ByteStreamSplit,
+                Encoding::BYTE_STREAM_SPLIT,
+            ),
+        ] {
+            let parsed: DFParquetEncoding = input.parse().unwrap();
+            assert_eq!(parsed, expected, "input: {input}");
+            assert_eq!(parsed.to_string(), input.to_ascii_lowercase());
+            assert_eq!(Encoding::from(parsed), parquet_encoding);
+        }
+
+        for input in ["", "invalid", "zstd"] {
+            let err = input.parse::<DFParquetEncoding>().unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("Unknown or unsupported parquet encoding"),
+                "input {input:?}: {err}"
+            );
+        }
+    }
 
     #[test]
     fn parquet_compression_parses_and_displays() {
