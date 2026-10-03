@@ -789,3 +789,153 @@ drop table topk_two_groups;
 
 statement ok
 drop table t0;
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+set datafusion.execution.batch_size = 1;
+
+statement ok
+CREATE TABLE t_matrix(x BIGINT) AS VALUES
+(-301),
+(100),
+(500),
+(NULL);
+
+
+# Regression test for issue #25850: verify NULL group preservation with TopKAggregation
+query TT
+explain SELECT DISTINCT x FROM t_matrix ORDER BY x LIMIT 10;
+----
+logical_plan
+01)Sort: t_matrix.x ASC NULLS LAST, fetch=10
+02)--Aggregate: groupBy=[[t_matrix.x]], aggr=[[]]
+03)----TableScan: t_matrix projection=[x]
+physical_plan
+01)SortExec: TopK(fetch=10), expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--AggregateExec: mode=Single, gby=[x@0 as x], aggr=[], lim=[10]
+03)----DataSourceExec: partitions=1, partition_sizes=[4]
+
+# Case 1: ASC default (NULLS LAST), LIMIT 10
+query I
+SELECT DISTINCT x FROM t_matrix ORDER BY x LIMIT 10;
+----
+-301
+100
+500
+NULL
+
+# Case 2: DESC default (NULLS FIRST), LIMIT 10
+query I
+SELECT x FROM t_matrix GROUP BY x ORDER BY x DESC LIMIT 10;
+----
+NULL
+500
+100
+-301
+
+# Case 3: DESC default (NULLS FIRST), LIMIT 1 (NULL must be returned)
+query I
+SELECT DISTINCT x FROM t_matrix ORDER BY x DESC LIMIT 1;
+----
+NULL
+
+# Case 4: DESC default (NULLS FIRST), LIMIT 2 (NULL and 500)
+query I
+SELECT DISTINCT x FROM t_matrix ORDER BY x DESC LIMIT 2;
+----
+NULL
+500
+
+# Case 5: DESC NULLS LAST, LIMIT 1 (500 must be returned)
+query I
+SELECT DISTINCT x FROM t_matrix ORDER BY x DESC NULLS LAST LIMIT 1;
+----
+500
+
+# Case 6: DESC NULLS LAST, LIMIT 4 (NULL must be last)
+query I
+SELECT DISTINCT x FROM t_matrix ORDER BY x DESC NULLS LAST LIMIT 4;
+----
+500
+100
+-301
+NULL
+
+# Case 7: ASC NULLS FIRST, LIMIT 1 (NULL must be returned)
+query I
+SELECT DISTINCT x FROM t_matrix ORDER BY x ASC NULLS FIRST LIMIT 1;
+----
+NULL
+
+# Case 8: ASC NULLS FIRST, LIMIT 2 (NULL and -301)
+query I
+SELECT DISTINCT x FROM t_matrix ORDER BY x ASC NULLS FIRST LIMIT 2;
+----
+NULL
+-301
+
+# Case 9: ASC default (NULLS LAST), LIMIT 3 (-301, 100, 500; NULL excluded by limit)
+query I
+SELECT DISTINCT x FROM t_matrix ORDER BY x LIMIT 3;
+----
+-301
+100
+500
+
+# Case 10: All NULLs
+statement ok
+CREATE TABLE t_all_nulls(x BIGINT) AS VALUES (NULL), (NULL);
+
+query I
+SELECT DISTINCT x FROM t_all_nulls ORDER BY x LIMIT 10;
+----
+NULL
+
+statement ok
+DROP TABLE t_all_nulls;
+
+# Verify semantic equivalence with optimizer.enable_topk_aggregation = false
+statement ok
+set datafusion.optimizer.enable_topk_aggregation = false;
+
+query TT
+explain SELECT DISTINCT x FROM t_matrix ORDER BY x LIMIT 10;
+----
+logical_plan
+01)Sort: t_matrix.x ASC NULLS LAST, fetch=10
+02)--Aggregate: groupBy=[[t_matrix.x]], aggr=[[]]
+03)----TableScan: t_matrix projection=[x]
+physical_plan
+01)SortExec: TopK(fetch=10), expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--AggregateExec: mode=Single, gby=[x@0 as x], aggr=[]
+03)----DataSourceExec: partitions=1, partition_sizes=[4]
+
+query I
+SELECT DISTINCT x FROM t_matrix ORDER BY x LIMIT 10;
+----
+-301
+100
+500
+NULL
+
+query I
+SELECT x FROM t_matrix GROUP BY x ORDER BY x DESC LIMIT 10;
+----
+NULL
+500
+100
+-301
+
+statement ok
+set datafusion.optimizer.enable_topk_aggregation = true;
+
+statement ok
+DROP TABLE t_matrix;
+
+statement ok
+set datafusion.execution.batch_size = 8192;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
