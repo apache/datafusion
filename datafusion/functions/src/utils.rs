@@ -21,7 +21,7 @@ use arrow::array::{
 };
 use arrow::buffer::NullBuffer;
 use arrow::compute::kernels::cmp::eq;
-use arrow::compute::{SortOptions, cast, try_binary};
+use arrow::compute::{SortOptions, cast, take, try_binary};
 use arrow::datatypes::{DataType, DecimalType};
 use arrow::error::ArrowError;
 use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, internal_err};
@@ -120,6 +120,78 @@ where
     move |args: &[ColumnarValue]| {
         // first, identify if any of the arguments is an Array. If yes, store its `len`,
         // as any scalar will need to be converted to an array of len `len`.
+        //
+        // When exactly one array arg is dict-encoded and no plain-array args
+        // exist alongside it, and NDV < batch size, evaluate `inner` on the
+        // values array (O(NDV)) and scatter the result back with `take` (O(N)).
+        // Callers opt in by setting EncodingPreservation::dictionary() on the
+        // coercion; their return_type must also strip the dict wrapper so the
+        // declared output type matches the plain-array result of `take`.
+        // When NDV >= batch size the optimization pays no dividend, so we fall
+        // through and cast the dict to its value type before calling `inner`.
+        let mut n_dict = 0usize;
+        let mut n_plain = 0usize;
+        for arg in args {
+            match arg {
+                ColumnarValue::Array(arr) => {
+                    if arr.as_any_dictionary_opt().is_some() {
+                        n_dict += 1;
+                    } else {
+                        n_plain += 1;
+                    }
+                }
+                ColumnarValue::Scalar(_) => {}
+            }
+        }
+
+        if n_dict == 1 && n_plain == 0 {
+            let dict_arr = args
+                .iter()
+                .find_map(|arg| match arg {
+                    ColumnarValue::Array(arr)
+                        if arr.as_any_dictionary_opt().is_some() =>
+                    {
+                        Some(arr)
+                    }
+                    _ => None,
+                })
+                .expect("n_dict == 1");
+            let dict = dict_arr.as_any_dictionary_opt().unwrap();
+            let ndv = dict.values().len();
+            let batch_n = dict.keys().len();
+
+            if ndv < batch_n {
+                let ndv_args: Vec<ColumnarValue> = args
+                    .iter()
+                    .map(|arg| match arg {
+                        ColumnarValue::Array(arr)
+                            if arr.as_any_dictionary_opt().is_some() =>
+                        {
+                            ColumnarValue::Array(Arc::clone(dict.values()))
+                        }
+                        other => other.clone(),
+                    })
+                    .collect();
+
+                let ndv_arrays = ndv_args
+                    .iter()
+                    .zip(hints.iter().chain(std::iter::repeat(&Hint::Pad)))
+                    .map(|(arg, hint)| {
+                        let expansion_len = match hint {
+                            Hint::AcceptsSingular => 1,
+                            Hint::Pad => ndv,
+                        };
+                        arg.to_array(expansion_len)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                let ndv_result = (inner)(&ndv_arrays)?;
+                let result = take(&ndv_result, dict.keys(), None)?;
+                return Ok(ColumnarValue::Array(result));
+            }
+            // NDV >= batch size: fall through; cast dict to its value type below.
+        }
+
         let len = args
             .iter()
             .fold(Option::<usize>::None, |acc, arg| match arg {
@@ -134,19 +206,21 @@ where
             .iter()
             .zip(hints.iter().chain(std::iter::repeat(&Hint::Pad)))
             .map(|(arg, hint)| {
-                // Decide on the length to expand this scalar to depending
-                // on the given hints.
                 let expansion_len = match hint {
                     Hint::AcceptsSingular => 1,
                     Hint::Pad => inferred_length,
                 };
-                arg.to_array(expansion_len)
+                let arr = arg.to_array(expansion_len)?;
+                if let Some(d) = arr.as_any_dictionary_opt() {
+                    cast(&arr, d.values().data_type()).map_err(Into::into)
+                } else {
+                    Ok(arr)
+                }
             })
             .collect::<Result<Vec<_>>>()?;
 
         let result = (inner)(&args);
         if is_scalar {
-            // If all inputs are scalar, keeps output as scalar
             let result = result.and_then(|arr| ScalarValue::try_from_array(&arr, 0));
             result.map(ColumnarValue::Scalar)
         } else {
@@ -838,6 +912,7 @@ mod map_lookup_tests {
         StringArray, StructArray,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer};
+
     use arrow::datatypes::{Field, Int32Type};
 
     /// A map whose rows have the given lengths, drawing keys and values in
@@ -964,8 +1039,7 @@ mod map_lookup_tests {
                 }
             })
             .collect();
-        let repeated =
-            arrow::compute::take(key, &UInt32Array::from(vec![0; map.len()]), None)?;
+        let repeated = take(key, &UInt32Array::from(vec![0; map.len()]), None)?;
         for keys in [key, repeated.as_ref()] {
             let result = map_lookup(map, keys)?;
             assert_eq!(result.len(), matches.len());
