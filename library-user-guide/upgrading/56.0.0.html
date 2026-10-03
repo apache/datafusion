@@ -669,6 +669,29 @@ the previous fail-fast behaviour for the affected join types.</p></li>
 </pre></div>
 </div>
 </section>
+<section id="executionoptions-time-zone-is-now-a-validated-configtimezone">
+<h3><code class="docutils literal notranslate"><span class="pre">ExecutionOptions::time_zone</span></code> is now a validated <code class="docutils literal notranslate"><span class="pre">ConfigTimeZone</span></code><a class="headerlink" href="#executionoptions-time-zone-is-now-a-validated-configtimezone" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">ExecutionOptions::time_zone</span></code> changed from <code class="docutils literal notranslate"><span class="pre">Option&lt;String&gt;</span></code> to
+<code class="docutils literal notranslate"><span class="pre">Option&lt;ConfigTimeZone&gt;</span></code>. The value is now checked when it is set, so
+<code class="docutils literal notranslate"><span class="pre">SET</span> <span class="pre">TIME</span> <span class="pre">ZONE</span> <span class="pre">=</span> <span class="pre">'Asia/Taipei2'</span></code> fails immediately instead of on a later query.
+The string is kept exactly as written (<code class="docutils literal notranslate"><span class="pre">+08</span></code> stays <code class="docutils literal notranslate"><span class="pre">+08</span></code>).</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Code that reads or assigns <code class="docutils literal notranslate"><span class="pre">ExecutionOptions::time_zone</span></code> directly.</p></li>
+<li><p>Code that sets the value through SQL <code class="docutils literal notranslate"><span class="pre">SET</span></code> or <code class="docutils literal notranslate"><span class="pre">ConfigOptions::set</span></code> needs no
+code changes, but invalid time zones are now rejected immediately.</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
+<span class="n">options</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">time_zone</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="s">&quot;America/Denver&quot;</span><span class="p">.</span><span class="n">to_string</span><span class="p">());</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">tz</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">options</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">time_zone</span><span class="p">.</span><span class="n">clone</span><span class="p">();</span>
+
+<span class="c1">// After</span>
+<span class="n">options</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">time_zone</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="s">&quot;America/Denver&quot;</span><span class="p">.</span><span class="n">parse</span><span class="p">()</span><span class="o">?</span><span class="p">);</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">tz</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;&amp;</span><span class="kt">str</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">options</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">time_zone</span><span class="p">.</span><span class="n">as_ref</span><span class="p">().</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">tz</span><span class="o">|</span><span class="w"> </span><span class="n">tz</span><span class="p">.</span><span class="n">as_str</span><span class="p">());</span>
+</pre></div>
+</div>
+</section>
 <section id="executionoptions-has-a-new-soft-max-bytes-per-output-file-field">
 <h3><code class="docutils literal notranslate"><span class="pre">ExecutionOptions</span></code> has a new <code class="docutils literal notranslate"><span class="pre">soft_max_bytes_per_output_file</span></code> field<a class="headerlink" href="#executionoptions-has-a-new-soft-max-bytes-per-output-file-field" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">ExecutionOptions</span></code> gained a public <code class="docutils literal notranslate"><span class="pre">soft_max_bytes_per_output_file:</span> <span class="pre">ConfigNonZeroUsize</span></code>
@@ -1204,6 +1227,7 @@ the API breaks.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#groupcolumn-now-requires-values-preserving"><code class="docutils literal notranslate"><span class="pre">GroupColumn</span></code> now requires <code class="docutils literal notranslate"><span class="pre">values_preserving</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-proto-common-option-and-constraint-conversions-are-fallible"><code class="docutils literal notranslate"><span class="pre">datafusion-proto</span></code>: common option and constraint conversions are fallible</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionoptions-has-a-new-enable-nlj-coordinated-fallback-field"><code class="docutils literal notranslate"><span class="pre">ExecutionOptions</span></code> has a new <code class="docutils literal notranslate"><span class="pre">enable_nlj_coordinated_fallback</span></code> field</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionoptions-time-zone-is-now-a-validated-configtimezone"><code class="docutils literal notranslate"><span class="pre">ExecutionOptions::time_zone</span></code> is now a validated <code class="docutils literal notranslate"><span class="pre">ConfigTimeZone</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionoptions-has-a-new-soft-max-bytes-per-output-file-field"><code class="docutils literal notranslate"><span class="pre">ExecutionOptions</span></code> has a new <code class="docutils literal notranslate"><span class="pre">soft_max_bytes_per_output_file</span></code> field</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-optimizer-use-statistics-registry-is-deprecated-and-ignored"><code class="docutils literal notranslate"><span class="pre">datafusion.optimizer.use_statistics_registry</span></code> is deprecated and ignored</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#generated-protobuf-jsonwriteroptions-gained-a-compression-level-field">Generated protobuf <code class="docutils literal notranslate"><span class="pre">JsonWriterOptions</span></code> gained a <code class="docutils literal notranslate"><span class="pre">compression_level</span></code> field</a></li>
