@@ -20,6 +20,7 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use crate::column_labels::label_output_columns;
 use crate::parser::{
     CopyToSource, CopyToStatement, CreateExternalCatalog, CreateExternalTable, DFParser,
     ExplainStatement, LexOrdering, ResetStatement, Statement as DFStatement,
@@ -306,7 +307,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 };
                 self.explain_to_plan(options, statement)
             }
-            Statement::Query(query) => self.query_to_plan(*query, planner_context),
+            Statement::Query(query) => {
+                if !self
+                    .context_provider
+                    .options()
+                    .sql_parser
+                    .pretty_column_names
+                {
+                    return self.query_to_plan(*query, planner_context);
+                }
+                let typed_names = self.typed_column_names(&query.body);
+                let plan = self.query_to_plan(*query, planner_context)?;
+                label_output_columns(plan, &typed_names)
+            }
             Statement::ShowVariable { variable } => self.show_variable_to_plan(&variable),
             Statement::Set(statement) => self.set_statement_to_plan(statement),
             Statement::CreateTable(CreateTable {

@@ -4909,7 +4909,7 @@ mod tests {
                 vec![expr],
             )
             .await?,
-            "AggregateExec: mode=Single, gby=[], aggr=[sum(?table?.column1) FILTER (WHERE ?table?.column2 <= Int64(0)) as agg]"
+            "AggregateExec: mode=Single, gby=[], aggr=[sum(?table?.column1) FILTER (WHERE ?table?.column2 <= 0) as agg]"
         );
 
         Ok(())
@@ -4933,7 +4933,7 @@ mod tests {
                 vec![expr],
             )
             .await?,
-            "AggregateExec: mode=Single, gby=[], aggr=[first_value(?table?.column1) RESPECT NULLS ORDER BY [?table?.column2 ASC NULLS FIRST] as agg]"
+            "AggregateExec: mode=Single, gby=[], aggr=[first_value(?table?.column1) RESPECT NULLS ORDER BY ?table?.column2 NULLS FIRST as agg]"
         );
 
         Ok(())

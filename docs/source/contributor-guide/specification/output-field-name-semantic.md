@@ -40,6 +40,30 @@ DataFusion queries planned from both SQL queries and Dataframe APIs.
 - Function arguments MUST be separated by a comma `,` and a space.
   - `SELECT f(c1,c2)` and `df.select(vec![f.udf("f")?.call(vec![col("c1"), col("c2")])])` SHOULD result in field name: `f(table.c1, table.c2)`
 
+### Readable SQL column names
+
+When `datafusion.sql_parser.pretty_column_names` is `true`, the unaliased
+output columns of a top-level SQL query get readable labels. These rules
+replace three of the rules above for SQL query results. DataFrame output and
+names inside the query plan keep the rules above.
+
+- Compound column field names MUST NOT contain a relation/table qualifier.
+  - `SELECT foo + bar` SHOULD result in field name: `foo + bar`
+- Operator expressions MUST be wrapped with parentheses only where operator
+  precedence needs them.
+  - `SELECT 1+2` SHOULD result in field name: `1 + 2`
+  - `SELECT (a+b)*c` SHOULD result in field name: `(a + b) * c`
+- Negation is wrapped with parentheses.
+  - `SELECT -a` SHOULD result in field name: `(- a)`
+
+Window functions use SQL `OVER (...)` syntax, without the parts that equal
+their defaults. For example, `SELECT row_number() OVER (ORDER BY a)` SHOULD
+result in field name: `row_number() OVER (ORDER BY a)`.
+
+A column keeps the name from the rules above when its label collides with the
+name of another output column, or when it is a column reference typed in the
+outermost `SELECT` list.
+
 ## Appendices
 
 ### Examples and comparison with other systems

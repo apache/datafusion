@@ -598,9 +598,9 @@ logical_plan
 01)Aggregate: groupBy=[[distinct_simplify_t.g]], aggr=[[min(distinct_simplify_t.v) FILTER (WHERE distinct_simplify_t.v > Int32(3)) AS min(DISTINCT distinct_simplify_t.v) FILTER (WHERE distinct_simplify_t.v > Int64(3))]]
 02)--TableScan: distinct_simplify_t projection=[g, v]
 physical_plan
-01)AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[min(distinct_simplify_t.v) FILTER (WHERE distinct_simplify_t.v > Int32(3)) as min(DISTINCT distinct_simplify_t.v) FILTER (WHERE distinct_simplify_t.v > Int64(3))]
+01)AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[min(distinct_simplify_t.v) FILTER (WHERE distinct_simplify_t.v > 3) as min(DISTINCT distinct_simplify_t.v) FILTER (WHERE distinct_simplify_t.v > Int64(3))]
 02)--RepartitionExec: partitioning=Hash([g@0], 4), input_partitions=1
-03)----AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[min(distinct_simplify_t.v) FILTER (WHERE distinct_simplify_t.v > Int32(3)) as min(DISTINCT distinct_simplify_t.v) FILTER (WHERE distinct_simplify_t.v > Int64(3))]
+03)----AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[min(distinct_simplify_t.v) FILTER (WHERE distinct_simplify_t.v > 3) as min(DISTINCT distinct_simplify_t.v) FILTER (WHERE distinct_simplify_t.v > Int64(3))]
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # min/max(DISTINCT) over floats now sees the raw values. Before this rule, the

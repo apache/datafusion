@@ -324,6 +324,20 @@ config_namespace! {
         /// Disable this option to preserve explicit subquery ordering in the
         /// planned query.
         pub enable_subquery_sort_elimination: bool, default = true
+
+        /// When set to true, an unaliased output column of a top-level SQL
+        /// query is named with a readable label, such as `a + 1` instead of
+        /// `t.a + Int64(1)`. Labels leave out type wrappers and table
+        /// qualifiers, and window functions use `OVER (...)` syntax without
+        /// default parts. A column keeps its current name when its label
+        /// collides with another column's name, or when it is a column
+        /// reference typed in the outermost `SELECT` list.
+        ///
+        /// Names inside the query plan don't change, so name resolution
+        /// works as before. Stored column names (`CREATE VIEW`,
+        /// `CREATE TABLE AS`, `INSERT`, `COPY`) and the DataFrame API are
+        /// not affected.
+        pub pretty_column_names: bool, default = false
     }
 }
 
