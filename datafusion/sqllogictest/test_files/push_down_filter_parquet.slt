@@ -1237,7 +1237,7 @@ physical_plan
 02)--RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=2
 03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/pnej_build/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/pnej_build/2.parquet]]}, projection=[id], file_type=parquet
 04)--RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=2
-05)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/pnej_probe/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/pnej_probe/2.parquet]]}, projection=[id], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+05)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/pnej_probe/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/pnej_probe/2.parquet]]}, projection=[id], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 
 query II rowsort
 SELECT pnej_build.id, pnej_probe.id FROM pnej_build JOIN pnej_probe ON pnej_build.id IS NOT DISTINCT FROM pnej_probe.id
