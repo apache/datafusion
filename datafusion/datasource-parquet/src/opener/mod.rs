@@ -36,7 +36,7 @@ use crate::row_group_filter::{RowGroupAccessPlanFilter, row_group_in_range};
 use crate::{
     BloomFilterStatistics, Int96Coercer, ParquetAccessPlan, ParquetFileMetrics,
     ParquetFileReaderFactory, ParquetRowSelection, ParquetVirtualColumn, RowGroupAccess,
-    apply_file_schema_type_coercions,
+    apply_file_schema_type_coercions_with_options,
 };
 use arrow::array::RecordBatch;
 use arrow::datatypes::DataType;
@@ -283,6 +283,10 @@ pub(super) struct ParquetMorselizer {
     /// coerced column type becomes `Timestamp(<coerce_int96>, Some(<tz>))`.
     /// No effect when `coerce_int96` is `None`.
     pub coerce_int96_tz: Option<Arc<str>>,
+    /// Read binary file columns directly as strings when the table schema
+    /// declares a string type. When `false`, they are read as binary and the
+    /// `expr_adapter_factory`'s adapter casts them instead.
+    pub coerce_binary_to_string: bool,
     /// Optional parquet FileDecryptionProperties
     #[cfg(feature = "parquet_encryption")]
     pub file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
@@ -490,6 +494,7 @@ struct PreparedParquetOpen {
     limit: Option<usize>,
     coerce_int96: Option<TimeUnit>,
     coerce_int96_tz: Option<Arc<str>>,
+    coerce_binary_to_string: bool,
     expr_adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
     predicate_creation_errors: Count,
     max_predicate_cache_size: Option<usize>,
@@ -991,6 +996,7 @@ impl ParquetMorselizer {
             limit: self.limit,
             coerce_int96: self.coerce_int96,
             coerce_int96_tz: self.coerce_int96_tz.clone(),
+            coerce_binary_to_string: self.coerce_binary_to_string,
             expr_adapter_factory: Arc::clone(&self.expr_adapter_factory),
             predicate_creation_errors,
             max_predicate_cache_size: self.max_predicate_cache_size,
@@ -1110,9 +1116,10 @@ impl MetadataLoadedParquetOpen {
         // desired schema (for example if we want to instruct the parquet
         // reader to read strings using Utf8View instead). Update if necessary
         let mut metadata_dirty = false;
-        if let Some(merged) = apply_file_schema_type_coercions(
+        if let Some(merged) = apply_file_schema_type_coercions_with_options(
             &prepared.logical_file_schema,
             &physical_file_schema,
+            prepared.coerce_binary_to_string,
         ) {
             physical_file_schema = Arc::new(merged);
             options = options.with_schema(Arc::clone(&physical_file_schema));
@@ -2195,6 +2202,7 @@ mod test {
         enable_bloom_filter: bool,
         enable_row_group_stats_pruning: bool,
         coerce_int96: Option<TimeUnit>,
+        coerce_binary_to_string: bool,
         max_predicate_cache_size: Option<usize>,
         max_in_list_size: usize,
         reverse_row_groups: bool,
@@ -2418,6 +2426,7 @@ mod test {
                 enable_bloom_filter: false,
                 enable_row_group_stats_pruning: false,
                 coerce_int96: None,
+                coerce_binary_to_string: true,
                 max_predicate_cache_size: None,
                 max_in_list_size: MAX_IN_LIST_SIZE,
                 reverse_row_groups: false,
@@ -2525,6 +2534,12 @@ mod test {
             self
         }
 
+        /// Set whether binary file columns are read directly as strings.
+        fn with_coerce_binary_to_string(mut self, enable: bool) -> Self {
+            self.coerce_binary_to_string = enable;
+            self
+        }
+
         /// Set whether the scan must preserve file order.
         fn with_preserve_order(mut self, enable: bool) -> Self {
             self.preserve_order = enable;
@@ -2599,6 +2614,7 @@ mod test {
                 enable_bloom_filter: self.enable_bloom_filter,
                 enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,
                 coerce_int96: self.coerce_int96,
+                coerce_binary_to_string: self.coerce_binary_to_string,
                 // End-to-end coercion behavior (including timezone) is
                 // covered by parquet.slt. No opener-level test currently
                 // needs a non-default value here.
@@ -5803,5 +5819,82 @@ mod test {
             let (_batches, rows) = count_batches_and_rows(stream).await;
             assert_eq!(rows, 5);
         }
+    }
+
+    /// Write a single unannotated `BINARY` column `b` holding `values`, with no
+    /// `ARROW:schema` hint, so the reader infers `Binary` for it.
+    async fn write_unannotated_binary_file(
+        store: &dyn ObjectStore,
+        name: &str,
+        values: &[&[u8]],
+    ) -> PartitionedFile {
+        use parquet::data_type::{ByteArray, ByteArrayType};
+        use parquet::file::writer::SerializedFileWriter;
+        use parquet::schema::parser::parse_message_type;
+
+        let schema =
+            Arc::new(parse_message_type("message test { required binary b; }").unwrap());
+        let mut bytes = Vec::new();
+        let mut writer = SerializedFileWriter::new(
+            &mut bytes,
+            schema,
+            Arc::new(WriterProperties::builder().build()),
+        )
+        .unwrap();
+        let mut row_group = writer.next_row_group().unwrap();
+        let mut column = row_group.next_column().unwrap().unwrap();
+        let values: Vec<ByteArray> =
+            values.iter().map(|v| ByteArray::from(v.to_vec())).collect();
+        column
+            .typed::<ByteArrayType>()
+            .write_batch(&values, None, None)
+            .unwrap();
+        column.close().unwrap();
+        row_group.close().unwrap();
+        writer.close().unwrap();
+        let path = Path::from(name);
+        store.put(&path, bytes.into()).await.unwrap();
+        PartitionedFile::from(store.head(&path).await.unwrap())
+    }
+
+    /// With `coerce_binary_to_string` disabled, a binary file column read into
+    /// a string table column is decoded as binary and converted by the
+    /// expression adapter's cast, so invalid UTF-8 is rejected by that cast
+    /// rather than surfacing as an invalid string array.
+    #[tokio::test]
+    async fn test_coerce_binary_to_string_disabled_casts_in_adapter() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let table_schema =
+            Arc::new(Schema::new(vec![Field::new("b", DataType::Utf8, false)]));
+        let morselizer = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(table_schema)
+            .with_coerce_binary_to_string(false)
+            .build();
+
+        let file = write_unannotated_binary_file(
+            store.as_ref(),
+            "valid.parquet",
+            &[b"a", b"bc"],
+        )
+        .await;
+        let stream = open_file(&morselizer, file).await.unwrap();
+        let batches: Vec<RecordBatch> = stream.try_collect().await.unwrap();
+        assert_eq!(batches.len(), 1);
+        let values = batches[0].column(0).as_string::<i32>();
+        assert_eq!(
+            values.iter().collect::<Vec<_>>(),
+            vec![Some("a"), Some("bc")]
+        );
+
+        let file = write_unannotated_binary_file(
+            store.as_ref(),
+            "invalid.parquet",
+            &[b"a", &[0xff]],
+        )
+        .await;
+        let stream = open_file(&morselizer, file).await.unwrap();
+        let err = stream.try_collect::<Vec<_>>().await.unwrap_err();
+        assert_contains!(err.to_string(), "Encountered non UTF-8 data");
     }
 }

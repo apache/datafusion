@@ -705,6 +705,7 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
             maximum_buffered_record_batches_per_stream: global_options.global.maximum_buffered_record_batches_per_stream as u64,
             schema_force_view_types: global_options.global.schema_force_view_types,
             binary_as_string: global_options.global.binary_as_string,
+            coerce_binary_to_string: global_options.global.coerce_binary_to_string,
             skip_arrow_metadata: global_options.global.skip_arrow_metadata,
             coerce_int96_opt: global_options.global.coerce_int96.map(|compression| {
                 parquet_options::CoerceInt96Opt::CoerceInt96(compression)
