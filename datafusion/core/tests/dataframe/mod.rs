@@ -33,7 +33,7 @@ use arrow::datatypes::{
 use arrow::error::ArrowError;
 use arrow::util::pretty::pretty_format_batches;
 use arrow_schema::{SortOptions, TimeUnit};
-use datafusion::{assert_batches_eq, dataframe};
+use datafusion::{assert_batches_eq, assert_batches_sorted_eq, dataframe};
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_functions_aggregate::count::{count_all, count_all_window};
 use datafusion_functions_aggregate::expr_fn::{
@@ -1846,31 +1846,54 @@ async fn sendable() {
 
 #[tokio::test]
 async fn intersect() -> Result<()> {
-    let df = test_table().await?.select_columns(&["c1", "c3"])?;
-    let d2 = df.clone();
-    let plan = df.intersect(d2)?;
-    let result = plan.logical_plan().clone();
-    let expected = create_plan(
-        "SELECT c1, c3 FROM aggregate_test_100
-            INTERSECT ALL SELECT c1, c3 FROM aggregate_test_100",
-    )
-    .await?;
-    assert_same_plan(&result, &expected);
+    let ctx = SessionContext::new();
+    let left = ctx
+        .sql(
+            "SELECT * FROM VALUES (NULL, 'n'), (NULL, 'n'), (1, 'x'), (1, 'x'), (2, 'y')",
+        )
+        .await?;
+    let right = ctx
+        .sql("SELECT * FROM VALUES (NULL, 'n'), (1, 'x'), (1, 'x'), (1, 'x'), (3, 'z')")
+        .await?;
+    let result = left.intersect(right)?.collect().await?;
+    assert_batches_sorted_eq!(
+        [
+            "+---------+---------+",
+            "| column1 | column2 |",
+            "+---------+---------+",
+            "|         | n       |",
+            "| 1       | x       |",
+            "| 1       | x       |",
+            "+---------+---------+",
+        ],
+        &result
+    );
     Ok(())
 }
 
 #[tokio::test]
 async fn except() -> Result<()> {
-    let df = test_table().await?.select_columns(&["c1", "c3"])?;
-    let d2 = df.clone();
-    let plan = df.except(d2)?;
-    let result = plan.logical_plan().clone();
-    let expected = create_plan(
-        "SELECT c1, c3 FROM aggregate_test_100
-            EXCEPT ALL SELECT c1, c3 FROM aggregate_test_100",
-    )
-    .await?;
-    assert_same_plan(&result, &expected);
+    let ctx = SessionContext::new();
+    let left = ctx
+        .sql(
+            "SELECT * FROM VALUES (NULL, 'n'), (NULL, 'n'), (1, 'x'), (1, 'x'), (2, 'y')",
+        )
+        .await?;
+    let right = ctx
+        .sql("SELECT * FROM VALUES (NULL, 'n'), (1, 'x'), (1, 'x'), (1, 'x'), (3, 'z')")
+        .await?;
+    let result = left.except(right)?.collect().await?;
+    assert_batches_sorted_eq!(
+        [
+            "+---------+---------+",
+            "| column1 | column2 |",
+            "+---------+---------+",
+            "|         | n       |",
+            "| 2       | y       |",
+            "+---------+---------+",
+        ],
+        &result
+    );
     Ok(())
 }
 
