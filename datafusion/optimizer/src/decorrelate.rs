@@ -216,6 +216,16 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     _ => self.unsupported(plan),
                 }
             }
+            // A window function computes each value from the rows of its
+            // partition. A correlated filter below the window selects those
+            // rows for each outer row. If the filter moves above the window,
+            // the window function runs over all rows of the input, and the
+            // values it computes are different.
+            LogicalPlan::Window(ref window) if holds_outer_reference(&window.input) => {
+                // the unsupported case
+                self.can_pull_up = false;
+                Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
+            }
             _ if plan.contains_outer_reference() => {
                 // the unsupported cases, the plan expressions contain out reference columns(like window expressions)
                 self.unsupported(plan)
