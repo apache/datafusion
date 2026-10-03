@@ -384,14 +384,10 @@ impl PartialHashAggregateStream {
         let num_group_columns = agg.group_by().num_group_exprs();
         // Same conditions as for bucketing in the final aggregation, which
         // receives what is flushed here: see `FinalHashAggregateStream::new`.
-        let has_nested_state = schema
-            .fields()
-            .iter()
-            .skip(num_group_columns)
-            .any(|field| field.data_type().is_nested());
+        let fixed_width_state = BucketedAggregation::supports_state(&schema);
         let table_flush = (bucket_threshold > 0
             && group_values_soft_limit.is_none()
-            && !has_nested_state)
+            && fixed_width_state)
             .then(|| PartialTableFlush {
                 threshold: bucket_threshold,
                 num_group_columns,
@@ -833,10 +829,7 @@ impl FinalHashAggregateStream {
         // A soft limit stops reading input early, which bucketing cannot do.
         let bucketing = (bucket_threshold > 0
             && group_values_soft_limit.is_none()
-            && BucketedAggregation::supports_state(
-                &input_schema,
-                agg.group_by().num_group_exprs(),
-            ))
+            && BucketedAggregation::supports_state(&input_schema))
         .then(|| {
             Arc::new(BucketedAggregation::new(
                 bucket_threshold,

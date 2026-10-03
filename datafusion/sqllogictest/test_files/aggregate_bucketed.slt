@@ -128,6 +128,9 @@ select count(*), round(sum(a), 3) from (select v % 10007 as k, avg(v) a from t g
 ----
 10007 1000705003.5
 
+# The next three queries have a string key, so they keep a single table: only
+# fixed-width state is bucketed. Their results must not change.
+
 # string key
 query II
 select count(*), sum(c) from (select concat('key-', cast(v % 9973 as varchar)) as k, count(*) c from t group by k);

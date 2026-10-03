@@ -22,7 +22,7 @@
 use std::sync::Arc;
 
 use arrow::compute::BatchCoalescer;
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
@@ -107,20 +107,16 @@ impl BucketedAggregation {
 
     /// True if a schema of partial state rows can be bucketed.
     ///
-    /// Bucketing turns the state of a table into rows and merges those rows
-    /// again. That is cheap for fixed-width and string state, but nested
-    /// state (the lists kept by `count(distinct)`, `array_agg` or `median`)
-    /// is costly to rebuild and takes more memory as rows than inside the
-    /// accumulator, so such aggregations keep their single table.
-    pub(super) fn supports_state(
-        state_schema: &SchemaRef,
-        num_group_columns: usize,
-    ) -> bool {
-        !state_schema
-            .fields()
-            .iter()
-            .skip(num_group_columns)
-            .any(|field| field.data_type().is_nested())
+    /// Bucketing moves every row once more before it is aggregated, which only
+    /// pays when moving a row is cheap compared to the cache miss it saves.
+    /// That holds for fixed-width columns. Variable-length keys or state
+    /// (strings, lists, ...) cost as much to move as the smaller tables save,
+    /// so such aggregations keep their single table.
+    pub(super) fn supports_state(state_schema: &SchemaRef) -> bool {
+        state_schema.fields().iter().all(|field| {
+            let data_type = field.data_type();
+            data_type.is_primitive() || *data_type == DataType::Boolean
+        })
     }
 
     pub(super) fn threshold(&self) -> usize {
@@ -363,5 +359,49 @@ impl BucketedAggregation {
 
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use arrow::datatypes::{Field, Fields, Schema};
+
+    fn schema(types: Vec<DataType>) -> SchemaRef {
+        let fields: Fields = types
+            .into_iter()
+            .enumerate()
+            .map(|(i, data_type)| Field::new(format!("c{i}"), data_type, true))
+            .collect();
+        Arc::new(Schema::new(fields))
+    }
+
+    #[test]
+    fn only_fixed_width_state_is_bucketed() {
+        assert!(BucketedAggregation::supports_state(&schema(vec![
+            DataType::Int64,
+            DataType::Boolean,
+            DataType::Decimal128(38, 10),
+            DataType::Float64,
+            DataType::Date32,
+        ])));
+
+        // A variable-length group key or state column turns bucketing off
+        for variable_length in [
+            DataType::Utf8,
+            DataType::Utf8View,
+            DataType::LargeBinary,
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true))),
+        ] {
+            assert!(!BucketedAggregation::supports_state(&schema(vec![
+                DataType::Int64,
+                variable_length.clone(),
+            ])));
+            assert!(!BucketedAggregation::supports_state(&schema(vec![
+                variable_length,
+                DataType::Int64,
+            ])));
+        }
     }
 }
