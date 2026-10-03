@@ -109,16 +109,27 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                 //   and build `AggregateKind::DistinctLimit`
                 // - 3. `CombinePartialFinalAggregate`: the current optimization
                 //
-                // Here it restores previously applied optimization in step 2. The
-                // final aggregate decides: step 2 may have limited only the final
-                // aggregate, e.g. when its grouping differs from the partial's.
-                if let AggregateKind::DistinctLimit { limit, .. } = &agg_exec.kind
-                    && let Some(optimized) = combined_agg
-                        .clone()
-                        .try_optimize_distinct_soft_limit(*limit)
-                {
-                    combined_agg = optimized.data;
-                }
+                // Here it restores previously applied optimization in step 2
+                let combined_aggr_kind = match (&agg_exec.kind, &input_agg_exec.kind) {
+                    (AggregateKind::General { .. }, AggregateKind::General { .. }) => {
+                        combined_agg.kind
+                    }
+                    (
+                        AggregateKind::DistinctLimit { limit, .. },
+                        AggregateKind::DistinctLimit {
+                            group_by,
+                            limit: partial_limit,
+                        },
+                    ) if limit == partial_limit => AggregateKind::DistinctLimit {
+                        // The combined aggregate groups raw input, like the partial.
+                        group_by: Arc::clone(group_by),
+                        limit: *limit,
+                    },
+                    // Step 2 may limit only the final aggregate, e.g. when its
+                    // grouping differs from the partial's. Keep both stages.
+                    _ => return Ok(Transformed::no(plan)),
+                };
+                combined_agg.kind = combined_aggr_kind;
                 Some(Arc::new(combined_agg))
             } else {
                 None
