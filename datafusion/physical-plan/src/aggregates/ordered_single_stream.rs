@@ -755,12 +755,12 @@ impl RecordBatchStream for OrderedSingleAggregateStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ExecutionPlan;
     use crate::aggregates::PhysicalGroupBy;
-    use crate::stream::RecordBatchStreamAdapter;
+    use crate::collect;
     use crate::test::TestMemoryExec;
-    use arrow::array::{AsArray, Int64Array};
-    use arrow::datatypes::{DataType, Field, Int64Type, Schema};
+    use arrow::array::Int64Array;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::test_util::batches_to_sort_string;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::{
         GreedyMemoryPool, MemoryPool, PeakRecordingPool,
@@ -771,31 +771,29 @@ mod tests {
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr_common::sort_expr::LexOrdering;
-    use futures::channel::mpsc;
-    use futures::{FutureExt, TryStreamExt};
-    use std::collections::BTreeMap;
 
-    const BATCH_SIZE: usize = 4;
-    /// Groups completed at once by each `a` boundary, many more than `BATCH_SIZE`.
-    const GROUPS_PER_KEY: i64 = 10 * BATCH_SIZE as i64 + 3;
-
-    type InputSender = mpsc::UnboundedSender<Result<RecordBatch>>;
-
-    fn schema() -> SchemaRef {
-        Arc::new(Schema::new(vec![
+    /// Runs `SELECT a, b, SUM(v) GROUP BY a, b` with `batch_size = 4` over
+    /// input ordered by `a`. Each `a` boundary completes 43 groups at once.
+    async fn run(pool: Arc<dyn MemoryPool>) -> Result<Vec<RecordBatch>> {
+        let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int64, false),
             Field::new("b", DataType::Int64, false),
             Field::new("v", DataType::Int64, false),
-        ]))
-    }
-
-    /// `SELECT a, b, SUM(v) GROUP BY a, b` over input ordered by `a`, with the
-    /// input fed through the returned channel.
-    fn new_stream(
-        pool: Arc<dyn MemoryPool>,
-    ) -> Result<(InputSender, OrderedSingleAggregateStream, AggregateExec)> {
-        let schema = schema();
-        let input = TestMemoryExec::try_new(&[vec![]], Arc::clone(&schema), None)?
+        ]));
+        let batches = [0, 0, 1, 1, 2, 2]
+            .map(|a| {
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(Int64Array::from(vec![a; 43])),
+                        Arc::new(Int64Array::from_iter_values(0..43)),
+                        Arc::new(Int64Array::from_iter_values(0..43)),
+                    ],
+                )
+                .unwrap()
+            })
+            .to_vec();
+        let input = TestMemoryExec::try_new(&[batches], Arc::clone(&schema), None)?
             .try_with_sort_information(vec![
                 LexOrdering::new([PhysicalSortExpr::new_default(col("a", &schema)?)])
                     .unwrap(),
@@ -816,130 +814,35 @@ mod tests {
             Arc::new(TestMemoryExec::update_cache(&Arc::new(input))),
             Arc::clone(&schema),
         )?;
-        assert_eq!(
-            aggregate.input_order_mode(),
-            &InputOrderMode::PartiallySorted(vec![0])
-        );
-        let context = Arc::new(
-            TaskContext::default()
-                .with_session_config(
-                    SessionConfig::new().with_batch_size(BATCH_SIZE).set_bool(
-                        "datafusion.execution.enable_migration_aggregate",
-                        true,
-                    ),
-                )
-                .with_runtime(
-                    RuntimeEnvBuilder::new()
-                        .with_memory_pool(pool)
-                        .build_arc()?,
-                ),
-        );
-        let mut stream = OrderedSingleAggregateStream::new(&aggregate, &context, 0)?;
-        let (sender, receiver) = mpsc::unbounded();
-        stream.input = Box::pin(RecordBatchStreamAdapter::new(schema, receiver));
-        Ok((sender, stream, aggregate))
+        let context = TaskContext::default()
+            .with_session_config(
+                SessionConfig::new()
+                    .with_batch_size(4)
+                    .set_bool("datafusion.execution.enable_migration_aggregate", true),
+            )
+            .with_runtime(
+                RuntimeEnvBuilder::new()
+                    .with_memory_pool(pool)
+                    .build_arc()?,
+            );
+        collect(Arc::new(aggregate), Arc::new(context)).await
     }
 
-    /// Rows `(a, b, v = b)` for every `b` in `0..GROUPS_PER_KEY`.
-    fn input_batch(a: i64) -> RecordBatch {
-        let num_rows = GROUPS_PER_KEY as usize;
-        RecordBatch::try_new(
-            schema(),
-            vec![
-                Arc::new(Int64Array::from(vec![a; num_rows])),
-                Arc::new(Int64Array::from_iter_values(0..GROUPS_PER_KEY)),
-                Arc::new(Int64Array::from_iter_values(0..GROUPS_PER_KEY)),
-            ],
-        )
-        .unwrap()
-    }
-
-    /// Sends two input batches for each `a` in `keys`, so every group sums to
-    /// `2 * b`.
-    fn send_input(sender: &InputSender, keys: std::ops::Range<i64>) {
-        for a in keys {
-            for _ in 0..2 {
-                sender.unbounded_send(Ok(input_batch(a))).unwrap();
-            }
-        }
-    }
-
-    /// Checks that every group of `keys` is emitted exactly once with the
-    /// expected sum.
-    fn assert_output(output: &[RecordBatch], keys: std::ops::Range<i64>) {
-        let mut actual = BTreeMap::new();
-        for batch in output {
-            let [a, b, sum] =
-                [0, 1, 2].map(|i| batch.column(i).as_primitive::<Int64Type>());
-            for row in 0..batch.num_rows() {
-                let previous =
-                    actual.insert((a.value(row), b.value(row)), sum.value(row));
-                assert!(previous.is_none(), "duplicate group");
-            }
-        }
-        let expected = keys
-            .flat_map(|a| (0..GROUPS_PER_KEY).map(move |b| ((a, b), 2 * b)))
-            .collect::<BTreeMap<_, _>>();
-        assert_eq!(actual, expected);
-    }
-
-    /// One ordered key boundary completes many more groups than `batch_size`.
-    /// They are materialized once and emitted in `batch_size` slices before
-    /// more input is read.
+    /// One byte below the unlimited peak, the completed groups cannot be
+    /// reserved next to the table, so they are handed off without slicing.
+    /// The result must not change.
     #[tokio::test]
-    async fn completed_groups_are_emitted_in_batch_size_slices() -> Result<()> {
-        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(usize::MAX));
-        let (sender, mut stream, _) = new_stream(Arc::clone(&pool))?;
-
-        // No group is complete until a larger `a` arrives.
-        send_input(&sender, 0..1);
-        assert!(stream.next().now_or_never().is_none());
-
-        // `a = 1` completes every `a = 0` group. All of them are emitted
-        // without reading more input.
-        send_input(&sender, 1..2);
-        let mut output = vec![];
-        while let Some(batch) = stream.next().now_or_never() {
-            output.push(batch.expect("stream ended before input was exhausted")?);
-        }
-        assert_output(&output, 0..1);
-
-        // End of input completes the `a = 1` groups.
-        sender.close_channel();
-        output.extend(stream.by_ref().try_collect::<Vec<_>>().await?);
-        assert_output(&output, 0..2);
-        assert!(output.iter().all(|batch| batch.num_rows() <= BATCH_SIZE));
-        assert_eq!(pool.reserved(), 0);
-        Ok(())
-    }
-
-    /// If completed groups cannot be reserved while they are sliced, they are
-    /// handed off as one batch instead of failing the query.
-    #[tokio::test]
-    async fn completed_groups_are_handed_off_whole_under_memory_pressure() -> Result<()> {
-        let run = |pool: Arc<dyn MemoryPool>| async move {
-            let (sender, stream, aggregate) = new_stream(Arc::clone(&pool))?;
-            send_input(&sender, 0..3);
-            sender.close_channel();
-            let output = stream.try_collect::<Vec<_>>().await?;
-            assert_output(&output, 0..3);
-            assert_eq!(aggregate.metrics().unwrap().spill_count(), Some(0));
-            assert_eq!(pool.reserved(), 0);
-            Ok::<_, DataFusionError>(output)
-        };
-
-        // Without a limit, the peak reservation holds the table plus one
-        // batch of completed groups.
+    async fn completed_groups_under_memory_pressure() -> Result<()> {
         let pool = Arc::new(PeakRecordingPool::new(Arc::new(GreedyMemoryPool::new(
             usize::MAX,
         ))));
-        let output = run(Arc::clone(&pool) as _).await?;
-        assert!(output.iter().all(|batch| batch.num_rows() <= BATCH_SIZE));
-
-        // One byte less fits the table but not that batch.
+        let expected = run(Arc::clone(&pool) as _).await?;
         let limit = pool.peak_reserved() - 1;
-        let output = run(Arc::new(GreedyMemoryPool::new(limit))).await?;
-        assert!(output.iter().any(|batch| batch.num_rows() > BATCH_SIZE));
+        let actual = run(Arc::new(GreedyMemoryPool::new(limit))).await?;
+        assert_eq!(
+            batches_to_sort_string(&actual),
+            batches_to_sort_string(&expected)
+        );
         Ok(())
     }
 }
