@@ -3022,3 +3022,35 @@ DROP TABLE oj_a;
 
 statement ok
 DROP TABLE oj_b;
+
+#############
+## Scalar subquery equality: NDV-based row estimate
+## When a filter contains `col = (SELECT ...)`, the interval solver
+## cannot resolve the subquery, but the fallback heuristic uses
+## `1 / NDV(col)` instead of the flat 20% default.
+#############
+
+statement ok
+CREATE TABLE ndv_main AS
+  SELECT column1 AS id, column2 AS val
+  FROM (VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e'),
+               (6, 'f'), (7, 'g'), (8, 'h'), (9, 'i'), (10, 'j'));
+
+statement ok
+CREATE TABLE ndv_lookup AS SELECT 5 AS v;
+
+# The filter `id = (SELECT v FROM ndv_lookup)` should use the NDV of `id`
+# (10 distinct values) to estimate ~1 row instead of the 20% default (~2 rows).
+query TT
+EXPLAIN SELECT * FROM ndv_main WHERE id = (SELECT v FROM ndv_lookup);
+----
+logical_plan
+<slt:ignore>
+physical_plan
+<slt:ignore>
+
+statement ok
+DROP TABLE ndv_main;
+
+statement ok
+DROP TABLE ndv_lookup;
