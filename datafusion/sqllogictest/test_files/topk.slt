@@ -396,3 +396,98 @@ set datafusion.explain.physical_plan_only = false
 
 statement ok
 set datafusion.execution.batch_size = 8192
+
+#####################################
+## TopK with nested sort keys containing NULL elements
+## The dynamic filter must not drop rows that sort before the current
+## threshold (nested comparisons do not follow the sort's NULL ordering).
+#####################################
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+create table nested_list (l int[]) as values (make_array(1, NULL));
+
+statement ok
+insert into nested_list values (make_array(1, 2));
+
+query ?
+select l from nested_list order by l;
+----
+[1, 2]
+[1, NULL]
+
+query ?
+select l from nested_list order by l limit 1;
+----
+[1, 2]
+
+query ?
+select l from nested_list order by l nulls first limit 1;
+----
+[1, NULL]
+
+statement ok
+create table nested_list_desc (l int[]) as values (make_array(1, 2));
+
+statement ok
+insert into nested_list_desc values (make_array(1, NULL));
+
+query ?
+select l from nested_list_desc order by l desc limit 1;
+----
+[1, NULL]
+
+statement ok
+create table nested_struct as
+select named_struct('a', 1, 'b', NULL::int) x
+union all
+select named_struct('a', 1, 'b', 2);
+
+query ?
+select x from nested_struct order by x limit 1;
+----
+{a: 1, b: 2}
+
+# Nested key after a flat key: rows tied on the flat prefix must be kept
+statement ok
+create table nested_second (a int, l int[]) as values (1, make_array(1, NULL));
+
+statement ok
+insert into nested_second values (2, make_array(0)), (1, make_array(1, 2));
+
+query I?
+select a, l from nested_second order by a, l limit 1;
+----
+1 [1, 2]
+
+# Nested key followed by a flat key
+statement ok
+create table nested_first (l int[], b int) as values (make_array(1, NULL), 1);
+
+statement ok
+insert into nested_first values (make_array(1, 2), 5);
+
+query ?I
+select l, b from nested_first order by l, b limit 1;
+----
+[1, 2] 5
+
+statement ok
+drop table nested_list;
+
+statement ok
+drop table nested_list_desc;
+
+statement ok
+drop table nested_struct;
+
+statement ok
+drop table nested_second;
+
+statement ok
+drop table nested_first;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
