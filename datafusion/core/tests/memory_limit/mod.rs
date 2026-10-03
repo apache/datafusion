@@ -1340,7 +1340,12 @@ impl TestCase {
             .with_runtime_env(runtime)
             .with_default_features();
         let builder = match scenario.rules() {
-            Some(rules) => builder.with_physical_optimizer_rules(rules),
+            // A scenario that pins a custom rule set does so to keep
+            // memory-hungry operators out of the plan. The analyzer phase would
+            // reintroduce them, so clear it too.
+            Some(rules) => builder
+                .with_physical_analyzer_rules(vec![])
+                .with_physical_optimizer_rules(rules),
             None => builder,
         };
 

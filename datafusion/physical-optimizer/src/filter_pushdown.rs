@@ -34,6 +34,7 @@
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
+use crate::analyzer::PhysicalAnalyzerRule;
 
 use datafusion_common::{Result, assert_eq_or_internal_err, config::ConfigOptions};
 use datafusion_physical_expr::PhysicalExpr;
@@ -434,6 +435,27 @@ impl PhysicalOptimizerRule for FilterPushdown {
 
     fn schema_check(&self) -> bool {
         true // Filter pushdown does not change the schema of the plan
+    }
+}
+
+/// The same rewrite as the [`PhysicalOptimizerRule`] impl. The default
+/// analyzer registers this rule in the position it held in the optimizer list
+/// before the analyzer phase existed, ahead of `EnsureRequirements`.
+impl PhysicalAnalyzerRule for FilterPushdown {
+    fn analyze(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        config: &ConfigOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        PhysicalOptimizerRule::optimize(self, plan, config)
+    }
+
+    fn name(&self) -> &str {
+        PhysicalOptimizerRule::name(self)
+    }
+
+    fn schema_check(&self) -> bool {
+        PhysicalOptimizerRule::schema_check(self)
     }
 }
 

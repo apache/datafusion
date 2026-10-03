@@ -191,7 +191,11 @@ mod tests {
     #[tokio::test]
     async fn test_three_library_query_planner_restores_type_identity() -> Result<()> {
         // Library A: datafusion-python owns the session and codec registry.
+        // Clear both physical phases so the assertions observe planning alone:
+        // the analyzer would otherwise wrap the root in an `OutputRequirementExec`
+        // (its remove pass lives among the optimizer rules cleared here).
         let state = SessionStateBuilder::new_with_default_features()
+            .with_physical_analyzer_rules(vec![])
             .with_physical_optimizer_rules(vec![])
             .build();
         let ctx = Arc::new(SessionContext::new_with_state(state));
@@ -261,8 +265,11 @@ mod tests {
     async fn test_query_planner_swap_round_trips_type_identity() -> Result<()> {
         // Library A: datafusion-python owns the session and codec registry. The
         // physical optimizer rules are cleared so the assertions below observe
-        // planning alone.
+        // planning alone. The analyzer phase is cleared too, otherwise it would
+        // wrap the root in an `OutputRequirementExec` whose remove pass lives
+        // among the optimizer rules cleared here.
         let state = SessionStateBuilder::new_with_default_features()
+            .with_physical_analyzer_rules(vec![])
             .with_physical_optimizer_rules(vec![])
             .build();
         let ctx = Arc::new(SessionContext::new_with_state(state));
