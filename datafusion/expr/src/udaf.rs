@@ -32,9 +32,9 @@ use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 use crate::expr::{
-    AggregateFunction, AggregateFunctionParams, ExprListDisplay, WindowFunctionParams,
-    schema_name_from_exprs, schema_name_from_exprs_comma_separated_without_space,
-    schema_name_from_sorts,
+    AggregateFunction, AggregateFunctionParams, ExprListDisplay, SortListDisplay,
+    WindowFunctionParams, schema_name_from_exprs,
+    schema_name_from_exprs_comma_separated_without_space, schema_name_from_sorts,
 };
 use crate::function::{
     AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs,
@@ -1131,20 +1131,23 @@ pub fn udaf_default_schema_name<F: AggregateUDFImpl + ?Sized>(
 ///
 /// # Example
 /// ```
-/// # use datafusion_expr::col;
+/// # use datafusion_expr::{col, lit};
 /// # use datafusion_expr::expr::AggregateFunctionParams;
 /// # use datafusion_expr::UdafHumanDisplayBuilder;
 /// # let params = AggregateFunctionParams {
 /// #     args: vec![col("x")],
 /// #     distinct: false,
-/// #     filter: Some(Box::new(col("y").gt(col("z")))),
-/// #     order_by: vec![],
+/// #     filter: Some(Box::new(col("y").gt(lit(5i64)))),
+/// #     order_by: vec![col("z").sort(false, true)],
 /// #     null_treatment: None,
 /// # };
 /// let human_display = UdafHumanDisplayBuilder::new("my_udaf", &params)
 ///     .build()
 ///     .unwrap();
-/// assert_eq!(human_display, "my_udaf(x) FILTER (WHERE y > z)");
+/// assert_eq!(
+///     human_display,
+///     "my_udaf(x) FILTER (WHERE y > 5) ORDER BY z DESC"
+/// );
 /// ```
 #[derive(Debug)]
 pub struct UdafHumanDisplayBuilder<'a> {
@@ -1185,14 +1188,13 @@ impl<'a> UdafHumanDisplayBuilder<'a> {
         }
 
         if let Some(filter) = filter {
-            schema_name.write_fmt(format_args!(" FILTER (WHERE {filter})"))?;
+            schema_name
+                .write_fmt(format_args!(" FILTER (WHERE {})", filter.human_display()))?;
         }
 
         if !order_by.is_empty() {
-            schema_name.write_fmt(format_args!(
-                " ORDER BY [{}]",
-                schema_name_from_sorts(order_by)?
-            ))?;
+            schema_name
+                .write_fmt(format_args!(" ORDER BY {}", SortListDisplay(order_by)))?;
         }
 
         Ok(schema_name)
