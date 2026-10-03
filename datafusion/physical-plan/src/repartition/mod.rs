@@ -610,21 +610,23 @@ impl RepartitionExecState {
                 .map(|(partition, channel)| (*partition, channel.sender.clone()))
                 .collect();
 
-            let input_task = SpawnedTask::spawn(RepartitionExec::pull_from_input(
-                stream,
-                txs,
-                partitioning.clone(),
-                range_router.clone(),
-                metrics,
-                // preserve_order depends on partition index to start from 0
-                if preserve_order { 0 } else { i },
-                num_input_partitions,
-            ));
+            let input_task =
+                SpawnedTask::spawn_reclaimable(RepartitionExec::pull_from_input(
+                    stream,
+                    txs,
+                    partitioning.clone(),
+                    range_router.clone(),
+                    metrics,
+                    // preserve_order depends on partition index to start from 0
+                    if preserve_order { 0 } else { i },
+                    num_input_partitions,
+                ));
 
             // In a separate task, wait for each input to be done
             // (and pass along any errors, including panic!s)
-            let wait_for_task =
-                SpawnedTask::spawn(RepartitionExec::wait_for_task(input_task, senders));
+            let wait_for_task = SpawnedTask::spawn_reclaimable(
+                RepartitionExec::wait_for_task(input_task, senders),
+            );
             spawned_tasks.push(wait_for_task);
         }
         *self = Self::ConsumingInputStreams(ConsumingInputStreamsState {
