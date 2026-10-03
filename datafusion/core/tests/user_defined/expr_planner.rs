@@ -61,6 +61,13 @@ impl ExprPlanner for MyCustomPlanner {
                     format!("{} ? {}", expr.left, expr.right),
                 ))))
             }
+            BinaryOperator::Custom(op) if op == ":" => {
+                Ok(PlannerResult::Planned(Expr::Alias(Alias::new(
+                    Expr::Literal(ScalarValue::Boolean(Some(true)), None),
+                    None::<&str>,
+                    "custom colon",
+                ))))
+            }
             _ => Ok(PlannerResult::Original(expr)),
         }
     }
@@ -123,5 +130,29 @@ async fn test_question_filter() {
     +---+
     | 1 |
     +---+
+    ");
+}
+
+#[tokio::test]
+async fn test_custom_struct_colon_operator() {
+    let config =
+        SessionConfig::new().set_str("datafusion.sql_parser.dialect", "snowflake");
+    let mut ctx = SessionContext::new_with_config(config);
+    ctx.register_expr_planner(Arc::new(MyCustomPlanner))
+        .unwrap();
+
+    let actual = ctx
+        .sql("select {'a': 1}:a;")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    insta::assert_snapshot!(batches_to_string(&actual), @r"
+    +--------------+
+    | custom colon |
+    +--------------+
+    | true         |
+    +--------------+
     ");
 }
