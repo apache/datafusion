@@ -1322,3 +1322,11 @@ INSERT INTO map_primitive_cast_insert VALUES (MAP {NULL: 1});
 
 statement ok
 DROP TABLE map_primitive_cast_insert;
+
+# element_at / map_extract on a non-map argument is a user error reported at
+# planning, not an internal error ("bug in DataFusion").
+query error Error during planning: Expected a Map type, got Int64
+SELECT element_at(1, 1);
+
+query error Error during planning: Expected a Map type, got Int64
+SELECT map_extract(1, 1);
