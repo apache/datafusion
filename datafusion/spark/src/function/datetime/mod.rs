@@ -29,6 +29,7 @@ pub mod make_interval;
 pub mod monthname;
 pub mod next_day;
 pub mod time_trunc;
+mod timezone;
 pub mod to_utc_timestamp;
 pub mod trunc;
 pub mod unix;
