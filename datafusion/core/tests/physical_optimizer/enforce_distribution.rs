@@ -5950,12 +5950,6 @@ fn ensure_distribution_shares_statistics_cache() -> Result<()> {
     // `depth` pass-through operators sitting on top of it. Each ancestor's
     // distribution enforcement inspects its child's statistics, which recurse to
     // the leaf.
-    //
-    // The measured arm drives the real `EnsureRequirements` rule, so the shared
-    // context under test is the one the rule actually uses — reimplementing it
-    // here would keep passing even if the rule stopped sharing. The baseline arm
-    // allocates a fresh `StatisticsContext` per node, reproducing the behavior
-    // before this change.
     fn deep_plan(depth: usize, calls: &Arc<AtomicUsize>) -> Arc<dyn ExecutionPlan> {
         let mut plan: Arc<dyn ExecutionPlan> =
             Arc::new(CountingStatsExec::new(parquet_exec(), Arc::clone(calls)));
