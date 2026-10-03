@@ -115,17 +115,14 @@ macro_rules! downcast_bitwise_accumulator {
 /// `EXPR_FN` identifier used to name the generated expression function.
 /// `AGGREGATE_UDF_FN` is an identifier used to name the underlying UDAF function.
 /// `OPR_TYPE` is an expression that evaluates to the type of bitwise operation to be performed.
+/// `OPR_NAME` is a string literal naming the operation in the generated expression function's docs (e.g. `"AND"`).
 /// `DOCUMENTATION` documentation for the UDAF
 macro_rules! make_bitwise_udaf_expr_and_func {
-    ($EXPR_FN:ident, $AGGREGATE_UDF_FN:ident, $OPR_TYPE:expr, $DOCUMENTATION:expr) => {
+    ($EXPR_FN:ident, $AGGREGATE_UDF_FN:ident, $OPR_TYPE:expr, $OPR_NAME:literal, $DOCUMENTATION:expr) => {
         make_udaf_expr!(
             $EXPR_FN,
             expr_x,
-            concat!(
-                "Returns the bitwise",
-                stringify!($OPR_TYPE),
-                "of a group of values"
-            ),
+            concat!("Returns the bitwise ", $OPR_NAME, " of a group of values"),
             $AGGREGATE_UDF_FN
         );
         create_func!(
@@ -182,18 +179,21 @@ make_bitwise_udaf_expr_and_func!(
     bit_and,
     bit_and_udaf,
     BitwiseOperationType::And,
+    "AND",
     get_bit_and_doc()
 );
 make_bitwise_udaf_expr_and_func!(
     bit_or,
     bit_or_udaf,
     BitwiseOperationType::Or,
+    "OR",
     get_bit_or_doc()
 );
 make_bitwise_udaf_expr_and_func!(
     bit_xor,
     bit_xor_udaf,
     BitwiseOperationType::Xor,
+    "XOR",
     get_bit_xor_doc()
 );
 
