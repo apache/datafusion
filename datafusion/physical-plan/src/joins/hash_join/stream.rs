@@ -33,7 +33,7 @@ use crate::joins::hash_join::shared_bounds::{
     PartitionBounds, PartitionBuildData, SharedBuildAccumulator,
 };
 use crate::joins::utils::{
-    JoinKeyComparator, OnceFut, equal_rows_arr, matchable_join_keys,
+    JoinKeyComparator, OnceFut, equal_rows_arr_with_normalized_left, matchable_join_keys,
 };
 use crate::stream::EmptyRecordBatchStream;
 use crate::{
@@ -425,6 +425,11 @@ impl RecordBatchStream for HashJoinStream {
 /// Returns build/probe indices satisfying the equality condition, along with
 /// (optional) starting point for next iteration.
 ///
+/// `build_side_values` must come from [`JoinLeftData::values()`] (or be
+/// derived from it), where float `-0.0` is already rewritten to `+0.0`. The
+/// key comparison does not normalize the build side again, so raw build keys
+/// holding `-0.0` would fail to match `+0.0` on the probe side.
+///
 /// # Example
 ///
 /// For `LEFT.b1 = RIGHT.b2`:
@@ -496,7 +501,7 @@ pub(super) fn lookup_join_hashmap(
     let probe_indices_unfiltered: UInt32Array =
         std::mem::take(probe_indices_buffer).into();
 
-    let (build_indices, probe_indices) = equal_rows_arr(
+    let (build_indices, probe_indices) = equal_rows_arr_with_normalized_left(
         &build_indices_unfiltered,
         &probe_indices_unfiltered,
         build_side_values,
@@ -1568,6 +1573,8 @@ fn mark_null_candidates_for_probe_batch(
 /// Calls `f` with all correlation-scope matches between `build_scope_values`
 /// and `probe_scope_values`, as chunks of at most `batch_size` pairs of
 /// (position in `build_scope_values`, position in `probe_scope_values`).
+/// `build_scope_values` must already be normalized, as for
+/// [`lookup_join_hashmap`].
 #[expect(clippy::too_many_arguments)]
 fn for_each_scope_match(
     scope_map: &dyn JoinHashMapType,

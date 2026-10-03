@@ -322,8 +322,8 @@ impl PhysicalExpr for ScalarFunctionExpr {
             .map(|props| &props.range)
             .collect::<Vec<_>>();
         let range = self.fun().evaluate_bounds(&children_range)?;
-        // The default UDF bounds carry no type information. Recover the resolved
-        // output type for property inference without discarding explicit bounds.
+        // Unbounded Null bounds carry no type information, even from an override.
+        // Recover the resolved output type while preserving all other intervals.
         let range = if range.data_type() == DataType::Null && range.is_unbounded() {
             Interval::make_unbounded(self.return_type()).unwrap_or(range)
         } else {
@@ -433,7 +433,7 @@ mod tests {
             assert_eq!(properties.sort_properties, SortProperties::Unordered);
             assert!(!properties.preserves_lex_ordering);
             assert!(!properties.strictly_order_preserving);
-            // The constraint solver calls this method directly, bypassing the fallback.
+            // Direct bounds evaluation does not use the property-analysis fallback.
             assert_eq!(
                 expr.evaluate_bounds(&[]).unwrap(),
                 Interval::make_unbounded(&DataType::Null).unwrap()
@@ -527,6 +527,55 @@ mod tests {
         }
     }
 
+    #[test]
+    fn checked_time_arithmetic_uses_recovered_function_type() -> Result<()> {
+        use crate::expressions::BinaryExpr;
+        use arrow::compute::SortOptions;
+        use datafusion_expr::Operator;
+        use datafusion_functions::datetime::date_trunc::DateTruncFunc;
+
+        let time_type = DataType::Time64(TimeUnit::Nanosecond);
+        let precision = Arc::new(Literal::new(ScalarValue::from("hour")));
+        let precision_properties = precision.get_properties(&[])?;
+        let date_trunc = ScalarFunctionExpr::try_new(
+            Arc::new(ScalarUDF::from(DateTruncFunc::new())),
+            vec![precision, Arc::new(Column::new("t", 0))],
+            &Schema::new(vec![Field::new("t", time_type.clone(), true)]),
+            Arc::new(ConfigOptions::default()),
+        )?;
+        let time_properties = ExprProperties::new_unknown()
+            .with_order(SortProperties::Ordered(SortOptions::default()))
+            .with_range(Interval::make_unbounded(&time_type)?);
+        let truncated_properties =
+            date_trunc.get_properties(&[precision_properties, time_properties])?;
+        assert_eq!(
+            truncated_properties.range,
+            Interval::make_unbounded(&time_type)?
+        );
+        assert_eq!(
+            truncated_properties.sort_properties,
+            SortProperties::Ordered(SortOptions::default())
+        );
+        let interval = Arc::new(Literal::new(ScalarValue::new_interval_mdn(
+            0,
+            0,
+            7_200_000_000_000,
+        )));
+        let interval_properties = interval.get_properties(&[])?;
+        let shifted = BinaryExpr::new(Arc::new(date_trunc), Operator::Plus, interval)
+            .with_fail_on_overflow(true);
+
+        // Checked arithmetic still wraps time-of-day across midnight. Recovering
+        // the function's type is necessary to recognize this non-monotonic case.
+        assert_eq!(
+            shifted
+                .get_properties(&[truncated_properties, interval_properties])?
+                .sort_properties,
+            SortProperties::Unordered
+        );
+        Ok(())
+    }
+
     #[derive(Debug, PartialEq, Eq, Hash)]
     struct BoundsUDF {
         inner: MockScalarUDF,
@@ -558,55 +607,71 @@ mod tests {
         }
     }
 
+    fn bounds_expr(fail: bool) -> ScalarFunctionExpr {
+        ScalarFunctionExpr::try_new(
+            Arc::new(ScalarUDF::from(BoundsUDF {
+                inner: MockScalarUDF {
+                    signature: Signature::exact(
+                        vec![DataType::Int32],
+                        Volatility::Immutable,
+                    ),
+                    return_type: DataType::Int32,
+                },
+                fail,
+            })),
+            vec![Arc::new(Column::new("a", 0))],
+            &Schema::new(vec![Field::new("a", DataType::Int32, true)]),
+            Arc::new(ConfigOptions::default()),
+        )
+        .unwrap()
+    }
+
     #[test]
-    fn properties_preserve_udf_bounds_and_errors() {
-        for fail in [false, true] {
-            let expr = ScalarFunctionExpr::try_new(
-                Arc::new(ScalarUDF::from(BoundsUDF {
-                    inner: MockScalarUDF {
-                        signature: Signature::exact(
-                            vec![DataType::Int32],
-                            Volatility::Immutable,
-                        ),
-                        return_type: DataType::Int32,
-                    },
-                    fail,
-                })),
-                vec![Arc::new(Column::new("a", 0))],
-                &Schema::new(vec![Field::new("a", DataType::Int32, true)]),
-                Arc::new(ConfigOptions::default()),
-            )
-            .unwrap();
-            for (lower, upper) in [
-                (Some(0), Some(100)),
-                (Some(1), Some(1)),
-                (None, Some(100)),
-                (Some(0), None),
-                (None, None),
-            ] {
-                let bounds = Interval::make::<i32>(lower, upper).unwrap();
-                let child = ExprProperties::new_unknown().with_range(bounds.clone());
-                let properties = expr.get_properties(&[child]);
-                let direct = expr.evaluate_bounds(&[&bounds]);
-                if fail {
-                    assert!(
-                        properties
-                            .unwrap_err()
-                            .to_string()
-                            .contains("bounds evaluation failed")
-                    );
-                    assert!(
-                        direct
-                            .unwrap_err()
-                            .to_string()
-                            .contains("bounds evaluation failed")
-                    );
-                } else {
-                    assert_eq!(properties.unwrap().range, bounds);
-                    assert_eq!(direct.unwrap(), bounds);
-                }
-            }
+    fn properties_preserve_udf_bounds() {
+        let expr = bounds_expr(false);
+        for (lower, upper) in [
+            (Some(0), Some(100)),
+            (Some(1), Some(1)),
+            (None, Some(100)),
+            (Some(0), None),
+            (None, None),
+        ] {
+            let bounds = Interval::make::<i32>(lower, upper).unwrap();
+            let child = ExprProperties::new_unknown().with_range(bounds.clone());
+            assert_eq!(expr.get_properties(&[child]).unwrap().range, bounds);
+            assert_eq!(expr.evaluate_bounds(&[&bounds]).unwrap(), bounds);
         }
+    }
+
+    #[test]
+    fn properties_recover_type_from_explicit_unknown_bounds() {
+        let expr = bounds_expr(false);
+        let bounds = Interval::make_unbounded(&DataType::Null).unwrap();
+        let child = ExprProperties::new_unknown().with_range(bounds.clone());
+        assert_eq!(
+            expr.get_properties(&[child]).unwrap().range,
+            Interval::make_unbounded(&DataType::Int32).unwrap()
+        );
+        assert_eq!(expr.evaluate_bounds(&[&bounds]).unwrap(), bounds);
+    }
+
+    #[test]
+    fn properties_propagate_udf_bounds_errors() {
+        let expr = bounds_expr(true);
+        let bounds = Interval::make::<i32>(Some(0), Some(100)).unwrap();
+        let child = ExprProperties::new_unknown().with_range(bounds.clone());
+        assert!(
+            expr.get_properties(&[child])
+                .unwrap_err()
+                .to_string()
+                .contains("bounds evaluation failed")
+        );
+        assert!(
+            expr.evaluate_bounds(&[&bounds])
+                .unwrap_err()
+                .to_string()
+                .contains("bounds evaluation failed")
+        );
     }
 
     #[test]
