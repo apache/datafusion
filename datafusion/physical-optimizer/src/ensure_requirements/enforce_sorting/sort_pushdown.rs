@@ -536,6 +536,22 @@ fn pushdown_requirement_to_children(
             )
             .then(|| Ok(vec![Some(parent_required)]))
             .transpose()
+    } else if plan.is::<GlobalLimitExec>() || plan.is::<LocalLimitExec>() {
+        // Sorting below a limit changes which rows it keeps. Only refine a
+        // SortExec directly below it, which changes how ties are broken.
+        // Otherwise, sort the retained rows and let the input stop early.
+        let refines_sort_below = plan.children()[0].is::<SortExec>()
+            && plan.output_ordering().is_some_and(|ordering| {
+                plan.equivalence_properties().requirements_compatible(
+                    parent_required.first().clone(),
+                    ordering.clone().into(),
+                )
+            });
+        if refines_sort_below {
+            Ok(Some(vec![Some(parent_required)]))
+        } else {
+            Ok(None)
+        }
     } else if plan.fetch().is_some()
         && plan.supports_limit_pushdown()
         && plan
@@ -566,8 +582,10 @@ fn pushdown_requirement_to_children(
             } else {
                 parent_required.clone()
             };
+
+        // Pushing a sort below an unordered fetch changes which rows it keeps.
         let Some(ordering) = plan.properties().output_ordering() else {
-            return Ok(Some(vec![Some(child_required)]));
+            return Ok(None);
         };
         if plan.properties().eq_properties.requirements_compatible(
             parent_required.first().clone(),
