@@ -1018,6 +1018,27 @@ query I
 SELECT x FROM nmnull_o WHERE CAST(NULL AS INT) NOT IN (SELECT id FROM nmnull_i) OR x = 99;
 ----
 
+# The NULL constant is the key of a null-aware mark join.
+query TT
+EXPLAIN SELECT x FROM nmnull_o WHERE CAST(NULL AS INT) NOT IN (SELECT id FROM nmnull_i) OR x = 99;
+----
+logical_plan
+01)Projection: nmnull_o.x
+02)--Filter: NOT __correlated_sq_1.mark OR nmnull_o.x = Int32(99)
+03)----Projection: nmnull_o.x, __correlated_sq_1.mark
+04)------LeftMark Join: __correlated_sq_1_value = __correlated_sq_1.id null_aware
+05)--------Projection: nmnull_o.x, Int32(NULL) AS __correlated_sq_1_value
+06)----------TableScan: nmnull_o projection=[x]
+07)--------SubqueryAlias: __correlated_sq_1
+08)----------TableScan: nmnull_i projection=[id]
+physical_plan
+01)FilterExec: NOT mark@1 OR x@0 = 99, projection=[x@0]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(__correlated_sq_1_value@1, id@0)], projection=[x@0, mark@2], null_aware
+04)------ProjectionExec: expr=[x@0 as x, NULL as __correlated_sq_1_value]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)------DataSourceExec: partitions=1, partition_sizes=[1]
+
 # Nullable expression over a `NOT NULL` column.
 query I
 SELECT x FROM nmnull_o WHERE (CASE WHEN x > 100 THEN 1 END) NOT IN (SELECT id FROM nmnull_i) OR x = 99;

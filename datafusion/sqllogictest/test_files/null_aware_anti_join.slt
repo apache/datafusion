@@ -978,6 +978,11 @@ query I
 SELECT x FROM nanull_o WHERE NULLIF(1, 1) NOT IN (SELECT id FROM nanull_i);
 ----
 
+# `x + NULL` is simplified to a NULL constant before decorrelation.
+query I
+SELECT x FROM nanull_o WHERE x + CAST(NULL AS INT) NOT IN (SELECT id FROM nanull_i);
+----
+
 query I
 SELECT x FROM nanull_o WHERE NOT (CAST(NULL AS INT) NOT IN (SELECT id FROM nanull_i));
 ----
@@ -1024,8 +1029,10 @@ query I
 SELECT x FROM nanull_o WHERE (CASE WHEN x > 100 THEN 1 END) NOT IN (SELECT id FROM nanull_i);
 ----
 
+# Not folded: the key keeps its column reference, so null-awareness comes from
+# the nullability of the whole expression.
 query I
-SELECT x FROM nanull_o WHERE x + CAST(NULL AS INT) NOT IN (SELECT id FROM nanull_i);
+SELECT x FROM nanull_o WHERE x + (CASE WHEN x > 100 THEN 1 END) NOT IN (SELECT id FROM nanull_i);
 ----
 
 # Control: the same expression over a nullable column.
@@ -1040,7 +1047,8 @@ SELECT x FROM nanull_o WHERE (CASE WHEN x > 100 THEN 1 END) NOT IN (SELECT id FR
 1
 2
 
-# Control: a nullable expression on the subquery side.
+# Nullable expression on the subquery side: every inner value is NULL, so no
+# rows.
 query I
 SELECT x FROM nanull_o WHERE x NOT IN (SELECT CASE WHEN id > 100 THEN id END FROM nanull_i);
 ----
