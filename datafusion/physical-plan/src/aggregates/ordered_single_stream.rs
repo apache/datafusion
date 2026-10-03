@@ -61,7 +61,12 @@ use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream};
 /// After each input batch, check whether any groups can be emitted eagerly to
 /// improve memory efficiency. For example, if the last group key seen is
 /// `k = 100`, it is safe to emit all groups with keys less than 100 because the
-/// input is ordered.
+/// input is ordered. Materialize that entire completed prefix once, then emit
+/// slices of it before reading more input. See
+/// [`OrderedPartialAggregateStream::into_stream`] for why this avoids
+/// repeatedly removing small batches of groups from the table.
+///
+/// [`OrderedPartialAggregateStream::into_stream`]: super::ordered_partial_stream::OrderedPartialAggregateStream::into_stream
 ///
 /// # Memory Pressure and Spilling
 ///
@@ -98,6 +103,7 @@ pub(crate) struct OrderedSingleAggregateStream {
     input: SendableRecordBatchStream,
     reservation: MemoryReservation,
     baseline_metrics: BaselineMetrics,
+    batch_size: usize,
     state: Option<OrderedSingleAggregateState>,
 }
 
@@ -114,8 +120,13 @@ enum OrderedSingleAggregateState {
         table: OrderedAggregateTable<SingleMarker>,
         spill_context: Box<AggregateSpill>,
     },
-    ProducingOutput {
-        table: OrderedAggregateTable<SingleMarker>,
+    /// Emits one materialized batch in `batch_size` slices, then continues
+    /// with `next_state` (`ReadingInput`, or `Done` after input is exhausted).
+    Outputting {
+        batch: RecordBatch,
+        /// Reserved memory of `batch`, released when handing off the last slice.
+        batch_memory: usize,
+        next_state: Box<OrderedSingleAggregateState>,
     },
     PreparingMergeInput {
         table: OrderedAggregateTable<SingleMarker>,
@@ -167,7 +178,6 @@ impl OrderedSingleAggregateStream {
             partition,
             Arc::clone(&schema),
             Arc::clone(&state_schema),
-            batch_size,
         )?;
 
         let can_spill =
@@ -201,6 +211,7 @@ impl OrderedSingleAggregateStream {
             input,
             reservation,
             baseline_metrics,
+            batch_size,
             state: Some(OrderedSingleAggregateState::ReadingInput {
                 table,
                 spill_context,
@@ -238,8 +249,38 @@ impl OrderedSingleAggregateStream {
         }
     }
 
-    /// Consumes one ordered raw input batch, then immediately emits
-    /// finalized groups if the ordering proves any group is ready.
+    /// Reserves `batch` on top of `table_memory` and moves to `Outputting`,
+    /// which emits it in `batch_size` slices before continuing with
+    /// `next_state`. If the batch cannot be reserved, hands it off whole.
+    fn start_outputting(
+        &mut self,
+        batch: RecordBatch,
+        table_memory: usize,
+        next_state: OrderedSingleAggregateState,
+    ) -> OrderedSingleAggregateStateTransition {
+        let batch_memory = batch.get_array_memory_size();
+        match self.reservation.try_resize(table_memory + batch_memory) {
+            Ok(()) => ControlFlow::Continue(OrderedSingleAggregateState::Outputting {
+                batch,
+                batch_memory,
+                next_state: Box::new(next_state),
+            }),
+            Err(DataFusionError::ResourcesExhausted(_)) => {
+                // Only the retained table needs to remain reserved.
+                if let Err(e) = self.reservation.try_resize(table_memory) {
+                    return Self::break_with_err(e);
+                }
+                ControlFlow::Break((
+                    Poll::Ready(Some(Ok(batch.record_output(&self.baseline_metrics)))),
+                    next_state,
+                ))
+            }
+            Err(e) => Self::break_with_err(e),
+        }
+    }
+
+    /// Consumes one ordered raw input batch, then materializes all finalized
+    /// groups if the ordering proves any group is ready.
     ///
     /// See comments at `poll_next()` for details.
     ///
@@ -320,35 +361,27 @@ impl OrderedSingleAggregateStream {
                     Ok(None)
                 } else {
                     let timer = elapsed_compute.timer();
-                    let result = table.next_output_batch();
+                    let result = table.take_completed_result_batch();
                     timer.done();
                     result
                 };
 
                 match result {
-                    // Some finalized groups can be emitted. Yield them, then
-                    // continue aggregating input in the current state.
+                    // Some finalized groups can be emitted. Yield them in
+                    // slices, then continue aggregating input.
                     Ok(Some(batch)) => {
-                        if let Err(e) =
-                            self.reservation
-                                .try_resize(Self::reservation_size_for_table(
-                                    &table,
-                                    spill_context.as_deref(),
-                                ))
-                        {
-                            return Self::break_with_err(e);
-                        }
-                        let next_state = OrderedSingleAggregateState::ReadingInput {
-                            table,
-                            spill_context,
-                        };
-
-                        ControlFlow::Break((
-                            Poll::Ready(Some(Ok(
-                                batch.record_output(&self.baseline_metrics)
-                            ))),
-                            next_state,
-                        ))
+                        let table_memory = Self::reservation_size_for_table(
+                            &table,
+                            spill_context.as_deref(),
+                        );
+                        self.start_outputting(
+                            batch,
+                            table_memory,
+                            OrderedSingleAggregateState::ReadingInput {
+                                table,
+                                spill_context,
+                            },
+                        )
                     }
                     // Can't do early emit, continue aggregating.
                     Ok(None) => {
@@ -374,9 +407,23 @@ impl OrderedSingleAggregateStream {
                     }
                     _ => {
                         table.input_done();
-                        ControlFlow::Continue(
-                            OrderedSingleAggregateState::ProducingOutput { table },
-                        )
+                        let elapsed_compute =
+                            self.baseline_metrics.elapsed_compute().clone();
+                        let timer = elapsed_compute.timer();
+                        let result = table.take_completed_result_batch();
+                        drop(table);
+                        timer.done();
+                        match result {
+                            Ok(Some(batch)) => self.start_outputting(
+                                batch,
+                                0,
+                                OrderedSingleAggregateState::Done,
+                            ),
+                            Ok(None) => {
+                                ControlFlow::Continue(OrderedSingleAggregateState::Done)
+                            }
+                            Err(e) => Self::break_with_err(e),
+                        }
                     }
                 }
             }
@@ -520,61 +567,47 @@ impl OrderedSingleAggregateStream {
         }
     }
 
-    /// Emits one batch after input is exhausted.
-    ///
-    /// `table.input_done()` has already made every remaining group safe to emit,
-    /// so this state keeps draining until the table is empty.
+    /// Emits the next `batch_size` slice of a materialized batch.
     ///
     /// See comments at `poll_next()` for details.
     ///
     /// Returns the next operator state with control flow decision.
-    fn handle_producing_output(
+    fn handle_outputting(
         &mut self,
         original_state: OrderedSingleAggregateState,
     ) -> OrderedSingleAggregateStateTransition {
-        let OrderedSingleAggregateState::ProducingOutput { table } = original_state
+        let OrderedSingleAggregateState::Outputting {
+            batch,
+            batch_memory,
+            next_state,
+        } = original_state
         else {
             return Self::break_with_internal_err(
-                "Ordered single aggregate stream expected ProducingOutput state",
+                "Ordered single aggregate stream expected Outputting state",
             );
         };
 
-        let mut table = table;
-        let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
-        let timer = elapsed_compute.timer();
-        let result = table.next_output_batch();
-        timer.done();
-
-        match result {
-            Ok(Some(batch)) => {
-                let next_state = if table.is_empty() {
-                    drop(table);
-                    if let Err(e) = self.reservation.try_resize(0) {
-                        return Self::break_with_err(e);
-                    }
-                    OrderedSingleAggregateState::Done
-                } else {
-                    if let Err(e) = self.reservation.try_resize(table.memory_size()) {
-                        return Self::break_with_err(e);
-                    }
-                    OrderedSingleAggregateState::ProducingOutput { table }
-                };
-
-                ControlFlow::Break((
-                    Poll::Ready(Some(Ok(batch.record_output(&self.baseline_metrics)))),
+        if batch.num_rows() > self.batch_size {
+            let output = batch.slice(0, self.batch_size);
+            let batch = batch.slice(self.batch_size, batch.num_rows() - self.batch_size);
+            return ControlFlow::Break((
+                Poll::Ready(Some(Ok(output.record_output(&self.baseline_metrics)))),
+                OrderedSingleAggregateState::Outputting {
+                    batch,
+                    batch_memory,
                     next_state,
-                ))
-            }
-            Err(e) => Self::break_with_err(e),
-            Ok(None) => {
-                drop(table);
-                let next_state = OrderedSingleAggregateState::Done;
-                if let Err(e) = self.reservation.try_resize(0) {
-                    return Self::break_with_err(e);
-                }
-                ControlFlow::Continue(next_state)
-            }
+                },
+            ));
         }
+
+        // The final slice transfers ownership of the buffers to the consumer.
+        if let Err(e) = self.reservation.try_shrink(batch_memory) {
+            return Self::break_with_err(e);
+        }
+        ControlFlow::Break((
+            Poll::Ready(Some(Ok(batch.record_output(&self.baseline_metrics)))),
+            *next_state,
+        ))
     }
 }
 
@@ -595,14 +628,18 @@ impl Stream for OrderedSingleAggregateStream {
     ///
     /// ReadingInput
     ///   -> ReadingInput
-    ///      Aggregate one input batch. If it fits in memory, optionally yield
-    ///      groups proven complete by the input ordering, then read the next batch.
+    ///      Aggregate one input batch. If it fits in memory and no groups are
+    ///      complete, read the next batch.
     ///   -> Spilling
     ///      The table cannot reserve enough memory. Move all current states into
     ///      one fully group-key-sorted spill run.
-    ///   -> ProducingOutput
-    ///      Input was exhausted without spilling. Mark every remaining group as
-    ///      complete and produce its final result.
+    ///   -> Outputting
+    ///      Either the input ordering proves some groups complete, or input was
+    ///      exhausted without spilling and every remaining group is complete.
+    ///      Materialize all of them once into one batch. If the batch cannot be
+    ///      reserved, yield it whole and go to the state after `Outputting`.
+    ///   -> Done
+    ///      Input was exhausted without spilling and no groups remain.
     ///   -> PreparingMergeInput
     ///      Input was exhausted after spilling. Spill the last in-memory run and
     ///      construct the ordered input used to merge all spill files.
@@ -624,12 +661,15 @@ impl Stream for OrderedSingleAggregateStream {
     ///   -> Done
     ///      The merged spill input was fully aggregated.
     ///
-    /// ProducingOutput
-    ///   -> ProducingOutput
-    ///      One remaining final aggregate batch was yielded; repeat to continue
-    ///      draining the table.
+    /// Outputting
+    ///   Yield one `batch_size` slice of the materialized batch, keeping the
+    ///   batch reserved until its last slice is handed off.
+    ///   -> Outputting
+    ///      More slices remain.
+    ///   -> ReadingInput
+    ///      The batch was fully emitted; resume aggregating input.
     ///   -> Done
-    ///      All remaining groups were emitted.
+    ///      The batch was fully emitted after input was exhausted.
     ///
     /// Any active state
     ///   -> Error
@@ -664,8 +704,8 @@ impl Stream for OrderedSingleAggregateStream {
                 state @ OrderedSingleAggregateState::MergingSpills { .. } => {
                     self.handle_merging_spills(cx, state)
                 }
-                state @ OrderedSingleAggregateState::ProducingOutput { .. } => {
-                    self.handle_producing_output(state)
+                state @ OrderedSingleAggregateState::Outputting { .. } => {
+                    self.handle_outputting(state)
                 }
                 state @ OrderedSingleAggregateState::Error => {
                     self.close_input();
@@ -709,5 +749,197 @@ impl Stream for OrderedSingleAggregateStream {
 impl RecordBatchStream for OrderedSingleAggregateStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ExecutionPlan;
+    use crate::aggregates::PhysicalGroupBy;
+    use crate::stream::RecordBatchStreamAdapter;
+    use crate::test::TestMemoryExec;
+    use arrow::array::{AsArray, Int64Array};
+    use arrow::datatypes::{DataType, Field, Int64Type, Schema};
+    use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::memory_pool::{
+        GreedyMemoryPool, MemoryPool, PeakRecordingPool,
+    };
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    use datafusion_functions_aggregate::sum::sum_udaf;
+    use datafusion_physical_expr::PhysicalSortExpr;
+    use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+    use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr_common::sort_expr::LexOrdering;
+    use futures::channel::mpsc;
+    use futures::{FutureExt, TryStreamExt};
+    use std::collections::BTreeMap;
+
+    const BATCH_SIZE: usize = 4;
+    /// Groups completed at once by each `a` boundary, many more than `BATCH_SIZE`.
+    const GROUPS_PER_KEY: i64 = 10 * BATCH_SIZE as i64 + 3;
+
+    type InputSender = mpsc::UnboundedSender<Result<RecordBatch>>;
+
+    fn schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+            Field::new("v", DataType::Int64, false),
+        ]))
+    }
+
+    /// `SELECT a, b, SUM(v) GROUP BY a, b` over input ordered by `a`, with the
+    /// input fed through the returned channel.
+    fn new_stream(
+        pool: Arc<dyn MemoryPool>,
+    ) -> Result<(InputSender, OrderedSingleAggregateStream, AggregateExec)> {
+        let schema = schema();
+        let input = TestMemoryExec::try_new(&[vec![]], Arc::clone(&schema), None)?
+            .try_with_sort_information(vec![
+                LexOrdering::new([PhysicalSortExpr::new_default(col("a", &schema)?)])
+                    .unwrap(),
+            ])?;
+        let aggregate = AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::new_single(vec![
+                (col("a", &schema)?, "a".into()),
+                (col("b", &schema)?, "b".into()),
+            ]),
+            vec![Arc::new(
+                AggregateExprBuilder::new(sum_udaf(), vec![col("v", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("sum")
+                    .build()?,
+            )],
+            vec![None],
+            Arc::new(TestMemoryExec::update_cache(&Arc::new(input))),
+            Arc::clone(&schema),
+        )?;
+        assert_eq!(
+            aggregate.input_order_mode(),
+            &InputOrderMode::PartiallySorted(vec![0])
+        );
+        let context = Arc::new(
+            TaskContext::default()
+                .with_session_config(
+                    SessionConfig::new().with_batch_size(BATCH_SIZE).set_bool(
+                        "datafusion.execution.enable_migration_aggregate",
+                        true,
+                    ),
+                )
+                .with_runtime(
+                    RuntimeEnvBuilder::new()
+                        .with_memory_pool(pool)
+                        .build_arc()?,
+                ),
+        );
+        let mut stream = OrderedSingleAggregateStream::new(&aggregate, &context, 0)?;
+        let (sender, receiver) = mpsc::unbounded();
+        stream.input = Box::pin(RecordBatchStreamAdapter::new(schema, receiver));
+        Ok((sender, stream, aggregate))
+    }
+
+    /// Rows `(a, b, v = b)` for every `b` in `0..GROUPS_PER_KEY`.
+    fn input_batch(a: i64) -> RecordBatch {
+        let num_rows = GROUPS_PER_KEY as usize;
+        RecordBatch::try_new(
+            schema(),
+            vec![
+                Arc::new(Int64Array::from(vec![a; num_rows])),
+                Arc::new(Int64Array::from_iter_values(0..GROUPS_PER_KEY)),
+                Arc::new(Int64Array::from_iter_values(0..GROUPS_PER_KEY)),
+            ],
+        )
+        .unwrap()
+    }
+
+    /// Sends two input batches for each `a` in `keys`, so every group sums to
+    /// `2 * b`.
+    fn send_input(sender: &InputSender, keys: std::ops::Range<i64>) {
+        for a in keys {
+            for _ in 0..2 {
+                sender.unbounded_send(Ok(input_batch(a))).unwrap();
+            }
+        }
+    }
+
+    /// Checks that every group of `keys` is emitted exactly once with the
+    /// expected sum.
+    fn assert_output(output: &[RecordBatch], keys: std::ops::Range<i64>) {
+        let mut actual = BTreeMap::new();
+        for batch in output {
+            let [a, b, sum] =
+                [0, 1, 2].map(|i| batch.column(i).as_primitive::<Int64Type>());
+            for row in 0..batch.num_rows() {
+                let previous =
+                    actual.insert((a.value(row), b.value(row)), sum.value(row));
+                assert!(previous.is_none(), "duplicate group");
+            }
+        }
+        let expected = keys
+            .flat_map(|a| (0..GROUPS_PER_KEY).map(move |b| ((a, b), 2 * b)))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(actual, expected);
+    }
+
+    /// One ordered key boundary completes many more groups than `batch_size`.
+    /// They are materialized once and emitted in `batch_size` slices before
+    /// more input is read.
+    #[tokio::test]
+    async fn completed_groups_are_emitted_in_batch_size_slices() -> Result<()> {
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(usize::MAX));
+        let (sender, mut stream, _) = new_stream(Arc::clone(&pool))?;
+
+        // No group is complete until a larger `a` arrives.
+        send_input(&sender, 0..1);
+        assert!(stream.next().now_or_never().is_none());
+
+        // `a = 1` completes every `a = 0` group. All of them are emitted
+        // without reading more input.
+        send_input(&sender, 1..2);
+        let mut output = vec![];
+        while let Some(batch) = stream.next().now_or_never() {
+            output.push(batch.expect("stream ended before input was exhausted")?);
+        }
+        assert_output(&output, 0..1);
+
+        // End of input completes the `a = 1` groups.
+        sender.close_channel();
+        output.extend(stream.by_ref().try_collect::<Vec<_>>().await?);
+        assert_output(&output, 0..2);
+        assert!(output.iter().all(|batch| batch.num_rows() <= BATCH_SIZE));
+        assert_eq!(pool.reserved(), 0);
+        Ok(())
+    }
+
+    /// If completed groups cannot be reserved while they are sliced, they are
+    /// handed off as one batch instead of failing the query.
+    #[tokio::test]
+    async fn completed_groups_are_handed_off_whole_under_memory_pressure() -> Result<()> {
+        let run = |pool: Arc<dyn MemoryPool>| async move {
+            let (sender, stream, aggregate) = new_stream(Arc::clone(&pool))?;
+            send_input(&sender, 0..3);
+            sender.close_channel();
+            let output = stream.try_collect::<Vec<_>>().await?;
+            assert_output(&output, 0..3);
+            assert_eq!(aggregate.metrics().unwrap().spill_count(), Some(0));
+            assert_eq!(pool.reserved(), 0);
+            Ok::<_, DataFusionError>(output)
+        };
+
+        // Without a limit, the peak reservation holds the table plus one
+        // batch of completed groups.
+        let pool = Arc::new(PeakRecordingPool::new(Arc::new(GreedyMemoryPool::new(
+            usize::MAX,
+        ))));
+        let output = run(Arc::clone(&pool) as _).await?;
+        assert!(output.iter().all(|batch| batch.num_rows() <= BATCH_SIZE));
+
+        // One byte less fits the table but not that batch.
+        let limit = pool.peak_reserved() - 1;
+        let output = run(Arc::new(GreedyMemoryPool::new(limit))).await?;
+        assert!(output.iter().any(|batch| batch.num_rows() > BATCH_SIZE));
+        Ok(())
     }
 }

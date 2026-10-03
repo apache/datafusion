@@ -161,7 +161,6 @@ impl OrderedPartialAggregateStream {
             agg,
             partition,
             Arc::clone(&schema),
-            batch_size,
         )?;
         let reservation =
             MemoryConsumer::new(format!("OrderedPartialAggregateStream[{partition}]"))
