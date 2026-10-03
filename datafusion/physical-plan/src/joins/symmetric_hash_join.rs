@@ -268,7 +268,7 @@ impl SymmetricHashJoinExec {
         join_on: JoinOnRef,
     ) -> Result<PlanProperties> {
         // Calculate equivalence properties:
-        let eq_properties = join_equivalence_properties(
+        let mut eq_properties = join_equivalence_properties(
             left.equivalence_properties().clone(),
             right.equivalence_properties().clone(),
             &join_type,
@@ -279,8 +279,13 @@ impl SymmetricHashJoinExec {
             join_on,
         )?;
 
-        let output_partitioning =
-            symmetric_join_output_partitioning(left, right, &join_type)?;
+        let output_partitioning = symmetric_join_output_partitioning(
+            left,
+            right,
+            &join_type,
+            join_on,
+            &mut eq_properties,
+        )?;
 
         Ok(PlanProperties::new(
             eq_properties,
