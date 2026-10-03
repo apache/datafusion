@@ -99,7 +99,6 @@ python3 dev/update_datafusion_versions.py NEW_VERSION
 
 This updates the DataFusion version across all files, including documentation. The only extra step required is to update the `Cargo.lock` file, using the following command:
 
-
 ```shell
 cargo check -p datafusion
 ```
