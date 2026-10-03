@@ -35,8 +35,9 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
 use crate::function::error_utils::{
@@ -122,6 +123,46 @@ impl ScalarUDFImpl for SparkConcatWs {
         }
 
         spark_concat_ws(&args.args, args.number_rows)
+    }
+
+    fn simplify(
+        &self,
+        args: Vec<Expr>,
+        _info: &SimplifyContext,
+    ) -> Result<ExprSimplifyResult> {
+        // Rule 1 — literal NULL separator → NULL (must run before pruning;
+        // `concat_ws(NULL)` and `concat_ws(NULL, …)` are both NULL in Spark
+        // regardless of how many value args follow).
+        if let Some(Expr::Literal(scalar, _)) = args.first()
+            && scalar.is_null()
+        {
+            return Ok(ExprSimplifyResult::Simplified(Expr::Literal(
+                ScalarValue::Utf8(None),
+                None,
+            )));
+        }
+
+        // Rule 2 — Spark ignores NULL value args, so any literal NULL after
+        // the separator can be dropped at plan time. The separator itself
+        // (index 0) is preserved.
+        let pruned: Vec<Expr> = args
+            .into_iter()
+            .enumerate()
+            .filter(|(i, e)| *i == 0 || !matches!(e, Expr::Literal(s, _) if s.is_null()))
+            .map(|(_, e)| e)
+            .collect();
+
+        // Rule 3 — only the separator (a literal, non-null) survives →
+        // empty string. Catches both `concat_ws(sep_lit)` directly and
+        // `concat_ws(sep_lit, NULL, NULL, …)` after Rule 2.
+        if matches!(pruned.as_slice(), [Expr::Literal(_, _)]) {
+            return Ok(ExprSimplifyResult::Simplified(Expr::Literal(
+                ScalarValue::Utf8(Some(String::new())),
+                None,
+            )));
+        }
+
+        Ok(ExprSimplifyResult::Original(pruned))
     }
 }
 
