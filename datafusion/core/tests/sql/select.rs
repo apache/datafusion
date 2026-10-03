@@ -459,6 +459,26 @@ async fn test_limit_offset_parameters() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_optimized_limit_offset_parameters_keep_type() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    for sql in [
+        "SELECT 20 AS value LIMIT $1",
+        "SELECT 20 AS value OFFSET $1",
+    ] {
+        let df = ctx.sql(sql).await?;
+        let optimized = ctx.state().optimize(df.logical_plan())?;
+        assert_eq!(
+            optimized.get_parameter_types()?,
+            HashMap::from([("$1".to_string(), Some(DataType::Int64))]),
+            "{sql}"
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_limit_offset_parameters_named() -> Result<()> {
     let ctx = SessionContext::new();
     let df = ctx
