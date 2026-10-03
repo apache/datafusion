@@ -115,6 +115,46 @@ physical_plan
 02)--AggregateExec: mode=Single, gby=[], aggr=[sum(sum_simplify_t.column1), count(sum_simplify_t.column1)]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
+statement ok
+CREATE TABLE sum_simplify_decimal_interval_t AS
+SELECT
+    CAST(v AS DECIMAL(10,2)) AS d,
+    CAST(v || ' days' AS INTERVAL) AS iv
+FROM generate_series(1, 12) AS g(v);
+
+query ??
+SELECT
+    SUM(iv + INTERVAL '1 day') AS a,
+    SUM(iv + INTERVAL '2 days') AS b
+FROM sum_simplify_decimal_interval_t;
+----
+90 days 102 days
+
+statement ok
+SET datafusion.sql_parser.parse_float_as_decimal = true;
+
+query RR
+SELECT
+    SUM(d + 1.5) AS a,
+    SUM(d + 2.5) AS b
+FROM sum_simplify_decimal_interval_t;
+----
+96.00 108.00
+
+query RTRT
+SELECT
+    SUM(d + 1.00001) AS a,
+    arrow_typeof(SUM(d + 1.00001)) AS a_type,
+    SUM(d + 2.00001) AS b,
+    arrow_typeof(SUM(d + 2.00001)) AS b_type
+FROM sum_simplify_decimal_interval_t
+WHERE d <= 5;
+----
+20.00005 Decimal128(24, 5) 25.00005 Decimal128(24, 5)
+
+statement ok
+SET datafusion.sql_parser.parse_float_as_decimal = false;
+
 # Reordered expressions that still compute the same thing
 query II
 SELECT SUM(1 + column1), SUM(column1 + 2) FROM sum_simplify_t;
