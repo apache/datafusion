@@ -26,7 +26,6 @@ use crate::variation_const::{
 use datafusion::arrow::array::{Array, GenericListArray, OffsetSizeTrait};
 use datafusion::arrow::temporal_conversions::NANOSECONDS;
 use datafusion::common::{ScalarValue, exec_err, not_impl_err};
-use substrait::proto::expression::literal::interval_day_to_second::PrecisionMode;
 use substrait::proto::expression::literal::map::KeyValue;
 use substrait::proto::expression::literal::{
     Decimal, IntervalCompound, IntervalDayToSecond, IntervalYearToMonth, List,
@@ -217,7 +216,7 @@ pub(crate) fn to_substrait_literal(
                     days: i.days,
                     seconds: (i.nanoseconds / NANOSECONDS) as i32,
                     subseconds: i.nanoseconds % NANOSECONDS,
-                    precision_mode: Some(PrecisionMode::Precision(9)), // nanoseconds
+                    precision: 9, // nanoseconds
                 }),
             }),
             DEFAULT_TYPE_VARIATION_REF,
@@ -227,7 +226,7 @@ pub(crate) fn to_substrait_literal(
                 days: i.days,
                 seconds: i.milliseconds / 1000,
                 subseconds: (i.milliseconds % 1000) as i64,
-                precision_mode: Some(PrecisionMode::Precision(3)), // 3 for milliseconds
+                precision: 3, // 3 for milliseconds
             }),
             DEFAULT_TYPE_VARIATION_REF,
         ),

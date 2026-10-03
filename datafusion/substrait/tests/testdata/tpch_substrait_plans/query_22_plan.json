@@ -1438,16 +1438,7 @@
                 }
               },
               "groupings": [{
-                "groupingExpressions": [{
-                  "selection": {
-                    "directReference": {
-                      "structField": {
-                      }
-                    },
-                    "rootReference": {
-                    }
-                  }
-                }]
+                "expressionReferences": [0]
               }],
               "measures": [{
                 "measure": {
@@ -1485,6 +1476,16 @@
                       }
                     }
                   }]
+                }
+              }],
+              "groupingExpressions": [{
+                "selection": {
+                  "directReference": {
+                    "structField": {
+                    }
+                  },
+                  "rootReference": {
+                  }
                 }
               }]
             }

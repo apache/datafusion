@@ -873,26 +873,7 @@
                 }
               },
               "groupings": [{
-                "groupingExpressions": [{
-                  "selection": {
-                    "directReference": {
-                      "structField": {
-                      }
-                    },
-                    "rootReference": {
-                    }
-                  }
-                }, {
-                  "selection": {
-                    "directReference": {
-                      "structField": {
-                        "field": 1
-                      }
-                    },
-                    "rootReference": {
-                    }
-                  }
-                }]
+                "expressionReferences": [0, 1]
               }],
               "measures": [{
                 "measure": {
@@ -919,6 +900,26 @@
                       }
                     }
                   }]
+                }
+              }],
+              "groupingExpressions": [{
+                "selection": {
+                  "directReference": {
+                    "structField": {
+                    }
+                  },
+                  "rootReference": {
+                  }
+                }
+              }, {
+                "selection": {
+                  "directReference": {
+                    "structField": {
+                      "field": 1
+                    }
+                  },
+                  "rootReference": {
+                  }
                 }
               }]
             }

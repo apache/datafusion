@@ -20,7 +20,7 @@ use crate::logical_plan::producer::{
 };
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::{LogicalPlan, SubqueryAlias};
-use substrait::proto::{Plan, PlanRel, Rel, RelRoot, plan_rel};
+use substrait::proto::{ExecutionBehavior, Plan, PlanRel, Rel, RelRoot, plan_rel};
 use substrait::version;
 
 /// Convert DataFusion LogicalPlan to Substrait Plan
@@ -51,6 +51,9 @@ pub fn to_substrait_plan(
         expected_type_urls: vec![],
         parameter_bindings: vec![],
         type_aliases: vec![],
+        // DataFusion does not emit execution context variables, so the
+        // evaluation mode does not govern anything in the plans it produces.
+        execution_behavior: Some(ExecutionBehavior::default()),
     }))
 }
 
