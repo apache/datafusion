@@ -65,7 +65,7 @@ use datafusion_physical_plan::{
     ExecutionPlan,
     aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
     coalesce_partitions::CoalescePartitionsExec,
-    collect,
+    collect, displayable,
     execution_plan::{
         ChildrenPropertiesMode, ReplaceChildrenOptions, plan_contains_expression_id,
     },
@@ -5147,4 +5147,191 @@ fn post_phase_is_idempotent_on_hash_join() {
         get_plan_string(&twice),
         "second invocation of FilterPushdown::new_post_optimization mutated the plan",
     );
+}
+
+#[test]
+fn startup_output_requires_a_direct_dynamic_filter_path() -> datafusion_common::Result<()>
+{
+    #[expect(deprecated)]
+    use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
+    use datafusion_physical_plan::coop::CooperativeExec;
+
+    for (case, expected) in [
+        ("direct", true),
+        ("projection", true),
+        ("cooperative", true),
+        ("unsupported_source", false),
+        ("disabled", false),
+        ("plain_sort", false),
+        ("zero_fetch", false),
+        ("filter_fetch", false),
+        ("second_filter", false),
+        ("repartition", false),
+        ("repartition_below", true),
+        ("unsupported_repartition_below", false),
+        ("hash_repartition_below", false),
+        ("second_filter_below_repartition", false),
+        ("coalescer", false),
+    ] {
+        let mut scan = TestScanBuilder::new(schema())
+            .with_support(!matches!(
+                case,
+                "unsupported_source" | "unsupported_repartition_below"
+            ))
+            .build();
+        if case == "second_filter_below_repartition" {
+            scan = Arc::new(FilterExec::try_new(
+                col_lit_predicate("b", "bar", &schema()),
+                scan,
+            )?);
+        }
+        match case {
+            "repartition_below"
+            | "unsupported_repartition_below"
+            | "second_filter_below_repartition" => {
+                scan = Arc::new(RepartitionExec::try_new(
+                    scan,
+                    Partitioning::RoundRobinBatch(2),
+                )?);
+            }
+            "hash_repartition_below" => {
+                scan = Arc::new(RepartitionExec::try_new(
+                    scan,
+                    Partitioning::Hash(vec![col("c", &schema())?], 2),
+                )?);
+            }
+            _ => {}
+        }
+        let mut filter =
+            FilterExecBuilder::new(col_lit_predicate("a", "foo", &schema()), scan);
+        if case == "filter_fetch" {
+            filter = filter.with_fetch(Some(10));
+        }
+        let mut input: Arc<dyn ExecutionPlan> = Arc::new(filter.build()?);
+        match case {
+            "projection" => {
+                input = Arc::new(ProjectionExec::try_new(
+                    vec![
+                        (col("c", &schema())?, "c".to_string()),
+                        (col("a", &schema())?, "a".to_string()),
+                    ],
+                    input,
+                )?);
+            }
+            "cooperative" => input = Arc::new(CooperativeExec::new(input)),
+            "second_filter" => {
+                input = Arc::new(FilterExec::try_new(
+                    col_lit_predicate("b", "bar", &schema()),
+                    input,
+                )?)
+            }
+            "repartition" => {
+                input = Arc::new(RepartitionExec::try_new(
+                    input,
+                    Partitioning::RoundRobinBatch(2),
+                )?)
+            }
+            "coalescer" => {
+                #[expect(deprecated)]
+                let coalescer = CoalesceBatchesExec::new(input, 8192);
+                input = Arc::new(coalescer);
+            }
+            _ => {}
+        }
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new_default(col(
+            "c",
+            &input.schema(),
+        )?)])
+        .unwrap();
+        let fetch = match case {
+            "plain_sort" => None,
+            "zero_fetch" => Some(0),
+            _ => Some(10),
+        };
+        let plan: Arc<dyn ExecutionPlan> =
+            Arc::new(SortExec::new(ordering, input).with_fetch(fetch));
+        let mut config = ConfigOptions::default();
+        config.execution.parquet.pushdown_filters = true;
+        config.optimizer.enable_topk_dynamic_filter_pushdown = case != "disabled";
+        let rule = FilterPushdown::new_post_optimization();
+        let plan = rule.optimize(plan, &config)?;
+        let formatted = displayable(plan.as_ref()).indent(true).to_string();
+        assert_eq!(
+            formatted.contains("startup_rows=10"),
+            expected,
+            "{case}: {formatted}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn startup_output_for_min_max_only() -> datafusion_common::Result<()> {
+    for (case, expected) in [
+        ("min", true),
+        ("max", true),
+        ("min_repartition", true),
+        ("max_repartition", true),
+        ("count", false),
+        ("mixed", false),
+        ("disabled", false),
+        ("unsupported", false),
+        ("unsupported_repartition", false),
+    ] {
+        let mut scan = TestScanBuilder::new(schema())
+            .with_support(!matches!(case, "unsupported" | "unsupported_repartition"))
+            .build();
+        if matches!(
+            case,
+            "min_repartition" | "max_repartition" | "unsupported_repartition"
+        ) {
+            scan = Arc::new(RepartitionExec::try_new(
+                scan,
+                Partitioning::RoundRobinBatch(2),
+            )?);
+        }
+        let input: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(
+            col_lit_predicate("a", "foo", &schema()),
+            scan,
+        )?);
+        let udf = match case {
+            "max" | "max_repartition" => max_udaf(),
+            "count" => count_udaf(),
+            _ => min_udaf(),
+        };
+        let mut aggregates = vec![Arc::new(
+            AggregateExprBuilder::new(udf, vec![col("c", &schema())?])
+                .schema(schema())
+                .alias("value")
+                .build()?,
+        )];
+        if case == "mixed" {
+            aggregates.push(Arc::new(
+                AggregateExprBuilder::new(count_udaf(), vec![col("c", &schema())?])
+                    .schema(schema())
+                    .alias("count")
+                    .build()?,
+            ));
+        }
+        let filters = vec![None; aggregates.len()];
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::new_single(vec![]),
+            aggregates,
+            filters,
+            input,
+            schema(),
+        )?);
+        let mut config = ConfigOptions::default();
+        config.execution.parquet.pushdown_filters = true;
+        config.optimizer.enable_aggregate_dynamic_filter_pushdown = case != "disabled";
+        let plan = FilterPushdown::new_post_optimization().optimize(plan, &config)?;
+        let formatted = displayable(plan.as_ref()).indent(true).to_string();
+        assert_eq!(
+            formatted.contains("startup_rows=1"),
+            expected,
+            "{case}: {formatted}"
+        );
+    }
+    Ok(())
 }
