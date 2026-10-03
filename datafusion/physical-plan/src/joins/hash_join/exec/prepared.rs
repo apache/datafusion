@@ -18,9 +18,43 @@
 //! Explicit immutable build reuse for embedding executors.
 
 use super::*;
+use crate::joins::join_hash_map::lookup_allocation_size;
 use crate::spill::spill_manager::GetSlicedSize;
 use datafusion_common::exec_datafusion_err;
 use datafusion_execution::memory_pool::MemoryPool;
+
+/// Prepared builds retain a single durable reservation and admit the entire
+/// lookup table up front. Keep that contract instead of splitting off a map's
+/// private reservation or introducing an old-plus-new growth peak while the
+/// concatenation copy is also reserved.
+pub(super) fn new_prepared_join_hashmap(
+    num_rows: usize,
+    reservation: &mut MemoryReservation,
+) -> Result<Box<dyn JoinHashMapType>> {
+    let wide = num_rows > u32::MAX as usize;
+    let index_size = if wide {
+        size_of::<u64>()
+    } else {
+        size_of::<u32>()
+    };
+    let table_bytes = if wide {
+        lookup_allocation_size::<u64>(num_rows)?
+    } else {
+        lookup_allocation_size::<u32>(num_rows)?
+    };
+    let admitted = num_rows
+        .checked_mul(index_size)
+        .and_then(|bytes| bytes.checked_add(table_bytes))
+        .ok_or_else(|| exec_datafusion_err!("Prepared hash-join map size overflow"))?;
+    reservation.try_grow(admitted)?;
+    let map: Box<dyn JoinHashMapType> = if wide {
+        Box::new(JoinHashMapU64::with_capacity(num_rows))
+    } else {
+        Box::new(JoinHashMapU32::with_capacity(num_rows))
+    };
+    reservation.shrink(admitted - map.size());
+    Ok(map)
+}
 
 /// An immutable, fully prepared broadcast build, independent of any probe task.
 ///
