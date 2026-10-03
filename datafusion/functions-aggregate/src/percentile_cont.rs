@@ -934,18 +934,26 @@ where
         upper: T::Native,
         fraction: f64,
     ) -> Result<T::Native> {
-        // Linear interpolation.
-        // We compute a quantized interpolation weight using `FLOAT_INTERPOLATION_PRECISION` because:
-        // 1. Both values come from the input data, so (upper - lower) is bounded by the value range
-        // 2. fraction is between 0 and 1; quantizing it provides stable, predictable results
-        // 3. The result is guaranteed to be between lower_value and upper_value (modulo cast rounding)
-        // 4. Arithmetic is performed in f64 and cast back to avoid overflowing Float16 intermediates
+        // Quantize the fraction to provide stable, predictable results. Perform
+        // the arithmetic in f64 and cast back to avoid overflowing Float16
+        // intermediates.
         let scaled = (fraction * (INTERPOLATION_PRECISION as f64)) as usize;
         let weight = scaled as f64 / (INTERPOLATION_PRECISION as f64);
 
         let lower_f: f64 = lower.as_();
         let upper_f: f64 = upper.as_();
-        let interpolated_f = lower_f + (upper_f - lower_f) * weight;
+        let delta = upper_f - lower_f;
+        let interpolated_f =
+            if lower_f.is_finite() && upper_f.is_finite() && !delta.is_finite() {
+                // Opposite-sign finite values near the Float64 limits can have an
+                // infinite difference. Weighting each endpoint separately keeps
+                // both products bounded and avoids that intermediate overflow.
+                lower_f * (1.0 - weight) + upper_f * weight
+            } else {
+                // Use the difference-based formula for finite deltas and for
+                // all non-finite inputs to preserve existing behavior.
+                lower_f + delta * weight
+            };
         Ok(interpolated_f.as_())
     }
 }
@@ -1179,6 +1187,35 @@ mod tests {
             (result_f - 32752.0).abs() < 1.0,
             "unexpected result {result_f}"
         );
+    }
+
+    #[test]
+    fn f64_interpolation_handles_overflowing_difference() {
+        // Use both DBL_MAX (the reported case) and a power of two whose
+        // quarter-percentile results are exactly representable.
+        let power_of_two = 2.0_f64.powi(1023);
+        let cases = [
+            (-f64::MAX, f64::MAX, 0.5, 0.0),
+            (-power_of_two, power_of_two, 0.25, -power_of_two / 2.0),
+            (-power_of_two, power_of_two, 0.75, power_of_two / 2.0),
+            (-f64::MAX, f64::MAX / 2.0, 0.5, -f64::MAX / 4.0),
+            (-f64::MAX / 2.0, f64::MAX, 0.5, f64::MAX / 4.0),
+        ];
+
+        for (lower, upper, fraction, expected) in cases {
+            assert!(
+                (upper - lower).is_infinite(),
+                "test premise: the difference must overflow"
+            );
+
+            let actual =
+                <FloatInterpolator as PercentileInterpolator<Float64Type>>::interpolate(
+                    lower, upper, fraction,
+                )
+                .expect("interpolation should succeed");
+
+            assert_eq!(actual, expected);
+        }
     }
 
     #[test]
