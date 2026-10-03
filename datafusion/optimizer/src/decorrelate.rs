@@ -36,8 +36,8 @@ use datafusion_expr::utils::{
     collect_subquery_cols, conjunction, find_join_exprs, split_conjunction,
 };
 use datafusion_expr::{
-    BinaryExpr, Cast, EmptyRelation, Expr, ExprSchemable, FetchType, LogicalPlan,
-    LogicalPlanBuilder, Operator, SkipType, expr, lit,
+    Aggregate, BinaryExpr, Cast, EmptyRelation, Expr, ExprSchemable, FetchType,
+    LogicalPlan, LogicalPlanBuilder, Operator, SkipType, expr, lit,
 };
 
 /// This struct rewrite the sub query plan by pull up the correlated
@@ -91,6 +91,13 @@ pub struct PullUpCorrelatedExpr {
     /// The list is cleared when the pull up passes a node that can put a NULL
     /// back into such a column: an outer join, a union or a grouping set.
     pub correlated_filters: Vec<Expr>,
+    /// Columns read, above the subquery's `Aggregate`, by a node the rewrite
+    /// has not reached yet when it visits that `Aggregate` (the rewrite runs
+    /// bottom-up, so a `Projection` or `HAVING` above it is only visited
+    /// afterwards). Populated once, from the original subquery plan, by
+    /// [`Self::with_column_refs_above_aggregate`], since [`Self::f_up`] has no
+    /// way to compute it on its own.
+    column_refs_above_aggregate: BTreeSet<Column>,
 }
 
 impl Default for PullUpCorrelatedExpr {
@@ -113,6 +120,7 @@ impl PullUpCorrelatedExpr {
             pull_up_having_expr: None,
             pulled_up_scalar_agg: false,
             correlated_filters: Vec::new(),
+            column_refs_above_aggregate: BTreeSet::new(),
         }
     }
 
@@ -142,6 +150,36 @@ impl PullUpCorrelatedExpr {
         self.can_pull_up = false;
         Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
     }
+
+    /// Record the columns read above the subquery's `Aggregate`, computed
+    /// from `subquery_plan` (the plan as it is before this rewrite runs).
+    ///
+    /// A grouping set that omits a correlated column only needs to reject the
+    /// pull up when something reads the column the pull up would fill in, so
+    /// [`Self::f_up`] needs this computed ahead of time. See
+    /// `columns_read_above_aggregate`.
+    pub fn with_column_refs_above_aggregate(
+        mut self,
+        subquery_plan: &LogicalPlan,
+    ) -> Self {
+        self.column_refs_above_aggregate = columns_read_above_aggregate(subquery_plan);
+        self
+    }
+}
+
+/// The outcome of trying to fold the pull up's columns into a grouping set
+/// `Aggregate`. See [`PullUpCorrelatedExpr::grouping_sets_pull_up_outcome`].
+#[derive(Debug, PartialEq, Eq)]
+enum GroupingSetsPullUp {
+    /// Every set already groups by the columns; the aggregate's `group_expr`
+    /// stays as it is.
+    NoColumnsToAdd,
+    /// Some set leaves a required column out, but extending every set with it
+    /// changes nothing the rest of the query can observe.
+    SafeToExtend,
+    /// Some set leaves a required column out, and extending every set with it
+    /// would change what the query returns.
+    Unsafe,
 }
 
 /// Used to indicate the unmatched rows from the inner(subquery) table after the left out Join
@@ -363,42 +401,54 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     &mut local_correlated_cols,
                 );
 
-                // A grouping set cannot take the columns the pull up adds.
-                // `LogicalPlanBuilder::aggregate` cross joins a plain group
-                // expression with the sets that are already there, so `ROLLUP(i.k)`,
-                // which is `GROUPING SETS ((i.k), ())`, becomes
-                // `GROUPING SETS ((i.k), (i.k, i.k))`. The empty set is gone, and
-                // with it the grand total row the subquery returns for every outer
-                // row, including the rows whose correlated filter matches nothing.
-                // The join that replaces the filter cannot bring those rows back,
-                // so the subquery stays correlated unless every set already groups
-                // by each column the pull up would add.
+                // A grouping set that omits a column the pull up adds either
+                // keeps its sets as they are (every set already groups by the
+                // column), or gains the column in every set, `ROLLUP(i.k)`
+                // (`GROUPING SETS ((i.k), ())`) becoming
+                // `GROUPING SETS ((i.k), (i.k, i.k))`. The latter loses the
+                // empty set, and with it the grand total row the subquery
+                // returns for every outer row, including the rows whose
+                // correlated filter matches nothing, so it is only safe when
+                // no set is empty and nothing reads the column the fill
+                // changes from `NULL` to the correlated value.
                 let mut missing_exprs = if aggregate
                     .group_expr
                     .iter()
                     .any(|expr| matches!(expr, Expr::GroupingSet(_)))
                 {
-                    if self.grouping_sets_cover_pull_up_cols(
-                        &aggregate.group_expr,
-                        &local_correlated_cols,
-                    ) {
-                        // Every set already groups by them, so the sets stay as
-                        // they are. Adding the columns again would repeat them
-                        // inside every set.
-                        aggregate.group_expr.to_vec()
-                    } else {
-                        self.can_pull_up = false;
-                        // The rewrite still runs, the same way the
-                        // `can_pull_over_aggregation` case above does. The callers
-                        // read `can_pull_up` only after the whole rewrite has
-                        // finished, and the nodes above this one still expect the
-                        // pulled up columns in its output, so leaving them out here
-                        // would fail the rewrite with a schema error instead. They
-                        // drop this plan and keep the correlated subquery.
-                        self.collect_missing_exprs(
-                            &aggregate.group_expr,
-                            &local_correlated_cols,
-                        )?
+                    match self
+                        .grouping_sets_pull_up_outcome(aggregate, &local_correlated_cols)
+                    {
+                        GroupingSetsPullUp::NoColumnsToAdd => {
+                            // Every set already groups by them, so the sets stay as
+                            // they are. Adding the columns again would repeat them
+                            // inside every set.
+                            aggregate.group_expr.to_vec()
+                        }
+                        GroupingSetsPullUp::SafeToExtend => {
+                            // No set is empty and nothing reads the columns the
+                            // fill changes from `NULL` to the correlated value,
+                            // so extending every set is invisible to the rest of
+                            // the query.
+                            self.collect_missing_exprs(
+                                &aggregate.group_expr,
+                                &local_correlated_cols,
+                            )?
+                        }
+                        GroupingSetsPullUp::Unsafe => {
+                            self.can_pull_up = false;
+                            // The rewrite still runs, the same way the
+                            // `can_pull_over_aggregation` case above does. The callers
+                            // read `can_pull_up` only after the whole rewrite has
+                            // finished, and the nodes above this one still expect the
+                            // pulled up columns in its output, so leaving them out here
+                            // would fail the rewrite with a schema error instead. They
+                            // drop this plan and keep the correlated subquery.
+                            self.collect_missing_exprs(
+                                &aggregate.group_expr,
+                                &local_correlated_cols,
+                            )?
+                        }
                     }
                 } else {
                     // add missing columns to Aggregation's group expressions
@@ -492,26 +542,41 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
 }
 
 impl PullUpCorrelatedExpr {
-    /// Whether the pull up can add its columns to `group_expr` without changing
-    /// what the aggregate returns.
+    /// Whether the pull up can add its columns to a grouping set `Aggregate`,
+    /// and whether it needs to.
     ///
-    /// `true` when `group_expr` holds no grouping set, and when every set of every
-    /// grouping set it holds already groups by each column
-    /// [`Self::collect_missing_exprs`] would add. In the second case the pull up
-    /// adds nothing and the aggregate keeps the sets it has.
+    /// [`GroupingSetsPullUp::NoColumnsToAdd`] when every set of every grouping
+    /// set already groups by each column [`Self::collect_missing_exprs`]
+    /// would add: the pull up adds nothing and the aggregate keeps the sets
+    /// it has.
     ///
-    /// `ROLLUP` and `CUBE` always contain the empty set, which yields a row for
-    /// outer rows the correlated filter matches nothing for, so they are only safe
-    /// when there is nothing to add.
+    /// Otherwise some set leaves a required column out, which fills that
+    /// column with `NULL` in the set's rows. Adding the column to every set
+    /// (`LogicalPlanBuilder::aggregate` cross joins a plain group expression
+    /// with the sets that are already there) gives it a value instead. This
+    /// is only invisible to the rest of the query when:
+    ///  - no set is empty. `ROLLUP(i.k)`, `GROUPING SETS ((i.k), ())`, always
+    ///    holds one, and turns into `GROUPING SETS ((i.k), (i.k, i.k))`,
+    ///    losing the empty set and the grand total row it yields for every
+    ///    outer row, including the rows the correlated filter matches
+    ///    nothing for. The join that replaces the filter cannot bring that
+    ///    row back.
+    ///  - the aggregate does not compute `GROUPING`/`GROUPING_ID`, which
+    ///    reads whether a row's set groups by a column.
+    ///  - nothing above the aggregate reads the column, which
+    ///    `column_refs_above_aggregate` was populated with ahead of time (this
+    ///    rewrite runs bottom-up, so a `HAVING` or `Projection` above the
+    ///    aggregate is only visited after it).
     ///
-    /// A non-empty set that leaves a column out fills it with NULL. Adding the
-    /// column would give it a value instead, which a `HAVING` or a projection
-    /// above the aggregate can read, so such a set is rejected as well.
-    fn grouping_sets_cover_pull_up_cols(
+    /// When one of these fails, [`GroupingSetsPullUp::Unsafe`] is returned:
+    /// the columns are still added, so the schema the nodes above expect
+    /// stays correct, but the caller must give up on decorrelating.
+    fn grouping_sets_pull_up_outcome(
         &self,
-        group_expr: &[Expr],
+        aggregate: &Aggregate,
         correlated_subquery_cols: &BTreeSet<Column>,
-    ) -> bool {
+    ) -> GroupingSetsPullUp {
+        let group_expr = &aggregate.group_expr;
         let grouping_sets = group_expr
             .iter()
             .filter_map(|expr| match expr {
@@ -520,7 +585,7 @@ impl PullUpCorrelatedExpr {
             })
             .collect::<Vec<_>>();
         if grouping_sets.is_empty() {
-            return true;
+            return GroupingSetsPullUp::NoColumnsToAdd;
         }
 
         // The same columns `collect_missing_exprs` appends: the correlated columns
@@ -536,18 +601,37 @@ impl PullUpCorrelatedExpr {
                 .any(|expr| matches!(expr, Expr::Column(c) if c == *col))
         });
         if required_cols.is_empty() {
-            return true;
+            return GroupingSetsPullUp::NoColumnsToAdd;
         }
 
-        grouping_sets.iter().all(|grouping_set| match grouping_set {
-            GroupingSet::Rollup(_) | GroupingSet::Cube(_) => false,
-            GroupingSet::GroupingSets(sets) => sets.iter().all(|set| {
-                required_cols.iter().all(|col| {
-                    set.iter()
-                        .any(|expr| matches!(expr, Expr::Column(c) if c == *col))
-                })
-            }),
-        })
+        let already_covered =
+            grouping_sets.iter().all(|grouping_set| match grouping_set {
+                GroupingSet::Rollup(_) | GroupingSet::Cube(_) => false,
+                GroupingSet::GroupingSets(sets) => sets.iter().all(|set| {
+                    required_cols.iter().all(|col| {
+                        set.iter()
+                            .any(|expr| matches!(expr, Expr::Column(c) if c == *col))
+                    })
+                }),
+            });
+        if already_covered {
+            return GroupingSetsPullUp::NoColumnsToAdd;
+        }
+
+        let has_empty_set = grouping_sets.iter().any(|grouping_set| match grouping_set {
+            GroupingSet::Rollup(_) | GroupingSet::Cube(_) => true,
+            GroupingSet::GroupingSets(sets) => sets.iter().any(|set| set.is_empty()),
+        });
+        let reads_grouping_fn = aggregate.aggr_expr.iter().any(is_grouping_call);
+        let read_above = required_cols
+            .iter()
+            .any(|col| self.column_refs_above_aggregate.contains(*col));
+
+        if has_empty_set || reads_grouping_fn || read_above {
+            GroupingSetsPullUp::Unsafe
+        } else {
+            GroupingSetsPullUp::SafeToExtend
+        }
     }
 
     fn collect_missing_exprs(
@@ -659,6 +743,45 @@ fn can_pullup_over_aggregation(expr: &Expr) -> bool {
     } else {
         false
     }
+}
+
+/// Whether `expr` computes `GROUPING`/`GROUPING_ID`, which reads whether a
+/// row's grouping set groups by a particular column.
+fn is_grouping_call(expr: &Expr) -> bool {
+    matches!(expr, Expr::AggregateFunction(agg) if agg.func.name().eq_ignore_ascii_case("grouping"))
+}
+
+/// Columns read by a node strictly above the first `Aggregate` found in
+/// `plan`, which is the subquery's original, not yet rewritten, plan.
+///
+/// [`PullUpCorrelatedExpr::f_up`] runs bottom-up, so by the time it visits an
+/// `Aggregate` it cannot yet tell whether a `HAVING` or `Projection` above it
+/// reads one of the columns a grouping set pull up would add. This walks the
+/// plan top-down instead, before the rewrite starts, and stops at the first
+/// `Aggregate` along each branch, collecting the columns every node above it
+/// reads in its own expressions. A nested `Subquery` is a different
+/// correlation scope and is skipped, the same way
+/// [`PullUpCorrelatedExpr::f_down`] skips it.
+fn columns_read_above_aggregate(plan: &LogicalPlan) -> BTreeSet<Column> {
+    fn walk(plan: &LogicalPlan, above: &mut BTreeSet<Column>) -> bool {
+        if matches!(plan, LogicalPlan::Subquery(_)) {
+            return false;
+        }
+        if matches!(plan, LogicalPlan::Aggregate(_)) {
+            return true;
+        }
+        let found_below = plan.inputs().into_iter().any(|child| walk(child, above));
+        if found_below {
+            for expr in plan.expressions() {
+                above.extend(expr.column_refs().into_iter().cloned());
+            }
+        }
+        found_below
+    }
+
+    let mut above = BTreeSet::new();
+    walk(plan, &mut above);
+    above
 }
 
 fn collect_local_correlated_cols(
