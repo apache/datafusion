@@ -129,7 +129,6 @@ fn is_single_distinct_agg(
     let mut fields_set = HashSet::new();
     let mut aggregate_count = 0;
     let mut distinct_aggs = vec![];
-    let mut has_count_rollup = false;
     for expr in aggr_expr {
         if let Expr::AggregateFunction(AggregateFunction {
             func,
@@ -153,7 +152,7 @@ fn is_single_distinct_agg(
                 }
                 distinct_aggs.push((func, args.as_slice()));
             } else if count_rollup.is_some_and(|rollup| rollup.is_count(func)) {
-                has_count_rollup = true;
+                // count is allowed
             } else if func.name() != "sum"
                 && func.name().to_lowercase() != "min"
                 && func.name().to_lowercase() != "max"
@@ -167,14 +166,13 @@ fn is_single_distinct_agg(
     if aggregate_count != aggr_expr.len() || fields_set.len() != 1 {
         return Ok(false);
     }
-    if has_count_rollup && !rewrite_pays_for_count(&distinct_aggs, input_schema)? {
+    if !rewrite_pays(&distinct_aggs, input_schema)? {
         return Ok(false);
     }
     Ok(true)
 }
 
-/// Whether the rewrite is worth extending to a plan that only qualifies because
-/// of the non-distinct `count`.
+/// Whether the rewrite is worth extending to a plan.
 ///
 /// The rewrite is not free: every other aggregate moves down to the inner group
 /// by, which has a row per `(group, distinct value)` pair rather than per group,
@@ -189,12 +187,8 @@ fn is_single_distinct_agg(
 ///
 /// This is a proxy: what actually decides the outcome is the cost per distinct
 /// value on each side, which this rule cannot see. It is deliberately
-/// conservative in the direction that leaves a plan alone. The pre-existing
-/// tolerance of a non-distinct `sum`, `min` or `max` is not gated, since
-/// narrowing it would change plans that have always been rewritten.
-///
-/// Measured in <https://github.com/apache/datafusion/pull/24859>.
-fn rewrite_pays_for_count(
+/// conservative in the direction that leaves a plan alone.
+fn rewrite_pays(
     distinct_aggs: &[(&Arc<AggregateUDF>, &[Expr])],
     input_schema: &DFSchema,
 ) -> Result<bool> {
@@ -634,11 +628,9 @@ mod tests {
         // Should work
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        Projection: count(alias1) AS count(DISTINCT test.b) [count(DISTINCT test.b):Int64]
-          Aggregate: groupBy=[[]], aggr=[[count(alias1)]] [count(alias1):Int64]
-            Aggregate: groupBy=[[test.b AS alias1]], aggr=[[]] [alias1:UInt32]
-              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            @"
+        Aggregate: groupBy=[[]], aggr=[[count(DISTINCT test.b)]] [count(DISTINCT test.b):Int64]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -720,11 +712,9 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        Projection: count(alias1) AS count(DISTINCT Int32(2) * test.b) [count(DISTINCT Int32(2) * test.b):Int64]
-          Aggregate: groupBy=[[]], aggr=[[count(alias1)]] [count(alias1):Int64]
-            Aggregate: groupBy=[[Int32(2) * test.b AS alias1]], aggr=[[]] [alias1:Int64]
-              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            @"
+        Aggregate: groupBy=[[]], aggr=[[count(DISTINCT Int32(2) * test.b)]] [count(DISTINCT Int32(2) * test.b):Int64]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -740,11 +730,9 @@ mod tests {
         // Should work
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        Projection: test.a, count(alias1) AS count(DISTINCT test.b) [a:UInt32, count(DISTINCT test.b):Int64]
-          Aggregate: groupBy=[[test.a]], aggr=[[count(alias1)]] [a:UInt32, count(alias1):Int64]
-            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]
-              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            @"
+        Aggregate: groupBy=[[test.a]], aggr=[[count(DISTINCT test.b)]] [a:UInt32, count(DISTINCT test.b):Int64]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -784,11 +772,9 @@ mod tests {
         // Should work
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        Projection: test.a, count(alias1) AS count(DISTINCT test.b), max(alias1) AS max(DISTINCT test.b) [a:UInt32, count(DISTINCT test.b):Int64, max(DISTINCT test.b):UInt32;N]
-          Aggregate: groupBy=[[test.a]], aggr=[[count(alias1), max(alias1)]] [a:UInt32, count(alias1):Int64, max(alias1):UInt32;N]
-            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]
-              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            @"
+        Aggregate: groupBy=[[test.a]], aggr=[[count(DISTINCT test.b), max(DISTINCT test.b)]] [a:UInt32, count(DISTINCT test.b):Int64, max(DISTINCT test.b):UInt32;N]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -856,11 +842,9 @@ mod tests {
         // exactly as before
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        Projection: test.a, count(alias1) AS count(DISTINCT test.b), sum(alias2) AS sum(test.c) [a:UInt32, count(DISTINCT test.b):Int64, sum(test.c):UInt64;N]
-          Aggregate: groupBy=[[test.a]], aggr=[[count(alias1), sum(alias2)]] [a:UInt32, count(alias1):Int64, sum(alias2):UInt64;N]
-            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[sum(test.c) AS alias2]] [a:UInt32, alias1:UInt32, alias2:UInt64;N]
-              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            @"
+        Aggregate: groupBy=[[test.a]], aggr=[[count(DISTINCT test.b), sum(test.c)]] [a:UInt32, count(DISTINCT test.b):Int64, sum(test.c):UInt64;N]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -923,11 +907,9 @@ mod tests {
         // Should work
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        Projection: group_alias_0 AS test.a + Int32(1), count(alias1) AS count(DISTINCT test.c) [test.a + Int32(1):Int64, count(DISTINCT test.c):Int64]
-          Aggregate: groupBy=[[group_alias_0]], aggr=[[count(alias1)]] [group_alias_0:Int64, count(alias1):Int64]
-            Aggregate: groupBy=[[test.a + Int32(1) AS group_alias_0, test.c AS alias1]], aggr=[[]] [group_alias_0:Int64, alias1:UInt32]
-              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            @"
+        Aggregate: groupBy=[[test.a + Int32(1)]], aggr=[[count(DISTINCT test.c)]] [test.a + Int32(1):Int64, count(DISTINCT test.c):Int64]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -950,11 +932,9 @@ mod tests {
         // Should work
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        Projection: test.a, sum(alias2) AS sum(test.c), count(alias1) AS count(DISTINCT test.b), max(alias1) AS max(DISTINCT test.b) [a:UInt32, sum(test.c):UInt64;N, count(DISTINCT test.b):Int64, max(DISTINCT test.b):UInt32;N]
-          Aggregate: groupBy=[[test.a]], aggr=[[sum(alias2), count(alias1), max(alias1)]] [a:UInt32, sum(alias2):UInt64;N, count(alias1):Int64, max(alias1):UInt32;N]
-            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[sum(test.c) AS alias2]] [a:UInt32, alias1:UInt32, alias2:UInt64;N]
-              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            @"
+        Aggregate: groupBy=[[test.a]], aggr=[[sum(test.c), count(DISTINCT test.b), max(DISTINCT test.b)]] [a:UInt32, sum(test.c):UInt64;N, count(DISTINCT test.b):Int64, max(DISTINCT test.b):UInt32;N]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -973,11 +953,9 @@ mod tests {
         // Should work
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        Projection: test.a, sum(alias2) AS sum(test.c), max(alias3) AS max(test.c), count(alias1) AS count(DISTINCT test.b) [a:UInt32, sum(test.c):UInt64;N, max(test.c):UInt32;N, count(DISTINCT test.b):Int64]
-          Aggregate: groupBy=[[test.a]], aggr=[[sum(alias2), max(alias3), count(alias1)]] [a:UInt32, sum(alias2):UInt64;N, max(alias3):UInt32;N, count(alias1):Int64]
-            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[sum(test.c) AS alias2, max(test.c) AS alias3]] [a:UInt32, alias1:UInt32, alias2:UInt64;N, alias3:UInt32;N]
-              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            @"
+        Aggregate: groupBy=[[test.a]], aggr=[[sum(test.c), max(test.c), count(DISTINCT test.b)]] [a:UInt32, sum(test.c):UInt64;N, max(test.c):UInt32;N, count(DISTINCT test.b):Int64]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -996,11 +974,9 @@ mod tests {
         // Should work
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        Projection: test.c, min(alias2) AS min(test.a), count(alias1) AS count(DISTINCT test.b) [c:UInt32, min(test.a):UInt32;N, count(DISTINCT test.b):Int64]
-          Aggregate: groupBy=[[test.c]], aggr=[[min(alias2), count(alias1)]] [c:UInt32, min(alias2):UInt32;N, count(alias1):Int64]
-            Aggregate: groupBy=[[test.c, test.b AS alias1]], aggr=[[min(test.a) AS alias2]] [c:UInt32, alias1:UInt32, alias2:UInt32;N]
-              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            @"
+        Aggregate: groupBy=[[test.c]], aggr=[[min(test.a), count(DISTINCT test.b)]] [c:UInt32, min(test.a):UInt32;N, count(DISTINCT test.b):Int64]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
