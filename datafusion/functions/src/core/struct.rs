@@ -15,11 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::getfield::GetFieldFunc;
 use arrow::array::StructArray;
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::{Result, exec_err, internal_err};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
+    StructFieldMapping,
 };
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
@@ -149,5 +151,17 @@ impl ScalarUDFImpl for StructFunc {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn struct_field_mapping(
+        &self,
+        literal_args: &[Option<ScalarValue>],
+    ) -> Option<StructFieldMapping> {
+        Some(StructFieldMapping {
+            field_accessor: Arc::new(ScalarUDF::from(GetFieldFunc::new())),
+            fields: (0..literal_args.len())
+                .map(|i| (vec![ScalarValue::Utf8(Some(format!("c{i}")))], i))
+                .collect(),
+        })
     }
 }
