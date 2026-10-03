@@ -233,6 +233,110 @@ FROM (
 08)--------------AggregateExec: mode=Partial, gby=[v@0 * 7 % 100000 as t.v * Int64(7) % Int64(100000)], aggr=[sum(t.v)], metrics=[<slt:ignore>early_emit_count=<slt:ignore>]
 <slt:ignore>
 
+# --- Case H: a few groups with large state ---
+# The array_agg states of all 32 groups do not fit in the memory limit, but a
+# single group does. Spilling must write the groups in batches that can be
+# read back within the limit, instead of one batch holding every group.
+# See https://github.com/apache/datafusion/issues/25851
+statement ok
+RESET datafusion.runtime.max_spill_merge_fan_in
+
+statement ok
+SET datafusion.execution.batch_size = 8192
+
+statement ok
+SET datafusion.runtime.memory_limit = '24M'
+
+# Partial/final aggregation: the final aggregation spills the partial states of
+# its partition.
+statement ok
+SET datafusion.execution.target_partitions = 2
+
+query II
+SELECT count(*), sum(n)
+FROM (
+  SELECT v % 32 AS k, cardinality(array_agg(concat(CAST(v AS VARCHAR), repeat('x', 100)))) AS n
+  FROM generate_series(1, 500000) AS t(v)
+  GROUP BY v % 32
+)
+----
+32 500000
+
+# Assert the final aggregation spilled, the `spilled_bytes` metric must be in MB
+query TT
+EXPLAIN ANALYZE
+SELECT count(*), sum(n)
+FROM (
+  SELECT v % 32 AS k, cardinality(array_agg(concat(CAST(v AS VARCHAR), repeat('x', 100)))) AS n
+  FROM generate_series(1, 500000) AS t(v)
+  GROUP BY v % 32
+)
+----
+<slt:ignore>
+06)----------AggregateExec: mode=FinalPartitioned, gby=[t.v % Int64(32)@0 as t.v % Int64(32)], aggr=[<slt:ignore>], metrics=[<slt:ignore>spilled_bytes=<slt:ignore> MB, spilled_rows=<slt:ignore>]
+07)------------RepartitionExec: <slt:ignore>
+
+# Single-stage aggregation: spills several runs as input arrives, which replay
+# merges.
+statement ok
+SET datafusion.execution.target_partitions = 1
+
+query II
+SELECT count(*), sum(n)
+FROM (
+  SELECT v % 32 AS k, cardinality(array_agg(concat(CAST(v AS VARCHAR), repeat('x', 100)))) AS n
+  FROM generate_series(1, 500000) AS t(v)
+  GROUP BY v % 32
+)
+----
+32 500000
+
+# Assert spill happened, the `spilled_bytes` metric must be in MB
+query TT
+EXPLAIN ANALYZE
+SELECT count(*), sum(n)
+FROM (
+  SELECT v % 32 AS k, cardinality(array_agg(concat(CAST(v AS VARCHAR), repeat('x', 100)))) AS n
+  FROM generate_series(1, 500000) AS t(v)
+  GROUP BY v % 32
+)
+----
+<slt:ignore>
+04)------AggregateExec: mode=Single, gby=[v@0 % 32 as t.v % Int64(32)], aggr=[<slt:ignore>], metrics=[<slt:ignore>spilled_bytes=<slt:ignore> MB, spilled_rows=<slt:ignore>]
+05)--------ProjectionExec: <slt:ignore>
+
+# 14 large groups, adjacent in key order, spilled together with 62,500 small
+# groups. The small groups must not make a batch take several large groups.
+query II
+SELECT count(*), sum(n)
+FROM (
+  SELECT k, cardinality(array_agg(p)) AS n
+  FROM (
+    SELECT CASE WHEN v % 8 = 0 THEN v + 1000000 ELSE v % 16 END AS k,
+           concat(CAST(v AS VARCHAR), repeat('x', 100)) AS p
+    FROM generate_series(1, 500000) AS t(v)
+  )
+  GROUP BY k
+)
+----
+62514 500000
+
+# Runs of large groups followed by a run of small groups. Replay must not
+# merge the large rows into one batch.
+query II
+SELECT count(*), sum(n)
+FROM (
+  SELECT k, cardinality(array_agg(s)) AS n
+  FROM (
+    SELECT CASE WHEN v <= 360000 THEN v % 32 ELSE v END AS k,
+           CASE WHEN v <= 360000 THEN concat(CAST(v AS VARCHAR), repeat('x', 100)) ELSE CAST(v AS VARCHAR) END AS s
+    FROM generate_series(1, 700000) AS t(v)
+  )
+  GROUP BY k
+)
+----
+340032 700000
+
 # Restore settings to slt runner defaults
 statement ok
 RESET datafusion.runtime.memory_limit
@@ -242,6 +346,11 @@ RESET datafusion.runtime.max_spill_merge_fan_in
 
 statement ok
 RESET datafusion.execution.batch_size
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
+# reset it explicitly.
+statement ok
+SET datafusion.execution.target_partitions = 4
 
 statement ok
 RESET datafusion.catalog.create_default_catalog_and_schema

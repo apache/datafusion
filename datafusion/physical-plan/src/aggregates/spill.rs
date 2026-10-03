@@ -19,23 +19,37 @@
 
 use std::sync::Arc;
 
+use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{Result, internal_err};
-use datafusion_execution::TaskContext;
+use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_execution::memory_pool::MemoryReservation;
+use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use futures::StreamExt;
 
 use super::aggregate_hash_table::OrderedAggregateTableMetrics;
 use super::ordered_final_stream::OrderedFinalAggregateStream;
 use super::{AggregateExec, AggregateMode};
-use crate::metrics::{BaselineMetrics, SpillMetrics};
+use crate::metrics::{BaselineMetrics, SpillMetrics, Time};
 use crate::sorts::IncrementalSortIterator;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
+use crate::spill::get_record_batch_memory_size;
 use crate::spill::spill_manager::SpillManager;
+use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 use crate::{InputOrderMode, SendableRecordBatchStream};
+
+/// Target size in bytes of the batches that spilling writes and replay
+/// merges. A batch can be larger when it holds a larger group.
+///
+/// Replay holds the groups of the batch it merges in memory, and merging
+/// several spill files reserves memory for a few batches of each. A limit of
+/// `batch_size` rows alone does not bound the size of a batch: a few groups
+/// with large state, such as `array_agg` over a low-cardinality key, would fit
+/// in a single batch.
+const SPILL_BATCH_TARGET_BYTES: usize = 1024 * 1024;
 
 /// Spill configuration and accumulated runs of one grouped aggregation stream.
 ///
@@ -222,12 +236,18 @@ impl AggregateSpill {
             return Ok(());
         };
 
-        let max_batch_rows = state_batch.num_rows().min(self.batch_size);
+        let mut max_batch_rows = 0;
         let sorted_iter = IncrementalSortIterator::new(
             state_batch,
             self.spill_expr.clone(),
             self.batch_size,
-        );
+        )
+        .with_max_batch_bytes(SPILL_BATCH_TARGET_BYTES)
+        .inspect(|batch| {
+            if let Ok(batch) = batch {
+                max_batch_rows = max_batch_rows.max(batch.num_rows());
+            }
+        });
         let spill_file = self
             .spill_manager
             .spill_record_batch_iter_and_return_max_batch_memory(
@@ -280,6 +300,7 @@ impl AggregateSpill {
             .with_expressions(&spill_expr)
             .with_metrics(baseline_metrics.intermediate())
             .with_batch_size(batch_size)
+            .with_max_batch_bytes(Some(SPILL_BATCH_TARGET_BYTES))
             .with_reservation(merge_reservation)
             .with_replay_headroom()
             .with_intermediate_merge_sizing(Some(min_spill_batch_rows))
@@ -290,11 +311,141 @@ impl AggregateSpill {
             partition,
             merged,
             &InputOrderMode::Sorted,
-            baseline_metrics.clone(),
+            baseline_metrics.intermediate(),
             metrics,
             None,
             reservation,
         )?;
-        Ok(replay.into_stream())
+        // Replay emits the groups of each merged batch, which may be few
+        let output = coalesce(
+            replay.into_stream(),
+            batch_size,
+            SPILL_BATCH_TARGET_BYTES,
+            baseline_metrics.elapsed_compute().clone(),
+        );
+        Ok(Box::pin(ObservedStream::new(
+            output,
+            baseline_metrics.clone(),
+            None,
+        )))
+    }
+}
+
+/// Combines consecutive small batches of `input` into batches of up to
+/// `batch_size` rows and `max_bytes`. Batches of at least half that size are
+/// passed on as they are.
+fn coalesce(
+    mut input: SendableRecordBatchStream,
+    batch_size: usize,
+    max_bytes: usize,
+    elapsed_compute: Time,
+) -> SendableRecordBatchStream {
+    let schema = input.schema();
+    let output_schema = Arc::clone(&schema);
+    let output = async_try_stream(move |mut emitter| async move {
+        let mut pending = vec![];
+        let (mut rows, mut bytes) = (0, 0);
+        while let Some(batch) = input.next().await.transpose()? {
+            let batch_bytes = get_record_batch_memory_size(&batch);
+            let passed_on =
+                batch.num_rows() >= batch_size / 2 || batch_bytes >= max_bytes / 2;
+            if passed_on
+                || rows + batch.num_rows() > batch_size
+                || bytes + batch_bytes > max_bytes
+            {
+                emit_combined(&schema, &mut pending, &mut emitter, &elapsed_compute)
+                    .await?;
+                (rows, bytes) = (0, 0);
+            }
+            if passed_on {
+                emitter.emit(batch).await;
+                continue;
+            }
+            rows += batch.num_rows();
+            bytes += batch_bytes;
+            pending.push(batch);
+        }
+        emit_combined(&schema, &mut pending, &mut emitter, &elapsed_compute).await
+    });
+    Box::pin(RecordBatchStreamAdapter::new(output_schema, output))
+}
+
+/// Emits the batches in `pending`, if any, as one batch.
+async fn emit_combined(
+    schema: &SchemaRef,
+    pending: &mut Vec<RecordBatch>,
+    emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
+    elapsed_compute: &Time,
+) -> Result<()> {
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let batch = {
+        let _timer = elapsed_compute.timer();
+        concat_batches(schema, pending.iter())?
+    };
+    pending.clear();
+    emitter.emit(batch).await;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::collect;
+    use arrow::array::{ArrayRef, AsArray, Int32Array, StringArray};
+    use arrow::datatypes::Int32Type;
+
+    #[tokio::test]
+    async fn coalesce_combines_small_batches() -> Result<()> {
+        // Keys `start..end`, each with a value of `value_len` bytes
+        let batch = |start: i32, end: i32, value_len: usize| {
+            let values = (start..end).map(|_| "x".repeat(value_len));
+            RecordBatch::try_from_iter([
+                (
+                    "key",
+                    Arc::new(Int32Array::from_iter_values(start..end)) as ArrayRef,
+                ),
+                (
+                    "value",
+                    Arc::new(StringArray::from_iter_values(values)) as ArrayRef,
+                ),
+            ])
+            .unwrap()
+        };
+        let input = vec![
+            batch(0, 3, 0),
+            batch(3, 6, 0),
+            batch(6, 9, 0),
+            batch(9, 12, 0),
+            batch(12, 14, 20_000),
+            batch(14, 17, 0),
+            batch(17, 20, 0),
+            batch(20, 25, 0),
+        ];
+        let schema = input[0].schema();
+        let input = Box::pin(RecordBatchStreamAdapter::new(
+            schema,
+            futures::stream::iter(input.into_iter().map(Ok)),
+        ));
+
+        let output = collect(coalesce(input, 8, 10_000, Time::new())).await?;
+
+        // Small batches are combined up to 8 rows. The batch over half of
+        // 10,000 bytes and the batch of half of 8 rows are passed on alone.
+        let num_rows: Vec<usize> = output.iter().map(RecordBatch::num_rows).collect();
+        assert_eq!(num_rows, vec![6, 6, 2, 6, 5]);
+        let keys: Vec<i32> = output
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_primitive::<Int32Type>()
+                    .values()
+                    .to_vec()
+            })
+            .collect();
+        assert_eq!(keys, (0..25).collect::<Vec<_>>());
+        Ok(())
     }
 }
