@@ -2360,6 +2360,8 @@ pub struct SQLOptions {
     allow_ddl: bool,
     /// See [`Self::with_allow_dml`]
     allow_dml: bool,
+    /// See [`Self::with_allow_copy`]
+    allow_copy: bool,
     /// See [`Self::with_allow_statements`]
     allow_statements: bool,
 }
@@ -2369,6 +2371,7 @@ impl Default for SQLOptions {
         Self {
             allow_ddl: true,
             allow_dml: true,
+            allow_copy: true,
             allow_statements: true,
         }
     }
@@ -2389,6 +2392,15 @@ impl SQLOptions {
     /// Should DML data modification commands (e.g. `INSERT` and `COPY`) be run? Defaults to `true`
     pub fn with_allow_dml(mut self, allow: bool) -> Self {
         self.allow_dml = allow;
+        self
+    }
+
+    /// Should `COPY` commands be run? Defaults to `true`.
+    ///
+    /// `COPY` commands are also disabled when DML is disabled with
+    /// [`Self::with_allow_dml`].
+    pub fn with_allow_copy(mut self, allow: bool) -> Self {
+        self.allow_copy = allow;
         self
     }
 
@@ -2425,6 +2437,9 @@ impl<'n> TreeNodeVisitor<'n> for BadPlanVisitor<'_> {
             }
             LogicalPlan::Dml(dml) if !self.options.allow_dml => {
                 plan_err!("DML not supported: {}", dml.op)
+            }
+            LogicalPlan::Copy(_) if !self.options.allow_copy => {
+                plan_err!("COPY not supported")
             }
             LogicalPlan::Copy(_) if !self.options.allow_dml => {
                 plan_err!("DML not supported: COPY")
