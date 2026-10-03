@@ -908,15 +908,18 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// # Output type
     ///
     /// The default implementation returns an unbounded [`DataType::Null`]
-    /// interval because the output type cannot be inferred generically.
-    /// Implementations should override this method when they can determine the
-    /// output type, even if they cannot compute precise bounds. Returning an
-    /// unbounded interval with the correct type preserves information used by
-    /// downstream physical property analysis.
+    /// interval because the output type cannot be inferred from input intervals
+    /// alone. During physical property analysis, `ScalarFunctionExpr` uses its
+    /// resolved return type to replace any unbounded [`DataType::Null`]
+    /// interval returned here with a typed unbounded interval when supported,
+    /// including intervals returned by overrides. If the resolved type is not
+    /// supported by [`Interval::make_unbounded`], the original interval is kept.
+    /// UDFs need not override this method solely to preserve their output type
+    /// for that analysis.
     ///
-    /// If the output type depends on argument values, only report it when those
-    /// values are known, such as from singleton input intervals. Otherwise,
-    /// keep the output type unknown.
+    /// Override this method to provide more precise bounds. All intervals other
+    /// than an unbounded [`DataType::Null`] interval are preserved. The fallback
+    /// does not apply to direct calls to `PhysicalExpr::evaluate_bounds`.
     fn evaluate_bounds(&self, _input: &[&Interval]) -> Result<Interval> {
         // We cannot assume the input datatype is the same of output type.
         Interval::make_unbounded(&DataType::Null)
