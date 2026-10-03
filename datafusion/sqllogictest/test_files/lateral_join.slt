@@ -755,16 +755,20 @@ ORDER BY t1.id, sub.x;
 
 # --- Correlated filter below a window function ---
 # https://github.com/apache/datafusion/issues/25792
-# Pulling `t2.t1_id = t1.id` above the window would number the t2 rows of all
-# t1 rows together instead of the t2 rows of each t1 row.
-# Expected result once supported: (1, 10, 1), (1, 20, 2), (2, 30, 1).
-statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn
+# Pulling `t2.t1_id = t1.id` above the window as it is would number the t2 rows
+# of all t1 rows together. The filter fixes `t2.t1_id` for each t1 row, so the
+# pull up adds `t2.t1_id` to the `PARTITION BY` of the window instead.
+query III
 SELECT t1.id, sub.id, sub.rn
 FROM t1, LATERAL (
     SELECT t2.id, row_number() OVER (ORDER BY t2.id) AS rn
     FROM (SELECT * FROM t2 WHERE t2.t1_id = t1.id) AS t2
 ) AS sub
 ORDER BY t1.id, sub.id;
+----
+1 10 1
+1 20 2
+2 30 1
 
 # A correlated filter above the window is still decorrelated. The window
 # numbers all t2 rows, then the filter keeps the rows of each t1 row.
@@ -850,14 +854,29 @@ ORDER BY t1.id, sub.id;
 1 20 2
 2 30 1
 
-# The filter must read a `PARTITION BY` column of every window function.
-statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn
+# Every window function is partitioned by the columns of the filter.
+query IIII
 SELECT t1.id, sub.id, sub.rn, sub.c
 FROM t1, LATERAL (
     SELECT t2.id,
         row_number() OVER (PARTITION BY t2.t1_id ORDER BY t2.id) AS rn,
         count(*) OVER (PARTITION BY t2.data) AS c
     FROM t2 WHERE t2.t1_id = t1.id
+) AS sub
+ORDER BY t1.id, sub.id;
+----
+1 10 1 1
+1 20 2 1
+2 30 1 1
+
+# A non-equality filter does not fix the value of its column for each t1 row,
+# so partitioning by the column would split the rows of one t1 row. The
+# subquery stays correlated.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn
+SELECT t1.id, sub.id, sub.rn
+FROM t1, LATERAL (
+    SELECT t2.id, row_number() OVER (ORDER BY t2.id) AS rn
+    FROM t2 WHERE t2.t1_id >= t1.id
 ) AS sub
 ORDER BY t1.id, sub.id;
 
