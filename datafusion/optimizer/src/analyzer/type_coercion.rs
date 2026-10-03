@@ -355,6 +355,14 @@ impl<'a> TypeCoercionRewriter<'a> {
             schema: &DFSchema,
             expr_name: &str,
         ) -> Result<Expr> {
+            // An untyped placeholder has no type to coerce yet. Leave it bare so
+            // `LogicalPlan::get_parameter_fields` can still default it to Int64
+            // post-analysis; wrapping it in a `CAST` here would hide it from that
+            // inference because the cast's inner expression is no longer a
+            // top-level `Limit` operand.
+            if matches!(&expr, Expr::Placeholder(p) if p.field.is_none()) {
+                return Ok(expr);
+            }
             let dt = expr.get_type(schema)?;
             if dt.is_integer() || dt.is_null() {
                 expr.cast_to(&DataType::Int64, schema)
@@ -1631,10 +1639,10 @@ mod test {
     use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, TimeUnit};
     use insta::assert_snapshot;
 
-    use crate::analyzer::Analyzer;
     use crate::analyzer::type_coercion::{
         TypeCoercion, TypeCoercionRewriter, coerce_case_expression,
     };
+    use crate::analyzer::{Analyzer, AnalyzerRule};
     use crate::assert_analyzed_plan_with_config_eq_snapshot;
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
@@ -1646,9 +1654,9 @@ mod test {
     use datafusion_expr::test::function_stub::avg_udaf;
     use datafusion_expr::{
         AccumulatorFactoryFunction, AggregateUDF, BinaryExpr, Case, ColumnarValue, Expr,
-        ExprSchemable, Filter, LogicalPlan, Operator, ScalarFunctionArgs, ScalarUDF,
-        ScalarUDFImpl, Signature, SimpleAggregateUDF, Subquery, Union, Volatility, cast,
-        col, create_udaf, is_true, lit,
+        ExprSchemable, Filter, Limit, LogicalPlan, Operator, ScalarFunctionArgs,
+        ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF, Subquery, Union,
+        Volatility, cast, col, create_udaf, is_true, lit, placeholder,
     };
     use datafusion_functions_aggregate::average::AvgAccumulator;
 
@@ -1730,6 +1738,19 @@ mod test {
             }
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn untyped_limit_parameter_remains_inferable_after_coercion() -> Result<()> {
+        let plan = LogicalPlan::Limit(Limit {
+            input: empty(),
+            fetch: Some(Box::new(placeholder("$1"))),
+            skip: None,
+        });
+        let analyzed = TypeCoercion::new().analyze(plan, &ConfigOptions::default())?;
+
+        assert_eq!(analyzed.get_parameter_types()?["$1"], Some(DataType::Int64));
         Ok(())
     }
 

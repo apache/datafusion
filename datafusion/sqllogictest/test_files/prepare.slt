@@ -380,6 +380,17 @@ statement ok
 DEALLOCATE get_N_rand_ints_from_last_run;
 
 statement ok
+PREPARE limit_after_typed_filter AS SELECT id FROM test WHERE id = $1 LIMIT $2;
+
+query I
+EXECUTE limit_after_typed_filter(1, 1);
+----
+1
+
+statement ok
+DEALLOCATE limit_after_typed_filter;
+
+statement ok
 DROP TABLE test;
 
 statement ok
