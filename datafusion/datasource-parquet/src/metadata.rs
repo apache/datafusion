@@ -779,7 +779,7 @@ fn summarize_column_statistics(
         summarize_null_counts(stats_converter, row_groups_metadata)?;
 
     accumulators.distinct_counts_array[logical_schema_index] =
-        summarize_distinct_counts(parquet_index, row_groups_metadata);
+        summarize_distinct_counts(stats_converter, row_groups_metadata)?;
 
     let arrow_field = logical_file_schema.field(logical_schema_index);
     accumulators.column_byte_sizes[logical_schema_index] = compute_arrow_column_size(
@@ -930,29 +930,27 @@ where
 
 /// Extract distinct counts from row group column statistics.
 fn summarize_distinct_counts(
-    parquet_idx: Option<usize>,
+    stats_converter: &StatisticsConverter,
     row_groups_metadata: &[RowGroupMetaData],
-) -> Precision<usize> {
-    let Some(parquet_idx) = parquet_idx else {
-        return Precision::Absent;
-    };
+) -> Result<Precision<usize>> {
+    if stats_converter.parquet_column_index().is_none() {
+        return Ok(Precision::Absent);
+    }
 
     let num_row_groups = row_groups_metadata.len();
     if num_row_groups == 0 {
-        return Precision::Absent;
+        return Ok(Precision::Absent);
     }
 
     let required_count = (num_row_groups as f64 * PARTIAL_NDV_THRESHOLD).ceil() as usize;
+    let distinct_counts =
+        stats_converter.row_group_distinct_counts(row_groups_metadata)?;
+
     let mut ndv_count = 0;
     let mut max_distinct_count: Option<u64> = None;
 
-    for (row_group_idx, row_group) in row_groups_metadata.iter().enumerate() {
-        if let Some(distinct_count) = row_group
-            .columns()
-            .get(parquet_idx)
-            .and_then(|col| col.statistics())
-            .and_then(|stats| stats.distinct_count_opt())
-        {
+    for (row_group_idx, value) in distinct_counts.iter().enumerate() {
+        if let Some(distinct_count) = value {
             ndv_count += 1;
             max_distinct_count = Some(match max_distinct_count {
                 Some(max) => max.max(distinct_count),
@@ -963,17 +961,14 @@ fn summarize_distinct_counts(
         // Return early if there's no chance to reach the required coverage.
         let remaining = num_row_groups - row_group_idx - 1;
         if ndv_count + remaining < required_count {
-            return Precision::Absent;
+            return Ok(Precision::Absent);
         }
     }
 
-    match max_distinct_count {
-        Some(distinct_count) if num_row_groups == 1 => {
-            Precision::Exact(distinct_count as usize)
-        }
+    Ok(match max_distinct_count {
         Some(distinct_count) => Precision::Inexact(distinct_count as usize),
         None => Precision::Absent,
-    }
+    })
 }
 
 /// Compute the Arrow in-memory size for a single column
@@ -1535,7 +1530,7 @@ mod tests {
 
         #[test]
         fn test_distinct_count_single_row_group_with_ndv() {
-            // Single row group with distinct count should return Exact
+            // Single row group with distinct count should return Inexact
             let schema_descr = create_schema_descr(1);
             let arrow_schema = create_arrow_schema(1);
 
@@ -1560,7 +1555,7 @@ mod tests {
 
             assert_eq!(
                 result.column_statistics[0].distinct_count,
-                Precision::Exact(42)
+                Precision::Inexact(42)
             );
         }
 
@@ -1747,7 +1742,7 @@ mod tests {
 
             assert_eq!(
                 result.column_statistics[0].distinct_count,
-                Precision::Exact(5)
+                Precision::Inexact(5)
             );
             assert_eq!(
                 result.column_statistics[1].distinct_count,
@@ -1755,7 +1750,7 @@ mod tests {
             );
             assert_eq!(
                 result.column_statistics[2].distinct_count,
-                Precision::Exact(100)
+                Precision::Inexact(100)
             );
         }
 
@@ -1924,15 +1919,15 @@ mod tests {
             // category: 10 distinct values
             assert_eq!(
                 result.column_statistics[1].distinct_count,
-                Precision::Exact(10),
-                "category column should have Exact(10) distinct_count"
+                Precision::Inexact(10),
+                "category column should have Inexact(10) distinct_count"
             );
 
             // name: 5 distinct values
             assert_eq!(
                 result.column_statistics[2].distinct_count,
-                Precision::Exact(5),
-                "name column should have Exact(5) distinct_count"
+                Precision::Inexact(5),
+                "name column should have Inexact(5) distinct_count"
             );
         }
     }
