@@ -234,6 +234,12 @@ Rather than a bare "LGTM", say what you actually checked ("traced the state
 transitions by hand", "confirmed the hasher change cannot affect ordering")
 so it is clear what was verified and what was not.
 
+### Use AI Review Tools Thoughtfully
+
+AI tools can help you review, but please read and edit their output before
+posting it so each comment is a clear, specific request in your own words. See
+[AI-assisted reviews](index.md#ai-assisted-reviews) in the contributor guide.
+
 ### Invite Additional Committers on Core Changes
 
 For changes to core, widely shared code, leave the PR open for other
