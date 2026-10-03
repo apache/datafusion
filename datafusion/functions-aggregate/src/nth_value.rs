@@ -444,7 +444,7 @@ impl Accumulator for NthValueAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        if states.is_empty() {
+        if states.len() < 2 {
             return Ok(());
         }
         // Second entry stores values received for ordering requirement columns
