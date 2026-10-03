@@ -359,6 +359,15 @@ impl TableFunctionImpl for ParquetMetadataFunc {
             Field::new("data_page_offset", DataType::Int64, true),
             Field::new("total_compressed_size", DataType::Int64, true),
             Field::new("total_uncompressed_size", DataType::Int64, true),
+            Field::new("bloom_filter_offset", DataType::Int64, true),
+            Field::new("bloom_filter_length", DataType::Int64, true),
+            Field::new("column_index_offset", DataType::Int64, true),
+            Field::new("column_index_length", DataType::Int64, true),
+            Field::new("offset_index_offset", DataType::Int64, true),
+            Field::new("offset_index_length", DataType::Int64, true),
+            Field::new("sorting_columns", DataType::Utf8, true),
+            Field::new("row_group_ordinal", DataType::Int64, true),
+            Field::new("row_group_file_offset", DataType::Int64, true),
         ]));
 
         // construct record batch from metadata
@@ -385,6 +394,16 @@ impl TableFunctionImpl for ParquetMetadataFunc {
         let mut data_page_offset_arr = vec![];
         let mut total_compressed_size_arr = vec![];
         let mut total_uncompressed_size_arr = vec![];
+        let mut bloom_filter_offset_arr = vec![];
+        let mut bloom_filter_length_arr = vec![];
+        let mut column_index_offset_arr = vec![];
+        let mut column_index_length_arr = vec![];
+        let mut offset_index_offset_arr = vec![];
+        let mut offset_index_length_arr = vec![];
+        let mut sorting_columns_arr = vec![];
+        let mut row_group_ordinal_arr = vec![];
+        let mut row_group_file_offset_arr = vec![];
+
         for (rg_idx, row_group) in metadata.row_groups().iter().enumerate() {
             for (col_idx, column) in row_group.columns().iter().enumerate() {
                 filename_arr.push(filename.clone());
@@ -426,6 +445,19 @@ impl TableFunctionImpl for ParquetMetadataFunc {
                 data_page_offset_arr.push(column.data_page_offset());
                 total_compressed_size_arr.push(column.compressed_size());
                 total_uncompressed_size_arr.push(column.uncompressed_size());
+                bloom_filter_offset_arr.push(column.bloom_filter_offset());
+                bloom_filter_length_arr
+                    .push(column.bloom_filter_length().map(|v| v as i64));
+                column_index_offset_arr.push(column.column_index_offset());
+                column_index_length_arr
+                    .push(column.column_index_length().map(|v| v as i64));
+                offset_index_offset_arr.push(column.offset_index_offset());
+                offset_index_length_arr
+                    .push(column.offset_index_length().map(|v| v as i64));
+                sorting_columns_arr
+                    .push(row_group.sorting_columns().map(|cols| format!("{cols:?}")));
+                row_group_ordinal_arr.push(row_group.ordinal().map(|v| v as i64));
+                row_group_file_offset_arr.push(row_group.file_offset());
             }
         }
 
@@ -455,6 +487,15 @@ impl TableFunctionImpl for ParquetMetadataFunc {
                 Arc::new(Int64Array::from(data_page_offset_arr)),
                 Arc::new(Int64Array::from(total_compressed_size_arr)),
                 Arc::new(Int64Array::from(total_uncompressed_size_arr)),
+                Arc::new(Int64Array::from(bloom_filter_offset_arr)),
+                Arc::new(Int64Array::from(bloom_filter_length_arr)),
+                Arc::new(Int64Array::from(column_index_offset_arr)),
+                Arc::new(Int64Array::from(column_index_length_arr)),
+                Arc::new(Int64Array::from(offset_index_offset_arr)),
+                Arc::new(Int64Array::from(offset_index_length_arr)),
+                Arc::new(StringArray::from(sorting_columns_arr)),
+                Arc::new(Int64Array::from(row_group_ordinal_arr)),
+                Arc::new(Int64Array::from(row_group_file_offset_arr)),
             ],
         )?;
 
