@@ -40,7 +40,6 @@ use datafusion_expr::{
     TypeSignature, Volatility, WindowFunctionDefinition,
     expr::WindowFunction,
     function::{AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs},
-    simplify::SimplifyContext,
     utils::{AggregateOrderSensitivity, format_state_name},
 };
 use datafusion_functions_aggregate_common::aggregate::count_distinct::PrimitiveDistinctCountGroupsAccumulator;
@@ -402,15 +401,13 @@ impl AggregateUDFImpl for Count {
     }
 
     fn simplify(&self) -> Option<AggregateFunctionSimplification> {
-        Some(Box::new(|mut aggregate_function, info| {
+        Some(Box::new(|mut aggregate_function, _| {
             let params = &aggregate_function.params;
-            // Every row is counted when none of the arguments can be null
             if !params.distinct
-                && !params.args.is_empty()
-                && params
-                    .args
-                    .iter()
-                    .all(|arg| is_safe_non_null_count_arg(arg, info))
+                && matches!(
+                    params.args.as_slice(),
+                    [Expr::Literal(value, _)] if value == &COUNT_STAR_EXPANSION
+                )
             {
                 aggregate_function.params.args.clear();
             }
@@ -490,16 +487,6 @@ impl AggregateUDFImpl for Count {
             let acc = CountAccumulator::new();
             Ok(Box::new(acc))
         }
-    }
-}
-
-/// Returns true if `expr` is a non-null literal or non-nullable column that is
-/// safe to elide from `COUNT`.
-fn is_safe_non_null_count_arg(expr: &Expr, info: &SimplifyContext) -> bool {
-    match expr {
-        Expr::Literal(value, _) => !value.is_null(),
-        Expr::Column(_) => matches!(info.nullable(expr), Ok(false)),
-        _ => false,
     }
 }
 
@@ -1039,7 +1026,6 @@ mod tests {
         },
         datatypes::{DataType, Field, Int32Type, Schema},
     };
-    use datafusion_common::DFSchema;
     use datafusion_expr::function::AccumulatorArgs;
     use datafusion_expr::{col, lit};
     use datafusion_physical_expr::{PhysicalExpr, expressions::Column};
@@ -1139,14 +1125,8 @@ mod tests {
     }
 
     #[test]
-    fn simplify_count_safe_non_null_args() -> Result<()> {
-        let schema = DFSchema::try_from(Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Int32, true),
-        ]))?;
-        let info = SimplifyContext::builder()
-            .with_schema(Arc::new(schema))
-            .build();
+    fn simplify_count_star() -> Result<()> {
+        let info = datafusion_expr::simplify::SimplifyContext::default();
         let simplify = Count::new().simplify().unwrap();
         let simplified_args = |args: Vec<Expr>, distinct: bool| -> Result<Vec<Expr>> {
             let aggregate_function = datafusion_expr::expr::AggregateFunction::new_udf(
@@ -1163,24 +1143,18 @@ mod tests {
             }
         };
 
-        for args in [
-            vec![lit(1i64)],
-            vec![lit("x")],
-            vec![col("a")],
-            vec![col("a"), lit(2)],
-        ] {
-            assert!(simplified_args(args, false)?.is_empty());
-        }
+        assert!(simplified_args(vec![lit(1_i64)], false)?.is_empty());
         for args in [
             vec![lit(ScalarValue::Null)],
-            vec![col("b")],
-            vec![col("a"), col("b")],
+            vec![lit(2_i64)],
+            vec![lit("x")],
+            vec![col("a")],
             vec![col("a") + lit(1)],
         ] {
             assert_eq!(simplified_args(args.clone(), false)?, args);
         }
         assert!(simplified_args(vec![], false)?.is_empty());
-        assert_eq!(simplified_args(vec![lit(1i64)], true)?, vec![lit(1i64)]);
+        assert_eq!(simplified_args(vec![lit(1_i64)], true)?, vec![lit(1_i64)]);
         Ok(())
     }
 

@@ -4532,16 +4532,16 @@ EXPLAIN SELECT c1, count(distinct c2), min(distinct c2), sum(c3), max(c4) FROM a
 logical_plan
 01)Sort: aggregate_test_100.c1 ASC NULLS LAST
 02)--Projection: aggregate_test_100.c1, count(alias1) AS count(DISTINCT aggregate_test_100.c2), min(alias1) AS min(DISTINCT aggregate_test_100.c2), sum(alias2) AS sum(aggregate_test_100.c3), max(alias3) AS max(aggregate_test_100.c4)
-03)----Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[count() AS count(alias1), min(alias1), sum(alias2), max(alias3)]]
+03)----Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[count(alias1), min(alias1), sum(alias2), max(alias3)]]
 04)------Aggregate: groupBy=[[aggregate_test_100.c1, aggregate_test_100.c2 AS alias1]], aggr=[[sum(CAST(aggregate_test_100.c3 AS Int64)) AS alias2, max(aggregate_test_100.c4) AS alias3]]
 05)--------TableScan: aggregate_test_100 projection=[c1, c2, c3, c4]
 physical_plan
 01)SortPreservingMergeExec: [c1@0 ASC NULLS LAST]
 02)--ProjectionExec: expr=[c1@0 as c1, count(alias1)@1 as count(DISTINCT aggregate_test_100.c2), min(alias1)@2 as min(DISTINCT aggregate_test_100.c2), sum(alias2)@3 as sum(aggregate_test_100.c3), max(alias3)@4 as max(aggregate_test_100.c4)]
 03)----SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[true]
-04)------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[count() as count(alias1), min(alias1), sum(alias2), max(alias3)]
+04)------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[count(alias1), min(alias1), sum(alias2), max(alias3)]
 05)--------RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8
-06)----------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[count() as count(alias1), min(alias1), sum(alias2), max(alias3)]
+06)----------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[count(alias1), min(alias1), sum(alias2), max(alias3)]
 07)------------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1, alias1@1 as alias1], aggr=[sum(aggregate_test_100.c3) as alias2, max(aggregate_test_100.c4) as alias3]
 08)--------------RepartitionExec: partitioning=Hash([c1@0, alias1@1], 8), input_partitions=8
 09)----------------AggregateExec: mode=Partial, gby=[c1@0 as c1, c2@1 as alias1], aggr=[sum(aggregate_test_100.c3) as alias2, max(aggregate_test_100.c4) as alias3]
@@ -5235,16 +5235,15 @@ GROUP BY
 ----
 logical_plan
 01)Projection: date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 120000000000 }"),keywords_stream.ts,Utf8("2000-01-01")) AS ts_chunk, count(keywords_stream.keyword) AS alert_keyword_count
-02)--Aggregate: groupBy=[[date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 120000000000 }"), keywords_stream.ts, TimestampNanosecond(946684800000000000, None)) AS date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 120000000000 }"),keywords_stream.ts,Utf8("2000-01-01"))]], aggr=[[count() AS count(keywords_stream.keyword)]]
-03)----Projection: keywords_stream.ts
-04)------LeftSemi Join: keywords_stream.keyword = __correlated_sq_1.keyword
-05)--------TableScan: keywords_stream projection=[ts, keyword]
-06)--------SubqueryAlias: __correlated_sq_1
-07)----------TableScan: alert_keywords projection=[keyword]
+02)--Aggregate: groupBy=[[date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 120000000000 }"), keywords_stream.ts, TimestampNanosecond(946684800000000000, None)) AS date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 120000000000 }"),keywords_stream.ts,Utf8("2000-01-01"))]], aggr=[[count(keywords_stream.keyword)]]
+03)----LeftSemi Join: keywords_stream.keyword = __correlated_sq_1.keyword
+04)------TableScan: keywords_stream projection=[ts, keyword]
+05)------SubqueryAlias: __correlated_sq_1
+06)--------TableScan: alert_keywords projection=[keyword]
 physical_plan
 01)ProjectionExec: expr=[date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 120000000000 }"),keywords_stream.ts,Utf8("2000-01-01"))@0 as ts_chunk, count(keywords_stream.keyword)@1 as alert_keyword_count]
-02)--AggregateExec: mode=Single, gby=[date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 120000000000 }, ts@0, 946684800000000000) as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 120000000000 }"),keywords_stream.ts,Utf8("2000-01-01"))], aggr=[count() as count(keywords_stream.keyword)]
-03)----HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(keyword@0, keyword@1)], projection=[ts@0]
+02)--AggregateExec: mode=Single, gby=[date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 120000000000 }, ts@0, 946684800000000000) as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 120000000000 }"),keywords_stream.ts,Utf8("2000-01-01"))], aggr=[count(keywords_stream.keyword)]
+03)----HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(keyword@0, keyword@1)]
 04)------DataSourceExec: partitions=1, partition_sizes=[3]
 05)------DataSourceExec: partitions=1, partition_sizes=[3]
 
