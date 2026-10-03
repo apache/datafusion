@@ -69,6 +69,7 @@ github:
           - "cargo check datafusion-spark features"
           - "cargo test (amd64)"
           - "cargo test 'extended_tests' (amd64)"
+          - "microbenchmark tests (amd64)"
           - "cargo test hash collisions (amd64)"
           - "cargo test datafusion-cli (amd64)"
           - "cargo examples (amd64)"

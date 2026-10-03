@@ -20,7 +20,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int64Array};
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::Field;
 use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
 };
@@ -87,7 +87,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     })
                     .collect();
                 let config_options = Arc::new(ConfigOptions::default());
-                let return_field = Field::new("f", DataType::Utf8View, true).into();
+                let return_field = Field::new("f", args[0].data_type(), true).into();
 
                 group.bench_function(&bench_name, |b| {
                     b.iter(|| {
