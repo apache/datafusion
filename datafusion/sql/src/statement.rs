@@ -3146,7 +3146,7 @@ FROM (
         &self,
         sql_table_name: ObjectName,
     ) -> Result<LogicalPlan> {
-        let Some(tables_table_ref) = self.resolve_info_table("tables") else {
+        let Some(tables_table_ref) = self.resolve_info_table("views") else {
             return plan_err!(
                 "SHOW CREATE TABLE is not supported unless information_schema is enabled"
             );

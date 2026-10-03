@@ -181,14 +181,6 @@ impl InformationSchemaConfig {
                     builder.add_schemata(&catalog_name, &schema_name, schema_owner);
                 }
             }
-
-            // Add the information schema itself
-            builder.add_schemata(&catalog_name, INFORMATION_SCHEMA, None);
-        }
-
-        // Add the system information schema
-        if let Some(system_catalog_name) = &self.system_catalog_name {
-            builder.add_schemata(system_catalog_name, INFORMATION_SCHEMA, None);
         }
     }
 
@@ -234,9 +226,7 @@ impl InformationSchemaConfig {
         schema: &dyn SchemaProvider,
     ) -> Result<(), DataFusionError> {
         for table_name in schema.table_names() {
-            if let Some(table) = schema.table(&table_name).await?
-                && table.table_type() == TableType::View
-            {
+            if let Some(table) = schema.table(&table_name).await? {
                 builder.add_view(
                     catalog_name,
                     schema_name,
@@ -270,15 +260,6 @@ impl InformationSchemaConfig {
                     }
                 }
             }
-
-            // Add the information schema view columns themselves
-            Self::add_columns(builder, &catalog_name, INFORMATION_SCHEMA, self).await?;
-        }
-
-        // Add the system information schema view columns
-        if let Some(system_catalog_name) = &self.system_catalog_name {
-            Self::add_columns(builder, system_catalog_name, INFORMATION_SCHEMA, self)
-                .await?;
         }
 
         Ok(())
