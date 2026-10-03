@@ -31,8 +31,8 @@ use datafusion_common::types::{
 };
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignature, TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, Documentation, EncodingPreservation, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -73,7 +73,8 @@ impl Default for SubstrFunc {
 
 impl SubstrFunc {
     pub fn new() -> Self {
-        let string = Coercion::new_exact(TypeSignatureClass::Native(logical_string()));
+        let string = Coercion::new_exact(TypeSignatureClass::Native(logical_string()))
+            .with_encoding_preservation(EncodingPreservation::dictionary());
         let int64 = Coercion::new_implicit(
             TypeSignatureClass::Native(logical_int64()),
             vec![TypeSignatureClass::Native(logical_int32())],
@@ -112,7 +113,10 @@ impl ScalarUDFImpl for SubstrFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+        match &arg_types[0] {
+            DataType::Dictionary(_, value_type) => Ok(*value_type.clone()),
+            other => Ok(other.clone()),
+        }
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
