@@ -948,6 +948,8 @@ physical_plan
 03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11], output_ordering=[c11@0 ASC NULLS LAST], file_type=csv, has_header=true
 
+# The bounds of c11 and c12 are unknown at plan time (the data is in (0, 1),
+# where log(c12, c11) is not increasing in c11), so the sort must be kept
 query TT
   EXPLAIN SELECT LOG(c12, c11) as log_c11_base_c12
   FROM aggregate_test_100
@@ -959,9 +961,10 @@ logical_plan
 03)----TableScan: aggregate_test_100 projection=[c11, c12]
 physical_plan
 01)SortPreservingMergeExec: [log_c11_base_c12@0 ASC NULLS LAST]
-02)--ProjectionExec: expr=[log(c12@1, c11@0) as log_c11_base_c12]
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11, c12], output_orderings=[[c11@0 ASC NULLS LAST], [c12@1 DESC NULLS LAST]], file_type=csv, has_header=true
+02)--SortExec: expr=[log_c11_base_c12@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[log(c12@1, c11@0) as log_c11_base_c12]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11, c12], output_orderings=[[c11@0 ASC NULLS LAST], [c12@1 DESC NULLS LAST]], file_type=csv, has_header=true
 
 query TT
 EXPLAIN SELECT LOG(c11, c12) as log_c12_base_c11
@@ -974,9 +977,61 @@ logical_plan
 03)----TableScan: aggregate_test_100 projection=[c11, c12]
 physical_plan
 01)SortPreservingMergeExec: [log_c12_base_c11@0 DESC NULLS LAST]
-02)--ProjectionExec: expr=[log(c11@0, c12@1) as log_c12_base_c11]
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11, c12], output_orderings=[[c11@0 ASC NULLS LAST], [c12@1 DESC NULLS LAST]], file_type=csv, has_header=true
+02)--SortExec: expr=[log_c12_base_c11@0 DESC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[log(c11@0, c12@1) as log_c12_base_c11]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11, c12], output_orderings=[[c11@0 ASC NULLS LAST], [c12@1 DESC NULLS LAST]], file_type=csv, has_header=true
+
+# log with a base in (0, 1) is decreasing, so the outer sort on `l` must be
+# kept even though its input is already sorted by x (the inner TopK)
+query TT
+EXPLAIN SELECT log(0.5, x) AS l FROM (SELECT x FROM (VALUES (1.0), (2.0), (4.0), (8.0)) AS t(x) ORDER BY x LIMIT 10) ORDER BY l ASC;
+----
+logical_plan
+01)Sort: l ASC NULLS LAST
+02)--Projection: log(Float64(0.5), t.x) AS l
+03)----Sort: t.x ASC NULLS LAST, fetch=10
+04)------SubqueryAlias: t
+05)--------Projection: column1 AS x
+06)----------Values: (Float64(1)), (Float64(2)), (Float64(4)), (Float64(8))
+physical_plan
+01)SortExec: expr=[l@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[log(0.5, column1@0) as l]
+03)----SortExec: TopK(fetch=10), expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query R
+SELECT log(0.5, x) AS l FROM (SELECT x FROM (VALUES (1.0), (2.0), (4.0), (8.0)) AS t(x) ORDER BY x LIMIT 10) ORDER BY l ASC;
+----
+-3
+-2
+-1
+0
+
+# log with a base > 1 is increasing, so the outer sort on `l` can be removed:
+# its input is already sorted by x (the inner TopK), so `l` is sorted too
+query TT
+EXPLAIN SELECT log(2.0, x) AS l FROM (SELECT x FROM (VALUES (1.0), (2.0), (4.0), (8.0)) AS t(x) ORDER BY x LIMIT 10) ORDER BY l ASC;
+----
+logical_plan
+01)Sort: l ASC NULLS LAST
+02)--Projection: log(Float64(2), t.x) AS l
+03)----Sort: t.x ASC NULLS LAST, fetch=10
+04)------SubqueryAlias: t
+05)--------Projection: column1 AS x
+06)----------Values: (Float64(1)), (Float64(2)), (Float64(4)), (Float64(8))
+physical_plan
+01)ProjectionExec: expr=[log(2, column1@0) as l]
+02)--SortExec: TopK(fetch=10), expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query R
+SELECT log(2.0, x) AS l FROM (SELECT x FROM (VALUES (1.0), (2.0), (4.0), (8.0)) AS t(x) ORDER BY x LIMIT 10) ORDER BY l ASC;
+----
+0
+1
+2
+3
 
 statement ok
 drop table aggregate_test_100;
