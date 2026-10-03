@@ -24,6 +24,9 @@ mod exec;
 mod filter;
 pub(crate) mod materializing_stream;
 mod metrics;
+mod semi_anti_summary;
+#[cfg(test)]
+mod semi_anti_summary_tests;
 
 #[cfg(test)]
 mod tests;

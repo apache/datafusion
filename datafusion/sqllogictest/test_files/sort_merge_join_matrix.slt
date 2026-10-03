@@ -313,3 +313,350 @@ query I
 SELECT count(*) FROM smj_dup_l l WHERE NOT EXISTS (SELECT 1 FROM smj_dup_r r WHERE l.k = r.k);
 ----
 1
+
+# ------------------------------------------------------------------
+# Semi/anti residual comparisons: duplicate extrema, all-NULL inner groups,
+# unmatched groups, and NULL equi keys. Every case also runs with HashJoin and
+# with one-row batches, exercising equal-key groups spanning several batches.
+# Seven-row groups include NULL padding so larger batches exercise summaries;
+# those NULL rows never witness a residual comparison and survive anti joins.
+# ------------------------------------------------------------------
+statement ok
+CREATE TABLE smj_cmp_l(id INT, k INT, v INT) AS VALUES
+  (0, NULL, NULL), (1, NULL, 4), (2, 0, 7),
+  (3, 1, NULL), (4, 1, 2), (5, 1, 2), (6, 1, 6),
+  (7, 2, 3), (8, 4, 5), (9, 1, NULL), (10, 1, NULL), (11, 1, NULL);
+
+statement ok
+CREATE TABLE smj_cmp_r(id INT, k INT, v INT) AS VALUES
+  (0, NULL, 1), (1, 1, NULL), (2, 1, 2), (3, 1, 2),
+  (4, 1, 6), (5, 2, NULL), (6, 3, 4),
+  (7, 1, NULL), (8, 1, NULL), (9, 1, NULL);
+
+# Residual <>: compare all four preserved-side/polarity choices.
+query TI rowsort
+SELECT 'left_semi', l.id FROM smj_cmp_l l LEFT SEMI JOIN smj_cmp_r r
+ON l.k = r.k AND l.v <> r.v
+UNION ALL
+SELECT 'left_anti', l.id FROM smj_cmp_l l LEFT ANTI JOIN smj_cmp_r r
+ON l.k = r.k AND l.v <> r.v
+UNION ALL
+SELECT 'right_semi', r.id FROM smj_cmp_l l RIGHT SEMI JOIN smj_cmp_r r
+ON l.k = r.k AND l.v <> r.v
+UNION ALL
+SELECT 'right_anti', r.id FROM smj_cmp_l l RIGHT ANTI JOIN smj_cmp_r r
+ON l.k = r.k AND l.v <> r.v;
+----
+left_anti 0
+left_anti 1
+left_anti 10
+left_anti 11
+left_anti 2
+left_anti 3
+left_anti 7
+left_anti 8
+left_anti 9
+left_semi 4
+left_semi 5
+left_semi 6
+right_anti 0
+right_anti 1
+right_anti 5
+right_anti 6
+right_anti 7
+right_anti 8
+right_anti 9
+right_semi 2
+right_semi 3
+right_semi 4
+
+# Residual <: compare all four preserved-side/polarity choices.
+query TI rowsort
+SELECT 'left_semi', l.id FROM smj_cmp_l l LEFT SEMI JOIN smj_cmp_r r
+ON l.k = r.k AND l.v < r.v
+UNION ALL
+SELECT 'left_anti', l.id FROM smj_cmp_l l LEFT ANTI JOIN smj_cmp_r r
+ON l.k = r.k AND l.v < r.v
+UNION ALL
+SELECT 'right_semi', r.id FROM smj_cmp_l l RIGHT SEMI JOIN smj_cmp_r r
+ON l.k = r.k AND l.v < r.v
+UNION ALL
+SELECT 'right_anti', r.id FROM smj_cmp_l l RIGHT ANTI JOIN smj_cmp_r r
+ON l.k = r.k AND l.v < r.v;
+----
+left_anti 0
+left_anti 1
+left_anti 10
+left_anti 11
+left_anti 2
+left_anti 3
+left_anti 6
+left_anti 7
+left_anti 8
+left_anti 9
+left_semi 4
+left_semi 5
+right_anti 0
+right_anti 1
+right_anti 2
+right_anti 3
+right_anti 5
+right_anti 6
+right_anti 7
+right_anti 8
+right_anti 9
+right_semi 4
+
+# Residual <=: compare all four preserved-side/polarity choices.
+query TI rowsort
+SELECT 'left_semi', l.id FROM smj_cmp_l l LEFT SEMI JOIN smj_cmp_r r
+ON l.k = r.k AND l.v <= r.v
+UNION ALL
+SELECT 'left_anti', l.id FROM smj_cmp_l l LEFT ANTI JOIN smj_cmp_r r
+ON l.k = r.k AND l.v <= r.v
+UNION ALL
+SELECT 'right_semi', r.id FROM smj_cmp_l l RIGHT SEMI JOIN smj_cmp_r r
+ON l.k = r.k AND l.v <= r.v
+UNION ALL
+SELECT 'right_anti', r.id FROM smj_cmp_l l RIGHT ANTI JOIN smj_cmp_r r
+ON l.k = r.k AND l.v <= r.v;
+----
+left_anti 0
+left_anti 1
+left_anti 10
+left_anti 11
+left_anti 2
+left_anti 3
+left_anti 7
+left_anti 8
+left_anti 9
+left_semi 4
+left_semi 5
+left_semi 6
+right_anti 0
+right_anti 1
+right_anti 5
+right_anti 6
+right_anti 7
+right_anti 8
+right_anti 9
+right_semi 2
+right_semi 3
+right_semi 4
+
+# Residual >: compare all four preserved-side/polarity choices.
+query TI rowsort
+SELECT 'left_semi', l.id FROM smj_cmp_l l LEFT SEMI JOIN smj_cmp_r r
+ON l.k = r.k AND l.v > r.v
+UNION ALL
+SELECT 'left_anti', l.id FROM smj_cmp_l l LEFT ANTI JOIN smj_cmp_r r
+ON l.k = r.k AND l.v > r.v
+UNION ALL
+SELECT 'right_semi', r.id FROM smj_cmp_l l RIGHT SEMI JOIN smj_cmp_r r
+ON l.k = r.k AND l.v > r.v
+UNION ALL
+SELECT 'right_anti', r.id FROM smj_cmp_l l RIGHT ANTI JOIN smj_cmp_r r
+ON l.k = r.k AND l.v > r.v;
+----
+left_anti 0
+left_anti 1
+left_anti 10
+left_anti 11
+left_anti 2
+left_anti 3
+left_anti 4
+left_anti 5
+left_anti 7
+left_anti 8
+left_anti 9
+left_semi 6
+right_anti 0
+right_anti 1
+right_anti 4
+right_anti 5
+right_anti 6
+right_anti 7
+right_anti 8
+right_anti 9
+right_semi 2
+right_semi 3
+
+# Residual >=: compare all four preserved-side/polarity choices.
+query TI rowsort
+SELECT 'left_semi', l.id FROM smj_cmp_l l LEFT SEMI JOIN smj_cmp_r r
+ON l.k = r.k AND l.v >= r.v
+UNION ALL
+SELECT 'left_anti', l.id FROM smj_cmp_l l LEFT ANTI JOIN smj_cmp_r r
+ON l.k = r.k AND l.v >= r.v
+UNION ALL
+SELECT 'right_semi', r.id FROM smj_cmp_l l RIGHT SEMI JOIN smj_cmp_r r
+ON l.k = r.k AND l.v >= r.v
+UNION ALL
+SELECT 'right_anti', r.id FROM smj_cmp_l l RIGHT ANTI JOIN smj_cmp_r r
+ON l.k = r.k AND l.v >= r.v;
+----
+left_anti 0
+left_anti 1
+left_anti 10
+left_anti 11
+left_anti 2
+left_anti 3
+left_anti 7
+left_anti 8
+left_anti 9
+left_semi 4
+left_semi 5
+left_semi 6
+right_anti 0
+right_anti 1
+right_anti 5
+right_anti 6
+right_anti 7
+right_anti 8
+right_anti 9
+right_semi 2
+right_semi 3
+right_semi 4
+
+# NULL equi keys may match when requested, while a NULL residual is never true.
+query I rowsort
+SELECT l.id FROM smj_cmp_l l LEFT SEMI JOIN smj_cmp_r r
+ON l.k IS NOT DISTINCT FROM r.k AND l.v > r.v;
+----
+1
+6
+
+# Negated equality has the same existence semantics as <>.
+query I rowsort
+SELECT l.id FROM smj_cmp_l l LEFT ANTI JOIN smj_cmp_r r
+ON l.k = r.k AND NOT (l.v = r.v);
+----
+0
+1
+10
+11
+2
+3
+7
+8
+9
+
+# Independent extrema cannot establish a common witness for AND.
+query I rowsort
+SELECT l.id FROM smj_cmp_l l LEFT SEMI JOIN smj_cmp_r r
+ON l.k = r.k AND l.v < r.v AND l.v > r.v;
+----
+
+# Complex expressions use the ordinary residual path, including normalization
+# of NULL string values to empty strings.
+statement ok
+CREATE TABLE smj_values AS SELECT id, 1 AS k,
+  arrow_cast(s, 'Utf8') AS utf8,
+  arrow_cast(s, 'LargeUtf8') AS large_utf8,
+  arrow_cast(s, 'Utf8View') AS utf8_view,
+  CAST(d AS DATE) AS date_value,
+  arrow_cast(ts, 'Timestamp(Microsecond, Some("UTC"))') AS timestamp_value,
+  CAST(n AS DECIMAL(20, 2)) AS decimal_value
+FROM (VALUES
+  (0, NULL, NULL, NULL, NULL),
+  (1, '', '1969-12-31', '1969-12-31T23:59:59Z', -1.23),
+  (2, 'a', '1970-01-01', '1970-01-01T00:00:00Z', 0.00),
+  (3, 'out-of-line-string-z', '1970-01-02', '1970-01-01T00:00:01Z', 4.56),
+  (4, 'é', '1970-01-02', '1970-01-01T00:00:01Z', 4.56),
+  (5, NULL, NULL, NULL, NULL), (6, NULL, NULL, NULL, NULL)
+) AS t(id, s, d, ts, n);
+
+# Semi join with < over string layouts and temporal/decimal types.
+query TI rowsort
+SELECT 'utf8', l.id FROM smj_values l LEFT SEMI JOIN smj_values r
+ON l.k = r.k AND l.utf8 < r.utf8
+UNION ALL
+SELECT 'large_utf8', l.id FROM smj_values l LEFT SEMI JOIN smj_values r
+ON l.k = r.k AND l.large_utf8 < r.large_utf8
+UNION ALL
+SELECT 'utf8_view', l.id FROM smj_values l LEFT SEMI JOIN smj_values r
+ON l.k = r.k AND l.utf8_view < r.utf8_view
+UNION ALL
+SELECT 'date_value', l.id FROM smj_values l LEFT SEMI JOIN smj_values r
+ON l.k = r.k AND l.date_value < r.date_value
+UNION ALL
+SELECT 'timestamp_value', l.id FROM smj_values l LEFT SEMI JOIN smj_values r
+ON l.k = r.k AND l.timestamp_value < r.timestamp_value
+UNION ALL
+SELECT 'decimal_value', l.id FROM smj_values l LEFT SEMI JOIN smj_values r
+ON l.k = r.k AND l.decimal_value < r.decimal_value;
+----
+date_value 1
+date_value 2
+decimal_value 1
+decimal_value 2
+large_utf8 1
+large_utf8 2
+large_utf8 3
+timestamp_value 1
+timestamp_value 2
+utf8 1
+utf8 2
+utf8 3
+utf8_view 1
+utf8_view 2
+utf8_view 3
+
+# Anti join with <> over string layouts and temporal/decimal types.
+query TI rowsort
+SELECT 'utf8', l.id FROM smj_values l LEFT ANTI JOIN smj_values r
+ON l.k = r.k AND l.utf8 <> r.utf8
+UNION ALL
+SELECT 'large_utf8', l.id FROM smj_values l LEFT ANTI JOIN smj_values r
+ON l.k = r.k AND l.large_utf8 <> r.large_utf8
+UNION ALL
+SELECT 'utf8_view', l.id FROM smj_values l LEFT ANTI JOIN smj_values r
+ON l.k = r.k AND l.utf8_view <> r.utf8_view
+UNION ALL
+SELECT 'date_value', l.id FROM smj_values l LEFT ANTI JOIN smj_values r
+ON l.k = r.k AND l.date_value <> r.date_value
+UNION ALL
+SELECT 'timestamp_value', l.id FROM smj_values l LEFT ANTI JOIN smj_values r
+ON l.k = r.k AND l.timestamp_value <> r.timestamp_value
+UNION ALL
+SELECT 'decimal_value', l.id FROM smj_values l LEFT ANTI JOIN smj_values r
+ON l.k = r.k AND l.decimal_value <> r.decimal_value;
+----
+date_value 0
+date_value 5
+date_value 6
+decimal_value 0
+decimal_value 5
+decimal_value 6
+large_utf8 0
+large_utf8 5
+large_utf8 6
+timestamp_value 0
+timestamp_value 5
+timestamp_value 6
+utf8 0
+utf8 5
+utf8 6
+utf8_view 0
+utf8_view 5
+utf8_view 6
+
+query I rowsort
+SELECT l.id FROM smj_values l LEFT ANTI JOIN smj_values r
+ON l.k = r.k AND COALESCE(l.utf8, '') <> COALESCE(r.utf8, '');
+----
+
+# OR can have a witness from either comparison, but NULL never supplies one.
+query I rowsort
+SELECT l.id FROM smj_cmp_l l LEFT ANTI JOIN smj_cmp_r r
+ON l.k = r.k AND (l.v < r.v OR l.v > r.v);
+----
+0
+1
+10
+11
+2
+3
+7
+8
+9
