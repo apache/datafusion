@@ -35,17 +35,28 @@
 //! ) WHERE rk <= K;
 //! ```
 //!
-//! And replaces the `FilterExec → BoundedWindowAggExec` pipeline with
-//! `BoundedWindowAggExec → PartitionedTopKExec(fetch=K)`, removing the
-//! `FilterExec` and inserting `PartitionedTopKExec` under the window.
+//! The rewrite has two forms, chosen by whether the window's input already
+//! satisfies the `(partition_keys, order_keys)` ordering that the window
+//! requires:
 //!
-//! The appropriate [`WindowFnKind`] is forwarded to `PartitionedTopKExec`.
-//! `RANK` and `DENSE_RANK` require a non-empty `ORDER BY` clause (otherwise
-//! all rows tie at rank 1 and the optimization is degenerate).
+//! - **Input already ordered**: insert a streaming
+//!   [`StreamingPartitionedTopKExec`] between the window and its child. It culls
+//!   rows to the per-partition top-K in a single pass with O(1) state. This is a
+//!   pure win, so it is applied **unconditionally**.
+//! - **Input not ordered**: insert a heap-based [`PartitionedTopKExec`] below the
+//!   window instead, which maintains per-partition top-K state rather than
+//!   sorting the whole dataset. This can regress at high partition cardinality,
+//!   so it is gated on the `enable_window_topn` config flag.
 //!
-//! See [`PartitionedTopKExec`] for details on the replacement operator.
+//! Both drop the `FilterExec`. The appropriate [`WindowFnKind`] is forwarded to
+//! the chosen operator. `RANK` and `DENSE_RANK` require a non-empty `ORDER BY`
+//! clause (otherwise all rows tie at rank 1 and the optimization is degenerate).
+//!
+//! See [`PartitionedTopKExec`] / [`StreamingPartitionedTopKExec`] for details on
+//! the replacement operators.
 //!
 //! [`PartitionedTopKExec`]: datafusion_physical_plan::sorts::partitioned_topk::PartitionedTopKExec
+//! [`StreamingPartitionedTopKExec`]: datafusion_physical_plan::sorts::streaming_partitioned_topk::StreamingPartitionedTopKExec
 //! [`WindowFnKind`]: datafusion_physical_plan::sorts::partitioned_topk::WindowFnKind
 
 use std::sync::Arc;
@@ -58,8 +69,7 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
 use datafusion_physical_expr::window::StandardWindowExpr;
-use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
-use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_expr::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
 use datafusion_physical_plan::execution_plan::replace_children_if_necessary;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::projection::ProjectionExec;
@@ -67,7 +77,9 @@ use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::partitioned_topk::{
     PartitionedTopKExec, WindowFnKind,
 };
+use datafusion_physical_plan::sorts::streaming_partitioned_topk::StreamingPartitionedTopKExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowUDFExpr};
+use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 /// Physical optimizer rule that converts per-partition `ROW_NUMBER`,
 /// `RANK`, and `DENSE_RANK` top-K queries into a more efficient plan
@@ -77,23 +89,38 @@ use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowUDFExpr};
 ///
 /// ```text
 /// FilterExec(<ranking fn output> <= K)
-///   [optional ProjectionExec]
+///   [optional ProjectionExec/RepartitionExec]
 ///     BoundedWindowAggExec(<ranking fn> PARTITION BY ... ORDER BY ...)
+///       <child>            // the window's input, already ordered or not
 /// ```
 ///
 /// # Replacement
 ///
+/// If `<child>` already produces `(partition_keys, order_keys)` ordering, a
+/// streaming `StreamingPartitionedTopKExec` is inserted between the window and
+/// the child:
+///
 /// ```text
-/// [optional ProjectionExec]
-///   BoundedWindowAggExec(<ranking fn> PARTITION BY ... ORDER BY ...)
-///     PartitionedTopKExec(fn=<row_number|rank|dense_rank>, partition_keys, order_keys, fetch=K)
+/// [optional ProjectionExec/RepartitionExec]
+///   BoundedWindowAggExec(...)
+///     StreamingPartitionedTopKExec(fn=<row_number|rank>, partition_keys, order_keys, fetch=K)
+///       <ordered child>
 /// ```
 ///
-/// The `FilterExec` is removed entirely. The child of `BoundedWindowAggExec` is now
-/// `PartitionedTopKExec`, which maintains per-partition top-K state (a
-/// heap for `ROW_NUMBER`, a heap plus boundary ties for `RANK`, a
-/// K-bounded distinct-ob map for `DENSE_RANK`) instead of sorting the
-/// whole dataset.
+/// Otherwise a heap-based `PartitionedTopKExec` is inserted in the same place:
+///
+/// ```text
+/// [optional ProjectionExec/RepartitionExec]
+///   BoundedWindowAggExec(...)
+///     PartitionedTopKExec(fn=<row_number|rank|dense_rank>, partition_keys, order_keys, fetch=K)
+///       <child>
+/// ```
+///
+/// In both cases the `FilterExec` is removed entirely. The heap operator
+/// maintains per-partition top-K state (a heap for `ROW_NUMBER`, a heap plus
+/// boundary ties for `RANK`, a K-bounded distinct-ob map for `DENSE_RANK`)
+/// instead of sorting the whole dataset; the streaming operator computes the
+/// per-partition rank in a single pass with O(1) state.
 ///
 /// # Supported Predicates
 ///
@@ -104,9 +131,8 @@ use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowUDFExpr};
 ///
 /// # When the Rule Fires
 ///
-/// All of the following must be true:
-/// - Config flag `enable_window_topn` is `true`
-/// - The plan matches `FilterExec → [ProjectionExec] → BoundedWindowAggExec`
+/// The shared match requires all of:
+/// - The plan matches `FilterExec → [ProjectionExec/RepartitionExec...] → BoundedWindowAggExec`
 /// - The window function is `ROW_NUMBER`, `RANK`, or `DENSE_RANK`
 /// - Every window expression in the `BoundedWindowAggExec` is `ROW_NUMBER`,
 ///   `RANK`, or `DENSE_RANK` over the same `PARTITION BY` / `ORDER BY`. A
@@ -123,6 +149,11 @@ use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowUDFExpr};
 /// - The filter predicate compares the window output column to an integer
 ///   literal using `<=`, `<`, `>=`, or `>`
 ///
+/// The **streaming** rewrite additionally requires the child's output ordering to
+/// already satisfy `(partition_keys, order_keys)`; it fires **regardless** of
+/// `enable_window_topn`. The **heap** rewrite handles everything else and only
+/// fires when `enable_window_topn` is `true`.
+///
 /// [`PartitionedTopKExec`]: datafusion_physical_plan::sorts::partitioned_topk::PartitionedTopKExec
 #[derive(Default, Clone, Debug)]
 pub struct WindowTopN;
@@ -132,13 +163,13 @@ impl WindowTopN {
         Self
     }
 
-    /// Attempt to transform a single plan node.
+    /// Match a `FilterExec → [ProjectionExec/RepartitionExec...] →
+    /// BoundedWindowAggExec` chain and extract the pieces both rewrites need.
     ///
-    /// Returns `Some(new_plan)` if the node matches the
-    /// `FilterExec → [ProjectionExec] → BoundedWindowAggExec`
-    /// pattern and can be rewritten, or `None` if the node should be
-    /// left unchanged.
-    fn try_transform(plan: &Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPlan>> {
+    /// Returns `None` unless all shared guards hold: a supported ranking
+    /// function, every sibling window expression prune-safe, a non-empty
+    /// `PARTITION BY`, and at least one effective `ORDER BY` key.
+    fn match_window(plan: &Arc<dyn ExecutionPlan>) -> Option<MatchedWindow> {
         // Step 1: Match FilterExec at the top
         let filter = plan.downcast_ref::<FilterExec>()?;
 
@@ -160,11 +191,10 @@ impl WindowTopN {
         }
 
         // Step 3: Walk through optional ProjectionExec and RepartitionExec to find BoundedWindowAggExec
-        let child = filter.input();
-        let (window_exec, intermediates) = find_window_below(child)?;
+        let (window_exec, intermediates) = find_window_below(filter.input())?;
+        let window_exec_typed = window_exec.downcast_ref::<BoundedWindowAggExec>()?;
 
         // Step 4: Verify col_idx references a supported window function output column
-        let window_exec_typed = window_exec.downcast_ref::<BoundedWindowAggExec>()?;
         let input_field_count = window_exec_typed.input().schema().fields().len();
         if col_idx < input_field_count {
             return None; // Filter is on an input column, not a window column
@@ -188,6 +218,10 @@ impl WindowTopN {
         // give a wrong result. Bail out unless every window expression is a
         // supported ranking function sharing the matched expression's
         // partition/order keys.
+        //
+        // This guard is shared deliberately: it inspects only the window
+        // expressions, so it is independent of which rewrite (streaming or
+        // heap) is chosen, and both prune tails.
         let matched_expr = &window_exprs[window_expr_idx];
         let all_prune_safe = window_exprs.iter().all(|e| {
             supported_window_fn(e).is_some()
@@ -233,26 +267,71 @@ impl WindowTopN {
             return None;
         }
 
-        let partitioned_topk = PartitionedTopKExec::try_new(
-            Arc::clone(window_exec_typed.input()),
+        Some(MatchedWindow {
+            window_exec: Arc::clone(&window_exec),
+            window_expr_idx,
+            fn_kind,
             expr,
             partition_prefix_len,
             limit_n,
-            fn_kind,
+            intermediates,
+        })
+    }
+
+    /// Case 1 — the child already produces `(partition_keys, order_keys)`
+    /// ordering. Insert a [`StreamingPartitionedTopKExec`] between the window and
+    /// its child; drop the `FilterExec`.
+    fn try_streaming(plan: &Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPlan>> {
+        let matched = Self::match_window(plan)?;
+
+        let window = matched.window_exec.downcast_ref::<BoundedWindowAggExec>()?;
+        let child = window.input();
+
+        let window_expr = &window.window_expr()[matched.window_expr_idx];
+        let (expr, partition_prefix_len) = streaming_ordering(
+            child,
+            window_expr.partition_by(),
+            window_expr.order_by(),
+        )?;
+
+        let streaming = StreamingPartitionedTopKExec::try_new(
+            Arc::clone(child),
+            expr,
+            partition_prefix_len,
+            matched.limit_n,
+            matched.fn_kind,
         )
         .ok()?;
 
-        // Step 7: Rebuild window with PartitionedTopKExec as its child
-        let mut result =
-            replace_children_if_necessary(window_exec, vec![Arc::new(partitioned_topk)])
-                .ok()?;
+        rebuild(
+            &matched.window_exec,
+            Arc::new(streaming),
+            matched.intermediates,
+        )
+    }
 
-        // Step 8: Rebuild intermediate nodes (ProjectionExec/RepartitionExec)
-        for node in intermediates.into_iter().rev() {
-            result = replace_children_if_necessary(node, vec![result]).ok()?;
-        }
+    /// Case 2 — the child's ordering does not already satisfy the window's
+    /// `(partition_keys, order_keys)`. Insert a heap-based
+    /// [`PartitionedTopKExec`] below the window; drop the `FilterExec`. Gated on
+    /// `enable_window_topn` by the caller.
+    fn try_heap(plan: &Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPlan>> {
+        let matched = Self::match_window(plan)?;
+        let window = matched.window_exec.downcast_ref::<BoundedWindowAggExec>()?;
 
-        Some(result)
+        let partitioned_topk = PartitionedTopKExec::try_new(
+            Arc::clone(window.input()),
+            matched.expr,
+            matched.partition_prefix_len,
+            matched.limit_n,
+            matched.fn_kind,
+        )
+        .ok()?;
+
+        rebuild(
+            &matched.window_exec,
+            Arc::new(partitioned_topk),
+            matched.intermediates,
+        )
     }
 }
 
@@ -262,18 +341,24 @@ impl PhysicalOptimizerRule for WindowTopN {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if !config.optimizer.enable_window_topn {
-            return Ok(plan);
-        }
+        let enable_heap = config.optimizer.enable_window_topn;
 
         plan.transform_down(|node| {
-            Ok(
-                if let Some(transformed) = WindowTopN::try_transform(&node) {
-                    Transformed::yes(transformed)
+            // The streaming rewrite (already-sorted input) is a pure win and is
+            // applied unconditionally. The heap rewrite (unsorted input) can
+            // regress at high partition cardinality, so it stays behind the
+            // `enable_window_topn` flag.
+            if let Some(transformed) = WindowTopN::try_streaming(&node) {
+                Ok(Transformed::yes(transformed))
+            } else if enable_heap {
+                if let Some(transformed) = WindowTopN::try_heap(&node) {
+                    Ok(Transformed::yes(transformed))
                 } else {
-                    Transformed::no(node)
-                },
-            )
+                    Ok(Transformed::no(node))
+                }
+            } else {
+                Ok(Transformed::no(node))
+            }
         })
         .data()
     }
@@ -285,6 +370,89 @@ impl PhysicalOptimizerRule for WindowTopN {
     fn schema_check(&self) -> bool {
         true
     }
+}
+
+/// Shared pieces extracted from a matched
+/// `FilterExec → [Projection/Repartition...] → BoundedWindowAggExec` chain.
+struct MatchedWindow {
+    /// The `BoundedWindowAggExec` node (as `Arc<dyn ExecutionPlan>`).
+    window_exec: Arc<dyn ExecutionPlan>,
+    /// Index of the ranking window expression within the window's expressions.
+    window_expr_idx: usize,
+    /// Which ranking function was matched.
+    fn_kind: WindowFnKind,
+    /// `(PARTITION BY keys, ORDER BY keys)` as a lex ordering, derived from the
+    /// window expression. Used as-is by the heap rewrite; the streaming rewrite
+    /// derives its own from the child's concrete output ordering instead.
+    expr: LexOrdering,
+    /// Number of `PARTITION BY` keys.
+    partition_prefix_len: usize,
+    /// Per-partition row limit (K) derived from the predicate.
+    limit_n: usize,
+    /// `ProjectionExec`/`RepartitionExec` nodes between the filter and the
+    /// window, to be rebuilt above the new child.
+    intermediates: Vec<Arc<dyn ExecutionPlan>>,
+}
+
+/// Rebuild the window over `new_child`, then replay the intermediate
+/// `Projection`/`Repartition` nodes above it (the `FilterExec` is dropped).
+fn rebuild(
+    window_exec: &Arc<dyn ExecutionPlan>,
+    new_child: Arc<dyn ExecutionPlan>,
+    intermediates: Vec<Arc<dyn ExecutionPlan>>,
+) -> Option<Arc<dyn ExecutionPlan>> {
+    let mut result =
+        replace_children_if_necessary(Arc::clone(window_exec), vec![new_child]).ok()?;
+    for node in intermediates.into_iter().rev() {
+        result = replace_children_if_necessary(node, vec![result]).ok()?;
+    }
+    Some(result)
+}
+
+/// Derive the `(expr, partition_prefix_len)` for a streaming rewrite from the
+/// child's concrete output ordering.
+///
+/// Requires the child ordering to begin with the `PARTITION BY` columns (in any
+/// order — partition keys need only be grouped) followed by the `ORDER BY`
+/// expressions matched exactly (expr + options). Using the child's real sort
+/// options means the operator's declared `required_input_ordering` matches what
+/// is already present, so `EnforceSorting` won't insert a redundant sort.
+///
+/// Returns `None` if the ordering doesn't line up — the node then falls through
+/// to the heap path or the default plan.
+fn streaming_ordering(
+    child: &Arc<dyn ExecutionPlan>,
+    partition_by: &[Arc<dyn PhysicalExpr>],
+    order_by: &[PhysicalSortExpr],
+) -> Option<(LexOrdering, usize)> {
+    let partition_prefix_len = partition_by.len();
+    let total = partition_prefix_len + order_by.len();
+
+    let ordering = child.output_ordering()?;
+    if ordering.len() < total {
+        return None;
+    }
+
+    // ORDER BY suffix must match exactly (expression and sort options).
+    for (actual, expected) in ordering[partition_prefix_len..total].iter().zip(order_by) {
+        if actual != expected {
+            return None;
+        }
+    }
+
+    // Partition prefix must be exactly the PARTITION BY columns (grouping —
+    // direction/nulls don't matter for boundary detection).
+    for pb in partition_by {
+        if !ordering[..partition_prefix_len]
+            .iter()
+            .any(|e| e.expr.eq(pb))
+        {
+            return None;
+        }
+    }
+
+    let expr = LexOrdering::new(ordering[..total].iter().cloned())?;
+    Some((expr, partition_prefix_len))
 }
 
 /// Extract a window limit from a predicate expression.
@@ -308,9 +476,7 @@ impl PhysicalOptimizerRule for WindowTopN {
 /// - `10 >= rn` → `Some((2, 10))`
 /// - `rn = 1` → `None` (equality not supported)
 /// - `val <= 5` → `Some((1, 5))` (caller must verify it's a window column)
-fn extract_window_limit(
-    predicate: &Arc<dyn datafusion_physical_expr::PhysicalExpr>,
-) -> Option<(usize, usize)> {
+fn extract_window_limit(predicate: &Arc<dyn PhysicalExpr>) -> Option<(usize, usize)> {
     let binary = predicate.downcast_ref::<BinaryExpr>()?;
     let op = binary.op();
     let left = binary.left();
