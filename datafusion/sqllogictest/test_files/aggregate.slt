@@ -7619,6 +7619,62 @@ staging 1
 statement ok
 DROP TABLE distinct_limit_window_table;
 
+# `LimitedDistinctAggregation` limits only the final aggregate when its grouping
+# differs from the partial's (columns not at their output positions, or
+# expression keys). `CombinePartialFinalAggregate` must leave such a pair
+# uncombined instead of failing to plan.
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+CREATE TABLE distinct_limit_combine AS
+SELECT * FROM (VALUES (1, 10), (2, 20), (3, 30), (4, 40), (5, 50), (6, 60)) AS v(a, b);
+
+query TT
+EXPLAIN SELECT b, a FROM distinct_limit_combine GROUP BY b, a LIMIT 2;
+----
+logical_plan
+01)Limit: skip=0, fetch=2
+02)--Aggregate: groupBy=[[distinct_limit_combine.b, distinct_limit_combine.a]], aggr=[[]]
+03)----TableScan: distinct_limit_combine projection=[a, b]
+physical_plan
+01)GlobalLimitExec: skip=0, fetch=2
+02)--AggregateExec: mode=Final, gby=[b@0 as b, a@1 as a], aggr=[], lim=[2]
+03)----AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# LIMIT without ORDER BY may return any two groups
+query II
+SELECT count(*), count(*) FILTER (WHERE b = a * 10)
+FROM (SELECT b, a FROM distinct_limit_combine GROUP BY b, a LIMIT 2);
+----
+2 2
+
+query TT
+EXPLAIN SELECT a % 3 FROM distinct_limit_combine GROUP BY a % 3 LIMIT 2;
+----
+logical_plan
+01)Limit: skip=0, fetch=2
+02)--Aggregate: groupBy=[[distinct_limit_combine.a % Int64(3)]], aggr=[[]]
+03)----TableScan: distinct_limit_combine projection=[a]
+physical_plan
+01)GlobalLimitExec: skip=0, fetch=2
+02)--AggregateExec: mode=Final, gby=[distinct_limit_combine.a % Int64(3)@0 as distinct_limit_combine.a % Int64(3)], aggr=[], lim=[2]
+03)----AggregateExec: mode=Partial, gby=[a@0 % 3 as distinct_limit_combine.a % Int64(3)], aggr=[]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT count(*), count(DISTINCT m)
+FROM (SELECT a % 3 AS m FROM distinct_limit_combine GROUP BY a % 3 LIMIT 2);
+----
+2 2
+
+statement ok
+DROP TABLE distinct_limit_combine;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
 #
 # regr_*() tests
 #
