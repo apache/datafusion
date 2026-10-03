@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use arrow::array::RecordBatch;
+use arrow::array::{Array, MapArray, RecordBatch, StructArray};
 use arrow::datatypes::Schema;
 use datafusion_common::{DataFusionError, Result, ScalarValue, internal_err, plan_err};
 use datafusion_expr::ColumnarValue;
@@ -74,4 +74,39 @@ pub(crate) fn validate_percentile_expr(
         );
     }
     Ok(percentile)
+}
+
+/// Splits row `row` of `map_array` into its key and value scalars.
+pub(crate) fn map_row_to_scalars(
+    map_array: &MapArray,
+    row: usize,
+) -> Result<(Vec<ScalarValue>, Vec<ScalarValue>)> {
+    let offsets = map_array.value_offsets();
+    let keys = map_array.keys();
+    let values = map_array.values();
+
+    let start = offsets[row] as usize;
+    let end = offsets[row + 1] as usize;
+    let mut row_keys = Vec::with_capacity(end - start);
+    let mut row_values = Vec::with_capacity(end - start);
+    for idx in start..end {
+        row_keys.push(ScalarValue::try_from_array(keys, idx)?);
+        row_values.push(ScalarValue::try_from_array(values, idx)?);
+    }
+    Ok((row_keys, row_values))
+}
+
+/// Converts each row of `struct_array` into the scalars of its columns.
+pub(crate) fn struct_to_rows(
+    struct_array: &StructArray,
+) -> Result<Vec<Vec<ScalarValue>>> {
+    (0..struct_array.len())
+        .map(|row| {
+            struct_array
+                .columns()
+                .iter()
+                .map(|column| ScalarValue::try_from_array(column, row))
+                .collect()
+        })
+        .collect()
 }
