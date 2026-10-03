@@ -119,7 +119,7 @@ impl ScalarUDFImpl for CurrentDateFunc {
             .execution
             .time_zone
             .as_ref()
-            .and_then(|tz| tz.parse::<Tz>().ok())
+            .and_then(|tz| tz.as_str().parse::<Tz>().ok())
             .map_or_else(
                 || datetime_to_days(&now_ts),
                 |tz| {
