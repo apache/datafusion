@@ -110,4 +110,45 @@ pub trait PhysicalOptimizerRule: Debug + std::any::Any {
     ///
     /// [`optimize`]: PhysicalOptimizerRule::optimize
     fn schema_check(&self) -> bool;
+
+    /// Whether this rule may be applied to its own output, i.e. whether it is
+    /// idempotent: an application to a plan it has already settled must
+    /// change nothing.
+    ///
+    /// The optimizer runs a rule that returns `true` to convergence at each
+    /// of its call sites, re-applying it until the plan's signature repeats
+    /// (fixpoint or cycle) or `max_passes` is reached. A rule that returns
+    /// `false`, the default, runs exactly once per call site: how often it
+    /// runs stays entirely a property of the chain that scheduled it.
+    ///
+    /// Only declare this for rules whose specification promises it.
+    /// Enforcement passes qualify by definition: enforcing requirements on a
+    /// plan that already satisfies them must be a no-op. Most optimizations
+    /// do not: a rewrite whose trigger pattern survives in its own output
+    /// re-fires on re-application (a pushdown that leaves the original
+    /// operator in place will push the same thing again).
+    fn idempotent(&self) -> bool {
+        false
+    }
+
+    /// Whether this rule's output is a pure function of the plan and the
+    /// configuration: no clocks, no randomness, no external mutable state.
+    ///
+    /// The optimizer uses this for a weaker and safer saving than
+    /// [`idempotent`](Self::idempotent): within one optimization run, once a
+    /// deterministic rule has been *observed* to return a plan unchanged, a
+    /// later call handing it that same plan is skipped outright, since it
+    /// would provably do the same nothing. Nothing is ever re-applied
+    /// speculatively, so this is safe for rules that are not idempotent: a
+    /// rule that oscillates between two forms is deterministic (each form
+    /// maps to the other, reproducibly) and never records a fixpoint, so it
+    /// is simply never skipped.
+    ///
+    /// This is what makes hand-authored repetition affordable: a chain that
+    /// interleaves rewrites with enforcement passes re-runs enforcement after
+    /// every rewrite, and on most plans most rewrites do not fire, so most of
+    /// those enforcement calls are re-deriving a plan they already settled.
+    fn deterministic(&self) -> bool {
+        false
+    }
 }
