@@ -2050,6 +2050,60 @@ mod tests {
         )
     }
 
+    /// A NULL constant has no column, but it is still nullable. The join must
+    /// be null-aware although the subquery column `sq.c` is not nullable
+    /// (<https://github.com/apache/datafusion/issues/25473>).
+    #[test]
+    fn null_constant_not_in_non_nullable_subquery_is_null_aware() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(not_in_subquery(
+                lit(ScalarValue::UInt32(None)),
+                test_subquery_with_name("sq")?,
+            ))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.b [b:UInt32]
+          Projection: test.a, test.b, test.c [a:UInt32, b:UInt32, c:UInt32]
+            LeftAnti Join:  Filter: __correlated_sq_1_value = __correlated_sq_1.c null_aware [a:UInt32, b:UInt32, c:UInt32, __correlated_sq_1_value:UInt32;N]
+              Projection: test.a, test.b, test.c, UInt32(NULL) AS __correlated_sq_1_value [a:UInt32, b:UInt32, c:UInt32, __correlated_sq_1_value:UInt32;N]
+                TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+              SubqueryAlias: __correlated_sq_1 [c:UInt32]
+                Projection: sq.c [c:UInt32]
+                  TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    /// `test.c + 1` over a non-nullable `test.c` cannot be NULL, and neither can
+    /// `sq.c`, so the anti join stays plain
+    /// (<https://github.com/apache/datafusion/issues/25474>).
+    #[test]
+    fn non_nullable_key_expr_not_in_is_not_null_aware() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(not_in_subquery(
+                col("test.c") + lit(1u32),
+                test_subquery_with_name("sq")?,
+            ))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.b [b:UInt32]
+          LeftAnti Join:  Filter: test.c + UInt32(1) = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            SubqueryAlias: __correlated_sq_1 [c:UInt32]
+              Projection: sq.c [c:UInt32]
+                TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
     #[test]
     fn correlated_not_in_mark_join_is_null_aware_for_hashable_filter() -> Result<()> {
         let outer_scan = nullable_scalar_mark_scan("outer_t")?;
