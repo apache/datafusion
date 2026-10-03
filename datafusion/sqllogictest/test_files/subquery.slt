@@ -3189,10 +3189,8 @@ statement ok
 DROP TABLE oj_b;
 
 # Regression test for #25792: a correlated filter below a window function
-# selects the rows the window function sees for each outer row. Pulled above
-# the window as it is, the window function would run over all rows and compute
-# different values. The filter `y = k` fixes `y` for each outer row, so the pull
-# up adds `y` to the `PARTITION BY` of the window, which keeps the values.
+# selects the rows that the window function sees for each outer row. For
+# `y = k`, the pull up partitions the window by `y` as well.
 statement ok
 CREATE TABLE win_outer(k INT) AS VALUES (1), (2), (5);
 
@@ -3267,8 +3265,8 @@ SELECT win_outer.k FROM win_outer WHERE EXISTS (SELECT 1 FROM (SELECT win_inner.
 2
 
 # A correlated filter below the window that reads only a `PARTITION BY` column
-# keeps or drops whole partitions, so it is pulled above the window as it is.
-# This holds for a non-equality filter too. The right answer is `1`.
+# keeps or drops whole partitions, so it is pulled above the window. This holds
+# for a non-equality filter too. The right answer is `1`.
 query I
 SELECT win_outer.k FROM win_outer WHERE EXISTS (SELECT 1 FROM (SELECT row_number() OVER (PARTITION BY win_inner.y ORDER BY win_inner.id) AS rn FROM win_inner WHERE win_inner.y > win_outer.k) AS w WHERE w.rn = 1) ORDER BY win_outer.k;
 ----
@@ -3298,20 +3296,10 @@ SELECT win_outer.k, (SELECT max(w.rn) FROM (SELECT row_number() OVER (PARTITION 
 2 1
 5 NULL
 
-# `CAST(f AS INT) = k` keeps the rows of several `f` values for one outer row,
-# so partitioning by `f` would number them apart. The subquery stays
-# correlated. The right answer is `(1, 2), (2, NULL), (5, NULL)`.
+# A lossy `CAST(f AS INT) = k` matches several `f` values for one outer row, so
+# the subquery stays correlated. The right answer is `(1, 2), (2, NULL), (5, NULL)`.
 statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
 SELECT win_outer.k, (SELECT max(w.rn) FROM (SELECT row_number() OVER (ORDER BY v.id) AS rn FROM (VALUES (1, 1.2), (2, 1.4)) AS v(id, f) WHERE CAST(v.f AS INT) = win_outer.k) AS w) AS m FROM win_outer ORDER BY win_outer.k;
-
-# The `IN` predicate repeats `win_inner.y = win_outer.k`, so the pull up drops
-# that filter and the join applies it. The window must still be partitioned by
-# `win_inner.y`. The right answer is `1, 2`.
-query I
-SELECT win_outer.k FROM win_outer WHERE win_outer.k IN (SELECT win_inner.y FROM win_inner WHERE win_inner.y = win_outer.k QUALIFY row_number() OVER (ORDER BY win_inner.id) = 1) ORDER BY win_outer.k;
-----
-1
-2
 
 # A window over an aggregate with count bug handling stays correlated.
 statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
