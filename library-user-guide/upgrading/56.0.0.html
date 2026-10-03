@@ -509,6 +509,23 @@ accept <code class="docutils literal notranslate"><span class="pre">RowGroupSele
 synchronous reader still requires <code class="docutils literal notranslate"><span class="pre">with_row_groups</span></code> and an overall
 <code class="docutils literal notranslate"><span class="pre">with_row_selection</span></code>.</p>
 </section>
+<section id="rowgroupaccessplanfilter-prune-by-range-takes-a-rowgrouprangeassignment">
+<h3><code class="docutils literal notranslate"><span class="pre">RowGroupAccessPlanFilter::prune_by_range</span></code> takes a <code class="docutils literal notranslate"><span class="pre">RowGroupRangeAssignment</span></code><a class="headerlink" href="#rowgroupaccessplanfilter-prune-by-range-takes-a-rowgrouprangeassignment" title="Link to this heading">#</a></h3>
+<p>The new <code class="docutils literal notranslate"><span class="pre">datafusion.execution.parquet.row_group_range_assignment</span></code> option decides
+which byte range of a split Parquet file reads each row group. The default,
+<code class="docutils literal notranslate"><span class="pre">start_offset</span></code>, keeps the previous behavior. <code class="docutils literal notranslate"><span class="pre">midpoint</span></code> matches Apache Spark.</p>
+<p><code class="docutils literal notranslate"><span class="pre">RowGroupAccessPlanFilter::prune_by_range</span></code> takes the assignment as a new
+argument. Pass <code class="docutils literal notranslate"><span class="pre">RowGroupRangeAssignment::StartOffset</span></code> for the previous behavior:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
+<span class="n">filter</span><span class="p">.</span><span class="n">prune_by_range</span><span class="p">(</span><span class="n">groups</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">range</span><span class="p">);</span>
+<span class="c1">// After</span>
+<span class="n">filter</span><span class="p">.</span><span class="n">prune_by_range</span><span class="p">(</span><span class="n">groups</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">range</span><span class="p">,</span><span class="w"> </span><span class="n">RowGroupRangeAssignment</span><span class="p">::</span><span class="n">StartOffset</span><span class="p">);</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">ParquetOptions</span></code> and its generated protobuf struct gained a
+<code class="docutils literal notranslate"><span class="pre">row_group_range_assignment</span></code> field. Exhaustive struct literals must set it or
+use <code class="docutils literal notranslate"><span class="pre">..Default::default()</span></code>.</p>
+</section>
 <section id="missing-parquet-null-counts-are-treated-as-unknown">
 <h3>Missing Parquet null counts are treated as unknown<a class="headerlink" href="#missing-parquet-null-counts-are-treated-as-unknown" title="Link to this heading">#</a></h3>
 <p>DataFusion now preserves an omitted Parquet <code class="docutils literal notranslate"><span class="pre">null_count</span></code> statistic as unknown.
@@ -1220,6 +1237,7 @@ the API breaks.</p>
 </ul>
 </li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parquetaccessplan-into-overall-row-selection-is-deprecated"><code class="docutils literal notranslate"><span class="pre">ParquetAccessPlan::into_overall_row_selection</span></code> is deprecated</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rowgroupaccessplanfilter-prune-by-range-takes-a-rowgrouprangeassignment"><code class="docutils literal notranslate"><span class="pre">RowGroupAccessPlanFilter::prune_by_range</span></code> takes a <code class="docutils literal notranslate"><span class="pre">RowGroupRangeAssignment</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#missing-parquet-null-counts-are-treated-as-unknown">Missing Parquet null counts are treated as unknown</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#timestamp-u-some-tz-timestamp-u-none-reads-the-naive-operand-in-tz"><code class="docutils literal notranslate"><span class="pre">Timestamp(u,</span> <span class="pre">Some(tz))</span> <span class="pre">-</span> <span class="pre">Timestamp(u,</span> <span class="pre">None)</span></code> reads the naive operand in <code class="docutils literal notranslate"><span class="pre">tz</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#foreignsession-create-physical-plan-is-unsupported"><code class="docutils literal notranslate"><span class="pre">ForeignSession::create_physical_plan</span></code> is unsupported</a></li>
