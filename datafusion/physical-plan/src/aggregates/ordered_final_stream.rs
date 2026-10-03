@@ -189,7 +189,6 @@ impl OrderedFinalAggregateStream {
             agg,
             &input_schema,
             Arc::clone(&schema),
-            batch_size,
             input_order_mode,
             metrics,
         )?;
