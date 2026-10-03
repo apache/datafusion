@@ -3676,10 +3676,11 @@ mod tests {
         FairSpillPool, MemoryPool, PeakRecordingPool,
     };
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    use datafusion_expr::expr_fn::create_udaf;
     use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
     use datafusion_expr::{
-        Accumulator, AggregateUDF, AggregateUDFImpl, EmitTo, GroupsAccumulator, Operator,
-        Signature, Volatility,
+        Accumulator, AccumulatorUpdateArgs, AggregateUDF, AggregateUDFImpl, EmitTo,
+        GroupsAccumulator, Operator, Signature, Volatility,
     };
     use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
     use datafusion_functions_aggregate::array_agg::array_agg_udaf;
@@ -4945,6 +4946,211 @@ mod tests {
             pool.reserved(),
         );
 
+        Ok(())
+    }
+
+    #[derive(Debug, Default)]
+    struct InputlessCountAccumulator(i64);
+
+    impl Accumulator for InputlessCountAccumulator {
+        fn update_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
+            internal_err!("inputless_count requires AccumulatorUpdateArgs")
+        }
+
+        fn update_batch_with_args(
+            &mut self,
+            args: AccumulatorUpdateArgs<'_>,
+        ) -> Result<()> {
+            self.0 += args.num_rows() as i64;
+            Ok(())
+        }
+
+        fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+            self.0 += states[0]
+                .as_primitive::<Int64Type>()
+                .iter()
+                .flatten()
+                .sum::<i64>();
+            Ok(())
+        }
+
+        fn evaluate(&mut self) -> Result<ScalarValue> {
+            Ok(ScalarValue::Int64(Some(self.0)))
+        }
+
+        fn state(&mut self) -> Result<Vec<ScalarValue>> {
+            Ok(vec![ScalarValue::Int64(Some(self.0))])
+        }
+
+        fn size(&self) -> usize {
+            size_of_val(self)
+        }
+    }
+
+    fn inputless_aggregate(
+        mode: AggregateMode,
+        group_by: PhysicalGroupBy,
+        schema: &SchemaRef,
+        batches: Vec<RecordBatch>,
+        order_by: Vec<PhysicalSortExpr>,
+    ) -> Result<Arc<AggregateExec>> {
+        let input = TestMemoryExec::try_new_exec(&[batches], Arc::clone(schema), None)?;
+        let udaf = create_udaf(
+            "inputless_count",
+            vec![],
+            Arc::new(DataType::Int64),
+            Volatility::Immutable,
+            Arc::new(|_| Ok(Box::new(InputlessCountAccumulator::default()))),
+            Arc::new(vec![DataType::Int64]),
+        );
+        AggregateExprBuilder::new(Arc::new(udaf), vec![])
+            .schema(Arc::clone(schema))
+            .order_by(order_by)
+            .alias("inputless_count")
+            .build()
+            .map(Arc::new)
+            .and_then(|aggregate| {
+                AggregateExec::try_new(
+                    mode,
+                    group_by,
+                    vec![aggregate],
+                    vec![None],
+                    input,
+                    Arc::clone(schema),
+                )
+                .map(Arc::new)
+            })
+    }
+
+    #[tokio::test]
+    async fn inputless_accumulator_uses_explicit_row_count() -> Result<()> {
+        let (schema, batches) = some_data();
+        let aggregate = inputless_aggregate(
+            AggregateMode::Single,
+            PhysicalGroupBy::default(),
+            &schema,
+            batches,
+            vec![],
+        )?;
+
+        let output =
+            collect(aggregate.execute(0, Arc::new(TaskContext::default()))?).await?;
+        assert_eq!(output[0].column(0).as_primitive::<Int64Type>().value(0), 8);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn adapter_groups_inputless_accumulator() -> Result<()> {
+        let (schema, batches) = some_data();
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
+        let aggregate = inputless_aggregate(
+            AggregateMode::Single,
+            group_by,
+            &schema,
+            batches,
+            vec![],
+        )?;
+
+        let output = collect(aggregate.execute(0, new_migrated_hash_ctx(4))?).await?;
+        assert_snapshot!(batches_to_sort_string(&output), @r"
+        +---+-----------------+
+        | a | inputless_count |
+        +---+-----------------+
+        | 2 | 2               |
+        | 3 | 3               |
+        | 4 | 3               |
+        +---+-----------------+
+        ");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn inputless_accumulator_with_order_by_uses_explicit_row_count() -> Result<()> {
+        let (schema, batches) = some_data();
+        let order_by = || -> Result<Vec<PhysicalSortExpr>> {
+            Ok(vec![PhysicalSortExpr::new_default(col("b", &schema)?)])
+        };
+
+        let aggregate = inputless_aggregate(
+            AggregateMode::Single,
+            PhysicalGroupBy::default(),
+            &schema,
+            batches.clone(),
+            order_by()?,
+        )?;
+        let output =
+            collect(aggregate.execute(0, Arc::new(TaskContext::default()))?).await?;
+        assert_eq!(output[0].column(0).as_primitive::<Int64Type>().value(0), 8);
+
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
+        let aggregate = inputless_aggregate(
+            AggregateMode::Single,
+            group_by,
+            &schema,
+            batches,
+            order_by()?,
+        )?;
+        let output = collect(aggregate.execute(0, new_migrated_hash_ctx(4))?).await?;
+        assert_snapshot!(batches_to_sort_string(&output), @r"
+        +---+-----------------+
+        | a | inputless_count |
+        +---+-----------------+
+        | 2 | 2               |
+        | 3 | 3               |
+        | 4 | 3               |
+        +---+-----------------+
+        ");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn partial_skip_converts_inputless_accumulator_state() -> Result<()> {
+        let (schema, batches) = some_data();
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
+        let aggregate = inputless_aggregate(
+            AggregateMode::Partial,
+            group_by,
+            &schema,
+            batches,
+            vec![],
+        )?;
+        let session_config = migrated_hash_session_config(4)
+            .set(
+                "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
+                &ScalarValue::Int64(Some(2)),
+            )
+            .set(
+                "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
+                &ScalarValue::Float64(Some(0.1)),
+            );
+        let ctx = Arc::new(TaskContext::default().with_session_config(session_config));
+
+        let output = collect(aggregate.execute(0, ctx)?).await?;
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&output), @r"
+            +---+---+
+            | a | 0 |
+            +---+---+
+            | 2 | 1 |
+            | 2 | 1 |
+            | 3 | 1 |
+            | 3 | 1 |
+            | 3 | 1 |
+            | 4 | 1 |
+            | 4 | 2 |
+            +---+---+
+            ");
+        }
+        let skipped_rows = aggregate
+            .metrics()
+            .unwrap()
+            .sum_by_name("skipped_aggregation_rows")
+            .map(|metric| metric.as_usize())
+            .unwrap_or(0);
+        assert_eq!(skipped_rows, 4);
         Ok(())
     }
 

@@ -64,7 +64,7 @@ use datafusion_common::{
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use datafusion_expr::{EmitTo, GroupsAccumulator};
+use datafusion_expr::{ConvertToStateArgs, EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -1469,7 +1469,13 @@ impl GroupedHashAggregateStream {
             output.extend(self.aggregate_accumulator_metrics.time(
                 idx,
                 AccumulatorPhase::ConvertToState,
-                || acc.convert_to_state(values, opt_filter),
+                || {
+                    acc.convert_to_state_with_args(ConvertToStateArgs::new(
+                        values,
+                        opt_filter,
+                        batch.num_rows(),
+                    ))
+                },
             )?);
         }
 

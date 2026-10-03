@@ -108,11 +108,12 @@ pub use datafusion_doc::{
     scalar_doc_sections, window_doc_sections,
 };
 pub use datafusion_expr_common::accumulator::{
-    Accumulator, AggregateMetric, AggregateMetricRecorder, AggregateMetrics,
+    Accumulator, AccumulatorUpdateArgs, AggregateMetric, AggregateMetricRecorder,
+    AggregateMetrics,
 };
 pub use datafusion_expr_common::columnar_value::ColumnarValue;
 pub use datafusion_expr_common::groups_accumulator::{
-    EmitTo, GroupSelection, GroupsAccumulator,
+    ConvertToStateArgs, EmitTo, GroupSelection, GroupsAccumulator,
 };
 pub use datafusion_expr_common::operator::Operator;
 pub use datafusion_expr_common::placement::ExpressionPlacement;

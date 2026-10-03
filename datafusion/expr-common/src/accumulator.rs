@@ -92,6 +92,32 @@ impl Drop for AggregateMetricTimer<'_> {
     }
 }
 
+/// Arguments for updating an [`Accumulator`].
+#[derive(Debug, Clone, Copy)]
+pub struct AccumulatorUpdateArgs<'a> {
+    values: &'a [ArrayRef],
+    num_rows: usize,
+}
+
+impl<'a> AccumulatorUpdateArgs<'a> {
+    /// Creates arguments for updating an [`Accumulator`].
+    pub fn new(values: &'a [ArrayRef], num_rows: usize) -> Self {
+        Self { values, num_rows }
+    }
+
+    /// Returns the evaluated arguments to the aggregate function.
+    pub fn values(&self) -> &'a [ArrayRef] {
+        self.values
+    }
+
+    /// Returns the number of rows participating in this update.
+    ///
+    /// Aggregate filters have already been applied to this count.
+    pub fn num_rows(&self) -> usize {
+        self.num_rows
+    }
+}
+
 /// Tracks an aggregate function's state.
 ///
 /// `Accumulator`s are stateful objects that implement a single group. They
@@ -137,6 +163,15 @@ pub trait Accumulator: Send + Sync + Debug + std::any::Any {
     /// and `update_batch` adds each of the input values to the
     /// running sum.
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()>;
+
+    /// Updates the accumulator with its evaluated arguments and input row count.
+    ///
+    /// The explicit row count supports aggregate functions without arguments,
+    /// which receive an empty [`AccumulatorUpdateArgs::values`] slice. The
+    /// default implementation delegates to [`Self::update_batch`].
+    fn update_batch_with_args(&mut self, args: AccumulatorUpdateArgs<'_>) -> Result<()> {
+        self.update_batch(args.values())
+    }
 
     /// Returns an optional metric timed once per grouped adapter input batch.
     ///
