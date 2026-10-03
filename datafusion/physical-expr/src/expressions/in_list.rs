@@ -31,6 +31,7 @@ use arrow::compute::kernels::boolean::{not, or_kleene};
 use arrow::compute::kernels::cmp::eq as arrow_eq;
 use arrow::datatypes::*;
 
+use datafusion_common::utils::{normalize_float_zero, normalize_float_zero_scalar};
 use datafusion_common::{
     DFSchema, Result, ScalarValue, assert_or_internal_err, exec_err,
 };
@@ -47,7 +48,7 @@ mod static_filter;
 mod strategy;
 
 use static_filter::StaticFilterRef;
-use strategy::instantiate_static_filter;
+use strategy::{dictionary_value_type, instantiate_static_filter};
 
 /// InList
 pub struct InListExpr {
@@ -79,6 +80,20 @@ fn supports_arrow_eq(dt: &DataType) -> bool {
         Boolean | Binary | LargeBinary | BinaryView | FixedSizeBinary(_) => true,
         Dictionary(_, v) => supports_arrow_eq(v.as_ref()),
         _ => dt.is_primitive() || dt.is_null() || dt.is_string(),
+    }
+}
+
+fn normalize_in_list_float_zero_value(value: ColumnarValue) -> ColumnarValue {
+    match value {
+        ColumnarValue::Array(array)
+            if dictionary_value_type(array.data_type()).is_floating() =>
+        {
+            ColumnarValue::Array(normalize_float_zero(&array))
+        }
+        ColumnarValue::Scalar(scalar) => {
+            ColumnarValue::Scalar(normalize_float_zero_scalar(scalar))
+        }
+        value => value,
     }
 }
 
@@ -370,12 +385,15 @@ impl PhysicalExpr for InListExpr {
                 // Use Arrow's vectorized eq kernel for types it supports (primitive,
                 // boolean, string, binary, dictionary), falling back to row-by-row
                 // comparator for unsupported types (nested, RunEndEncoded, etc.).
-                let value = value.into_array(num_rows)?;
+                // Normalize the left side once for the whole list. Doing this
+                // outside `compare_one` avoids rescanning it for every item.
+                let value =
+                    normalize_in_list_float_zero_value(value).into_array(num_rows)?;
                 let lhs_supports_arrow_eq = supports_arrow_eq(value.data_type());
 
                 // Helper: compare value against a single list expression
                 let compare_one = |expr: &Arc<dyn PhysicalExpr>| -> Result<BooleanArray> {
-                    match expr.evaluate(batch)? {
+                    match normalize_in_list_float_zero_value(expr.evaluate(batch)?) {
                         ColumnarValue::Array(array) => {
                             if lhs_supports_arrow_eq
                                 && supports_arrow_eq(array.data_type())
@@ -3364,6 +3382,44 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_in_list_with_columns_float_signed_zero() -> Result<()> {
+        use arrow::compute::cast;
+
+        for (data_type, dictionary) in [
+            (DataType::Float32, false),
+            (DataType::Float64, false),
+            (DataType::Float64, true),
+        ] {
+            let mut left = cast(&Float64Array::from(vec![0.0, -0.0, 1.0]), &data_type)?;
+            let mut right = cast(&Float64Array::from(vec![-0.0, 0.0, 2.0]), &data_type)?;
+            if dictionary {
+                left = wrap_in_dict(left);
+                right = wrap_in_dict(right);
+            }
+            let scalar = lit(ScalarValue::try_from_array(left.as_ref(), 1)?);
+            let batch = RecordBatch::try_from_iter([("a", left), ("b", right)])?;
+            let schema = batch.schema();
+
+            // Exercise array and scalar values on both sides, including scalar
+            // normalization before the left-hand side is broadcast.
+            for (left, right) in [
+                (col("a", &schema)?, col("b", &schema)?),
+                (col("a", &schema)?, Arc::clone(&scalar)),
+                (scalar, col("a", &schema)?),
+            ] {
+                let expr = make_in_list_with_columns(left, vec![right], false);
+                let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+                assert_eq!(
+                    as_boolean_array(&result),
+                    &BooleanArray::from(vec![true, true, false]),
+                    "{data_type:?}, dictionary={dictionary}: {expr}"
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Tests that short-circuit evaluation produces correct results.
     /// When all rows match after the first list item, remaining items
     /// should be skipped without affecting correctness.
@@ -3885,6 +3941,23 @@ mod tests {
             result,
             &BooleanArray::from(vec![Some(true), Some(false), Some(true)])
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_try_new_from_array_dict_haystack_float64_signed_zero() -> Result<()> {
+        // One value beyond the branchless limit selects the hash-set strategy.
+        let list_len =
+            <Float64Type as branchless_filter::BranchlessFilterType>::MAX_LIST_LEN + 1;
+        let haystack = make_f64_dict_array(vec![Some(-0.0); list_len]);
+        let needles: ArrayRef = Arc::new(Float64Array::from(vec![0.0]));
+        for needles in [Arc::clone(&needles), wrap_in_dict(needles)] {
+            assert_eq!(
+                eval_in_list_from_array(needles, Arc::clone(&haystack))?,
+                BooleanArray::from(vec![true])
+            );
+        }
 
         Ok(())
     }
