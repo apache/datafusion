@@ -22,9 +22,10 @@ use crate::file_format::ObjectStoreFetch;
 use crate::{Int96Coercer, apply_file_schema_type_coercions};
 use arrow::array::{Array, ArrayRef, BooleanArray};
 use arrow::compute::kernels::cmp::eq;
-use arrow::compute::{and, sum};
+use arrow::compute::{CastOptions, and, cast_with_options, sum};
 use arrow::datatypes::{DataType, Schema, SchemaRef, TimeUnit};
 use datafusion_common::encryption::FileDecryptionProperties;
+use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
     ColumnStatistics, DataFusionError, HashMap, Result, ScalarValue, Statistics,
@@ -34,7 +35,7 @@ use datafusion_execution::cache::cache_manager::{
     CachedFileMetadataEntry, FileMetadata, FileMetadataCache,
 };
 use datafusion_functions_aggregate_common::min_max::{MaxAccumulator, MinAccumulator};
-use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::expressions::{CastExpr, Column};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_plan::Accumulator;
 use log::debug;
@@ -591,7 +592,7 @@ impl<'a> DFParquetMetadata<'a> {
                                 column_byte_sizes: &mut column_byte_sizes,
                                 distinct_counts_array: &mut distinct_counts_array,
                             };
-                            summarize_column_statistics(
+                            if summarize_column_statistics(
                                 logical_file_schema,
                                 &mut accumulators,
                                 idx,
@@ -599,7 +600,13 @@ impl<'a> DFParquetMetadata<'a> {
                                 row_groups_metadata,
                                 num_rows,
                             )
-                            .ok();
+                            .is_none()
+                            {
+                                // An initialized or partially updated accumulator
+                                // cannot establish a bound after a conversion error.
+                                min_accs[idx] = None;
+                                max_accs[idx] = None;
+                            }
                         }
                         Err(e) => {
                             debug!("Failed to create statistics converter: {e}");
@@ -743,6 +750,8 @@ impl StatisticsAccumulators<'_> {
     }
 }
 
+/// Returns `None` when bounds cannot be summarized. Statistics are optional, so
+/// unsupported conversions do not need to construct a [`DataFusionError`].
 fn summarize_column_statistics(
     logical_file_schema: &Schema,
     accumulators: &mut StatisticsAccumulators,
@@ -750,46 +759,83 @@ fn summarize_column_statistics(
     stats_converter: &StatisticsConverter,
     row_groups_metadata: &[RowGroupMetaData],
     num_rows: usize,
-) -> Result<()> {
+) -> Option<()> {
     let parquet_index = stats_converter.parquet_column_index();
-
-    if accumulators.max_accs[logical_schema_index].is_some() {
-        accumulators.is_max_value_exact[logical_schema_index] = summarize_bound(
-            &mut accumulators.max_accs[logical_schema_index],
-            &stats_converter.row_group_maxes(row_groups_metadata)?,
-            parquet_index,
-            row_groups_metadata,
-            ParquetStatistics::max_is_exact,
-            || Ok(stats_converter.row_group_is_max_value_exact(row_groups_metadata)?),
-        )?;
-    }
-
-    if accumulators.min_accs[logical_schema_index].is_some() {
-        accumulators.is_min_value_exact[logical_schema_index] = summarize_bound(
-            &mut accumulators.min_accs[logical_schema_index],
-            &stats_converter.row_group_mins(row_groups_metadata)?,
-            parquet_index,
-            row_groups_metadata,
-            ParquetStatistics::min_is_exact,
-            || Ok(stats_converter.row_group_is_min_value_exact(row_groups_metadata)?),
-        )?;
-    }
 
     accumulators.null_counts_array[logical_schema_index] =
         summarize_null_counts(stats_converter, row_groups_metadata)?;
 
-    accumulators.distinct_counts_array[logical_schema_index] =
-        summarize_distinct_counts(parquet_index, row_groups_metadata);
-
     let arrow_field = logical_file_schema.field(logical_schema_index);
+    let data_type = min_max_aggregate_data_type(arrow_field.data_type());
+    let file_data_type =
+        min_max_aggregate_data_type(stats_converter.arrow_field().data_type());
+    let distinct_count = summarize_distinct_counts(parquet_index, row_groups_metadata);
+    accumulators.distinct_counts_array[logical_schema_index] =
+        if cast_preserves_distinct_count(file_data_type, data_type) {
+            distinct_count
+        } else {
+            distinct_count.to_inexact()
+        };
+
     accumulators.column_byte_sizes[logical_schema_index] = compute_arrow_column_size(
         arrow_field.data_type(),
         row_groups_metadata,
         parquet_index,
         num_rows,
     );
+    if accumulators.max_accs[logical_schema_index].is_some() {
+        accumulators.is_max_value_exact[logical_schema_index] = summarize_bound(
+            &mut accumulators.max_accs[logical_schema_index],
+            &stats_converter.row_group_maxes(row_groups_metadata).ok()?,
+            data_type,
+            parquet_index,
+            row_groups_metadata,
+            ParquetStatistics::max_is_exact,
+            || {
+                stats_converter
+                    .row_group_is_max_value_exact(row_groups_metadata)
+                    .ok()
+            },
+        )
+        .ok()?;
+    }
 
-    Ok(())
+    if accumulators.min_accs[logical_schema_index].is_some() {
+        accumulators.is_min_value_exact[logical_schema_index] = summarize_bound(
+            &mut accumulators.min_accs[logical_schema_index],
+            &stats_converter.row_group_mins(row_groups_metadata).ok()?,
+            data_type,
+            parquet_index,
+            row_groups_metadata,
+            ParquetStatistics::min_is_exact,
+            || {
+                stats_converter
+                    .row_group_is_min_value_exact(row_groups_metadata)
+                    .ok()
+            },
+        )
+        .ok()?;
+    }
+
+    Some(())
+}
+
+/// Whether a successful cast preserves the number of distinct values.
+///
+/// Reuse the lossless casts recognized by [`CastExpr::check_bigger_cast`]. Lossy
+/// casts, such as `Float64` to `Float32` or timestamps to a coarser unit, can merge
+/// distinct values and must not retain an exact distinct count.
+///
+/// Timestamp casts to a finer unit are also one-to-one when they succeed. Unlike
+/// `check_bigger_cast`, this permits casts that can overflow: reading the data
+/// reports an error in that case, and bound conversion discards those statistics.
+fn cast_preserves_distinct_count(from: &DataType, to: &DataType) -> bool {
+    CastExpr::check_bigger_cast(to, from)
+        || matches!(
+            (from, to),
+            (DataType::Timestamp(from_unit, from_tz), DataType::Timestamp(to_unit, to_tz))
+                if from_tz == to_tz && from_unit <= to_unit
+        )
 }
 
 /// Feed a column's per-row-group min or max `values` into `acc` and decide
@@ -798,14 +844,47 @@ fn summarize_column_statistics(
 /// `is_exact` reads the per-row-group exactness flag straight from the raw
 /// parquet statistics. `row_group_exactness` rebuilds the exactness as a Boolean
 /// array and is only called for the rare case where row groups disagree.
+/// A unit error signals unusable bounds without allocating a diagnostic.
+/// `Ok(None)` means the exactness is unknown.
 fn summarize_bound<A: Accumulator>(
     acc: &mut Option<A>,
     values: &ArrayRef,
+    data_type: &DataType,
     parquet_index: Option<usize>,
     row_groups_metadata: &[RowGroupMetaData],
     is_exact: impl Fn(&ParquetStatistics) -> bool,
-    row_group_exactness: impl FnOnce() -> Result<BooleanArray>,
-) -> Result<Option<bool>> {
+    row_group_exactness: impl FnOnce() -> Option<BooleanArray>,
+) -> Result<Option<bool>, ()> {
+    // StatisticsConverter uses the file's timestamp unit, whereas the
+    // accumulator uses the table's. Changing units preserves order, but an
+    // overflow must discard the bound rather than introduce a NULL endpoint.
+    let converted_values = if values.data_type() != data_type
+        && matches!(
+            (values.data_type(), data_type),
+            (DataType::Timestamp(_, from_tz), DataType::Timestamp(_, to_tz))
+                if from_tz == to_tz
+        ) {
+        let options = CastOptions {
+            safe: true,
+            ..DEFAULT_CAST_OPTIONS
+        };
+        let converted = cast_with_options(values, data_type, &options).map_err(|_| ())?;
+        // Overflow becomes NULL without allocating an error. It invalidates
+        // the bounds, even if other row groups converted successfully.
+        if converted.null_count() != values.null_count() {
+            return Err(());
+        }
+        Some(converted)
+    } else {
+        None
+    };
+    let values = converted_values.as_ref().unwrap_or(values);
+
+    // Reject incompatible types before the accumulator formats an error.
+    if min_max_aggregate_data_type(values.data_type()) != data_type {
+        return Err(());
+    }
+
     // A NULL converted bound can mean missing statistics, not just all-NULL
     // data. Ignoring it in MIN/MAX would let another row group's exact endpoint
     // incorrectly establish an exact bound for the whole file. Drop this bound
@@ -834,7 +913,7 @@ fn summarize_bound<A: Accumulator>(
     let Some(acc) = acc.as_mut() else {
         return Ok(None);
     };
-    acc.update_batch(&[Arc::clone(values)])?;
+    acc.update_batch(&[Arc::clone(values)]).map_err(|_| ())?;
 
     Ok(
         match summarize_row_group_exactness(parquet_index, row_groups_metadata, is_exact)
@@ -842,8 +921,8 @@ fn summarize_bound<A: Accumulator>(
             ExactnessSummary::AllExact => Some(true),
             ExactnessSummary::NoneExact => Some(false),
             ExactnessSummary::Mixed => {
-                let exactness = row_group_exactness()?;
-                has_any_exact_match(&acc.evaluate()?, values, &exactness)
+                let exactness = row_group_exactness().ok_or(())?;
+                has_any_exact_match(&acc.evaluate().map_err(|_| ())?, values, &exactness)
             }
         },
     )
@@ -852,12 +931,14 @@ fn summarize_bound<A: Accumulator>(
 fn summarize_null_counts(
     stats_converter: &StatisticsConverter,
     row_groups_metadata: &[RowGroupMetaData],
-) -> Result<Precision<usize>> {
+) -> Option<Precision<usize>> {
     if row_groups_metadata.is_empty() {
-        return Ok(Precision::Exact(0));
+        return Some(Precision::Exact(0));
     }
 
-    let null_counts = stats_converter.row_group_null_counts(row_groups_metadata)?;
+    let null_counts = stats_converter
+        .row_group_null_counts(row_groups_metadata)
+        .ok()?;
 
     match sum(&null_counts) {
         Some(count) => {
@@ -865,15 +946,15 @@ fn summarize_null_counts(
             // statistics are absent or because the null_count field is omitted,
             // report the aggregate as inexact.
             if null_counts.null_count() > 0 {
-                Ok(Precision::Inexact(count as usize))
+                Some(Precision::Inexact(count as usize))
             } else {
-                Ok(Precision::Exact(count as usize))
+                Some(Precision::Exact(count as usize))
             }
         }
         None => match null_counts.len() {
             // If sum() returned None we either have no rows or all values are null
-            0 => Ok(Precision::Exact(0)),
-            _ => Ok(Precision::Absent),
+            0 => Some(Precision::Exact(0)),
+            _ => Some(Precision::Absent),
         },
     }
 }
@@ -1328,10 +1409,13 @@ mod tests {
     mod statistics_tests {
         use super::*;
         use arrow::datatypes::Field;
+        use parquet::arrow::ArrowSchemaConverter;
         use parquet::basic::Type as PhysicalType;
         use parquet::file::metadata::ColumnChunkMetaData;
         use parquet::file::reader::{FileReader, SerializedFileReader};
-        use parquet::file::statistics::Statistics as ParquetStatistics;
+        use parquet::file::statistics::{
+            Statistics as ParquetStatistics, ValueStatistics,
+        };
         use parquet::schema::types::Type as SchemaType;
         use std::fs::File;
         use std::path::PathBuf;
@@ -1408,6 +1492,246 @@ mod tests {
             );
 
             ParquetMetaData::new(file_meta, row_groups)
+        }
+
+        #[test]
+        fn test_timestamp_bound_exactness_after_conversion() {
+            // COPY writes exact timestamp bounds, so the SQL regression cannot
+            // exercise mixed exactness flags or bounds that coincide only after
+            // reducing timestamp precision.
+            for timezone in [None, Some(Arc::<str>::from("UTC"))] {
+                for (file_unit, table_unit) in [
+                    (TimeUnit::Microsecond, TimeUnit::Nanosecond),
+                    (TimeUnit::Nanosecond, TimeUnit::Microsecond),
+                ] {
+                    let file_schema = Schema::new(vec![Field::new(
+                        "col_0",
+                        DataType::Timestamp(file_unit, timezone.clone()),
+                        true,
+                    )]);
+                    let schema_descr = Arc::new(
+                        ArrowSchemaConverter::new().convert(&file_schema).unwrap(),
+                    );
+                    let table_schema = Arc::new(Schema::new(vec![Field::new(
+                        "col_0",
+                        DataType::Timestamp(table_unit, timezone.clone()),
+                        true,
+                    )]));
+                    let groups = [(1900, false), (1000, true)]
+                        .into_iter()
+                        .map(|(bound, exact)| {
+                            let stats = ValueStatistics::new(
+                                Some(-bound),
+                                Some(bound),
+                                None,
+                                Some(0),
+                                false,
+                            )
+                            .with_min_is_exact(exact)
+                            .with_max_is_exact(exact);
+                            create_row_group_with_stats(
+                                &schema_descr,
+                                vec![Some(ParquetStatistics::Int64(stats))],
+                                2,
+                            )
+                        })
+                        .collect();
+                    let metadata = create_parquet_metadata(schema_descr, groups);
+                    let statistics = DFParquetMetadata::statistics_from_parquet_metadata(
+                        &metadata,
+                        &table_schema,
+                    )
+                    .unwrap();
+                    let expected = |sign| match table_unit {
+                        TimeUnit::Nanosecond => {
+                            Precision::Inexact(ScalarValue::TimestampNanosecond(
+                                Some(sign * 1_900_000),
+                                timezone.clone(),
+                            ))
+                        }
+                        // Both row groups round towards zero to [-1, 1]. The
+                        // exact row group therefore establishes both bounds.
+                        _ => Precision::Exact(ScalarValue::TimestampMicrosecond(
+                            Some(sign),
+                            timezone.clone(),
+                        )),
+                    };
+                    assert_eq!(statistics.column_statistics[0].min_value, expected(-1));
+                    assert_eq!(statistics.column_statistics[0].max_value, expected(1));
+                }
+            }
+        }
+
+        #[test]
+        fn test_distinct_count_after_schema_conversion() {
+            // COPY does not write Parquet distinct_count statistics. Construct
+            // them here to check that COUNT(DISTINCT) cannot use an exact file
+            // count after a conversion merges values in the table schema.
+            for (file_type, parquet_stats, table_types) in [
+                (
+                    DataType::Timestamp(TimeUnit::Microsecond, None),
+                    ParquetStatistics::int64(
+                        Some(1000),
+                        Some(1900),
+                        Some(2),
+                        Some(0),
+                        false,
+                    ),
+                    vec![
+                        // Both values become 1 millisecond.
+                        (
+                            DataType::Timestamp(TimeUnit::Millisecond, None),
+                            Precision::Inexact(2),
+                        ),
+                        (
+                            DataType::Timestamp(TimeUnit::Microsecond, None),
+                            Precision::Exact(2),
+                        ),
+                        (
+                            DataType::Timestamp(TimeUnit::Nanosecond, None),
+                            Precision::Exact(2),
+                        ),
+                    ],
+                ),
+                (
+                    DataType::Float64,
+                    ParquetStatistics::double(
+                        Some(1.0),
+                        Some(1.0 + f64::EPSILON),
+                        Some(2),
+                        Some(0),
+                        false,
+                    ),
+                    vec![
+                        // The two distinct doubles both round to 1.0f32.
+                        (DataType::Float32, Precision::Inexact(2)),
+                        (DataType::Float64, Precision::Exact(2)),
+                    ],
+                ),
+                (
+                    DataType::Int32,
+                    ParquetStatistics::int32(
+                        Some(1000),
+                        Some(1900),
+                        Some(2),
+                        Some(0),
+                        false,
+                    ),
+                    vec![(DataType::Int64, Precision::Exact(2))],
+                ),
+            ] {
+                let file_schema =
+                    Schema::new(vec![Field::new("col_0", file_type, false)]);
+                let schema_descr =
+                    Arc::new(ArrowSchemaConverter::new().convert(&file_schema).unwrap());
+                let row_group = create_row_group_with_stats(
+                    &schema_descr,
+                    vec![Some(parquet_stats)],
+                    2,
+                );
+                let metadata = create_parquet_metadata(schema_descr, vec![row_group]);
+                for (table_type, expected) in table_types {
+                    let table_schema = Arc::new(Schema::new(vec![Field::new(
+                        "col_0", table_type, false,
+                    )]));
+                    let statistics = DFParquetMetadata::statistics_from_parquet_metadata(
+                        &metadata,
+                        &table_schema,
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        statistics.column_statistics[0].distinct_count,
+                        expected,
+                        "file type: {:?}, table type: {:?}",
+                        file_schema.field(0).data_type(),
+                        table_schema.field(0).data_type(),
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn test_statistics_discard_failed_timestamp_bounds() {
+            let file_schema = Schema::new(vec![Field::new(
+                "col_0",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                true,
+            )]);
+            let schema_descr =
+                Arc::new(ArrowSchemaConverter::new().convert(&file_schema).unwrap());
+            let table_schema = Arc::new(Schema::new(vec![Field::new(
+                "col_0",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                true,
+            )]));
+
+            // One overflowing row group must invalidate the file bounds even
+            // when another row group's bounds convert successfully. Check both
+            // MIN failure (after MAX has been updated) and MAX failure.
+            for (min, max) in [(i64::MIN, 200), (100, i64::MAX)] {
+                let groups = [(100, 200), (min, max)]
+                    .into_iter()
+                    .map(|(min, max)| {
+                        create_row_group_with_stats(
+                            &schema_descr,
+                            vec![Some(ParquetStatistics::int64(
+                                Some(min),
+                                Some(max),
+                                Some(2),
+                                Some(1),
+                                false,
+                            ))],
+                            3,
+                        )
+                    })
+                    .collect();
+                let metadata = create_parquet_metadata(Arc::clone(&schema_descr), groups);
+                let statistics = DFParquetMetadata::statistics_from_parquet_metadata(
+                    &metadata,
+                    &table_schema,
+                )
+                .unwrap();
+                let column = &statistics.column_statistics[0];
+                assert_eq!(column.min_value, Precision::Absent);
+                assert_eq!(column.max_value, Precision::Absent);
+                assert_eq!(column.null_count, Precision::Exact(2));
+                assert_eq!(column.distinct_count, Precision::Inexact(2));
+                assert_eq!(column.byte_size, Precision::Exact(48));
+                assert_eq!(statistics.num_rows, Precision::Exact(6));
+            }
+        }
+
+        #[test]
+        fn test_statistics_discard_unsupported_bounds() {
+            let schema_descr = create_schema_descr(1);
+            let table_schema = Arc::new(Schema::new(vec![Field::new(
+                "col_0",
+                DataType::Boolean,
+                true,
+            )]));
+            let row_group = create_row_group_with_stats(
+                &schema_descr,
+                vec![Some(ParquetStatistics::int32(
+                    Some(0),
+                    Some(1),
+                    Some(2),
+                    Some(1),
+                    false,
+                ))],
+                3,
+            );
+            let metadata = create_parquet_metadata(schema_descr, vec![row_group]);
+            let statistics = DFParquetMetadata::statistics_from_parquet_metadata(
+                &metadata,
+                &table_schema,
+            )
+            .unwrap();
+            let column = &statistics.column_statistics[0];
+            assert_eq!(column.min_value, Precision::Absent);
+            assert_eq!(column.max_value, Precision::Absent);
+            assert_eq!(column.null_count, Precision::Exact(1));
+            assert_eq!(column.distinct_count, Precision::Inexact(2));
+            assert_eq!(statistics.num_rows, Precision::Exact(3));
         }
 
         #[test]
