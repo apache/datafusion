@@ -1,0 +1,17 @@
+[
+  {
+    "name": "Development",
+    "url": "https://datafusion.apache.org/",
+    "version": "main"
+  },
+  {
+    "name": "55.1.0",
+    "url": "https://datafusion.apache.org/versions/55.1.0/",
+    "version": "55.1.0"
+  },
+  {
+    "name": "55.0.0",
+    "url": "https://datafusion.apache.org/versions/55.0.0/",
+    "version": "55.0.0"
+  }
+]

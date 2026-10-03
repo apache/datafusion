@@ -301,6 +301,48 @@ git tag 50.3.0
 git push apache 50.3.0
 ```
 
+#### Publish the versioned documentation
+
+After the final release tag is available, build its complete documentation
+using the configuration from the tag. The small configuration overlay adds the
+version picker and the correct URL prefix to older tags without changing their
+documentation source. For example, from the repository root, for `55.0.0`:
+
+```shell
+git fetch origin tag 55.0.0
+git worktree add --detach /tmp/datafusion-55.0.0 55.0.0
+cd /tmp/datafusion-55.0.0/docs
+DATAFUSION_DOCS_SOURCE="$PWD/source" DATAFUSION_DOCS_VERSION=55.0.0 \
+  SPHINXOPTS="-W -c /path/to/current/datafusion/docs/scripts/release" \
+  uv run --package datafusion-docs --with sphinx-sitemap ./build.sh
+```
+
+Replace the version and paths for each release. Use an absolute path to the
+overlay in your current checkout. The existing `build.sh` generates the tagged
+dependency graph and builds the HTML with warnings treated as errors. The
+`--with sphinx-sitemap` option supplies the sitemap extension for older tags.
+
+From the current checkout, prepare a separate PR targeting `asf-site`:
+
+```shell
+git fetch origin asf-site
+git worktree add -b docs/publish-55.0.0 /tmp/datafusion-asf-site origin/asf-site
+mkdir -p /tmp/datafusion-asf-site/versions/55.0.0
+rsync -a --exclude '/.buildinfo' \
+  /tmp/datafusion-55.0.0/docs/build/html/ \
+  /tmp/datafusion-asf-site/versions/55.0.0/
+```
+
+Check that the release directory does not already exist before copying it.
+Review the generated files and open the publication PR for review.
+Once it is published, add its entry to `docs/source/_static/versions.json` on
+`main` so the picker offers only working destinations. Remove the temporary
+worktrees afterward.
+
+Merge the separate documentation-retention workflow change before publishing
+the first release documentation; otherwise the next `main` deployment would
+delete `/versions/`.
+
 ### 10. Publish on Crates.io
 
 Only approved releases of the tarball should be published to
