@@ -31,7 +31,7 @@ use arrow::datatypes::{
 };
 use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array};
 use datafusion_common::types::{NativeType, logical_int64};
-use datafusion_common::{Result, exec_datafusion_err};
+use datafusion_common::{Result, exec_datafusion_err, exec_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
@@ -297,8 +297,12 @@ fn general_list_repeat<O: OffsetSizeTrait>(
         &UInt64Array::from_iter_values(take_indices),
         None,
     )?;
+    let inner_field = match list_array.data_type() {
+        List(field) | LargeList(field) => Arc::clone(field),
+        other => return exec_err!("array_repeat: expected a list, got {other}"),
+    };
     let inner_list = GenericListArray::<O>::try_new(
-        Arc::new(Field::new_list_field(list_array.value_type().clone(), true)),
+        inner_field,
         OffsetBuffer::new(inner_offsets.into()),
         inner_values,
         Some(NullBuffer::new(inner_nulls.finish())),
