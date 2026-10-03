@@ -1137,7 +1137,7 @@ async fn explain_analyze_aggregate_metrics_map_indices_to_expressions() {
         .to_string();
     assert_contains!(
         normal.as_str(),
-        "aggr=[sum(aggregate_test_100.c5), sum(aggregate_test_100.c6), count(aggregate_test_100.c7)]"
+        "aggr=[sum(aggregate_test_100.c5), sum(aggregate_test_100.c6), count(1) as count(aggregate_test_100.c7)]"
     );
     assert_contains!(normal.as_str(), "agg_expr_0_arguments_time");
     assert_contains!(normal.as_str(), "agg_expr_1_arguments_time");
@@ -1159,7 +1159,7 @@ async fn explain_analyze_aggregate_metrics_map_indices_to_expressions() {
     );
     assert_contains!(
         verbose.as_str(),
-        "agg_expr_2_arguments_time{partition=0, aggregate=count(aggregate_test_100.c7)}"
+        "agg_expr_2_arguments_time{partition=0, aggregate=count(1) as count(aggregate_test_100.c7)}"
     );
 }
 

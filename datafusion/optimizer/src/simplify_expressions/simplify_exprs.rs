@@ -396,7 +396,7 @@ mod tests {
             plan,
             @r"
         Projection: sum(test.a) + Int64(2) * CAST(count(test.a) AS Int64) AS sum(test.a + Int64(2)), sum(test.a) + Int64(3) * CAST(count(test.a) AS Int64) AS sum(test.a + Int64(3))
-          Aggregate: groupBy=[[]], aggr=[[sum(test.a), count(test.a)]]
+          Aggregate: groupBy=[[]], aggr=[[sum(test.a), count(Int64(1)) AS count(test.a)]]
             TableScan: test
         "
         )?;
