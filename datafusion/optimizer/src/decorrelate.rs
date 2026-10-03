@@ -37,7 +37,7 @@ use datafusion_expr::utils::{
 };
 use datafusion_expr::{
     BinaryExpr, Cast, Distinct, EmptyRelation, Expr, ExprSchemable, FetchType,
-    LogicalPlan, LogicalPlanBuilder, Operator, expr, lit,
+    LogicalPlan, LogicalPlanBuilder, Operator, SkipType, expr, lit,
 };
 
 /// This struct rewrite the sub query plan by pull up the correlated
@@ -204,16 +204,37 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     Ok(Transformed::no(plan))
                 }
             }
-            // `f_up` drops the Limit of an EXISTS subquery, which does not
-            // change whether the subquery returns a row. Any other Limit keeps
-            // the correlated filters below it.
-            LogicalPlan::Limit(_) => {
-                match (self.exists_sub_query, holds_outer_reference(&plan)) {
-                    (false, true) => {
-                        // the unsupported case
-                        Ok(self.stop_pull_up(plan))
+            // For EXISTS only emptiness matters, so `f_down` removes or
+            // replaces a Limit over a correlated filter where it can. Any other
+            // Limit keeps the correlated filters below it.
+            LogicalPlan::Limit(ref limit) => {
+                if !holds_outer_reference(&plan) {
+                    return Ok(Transformed::no(plan));
+                }
+                if !self.exists_sub_query {
+                    return Ok(self.stop_pull_up(plan));
+                }
+                // Only emptiness matters for EXISTS, so remove a limit that
+                // cannot make its input empty and replace one that always does
+                // with an empty relation.
+                let fetch = limit.get_fetch_type()?;
+                if matches!(fetch, FetchType::Literal(Some(0))) {
+                    return Ok(Transformed::yes(LogicalPlan::EmptyRelation(
+                        EmptyRelation {
+                            produce_one_row: false,
+                            schema: Arc::clone(limit.input.schema()),
+                        },
+                    )));
+                }
+                match (limit.get_skip_type()?, fetch) {
+                    (SkipType::Literal(0), FetchType::Literal(_)) => {
+                        // The rewriter does not call `f_down` on the returned
+                        // node, so do it here
+                        let mut t = self.f_down((*limit.input).clone())?;
+                        t.transformed = true;
+                        Ok(t)
                     }
-                    _ => Ok(Transformed::no(plan)),
+                    _ => Ok(self.stop_pull_up(plan)),
                 }
             }
             // A correlated filter below these nodes can move above them. The
@@ -531,28 +552,13 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 }
             }
             LogicalPlan::Limit(limit) => {
-                let input_expr_map =
-                    self.collected_count_expr_map.get(&*limit.input).cloned();
-                // handling the limit clause in the subquery
-                let new_plan = match (self.exists_sub_query, self.join_filters.is_empty())
+                if let Some(input_map) =
+                    self.collected_count_expr_map.get(&*limit.input).cloned()
                 {
-                    // Correlated exist subquery, remove the limit(so that correlated expressions can pull up)
-                    (true, false) => Transformed::yes(match limit.get_fetch_type()? {
-                        FetchType::Literal(Some(0)) => {
-                            LogicalPlan::EmptyRelation(EmptyRelation {
-                                produce_one_row: false,
-                                schema: Arc::clone(limit.input.schema()),
-                            })
-                        }
-                        _ => LogicalPlanBuilder::from((*limit.input).clone()).build()?,
-                    }),
-                    _ => Transformed::no(plan),
-                };
-                if let Some(input_map) = input_expr_map {
                     self.collected_count_expr_map
-                        .insert(new_plan.data.clone(), input_map);
+                        .insert(plan.clone(), input_map);
                 }
-                Ok(new_plan)
+                Ok(Transformed::no(plan))
             }
             LogicalPlan::Window(window) => {
                 let mut local_correlated_cols = BTreeSet::new();

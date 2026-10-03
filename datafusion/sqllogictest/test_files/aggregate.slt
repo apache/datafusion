@@ -1862,6 +1862,55 @@ SELECT approx_distinct(arrow_cast(i, 'Dictionary(Int32, Float64)')) FROM approx_
 statement error DataFusion error: This feature is not implemented: Support for 'approx_distinct' for data type Dictionary\(Int32, Float64\) is not implemented
 SELECT g, approx_distinct(arrow_cast(i, 'Dictionary(Int32, Float64)')) FROM approx_distinct_group_test GROUP BY g;
 
+# RunEndEncoded: run-end encoded values must hash identically to the plain
+# values, so the counts below match the Utf8 / Int32 cases above.
+query I
+SELECT approx_distinct(arrow_cast(s, 'RunEndEncoded("run_ends": non-null Int32, "values": Utf8)')) FROM approx_distinct_group_test WHERE g = 2;
+----
+2
+
+query II
+SELECT g, approx_distinct(arrow_cast(s, 'RunEndEncoded("run_ends": non-null Int32, "values": Utf8)')) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+query II
+SELECT g, approx_distinct(arrow_cast(i, 'RunEndEncoded("run_ends": non-null Int64, "values": Int32)')) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+# RunEndEncoded over a fixed-domain value type (Int8) goes through the
+# HyperLogLog accumulators and must match the Int32 counts above.
+query II
+SELECT g, approx_distinct(arrow_cast(arrow_cast(i, 'Int8'), 'RunEndEncoded("run_ends": non-null Int32, "values": Int8)')) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+# RunEndEncoded over a dictionary
+query II
+SELECT g, approx_distinct(arrow_cast(s, 'RunEndEncoded("run_ends": non-null Int32, "values": Dictionary(Int32, Utf8))')) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+# Unsupported value types are rejected, as for a bare Float64
+statement error DataFusion error: This feature is not implemented: Support for 'approx_distinct' for data type RunEndEncoded
+SELECT approx_distinct(arrow_cast(i, 'RunEndEncoded("run_ends": non-null Int32, "values": Float64)')) FROM approx_distinct_group_test;
+
+statement error DataFusion error: This feature is not implemented: Support for 'approx_distinct' for data type RunEndEncoded
+SELECT g, approx_distinct(arrow_cast(i, 'RunEndEncoded("run_ends": non-null Int32, "values": Float64)')) FROM approx_distinct_group_test GROUP BY g;
+
 
 # List
 statement ok
@@ -5159,6 +5208,25 @@ SELECT bit_and(DISTINCT c), bit_or(DISTINCT c), count(c), tag FROM bit_distinct 
 
 statement ok
 drop table bit_distinct;
+
+
+# bitwise aggregates over NULL inputs, with and without GROUP BY
+statement ok
+create table bit_null (tag varchar) as values ('A'), ('A'), ('B');
+
+query ???
+SELECT bit_and(NULL), bit_or(NULL), bit_xor(NULL) FROM bit_null;
+----
+NULL NULL NULL
+
+query ???T
+SELECT bit_and(NULL), bit_or(NULL), bit_xor(NULL), tag FROM bit_null GROUP BY tag ORDER BY tag;
+----
+NULL NULL NULL A
+NULL NULL NULL B
+
+statement ok
+drop table bit_null;
 
 
 # bit_and_i32
@@ -8841,8 +8909,8 @@ logical_plan
 01)Aggregate: groupBy=[[]], aggr=[[count(Int64(NULL)) AS count(NULL)]]
 02)--TableScan: t projection=[]
 physical_plan
-01)AggregateExec: mode=Single, gby=[], aggr=[count(NULL)]
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[0 as count(NULL)]
+02)--PlaceholderRowExec
 
 statement count 0
 drop table t;
@@ -8915,8 +8983,8 @@ logical_plan
 01)Aggregate: groupBy=[[]], aggr=[[count(Int64(1)), count(Int64(2))]]
 02)--TableScan: t projection=[]
 physical_plan
-01)AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1)), count(Int64(2))]
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[2 as count(Int64(1)), 2 as count(Int64(2))]
+02)--PlaceholderRowExec
 
 query II
 select count(1), count() from t;
@@ -8977,9 +9045,24 @@ logical_plan
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1)), count(Int64(2))]]
 03)----TableScan: t projection=[]
 physical_plan
-01)ProjectionExec: expr=[count(Int64(1))@0 * count(Int64(2))@1 as count(Int64(1)) * count(Int64(2))]
-02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1)), count(Int64(2))]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[2 * 2 as count(Int64(1)) * count(Int64(2))]
+02)--PlaceholderRowExec
+
+# Any non-null literal counts every row, so it can be answered from statistics
+query II
+select count('a'), count(true) from t;
+----
+2 2
+
+query TT
+explain select count('a'), count(true) from t;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[count(Utf8("a")), count(Boolean(true))]]
+02)--TableScan: t projection=[]
+physical_plan
+01)ProjectionExec: expr=[2 as count(Utf8("a")), 2 as count(Boolean(true))]
+02)--PlaceholderRowExec
 
 statement count 0
 drop table t;
