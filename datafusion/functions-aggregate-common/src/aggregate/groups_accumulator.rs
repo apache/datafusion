@@ -867,13 +867,7 @@ fn get_filter_at_indices(
 
 fn filtered_row_count(opt_filter: Option<&BooleanArray>, offsets: &[usize]) -> usize {
     let (offset, length) = (offsets[0], offsets[1] - offsets[0]);
-    opt_filter.map_or(length, |filter| {
-        filter
-            .slice(offset, length)
-            .iter()
-            .filter(|value| matches!(value, Some(true)))
-            .count()
-    })
+    opt_filter.map_or(length, |filter| filter.slice(offset, length).true_count())
 }
 
 fn update_accumulator(
