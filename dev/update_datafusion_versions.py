@@ -26,29 +26,6 @@ import argparse
 from pathlib import Path
 import tomlkit
 
-crates = {
-    'datafusion-common': 'datafusion/common/Cargo.toml',
-    'datafusion-common-runtime': 'datafusion/common-runtime/Cargo.toml',
-    'datafusion': 'datafusion/core/Cargo.toml',
-    'datafusion-execution': 'datafusion/execution/Cargo.toml',
-    'datafusion-expr': 'datafusion/expr/Cargo.toml',
-    'datafusion-ffi': 'datafusion/ffi/Cargo.toml',
-    'datafusion-functions': 'datafusion/functions/Cargo.toml',
-    'datafusion-functions-aggregate': 'datafusion/functions-aggregate/Cargo.toml',
-    'datafusion-functions-nested': 'datafusion/functions-nested/Cargo.toml',
-    'datafusion-optimizer': 'datafusion/optimizer/Cargo.toml',
-    'datafusion-physical-expr': 'datafusion/physical-expr/Cargo.toml',
-    'datafusion-physical-expr-common': 'datafusion/physical-expr-common/Cargo.toml',
-    'datafusion-physical-plan': 'datafusion/physical-plan/Cargo.toml',
-    'datafusion-proto': 'datafusion/proto/Cargo.toml',
-    'datafusion-sql': 'datafusion/sql/Cargo.toml',
-    'datafusion-sqllogictest': 'datafusion/sqllogictest/Cargo.toml',
-    'datafusion-substrait': 'datafusion/substrait/Cargo.toml',
-    'datafusion-wasmtest': 'datafusion/wasmtest/Cargo.toml',
-    'datafusion-benchmarks': 'benchmarks/Cargo.toml',
-    'datafusion-cli': 'datafusion-cli/Cargo.toml',
-    'datafusion-examples': 'datafusion-examples/Cargo.toml',
-}
 
 def update_workspace_version(new_version: str):
     cargo_toml = 'Cargo.toml'
@@ -64,47 +41,15 @@ def update_workspace_version(new_version: str):
 
     doc = tomlkit.parse(data)
 
-    for crate in crates.keys():
-        df_dep = doc.get('workspace').get('dependencies', {}).get(crate)
+    for crate, df_dep in doc['workspace']['dependencies'].items():
+        if not crate.startswith('datafusion'):
+            continue
         # skip crates that pin datafusion using git hash
         if df_dep is not None and df_dep.get('version') is not None:
             print(f'updating {crate} dependency in {cargo_toml}')
             df_dep['version'] = new_version
 
-    with open(cargo_toml, 'w') as f:
-        f.write(tomlkit.dumps(doc))
-
-
-def update_datafusion_version(cargo_toml: str, new_version: str):
-    print(f'updating {cargo_toml}')
-    with open(cargo_toml) as f:
-        data = f.read()
-
-    doc = tomlkit.parse(data)
-    pkg = doc.get('package')
-    if 'workspace' not in pkg['version']:
-        pkg['version'] = new_version
-
-    with open(cargo_toml, 'w') as f:
-        f.write(tomlkit.dumps(doc))
-
-def update_downstream_versions(cargo_toml: str, new_version: str):
-    with open(cargo_toml) as f:
-        data = f.read()
-
-    doc = tomlkit.parse(data)
-
-    for crate in crates.keys():
-        df_dep = doc.get('dependencies', {}).get(crate)
-        # skip crates that pin datafusion using git hash
-        if df_dep is not None and df_dep.get('version') is not None:
-            print(f'updating {crate} dependency in {cargo_toml}')
-            df_dep['version'] = new_version
-
-        df_dep = doc.get('dev-dependencies', {}).get(crate)
-        if df_dep is not None and df_dep.get('version') is not None:
-            print(f'updating {crate} dev-dependency in {cargo_toml}')
-            df_dep['version'] = new_version
+    doc['workspace']['package']['version'] = new_version
 
     with open(cargo_toml, 'w') as f:
         f.write(tomlkit.dumps(doc))
@@ -117,6 +62,7 @@ def update_docs(path: str, new_version: str):
         fd.seek(0)
         content = re.sub(r'datafusion\s*=\s*"(.+?)"', f'datafusion = "{new_version}"', content)
         content = re.sub(r'datafusion\s*=\s*\{\s*version\s*=\s*"(.+?)"', f'datafusion = {{ version = "{new_version}"', content)
+        content = re.sub(r'datafusion version \d+\.\d+\.\d+', f'datafusion version {new_version}', content)
         fd.truncate()
         fd.write(content)
 
@@ -151,18 +97,11 @@ def main():
     print(f'Updating workspace in {repo_root} to {new_version}')
     update_workspace_version(new_version)
 
-    print(f'Updating datafusion crate versions in {repo_root} to {new_version}')
-    for cargo_toml in crates.values():
-        update_datafusion_version(cargo_toml, new_version)
-
-    print(f'Updating datafusion dependency versions in {repo_root} to {new_version}')
-    for cargo_toml in crates.values():
-        update_downstream_versions(cargo_toml, new_version)
-
     update_docs("README.md", new_version)
     update_docs("docs/source/download.md", new_version)
     update_docs("docs/source/user-guide/example-usage.md", new_version)
     update_docs("docs/source/user-guide/crate-configuration.md", new_version)
+    update_docs("docs/source/user-guide/configs.md", new_version)
     
     update_ci(new_version)
 
