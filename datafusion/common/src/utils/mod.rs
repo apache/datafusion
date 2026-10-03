@@ -30,8 +30,8 @@ use crate::error::{
 };
 use crate::{Result, ScalarValue};
 use arrow::array::{
-    Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray, OffsetSizeTrait,
-    cast::AsArray,
+    Array, ArrayData, ArrayRef, FixedSizeListArray, LargeListArray, ListArray,
+    OffsetSizeTrait, cast::AsArray, downcast_array,
 };
 use arrow::array::{
     ArrowPrimitiveType, BooleanArray, Datum, GenericListArray, Int32Array, Int64Array,
@@ -1432,9 +1432,9 @@ fn fsl_values_row_number(list_size: i32, array_len: usize) -> Result<Int32Array>
     Ok(PrimitiveArray::new(rows_number.into(), None))
 }
 
-/// Replace `-0.0` with `+0.0` in any `Float16`, `Float32`, or `Float64` array.
-/// For non-float arrays returns the input unchanged. NaN payloads are
-/// preserved.
+/// Replace `-0.0` with `+0.0` in any `Float16`, `Float32`, or `Float64` array,
+/// including floats inside dictionaries and nested arrays. For other arrays,
+/// returns the input unchanged. NaN payloads are preserved.
 ///
 /// Arrow's comparison kernels (`arrow::compute::kernels::cmp::eq` etc.) and
 /// row-encoding (`arrow::row::RowConverter`) use IEEE 754 totalOrder
@@ -1544,21 +1544,38 @@ pub fn has_float_leaf(data_type: &DataType) -> bool {
 }
 
 /// Replace `-0.0` with `+0.0` in `Float16`, `Float32`, or `Float64` scalar
-/// values. Other variants are returned unchanged. See [`normalize_float_zero`]
-/// for context.
-pub fn normalize_float_zero_scalar(scalar: ScalarValue) -> ScalarValue {
-    match scalar {
-        ScalarValue::Float32(Some(v)) if v.to_bits() << 1 == 0 => {
-            ScalarValue::Float32(Some(0.0))
-        }
-        ScalarValue::Float64(Some(v)) if v.to_bits() << 1 == 0 => {
-            ScalarValue::Float64(Some(0.0))
-        }
-        ScalarValue::Float16(Some(v)) if v.to_bits() << 1 == 0 => {
-            ScalarValue::Float16(Some(half::f16::from_bits(0)))
-        }
-        other => other,
+/// values, including floats inside nested and encoded values. Other variants
+/// are returned unchanged. See [`normalize_float_zero`] for context.
+pub fn normalize_float_zero_scalar(mut scalar: ScalarValue) -> ScalarValue {
+    fn normalize_array<A: Array + From<ArrayData> + 'static>(array: &mut Arc<A>) {
+        *array = Arc::new(downcast_array(
+            normalize_float_zero(&(Arc::clone(array) as ArrayRef)).as_ref(),
+        ));
     }
+
+    fn normalize(scalar: &mut ScalarValue) {
+        match scalar {
+            ScalarValue::Float32(Some(v)) if v.to_bits() << 1 == 0 => *v = 0.0,
+            ScalarValue::Float64(Some(v)) if v.to_bits() << 1 == 0 => *v = 0.0,
+            ScalarValue::Float16(Some(v)) if v.to_bits() << 1 == 0 => {
+                *v = half::f16::from_bits(0);
+            }
+            ScalarValue::FixedSizeList(array) => normalize_array(array),
+            ScalarValue::List(array) => normalize_array(array),
+            ScalarValue::LargeList(array) => normalize_array(array),
+            ScalarValue::ListView(array) => normalize_array(array),
+            ScalarValue::LargeListView(array) => normalize_array(array),
+            ScalarValue::Struct(array) => normalize_array(array),
+            ScalarValue::Map(array) => normalize_array(array),
+            ScalarValue::Union(Some((_, value)), _, _)
+            | ScalarValue::Dictionary(_, value)
+            | ScalarValue::RunEndEncoded(_, _, value) => normalize(value),
+            _ => {}
+        }
+    }
+
+    normalize(&mut scalar);
+    scalar
 }
 
 /// Apply a struct's nulls to one of its fields.
@@ -1611,8 +1628,8 @@ mod tests {
     use super::*;
     use crate::ScalarValue::Null;
     use arrow::{
-        array::{Float64Array, Int32Array, NullArray},
-        datatypes::Int32Type,
+        array::{DictionaryArray, Float64Array, Int8Array, Int32Array, NullArray},
+        datatypes::{Float64Type, Int8Type, Int32Type},
     };
     #[cfg(feature = "sql")]
     use sqlparser::ast::Ident;
@@ -1690,6 +1707,104 @@ mod tests {
         } else {
             assert!(max.is_err());
         }
+    }
+
+    #[test]
+    fn normalize_float_zero_in_dictionary_arrays_and_scalars() -> Result<()> {
+        let nan = f64::from_bits(0x7ff8_0000_0000_0001);
+        let keys = Int8Array::from(vec![Some(0), Some(1), None, Some(2)]);
+        let array: ArrayRef = Arc::new(DictionaryArray::try_new(
+            keys.clone(),
+            Arc::new(Float64Array::from(vec![-0.0, nan, 1.0])),
+        )?);
+
+        let normalized = normalize_float_zero(&array);
+        let dictionary = normalized.as_dictionary::<Int8Type>();
+        assert_eq!(dictionary.keys(), &keys);
+        let values = dictionary.values().as_primitive::<Float64Type>();
+        assert_eq!(values.value(0).to_bits(), 0.0_f64.to_bits());
+        assert_eq!(values.value(1).to_bits(), nan.to_bits());
+        assert_eq!(values.value(2), 1.0);
+
+        assert!(Arc::ptr_eq(&normalize_float_zero(&normalized), &normalized));
+
+        assert_eq!(
+            normalize_float_zero_scalar(ScalarValue::try_from_array(&array, 0)?),
+            ScalarValue::try_from_array(&normalized, 0)?
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn normalize_float_zero_scalar_preserves_union_and_run_metadata() -> Result<()> {
+        use arrow::datatypes::{UnionFields, UnionMode};
+
+        let run_ends = Arc::new(Field::new("ends", DataType::Int32, false));
+        let values = Arc::new(Field::new("samples", DataType::Float64, true));
+        let fields = UnionFields::try_new(
+            [7, 42],
+            [
+                Field::new(
+                    "runs",
+                    DataType::RunEndEncoded(Arc::clone(&run_ends), Arc::clone(&values)),
+                    true,
+                ),
+                Field::new("other", DataType::Int32, true),
+            ],
+        )?;
+        let nan = f64::from_bits(0x7ff8_0000_0000_0001);
+        for mode in [UnionMode::Sparse, UnionMode::Dense] {
+            let wrap = |value| {
+                ScalarValue::Union(
+                    Some((
+                        7,
+                        Box::new(ScalarValue::RunEndEncoded(
+                            Arc::clone(&run_ends),
+                            Arc::clone(&values),
+                            Box::new(ScalarValue::Float64(value)),
+                        )),
+                    )),
+                    fields.clone(),
+                    mode,
+                )
+            };
+            for (value, expected) in [
+                (Some(-0.0), Some(0.0)),
+                (Some(nan), Some(nan)),
+                (None, None),
+            ] {
+                assert_eq!(normalize_float_zero_scalar(wrap(value)), wrap(expected));
+            }
+            let null = ScalarValue::Union(None, fields.clone(), mode);
+            assert_eq!(normalize_float_zero_scalar(null.clone()), null);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn normalize_float_zero_scalar_preserves_sliced_list() {
+        let nan = f64::from_bits(0x7ff8_0000_0000_0001);
+        let list = Arc::new(
+            ListArray::from_iter_primitive::<Float64Type, _, _>([
+                Some(vec![Some(99.0)]),
+                Some(vec![Some(-0.0), Some(nan), None]),
+                Some(vec![Some(42.0)]),
+            ])
+            .slice(1, 1),
+        );
+        let ScalarValue::List(normalized) =
+            normalize_float_zero_scalar(ScalarValue::List(list))
+        else {
+            panic!("normalization must preserve the scalar variant");
+        };
+        assert_eq!(normalized.len(), 1);
+        let child = normalized.value(0);
+        let child = child.as_primitive::<Float64Type>();
+        assert_eq!(child.len(), 3);
+        assert_eq!(child.value(0).to_bits(), 0.0_f64.to_bits());
+        assert_eq!(child.value(1).to_bits(), nan.to_bits());
+        assert!(child.is_null(2));
     }
 
     #[test]

@@ -30,6 +30,7 @@ use std::sync::LazyLock;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::nested_struct::has_one_of_more_common_fields;
+use datafusion_common::utils::has_float_leaf;
 use datafusion_common::{
     DFSchema, DataFusionError, Result, ScalarValue, exec_datafusion_err, internal_err,
 };
@@ -2318,8 +2319,9 @@ fn are_inlist_and_eq_and_match_neg(
 fn inlists_have_set_comparable_literals(left: &Expr, right: &Expr) -> bool {
     match (left, right) {
         (Expr::InList(l), Expr::InList(r)) => l.list.iter().chain(&r.list).all(|item| {
-            item.as_literal()
-                .is_some_and(|value| !value.is_null() && !value.data_type().is_floating())
+            item.as_literal().is_some_and(|value| {
+                !value.is_null() && !has_float_leaf(&value.data_type())
+            })
         }),
         _ => false,
     }
