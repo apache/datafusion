@@ -16,11 +16,13 @@
 // under the License.
 
 use arrow::array::{
-    Array, AsArray, BooleanArray, BooleanBufferBuilder, GenericListArray, OffsetSizeTrait,
+    Array, ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder, FixedSizeListArray,
+    GenericListArray, OffsetSizeTrait,
 };
 use arrow::buffer::{BooleanBuffer, NullBuffer};
-use arrow::datatypes::DataType;
-use datafusion_common::{Result, exec_err};
+use arrow::compute::unary;
+use arrow::datatypes::{DataType, Float32Type, Float64Type};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -28,6 +30,9 @@ use datafusion_functions_nested::array_has::array_has_udf;
 use std::sync::Arc;
 
 /// Spark-compatible `array_contains` function.
+///
+/// Float elements are first canonicalized to Spark's equality, where `-0.0`
+/// equals `0.0` and all NaNs are equal (top-level elements only).
 ///
 /// Calls DataFusion's `array_has` and then applies Spark's null semantics:
 /// - If the result from `array_has` is `true`, return `true`.
@@ -68,12 +73,120 @@ impl ScalarUDFImpl for SparkArrayContains {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let mut args = args;
+        for arg in &mut args.args {
+            *arg = canonicalize_floats(arg)?;
+        }
         let haystack = args.args[0].clone();
         let array_has_result = array_has_udf().invoke_with_args(args)?;
 
         let result_array = array_has_result.to_array(1)?;
         let patched = apply_spark_null_semantics(result_array.as_boolean(), &haystack)?;
         Ok(ColumnarValue::Array(Arc::new(patched)))
+    }
+}
+
+/// Rewrites float values so that bitwise comparison matches Spark's equality:
+/// `-0.0` becomes `0.0` and every NaN becomes the canonical NaN. Applies to a
+/// float argument and to the elements of a list argument; other values are
+/// returned as they are.
+fn canonicalize_floats(value: &ColumnarValue) -> Result<ColumnarValue> {
+    Ok(match value {
+        ColumnarValue::Array(array) => {
+            ColumnarValue::Array(canonicalize_float_array(array))
+        }
+        ColumnarValue::Scalar(scalar) => match scalar {
+            ScalarValue::Float32(Some(v)) => {
+                ColumnarValue::Scalar(ScalarValue::Float32(Some(canonical_f32(*v))))
+            }
+            ScalarValue::Float64(Some(v)) => {
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(canonical_f64(*v))))
+            }
+            ScalarValue::List(list) => ColumnarValue::Scalar(ScalarValue::List(
+                canonicalize_float_array(&(Arc::clone(list) as ArrayRef))
+                    .as_list::<i32>()
+                    .clone()
+                    .into(),
+            )),
+            ScalarValue::LargeList(list) => {
+                ColumnarValue::Scalar(ScalarValue::LargeList(
+                    canonicalize_float_array(&(Arc::clone(list) as ArrayRef))
+                        .as_list::<i64>()
+                        .clone()
+                        .into(),
+                ))
+            }
+            ScalarValue::FixedSizeList(list) => {
+                ColumnarValue::Scalar(ScalarValue::FixedSizeList(
+                    canonicalize_float_array(&(Arc::clone(list) as ArrayRef))
+                        .as_fixed_size_list()
+                        .clone()
+                        .into(),
+                ))
+            }
+            _ => value.clone(),
+        },
+    })
+}
+
+fn canonical_f32(v: f32) -> f32 {
+    if v.is_nan() {
+        f32::NAN
+    } else if v == 0.0 {
+        0.0
+    } else {
+        v
+    }
+}
+
+fn canonical_f64(v: f64) -> f64 {
+    if v.is_nan() {
+        f64::NAN
+    } else if v == 0.0 {
+        0.0
+    } else {
+        v
+    }
+}
+
+fn canonicalize_float_array(array: &ArrayRef) -> ArrayRef {
+    match array.data_type() {
+        DataType::Float32 => Arc::new(unary::<Float32Type, _, Float32Type>(
+            array.as_primitive::<Float32Type>(),
+            canonical_f32,
+        )),
+        DataType::Float64 => Arc::new(unary::<Float64Type, _, Float64Type>(
+            array.as_primitive::<Float64Type>(),
+            canonical_f64,
+        )),
+        DataType::List(field) => {
+            let list = array.as_list::<i32>();
+            Arc::new(GenericListArray::<i32>::new(
+                Arc::clone(field),
+                list.offsets().clone(),
+                canonicalize_float_array(list.values()),
+                list.nulls().cloned(),
+            ))
+        }
+        DataType::LargeList(field) => {
+            let list = array.as_list::<i64>();
+            Arc::new(GenericListArray::<i64>::new(
+                Arc::clone(field),
+                list.offsets().clone(),
+                canonicalize_float_array(list.values()),
+                list.nulls().cloned(),
+            ))
+        }
+        DataType::FixedSizeList(field, size) => {
+            let list = array.as_fixed_size_list();
+            Arc::new(FixedSizeListArray::new(
+                Arc::clone(field),
+                *size,
+                canonicalize_float_array(list.values()),
+                list.nulls().cloned(),
+            ))
+        }
+        _ => Arc::clone(array),
     }
 }
 
