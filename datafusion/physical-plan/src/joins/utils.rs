@@ -582,8 +582,16 @@ fn estimate_join_cardinality(
             };
             let mut left_column_statistics = left_stats.column_statistics;
             let mut right_column_statistics = right_stats.column_statistics;
-            let (left_keys, right_keys): (Vec<_>, Vec<_>) =
-                on_column_indices.iter().flatten().copied().unzip();
+            let (left_keys, right_keys): (Vec<_>, Vec<_>) = on_column_indices
+                .iter()
+                .flatten()
+                .map(|&(left, right)| {
+                    (
+                        (left, right_column_statistics[right].null_count),
+                        (right, left_column_statistics[left].null_count),
+                    )
+                })
+                .unzip();
             estimate_join_null_counts(
                 &mut left_column_statistics,
                 &left_side,
@@ -816,6 +824,21 @@ fn estimate_join_unmatched_rows(
     null_equality: NullEquality,
 ) -> Option<usize> {
     let rows = *input.num_rows.get_value()?;
+    // The semi estimate uses non-NULL NDV overlap, so it can miss NULL
+    // matches. With one null-safe key, every input NULL has a match if the
+    // other side has any NULLs. This bounds matched input rows, not pairs.
+    let matched_nulls = match (
+        null_equality,
+        input.column_statistics.as_slice(),
+        other.column_statistics.as_slice(),
+    ) {
+        (NullEquality::NullEqualsNull, [input], [other])
+            if other.null_count.get_value().is_some_and(|&count| count > 0) =>
+        {
+            input.null_count.get_value().copied().unwrap_or(0)
+        }
+        _ => 0,
+    };
     let matched = estimate_semi_join_cardinality(
         &input.num_rows,
         &other.num_rows,
@@ -824,6 +847,7 @@ fn estimate_join_unmatched_rows(
         null_equality,
     )
     .unwrap_or(inner_rows)
+    .max(matched_nulls)
     .min(inner_rows);
     // A NULL in any key prevents a match under ordinary equality. The same
     // holds for null-safe equality when the other key has no NULLs.
@@ -859,39 +883,45 @@ struct JoinSideRows {
 /// that keeps both sides' columns. A join repeats and drops rows, so a null
 /// count scales with the rows that carry the column, and padding adds NULLs.
 /// NULL keys never match under `NullEqualsNothing`, so only the unmatched rows
-/// of a preserved side keep them, each once.
+/// of a preserved side keep them, each once. The same holds for null-safe keys
+/// whose opposite key has exactly zero NULLs. Each `keys` entry contains the
+/// column index and the opposite key's input null count.
 fn estimate_join_null_counts(
     column_statistics: &mut [ColumnStatistics],
     side: &JoinSideRows,
-    keys: &[usize],
+    keys: &[(usize, Precision<usize>)],
     null_equality: NullEquality,
     null_matches: Precision<usize>,
 ) {
     for (idx, column_stats) in column_statistics.iter_mut().enumerate() {
         let null_count = column_stats.null_count;
-        let own_nulls =
-            if keys.contains(&idx) && null_equality == NullEquality::NullEqualsNothing {
-                if side.preserved {
-                    // A single output partition can emit all unmatched rows of
-                    // a broadcast side, so the count is exact only overall.
-                    null_count.to_inexact()
-                } else {
-                    Precision::Exact(0)
-                }
-            } else if null_count == Precision::Exact(0) {
-                // A join cannot add values, so a column without nulls keeps none.
-                null_count
-            } else if keys.contains(&idx) {
-                if side.preserved {
-                    null_matches.max(&null_count).to_inexact()
-                } else {
-                    null_matches
-                }
+        let nulls_cannot_match = keys.iter().any(|&(key, opposite_nulls)| {
+            key == idx
+                && (null_equality == NullEquality::NullEqualsNothing
+                    || opposite_nulls == Precision::Exact(0))
+        });
+        let own_nulls = if nulls_cannot_match {
+            if side.preserved && null_count != Precision::Exact(0) {
+                // A single output partition can emit all unmatched rows of
+                // a broadcast side, so the count is exact only overall.
+                null_count.to_inexact()
             } else {
-                side.input.map_or(Precision::Absent, |rows| {
-                    scale_subset_count(null_count, rows, side.own)
-                })
-            };
+                Precision::Exact(0)
+            }
+        } else if null_count == Precision::Exact(0) {
+            // A join cannot add values, so a column without nulls keeps none.
+            null_count
+        } else if keys.iter().any(|&(key, _)| key == idx) {
+            if side.preserved {
+                null_matches.max(&null_count).to_inexact()
+            } else {
+                null_matches
+            }
+        } else {
+            side.input.map_or(Precision::Absent, |rows| {
+                scale_subset_count(null_count, rows, side.own)
+            })
+        };
         // Padding is an estimate. An unknown contribution from matched rows
         // stays unknown rather than being treated as zero.
         column_stats.null_count = match side.padded {
@@ -3715,6 +3745,145 @@ mod tests {
                 Inexact(20),
                 "{join_type}"
             );
+        }
+    }
+
+    #[test]
+    fn test_join_null_counts_null_safe_multikey() {
+        // The key order differs from the column order on both sides. A NULL
+        // can only match if the corresponding key on the other side has NULLs.
+        let column = |null_count| ColumnStatistics {
+            null_count,
+            distinct_count: Exact(10),
+            ..ColumnStatistics::new_unknown()
+        };
+        let on = vec![
+            (
+                Arc::new(Column::new("a", 1)) as _,
+                Arc::new(Column::new("a", 1)) as _,
+            ),
+            (
+                Arc::new(Column::new("b", 2)) as _,
+                Arc::new(Column::new("b", 0)) as _,
+            ),
+        ];
+        for (join_type, opposite_nulls, expected) in [
+            (
+                JoinType::Inner,
+                Exact(0),
+                [Exact(0), Exact(0), Exact(0), Exact(0)],
+            ),
+            (
+                JoinType::Inner,
+                Inexact(0),
+                [Absent, Exact(0), Exact(0), Absent],
+            ),
+            (
+                JoinType::Inner,
+                Absent,
+                [Absent, Exact(0), Exact(0), Absent],
+            ),
+            (
+                JoinType::Left,
+                Exact(0),
+                [Inexact(20), Exact(0), Inexact(20), Inexact(20)],
+            ),
+            (
+                JoinType::Right,
+                Exact(0),
+                [Inexact(20), Inexact(20), Inexact(20), Exact(0)],
+            ),
+            (
+                JoinType::Full,
+                Exact(0),
+                [Inexact(40), Inexact(20), Inexact(40), Inexact(20)],
+            ),
+        ] {
+            let stats = estimate_join_cardinality(
+                &join_type,
+                create_stats(
+                    Some(100),
+                    vec![column(Exact(5)), column(Exact(20)), column(Exact(0))],
+                    true,
+                ),
+                create_stats(
+                    Some(100),
+                    vec![column(Exact(20)), column(opposite_nulls)],
+                    true,
+                ),
+                &on,
+                NullEquality::NullEqualsNull,
+            )
+            .unwrap();
+            let null_counts: Vec<_> = stats.column_statistics[1..]
+                .iter()
+                .map(|column| column.null_count)
+                .collect();
+            assert_eq!(null_counts, expected, "{join_type} {opposite_nulls:?}");
+            if join_type == JoinType::Inner {
+                // A non-key column is still scaled, not made null-free.
+                assert_eq!(stats.column_statistics[0].null_count, Inexact(50));
+            }
+        }
+    }
+
+    #[test]
+    fn test_join_null_counts_null_safe_unmatched_rows() {
+        let on = vec![(
+            Arc::new(Column::new("k", 0)) as _,
+            Arc::new(Column::new("k", 0)) as _,
+        )];
+        // Ninety NULL keys match every row on the other side. Only the ten
+        // distinct non-NULL keys are unmatched, even when matches duplicate.
+        for other_rows in [1, 3] {
+            for join_type in [JoinType::Left, JoinType::Right, JoinType::Full] {
+                let input = create_stats(
+                    Some(100),
+                    vec![create_column_stats(
+                        Exact(1),
+                        Exact(10),
+                        Exact(10),
+                        Exact(90),
+                    )],
+                    true,
+                );
+                let other = create_stats(
+                    Some(other_rows),
+                    vec![create_column_stats(
+                        Absent,
+                        Absent,
+                        Exact(0),
+                        Exact(other_rows),
+                    )],
+                    true,
+                );
+                let (left, right) = if join_type == JoinType::Right {
+                    (other, input)
+                } else {
+                    (input, other)
+                };
+                let stats = estimate_join_cardinality(
+                    &join_type,
+                    left,
+                    right,
+                    &on,
+                    NullEquality::NullEqualsNull,
+                )
+                .unwrap();
+                let null_pairs = 90 * other_rows;
+                assert_eq!(stats.num_rows, null_pairs + 10, "{join_type}");
+                let expected = if join_type == JoinType::Right {
+                    [Inexact(null_pairs + 10), Inexact(null_pairs)]
+                } else {
+                    [Inexact(null_pairs), Inexact(null_pairs + 10)]
+                };
+                let null_counts: Vec<_> = stats
+                    .column_statistics
+                    .iter()
+                    .map(|column| column.null_count)
+                    .collect();
+                assert_eq!(null_counts, expected, "{join_type}");
+            }
         }
     }
 
