@@ -636,6 +636,13 @@ message ParquetOptions {
     uint64 max_predicate_cache_size = 33;
   }
 
+  oneof read_ahead_bytes_opt {
+    uint64 read_ahead_bytes = 39;
+  }
+
+  reserved 40;
+  reserved "read_ahead_conditional";
+
   oneof max_row_group_bytes_opt {
     uint64 max_row_group_bytes = 37;
   }

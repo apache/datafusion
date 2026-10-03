@@ -913,6 +913,8 @@ pub struct ParquetOptions {
     pub max_predicate_cache_size_opt: ::core::option::Option<
         parquet_options::MaxPredicateCacheSizeOpt,
     >,
+    #[prost(oneof = "parquet_options::ReadAheadBytesOpt", tags = "39")]
+    pub read_ahead_bytes_opt: ::core::option::Option<parquet_options::ReadAheadBytesOpt>,
     #[prost(oneof = "parquet_options::MaxRowGroupBytesOpt", tags = "37")]
     pub max_row_group_bytes_opt: ::core::option::Option<
         parquet_options::MaxRowGroupBytesOpt,
@@ -980,6 +982,11 @@ pub mod parquet_options {
     pub enum MaxPredicateCacheSizeOpt {
         #[prost(uint64, tag = "33")]
         MaxPredicateCacheSize(u64),
+    }
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum ReadAheadBytesOpt {
+        #[prost(uint64, tag = "39")]
+        ReadAheadBytes(u64),
     }
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum MaxRowGroupBytesOpt {

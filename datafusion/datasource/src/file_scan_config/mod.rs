@@ -738,7 +738,12 @@ impl DataSource for FileScanConfig {
 
         let source = self.file_source.with_batch_size(batch_size);
 
-        let morselizer = source.create_morselizer(object_store, self, partition)?;
+        let morselizer = source.create_morselizer_with_context(
+            object_store,
+            self,
+            partition,
+            &context,
+        )?;
 
         // Extract the shared work source from the sibling state if it exists.
         // This allows multiple sibling streams to steal work from a single

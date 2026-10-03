@@ -29,8 +29,8 @@ use crate::decoder_projection::DecoderProjection;
 use crate::metrics::{ByteProgress, RowFilterSkippedFullyMatchedMetric};
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::push_decoder::{
-    DecoderBuilderConfig, InitialDecoderState, PushDecoderStreamState, RgPlanEntry,
-    RowFilterContext, RowGroupPruner,
+    DecoderBuilderConfig, InitialDecoderState, PushDecoderStreamState, ReadAhead,
+    ReadAheadMemory, RgPlanEntry, RowFilterContext, RowGroupPruner,
 };
 use crate::row_group_filter::{RowGroupAccessPlanFilter, row_group_in_range};
 use crate::{
@@ -59,6 +59,7 @@ use datafusion_common::{
     ColumnStatistics, HashSet, Result, ScalarValue, Statistics, exec_err, internal_err,
 };
 use datafusion_datasource::{PartitionedFile, TableSchema};
+use datafusion_execution::memory_pool::MemoryPool;
 use datafusion_physical_expr::expressions::{Column, DynamicFilterTracking, Literal};
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_expr::utils::collect_columns;
@@ -83,6 +84,7 @@ use parquet::arrow::arrow_reader::{
 };
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::parquet_column;
+use parquet::arrow::push_decoder::FetchGranularity;
 use parquet::basic::Type;
 use parquet::bloom_filter::Sbbf;
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader, RowGroupMetaData};
@@ -299,6 +301,9 @@ pub(super) struct ParquetMorselizer {
     /// lists skip container-level pruning. Sourced from
     /// `datafusion.execution.parquet.max_in_list_size`.
     pub max_in_list_size: usize,
+    /// Read-ahead window in bytes. If set, decode a batch at a time. Sourced
+    /// from `datafusion.execution.parquet.read_ahead_bytes`.
+    pub read_ahead_bytes: Option<u64>,
     /// Whether to read row groups in reverse order
     pub reverse_row_groups: bool,
     /// Optional sort order used to reorder row groups by their min/max statistics.
@@ -306,6 +311,8 @@ pub(super) struct ParquetMorselizer {
     /// Per-scan virtual-column state (validation already performed). `None`
     /// when no virtual columns are requested — the common path.
     pub(crate) virtual_state: Option<Arc<VirtualColumnsState>>,
+    /// Pool that accounts read-ahead buffers. `None` uses an unbounded pool.
+    pub(crate) memory_pool: Option<Arc<dyn MemoryPool>>,
 }
 
 impl fmt::Debug for ParquetMorselizer {
@@ -460,6 +467,7 @@ struct PreparedParquetOpen {
     /// the logical-with-virtual schema. `None` when no virtual columns were
     /// requested.
     virtual_state: Option<Arc<VirtualColumnsState>>,
+    memory_pool: Option<Arc<dyn MemoryPool>>,
     reorder_predicates: bool,
     pushdown_filters: bool,
     force_filter_selections: bool,
@@ -494,6 +502,7 @@ struct PreparedParquetOpen {
     predicate_creation_errors: Count,
     max_predicate_cache_size: Option<usize>,
     max_in_list_size: usize,
+    read_ahead_bytes: Option<u64>,
     reverse_row_groups: bool,
     sort_order_for_reorder: Option<LexOrdering>,
     preserve_order: bool,
@@ -652,7 +661,20 @@ impl ParquetOpenState {
             }
             ParquetOpenState::PruneWithStatistics(prepared) => {
                 let mut prepared_row_groups = (*prepared).prune_row_groups()?;
-                if prepared_row_groups.should_load_page_index()? {
+                // Streaming fetches pages when an offset index exists, so also load
+                // it when a row group is larger than the read-ahead window.
+                let loaded = &prepared_row_groups.prepared.loaded;
+                let streaming = match loaded.prepared.read_ahead_bytes {
+                    Some(window) if loaded.prepared.enable_page_index => {
+                        let metadata = loaded.reader_metadata.metadata();
+                        prepared_row_groups
+                            .row_groups
+                            .row_group_indexes()
+                            .any(|idx| row_group_bytes(metadata.row_group(idx)) > window)
+                    }
+                    _ => false,
+                };
+                if streaming || prepared_row_groups.should_load_page_index()? {
                     Ok(ParquetOpenState::LoadPageIndex(
                         prepared_row_groups.load_page_index().boxed(),
                     ))
@@ -980,6 +1002,7 @@ impl ParquetMorselizer {
             projection,
             predicate,
             virtual_state: self.virtual_state.as_ref().map(Arc::clone),
+            memory_pool: self.memory_pool.clone(),
             reorder_predicates: self.reorder_filters,
             pushdown_filters: self.pushdown_filters,
             force_filter_selections: self.force_filter_selections,
@@ -995,6 +1018,7 @@ impl ParquetMorselizer {
             predicate_creation_errors,
             max_predicate_cache_size: self.max_predicate_cache_size,
             max_in_list_size: self.max_in_list_size,
+            read_ahead_bytes: self.read_ahead_bytes,
             reverse_row_groups: self.reverse_row_groups,
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             preserve_order: self.preserve_order,
@@ -1712,6 +1736,21 @@ impl RowGroupsPrunedParquetOpen {
             None => DecoderReadPlans::try_new(&prepared, &reader_metadata)?,
         };
 
+        // Bytes of the row groups in this file range, credited to
+        // `bytes_processed` as the scan finishes with them (see below).
+        let in_range_bytes: u64 = rg_metadata
+            .iter()
+            .filter(|rg_meta| {
+                prepared
+                    .file_range
+                    .as_ref()
+                    .is_none_or(|range| row_group_in_range(rg_meta, range))
+            })
+            .map(row_group_bytes)
+            .sum();
+
+        let read_ahead_bytes = prepared.read_ahead_bytes;
+
         // Lazily-registered suppression counter shared by the open-time first-RG
         // skip below and the stream's per-RG toggle (registered on first use so
         // scans that never suppress don't carry a zero-valued counter).
@@ -1802,6 +1841,10 @@ impl RowGroupsPrunedParquetOpen {
                 }
             }
 
+            if read_ahead_bytes.is_some() {
+                builder = builder.with_fetch_granularity(FetchGranularity::Batch);
+            }
+
             InitialDecoderState {
                 decoder: builder.build()?,
                 rg_plan,
@@ -1822,16 +1865,6 @@ impl RowGroupsPrunedParquetOpen {
         // plan it was built from had `prune_by_range` applied. The planned row
         // groups are therefore a subset of the in-range ones, and subtracting
         // leaves exactly those the scan will skip.
-        let in_range_bytes: u64 = rg_metadata
-            .iter()
-            .filter(|rg_meta| {
-                prepared
-                    .file_range
-                    .as_ref()
-                    .is_none_or(|range| row_group_in_range(rg_meta, range))
-            })
-            .map(row_group_bytes)
-            .sum();
         let planned_bytes: u64 = rg_plan.iter().map(|entry| entry.bytes).sum();
         byte_progress.credit(in_range_bytes.saturating_sub(planned_bytes));
 
@@ -1880,11 +1913,16 @@ impl RowGroupsPrunedParquetOpen {
             .file_metrics
             .row_groups_pruned_dynamic_filter
             .clone();
+        let read_ahead = read_ahead_bytes.map(|window| {
+            let memory =
+                ReadAheadMemory::new(prepared.memory_pool, prepared.partition_index);
+            ReadAhead::new(window, decoder.scan_plan(), memory)
+        });
         let stream = PushDecoderStreamState {
             decoder: Some(decoder),
             active_reader: None,
             rg_plan,
-            reader: prepared.async_file_reader,
+            reader: Some(prepared.async_file_reader),
             decoder_projection,
             arrow_reader_metrics,
             predicate_cache_inner_records,
@@ -1896,6 +1934,7 @@ impl RowGroupsPrunedParquetOpen {
             filter_installed,
             row_filter_skipped_fully_matched,
             byte_progress,
+            read_ahead,
         }
         .into_stream();
 
@@ -2197,6 +2236,8 @@ mod test {
         coerce_int96: Option<TimeUnit>,
         max_predicate_cache_size: Option<usize>,
         max_in_list_size: usize,
+        read_ahead_bytes: Option<u64>,
+        memory_pool: Option<Arc<dyn MemoryPool>>,
         reverse_row_groups: bool,
         preserve_order: bool,
     }
@@ -2420,6 +2461,8 @@ mod test {
                 coerce_int96: None,
                 max_predicate_cache_size: None,
                 max_in_list_size: MAX_IN_LIST_SIZE,
+                read_ahead_bytes: None,
+                memory_pool: None,
                 reverse_row_groups: false,
                 preserve_order: false,
             }
@@ -2510,6 +2553,18 @@ mod test {
             factory: Arc<dyn ParquetFileReaderFactory>,
         ) -> Self {
             self.parquet_file_reader_factory = Some(factory);
+            self
+        }
+
+        /// Set the read-ahead window (`read_ahead_bytes`).
+        fn with_read_ahead_bytes(mut self, bytes: u64) -> Self {
+            self.read_ahead_bytes = Some(bytes);
+            self
+        }
+
+        /// Set the pool that accounts read-ahead buffers.
+        fn with_memory_pool(mut self, pool: Arc<dyn MemoryPool>) -> Self {
+            self.memory_pool = Some(pool);
             self
         }
 
@@ -2610,9 +2665,11 @@ mod test {
                 encryption_factory: None,
                 max_predicate_cache_size: self.max_predicate_cache_size,
                 max_in_list_size: self.max_in_list_size,
+                read_ahead_bytes: self.read_ahead_bytes,
                 reverse_row_groups: self.reverse_row_groups,
                 sort_order_for_reorder: None,
                 virtual_state,
+                memory_pool: self.memory_pool,
             })
         }
     }
@@ -5802,6 +5859,235 @@ mod test {
             let stream = open_file(&morselizer, file).await.unwrap();
             let (_batches, rows) = count_batches_and_rows(stream).await;
             assert_eq!(rows, 5);
+        }
+    }
+
+    /// Read-ahead (`read_ahead_bytes`) and its accounting in the memory pool.
+    mod read_ahead {
+        use super::*;
+        use std::ops::Range;
+        use std::sync::Mutex;
+
+        use bytes::Bytes;
+
+        use arrow::array::Int64Array;
+        use arrow::compute::concat_batches;
+        use datafusion_execution::memory_pool::{
+            GreedyMemoryPool, MemoryPool, PeakRecordingPool,
+        };
+        use futures::future::BoxFuture;
+        use parquet::arrow::arrow_reader::ArrowReaderOptions;
+        use parquet::arrow::async_reader::AsyncFileReader;
+
+        const WINDOW: u64 = 1024 * 1024;
+        const ROWS: i64 = 400_000;
+
+        /// Records the bytes of every data fetch of the readers it creates.
+        #[derive(Debug)]
+        struct RecordingReaderFactory {
+            inner: DefaultParquetFileReaderFactory,
+            fetches: Arc<Mutex<Vec<u64>>>,
+        }
+
+        struct RecordingReader {
+            inner: Box<dyn AsyncFileReader + Send>,
+            fetches: Arc<Mutex<Vec<u64>>>,
+        }
+
+        impl ParquetFileReaderFactory for RecordingReaderFactory {
+            fn create_reader(
+                &self,
+                partition_index: usize,
+                partitioned_file: PartitionedFile,
+                metadata_size_hint: Option<usize>,
+                metrics: &ExecutionPlanMetricsSet,
+            ) -> Result<Box<dyn AsyncFileReader + Send>> {
+                Ok(Box::new(RecordingReader {
+                    inner: self.inner.create_reader(
+                        partition_index,
+                        partitioned_file,
+                        metadata_size_hint,
+                        metrics,
+                    )?,
+                    fetches: Arc::clone(&self.fetches),
+                }))
+            }
+        }
+
+        impl AsyncFileReader for RecordingReader {
+            fn get_bytes(
+                &mut self,
+                range: Range<u64>,
+            ) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
+                self.fetches.lock().unwrap().push(range.end - range.start);
+                self.inner.get_bytes(range)
+            }
+
+            fn get_byte_ranges(
+                &mut self,
+                ranges: Vec<Range<u64>>,
+            ) -> BoxFuture<'_, parquet::errors::Result<Vec<Bytes>>> {
+                let bytes = ranges.iter().map(|r| r.end - r.start).sum();
+                self.fetches.lock().unwrap().push(bytes);
+                self.inner.get_byte_ranges(ranges)
+            }
+
+            fn get_metadata<'a>(
+                &'a mut self,
+                options: Option<&'a ArrowReaderOptions>,
+            ) -> BoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>>
+            {
+                self.inner.get_metadata(options)
+            }
+        }
+
+        /// A file of several MB: `a` is `0..ROWS`, `b` does not compress.
+        /// Ten row groups of several pages each.
+        async fn write_file(store: &Arc<dyn ObjectStore>) -> (SchemaRef, usize) {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Int64, false),
+                Field::new("b", DataType::Int64, false),
+            ]));
+            let a: Vec<i64> = (0..ROWS).collect();
+            let b: Vec<i64> = a
+                .iter()
+                .map(|v| v.wrapping_mul(0x9E37_79B9_7F4A_7C15_u64 as i64))
+                .collect();
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int64Array::from(a)), Arc::new(Int64Array::from(b))],
+            )
+            .unwrap();
+            let props = WriterProperties::builder()
+                .set_dictionary_enabled(false)
+                .set_max_row_group_row_count(Some(ROWS as usize / 10))
+                .set_data_page_row_count_limit(4096)
+                .set_write_batch_size(4096)
+                .build();
+            let len = write_parquet_batches(
+                Arc::clone(store),
+                "read_ahead.parquet",
+                vec![batch],
+                Some(props),
+            )
+            .await;
+            (schema, len)
+        }
+
+        struct Scan {
+            batches: Vec<RecordBatch>,
+            /// Bytes of each data fetch.
+            fetches: Vec<u64>,
+            /// `pool.reserved()` after each batch.
+            reserved: Vec<usize>,
+        }
+
+        /// Scan the file, with read-ahead if `pool` is set.
+        async fn scan(
+            pool: Option<Arc<dyn MemoryPool>>,
+            predicate: Option<Arc<dyn PhysicalExpr>>,
+        ) -> Scan {
+            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+            let (schema, len) = write_file(&store).await;
+            let fetches = Arc::new(Mutex::new(vec![]));
+            let factory = RecordingReaderFactory {
+                inner: DefaultParquetFileReaderFactory::new(Arc::clone(&store)),
+                fetches: Arc::clone(&fetches),
+            };
+            let mut builder = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_projection_indices(&[0, 1])
+                .with_parquet_file_reader_factory(Arc::new(factory));
+            if let Some(predicate) = predicate {
+                builder = builder
+                    .with_predicate(predicate)
+                    .with_pushdown_filters(true);
+            }
+            if let Some(pool) = &pool {
+                builder = builder
+                    .with_read_ahead_bytes(WINDOW)
+                    .with_memory_pool(Arc::clone(pool));
+            }
+            let morselizer = builder.build();
+            let file = PartitionedFile::new("read_ahead.parquet".to_string(), len as u64);
+            let mut stream = open_file(&morselizer, file).await.unwrap();
+            let mut batches = vec![];
+            let mut reserved = vec![];
+            while let Some(batch) = stream.next().await {
+                batches.push(batch.unwrap());
+                reserved.extend(pool.as_ref().map(|p| p.reserved()));
+            }
+            drop(stream);
+            drop(morselizer);
+            if let Some(pool) = &pool {
+                assert_eq!(pool.reserved(), 0, "the stream returns all it reserved");
+            }
+            let fetches = fetches.lock().unwrap().clone();
+            Scan {
+                batches,
+                fetches,
+                reserved,
+            }
+        }
+
+        fn concat(batches: &[RecordBatch]) -> RecordBatch {
+            concat_batches(&batches[0].schema(), batches).unwrap()
+        }
+
+        fn a_lt(value: i64) -> Arc<dyn PhysicalExpr> {
+            let schema = Schema::new(vec![Field::new("a", DataType::Int64, false)]);
+            logical2physical(&col("a").lt(lit(value)), &schema)
+        }
+
+        /// A pool far smaller than the file cannot stop the scan: the bytes
+        /// the decoder needs are always granted.
+        #[tokio::test]
+        async fn small_pool_scan_is_correct_and_releases_all() {
+            let expected = scan(None, None).await;
+            let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(64 * 1024));
+            let actual = scan(Some(pool), None).await;
+            assert_eq!(concat(&actual.batches), concat(&expected.batches));
+            assert_eq!(concat(&actual.batches).num_rows(), ROWS as usize);
+        }
+
+        /// With room in the pool, the reservation follows what read-ahead
+        /// holds and stays within the window plus one required fetch.
+        #[tokio::test]
+        async fn reservation_is_bounded_by_window() {
+            let recorder = Arc::new(PeakRecordingPool::new(Arc::new(
+                GreedyMemoryPool::new(1 << 30),
+            )));
+            let pool: Arc<dyn MemoryPool> = Arc::clone(&recorder) as _;
+            let actual = scan(Some(pool), None).await;
+            // A required fetch is at most the largest fetch.
+            let largest_fetch = *actual.fetches.iter().max().unwrap();
+            let peak = recorder.max_reserved() as u64;
+            assert!(actual.reserved.iter().any(|&r| r > 0));
+            assert!(
+                peak <= WINDOW + largest_fetch,
+                "peak {peak}, largest fetch {largest_fetch}"
+            );
+        }
+
+        /// A filter that rejects every row: without read-ahead the scan never
+        /// reads `b`. Read-ahead fetches `b` ahead (a conditional range),
+        /// unless the pool has no room for it.
+        #[tokio::test]
+        async fn conditional_ranges_are_read_ahead_within_the_pool() {
+            let bytes = |scan: &Scan| scan.fetches.iter().sum::<u64>();
+            let baseline = scan(None, Some(a_lt(-1))).await;
+            assert_eq!(
+                baseline.batches.iter().map(|b| b.num_rows()).sum::<usize>(),
+                0
+            );
+
+            let unbounded: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1 << 30));
+            let ahead = scan(Some(unbounded), Some(a_lt(-1))).await;
+            let full: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1));
+            let required_only = scan(Some(full), Some(a_lt(-1))).await;
+            assert!(bytes(&ahead) > bytes(&baseline));
+            assert_eq!(bytes(&required_only), bytes(&baseline));
         }
     }
 }
