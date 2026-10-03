@@ -326,6 +326,10 @@ fn init() {
     "change_format_version",
     ["--file", "tests/sql/types_format.sql", "-q"],
 )]
+#[case::recursion_limit(
+    "recursion_limit",
+    ["--file", "tests/sql/recursion_limit.sql", "-q"],
+)]
 #[test]
 fn cli_quick_test<'a>(
     #[case] snapshot_name: &'a str,
