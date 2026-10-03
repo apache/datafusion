@@ -625,10 +625,7 @@ impl FinalHashAggregateStream {
         // A soft limit stops reading input early, which bucketing cannot do.
         let bucketing = (bucket_threshold > 0
             && group_values_soft_limit.is_none()
-            && BucketedAggregation::supports_state(
-                &input_schema,
-                agg.group_by().num_group_exprs(),
-            ))
+            && BucketedAggregation::supports_state(&input_schema))
         .then(|| {
             Arc::new(BucketedAggregation::new(
                 bucket_threshold,
