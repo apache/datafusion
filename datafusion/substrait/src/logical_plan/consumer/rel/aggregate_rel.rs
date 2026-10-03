@@ -17,10 +17,14 @@
 
 use crate::logical_plan::consumer::{NameTracker, SubstraitConsumer};
 use crate::logical_plan::consumer::{from_substrait_agg_func, from_substrait_sorts};
+use crate::logical_plan::grouping_set::{
+    GROUPING_SET_INDEX, grouping_id_column, grouping_set_columns, grouping_set_ids,
+    grouping_sets_of, index_from_grouping_id,
+};
 use datafusion::common::{Column, DFSchemaRef, internal_err, not_impl_err};
 use datafusion::logical_expr::builder::project;
 use datafusion::logical_expr::{
-    Aggregate, Expr, GroupingSet, LogicalPlan, LogicalPlanBuilder,
+    Aggregate, Expr, ExprSchemable, GroupingSet, LogicalPlan, LogicalPlanBuilder,
 };
 use substrait::proto::AggregateRel;
 use substrait::proto::aggregate_function::AggregationInvocation;
@@ -125,33 +129,44 @@ pub async fn from_aggregate_rel(
             .map(|e| name_tracker.get_uniquely_named_expr(e))
             .collect::<Result<Vec<Expr>, _>>()?;
 
+        let set_ids = (agg.groupings.len() > 1)
+            .then(|| {
+                grouping_set_ids(
+                    &grouping_set_columns(&group_exprs)?,
+                    grouping_sets_of(&group_exprs)?,
+                )
+            })
+            .transpose()?;
         let plan = input.aggregate(group_exprs, aggr_exprs)?.build()?;
-        if agg.groupings.len() > 1 {
-            reorder_grouping_set_output(plan, agg.measures.len())
-        } else {
-            Ok(plan)
+        match set_ids {
+            Some(set_ids) => grouping_set_output(plan, agg.measures.len(), &set_ids),
+            None => Ok(plan),
         }
     } else {
         not_impl_err!("Aggregate without an input is not valid")
     }
 }
 
-/// Reorders DataFusion's `[groups, grouping_id, measures]` aggregate schema to
-/// Substrait's direct output order of `[groups, measures, grouping_id]`.
-fn reorder_grouping_set_output(
+/// Shapes DataFusion's `[groups, grouping_id, measures]` aggregate schema into
+/// the direct output Substrait gives a multi-set aggregate:
+/// `[groups, measures, grouping set index]`.
+///
+/// The trailing column is not DataFusion's `__grouping_id`. Substrait defines it
+/// as "the zero-based index of the grouping set that yielded the record", while
+/// `__grouping_id` packs a bitmask of the columns the set leaves out together
+/// with an ordinal that separates repeated sets. Both identify the set that
+/// produced a row, so the column is replaced here by an expression mapping one
+/// to the other.
+///
+/// [Aggregate Operation]: https://substrait.io/relations/logical_relations/#aggregate-operation
+fn grouping_set_output(
     plan: LogicalPlan,
     measure_count: usize,
+    set_ids: &[u64],
 ) -> datafusion::common::Result<LogicalPlan> {
     let exprs: Vec<Expr> = {
         let schema = plan.schema();
-        let Some(grouping_id_index) =
-            schema.index_of_column_by_name(None, Aggregate::INTERNAL_GROUPING_ID)
-        else {
-            return internal_err!(
-                "Grouping set aggregate schema is missing {}",
-                Aggregate::INTERNAL_GROUPING_ID
-            );
-        };
+        let (grouping_id_index, grouping_id) = grouping_id_column(schema)?;
         if grouping_id_index + measure_count + 1 != schema.fields().len() {
             return internal_err!(
                 "Grouping set aggregate schema has {} fields after {}, expected {} measures",
@@ -160,11 +175,15 @@ fn reorder_grouping_set_output(
                 measure_count
             );
         }
+        let grouping_id = Expr::Column(grouping_id);
+        let grouping_id_type = grouping_id.get_type(schema)?;
+        let set_index = index_from_grouping_id(&grouping_id, &grouping_id_type, set_ids)?
+            .alias(GROUPING_SET_INDEX);
 
         (0..grouping_id_index)
             .chain(grouping_id_index + 1..schema.fields().len())
-            .chain(std::iter::once(grouping_id_index))
             .map(|index| Expr::Column(Column::from(schema.qualified_field(index))))
+            .chain(std::iter::once(set_index))
             .collect()
     };
     project(plan, exprs)
