@@ -405,10 +405,15 @@ impl FilterExec {
                 );
                 (selectivity, filtered_num_rows, cs)
             } else {
-                // Without interval boundaries, use the default selectivity and
-                // apply the row-count constraints that still follow from the
-                // filter predicate.
-                let selectivity = default_selectivity as f64 / 100.0;
+                // Without interval boundaries, attempt a heuristic fallback for selectivities.
+                // For instance, an equality filter against an unresolved scalar subquery will
+                // fail `check_support`, but we can still estimate selectivity as `1.0 / NDV`.
+                let selectivity = compute_fallback_selectivity(
+                    predicate,
+                    &input_stats.column_statistics,
+                    default_selectivity,
+                );
+
                 let filtered_num_rows =
                     input_num_rows.with_estimated_selectivity(selectivity);
                 let mut cs = input_stats.to_inexact().column_statistics;
@@ -1180,6 +1185,74 @@ fn holds_each_value_once(column: &ColumnStatistics, num_rows: &Precision<usize>)
         return false;
     };
     distinct.saturating_add(*nulls) >= *rows
+}
+
+/// Heuristic selectivity for predicates that fail interval analysis.
+///
+/// Splits the predicate into AND conjuncts. For each equality (`col = expr`)
+/// where at least one side is a [`Column`] with a known NDV, the selectivity
+/// contribution is `1 / NDV`. When both sides are columns with known NDV,
+/// `1 / max(left_NDV, right_NDV)` is used. All remaining conjuncts that
+/// cannot be estimated are covered by a single application of
+/// `default_selectivity`, preserving the pre-existing estimate for predicates
+/// that contain no recognizable equality.
+fn compute_fallback_selectivity(
+    predicate: &Arc<dyn PhysicalExpr>,
+    column_statistics: &[ColumnStatistics],
+    default_selectivity: u8,
+) -> f64 {
+    let conjuncts = split_conjunction(predicate);
+    let mut selectivity = 1.0;
+    let mut has_unhandled = false;
+
+    for expr in conjuncts {
+        let mut handled = false;
+
+        if let Some(binary) = expr.downcast_ref::<BinaryExpr>()
+            && *binary.op() == Operator::Eq
+        {
+            let left_ndv = column_ndv(binary.left(), column_statistics);
+            let right_ndv = column_ndv(binary.right(), column_statistics);
+
+            let ndv = match (left_ndv, right_ndv) {
+                (Some(l), Some(r)) => Some(l.max(r)),
+                (Some(n), None) | (None, Some(n)) => Some(n),
+                (None, None) => None,
+            };
+
+            if let Some(n) = ndv {
+                selectivity *= 1.0 / (n as f64);
+                handled = true;
+            }
+        }
+
+        if !handled {
+            has_unhandled = true;
+        }
+    }
+
+    // Apply the default selectivity at most once for all unhandled conjuncts,
+    // so that a predicate with no handled equalities keeps the same estimate
+    // as the previous flat-fallback path.
+    if has_unhandled {
+        selectivity *= default_selectivity as f64 / 100.0;
+    }
+
+    selectivity
+}
+
+/// Extracts the NDV from a [`Column`] reference, if the expression is a bare
+/// column and its statistics carry a positive distinct count.
+fn column_ndv(
+    expr: &Arc<dyn PhysicalExpr>,
+    column_statistics: &[ColumnStatistics],
+) -> Option<usize> {
+    let col = expr.downcast_ref::<Column>()?;
+    let stat = column_statistics.get(col.index())?;
+    match stat.distinct_count {
+        Precision::Exact(ndv) | Precision::Inexact(ndv) if ndv > 0 => Some(ndv),
+        _ => None,
+    }
 }
 
 /// Collects column equality information from `col = literal` predicates in a
@@ -4464,5 +4537,213 @@ mod tests {
             Precision::Inexact(20)
         );
         Ok(())
+    }
+
+    // ---------------------------------------------------------------
+    // Unit tests for compute_fallback_selectivity
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_fallback_selectivity_single_handled_equality() {
+        // col_0 = <expr>, NDV(col_0) = 100 → selectivity = 1/100
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let predicate: Arc<dyn PhysicalExpr> = binary(
+            col("a", &schema).unwrap(),
+            Operator::Eq,
+            lit(42i32),
+            &schema,
+        )
+        .unwrap();
+        let col_stats = vec![ColumnStatistics {
+            distinct_count: Precision::Inexact(100),
+            ..Default::default()
+        }];
+        let result = compute_fallback_selectivity(&predicate, &col_stats, 20);
+        assert!(
+            (result - 0.01).abs() < 1e-12,
+            "expected 1/100 = 0.01, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_fallback_selectivity_multiple_unhandled_conjuncts() {
+        // s LIKE '%abc' AND t <> 'x' AND u IN ('p','q')
+        // None are handled equalities → selectivity = default once = 0.2
+        let schema = Schema::new(vec![
+            Field::new("s", DataType::Utf8, false),
+            Field::new("t", DataType::Utf8, false),
+            Field::new("u", DataType::Utf8, false),
+        ]);
+        // Simulate three non-equality conjuncts via NotEq operators
+        let pred1 = binary(
+            col("s", &schema).unwrap(),
+            Operator::NotEq,
+            lit("abc"),
+            &schema,
+        )
+        .unwrap();
+        let pred2 = binary(
+            col("t", &schema).unwrap(),
+            Operator::NotEq,
+            lit("x"),
+            &schema,
+        )
+        .unwrap();
+        let pred3 = binary(
+            col("u", &schema).unwrap(),
+            Operator::NotEq,
+            lit("p"),
+            &schema,
+        )
+        .unwrap();
+        let combined: Arc<dyn PhysicalExpr> = conjunction(vec![pred1, pred2, pred3]);
+        let col_stats = vec![
+            ColumnStatistics::new_unknown(),
+            ColumnStatistics::new_unknown(),
+            ColumnStatistics::new_unknown(),
+        ];
+        let result = compute_fallback_selectivity(&combined, &col_stats, 20);
+        // default_selectivity applied exactly once: 0.2
+        assert!((result - 0.2).abs() < 1e-12, "expected 0.2, got {result}");
+    }
+
+    #[test]
+    fn test_fallback_selectivity_mixed_handled_and_unhandled() {
+        // col_a = 42 AND col_b <> 'x'
+        // col_a has NDV=50, col_b is unhandled
+        // selectivity = (1/50) * 0.2 = 0.004
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, false),
+        ]);
+        let eq_pred = binary(
+            col("a", &schema).unwrap(),
+            Operator::Eq,
+            lit(42i32),
+            &schema,
+        )
+        .unwrap();
+        let neq_pred = binary(
+            col("b", &schema).unwrap(),
+            Operator::NotEq,
+            lit("x"),
+            &schema,
+        )
+        .unwrap();
+        let combined: Arc<dyn PhysicalExpr> = conjunction(vec![eq_pred, neq_pred]);
+        let col_stats = vec![
+            ColumnStatistics {
+                distinct_count: Precision::Inexact(50),
+                ..Default::default()
+            },
+            ColumnStatistics::new_unknown(),
+        ];
+        let result = compute_fallback_selectivity(&combined, &col_stats, 20);
+        let expected = (1.0 / 50.0) * 0.2;
+        assert!(
+            (result - expected).abs() < 1e-12,
+            "expected {expected}, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_fallback_selectivity_col_eq_col_uses_max_ndv() {
+        // col_a = col_b, NDV(a)=100, NDV(b)=200
+        // selectivity = 1 / max(100, 200) = 1/200
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+        let predicate: Arc<dyn PhysicalExpr> = binary(
+            col("a", &schema).unwrap(),
+            Operator::Eq,
+            col("b", &schema).unwrap(),
+            &schema,
+        )
+        .unwrap();
+        let col_stats = vec![
+            ColumnStatistics {
+                distinct_count: Precision::Inexact(100),
+                ..Default::default()
+            },
+            ColumnStatistics {
+                distinct_count: Precision::Inexact(200),
+                ..Default::default()
+            },
+        ];
+        let result = compute_fallback_selectivity(&predicate, &col_stats, 20);
+        assert!(
+            (result - 1.0 / 200.0).abs() < 1e-12,
+            "expected 1/200 = 0.005, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_fallback_selectivity_no_conjuncts_returns_default() {
+        // A single non-equality predicate → default_selectivity once
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let predicate: Arc<dyn PhysicalExpr> = binary(
+            col("a", &schema).unwrap(),
+            Operator::Gt,
+            lit(10i32),
+            &schema,
+        )
+        .unwrap();
+        let col_stats = vec![ColumnStatistics {
+            distinct_count: Precision::Inexact(100),
+            ..Default::default()
+        }];
+        let result = compute_fallback_selectivity(&predicate, &col_stats, 20);
+        assert!((result - 0.2).abs() < 1e-12, "expected 0.2, got {result}");
+    }
+
+    #[test]
+    fn test_fallback_selectivity_cast_col_not_handled() {
+        // CAST(col_a AS Int64) = 42 — the left side is a CastExpr, not a
+        // bare Column, so `column_ndv` returns None. The conjunct is unhandled
+        // and falls through to `default_selectivity`.
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let cast_expr: Arc<dyn PhysicalExpr> = Arc::new(CastExpr::new(
+            col("a", &schema).unwrap(),
+            DataType::Int64,
+            None,
+        ));
+        let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            cast_expr,
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Int64(Some(42)))),
+        ));
+        let col_stats = vec![ColumnStatistics {
+            distinct_count: Precision::Inexact(100),
+            ..Default::default()
+        }];
+        let result = compute_fallback_selectivity(&predicate, &col_stats, 20);
+        // CAST wraps the column, so it's not recognized → default 0.2
+        assert!((result - 0.2).abs() < 1e-12, "expected 0.2, got {result}");
+    }
+
+    #[test]
+    fn test_fallback_selectivity_utf8_equality_uses_ndv() {
+        // name = 'alice' on a Utf8 column with NDV=60.
+        // Utf8 equality fails `check_support`, so our fallback runs and
+        // returns 1/60 instead of the previous flat 20%.
+        let schema = Schema::new(vec![Field::new("name", DataType::Utf8, false)]);
+        let predicate: Arc<dyn PhysicalExpr> = binary(
+            col("name", &schema).unwrap(),
+            Operator::Eq,
+            lit("alice"),
+            &schema,
+        )
+        .unwrap();
+        let col_stats = vec![ColumnStatistics {
+            distinct_count: Precision::Inexact(60),
+            ..Default::default()
+        }];
+        let result = compute_fallback_selectivity(&predicate, &col_stats, 20);
+        let expected = 1.0 / 60.0;
+        assert!(
+            (result - expected).abs() < 1e-12,
+            "expected {expected}, got {result}"
+        );
     }
 }
