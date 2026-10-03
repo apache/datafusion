@@ -311,41 +311,35 @@ Timestamp(ns, "+05:30") 2024-07-01T12:00:00+05:30
 
 # 5b. AT TIME ZONE applied to a tz-AWARE value.
 #
-# DIVERGES FROM POSTGRESQL (type, not instant). PostgreSQL's
-# `timestamptz AT TIME ZONE zone` *drops* the zone and returns
-# `timestamp without time zone` holding the wall clock reading in `zone`: for
-# the first query below PostgreSQL returns the naive values
-# `2024-01-15 13:00:00` / `2024-07-01 14:00:00`. DataFusion keeps the value
-# tz-aware and merely relabels which zone it is rendered in, so the instant is
-# preserved but the type is not what a PostgreSQL user expects, and a
-# subsequent cast or comparison behaves differently as a result.
-# See https://github.com/apache/datafusion/issues/12218
+# Matches PostgreSQL: `timestamptz AT TIME ZONE zone` drops the zone and
+# returns `timestamp without time zone` holding the wall clock reading in
+# `zone`. For the first query below PostgreSQL returns the naive values
+# `2024-01-15 13:00:00` / `2024-07-01 14:00:00`.
 query TP rowsort
 SELECT arrow_typeof(column1 AT TIME ZONE 'Europe/Brussels'),
        column1 AT TIME ZONE 'Europe/Brussels'
 FROM c_utc
 ----
-Timestamp(ns, "Europe/Brussels") 2024-01-15T13:00:00+01:00
-Timestamp(ns, "Europe/Brussels") 2024-07-01T14:00:00+02:00
+Timestamp(ns) 2024-01-15T13:00:00
+Timestamp(ns) 2024-07-01T14:00:00
 
 query TP rowsort
 SELECT arrow_typeof(column1 AT TIME ZONE 'America/Denver'),
        column1 AT TIME ZONE 'America/Denver'
 FROM c_denver
 ----
-Timestamp(ns, "America/Denver") 2024-01-15T12:00:00-07:00
-Timestamp(ns, "America/Denver") 2024-07-01T12:00:00-06:00
+Timestamp(ns) 2024-01-15T12:00:00
+Timestamp(ns) 2024-07-01T12:00:00
 
 # KNOWN WRONG. The composed idiom `tstz AT TIME ZONE zone` followed by a cast
 # to naive is the standard PostgreSQL way to read a wall clock in a named zone.
 # PostgreSQL (TimeZone='UTC') answers `2024-07-01 12:00:00`. DataFusion with
 # the session zone unset answers `2024-07-02T00:00:00` -- six hours *later*
 # than the input instant rather than six hours earlier, because the literal is
-# naive (SECTION 0), `AT TIME ZONE` then relabels rather than converts it, and
-# `::timestamp` finally renders the result back in UTC. Three separate
-# behaviours from this file compose into an answer that is a whole day out.
-# See https://github.com/apache/datafusion/issues/12218 and
-# https://github.com/apache/datafusion/issues/25166
+# naive (SECTION 0), so `AT TIME ZONE` takes the naive path and reads 18:00 as
+# a Denver wall clock, and `::timestamp` then renders the result in UTC. With a
+# tz-aware input the query answers correctly (SECTION 5b).
+# See https://github.com/apache/datafusion/issues/25166
 query P
 SELECT ('2024-07-01T18:00:00Z'::timestamptz AT TIME ZONE 'America/Denver')::timestamp
 ----

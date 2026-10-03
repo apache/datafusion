@@ -32,4 +32,20 @@ impl ExprPlanner for DatetimeFunctionPlanner {
             ScalarFunction::new_udf(crate::datetime::date_part(), args),
         )))
     }
+
+    /// `<tz-aware timestamp> AT TIME ZONE 'tz'` returns the wall clock in `tz`
+    /// as a timezone-naive timestamp, matching PostgreSQL.
+    ///
+    /// The SQL planner hands us the input already cast to
+    /// `Timestamp(unit, Some(tz))` — an instant-preserving relabel — so the
+    /// remaining step is to strip the timezone while keeping the displayed
+    /// value, which is `to_local_time`.
+    fn plan_at_time_zone(
+        &self,
+        args: Vec<Expr>,
+    ) -> datafusion_common::Result<PlannerResult<Vec<Expr>>> {
+        Ok(PlannerResult::Planned(Expr::ScalarFunction(
+            ScalarFunction::new_udf(crate::datetime::to_local_time(), args),
+        )))
+    }
 }
