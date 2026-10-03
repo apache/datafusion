@@ -212,6 +212,11 @@ WITHIN GROUP (ORDER BY c3)
 OVER (ROWS BETWEEN 4 PRECEDING AND CURRENT ROW)
 FROM aggregate_test_100
 
+statement error DataFusion error: Error during planning: Percentile value must be between 0.0 and 1.0 inclusive
+SELECT percentile_cont(1.5) WITHIN GROUP (ORDER BY c1) FROM aggregate_test_100;
+
+statement error DataFusion error: Error during planning: Percentile value must be between 0.0 and 1.0 inclusive
+SELECT percentile_cont(-0.5) WITHIN GROUP (ORDER BY c1) FROM aggregate_test_100;
 
 # Test that non-DISTINCT aggregates also preserve IGNORE NULLS when mixed with DISTINCT
 # This tests the two-phase aggregation rewrite in SingleDistinctToGroupBy
