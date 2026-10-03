@@ -3846,6 +3846,34 @@ async fn roundtrip_empty_table_scan_with_projection() -> Result<()> {
     Ok(())
 }
 
+// Regression test for https://github.com/apache/datafusion/issues/25937:
+// the optimizer reduces `LIMIT 0` and `WHERE false` to an `EmptyRelation`, which
+// must keep its schema across a to_proto -> from_proto round trip: on its own,
+// and under a node that still references its columns.
+#[tokio::test]
+async fn roundtrip_empty_relation_schema() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("name", DataType::Utf8, true),
+    ]));
+    let table = Arc::new(EmptyTable::new(Arc::clone(&schema)));
+
+    let ctx = SessionContext::new();
+    ctx.register_table("empty", table)?;
+
+    for query in [
+        "SELECT * FROM empty LIMIT 0",
+        "SELECT max(id), count(*) FROM empty WHERE false",
+    ] {
+        let plan = ctx.sql(query).await?.into_optimized_plan()?;
+        let bytes = logical_plan_to_bytes(&plan)?;
+        let restored = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+
+        assert_eq!(plan, restored, "{query}");
+    }
+    Ok(())
+}
+
 // Regression test for https://github.com/apache/datafusion/issues/22065:
 // the decoder must preserve `null_aware = true` (NOT IN semantics)
 // across a to_proto -> from_proto round trip. `null_equality` is at

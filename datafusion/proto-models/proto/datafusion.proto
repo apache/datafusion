@@ -181,6 +181,7 @@ message HashRepartition {
 
 message EmptyRelationNode {
   bool produce_one_row = 1;
+  datafusion_common.DfSchema schema = 2;
 }
 
 message CreateExternalTableNode {

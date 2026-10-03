@@ -805,7 +805,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .build()
             }
             LogicalPlanType::EmptyRelation(empty_relation) => {
-                LogicalPlanBuilder::empty(empty_relation.produce_one_row).build()
+                if let Some(schema) = &empty_relation.schema {
+                    Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+                        produce_one_row: empty_relation.produce_one_row,
+                        schema: Arc::new(schema.try_into()?),
+                    }))
+                } else {
+                    LogicalPlanBuilder::empty(empty_relation.produce_one_row).build()
+                }
             }
             LogicalPlanType::CreateExternalTable(create_extern_table) => {
                 let pb_schema = (create_extern_table.schema.clone()).ok_or_else(|| {
@@ -1989,11 +1996,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                 })
             }
             LogicalPlan::EmptyRelation(EmptyRelation {
-                produce_one_row, ..
+                produce_one_row,
+                schema,
             }) => Ok(LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::EmptyRelation(
                     protobuf::EmptyRelationNode {
                         produce_one_row: *produce_one_row,
+                        schema: Some(schema.try_into()?),
                     },
                 )),
             }),
