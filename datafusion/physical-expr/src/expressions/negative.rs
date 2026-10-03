@@ -357,6 +357,11 @@ mod tests {
             Interval::make(Some(i16::MIN + 1), Some(1_i16)).unwrap(),
             Interval::make(Some(i32::MIN + 1), Some(1_i32)).unwrap(),
             Interval::make(Some(i64::MIN + 1), Some(1_i64)).unwrap(),
+            // An unbounded upper bound cannot introduce MIN when the lower bound excludes it.
+            Interval::make(Some(i8::MIN + 1), None).unwrap(),
+            Interval::make(Some(i16::MIN + 1), None).unwrap(),
+            Interval::make(Some(i32::MIN + 1), None).unwrap(),
+            Interval::make(Some(i64::MIN + 1), None).unwrap(),
             Interval::make(Some(-2_f32), Some(1_f32)).unwrap(),
             Interval::make(Some(-2_f64), Some(1_f64)).unwrap(),
             Interval::make_unbounded(&Float32).unwrap(),
