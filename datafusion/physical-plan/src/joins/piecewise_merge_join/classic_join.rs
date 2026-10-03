@@ -24,7 +24,7 @@ use arrow::{
     array::{ArrayRef, BooleanArray, RecordBatch, UInt32Array},
     compute::{filter_record_batch, sort_to_indices, take_record_batch},
 };
-use arrow_schema::{Schema, SchemaRef, SortOptions};
+use arrow_schema::{DataType, Schema, SchemaRef, SortOptions};
 use datafusion_common::NullEquality;
 use datafusion_common::utils::normalize_float_zero;
 use datafusion_common::{Result, ScalarValue, internal_err};
@@ -630,7 +630,12 @@ fn matchable_rows(
 
     // The comparator's nested ordering is itself wrong for `<`/`<=` (#25957). Once that is
     // fixed, nested keys can go through `apply_cmp` too and this branch can be removed.
-    if stream_values.data_type().is_nested() {
+    //
+    // Run-end encoded keys are decided here too: arrow's run-end comparison kernel overflows
+    // on an empty batch sliced past its first run, which the scan never reaches.
+    if stream_values.data_type().is_nested()
+        || matches!(stream_values.data_type(), DataType::RunEndEncoded(_, _))
+    {
         let match_on_equal = matches_on_equal(operator)?;
         let cmp = JoinKeyComparator::new(
             &[Arc::clone(stream_values)],
@@ -724,7 +729,7 @@ mod tests {
         test::{TestMemoryExec, assert_join_metrics, build_table_i32},
     };
     use arrow::array::{Date32Array, Date64Array};
-    use arrow_schema::{DataType, Field};
+    use arrow_schema::Field;
     use datafusion_common::instant::Instant;
     use datafusion_common::test_util::batches_to_string;
     use datafusion_common::tree_node::TreeNodeRecursion;
@@ -1237,6 +1242,67 @@ mod tests {
         ");
 
         assert_join_metrics!(metrics, 5);
+        Ok(())
+    }
+
+    /// An empty streamed batch of run-end encoded keys, sliced past the first run, must not
+    /// reach arrow's run-end comparison kernel, which overflows on it.
+    #[tokio::test]
+    async fn join_right_run_end_encoded_keys_empty_sliced_batch() -> Result<()> {
+        use arrow::array::{Int32Array, RunArray};
+        use arrow::datatypes::Int32Type;
+
+        let ree_exec = |ids: &str,
+                        keys: &str,
+                        run_ends: Vec<i32>,
+                        values: Vec<Option<i32>>,
+                        slices: &[(usize, usize)]|
+         -> Result<Arc<dyn ExecutionPlan>> {
+            let keys_array = RunArray::<Int32Type>::try_new(
+                &Int32Array::from(run_ends),
+                &Int32Array::from(values),
+            )?;
+            let schema = Arc::new(Schema::new(vec![
+                Field::new(ids, DataType::Int32, false),
+                Field::new(keys, keys_array.data_type().clone(), true),
+            ]));
+            let len = keys_array.len() as i32;
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from((0..len).collect::<Vec<_>>())),
+                    Arc::new(keys_array),
+                ],
+            )?;
+            let batches = slices
+                .iter()
+                .map(|&(offset, len)| batch.slice(offset, len))
+                .collect::<Vec<_>>();
+            Ok(TestMemoryExec::try_new_exec(&[batches], schema, None)?)
+        };
+        // Buffered keys sorted for `<` (descending, NULLs first): {NULL, 5, 5, 1, 1}.
+        let left = ree_exec(
+            "a1",
+            "b1",
+            vec![1, 3, 5],
+            vec![None, Some(5), Some(1)],
+            &[(0, 5)],
+        )?;
+        // Streamed keys {NULL, 2, 2, 0, 6}, as batches of 3, 0 and 2 rows. The empty one
+        // starts at offset 3, past the end of the first run.
+        let right = ree_exec(
+            "a2",
+            "b2",
+            vec![1, 3, 4, 5],
+            vec![None, Some(2), Some(0), Some(6)],
+            &[(0, 3), (3, 0), (3, 2)],
+        )?;
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+        );
+
+        join_collect(left, right, on, Operator::Lt, JoinType::Right).await?;
         Ok(())
     }
 
