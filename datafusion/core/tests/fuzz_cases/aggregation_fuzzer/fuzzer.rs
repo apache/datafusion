@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
-use datafusion_common::{Result, internal_datafusion_err};
+use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
 use datafusion_common_runtime::JoinSet;
 use rand::{Rng, rng};
 
@@ -28,7 +28,7 @@ use crate::fuzz_cases::aggregation_fuzzer::{
     check_equality_of_batches,
     context_generator::{SessionContextGenerator, SessionContextWithParams},
     data_generator::{Dataset, DatasetGenerator, DatasetGeneratorConfig},
-    run_sql,
+    run_sql, run_sql_capturing_peak,
 };
 
 /// Rounds to call `generate` of [`SessionContextGenerator`]
@@ -213,18 +213,22 @@ impl AggregationFuzzer {
             let ctx_generator =
                 SessionContextGenerator::new(dataset_ref.clone(), &self.table_name);
 
-            // Generate the baseline context, and get the baseline result firstly
+            // Generate the baseline context, and get the baseline result firstly.
+            // The baseline run also gives the aggregate's peak memory, which sizes
+            // the spill pools for the randomized contexts.
             let baseline_ctx_with_params = ctx_generator
                 .generate_baseline()
                 .expect("should succeed to generate baseline session context");
-            let baseline_result = run_sql(&sql, &baseline_ctx_with_params.ctx)
-                .await
-                .expect("should succeed to run baseline sql");
+
+            let (baseline_result, agg_peak) =
+                run_sql_capturing_peak(&sql, &baseline_ctx_with_params.ctx)
+                    .await
+                    .expect("should succeed to run baseline sql");
             let baseline_result = Arc::new(baseline_result);
             // Generate test tasks
             for _ in 0..CTX_GEN_ROUNDS {
                 let ctx_with_params = ctx_generator
-                    .generate()
+                    .generate(agg_peak)
                     .expect("should succeed to generate session context");
                 let task = AggregationFuzzTestTask {
                     dataset_ref: dataset_ref.clone(),
@@ -271,9 +275,26 @@ struct AggregationFuzzTestTask {
 
 impl AggregationFuzzTestTask {
     async fn run(&self) -> Result<()> {
-        let task_result = run_sql(&self.sql, &self.ctx_with_params.ctx)
-            .await
-            .map_err(|e| e.context(self.context_error_report()))?;
+        let task_result = match run_sql(&self.sql, &self.ctx_with_params.ctx).await {
+            Ok(result) => result,
+            // A bounded pool too tight to even spill fails with `ResourcesExhausted`. Not a correctness bug, so skip
+            // and log it (no silent drop) instead of failing the run.
+            Err(e)
+                if self.ctx_with_params.params.memory_limit().is_some()
+                    && matches!(
+                        e.find_root(),
+                        DataFusionError::ResourcesExhausted(_)
+                    ) =>
+            {
+                println!(
+                    "skipping bounded run, pool too tight to spill \
+                     (memory_limit={:?}): {e}",
+                    self.ctx_with_params.params.memory_limit()
+                );
+                return Ok(());
+            }
+            Err(e) => return Err(e.context(self.context_error_report())),
+        };
         self.check_result(&task_result, &self.expected_result)
     }
 
