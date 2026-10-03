@@ -126,18 +126,17 @@ macro_rules! impl_decimal_array_negative {
     ($array:expr, $type:ty, $type_name:expr, $enable_ansi_mode:expr) => {{
         let array = $array.as_primitive::<$type>();
         let result: PrimitiveArray<$type> = if $enable_ansi_mode {
-            array
-                .try_unary(|x| {
-                    x.checked_neg().ok_or_else(|| {
-                        (exec_err!("{} overflow on negative({x})", $type_name)
-                            as Result<(), _>)
-                            .unwrap_err()
-                    })
-                })?
-                .with_data_type(array.data_type().clone())
+            array.try_unary(|x| {
+                x.checked_neg().ok_or_else(|| {
+                    (exec_err!("{} overflow on negative({x})", $type_name)
+                        as Result<(), _>)
+                        .unwrap_err()
+                })
+            })?
         } else {
             array.unary(|x| x.wrapping_neg())
-        };
+        }
+        .with_data_type(array.data_type().clone());
         Ok(ColumnarValue::Array(Arc::new(result)))
     }};
 }
