@@ -21,7 +21,6 @@
 use std::sync::Arc;
 
 use datafusion_common::error::Result;
-use datafusion_common::internal_err;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateKind, AggregateMode, PhysicalGroupBy,
@@ -103,36 +102,23 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                 };
 
                 // Re-apply distinct limit optimization.
-                // 
+                //
                 // The optimizer related to aggregates are (in order):
                 // - 1. Initial planning: always final/partial two stage
                 // - 2. `LimitedDistinctAggregation`: push limit into `AggregateExec`,
                 //   and build `AggregateKind::DistinctLimit`
                 // - 3. `CombinePartialFinalAggregate`: the current optimization
                 //
-                // Here it restores previously applied optimization in step 2
-                let combined_aggr_kind = match (&agg_exec.kind, &input_agg_exec.kind) {
-                    (AggregateKind::General { .. }, AggregateKind::General { .. }) => {
-                        combined_agg.kind
-                    }
-                    (
-                        AggregateKind::DistinctLimit { limit, .. },
-                        AggregateKind::DistinctLimit {
-                            group_by,
-                            limit: partial_limit,
-                        },
-                    ) if limit == partial_limit => AggregateKind::DistinctLimit {
-                        // The combined aggregate groups raw input, like the partial.
-                        group_by: Arc::clone(group_by),
-                        limit: *limit,
-                    },
-                    _ => {
-                        return internal_err!(
-                            "The AggregateKind should stay either (a) General (b) DistinctLimit introduced with the previous optimizer pass `LimitedDistinctAggregation`, it's impossible to have other variant"
-                        );
-                    }
-                };
-                combined_agg.kind = combined_aggr_kind;
+                // Here it restores previously applied optimization in step 2. The
+                // final aggregate decides: step 2 may have limited only the final
+                // aggregate, e.g. when its grouping differs from the partial's.
+                if let AggregateKind::DistinctLimit { limit, .. } = &agg_exec.kind
+                    && let Some(optimized) = combined_agg
+                        .clone()
+                        .try_optimize_distinct_soft_limit(*limit)
+                {
+                    combined_agg = optimized.data;
+                }
                 Some(Arc::new(combined_agg))
             } else {
                 None
