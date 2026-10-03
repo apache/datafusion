@@ -18,6 +18,9 @@
 # StatisticsRegistry: demonstrates improved join ordering via more conservative
 # cardinality estimates on a skewed dataset.
 #
+# The session registers a test-only provider in test_context.rs that replaces
+# the join estimate with the Cartesian product of the input row counts.
+#
 # customers (10 rows, 3 distinct customer_ids, skewed 8:1:1)
 # orders    (10 rows, same distribution)
 # dim_small (50 rows)

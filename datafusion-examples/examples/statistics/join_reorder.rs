@@ -23,9 +23,9 @@
 //!
 //! `(SELECT user_id FROM events WHERE amount < 50 GROUP BY user_id) JOIN dims`: a
 //! provider supplies the column stats a catalog knows (`amount` range, `user_id`
-//! distinct count); the built-in `FilterStatisticsProvider` then refines the
+//! distinct count); the experimental `FilterStatisticsProvider` then refines the
 //! post-filter distinct count with the survival formula
-//! `NDV * (1 - (1 - selectivity)^(rows / NDV))` (Yao/Cardenas) to ~32, below `dims`
+//! `NDV * (1 - (1 - selectivity)^(rows / NDV))` (Yao/Cardenas) to ~40, below `dims`
 //! (48), flipping the join build side. Core's simpler `min(NDV, rows)` cap would
 //! give 50 (> 48) and keep the other order; the refinement is the point. The
 //! ground-truth query prints the true surviving distinct count (below 48),
@@ -111,7 +111,7 @@ fn build_ctx(with_registry: bool) -> Result<SessionContext> {
         .with_config(config)
         .with_default_features();
     if with_registry {
-        let mut registry = StatisticsRegistry::default_with_builtin_providers();
+        let mut registry = StatisticsRegistry::with_experimental_providers();
         registry.register(Arc::new(ClosureStatisticsProvider::with_matches(
             catalog_matches,
             catalog_stats,
@@ -173,7 +173,7 @@ pub async fn join_reorder() -> Result<()> {
     );
     println!("-- Without the registry (default estimation) --");
     println!("{}\n", explain(&build_ctx(false)?).await?);
-    println!("-- With the registry (built-in refinement) --");
+    println!("-- With the registry (experimental refinement) --");
     println!("{}", explain(&build_ctx(true)?).await?);
     Ok(())
 }
