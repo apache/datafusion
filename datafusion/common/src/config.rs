@@ -1006,7 +1006,7 @@ config_namespace! {
         pub enable_staged_sort: bool, default = false
 
         /// Number of sort keys evaluated together by staged in-memory sorting.
-        pub sort_key_group_size: usize, default = 3
+        pub sort_key_group_size: usize, default = 5
 
         /// Maximum buffer capacity (in bytes) per partition for BufferExec
         /// inserted during sort pushdown optimization.

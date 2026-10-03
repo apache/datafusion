@@ -333,7 +333,7 @@ impl ExternalSorter {
             sort_spill_reservation_bytes,
             sort_in_place_threshold_bytes,
             enable_staged_sort: false,
-            sort_key_group_size: 3,
+            sort_key_group_size: 5,
         })
     }
 
