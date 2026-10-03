@@ -1030,9 +1030,15 @@ impl serde::Serialize for ColumnRelation {
         if !self.relation.is_empty() {
             len += 1;
         }
+        if !self.parts.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.ColumnRelation", len)?;
         if !self.relation.is_empty() {
             struct_ser.serialize_field("relation", &self.relation)?;
+        }
+        if !self.parts.is_empty() {
+            struct_ser.serialize_field("parts", &self.parts)?;
         }
         struct_ser.end()
     }
@@ -1045,11 +1051,13 @@ impl<'de> serde::Deserialize<'de> for ColumnRelation {
     {
         const FIELDS: &[&str] = &[
             "relation",
+            "parts",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Relation,
+            Parts,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -1072,6 +1080,7 @@ impl<'de> serde::Deserialize<'de> for ColumnRelation {
                     {
                         match value {
                             "relation" => Ok(GeneratedField::Relation),
+                            "parts" => Ok(GeneratedField::Parts),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -1092,6 +1101,7 @@ impl<'de> serde::Deserialize<'de> for ColumnRelation {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut relation__ = None;
+                let mut parts__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Relation => {
@@ -1100,10 +1110,17 @@ impl<'de> serde::Deserialize<'de> for ColumnRelation {
                             }
                             relation__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Parts => {
+                            if parts__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("parts"));
+                            }
+                            parts__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(ColumnRelation {
                     relation: relation__.unwrap_or_default(),
+                    parts: parts__.unwrap_or_default(),
                 })
             }
         }
@@ -4056,7 +4073,7 @@ impl serde::Serialize for ExplainAnalyzeCategoriesNode {
             struct_ser.serialize_field("all", &self.all)?;
         }
         if !self.only.is_empty() {
-            let v = self.only.iter().copied().map(|v| {
+            let v = self.only.iter().cloned().map(|v| {
                 MetricCategory::try_from(v)
                     .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", v)))
                 }).collect::<std::result::Result<Vec<_>, _>>()?;
