@@ -1021,6 +1021,25 @@ mod test {
             ),
             vec![in_guarantee("a", ["foo"]), in_guarantee("b", [1])],
         );
+
+        let tuples = [(1, 10), (2, 20)]
+            .into_iter()
+            .map(|(left, right)| {
+                let tuple = RecordBatch::try_from_iter([
+                    ("x", Arc::new(Int32Array::from(vec![left])) as ArrayRef),
+                    ("x", Arc::new(Int32Array::from(vec![right])) as ArrayRef),
+                ])
+                .unwrap();
+                lit(ScalarValue::Struct(Arc::new(StructArray::from(tuple))))
+            })
+            .collect();
+        let expr = datafusion_functions::core::named_struct().call(vec![
+            lit("x"),
+            col("b"),
+            lit("x"),
+            col("c"),
+        ]);
+        test_analyze(expr.in_list(tuples, false), vec![]);
     }
 
     #[test]
