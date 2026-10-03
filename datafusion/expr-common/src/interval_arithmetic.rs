@@ -853,6 +853,7 @@ impl Interval {
             _ => Self::new(prev_value(zero.clone()), next_value(zero.clone())),
         };
 
+        // The helpers treat intervals with a finite upper bound <= 0 as non-positive.
         // Exit early with an unbounded interval if zero is strictly inside the
         // right hand side:
         if rhs_ref.contains(&zero_point)? == Self::TRUE && !dt.is_unsigned_integer() {
@@ -1687,8 +1688,6 @@ fn div_helper_zero_exclusive(
     rhs: &Interval,
     zero: &ScalarValue,
 ) -> Interval {
-    // An interval ending at zero is non-positive. Compare against zero itself,
-    // not the negative endpoint of the integer zero neighborhood [-1, 1].
     let (lower, upper) = match (
         lhs.upper <= *zero && !lhs.upper.is_null(),
         rhs.upper <= *zero && !rhs.upper.is_null(),
@@ -3669,26 +3668,6 @@ mod tests {
     }
 
     #[test]
-    fn test_div_zero_endpoints() -> Result<()> {
-        let cases = [
-            ((-3_i64, 0_i64), (-2_i64, -1_i64), (0_i64, 3_i64)),
-            ((-3, 0), (1, 2), (-3, 0)),
-            ((0, 3), (-2, -1), (-3, 0)),
-            ((0, 3), (1, 2), (0, 3)),
-        ];
-        for ((lo, hi), (rlo, rhi), (expected_lo, expected_hi)) in cases {
-            let lhs = Interval::make(Some(lo), Some(hi))?;
-            let rhs = Interval::make(Some(rlo), Some(rhi))?;
-            assert_eq!(
-                lhs.div(&rhs)?,
-                Interval::make(Some(expected_lo), Some(expected_hi))?,
-                "{lhs:?} / {rhs:?}",
-            );
-        }
-        Ok(())
-    }
-
-    #[test]
     fn test_div_small_integer_intervals_contain_runtime_results() -> Result<()> {
         // Include zero at either endpoint, inside the range, and as a singleton.
         for lo in -3_i64..=3 {
@@ -3720,6 +3699,91 @@ mod tests {
     #[test]
     fn test_div() -> Result<()> {
         let cases = vec![
+            (
+                Interval::make(Some(-3_i64), Some(0_i64))?,
+                Interval::make(Some(-2_i64), Some(-1_i64))?,
+                Interval::make(Some(0_i64), Some(3_i64))?,
+            ),
+            (
+                Interval::make(Some(-3_i64), Some(0_i64))?,
+                Interval::make(Some(1_i64), Some(2_i64))?,
+                Interval::make(Some(-3_i64), Some(0_i64))?,
+            ),
+            (
+                Interval::make(Some(0_i64), Some(3_i64))?,
+                Interval::make(Some(-2_i64), Some(-1_i64))?,
+                Interval::make(Some(-3_i64), Some(0_i64))?,
+            ),
+            (
+                Interval::make(Some(0_i64), Some(3_i64))?,
+                Interval::make(Some(1_i64), Some(2_i64))?,
+                Interval::make(Some(0_i64), Some(3_i64))?,
+            ),
+            (
+                Interval::make(Some(-3_i64), Some(-1_i64))?,
+                Interval::make(Some(-3_i64), Some(0_i64))?,
+                Interval::make(Some(0_i64), None)?,
+            ),
+            (
+                Interval::make(Some(1_i64), Some(3_i64))?,
+                Interval::make(Some(-3_i64), Some(0_i64))?,
+                Interval::make(None, Some(0_i64))?,
+            ),
+            (
+                Interval::make(Some(-3_i64), Some(-1_i64))?,
+                Interval::make(Some(0_i64), Some(3_i64))?,
+                Interval::make(None, Some(0_i64))?,
+            ),
+            (
+                Interval::make(Some(1_i64), Some(3_i64))?,
+                Interval::make(Some(0_i64), Some(3_i64))?,
+                Interval::make(Some(0_i64), None)?,
+            ),
+            (
+                Interval::make(Some(-6_i64), Some(6_i64))?,
+                Interval::make(Some(-3_i64), Some(0_i64))?,
+                Interval::make::<i64>(None, None)?,
+            ),
+            (
+                Interval::make(Some(-6_i64), Some(6_i64))?,
+                Interval::make(Some(0_i64), Some(3_i64))?,
+                Interval::make::<i64>(None, None)?,
+            ),
+            (
+                Interval::make(Some(0_i64), Some(0_i64))?,
+                Interval::make(Some(0_i64), Some(0_i64))?,
+                Interval::make::<i64>(None, None)?,
+            ),
+            (
+                Interval::make(Some(0_u32), Some(0_u32))?,
+                Interval::make(Some(0_u32), Some(5_u32))?,
+                Interval::make(Some(0_u32), Some(0_u32))?,
+            ),
+            (
+                Interval::make(Some(0_u32), Some(0_u32))?,
+                Interval::make(Some(0_u32), Some(0_u32))?,
+                Interval::make::<u32>(None, None)?,
+            ),
+            (
+                Interval::make(Some(0_u32), Some(5_u32))?,
+                Interval::make(Some(0_u32), Some(5_u32))?,
+                Interval::make(Some(0_u32), None)?,
+            ),
+            (
+                Interval::make(Some(1_u32), Some(5_u32))?,
+                Interval::make(Some(0_u32), Some(5_u32))?,
+                Interval::make(Some(0_u32), None)?,
+            ),
+            (
+                Interval::make(Some(0_u64), Some(0_u64))?,
+                Interval::make(Some(0_u64), Some(5_u64))?,
+                Interval::make(Some(0_u64), Some(0_u64))?,
+            ),
+            (
+                Interval::make(Some(0_u64), Some(0_u64))?,
+                Interval::make(Some(0_u64), Some(0_u64))?,
+                Interval::make::<u64>(None, None)?,
+            ),
             (
                 Interval::make(Some(100_i64), Some(200_i64))?,
                 Interval::make(Some(1_i64), Some(2_i64))?,
@@ -3897,7 +3961,7 @@ mod tests {
             ),
         ];
         for case in cases {
-            let result = case.0.div(case.1)?;
+            let result = case.0.div(&case.1)?;
             if case.0.data_type().is_floating() {
                 assert!(
                     result.lower().is_null() && case.2.lower().is_null()
@@ -3908,7 +3972,7 @@ mod tests {
                         || result.upper().ge(case.2.upper())
                 );
             } else {
-                assert_eq!(result, case.2);
+                assert_eq!(result, case.2, "{:?} / {:?}", case.0, case.1);
             }
         }
 
