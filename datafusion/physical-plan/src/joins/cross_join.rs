@@ -187,6 +187,13 @@ impl CrossJoinExec {
     /// This function should be called BEFORE inserting any repartitioning
     /// operators on the join's children. Check [`super::HashJoinExec::swap_inputs`]
     /// for more details.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
     pub fn swap_inputs(&self) -> Result<Arc<dyn ExecutionPlan>> {
         let new_join =
             CrossJoinExec::new(Arc::clone(&self.right), Arc::clone(&self.left));

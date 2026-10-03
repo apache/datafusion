@@ -2837,6 +2837,12 @@ impl Filter {
     /// - the `predicate` expression returns a boolean value
     /// - the `predicate` expression is not aliased
     /// - the `predicate` expression contains no window function calls
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
     #[doc(hidden)]
     pub fn new(predicate: Expr, input: Arc<LogicalPlan>) -> Self {
         Self { predicate, input }

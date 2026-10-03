@@ -79,6 +79,13 @@ use utils::JoinHashMapType;
 /// contains rows.
 ///
 /// [`NullEquality::NullEqualsNothing`]: datafusion_common::NullEquality::NullEqualsNothing
+///
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
 pub enum Map {
     HashMap(Box<dyn JoinHashMapType>),
     ArrayMap(ArrayMap),
