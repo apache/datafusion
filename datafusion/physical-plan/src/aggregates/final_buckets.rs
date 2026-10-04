@@ -39,10 +39,13 @@ use crate::spill::spill_manager::SpillManager;
 use crate::stream::RecordBatchStreamAdapter;
 
 /// Number of bits of the routing hash consumed by one bucketing level.
-const BUCKET_BITS: u32 = 6;
+const BUCKET_BITS: u32 = 5;
 
 /// Number of buckets rows are split into at each level.
 const NUM_BUCKETS: usize = 1 << BUCKET_BITS;
+
+/// Disable intermediate bucket aggregation for this benchmark POC.
+const ENABLE_BUCKET_COMPACTION: bool = false;
 
 /// A bucket that is still too large is split again with the next hash bits,
 /// up to this many levels.
@@ -55,7 +58,7 @@ pub(super) const MAX_BUCKET_LEVELS: u32 = 4;
 const BUCKET_HASH_SEED: RandomState = RandomState::with_seed(5364907223173859721);
 
 /// A bucket is compacted for the first time once it holds this many batches
-/// worth of rows. With 64 buckets per partition this floor is what the
+/// worth of rows. With 32 buckets per partition this floor is what the
 /// buckets hold when every bucket has few groups, so it is kept small.
 const MIN_COMPACTION_BATCHES: usize = 1;
 
@@ -242,6 +245,9 @@ impl ColumnBatchBuilder {
 ///
 /// # Compaction
 ///
+/// Disabled in this POC by [`ENABLE_BUCKET_COMPACTION`]. The policy below is
+/// retained for comparison with the original implementation.
+///
 /// The input may hold the same group many times (for example when the partial
 /// aggregation was skipped), so buffering it as is could take far more memory
 /// than the single table it replaces. A bucket that has grown enough is
@@ -411,6 +417,9 @@ impl FinalBuckets {
 
     /// Returns a bucket that is due for compaction, if any.
     pub(super) fn bucket_to_compact(&self) -> Option<usize> {
+        if !ENABLE_BUCKET_COMPACTION {
+            return None;
+        }
         self.buckets.iter().position(|bucket| {
             bucket.spill_file.is_none() && bucket.rows >= bucket.compact_at
         })
