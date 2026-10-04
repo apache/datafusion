@@ -92,9 +92,9 @@ impl FFI_ScalarSubqueryResults {
     }
 }
 
-fn encode_scalar_value(value: ScalarValue) -> Result<SVec<u8>> {
+fn encode_scalar_value(value: &ScalarValue) -> Result<SVec<u8>> {
     let proto: datafusion_proto::protobuf::ScalarValue =
-        (&value).try_into().map_err(DataFusionError::from)?;
+        value.try_into().map_err(DataFusionError::from)?;
     Ok(proto.encode_to_vec().into_iter().collect())
 }
 
@@ -110,7 +110,7 @@ unsafe extern "C" fn get_fn_wrapper(
 ) -> FFI_Result<FFI_Option<SVec<u8>>> {
     let value = results.inner().get(SubqueryIndex::new(index as usize));
 
-    let encoded = value.map(encode_scalar_value).transpose();
+    let encoded = value.as_ref().map(encode_scalar_value).transpose();
 
     sresult!(encoded.map(FFI_Option::from))
 }
@@ -178,7 +178,7 @@ impl ScalarSubqueryResultsBackend for ForeignScalarSubqueryResultsBackend {
     }
 
     fn set(&self, index: usize, value: ScalarValue) -> Result<()> {
-        let bytes = encode_scalar_value(value)?;
+        let bytes = encode_scalar_value(&value)?;
         df_result!(unsafe { (self.0.set)(&self.0, index as u64, bytes) })
     }
 
