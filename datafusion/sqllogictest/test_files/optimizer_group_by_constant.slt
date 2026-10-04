@@ -49,7 +49,7 @@ GROUP BY 1, 2, 3, 4
 ----
 logical_plan
 01)Projection: t.c1, Int64(99999), t.c5 + t.c8, Utf8("test"), count(Int64(1))
-02)--Aggregate: groupBy=[[t.c1, t.c5 + t.c8]], aggr=[[count() AS count(Int64(1))]]
+02)--Aggregate: groupBy=[[t.c1, t.c5 + t.c8]], aggr=[[count(Int64(1))]]
 03)----SubqueryAlias: t
 04)------TableScan: test_table projection=[c1, c5, c8]
 
@@ -60,7 +60,7 @@ FROM test_table t
 group by 1, 2, 3
 ----
 logical_plan
-01)Aggregate: groupBy=[[Int64(123), Int64(456), Int64(789)]], aggr=[[count() AS count(Int64(1)), avg(t.c12)]]
+01)Aggregate: groupBy=[[Int64(123), Int64(456), Int64(789)]], aggr=[[count(Int64(1)), avg(t.c12)]]
 02)--SubqueryAlias: t
 03)----TableScan: test_table projection=[c12]
 
@@ -72,7 +72,7 @@ GROUP BY 1, 2
 ----
 logical_plan
 01)Projection: to_date(Utf8("2023-05-04")) AS dt, date_part(Utf8("DAY"),now()) < Int64(1000) AS today_filter, count(Int64(1))
-02)--Aggregate: groupBy=[[Date32("2023-05-04") AS to_date(Utf8("2023-05-04")), Boolean(true) AS date_part(Utf8("DAY"),now()) < Int64(1000)]], aggr=[[count() AS count(Int64(1))]]
+02)--Aggregate: groupBy=[[Date32("2023-05-04") AS to_date(Utf8("2023-05-04")), Boolean(true) AS date_part(Utf8("DAY"),now()) < Int64(1000)]], aggr=[[count(Int64(1))]]
 03)----SubqueryAlias: t
 04)------TableScan: test_table projection=[]
 
@@ -89,7 +89,7 @@ FROM test_table t
 GROUP BY 1
 ----
 logical_plan
-01)Aggregate: groupBy=[[Boolean(true) AS NOT date_part(Utf8("MONTH"),now()) BETWEEN Int64(50) AND Int64(60)]], aggr=[[count() AS count(Int64(1))]]
+01)Aggregate: groupBy=[[Boolean(true) AS NOT date_part(Utf8("MONTH"),now()) BETWEEN Int64(50) AND Int64(60)]], aggr=[[count(Int64(1))]]
 02)--SubqueryAlias: t
 03)----TableScan: test_table projection=[]
 

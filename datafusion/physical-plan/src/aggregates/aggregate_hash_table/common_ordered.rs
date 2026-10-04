@@ -250,7 +250,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
     /// e.g., `select k+1, sum(v*v) from t group by (k+1)`, this function
     /// evaluates `k+1`, `v*v`.
     pub(super) fn evaluate_batch(
-        &self,
+        &mut self,
         batch: &RecordBatch,
     ) -> Result<EvaluatedAggregateBatch> {
         let grouping_set_args =
@@ -261,7 +261,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         let accumulator_args = self.group_by_metrics.time_aggregate_arguments(|| {
             self.buffer
                 .accumulators
-                .iter()
+                .iter_mut()
                 .enumerate()
                 .map(|(idx, acc)| {
                     self.aggregate_argument_metrics

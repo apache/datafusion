@@ -138,19 +138,6 @@ pub trait Accumulator: Send + Sync + Debug + std::any::Any {
     /// running sum.
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()>;
 
-    /// Like [`Self::update_batch`], but also receives the input row count.
-    ///
-    /// Aggregates without arguments cannot derive this count from an empty
-    /// `values` slice and must override this method. The default delegates to
-    /// [`Self::update_batch`].
-    fn update_batch_with_num_rows(
-        &mut self,
-        values: &[ArrayRef],
-        _num_rows: usize,
-    ) -> Result<()> {
-        self.update_batch(values)
-    }
-
     /// Returns an optional metric timed once per grouped adapter input batch.
     ///
     /// A grouped accumulator adapter uses this for aggregate-owned work it

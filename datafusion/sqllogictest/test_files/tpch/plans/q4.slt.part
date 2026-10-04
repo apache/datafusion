@@ -42,7 +42,7 @@ order by
 logical_plan
 01)Sort: orders.o_orderpriority ASC NULLS LAST
 02)--Projection: orders.o_orderpriority, count(Int64(1)) AS count(*) AS order_count
-03)----Aggregate: groupBy=[[orders.o_orderpriority]], aggr=[[count() AS count(Int64(1))]]
+03)----Aggregate: groupBy=[[orders.o_orderpriority]], aggr=[[count(Int64(1))]]
 04)------Projection: orders.o_orderpriority
 05)--------LeftSemi Join: orders.o_orderkey = __correlated_sq_1.l_orderkey
 06)----------Projection: orders.o_orderkey, orders.o_orderpriority
@@ -56,9 +56,9 @@ physical_plan
 01)SortPreservingMergeExec: [o_orderpriority@0 ASC NULLS LAST]
 02)--ProjectionExec: expr=[o_orderpriority@0 as o_orderpriority, count(Int64(1))@1 as order_count]
 03)----SortExec: expr=[o_orderpriority@0 ASC NULLS LAST], preserve_partitioning=[true]
-04)------AggregateExec: mode=FinalPartitioned, gby=[o_orderpriority@0 as o_orderpriority], aggr=[count() as count(Int64(1))]
+04)------AggregateExec: mode=FinalPartitioned, gby=[o_orderpriority@0 as o_orderpriority], aggr=[count(Int64(1))]
 05)--------RepartitionExec: partitioning=Hash([o_orderpriority@0], 4), input_partitions=4
-06)----------AggregateExec: mode=Partial, gby=[o_orderpriority@0 as o_orderpriority], aggr=[count() as count(Int64(1))]
+06)----------AggregateExec: mode=Partial, gby=[o_orderpriority@0 as o_orderpriority], aggr=[count(Int64(1))]
 07)------------HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(o_orderkey@0, l_orderkey@0)], projection=[o_orderpriority@1]
 08)--------------RepartitionExec: partitioning=Hash([o_orderkey@0], 4), input_partitions=4
 09)----------------FilterExec: o_orderdate@1 >= 1993-07-01 AND o_orderdate@1 < 1993-10-01, projection=[o_orderkey@0, o_orderpriority@2]

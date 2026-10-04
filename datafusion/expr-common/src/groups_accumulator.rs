@@ -373,20 +373,6 @@ pub trait GroupsAccumulator: Send + std::any::Any {
         opt_filter: Option<&BooleanArray>,
     ) -> Result<Vec<ArrayRef>>;
 
-    /// Like [`Self::convert_to_state`], but also receives the input row count.
-    ///
-    /// Aggregates without arguments cannot derive this count from an empty
-    /// `values` slice and must override this method. The default delegates to
-    /// [`Self::convert_to_state`].
-    fn convert_to_state_with_num_rows(
-        &self,
-        values: &[ArrayRef],
-        opt_filter: Option<&BooleanArray>,
-        _num_rows: usize,
-    ) -> Result<Vec<ArrayRef>> {
-        self.convert_to_state(values, opt_filter)
-    }
-
     /// Amount of memory used to store the state of this accumulator,
     /// in bytes.
     ///

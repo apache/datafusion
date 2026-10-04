@@ -58,7 +58,7 @@ order by
 logical_plan
 01)Sort: custsale.cntrycode ASC NULLS LAST
 02)--Projection: custsale.cntrycode, count(Int64(1)) AS count(*) AS numcust, sum(custsale.c_acctbal) AS totacctbal
-03)----Aggregate: groupBy=[[custsale.cntrycode]], aggr=[[count() AS count(Int64(1)), sum(custsale.c_acctbal)]]
+03)----Aggregate: groupBy=[[custsale.cntrycode]], aggr=[[count(Int64(1)), sum(custsale.c_acctbal)]]
 04)------SubqueryAlias: custsale
 05)--------Projection: substr(customer.c_phone, Int64(1), Int64(2)) AS cntrycode, customer.c_acctbal
 06)----------LeftAnti Join: customer.c_custkey = __correlated_sq_1.o_custkey
@@ -76,9 +76,9 @@ physical_plan
 02)--SortPreservingMergeExec: [cntrycode@0 ASC NULLS LAST]
 03)----ProjectionExec: expr=[cntrycode@0 as cntrycode, count(Int64(1))@1 as numcust, sum(custsale.c_acctbal)@2 as totacctbal]
 04)------SortExec: expr=[cntrycode@0 ASC NULLS LAST], preserve_partitioning=[true]
-05)--------AggregateExec: mode=FinalPartitioned, gby=[cntrycode@0 as cntrycode], aggr=[count() as count(Int64(1)), sum(custsale.c_acctbal)]
+05)--------AggregateExec: mode=FinalPartitioned, gby=[cntrycode@0 as cntrycode], aggr=[count(Int64(1)), sum(custsale.c_acctbal)]
 06)----------RepartitionExec: partitioning=Hash([cntrycode@0], 4), input_partitions=4
-07)------------AggregateExec: mode=Partial, gby=[cntrycode@0 as cntrycode], aggr=[count() as count(Int64(1)), sum(custsale.c_acctbal)]
+07)------------AggregateExec: mode=Partial, gby=[cntrycode@0 as cntrycode], aggr=[count(Int64(1)), sum(custsale.c_acctbal)]
 08)--------------ProjectionExec: expr=[substr(c_phone@0, 1, 2) as cntrycode, c_acctbal@1 as c_acctbal]
 09)----------------HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(c_custkey@0, o_custkey@0)], projection=[c_phone@1, c_acctbal@2]
 10)------------------RepartitionExec: partitioning=Hash([c_custkey@0], 4), input_partitions=4

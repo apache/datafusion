@@ -36,7 +36,8 @@ use arrow::datatypes::{
 };
 use arrow::record_batch::RecordBatch;
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
-use datafusion_common::Result;
+use datafusion_common::{Result, ScalarValue, assert_eq_or_internal_err};
+use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::sort_properties::ExprProperties;
 
 /// Represents a [`PhysicalExpr`] node with associated properties (order and
@@ -425,6 +426,68 @@ pub fn evaluate_expressions_to_arrays_with_metrics<'a>(
         .collect::<Result<Vec<ArrayRef>>>()
 }
 
+/// Largest array, in bytes, that a [`ScalarArrayCache`] keeps between calls.
+const MAX_CACHED_SCALAR_ARRAY_BYTES: usize = 1024 * 1024;
+
+/// Reuses the array expanded from a scalar expression result across batches.
+#[derive(Debug, Default)]
+pub struct ScalarArrayCache {
+    cached: Option<(ScalarValue, ArrayRef)>,
+}
+
+impl ScalarArrayCache {
+    /// Like [`ColumnarValue::into_array_of_size`], but reuses the array built
+    /// for an earlier, equal scalar.
+    pub fn into_array_of_size(
+        &mut self,
+        value: ColumnarValue,
+        num_rows: usize,
+    ) -> Result<ArrayRef> {
+        let scalar = match value {
+            ColumnarValue::Scalar(scalar) => scalar,
+            array @ ColumnarValue::Array(_) => {
+                return array.into_array_of_size(num_rows);
+            }
+        };
+
+        if let Some((cached_scalar, array)) = &self.cached
+            && array.len() >= num_rows
+            && *cached_scalar == scalar
+        {
+            return Ok(array.slice(0, num_rows));
+        }
+
+        let array = scalar.to_array_of_size(num_rows)?;
+        if array.get_array_memory_size() <= MAX_CACHED_SCALAR_ARRAY_BYTES {
+            self.cached = Some((scalar, Arc::clone(&array)));
+        }
+        Ok(array)
+    }
+}
+
+/// Like [`evaluate_expressions_to_arrays`], but expands scalar results through
+/// one cache per expression.
+pub fn evaluate_expressions_to_arrays_with_cache(
+    exprs: &[Arc<dyn PhysicalExpr>],
+    caches: &mut [ScalarArrayCache],
+    batch: &RecordBatch,
+) -> Result<Vec<ArrayRef>> {
+    assert_eq_or_internal_err!(
+        exprs.len(),
+        caches.len(),
+        "expected one scalar array cache per expression"
+    );
+    let num_rows = batch.num_rows();
+    exprs
+        .iter()
+        .zip(caches)
+        .map(|(expr, cache)| {
+            expr.evaluate(batch)
+                .and_then(|value| cache.into_array_of_size(value, num_rows))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -654,6 +717,58 @@ mod tests {
         assert_eq!(scattered.value(2), 30);
         assert!(scattered.is_null(3));
         assert_eq!(scattered.value(4), 50);
+        Ok(())
+    }
+
+    #[test]
+    fn scalar_array_cache_reuses_equal_scalars() -> Result<()> {
+        let mut cache = ScalarArrayCache::default();
+        let one = || ColumnarValue::Scalar(ScalarValue::Int32(Some(1)));
+
+        let first = cache.into_array_of_size(one(), 4)?;
+        let second = cache.into_array_of_size(one(), 3)?;
+        assert_eq!(as_int32_array(&second)?, &Int32Array::from(vec![1, 1, 1]));
+        assert_eq!(
+            as_int32_array(&second)?.values().as_ptr(),
+            as_int32_array(&first)?.values().as_ptr()
+        );
+
+        let larger = cache.into_array_of_size(one(), 6)?;
+        assert_eq!(as_int32_array(&larger)?, &Int32Array::from(vec![1; 6]));
+        let smaller = cache.into_array_of_size(one(), 5)?;
+        assert_eq!(
+            as_int32_array(&smaller)?.values().as_ptr(),
+            as_int32_array(&larger)?.values().as_ptr()
+        );
+
+        let two = ColumnarValue::Scalar(ScalarValue::Int32(Some(2)));
+        let two = cache.into_array_of_size(two, 2)?;
+        assert_eq!(as_int32_array(&two)?, &Int32Array::from(vec![2, 2]));
+
+        let array: ArrayRef = Arc::new(Int32Array::from(vec![7, 8]));
+        let result =
+            cache.into_array_of_size(ColumnarValue::Array(Arc::clone(&array)), 2)?;
+        assert!(Arc::ptr_eq(&result, &array));
+        assert!(
+            cache
+                .into_array_of_size(ColumnarValue::Array(array), 3)
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn scalar_array_cache_skips_large_arrays() -> Result<()> {
+        let mut cache = ScalarArrayCache::default();
+        let value = || ColumnarValue::Scalar(ScalarValue::from("x".repeat(1024)));
+
+        let first = cache.into_array_of_size(value(), 2048)?;
+        let second = cache.into_array_of_size(value(), 2048)?;
+        assert_eq!(first.as_ref(), second.as_ref());
+        assert_ne!(
+            as_string_array(&first).values().as_ptr(),
+            as_string_array(&second).values().as_ptr()
+        );
         Ok(())
     }
 }

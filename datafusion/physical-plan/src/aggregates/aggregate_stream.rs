@@ -32,9 +32,7 @@ use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::ArrayRef;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{
-    DataFusionError, Result, ScalarValue, internal_datafusion_err, internal_err,
-};
+use datafusion_common::{Result, ScalarValue, internal_datafusion_err, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::PhysicalExpr;
@@ -49,7 +47,9 @@ use std::task::{Context, Poll};
 use super::AggregateExec;
 use crate::filter::batch_filter;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
+use datafusion_physical_expr_common::utils::{
+    ScalarArrayCache, evaluate_expressions_to_arrays_with_cache,
+};
 use futures::stream::{Stream, StreamExt};
 
 /// stream struct for aggregation without grouping columns
@@ -71,6 +71,7 @@ struct AggregateStreamInner {
     mode: AggregateMode,
     input: SendableRecordBatchStream,
     aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+    aggregate_argument_caches: Vec<Vec<ScalarArrayCache>>,
     filter_expressions: Arc<[Option<Arc<dyn PhysicalExpr>>]>,
     aggregate_argument_metrics: AggregateArgumentMetrics,
     aggregate_accumulator_metrics: AggregateAccumulatorMetrics,
@@ -303,6 +304,10 @@ impl AggregateStream {
         let input = agg.input.execute(partition, Arc::clone(context))?;
 
         let aggregate_expressions = aggregate_expressions(&agg.aggr_expr, &agg.mode, 0)?;
+        let aggregate_argument_caches = aggregate_expressions
+            .iter()
+            .map(|exprs| exprs.iter().map(|_| ScalarArrayCache::default()).collect())
+            .collect();
         let filter_expressions = match agg.mode.input_mode() {
             AggregateInputMode::Raw => agg_filter_expr,
             AggregateInputMode::Partial => vec![None; agg.aggr_expr.len()].into(),
@@ -364,6 +369,7 @@ impl AggregateStream {
             input,
             baseline_metrics,
             aggregate_expressions,
+            aggregate_argument_caches,
             filter_expressions,
             aggregate_argument_metrics,
             aggregate_accumulator_metrics,
@@ -389,6 +395,7 @@ impl AggregateStream {
                                 &batch,
                                 &mut this.accumulators,
                                 &this.aggregate_expressions,
+                                &mut this.aggregate_argument_caches,
                                 &this.filter_expressions,
                                 &this.aggregate_argument_metrics,
                                 &this.aggregate_accumulator_metrics,
@@ -474,11 +481,13 @@ impl RecordBatchStream for AggregateStream {
 /// If successful, this returns the additional number of bytes that were allocated during this process.
 ///
 /// TODO: Make this a member function
+#[expect(clippy::too_many_arguments)]
 fn aggregate_batch(
     mode: &AggregateMode,
     batch: &RecordBatch,
     accumulators: &mut [AccumulatorItem],
     expressions: &[Vec<Arc<dyn PhysicalExpr>>],
+    argument_caches: &mut [Vec<ScalarArrayCache>],
     filters: &[Option<Arc<dyn PhysicalExpr>>],
     aggregate_argument_metrics: &AggregateArgumentMetrics,
     aggregate_accumulator_metrics: &AggregateAccumulatorMetrics,
@@ -494,17 +503,17 @@ fn aggregate_batch(
     accumulators
         .iter_mut()
         .zip(expressions)
+        .zip(argument_caches)
         .zip(filters)
         .enumerate()
-        .try_for_each(|(index, ((accum, expr), filter))| {
+        .try_for_each(|(index, (((accum, expr), caches), filter))| {
             // 1.2 and 1.3
-            let (values, num_rows) = aggregate_argument_metrics.time(index, || {
+            let values = aggregate_argument_metrics.time(index, || {
                 let batch = match filter {
                     Some(filter) => Cow::Owned(batch_filter(batch, filter)?),
                     None => Cow::Borrowed(batch),
                 };
-                let values = evaluate_expressions_to_arrays(expr, batch.as_ref())?;
-                Ok::<_, DataFusionError>((values, batch.num_rows()))
+                evaluate_expressions_to_arrays_with_cache(expr, caches, batch.as_ref())
             })?;
 
             // 1.4
@@ -513,7 +522,7 @@ fn aggregate_batch(
                 AggregateInputMode::Raw => aggregate_accumulator_metrics.time(
                     index,
                     AccumulatorPhase::Update,
-                    || accum.update_batch_with_num_rows(&values, num_rows),
+                    || accum.update_batch(&values),
                 ),
                 AggregateInputMode::Partial => aggregate_accumulator_metrics.time(
                     index,

@@ -1178,7 +1178,7 @@ async fn explain_logical_plan_only() {
         @r#"
     logical_plan
     Projection: count(Int64(1)) AS count(*)
-      Aggregate: groupBy=[[]], aggr=[[count() AS count(Int64(1))]]
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
         SubqueryAlias: t
           Projection:
             Values: (Utf8("a"), Int64(1), Int64(100)), (Utf8("a"), Int64(2), Int64(150))
