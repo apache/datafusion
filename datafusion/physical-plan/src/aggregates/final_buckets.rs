@@ -150,8 +150,8 @@ impl ColumnArray {
     }
 }
 
-/// Builds full batches by scattering StringView columns and coalescing the
-/// remaining columns after gathering them into bucket order. Source ranges use
+/// Builds full batches by gathering columns into bucket order, then scattering
+/// their contiguous ranges into in-progress target arrays. Source ranges use
 /// the same copy and compaction decisions as `BatchCoalescer`, without
 /// allocating a small record batch for every destination.
 struct ColumnBatchBuilder {
@@ -412,39 +412,16 @@ impl FinalBuckets {
             *cursor += 1;
         }
 
-        // Scatter StringView columns directly from source order into every
-        // destination. Other columns are gathered once in bucket order.
+        // Gather every column in bucket order, then scatter each StringView
+        // column's contiguous ranges into all in-memory destinations at once.
         // Spilled buckets keep the existing gather-and-slice path.
         let indices: PrimitiveArray<UInt32Type> =
             std::mem::take(&mut self.reordered_indices).into();
+        let columns = take_arrays(batch.columns(), &indices, None)?;
         let can_scatter = self
             .buckets
             .iter()
-            .all(|bucket| bucket.spill_file.is_none())
-            && batch
-                .columns()
-                .iter()
-                .any(|source| source.data_type() == &DataType::Utf8View);
-        let columns = if can_scatter {
-            batch
-                .columns()
-                .iter()
-                .map(|source| {
-                    if source.data_type() == &DataType::Utf8View {
-                        Ok(Arc::clone(source))
-                    } else {
-                        compute::take(source.as_ref(), &indices, None)
-                    }
-                })
-                .collect::<ArrowResult<Vec<_>>>()?
-        } else {
-            take_arrays(batch.columns(), &indices, None)?
-        };
-        let bucket_ids: Vec<_> = if can_scatter {
-            self.hashes.iter().map(|&hash| bucket_of(hash)).collect()
-        } else {
-            Vec::new()
-        };
+            .all(|bucket| bucket.spill_file.is_none());
         for (column_index, source) in columns.iter().enumerate() {
             if can_scatter && source.data_type() == &DataType::Utf8View {
                 let mut targets: Vec<_> = self
@@ -464,7 +441,11 @@ impl FinalBuckets {
                         }
                     })
                     .collect();
-                compute::scatter_string_views(source, &bucket_ids, &mut targets)?;
+                compute::scatter_string_view_ranges(
+                    source,
+                    &self.bucket_sizes,
+                    &mut targets,
+                )?;
                 continue;
             }
             for (bucket, (&start, &size)) in self

@@ -159,7 +159,7 @@ checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 [[package]]
 name = "arrow"
 version = "60.0.0"
-source = "git+https://github.com/Rachelint/arrow-rs.git?rev=8d0558fc6f6a2acb47e91207ef7b4acf24a72245#8d0558fc6f6a2acb47e91207ef7b4acf24a72245"
+source = "git+https://github.com/Rachelint/arrow-rs.git?rev=cd9284f884d05e329acb293e1e95353ce555315e#cd9284f884d05e329acb293e1e95353ce555315e"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -181,7 +181,7 @@ dependencies = [
 [[package]]
 name = "arrow-arith"
 version = "60.0.0"
-source = "git+https://github.com/Rachelint/arrow-rs.git?rev=8d0558fc6f6a2acb47e91207ef7b4acf24a72245#8d0558fc6f6a2acb47e91207ef7b4acf24a72245"
+source = "git+https://github.com/Rachelint/arrow-rs.git?rev=cd9284f884d05e329acb293e1e95353ce555315e#cd9284f884d05e329acb293e1e95353ce555315e"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -194,7 +194,7 @@ dependencies = [
 [[package]]
 name = "arrow-array"
 version = "60.0.0"
-source = "git+https://github.com/Rachelint/arrow-rs.git?rev=8d0558fc6f6a2acb47e91207ef7b4acf24a72245#8d0558fc6f6a2acb47e91207ef7b4acf24a72245"
+source = "git+https://github.com/Rachelint/arrow-rs.git?rev=cd9284f884d05e329acb293e1e95353ce555315e#cd9284f884d05e329acb293e1e95353ce555315e"
 dependencies = [
  "ahash",
  "arrow-buffer",
@@ -213,7 +213,7 @@ dependencies = [
 [[package]]
 name = "arrow-avro"
 version = "60.0.0"
-source = "git+https://github.com/Rachelint/arrow-rs.git?rev=8d0558fc6f6a2acb47e91207ef7b4acf24a72245#8d0558fc6f6a2acb47e91207ef7b4acf24a72245"
+source = "git+https://github.com/Rachelint/arrow-rs.git?rev=cd9284f884d05e329acb293e1e95353ce555315e#cd9284f884d05e329acb293e1e95353ce555315e"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -236,7 +236,7 @@ dependencies = [
 [[package]]
 name = "arrow-buffer"
 version = "60.0.0"
-source = "git+https://github.com/Rachelint/arrow-rs.git?rev=8d0558fc6f6a2acb47e91207ef7b4acf24a72245#8d0558fc6f6a2acb47e91207ef7b4acf24a72245"
+source = "git+https://github.com/Rachelint/arrow-rs.git?rev=cd9284f884d05e329acb293e1e95353ce555315e#cd9284f884d05e329acb293e1e95353ce555315e"
 dependencies = [
  "bytes",
  "half",
@@ -247,7 +247,7 @@ dependencies = [
 [[package]]
 name = "arrow-cast"
 version = "60.0.0"
-source = "git+https://github.com/Rachelint/arrow-rs.git?rev=8d0558fc6f6a2acb47e91207ef7b4acf24a72245#8d0558fc6f6a2acb47e91207ef7b4acf24a72245"
+source = "git+https://github.com/Rachelint/arrow-rs.git?rev=cd9284f884d05e329acb293e1e95353ce555315e#cd9284f884d05e329acb293e1e95353ce555315e"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -268,7 +268,7 @@ dependencies = [
 [[package]]
 name = "arrow-cmp"
 version = "60.0.0"
-source = "git+https://github.com/Rachelint/arrow-rs.git?rev=8d0558fc6f6a2acb47e91207ef7b4acf24a72245#8d0558fc6f6a2acb47e91207ef7b4acf24a72245"
+source = "git+https://github.com/Rachelint/arrow-rs.git?rev=cd9284f884d05e329acb293e1e95353ce555315e#cd9284f884d05e329acb293e1e95353ce555315e"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -278,7 +278,7 @@ dependencies = [
 [[package]]
 name = "arrow-csv"
 version = "60.0.0"
-source = "git+https://github.com/Rachelint/arrow-rs.git?rev=8d0558fc6f6a2acb47e91207ef7b4acf24a72245#8d0558fc6f6a2acb47e91207ef7b4acf24a72245"
+source = "git+https://github.com/Rachelint/arrow-rs.git?rev=cd9284f884d05e329acb293e1e95353ce555315e#cd9284f884d05e329acb293e1e95353ce555315e"
 dependencies = [
  "arrow-array",
  "arrow-cast",
@@ -292,7 +292,7 @@ dependencies = [
 [[package]]
 name = "arrow-data"
 version = "60.0.0"
-source = "git+https://github.com/Rachelint/arrow-rs.git?rev=8d0558fc6f6a2acb47e91207ef7b4acf24a72245#8d0558fc6f6a2acb47e91207ef7b4acf24a72245"
+source = "git+https://github.com/Rachelint/arrow-rs.git?rev=cd9284f884d05e329acb293e1e95353ce555315e#cd9284f884d05e329acb293e1e95353ce555315e"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
@@ -304,7 +304,7 @@ dependencies = [
 [[package]]
 name = "arrow-flight"
 version = "60.0.0"
-source = "git+https://github.com/Rachelint/arrow-rs.git?rev=8d0558fc6f6a2acb47e91207ef7b4acf24a72245#8d0558fc6f6a2acb47e91207ef7b4acf24a72245"
+source = "git+https://github.com/Rachelint/arrow-rs.git?rev=cd9284f884d05e329acb293e1e95353ce555315e#cd9284f884d05e329acb293e1e95353ce555315e"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -329,7 +329,7 @@ dependencies = [
 [[package]]
 name = "arrow-ipc"
 version = "60.0.0"
-source = "git+https://github.com/Rachelint/arrow-rs.git?rev=8d0558fc6f6a2acb47e91207ef7b4acf24a72245#8d0558fc6f6a2acb47e91207ef7b4acf24a72245"
+source = "git+https://github.com/Rachelint/arrow-rs.git?rev=cd9284f884d05e329acb293e1e95353ce555315e#cd9284f884d05e329acb293e1e95353ce555315e"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -344,7 +344,7 @@ dependencies = [
 [[package]]
 name = "arrow-json"
 version = "60.0.0"
-source = "git+https://github.com/Rachelint/arrow-rs.git?rev=8d0558fc6f6a2acb47e91207ef7b4acf24a72245#8d0558fc6f6a2acb47e91207ef7b4acf24a72245"
+source = "git+https://github.com/Rachelint/arrow-rs.git?rev=cd9284f884d05e329acb293e1e95353ce555315e#cd9284f884d05e329acb293e1e95353ce555315e"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -368,7 +368,7 @@ dependencies = [
 [[package]]
 name = "arrow-ord"
 version = "60.0.0"
-source = "git+https://github.com/Rachelint/arrow-rs.git?rev=8d0558fc6f6a2acb47e91207ef7b4acf24a72245#8d0558fc6f6a2acb47e91207ef7b4acf24a72245"
+source = "git+https://github.com/Rachelint/arrow-rs.git?rev=cd9284f884d05e329acb293e1e95353ce555315e#cd9284f884d05e329acb293e1e95353ce555315e"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -381,7 +381,7 @@ dependencies = [
 [[package]]
 name = "arrow-row"
 version = "60.0.0"
-source = "git+https://github.com/Rachelint/arrow-rs.git?rev=8d0558fc6f6a2acb47e91207ef7b4acf24a72245#8d0558fc6f6a2acb47e91207ef7b4acf24a72245"
+source = "git+https://github.com/Rachelint/arrow-rs.git?rev=cd9284f884d05e329acb293e1e95353ce555315e#cd9284f884d05e329acb293e1e95353ce555315e"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -393,7 +393,7 @@ dependencies = [
 [[package]]
 name = "arrow-schema"
 version = "60.0.0"
-source = "git+https://github.com/Rachelint/arrow-rs.git?rev=8d0558fc6f6a2acb47e91207ef7b4acf24a72245#8d0558fc6f6a2acb47e91207ef7b4acf24a72245"
+source = "git+https://github.com/Rachelint/arrow-rs.git?rev=cd9284f884d05e329acb293e1e95353ce555315e#cd9284f884d05e329acb293e1e95353ce555315e"
 dependencies = [
  "bitflags",
  "serde",
@@ -404,7 +404,7 @@ dependencies = [
 [[package]]
 name = "arrow-select"
 version = "60.0.0"
-source = "git+https://github.com/Rachelint/arrow-rs.git?rev=8d0558fc6f6a2acb47e91207ef7b4acf24a72245#8d0558fc6f6a2acb47e91207ef7b4acf24a72245"
+source = "git+https://github.com/Rachelint/arrow-rs.git?rev=cd9284f884d05e329acb293e1e95353ce555315e#cd9284f884d05e329acb293e1e95353ce555315e"
 dependencies = [
  "ahash",
  "arrow-array",
@@ -418,7 +418,7 @@ dependencies = [
 [[package]]
 name = "arrow-string"
 version = "60.0.0"
-source = "git+https://github.com/Rachelint/arrow-rs.git?rev=8d0558fc6f6a2acb47e91207ef7b4acf24a72245#8d0558fc6f6a2acb47e91207ef7b4acf24a72245"
+source = "git+https://github.com/Rachelint/arrow-rs.git?rev=cd9284f884d05e329acb293e1e95353ce555315e#cd9284f884d05e329acb293e1e95353ce555315e"
 dependencies = [
  "arrow-array",
  "arrow-buffer",

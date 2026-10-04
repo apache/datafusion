@@ -84,23 +84,23 @@ rust-version = "1.94.0"
 version = "55.1.0"
 
 [patch.crates-io]
-arrow = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "8d0558fc6f6a2acb47e91207ef7b4acf24a72245" }
-arrow-arith = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "8d0558fc6f6a2acb47e91207ef7b4acf24a72245" }
-arrow-array = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "8d0558fc6f6a2acb47e91207ef7b4acf24a72245" }
-arrow-avro = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "8d0558fc6f6a2acb47e91207ef7b4acf24a72245" }
-arrow-buffer = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "8d0558fc6f6a2acb47e91207ef7b4acf24a72245" }
-arrow-cast = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "8d0558fc6f6a2acb47e91207ef7b4acf24a72245" }
-arrow-cmp = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "8d0558fc6f6a2acb47e91207ef7b4acf24a72245" }
-arrow-csv = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "8d0558fc6f6a2acb47e91207ef7b4acf24a72245" }
-arrow-data = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "8d0558fc6f6a2acb47e91207ef7b4acf24a72245" }
-arrow-flight = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "8d0558fc6f6a2acb47e91207ef7b4acf24a72245" }
-arrow-ipc = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "8d0558fc6f6a2acb47e91207ef7b4acf24a72245" }
-arrow-json = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "8d0558fc6f6a2acb47e91207ef7b4acf24a72245" }
-arrow-ord = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "8d0558fc6f6a2acb47e91207ef7b4acf24a72245" }
-arrow-row = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "8d0558fc6f6a2acb47e91207ef7b4acf24a72245" }
-arrow-schema = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "8d0558fc6f6a2acb47e91207ef7b4acf24a72245" }
-arrow-select = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "8d0558fc6f6a2acb47e91207ef7b4acf24a72245" }
-arrow-string = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "8d0558fc6f6a2acb47e91207ef7b4acf24a72245" }
+arrow = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "cd9284f884d05e329acb293e1e95353ce555315e" }
+arrow-arith = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "cd9284f884d05e329acb293e1e95353ce555315e" }
+arrow-array = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "cd9284f884d05e329acb293e1e95353ce555315e" }
+arrow-avro = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "cd9284f884d05e329acb293e1e95353ce555315e" }
+arrow-buffer = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "cd9284f884d05e329acb293e1e95353ce555315e" }
+arrow-cast = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "cd9284f884d05e329acb293e1e95353ce555315e" }
+arrow-cmp = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "cd9284f884d05e329acb293e1e95353ce555315e" }
+arrow-csv = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "cd9284f884d05e329acb293e1e95353ce555315e" }
+arrow-data = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "cd9284f884d05e329acb293e1e95353ce555315e" }
+arrow-flight = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "cd9284f884d05e329acb293e1e95353ce555315e" }
+arrow-ipc = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "cd9284f884d05e329acb293e1e95353ce555315e" }
+arrow-json = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "cd9284f884d05e329acb293e1e95353ce555315e" }
+arrow-ord = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "cd9284f884d05e329acb293e1e95353ce555315e" }
+arrow-row = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "cd9284f884d05e329acb293e1e95353ce555315e" }
+arrow-schema = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "cd9284f884d05e329acb293e1e95353ce555315e" }
+arrow-select = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "cd9284f884d05e329acb293e1e95353ce555315e" }
+arrow-string = { git = "https://github.com/Rachelint/arrow-rs.git", rev = "cd9284f884d05e329acb293e1e95353ce555315e" }
 
 [workspace.dependencies]
 # We turn off default-features for some dependencies here so the workspaces which inherit them can
