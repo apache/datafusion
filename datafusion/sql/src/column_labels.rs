@@ -16,23 +16,24 @@
 // under the License.
 
 //! Readable labels for the output columns of a SQL query, enabled by
-//! `datafusion.sql_parser.pretty_column_names`.
+//! `datafusion.sql_parser.column_labels`.
 //!
 //! The planner names an unaliased column with [`Expr::schema_name`], which is
 //! also the key it uses to look up columns, so the name includes type
 //! wrappers and table qualifiers (`t.a + Int64(1)`). This module computes a
 //! readable label for each output column of a fully planned query (`a + 1`)
-//! and renames the columns in the top projection of the plan, adding one if
-//! needed. Names inside the plan don't change.
+//! and attaches it as field metadata in the top projection of the plan,
+//! adding one if needed. Column names don't change.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::sync::Arc;
 
+use datafusion_common::metadata::{FieldMetadata, column_label_metadata};
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{Column, DFSchema, Dependency, Result};
+use datafusion_common::{Column, DFSchema, Dependency, Result, TableReference};
 use datafusion_expr::expr::{
-    ExprListDisplay, SortListDisplay, WindowFunction, WindowFunctionParams,
+    Alias, ExprListDisplay, SortListDisplay, WindowFunction, WindowFunctionParams,
 };
 use datafusion_expr::utils::grouping_set_to_exprlist;
 use datafusion_expr::{
@@ -68,21 +69,23 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 }
 
-/// Renames the output columns of `plan` to their readable labels.
+/// Attaches a readable label to each output column of `plan` as field
+/// metadata (see [`column_label_metadata`]). Column names don't change.
 ///
-/// A column keeps its current name when:
+/// A column gets no label when:
 /// - its name is in `typed_names`, the column references typed in the
 ///   outermost `SELECT` list;
 /// - its label can't be computed (see [`trace_column`]);
-/// - its label collides with the name of another output column.
+/// - its label equals its name.
 ///
-/// Returns `plan` unchanged when no column gets a new name.
+/// Two columns can get the same label, because their names stay unique.
+/// Returns `plan` unchanged when no column gets a label.
 pub(crate) fn label_output_columns(
     plan: LogicalPlan,
     typed_names: &HashSet<String>,
 ) -> Result<LogicalPlan> {
     let schema = Arc::clone(plan.schema());
-    let mut labels = schema
+    let labels = schema
         .fields()
         .iter()
         .enumerate()
@@ -98,8 +101,6 @@ pub(crate) fn label_output_columns(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    revert_colliding_labels(&schema, &mut labels);
-
     if labels.iter().all(Option::is_none) {
         return Ok(plan);
     }
@@ -108,9 +109,10 @@ pub(crate) fn label_output_columns(
     if let LogicalPlan::Projection(Projection { expr, input, .. }) = plan {
         let exprs = expr
             .into_iter()
+            .zip(schema.iter())
             .zip(labels)
-            .map(|(expr, label)| match label {
-                Some(label) => expr.unalias().alias(label),
+            .map(|((expr, (qualifier, field)), label)| match label {
+                Some(label) => with_label(expr, qualifier, field.name(), &label),
                 None => expr,
             })
             .collect();
@@ -122,7 +124,7 @@ pub(crate) fn label_output_columns(
         .map(|((qualifier, field), label)| {
             let column = Expr::Column(Column::from((qualifier, field)));
             match label {
-                Some(label) => column.alias(label),
+                Some(label) => with_label(column, qualifier, field.name(), &label),
                 None => column,
             }
         })
@@ -133,33 +135,24 @@ pub(crate) fn label_output_columns(
     )?))
 }
 
-/// Drops each label that has the same name as another output column, so the
-/// column keeps its current name. Dropping a label can create a new
-/// collision with the current name, so this repeats until no labeled column
-/// collides.
-fn revert_colliding_labels(schema: &DFSchema, labels: &mut [Option<String>]) {
-    loop {
-        let colliding: Vec<usize> = {
-            let names: Vec<&str> = schema
-                .fields()
-                .iter()
-                .zip(labels.iter())
-                .map(|(field, label)| label.as_deref().unwrap_or(field.name()))
-                .collect();
-            let mut counts: HashMap<&str, usize> = HashMap::new();
-            for name in &names {
-                *counts.entry(name).or_default() += 1;
-            }
-            (0..names.len())
-                .filter(|&idx| labels[idx].is_some() && counts[names[idx]] > 1)
-                .collect()
-        };
-        if colliding.is_empty() {
-            return;
+/// Returns `expr`, which produces the output column `qualifier.name`, aliased
+/// to the same name with `label` in its field metadata.
+fn with_label(
+    expr: Expr,
+    qualifier: Option<&TableReference>,
+    name: &str,
+    label: &str,
+) -> Expr {
+    let metadata = column_label_metadata(label, name);
+    match expr {
+        Expr::Alias(mut alias) => {
+            alias.metadata =
+                FieldMetadata::merge_options(alias.metadata.as_ref(), Some(&metadata));
+            Expr::Alias(alias)
         }
-        for idx in colliding {
-            labels[idx] = None;
-        }
+        expr => Expr::Alias(
+            Alias::new(expr, qualifier.cloned(), name).with_metadata(Some(metadata)),
+        ),
     }
 }
 

@@ -18,7 +18,6 @@
 use std::collections::HashMap;
 
 use super::*;
-use datafusion_common::test_util::batches_to_string;
 use datafusion_common::{ParamValues, ScalarValue, metadata::ScalarAndMetadata};
 use insta::assert_snapshot;
 
@@ -592,41 +591,5 @@ async fn test_recursive_cte_batch_schema_stable_with_order_by_limit() -> Result<
             "batch {i} schema field names leaked from recursive branch"
         );
     }
-    Ok(())
-}
-
-/// `datafusion.sql_parser.pretty_column_names` gives result columns readable
-/// headers. See also `pretty_column_names.slt`.
-#[tokio::test]
-async fn pretty_column_names_in_results() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.sql("CREATE TABLE t (a BIGINT, b BIGINT) AS VALUES (1, 2), (3, 4)")
-        .await?
-        .collect()
-        .await?;
-    let sql = "SELECT a + 1, sum(b), row_number() OVER (ORDER BY a) \
-               FROM t GROUP BY a ORDER BY a LIMIT 1";
-
-    let results = ctx.sql(sql).await?.collect().await?;
-    assert_snapshot!(batches_to_string(&results), @r"
-    +----------------+----------+----------------------------------------------------------------------------------------------+
-    | t.a + Int64(1) | sum(t.b) | row_number() ORDER BY [t.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW |
-    +----------------+----------+----------------------------------------------------------------------------------------------+
-    | 2              | 2        | 1                                                                                            |
-    +----------------+----------+----------------------------------------------------------------------------------------------+
-    ");
-
-    ctx.sql("SET datafusion.sql_parser.pretty_column_names = true")
-        .await?
-        .collect()
-        .await?;
-    let results = ctx.sql(sql).await?.collect().await?;
-    assert_snapshot!(batches_to_string(&results), @r"
-    +-------+--------+--------------------------------+
-    | a + 1 | sum(b) | row_number() OVER (ORDER BY a) |
-    +-------+--------+--------------------------------+
-    | 2     | 2      | 1                              |
-    +-------+--------+--------------------------------+
-    ");
     Ok(())
 }

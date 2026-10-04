@@ -325,19 +325,20 @@ config_namespace! {
         /// planned query.
         pub enable_subquery_sort_elimination: bool, default = true
 
-        /// When set to true, an unaliased output column of a top-level SQL
-        /// query is named with a readable label, such as `a + 1` instead of
+        /// When set to true, each unaliased output column of a top-level SQL
+        /// query gets a readable label, such as `a + 1` for a column named
         /// `t.a + Int64(1)`. Labels leave out type wrappers and table
         /// qualifiers, and window functions use `OVER (...)` syntax without
-        /// default parts. A column keeps its current name when its label
-        /// collides with another column's name, or when it is a column
-        /// reference typed in the outermost `SELECT` list.
+        /// default parts. The label is stored in the field metadata key
+        /// `datafusion.label`, and `DataFrame::show` and `datafusion-cli`
+        /// table output display it as the column header.
         ///
-        /// Names inside the query plan don't change, so name resolution
-        /// works as before. Stored column names (`CREATE VIEW`,
-        /// `CREATE TABLE AS`, `INSERT`, `COPY`) and the DataFrame API are
-        /// not affected.
-        pub pretty_column_names: bool, default = false
+        /// Column names don't change, so name resolution and code that reads
+        /// columns by name work as before. Columns that you name in the
+        /// outermost `SELECT` list, and statements that store column names
+        /// (`CREATE VIEW`, `CREATE TABLE AS`, `INSERT`, `COPY`), get no
+        /// labels.
+        pub column_labels: bool, default = false
     }
 }
 

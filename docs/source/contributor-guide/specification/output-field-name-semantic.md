@@ -40,29 +40,38 @@ DataFusion queries planned from both SQL queries and Dataframe APIs.
 - Function arguments MUST be separated by a comma `,` and a space.
   - `SELECT f(c1,c2)` and `df.select(vec![f.udf("f")?.call(vec![col("c1"), col("c2")])])` SHOULD result in field name: `f(table.c1, table.c2)`
 
-### Readable SQL column names
+### Column labels
 
-When `datafusion.sql_parser.pretty_column_names` is `true`, the unaliased
-output columns of a top-level SQL query get readable labels. These rules
-replace three of the rules above for SQL query results. DataFrame output and
-names inside the query plan keep the rules above.
+When `datafusion.sql_parser.column_labels` is `true`, each unaliased output
+column of a top-level SQL query gets a readable label in its field metadata.
+Field names still follow the rules above. The field metadata keys are:
 
-- Compound column field names MUST NOT contain a relation/table qualifier.
-  - `SELECT foo + bar` SHOULD result in field name: `foo + bar`
+- `datafusion.label`: the label, such as `a + 1`.
+- `datafusion.label_of`: the field name that the label applies to, such as
+  `t.a + Int64(1)`. A tool that displays results MUST show the label only
+  when the field name equals this value, because metadata stays on a field
+  after it's renamed.
+
+Labels follow these rules, which differ from the field name rules above:
+
+- Labels MUST NOT contain a relation/table qualifier.
+  - `SELECT foo + bar` SHOULD result in label: `foo + bar`
+- Literals MUST NOT contain a type wrapper.
+  - `SELECT 1` SHOULD result in label: `1`
 - Operator expressions MUST be wrapped with parentheses only where operator
   precedence needs them.
-  - `SELECT 1+2` SHOULD result in field name: `1 + 2`
-  - `SELECT (a+b)*c` SHOULD result in field name: `(a + b) * c`
+  - `SELECT 1+2` SHOULD result in label: `1 + 2`
+  - `SELECT (a+b)*c` SHOULD result in label: `(a + b) * c`
 - Negation is wrapped with parentheses.
-  - `SELECT -a` SHOULD result in field name: `(- a)`
+  - `SELECT -a` SHOULD result in label: `(- a)`
+- Window functions use SQL `OVER (...)` syntax, without the parts that equal
+  their defaults.
+  - `SELECT row_number() OVER (ORDER BY a)` SHOULD result in label:
+    `row_number() OVER (ORDER BY a)`
 
-Window functions use SQL `OVER (...)` syntax, without the parts that equal
-their defaults. For example, `SELECT row_number() OVER (ORDER BY a)` SHOULD
-result in field name: `row_number() OVER (ORDER BY a)`.
-
-A column keeps the name from the rules above when its label collides with the
-name of another output column, or when it is a column reference typed in the
-outermost `SELECT` list.
+A column gets no label when its label equals its field name, or when it is a
+column reference typed in the outermost `SELECT` list. Two columns can have
+the same label.
 
 ## Appendices
 

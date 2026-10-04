@@ -308,12 +308,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 self.explain_to_plan(options, statement)
             }
             Statement::Query(query) => {
-                if !self
-                    .context_provider
-                    .options()
-                    .sql_parser
-                    .pretty_column_names
-                {
+                if !self.context_provider.options().sql_parser.column_labels {
                     return self.query_to_plan(*query, planner_context);
                 }
                 let typed_names = self.typed_column_names(&query.body);
