@@ -180,6 +180,42 @@ physical_plan
 statement ok
 SET datafusion.explain.physical_plan_only = false;
 
+# Numeric UDFs with default bounds retain their output type through a cast.
+statement ok
+CREATE VIEW numeric_udf_ordering AS
+SELECT column1 AS x
+FROM (VALUES (2.5::DOUBLE), (-1.5::DOUBLE), (NULL::DOUBLE))
+ORDER BY x
+LIMIT 3;
+
+query R
+SELECT CAST(trunc(x) AS REAL) AS truncated
+FROM numeric_udf_ordering
+ORDER BY truncated;
+----
+-1
+2
+NULL
+
+statement ok
+SET datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT CAST(trunc(x) AS REAL) AS truncated
+FROM numeric_udf_ordering
+ORDER BY truncated;
+----
+physical_plan
+01)ProjectionExec: expr=[CAST(trunc(column1@0) AS Float32) as truncated]
+02)--SortExec: TopK(fetch=3), expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+RESET datafusion.explain.physical_plan_only;
+
+statement ok
+DROP VIEW numeric_udf_ordering;
+
 # Regression for https://github.com/apache/datafusion/issues/25523.
 statement ok
 SET datafusion.execution.target_partitions = 1;
