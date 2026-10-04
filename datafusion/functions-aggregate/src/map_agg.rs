@@ -313,8 +313,10 @@ impl Accumulator for MapAggAccumulator {
         assert_eq_or_internal_err!(keys.len(), vals.len(), "key/value length mismatch");
 
         for row in 0..keys.len() {
-            self.keys.push(ScalarValue::try_from_array(keys, row)?);
-            self.values.push(ScalarValue::try_from_array(vals, row)?);
+            self.keys
+                .push(ScalarValue::try_from_array(keys, row)?.compacted());
+            self.values
+                .push(ScalarValue::try_from_array(vals, row)?.compacted());
         }
 
         Ok(())
@@ -337,9 +339,10 @@ impl Accumulator for MapAggAccumulator {
                 continue;
             }
             for idx in offsets[row] as usize..offsets[row + 1] as usize {
-                self.keys.push(ScalarValue::try_from_array(map_keys, idx)?);
+                self.keys
+                    .push(ScalarValue::try_from_array(map_keys, idx)?.compacted());
                 self.values
-                    .push(ScalarValue::try_from_array(map_values, idx)?);
+                    .push(ScalarValue::try_from_array(map_values, idx)?.compacted());
             }
         }
 
