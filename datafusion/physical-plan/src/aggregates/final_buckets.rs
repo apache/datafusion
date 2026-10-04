@@ -24,9 +24,11 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, PrimitiveArray};
 use arrow::compute::{
-    BatchCoalescer, InProgressArray, create_in_progress_array, take_arrays,
+    self, BatchCoalescer, InProgressArray, InProgressByteViewArray,
+    StringViewScatterTarget, take_arrays,
 };
-use arrow::datatypes::{SchemaRef, UInt32Type};
+use arrow::datatypes::{DataType, SchemaRef, StringViewType, UInt32Type};
+use arrow::error::Result as ArrowResult;
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::Result;
 use datafusion_common::hash_utils::{RandomState, create_hashes};
@@ -96,13 +98,65 @@ struct Bucket {
     compact_at: usize,
 }
 
-/// Builds full batches directly from the columns of a reordered input batch.
-/// The input has already been gathered into bucket order. Source slices use
+/// Concrete StringView builders enable one scatter call across all buckets.
+/// Other columns retain the existing in-progress array interface.
+enum ColumnArray {
+    Dynamic(Box<dyn InProgressArray>),
+    StringView(Box<InProgressByteViewArray<StringViewType>>),
+}
+
+impl ColumnArray {
+    fn new(data_type: &DataType, batch_size: usize) -> Self {
+        if data_type == &DataType::Utf8View {
+            Self::StringView(Box::new(InProgressByteViewArray::new(batch_size)))
+        } else {
+            Self::Dynamic(compute::create_in_progress_array(data_type, batch_size))
+        }
+    }
+
+    fn set_source(&mut self, source: Option<ArrayRef>) {
+        match self {
+            Self::Dynamic(array) => array.set_source(source),
+            Self::StringView(array) => array.set_source(source),
+        }
+    }
+
+    fn set_source_range(&mut self, source: ArrayRef, offset: usize, len: usize) -> usize {
+        match self {
+            Self::Dynamic(array) => array.set_source_range(source, offset, len),
+            Self::StringView(array) => array.set_source_range(source, offset, len),
+        }
+    }
+
+    fn copy_rows(&mut self, offset: usize, len: usize) -> ArrowResult<()> {
+        match self {
+            Self::Dynamic(array) => array.copy_rows(offset, len),
+            Self::StringView(array) => array.copy_rows(offset, len),
+        }
+    }
+
+    fn finish(&mut self) -> ArrowResult<ArrayRef> {
+        match self {
+            Self::Dynamic(array) => array.finish(),
+            Self::StringView(array) => array.finish(),
+        }
+    }
+
+    fn size(&self) -> usize {
+        match self {
+            Self::Dynamic(array) => array.size(),
+            Self::StringView(array) => array.size(),
+        }
+    }
+}
+
+/// Builds full batches by scattering StringView columns and coalescing the
+/// remaining columns after gathering them into bucket order. Source ranges use
 /// the same copy and compaction decisions as `BatchCoalescer`, without
 /// allocating a small record batch for every destination.
 struct ColumnBatchBuilder {
     schema: SchemaRef,
-    columns: Vec<Box<dyn InProgressArray>>,
+    columns: Vec<ColumnArray>,
     batch_size: usize,
     column_rows: Vec<usize>,
     finished_columns: Vec<VecDeque<ArrayRef>>,
@@ -114,7 +168,7 @@ impl ColumnBatchBuilder {
         let columns: Vec<_> = schema
             .fields()
             .iter()
-            .map(|field| create_in_progress_array(field.data_type(), batch_size))
+            .map(|field| ColumnArray::new(field.data_type(), batch_size))
             .collect();
         Self {
             schema,
@@ -201,7 +255,7 @@ impl ColumnBatchBuilder {
     }
 
     fn size(&self) -> usize {
-        self.columns.capacity() * size_of::<Box<dyn InProgressArray>>()
+        self.columns.capacity() * size_of::<ColumnArray>()
             + self
                 .columns
                 .iter()
@@ -358,13 +412,61 @@ impl FinalBuckets {
             *cursor += 1;
         }
 
-        // Gather once in bucket order. Then visit every destination of one
-        // column before moving to the next column. Each destination column
-        // accumulates across input batches until it reaches batch_size.
+        // Scatter StringView columns directly from source order into every
+        // destination. Other columns are gathered once in bucket order.
+        // Spilled buckets keep the existing gather-and-slice path.
         let indices: PrimitiveArray<UInt32Type> =
             std::mem::take(&mut self.reordered_indices).into();
-        let columns = take_arrays(batch.columns(), &indices, None)?;
+        let can_scatter = self
+            .buckets
+            .iter()
+            .all(|bucket| bucket.spill_file.is_none())
+            && batch
+                .columns()
+                .iter()
+                .any(|source| source.data_type() == &DataType::Utf8View);
+        let columns = if can_scatter {
+            batch
+                .columns()
+                .iter()
+                .map(|source| {
+                    if source.data_type() == &DataType::Utf8View {
+                        Ok(Arc::clone(source))
+                    } else {
+                        compute::take(source.as_ref(), &indices, None)
+                    }
+                })
+                .collect::<ArrowResult<Vec<_>>>()?
+        } else {
+            take_arrays(batch.columns(), &indices, None)?
+        };
+        let bucket_ids: Vec<_> = if can_scatter {
+            self.hashes.iter().map(|&hash| bucket_of(hash)).collect()
+        } else {
+            Vec::new()
+        };
         for (column_index, source) in columns.iter().enumerate() {
+            if can_scatter && source.data_type() == &DataType::Utf8View {
+                let mut targets: Vec<_> = self
+                    .buckets
+                    .iter_mut()
+                    .map(|bucket| {
+                        let coalescer = &mut bucket.coalescer;
+                        let ColumnArray::StringView(array) =
+                            &mut coalescer.columns[column_index]
+                        else {
+                            unreachable!("StringView columns have concrete builders")
+                        };
+                        StringViewScatterTarget {
+                            array,
+                            rows: &mut coalescer.column_rows[column_index],
+                            finished: &mut coalescer.finished_columns[column_index],
+                        }
+                    })
+                    .collect();
+                compute::scatter_string_views(source, &bucket_ids, &mut targets)?;
+                continue;
+            }
             for (bucket, (&start, &size)) in self
                 .buckets
                 .iter_mut()
