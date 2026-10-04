@@ -46,7 +46,7 @@ make_higher_order_function_expr_and_func!(
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Returns the first element of an array that satisfies the given predicate. Returns null if the array is empty or no element matches. A predicate that returns null for an element is treated as not matching.",
+    description = "Returns the first element of an array that satisfies the given predicate. Returns null if the array is empty or no element matches. A predicate that returns null for an element is treated as not matching. Lambda expressions require a dialect that supports them; set `datafusion.sql_parser.dialect` to `DuckDB` because the default dialect does not parse the `->` syntax.",
     syntax_example = "array_first(array, predicate)",
     sql_example = r#"```sql
 > select array_first([1, 2, 3, 4], x -> x > 2);

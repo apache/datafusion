@@ -45,7 +45,7 @@ make_higher_order_function_expr_and_func!(
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Returns whether any elements of an array match the given predicate. Returns true if one or more elements match, false if none match (including empty arrays), and null if the predicate returns null for some elements and false for all others.",
+    description = "Returns whether any elements of an array match the given predicate. Returns true if one or more elements match, false if none match (including empty arrays), and null if the predicate returns null for some elements and false for all others. Lambda expressions require a dialect that supports them; set `datafusion.sql_parser.dialect` to `DuckDB` because the default dialect does not parse the `->` syntax.",
     syntax_example = "any_match(array, predicate)",
     sql_example = r#"```sql
 > select any_match([1, 2, 3], x -> x > 2);

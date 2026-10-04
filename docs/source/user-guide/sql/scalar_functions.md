@@ -3411,7 +3411,7 @@ array_add(array1, array2)
 
 ### `array_any_match`
 
-Returns whether any elements of an array match the given predicate. Returns true if one or more elements match, false if none match (including empty arrays), and null if the predicate returns null for some elements and false for all others.
+Returns whether any elements of an array match the given predicate. Returns true if one or more elements match, false if none match (including empty arrays), and null if the predicate returns null for some elements and false for all others. Lambda expressions require a dialect that supports them; set `datafusion.sql_parser.dialect` to `DuckDB` because the default dialect does not parse the `->` syntax.
 
 ```sql
 any_match(array, predicate)
@@ -3743,7 +3743,7 @@ _Alias of [array_element](#array_element)._
 
 ### `array_filter`
 
-filters the values of an array using a boolean lambda
+filters the values of an array using a boolean lambda. Lambda expressions require a dialect that supports them; set `datafusion.sql_parser.dialect` to `DuckDB` because the default dialect does not parse the `->` syntax.
 
 ```sql
 array_filter(array, x -> x > 2)
@@ -3771,7 +3771,7 @@ array_filter(array, x -> x > 2)
 
 ### `array_first`
 
-Returns the first element of an array that satisfies the given predicate. Returns null if the array is empty or no element matches. A predicate that returns null for an element is treated as not matching.
+Returns the first element of an array that satisfies the given predicate. Returns null if the array is empty or no element matches. A predicate that returns null for an element is treated as not matching. Lambda expressions require a dialect that supports them; set `datafusion.sql_parser.dialect` to `DuckDB` because the default dialect does not parse the `->` syntax.
 
 ```sql
 array_first(array, predicate)
@@ -4707,7 +4707,7 @@ array_to_string(array, delimiter[, null_string])
 
 ### `array_transform`
 
-transforms the values of an array
+transforms the values of an array. Lambda expressions require a dialect that supports them; set `datafusion.sql_parser.dialect` to `DuckDB` because the default dialect does not parse the `->` syntax.
 
 ```sql
 array_transform(array, lambda)
