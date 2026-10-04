@@ -17,9 +17,10 @@
 
 //! Common utilities for implementing unicode functions
 
+use crate::strings::sub_view;
 use arrow::array::{
-    Array, ArrayRef, ByteView, GenericStringArray, Int64Array, OffsetSizeTrait,
-    StringViewArray, make_view,
+    Array, ArrayRef, GenericStringArray, Int64Array, MAX_INLINE_VIEW_LEN,
+    OffsetSizeTrait, StringViewArray,
 };
 use arrow::datatypes::DataType;
 use arrow_buffer::{NullBuffer, ScalarBuffer};
@@ -217,14 +218,10 @@ fn general_left_right_view<F: LeftRightSlicer>(
             let n = n_array.value(idx);
 
             let range = F::slice(string, n);
-            let result_bytes = &string.as_bytes()[range.clone()];
-            if result_bytes.len() > 12 {
+            if range.len() > MAX_INLINE_VIEW_LEN as usize {
                 has_out_of_line = true;
             }
-
-            let byte_view = ByteView::from(views[idx]);
-            let new_offset = byte_view.offset + (range.start as u32);
-            make_view(result_bytes, byte_view.buffer_index, new_offset)
+            sub_view(views[idx], string.as_bytes(), range)
         })
         .collect::<Vec<u128>>();
 
@@ -236,7 +233,8 @@ fn general_left_right_view<F: LeftRightSlicer>(
     };
 
     // SAFETY:
-    // - Each view is produced by `make_view` with correct bytes and offset
+    // - Each view is produced by `sub_view` from the input view and a range
+    //   within the input string, as returned by `F::slice`
     // - Out-of-line views reuse the original buffer index and adjusted offset
     unsafe {
         let array = StringViewArray::new_unchecked(views, data_buffers, new_nulls);
