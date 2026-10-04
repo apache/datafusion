@@ -488,8 +488,9 @@ fn resolve_classic_join(
     let stream_idx = batch_process_state.start_stream_idx;
 
     // Streamed NULL keys are settled before the sort (see `split_off_never_matching`). One
-    // that got here would sort before every buffered key and match all of them.
-    if stream_values[0].null_count() > 0 {
+    // that got here would sort before every buffered key and match all of them. Logical, as a
+    // run-end encoded NULL has no physical null buffer.
+    if stream_values[0].logical_null_count() > 0 {
         return internal_err!(
             "PiecewiseMergeJoin: streamed NULL keys must be settled before the scan"
         );
@@ -589,19 +590,22 @@ fn build_matched_indices_and_mark_buffered(
 }
 
 // The last key of the sorted buffered side, or `None` when it is empty or every key is NULL:
-// NULLs sort first, so the last key is NULL only when every buffered key is.
+// NULLs sort first, so the last key is NULL only when every buffered key is. Logical, as a
+// run-end encoded or `Null`-typed NULL has no physical null buffer.
 fn buffered_extreme(values: &ArrayRef) -> Result<Option<ColumnarValue>> {
-    Ok(match values.len().checked_sub(1) {
-        // `apply_cmp` normalizes `-0.0` only in flat float scalars, not inside a
-        // `ScalarValue::Dictionary`, so normalize the key before taking it.
-        Some(last) if values.is_valid(last) => {
-            let extreme = normalize_float_zero(&values.slice(last, 1));
-            Some(ColumnarValue::Scalar(ScalarValue::try_from_array(
-                &extreme, 0,
-            )?))
-        }
-        _ => None,
-    })
+    let Some(last) = values.len().checked_sub(1) else {
+        return Ok(None);
+    };
+    let last = values.slice(last, 1);
+    if last.logical_null_count() > 0 {
+        return Ok(None);
+    }
+    // `apply_cmp` normalizes `-0.0` only in flat float scalars, not inside a
+    // `ScalarValue::Dictionary`, so normalize the key before taking it.
+    let extreme = normalize_float_zero(&last);
+    Ok(Some(ColumnarValue::Scalar(ScalarValue::try_from_array(
+        &extreme, 0,
+    )?)))
 }
 
 // Which rows of `stream_values` can match at least one buffered row.
@@ -644,8 +648,10 @@ fn matchable_rows(
             NullEquality::NullEqualsNothing,
         )?;
         let last = buffered_values.len() - 1;
+        // Logical NULLs: a run-end encoded NULL has no physical null buffer.
+        let nulls = stream_values.logical_nulls();
         let matchable = BooleanBuffer::collect_bool(num_rows, |row| {
-            stream_values.is_valid(row)
+            nulls.as_ref().is_none_or(|nulls| nulls.is_valid(row))
                 && is_match(cmp.compare(row, last), match_on_equal)
         });
         return Ok(BooleanArray::new(matchable, None));
@@ -1246,7 +1252,9 @@ mod tests {
     }
 
     /// An empty streamed batch of run-end encoded keys, sliced past the first run, must not
-    /// reach arrow's run-end comparison kernel, which overflows on it.
+    /// reach arrow's run-end comparison kernel, which overflows on it. The streamed NULL key
+    /// (`a2 = 0`) is a logical NULL with no physical null buffer, and must come out unmatched
+    /// rather than join every buffered row.
     #[tokio::test]
     async fn join_right_run_end_encoded_keys_empty_sliced_batch() -> Result<()> {
         use arrow::array::{Int32Array, RunArray};
@@ -1302,7 +1310,60 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         );
 
-        join_collect(left, right, on, Operator::Lt, JoinType::Right).await?;
+        let (_, batches, _) =
+            join_collect(left, right, on, Operator::Lt, JoinType::Right).await?;
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+----+----+----+
+        | a1 | b1 | a2 | b2 |
+        +----+----+----+----+
+        |    |    | 0  |    |
+        | 3  | 1  | 1  | 2  |
+        | 4  | 1  | 1  | 2  |
+        | 3  | 1  | 2  | 2  |
+        | 4  | 1  | 2  | 2  |
+        |    |    | 3  | 0  |
+        | 1  | 5  | 4  | 6  |
+        | 2  | 5  | 4  | 6  |
+        | 3  | 1  | 4  | 6  |
+        | 4  | 1  | 4  | 6  |
+        +----+----+----+----+
+        ");
+        Ok(())
+    }
+
+    /// `buffered_extreme` is `None` when the last buffered key is logically NULL, including
+    /// run-end encoded, `Null`-typed and dictionary keys, which have no physical NULL there.
+    #[test]
+    fn buffered_extreme_is_none_for_logically_null_keys() -> Result<()> {
+        use arrow::array::{DictionaryArray, Int32Array, NullArray, RunArray};
+        use arrow::datatypes::Int32Type;
+
+        let null_keys: Vec<(&str, ArrayRef)> = vec![
+            ("null", Arc::new(NullArray::new(3))),
+            (
+                "run_end_encoded",
+                Arc::new(RunArray::<Int32Type>::try_new(
+                    &Int32Array::from(vec![3]),
+                    &Int32Array::from(vec![None::<i32>]),
+                )?),
+            ),
+            (
+                "dictionary_null_value",
+                Arc::new(DictionaryArray::<Int32Type>::try_new(
+                    Int32Array::from(vec![0, 0]),
+                    Arc::new(Int32Array::from(vec![None::<i32>])),
+                )?),
+            ),
+        ];
+        for (name, values) in null_keys {
+            assert!(buffered_extreme(&values)?.is_none(), "{name}");
+        }
+
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![None, Some(3)]));
+        assert!(matches!(
+            buffered_extreme(&values)?,
+            Some(ColumnarValue::Scalar(ScalarValue::Int32(Some(3))))
+        ));
         Ok(())
     }
 
@@ -1444,6 +1505,23 @@ mod tests {
                 )),
             ),
             (
+                // NULL *values* behind valid dictionary keys, on both sides.
+                "dictionary_null_values",
+                Arc::new(DictionaryArray::<Int32Type>::new(
+                    Int32Array::from(vec![0, 1, 2]),
+                    Arc::new(StringArray::from(vec![Some("b"), None, Some("d")])),
+                )),
+                Arc::new(DictionaryArray::<Int32Type>::new(
+                    Int32Array::from(vec![0, 1, 2, 3, 1]),
+                    Arc::new(StringArray::from(vec![
+                        Some("a"),
+                        None,
+                        Some("c"),
+                        Some("e"),
+                    ])),
+                )),
+            ),
+            (
                 "decimal128",
                 Arc::new(
                     Decimal128Array::from(vec![Some(150), None, Some(-25)])
@@ -1569,9 +1647,11 @@ mod tests {
                         &[sort_options],
                         NullEquality::NullEqualsNothing,
                     )?;
+                    // Logical NULLs, so a dictionary key whose *value* is NULL counts as one.
+                    let nulls = streamed.logical_nulls();
                     for row in 0..streamed.len() {
-                        let expected = streamed.is_valid(row)
-                            && (sorted.null_count()..sorted.len()).any(|idx| {
+                        let expected = nulls.as_ref().is_none_or(|n| n.is_valid(row))
+                            && (sorted.logical_null_count()..sorted.len()).any(|idx| {
                                 is_match(cmp.compare(row, idx), match_on_equal)
                             });
                         assert_eq!(

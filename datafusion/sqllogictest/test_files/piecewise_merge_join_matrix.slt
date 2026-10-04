@@ -292,6 +292,139 @@ NULL NULL 3 0
 NULL NULL 6 NULL
 NULL NULL 7 1
 
+# The streamed side arrives in several batches, and the first one has no
+# matchable row: it is settled whole, and the scan sees an empty batch.
+statement ok
+CREATE TABLE cj_mb_r(rid INT, rv INT);
+
+statement ok
+INSERT INTO cj_mb_r VALUES (1, 0), (2, 1);
+
+statement ok
+INSERT INTO cj_mb_r VALUES (3, 4), (4, NULL), (5, 6);
+
+statement ok
+INSERT INTO cj_mb_r VALUES (6, NULL);
+
+query IIII rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_l l JOIN cj_mb_r r ON l.lv < r.rv;
+----
+1 1 3 4
+1 1 5 6
+2 3 3 4
+2 3 5 6
+3 5 5 6
+
+query IIII rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_l l FULL JOIN cj_mb_r r ON l.lv < r.rv;
+----
+1 1 3 4
+1 1 5 6
+2 3 3 4
+2 3 5 6
+3 5 5 6
+4 NULL NULL NULL
+NULL NULL 1 0
+NULL NULL 2 1
+NULL NULL 4 NULL
+NULL NULL 6 NULL
+
+# A buffered side whose keys are all NULL has no key to match against, so every
+# streamed row is settled as unmatched.
+statement ok
+CREATE TABLE cj_alln(lid INT, lv INT);
+
+statement ok
+INSERT INTO cj_alln VALUES (1, NULL), (2, NULL);
+
+query IIII rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_alln l JOIN cj_r r ON l.lv < r.rv;
+----
+
+query IIII rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_alln l RIGHT JOIN cj_r r ON l.lv < r.rv;
+----
+NULL NULL 1 3
+NULL NULL 2 5
+NULL NULL 3 NULL
+
+query IIII rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_alln l FULL JOIN cj_r r ON l.lv >= r.rv;
+----
+1 NULL NULL NULL
+2 NULL NULL NULL
+NULL NULL 1 3
+NULL NULL 2 5
+NULL NULL 3 NULL
+
+# Keys of type Null (columns built only from NULL literals) match nothing.
+statement ok
+CREATE TABLE cj_nl AS SELECT * FROM (VALUES (1, NULL), (2, NULL)) AS t(lid, lv);
+
+statement ok
+CREATE TABLE cj_nr AS SELECT * FROM (VALUES (10, NULL), (20, NULL)) AS t(rid, rv);
+
+query I?I? rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_nl l JOIN cj_nr r ON l.lv < r.rv;
+----
+
+query I?I? rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_nl l LEFT JOIN cj_nr r ON l.lv <= r.rv;
+----
+1 NULL NULL NULL
+2 NULL NULL NULL
+
+query I?I? rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_nl l RIGHT JOIN cj_nr r ON l.lv > r.rv;
+----
+NULL NULL 10 NULL
+NULL NULL 20 NULL
+
+query I?I? rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_nl l FULL JOIN cj_nr r ON l.lv >= r.rv;
+----
+1 NULL NULL NULL
+2 NULL NULL NULL
+NULL NULL 10 NULL
+NULL NULL 20 NULL
+
+# List keys, which are checked against the buffered extreme with the scan's
+# comparator rather than a vectorized comparison. A NULL list on the streamed
+# side must still come out unmatched. No list holds a NULL element (#25957).
+statement ok
+CREATE TABLE cj_ll AS SELECT * FROM (VALUES (1, make_array(1, 2)), (2, make_array(3)), (3, NULL)) AS t(lid, lv);
+
+statement ok
+CREATE TABLE cj_lr AS SELECT * FROM (VALUES (1, make_array(2)), (2, make_array(1, 2)), (3, make_array(0)), (4, NULL)) AS t(rid, rv);
+
+query I?I? rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_ll l RIGHT JOIN cj_lr r ON l.lv < r.rv;
+----
+1 [1, 2] 1 [2]
+NULL NULL 2 [1, 2]
+NULL NULL 3 [0]
+NULL NULL 4 NULL
+
+query I?I? rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_ll l FULL JOIN cj_lr r ON l.lv <= r.rv;
+----
+1 [1, 2] 1 [2]
+1 [1, 2] 2 [1, 2]
+2 [3] NULL NULL
+3 NULL NULL NULL
+NULL NULL 3 [0]
+NULL NULL 4 NULL
+
+query I?I? rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_ll l RIGHT JOIN cj_lr r ON l.lv >= r.rv;
+----
+1 [1, 2] 2 [1, 2]
+1 [1, 2] 3 [0]
+2 [3] 1 [2]
+2 [3] 2 [1, 2]
+2 [3] 3 [0]
+NULL NULL 4 NULL
+
 # ==================================================================
 # Part 2: Existence joins (LeftSemi / LeftAnti; Right/Mark fall back to NLJ)
 # ==================================================================
