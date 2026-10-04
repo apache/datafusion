@@ -17,8 +17,7 @@
 
 //! Protobuf conversions for the expression types owned by this crate:
 //! [`WindowFrame`], [`WindowFrameBound`], [`WindowFrameUnits`],
-//! [`MergeIntoClauseKind`](crate::dml::MergeIntoClauseKind) and
-//! [`NullTreatment`](crate::expr::NullTreatment).
+//! [`MergeIntoClauseKind`] and [`NullTreatment`](crate::expr::NullTreatment).
 //!
 //! These are plain [`From`] / [`TryFrom`] impls rather than something taking a
 //! codec: every field is either an enum tag or a [`ScalarValue`], so the

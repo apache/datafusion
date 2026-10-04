@@ -33,7 +33,7 @@ use datafusion_common::cast::as_list_array;
 use datafusion_common::{Result, ScalarValue, not_impl_err};
 use datafusion_expr::DistinctHandling;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::utils::format_state_name;
+use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Coercion, Documentation, GroupsAccumulator,
     ReversedUDAF, Signature, TypeSignatureClass, Volatility,
@@ -292,6 +292,11 @@ impl AggregateUDFImpl for BitwiseOperation {
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
+        if args.return_field.data_type().is_null() {
+            // A Null input has no integer groups accumulator (see
+            // create_groups_accumulator), so fall back to the scalar accumulator.
+            return false;
+        }
         // DISTINCT only changes the result of XOR; AND and OR are idempotent
         !(args.is_distinct && self.operation == BitwiseOperationType::Xor)
     }
@@ -314,6 +319,10 @@ impl AggregateUDFImpl for BitwiseOperation {
 
     fn reverse_expr(&self) -> ReversedUDAF {
         ReversedUDAF::Identical
+    }
+
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        AggregateOrderSensitivity::Insensitive
     }
 
     fn documentation(&self) -> Option<&Documentation> {
