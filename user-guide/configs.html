@@ -548,7 +548,7 @@ example, to configure <code class="docutils literal notranslate"><span class="pr
 </tr>
 <tr class="row-even"><td><p>datafusion.execution.time_zone</p></td>
 <td><p>NULL</p></td>
-<td><p>The default time zone Some functions, e.g. <code class="docutils literal notranslate"><span class="pre">now</span></code> return timestamps in this time zone</p></td>
+<td><p>The default time zone Some functions, e.g. <code class="docutils literal notranslate"><span class="pre">now</span></code>, return timestamps in this time zone. This is also used to interpret timezone-naive timestamps in comparisons and subtraction with timezone-aware timestamps.</p></td>
 </tr>
 <tr class="row-odd"><td><p>datafusion.execution.parquet.enable_page_index</p></td>
 <td><p>true</p></td>

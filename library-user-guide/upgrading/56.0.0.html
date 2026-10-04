@@ -456,6 +456,45 @@
 <p><strong>Note:</strong> DataFusion <code class="docutils literal notranslate"><span class="pre">56.0.0</span></code> has not been released yet. The information provided
 in this section pertains to features and changes that have already been merged
 to the main branch and are awaiting release in this version.</p>
+<section id="session-time-zone-now-applies-to-mixed-timestamp-operations">
+<h3>Session time zone now applies to mixed timestamp operations<a class="headerlink" href="#session-time-zone-now-applies-to-mixed-timestamp-operations" title="Link to this heading">#</a></h3>
+<p>When <code class="docutils literal notranslate"><span class="pre">datafusion.execution.time_zone</span></code> is set, DataFusion now uses it to
+interpret timezone-naive timestamps in comparisons and subtraction with
+timezone-aware timestamps. This applies to binary comparisons, <code class="docutils literal notranslate"><span class="pre">IN</span></code>,
+<code class="docutils literal notranslate"><span class="pre">BETWEEN</span></code>, <code class="docutils literal notranslate"><span class="pre">CASE</span> <span class="pre">expr</span> <span class="pre">WHEN</span></code>, <code class="docutils literal notranslate"><span class="pre">IN</span></code> subqueries, and <code class="docutils literal notranslate"><span class="pre">ANY</span></code> or <code class="docutils literal notranslate"><span class="pre">ALL</span></code>
+comparisons.</p>
+<p>Previously, mixed timestamp operations did not consistently use the configured
+session timezone. They could use the timezone-aware operand’s timezone or
+subtract raw timestamp values. The new behavior matches PostgreSQL and DuckDB.</p>
+<p>The default remains <code class="docutils literal notranslate"><span class="pre">None</span></code>. Without a session timezone, comparisons and
+subtraction use the timezone-aware operand’s timezone. Applications that set this
+option need to review queries that mix timezone-aware and timezone-naive timestamps.</p>
+</section>
+<section id="get-coerce-type-for-list-and-get-coerce-type-for-case-when-are-deprecated">
+<h3><code class="docutils literal notranslate"><span class="pre">get_coerce_type_for_list</span></code> and <code class="docutils literal notranslate"><span class="pre">get_coerce_type_for_case_when</span></code> are deprecated<a class="headerlink" href="#get-coerce-type-for-list-and-get-coerce-type-for-case-when-are-deprecated" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">IN</span></code> and <code class="docutils literal notranslate"><span class="pre">CASE</span> <span class="pre">expr</span> <span class="pre">WHEN</span></code> are defined in terms of <code class="docutils literal notranslate"><span class="pre">=</span></code>, and <code class="docutils literal notranslate"><span class="pre">=</span></code> now reads a
+timezone-naive timestamp in <code class="docutils literal notranslate"><span class="pre">datafusion.execution.time_zone</span></code> when it is compared
+against a timezone-aware one. These two functions have nowhere to take that
+setting from, so the planner no longer calls them and they now return a coercion
+that disagrees with the comparison operator they are defined in terms of.</p>
+<p>Both remain in place and behave exactly as they did in 55.0.0. To follow the
+planner, fold <code class="docutils literal notranslate"><span class="pre">comparison_coercion_with_session_timezone</span></code> over the values
+yourself:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// 55.0.0</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">coerced</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_coerce_type_for_list</span><span class="p">(</span><span class="o">&amp;</span><span class="n">expr_type</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">list_types</span><span class="p">);</span>
+
+<span class="c1">// 56.0.0</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">coerced</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">list_types</span><span class="p">.</span><span class="n">iter</span><span class="p">().</span><span class="n">try_fold</span><span class="p">(</span><span class="n">expr_type</span><span class="p">,</span><span class="w"> </span><span class="o">|</span><span class="n">left</span><span class="p">,</span><span class="w"> </span><span class="n">right</span><span class="o">|</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">comparison_coercion_with_session_timezone</span><span class="p">(</span><span class="o">&amp;</span><span class="n">left</span><span class="p">,</span><span class="w"> </span><span class="n">right</span><span class="p">,</span><span class="w"> </span><span class="n">session_time_zone</span><span class="p">)</span>
+<span class="p">});</span>
+</pre></div>
+</div>
+<p>Pass <code class="docutils literal notranslate"><span class="pre">options.execution.time_zone.as_ref().map(|tz|</span> <span class="pre">tz.as_str())</span></code> as
+<code class="docutils literal notranslate"><span class="pre">session_time_zone</span></code>, or <code class="docutils literal notranslate"><span class="pre">None</span></code> where no session is in scope. <code class="docutils literal notranslate"><span class="pre">None</span></code> reproduces the
+55.0.0 behavior, except that <code class="docutils literal notranslate"><span class="pre">NULL</span></code>
+against a dictionary-encoded type coerces to the dictionary type rather than to
+its value type, which is what <code class="docutils literal notranslate"><span class="pre">=</span></code> has always done.</p>
+</section>
 <section id="msrv-updated-to-1-95-0">
 <h3><code class="docutils literal notranslate"><span class="pre">MSRV</span></code> updated to 1.95.0<a class="headerlink" href="#msrv-updated-to-1-95-0" title="Link to this heading">#</a></h3>
 <p>The Minimum Supported Rust Version (MSRV) has been updated to <a class="reference external" href="https://releases.rs/docs/1.95.0/"><code class="docutils literal notranslate"><span class="pre">1.95.0</span></code></a>.</p>
@@ -1231,6 +1270,8 @@ the API breaks.</p>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-56-0-0">DataFusion 56.0.0</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#session-time-zone-now-applies-to-mixed-timestamp-operations">Session time zone now applies to mixed timestamp operations</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#get-coerce-type-for-list-and-get-coerce-type-for-case-when-are-deprecated"><code class="docutils literal notranslate"><span class="pre">get_coerce_type_for_list</span></code> and <code class="docutils literal notranslate"><span class="pre">get_coerce_type_for_case_when</span></code> are deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#msrv-updated-to-1-95-0"><code class="docutils literal notranslate"><span class="pre">MSRV</span></code> updated to 1.95.0</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#upgrade-arrow-parquet-to-60-0-0-and-object-store-to-0-14-2">Upgrade arrow/parquet to 60.0.0 and object_store to 0.14.2</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#field-and-schema-metadata-now-use-arrow-s-metadata-type">Field and schema metadata now use arrow’s <code class="docutils literal notranslate"><span class="pre">Metadata</span></code> type</a></li>
