@@ -35,7 +35,7 @@ use crate::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
 use crate::metrics::{ExecutionPlanMetricsSet, SpillMetrics};
 use crate::projection::{ProjectionExec, ProjectionExpr};
 use crate::sorts::sort::SortExec;
-use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
+use crate::spill::spill_manager::SpillManager;
 use crate::test::TestMemoryExec;
 use crate::test::exec::{BarrierExec, PanicExec};
 use crate::test::{build_table_i32, build_table_i32_two_cols};
@@ -6487,12 +6487,12 @@ fn small_key_group_batches(
 }
 
 /// A buffered inner key group of a few rows is a slice of a much larger
-/// inner batch. A group ending inside its batch must be charged for the
-/// rows it holds, not for the parent batch's buffers, so a pool that fits
-/// any one small group but not a whole inner batch spills at most once per
-/// inner batch (for the group reaching that batch's end).
+/// inner batch. A group ending inside its batch must be charged its row
+/// share of the parent batch, not the parent's full buffers, so a pool that
+/// fits any one small group but not a whole inner batch spills at most once
+/// per inner batch (for the group reaching that batch's end).
 #[tokio::test]
-async fn bitwise_small_key_groups_charged_by_sliced_size() -> Result<()> {
+async fn bitwise_small_key_groups_charged_by_row_share() -> Result<()> {
     const NUM_BATCHES: i32 = 2;
     const ROWS_PER_BATCH: i32 = 1024;
 
@@ -6505,8 +6505,8 @@ async fn bitwise_small_key_groups_charged_by_sliced_size() -> Result<()> {
     let right_batches =
         small_key_group_batches(("a2", "b1", "c2"), NUM_BATCHES, ROWS_PER_BATCH, 3, 7);
 
-    // Half of the smallest input batch: far above the sliced size of any
-    // key group ending inside its batch, but below what one whole parent
+    // Half of the smallest input batch: far above the row share charged to
+    // any key group ending inside its batch, but below what one whole parent
     // batch reports.
     let parent_batch_size = left_batches
         .iter()
@@ -6515,10 +6515,14 @@ async fn bitwise_small_key_groups_charged_by_sliced_size() -> Result<()> {
         .min()
         .unwrap();
     let memory_limit = parent_batch_size / 2;
-    let largest_group_size = left_batches[0]
-        .slice(0, 3)
-        .get_sliced_size()?
-        .max(right_batches[0].slice(0, 3).get_sliced_size()?);
+    // The largest group holds 3 rows, charged at the per-row share of the
+    // largest parent batch, matching how the stream charges it.
+    let largest_group_size = left_batches
+        .iter()
+        .chain(&right_batches)
+        .map(|b| b.get_array_memory_size().div_ceil(b.num_rows()) * 3)
+        .max()
+        .unwrap();
     // Keep 10x headroom over a group's rows so the test turns on how a
     // group is charged, not on landing near the limit.
     assert!(
