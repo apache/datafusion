@@ -158,15 +158,12 @@ impl ColumnSize {
         match self {
             Self::Fixed(width) => *width,
             Self::Bytes(offsets) => offsets.width() + offsets.max_len(),
-            Self::Views(views) => {
-                let max_len = views
-                    .iter()
-                    .map(|&view| view as u32)
-                    .filter(|&len| len > MAX_INLINE_VIEW_LEN)
-                    .max()
-                    .unwrap_or_default();
-                VIEW_SIZE_BYTES + max_len as usize
-            }
+            Self::Views(views) => views
+                .iter()
+                .copied()
+                .map(view_bytes)
+                .max()
+                .unwrap_or_default(),
             Self::List(offsets, values) => offsets
                 .width()
                 .saturating_add(offsets.max_len().saturating_mul(values.max_row())),
@@ -185,17 +182,7 @@ impl ColumnSize {
             Self::Bytes(offsets) => {
                 num_rows * offsets.width() + offsets.get(end) - offsets.get(start)
             }
-            Self::Views(views) => views[start..end]
-                .iter()
-                .map(|&view| {
-                    let len = view as u32;
-                    if len > MAX_INLINE_VIEW_LEN {
-                        VIEW_SIZE_BYTES + len as usize
-                    } else {
-                        VIEW_SIZE_BYTES
-                    }
-                })
-                .sum(),
+            Self::Views(views) => views[start..end].iter().copied().map(view_bytes).sum(),
             Self::List(offsets, values) => {
                 num_rows * offsets.width()
                     + values.rows(offsets.get(start), offsets.get(end))
@@ -205,6 +192,16 @@ impl ColumnSize {
                 fields.iter().map(|field| field.rows(start, end)).sum()
             }
         }
+    }
+}
+
+/// Returns the size in bytes of a view, plus its value unless it is inlined.
+fn view_bytes(view: u128) -> usize {
+    let len = view as u32;
+    if len > MAX_INLINE_VIEW_LEN {
+        VIEW_SIZE_BYTES + len as usize
+    } else {
+        VIEW_SIZE_BYTES
     }
 }
 
@@ -279,10 +276,13 @@ mod tests {
         .unwrap()
     }
 
-    fn row_sizes(columns: Vec<ArrayRef>) -> Vec<usize> {
+    /// Returns the size of each row of a batch of `columns`, and the upper
+    /// bound on the size of any row.
+    fn row_sizes(columns: Vec<ArrayRef>) -> (Vec<usize>, usize) {
         let batch = batch(columns);
         let sizes = SpilledRowSizes::new(&batch);
-        (0..batch.num_rows()).map(|row| sizes.row(row)).collect()
+        let rows = (0..batch.num_rows()).map(|row| sizes.row(row)).collect();
+        (rows, sizes.max_row())
     }
 
     #[test]
@@ -290,7 +290,7 @@ mod tests {
         let ints: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
         let strings: ArrayRef = Arc::new(StringArray::from(vec!["a", "bbbb"]));
         // 8 bytes of Int64, plus a 4 byte offset and the string bytes
-        assert_eq!(row_sizes(vec![ints, strings]), vec![13, 16]);
+        assert_eq!(row_sizes(vec![ints, strings]), (vec![13, 16], 16));
     }
 
     #[test]
@@ -301,9 +301,13 @@ mod tests {
             Buffer::from(vec![0u8; 6]),
             None,
         ));
+        let booleans: ArrayRef = Arc::new(BooleanArray::from(vec![true, false]));
         let strings: ArrayRef = Arc::new(StringArray::from(vec!["a", "bbbb"]));
-        let sizes = SpilledRowSizes::new(&batch(vec![Arc::clone(&ints), fixed]));
-        assert_eq!(sizes.fixed(), Some(11));
+        // 8 bytes of Int64 and 3 of FixedSizeBinary(3). The bits of booleans
+        // are not counted.
+        let columns = vec![Arc::clone(&ints), fixed, booleans];
+        assert_eq!(row_sizes(columns.clone()), (vec![11, 11], 11));
+        assert_eq!(SpilledRowSizes::new(&batch(columns)).fixed(), Some(11));
         assert_eq!(
             SpilledRowSizes::new(&batch(vec![ints, strings])).fixed(),
             None
@@ -311,40 +315,11 @@ mod tests {
     }
 
     #[test]
-    fn largest_row_bounds_every_row() {
-        let ints: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3]));
-        let strings: ArrayRef = Arc::new(StringArray::from(vec!["a", "bbbb", ""]));
-        // 8 bytes of Int64, plus a 4 byte offset and the longest string
-        assert_eq!(
-            SpilledRowSizes::new(&batch(vec![ints, strings])).max_row(),
-            16
-        );
-
-        let long = "a string longer than twelve";
-        let views: ArrayRef = Arc::new(StringViewArray::from(vec!["short", long]));
-        assert_eq!(
-            SpilledRowSizes::new(&batch(vec![views])).max_row(),
-            16 + long.len()
-        );
-
-        // An offset plus the most elements in a row, each of the largest size
-        let list: ArrayRef =
-            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
-                Some(vec![Some(1), Some(2), Some(3)]),
-                Some(vec![]),
-                Some(vec![Some(4)]),
-            ]));
-        assert_eq!(
-            SpilledRowSizes::new(&batch(vec![list])).max_row(),
-            4 + 3 * 8
-        );
-    }
-
-    #[test]
     fn views_count_their_bytes_unless_inlined() {
         let long = "a string longer than twelve";
         let views: ArrayRef = Arc::new(StringViewArray::from(vec!["short", long]));
-        assert_eq!(row_sizes(vec![views]), vec![16, 16 + long.len()]);
+        let long_row = 16 + long.len();
+        assert_eq!(row_sizes(vec![views]), (vec![16, long_row], long_row));
     }
 
     #[test]
@@ -359,7 +334,7 @@ mod tests {
             None,
         );
         // Compacting before spilling copies the bytes for each view
-        assert_eq!(row_sizes(vec![Arc::new(shared)]), vec![116; 3]);
+        assert_eq!(row_sizes(vec![Arc::new(shared)]), (vec![116; 3], 116));
     }
 
     #[test]
@@ -370,9 +345,11 @@ mod tests {
                 Some(vec![]),
                 Some(vec![Some(4)]),
             ]));
-        assert_eq!(row_sizes(vec![Arc::clone(&list)]), vec![28, 4, 12]);
+        // An offset plus the elements of the row. The bound is an offset plus
+        // the most elements in a row, each of the largest size.
+        assert_eq!(row_sizes(vec![Arc::clone(&list)]), (vec![28, 4, 12], 28));
         // A slice keeps the sizes of its own rows
-        assert_eq!(row_sizes(vec![list.slice(1, 2)]), vec![4, 12]);
+        assert_eq!(row_sizes(vec![list.slice(1, 2)]), (vec![4, 12], 12));
     }
 
     #[test]
@@ -385,7 +362,11 @@ mod tests {
             Arc::new(values),
             None,
         ));
-        assert_eq!(row_sizes(vec![list]), vec![4 + 36 + 16, 4 + 46]);
+        // The bound takes two elements, the most in a row, of the largest size
+        assert_eq!(
+            row_sizes(vec![list]),
+            (vec![4 + 36 + 16, 4 + 46], 4 + 2 * 46)
+        );
     }
 
     #[test]
@@ -400,7 +381,7 @@ mod tests {
                 Arc::new(StringArray::from(vec!["", "abc"])) as ArrayRef,
             ),
         ]));
-        assert_eq!(row_sizes(vec![fields]), vec![8, 11]);
+        assert_eq!(row_sizes(vec![fields]), (vec![8, 11], 11));
     }
 
     #[test]
@@ -410,17 +391,6 @@ mod tests {
                 .into_iter()
                 .collect::<DictionaryArray<Int32Type>>(),
         );
-        assert_eq!(row_sizes(vec![dictionary]), vec![4, 4]);
-    }
-
-    #[test]
-    fn other_types() {
-        let fixed: ArrayRef = Arc::new(FixedSizeBinaryArray::new(
-            3,
-            Buffer::from(vec![0u8; 6]),
-            None,
-        ));
-        let booleans: ArrayRef = Arc::new(BooleanArray::from(vec![true, false]));
-        assert_eq!(row_sizes(vec![fixed, booleans]), vec![3, 3]);
+        assert_eq!(row_sizes(vec![dictionary]), (vec![4, 4], 4));
     }
 }

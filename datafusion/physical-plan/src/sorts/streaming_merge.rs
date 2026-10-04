@@ -338,10 +338,9 @@ mod tests {
         ExecutionPlanMetricsSet, SpillMetrics,
     };
 
-    /// Merges five 1000 byte rows, one per batch, with 1000 small rows in
-    /// batches of 100, either from spill files or from in-memory streams.
+    /// Merges a spill file of five 1000 byte rows, one per batch, with a spill
+    /// file of 1000 small rows in batches of 100.
     async fn merge_wide_and_narrow_rows(
-        from_spill_files: bool,
         max_batch_bytes: Option<usize>,
     ) -> Result<Vec<RecordBatch>> {
         let schema = Arc::new(Schema::new(vec![
@@ -366,43 +365,34 @@ mod tests {
 
         let sort: LexOrdering =
             [PhysicalSortExpr::new_default(col("key", &schema)?)].into();
-        let mut builder = StreamingMergeBuilder::new()
+        let spill_manager = SpillManager::new(
+            Arc::new(TaskContext::default()).runtime_env(),
+            SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
+            Arc::clone(&schema),
+        );
+        let spill = |batches: &[RecordBatch]| SortedSpillFile {
+            file: spill_manager
+                .spill_record_batch_and_finish(batches, "test")
+                .unwrap()
+                .unwrap(),
+            max_record_batch_memory: batches
+                .iter()
+                .map(RecordBatch::get_array_memory_size)
+                .max()
+                .unwrap(),
+        };
+        let sorted_spill_files = vec![spill(&wide), spill(&narrow)];
+        let merged = StreamingMergeBuilder::new()
             .with_schema(Arc::clone(&schema))
             .with_expressions(&sort)
             .with_metrics(BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0))
             .with_batch_size(100)
             .with_max_batch_bytes(max_batch_bytes)
-            .with_bypass_mempool();
-        if from_spill_files {
-            let spill_manager = SpillManager::new(
-                Arc::new(TaskContext::default()).runtime_env(),
-                SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
-                Arc::clone(&schema),
-            );
-            let spill = |batches: &[RecordBatch]| SortedSpillFile {
-                file: spill_manager
-                    .spill_record_batch_and_finish(batches, "test")
-                    .unwrap()
-                    .unwrap(),
-                max_record_batch_memory: batches
-                    .iter()
-                    .map(RecordBatch::get_array_memory_size)
-                    .max()
-                    .unwrap(),
-            };
-            builder = builder
-                .with_sorted_spill_files(vec![spill(&wide), spill(&narrow)])
-                .with_spill_manager(spill_manager);
-        } else {
-            let stream = |batches: Vec<RecordBatch>| {
-                Box::pin(RecordBatchStreamAdapter::new(
-                    Arc::clone(&schema),
-                    futures::stream::iter(batches.into_iter().map(Ok)),
-                )) as SendableRecordBatchStream
-            };
-            builder = builder.with_streams(vec![stream(wide), stream(narrow)]);
-        }
-        let batches = collect(builder.build()?).await?;
+            .with_bypass_mempool()
+            .with_sorted_spill_files(sorted_spill_files)
+            .with_spill_manager(spill_manager)
+            .build()?;
+        let batches = collect(merged).await?;
 
         let keys: Vec<i32> = batches
             .iter()
@@ -424,32 +414,29 @@ mod tests {
         let num_rows = |batches: &[RecordBatch]| -> Vec<usize> {
             batches.iter().map(RecordBatch::num_rows).collect()
         };
-        for from_spill_files in [true, false] {
-            // By rows only, the five large rows end up in the first batch
-            let batches = merge_wide_and_narrow_rows(from_spill_files, None).await?;
-            assert_eq!(num_rows(&batches), [vec![100; 10], vec![5]].concat());
+        // By rows only, the five large rows end up in the first batch
+        let batches = merge_wide_and_narrow_rows(None).await?;
+        assert_eq!(num_rows(&batches), [vec![100; 10], vec![5]].concat());
 
-            // Three large rows exceed 3000 bytes, so the first batch holds
-            // fewer. Once the large rows are merged, batches of small rows
-            // still hold `batch_size` rows.
-            let batches =
-                merge_wide_and_narrow_rows(from_spill_files, Some(3000)).await?;
-            let rows = num_rows(&batches);
-            assert!(rows[0] < 5, "{rows:?}");
-            let last_wide = batches
-                .iter()
-                .position(|batch| {
-                    batch
-                        .column(0)
-                        .as_primitive::<Int32Type>()
-                        .values()
-                        .contains(&4)
-                })
-                .unwrap();
-            let narrow_only = &rows[last_wide + 1..rows.len() - 1];
-            assert!(narrow_only.len() > 5, "{rows:?}");
-            assert!(narrow_only.iter().all(|&rows| rows == 100), "{rows:?}");
-        }
+        // Three large rows exceed 3000 bytes, so the first batch holds fewer.
+        // Once the large rows are merged, batches of small rows still hold
+        // `batch_size` rows.
+        let batches = merge_wide_and_narrow_rows(Some(3000)).await?;
+        let rows = num_rows(&batches);
+        assert!(rows[0] < 5, "{rows:?}");
+        let last_wide = batches
+            .iter()
+            .position(|batch| {
+                batch
+                    .column(0)
+                    .as_primitive::<Int32Type>()
+                    .values()
+                    .contains(&4)
+            })
+            .unwrap();
+        let narrow_only = &rows[last_wide + 1..rows.len() - 1];
+        assert!(narrow_only.len() > 5, "{rows:?}");
+        assert!(narrow_only.iter().all(|&rows| rows == 100), "{rows:?}");
         Ok(())
     }
 

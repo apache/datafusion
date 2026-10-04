@@ -90,7 +90,7 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     max_batch_bytes: Option<usize>,
 
     /// The average memory size of the rows of each input's current batch
-    row_bytes: Vec<usize>,
+    avg_row_bytes: Vec<usize>,
 
     /// The estimated memory size of the in-progress rows, tracked when
     /// `max_batch_bytes` is set
@@ -157,7 +157,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             loser_tree: vec![],
             batch_size,
             max_batch_bytes: None,
-            row_bytes: vec![0; stream_count],
+            avg_row_bytes: vec![0; stream_count],
             in_progress_bytes: 0,
             fetch,
             produced: 0,
@@ -210,7 +210,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                     Ok(size) => size,
                     Err(e) => return Poll::Ready(Err(e)),
                 };
-                self.row_bytes[idx] = size.div_ceil(num_rows.max(1));
+                self.avg_row_bytes[idx] = size.div_ceil(num_rows.max(1));
                 Poll::Ready(Ok(()))
             }
         }
@@ -281,7 +281,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 let winner_stream = self.loser_tree[0];
                 self.in_progress.push_row(winner_stream);
                 if self.max_batch_bytes.is_some() {
-                    self.in_progress_bytes += self.row_bytes[winner_stream];
+                    self.in_progress_bytes += self.avg_row_bytes[winner_stream];
                 }
 
                 // 3.2. If the new row reached the limit
