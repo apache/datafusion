@@ -321,6 +321,84 @@ async fn select_without_limit() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_table_scan_offset_and_fetch() -> Result<()> {
+    use datafusion::arrow::array::Int64Array;
+    use datafusion::dataframe::DataFrame;
+    use datafusion::datasource::provider_as_source;
+    use datafusion::logical_expr::TableScanBuilder;
+
+    // A single CSV partition preserves input order and supports exact skip pushdown.
+    let temp = tempfile::tempdir()?;
+    let path = temp.path().join("data.csv");
+    std::fs::write(&path, "x\n0\n1\n2\n3\n4\n5\n")?;
+    let ctx = SessionContext::new();
+    ctx.register_csv("t", path.to_str().unwrap(), CsvReadOptions::new())
+        .await?;
+    let source = provider_as_source(ctx.table_provider("t").await?);
+
+    for skip in [Some(2), None, Some(0), Some(8)] {
+        for fetch in [None, Some(0), Some(2)] {
+            for project in [false, true] {
+                for parent in [
+                    None,
+                    Some((0, Some(2))),
+                    Some((1, Some(3))),
+                    Some((1, None)),
+                ] {
+                    let scan = TableScanBuilder::new("t", source.clone())
+                        .with_skip(skip)
+                        .with_fetch(fetch)
+                        .build()?;
+                    let mut builder =
+                        LogicalPlanBuilder::from(LogicalPlan::TableScan(scan));
+                    if project {
+                        builder = builder.project(vec![col("x")])?;
+                    }
+                    if let Some((skip, fetch)) = parent {
+                        builder = builder.limit(skip, fetch)?;
+                    }
+                    let plan = builder.build()?;
+                    let proto = to_substrait_plan(&plan, &ctx.state())?;
+                    let restored = from_substrait_plan(&ctx.state(), &proto).await?;
+                    let mut expected = (0_i64..6)
+                        .skip(skip.unwrap_or(0))
+                        .take(fetch.unwrap_or(usize::MAX))
+                        .collect::<Vec<_>>();
+                    if let Some((skip, fetch)) = parent {
+                        expected = expected
+                            .into_iter()
+                            .skip(skip)
+                            .take(fetch.unwrap_or(usize::MAX))
+                            .collect();
+                    }
+                    for (stage, plan) in [("original", plan), ("roundtrip", restored)] {
+                        let batches = DataFrame::new(ctx.state(), plan).collect().await?;
+                        let actual = batches
+                            .iter()
+                            .flat_map(|batch| {
+                                batch
+                                    .column(0)
+                                    .as_any()
+                                    .downcast_ref::<Int64Array>()
+                                    .unwrap()
+                                    .values()
+                                    .iter()
+                                    .copied()
+                            })
+                            .collect::<Vec<_>>();
+                        assert_eq!(
+                            actual, expected,
+                            "{stage}: skip={skip:?}, fetch={fetch:?}, project={project}, parent={parent:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn select_with_limit_offset() -> Result<()> {
     roundtrip("SELECT * FROM data LIMIT 200 OFFSET 10").await?;
     roundtrip("SELECT * FROM data LIMIT 100+100 OFFSET 20/2").await
