@@ -350,10 +350,9 @@ async fn roundtrip_signed_zero_window() -> Result<()> {
         &DefaultPhysicalExtensionCodec {},
         &DefaultPhysicalProtoConverter {},
     )?;
-    let mut plans = vec![Arc::clone(&plan), decoded];
     #[cfg(feature = "json")]
-    plans.push(super::roundtrip_test_json_and_return(plan, &ctx)?);
-    for plan in plans {
+    let decoded = super::roundtrip_test_json_and_return(decoded, &ctx)?;
+    for plan in [plan, decoded] {
         let batches = collect(plan, ctx.task_ctx()).await?;
         let row_numbers = batches
             .iter()
