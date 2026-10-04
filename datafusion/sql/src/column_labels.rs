@@ -22,8 +22,8 @@
 //! also the key it uses to look up columns, so the name includes type
 //! wrappers and table qualifiers (`t.a + Int64(1)`). This module computes a
 //! readable label for each output column of a fully planned query (`a + 1`)
-//! and renames the columns in a projection on top of the plan. Names inside
-//! the plan don't change.
+//! and renames the columns in the top projection of the plan, adding one if
+//! needed. Names inside the plan don't change.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
@@ -102,6 +102,19 @@ pub(crate) fn label_output_columns(
 
     if labels.iter().all(Option::is_none) {
         return Ok(plan);
+    }
+    // Alias the expressions of a top projection in place, instead of adding a
+    // projection on top that every optimizer pass then has to merge
+    if let LogicalPlan::Projection(Projection { expr, input, .. }) = plan {
+        let exprs = expr
+            .into_iter()
+            .zip(labels)
+            .map(|(expr, label)| match label {
+                Some(label) => expr.unalias().alias(label),
+                None => expr,
+            })
+            .collect();
+        return Ok(LogicalPlan::Projection(Projection::try_new(exprs, input)?));
     }
     let exprs = schema
         .iter()
