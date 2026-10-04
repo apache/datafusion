@@ -669,11 +669,15 @@ impl BitwiseSortMergeJoinStream {
 
             let inner_batch = self.inner_batch.as_ref().unwrap();
             let slice = inner_batch.slice(from, group_end - from);
-            // A slice reports its parent batch's full buffers, so charge only
-            // the rows the group holds. View arrays still count their parent's
-            // data buffers, and a group spanning an inner batch boundary keeps
-            // the earlier parent batch alive, so this can be one batch low.
-            self.inner_buffer_size += slice.get_sliced_size()?;
+            // A group ending inside the batch shares the current inner batch,
+            // so charge only its rows. A group reaching the batch end keeps
+            // the whole parent alive once the cursor advances, so charge all
+            // of it. View arrays still count their parent's data buffers.
+            self.inner_buffer_size += if group_end < num_inner {
+                slice.get_sliced_size()?
+            } else {
+                slice.get_array_memory_size()
+            };
             self.inner_key_buffer.push(slice);
 
             // Reserve memory for the newly buffered slice. If the pool

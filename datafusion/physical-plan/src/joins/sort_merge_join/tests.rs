@@ -6487,9 +6487,10 @@ fn small_key_group_batches(
 }
 
 /// A buffered inner key group of a few rows is a slice of a much larger
-/// inner batch. It must be charged for the rows it holds, not for the
-/// parent batch's buffers, so a pool that fits any one small group but not
-/// a whole inner batch must not spill.
+/// inner batch. A group ending inside its batch must be charged for the
+/// rows it holds, not for the parent batch's buffers, so a pool that fits
+/// any one small group but not a whole inner batch spills at most once per
+/// inner batch (for the group reaching that batch's end).
 #[tokio::test]
 async fn bitwise_small_key_groups_charged_by_sliced_size() -> Result<()> {
     const NUM_BATCHES: i32 = 2;
@@ -6505,8 +6506,8 @@ async fn bitwise_small_key_groups_charged_by_sliced_size() -> Result<()> {
         small_key_group_batches(("a2", "b1", "c2"), NUM_BATCHES, ROWS_PER_BATCH, 3, 7);
 
     // Half of the smallest input batch: far above the sliced size of any
-    // key group (two slices at most, when a group spans a batch boundary),
-    // but below what one whole parent batch reports.
+    // key group ending inside its batch, but below what one whole parent
+    // batch reports.
     let parent_batch_size = left_batches
         .iter()
         .chain(&right_batches)
@@ -6518,10 +6519,10 @@ async fn bitwise_small_key_groups_charged_by_sliced_size() -> Result<()> {
         .slice(0, 3)
         .get_sliced_size()?
         .max(right_batches[0].slice(0, 3).get_sliced_size()?);
-    // Keep 10x headroom over a two-slice group so the test turns on how a
+    // Keep 10x headroom over a group's rows so the test turns on how a
     // group is charged, not on landing near the limit.
     assert!(
-        memory_limit > 10 * 2 * largest_group_size,
+        memory_limit > 10 * largest_group_size,
         "memory limit {memory_limit} too close to group size {largest_group_size}"
     );
 
@@ -6558,10 +6559,10 @@ async fn bitwise_small_key_groups_charged_by_sliced_size() -> Result<()> {
         let metrics = join
             .metrics()
             .unwrap_or_else(|| panic!("metrics missing for {join_type:?}"));
-        assert_eq!(
-            metrics.spill_count(),
-            Some(0),
-            "small key groups spilled under a {memory_limit} byte pool for {join_type:?}"
+        let spill_count = metrics.spill_count().unwrap();
+        assert!(
+            spill_count <= NUM_BATCHES as usize,
+            "{spill_count} spills under a {memory_limit} byte pool for {join_type:?}"
         );
 
         let unbounded_join = join_with_filter(
@@ -6585,6 +6586,57 @@ async fn bitwise_small_key_groups_charged_by_sliced_size() -> Result<()> {
         assert!(
             rows > 0 && rows < num_outer_rows,
             "expected some but not all outer rows for {join_type:?}, got {rows}"
+        );
+    }
+
+    Ok(())
+}
+
+/// A buffered inner key group that reaches the end of its inner batch is
+/// the only thing keeping that batch alive once the cursor moves to the
+/// next one, so it must be charged the whole parent batch, not just its
+/// rows. Every key here is unique, so the last row of each inner batch is
+/// such a group.
+#[tokio::test]
+async fn bitwise_key_group_at_inner_batch_end_charged_full_parent() -> Result<()> {
+    let left_batches = small_key_group_batches(("a1", "b1", "c1"), 2, 1024, 1, 1);
+    let right_batches = small_key_group_batches(("a2", "b1", "c2"), 2, 1024, 1, 7);
+    let parent_batch_size = left_batches
+        .iter()
+        .chain(&right_batches)
+        .map(|b| b.get_array_memory_size())
+        .min()
+        .unwrap();
+
+    let left = build_table_from_batches(left_batches);
+    let right = build_table_from_batches(right_batches);
+    let on: JoinOn = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+    )];
+    let sort_options = vec![SortOptions::default(); on.len()];
+    let filter = build_c1_lt_c2_filter(left.schema().as_ref(), right.schema().as_ref());
+
+    for join_type in [LeftSemi, LeftAnti, RightSemi, RightAnti] {
+        let join = join_with_filter(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            filter.clone(),
+            join_type,
+            sort_options.clone(),
+            NullEquality::NullEqualsNothing,
+        )?;
+        common::collect(join.execute(0, Arc::new(TaskContext::default()))?).await?;
+
+        let peak_mem = join
+            .metrics()
+            .and_then(|m| m.sum_by_name("peak_mem_used"))
+            .map(|m| m.as_usize())
+            .unwrap_or(0);
+        assert!(
+            peak_mem >= parent_batch_size,
+            "peak_mem_used ({peak_mem}) below one inner batch ({parent_batch_size}) for {join_type:?}"
         );
     }
 
