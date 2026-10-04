@@ -43,6 +43,7 @@ use datafusion_expr::{TableType, Volatility};
 use datafusion_physical_plan::SendableRecordBatchStream;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::streaming::PartitionStream;
+use itertools::Itertools;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -454,120 +455,98 @@ impl InformationSchemaConfig {
     }
 }
 
-/// Build the argument field for `information_schema` to provide a return type
-fn resolve_informational_field(idx: usize, t: &NativeType) -> Result<FieldRef> {
-    // Since a native type maps to several physical types, resolve it against `Null` data type
-    // to get the canonical `DataType` for the native type
-    let data_type = t.default_cast_for(&DataType::Null)?;
-    Ok(Arc::new(Field::new(format!("arg_{idx}"), data_type, true)))
+/// Origins used to enumerate the physical types a native type can take
+const RESOLVE_CAST_SOURCES: [DataType; 2] = [DataType::Null, DataType::LargeUtf8];
+
+/// Build argument fields for `information_schema` to provide possbile return types
+fn resolve_informational_fields(idx: usize, t: &NativeType) -> Result<Vec<FieldRef>> {
+    // Since native types map to several physical types, resolve it against
+    // ambigious types to get canonical `DataType`s for the native type
+    let data_types = RESOLVE_CAST_SOURCES
+        .iter()
+        .map(|source| t.default_cast_for(source))
+        .collect::<Result<Vec<DataType>, _>>()?;
+    Ok(data_types
+        .into_iter()
+        .unique()
+        .map(|dt| Arc::new(Field::new(format!("arg_{idx}"), dt, true)))
+        .collect())
 }
 
-/// get the arguments and return types of a UDF
-/// returns a tuple of (arg_types, return_type)
-fn get_udf_args_and_return_types(
-    udf: &Arc<ScalarUDF>,
-) -> Result<BTreeSet<(Vec<String>, Option<String>)>> {
-    let signature = udf.signature();
+/// Function information schema is a set of tuples - argument types and an optional return type
+type FunctionInformationSchema = BTreeSet<(Vec<String>, Option<String>)>;
+
+/// Get the arguments and return types of a function from its signature
+fn get_args_and_return_types(
+    signature: &Signature,
+    return_field: impl Fn(&[FieldRef]) -> Result<FieldRef>,
+) -> Result<FunctionInformationSchema> {
     let arg_types = signature.type_signature.get_representative_types();
     if arg_types.is_empty() {
-        Ok(vec![(vec![], None)].into_iter().collect::<BTreeSet<_>>())
-    } else {
-        arg_types
-            .into_iter()
-            .map(|arg_types| {
-                let arg_fields = arg_types
-                    .iter()
-                    .enumerate()
-                    .map(|(i, t)| resolve_informational_field(i, t))
-                    .collect::<Result<Vec<FieldRef>>>()?;
-                let scalar_arguments = vec![None; arg_fields.len()];
-                let return_type = udf
-                    .return_field_from_args(ReturnFieldArgs {
-                        arg_fields: &arg_fields,
-                        scalar_arguments: &scalar_arguments,
-                    })
-                    .map(|f| {
-                        remove_native_type_prefix(&NativeType::from(
-                            f.data_type().clone(),
-                        ))
-                    })
-                    .ok();
-                let arg_types = arg_types
-                    .into_iter()
-                    .map(|t| remove_native_type_prefix(&t))
-                    .collect::<Vec<_>>();
-                Ok((arg_types, return_type))
-            })
-            .collect::<Result<BTreeSet<_>>>()
+        // Edge case if function doesn't have arguments
+        return Ok(BTreeSet::from([(vec![], None)]));
     }
+    arg_types
+        .into_iter()
+        .map(|arg_types| {
+            // Get possible types for each input arg
+            let arg_fields = arg_types
+                .iter()
+                .enumerate()
+                .map(|(i, t)| resolve_informational_fields(i, t))
+                .collect::<Result<Vec<_>>>()?;
+            // Build combinations of arg types with the return type
+            let return_types = arg_fields
+                .into_iter()
+                .multi_cartesian_product()
+                .filter_map(|arg_fields| return_field(&arg_fields).ok())
+                .map(|f| Some(remove_native_type_prefix(&f.data_type().into())))
+                .collect::<BTreeSet<_>>();
+            let return_types = if return_types.is_empty() {
+                // Indicate `None` if the return type cannot be represented from a signature,
+                BTreeSet::from([None])
+            } else {
+                return_types
+            };
+            let arg_types = arg_types
+                .iter()
+                .map(remove_native_type_prefix)
+                .collect::<Vec<_>>();
+            let tuples = return_types
+                .into_iter()
+                .map(move |return_type| (arg_types.clone(), return_type));
+            Ok(tuples)
+        })
+        .flatten_ok()
+        .collect()
+}
+
+fn get_udf_args_and_return_types(
+    udf: &Arc<ScalarUDF>,
+) -> Result<FunctionInformationSchema> {
+    get_args_and_return_types(udf.signature(), |arg_fields| {
+        let scalar_arguments = &vec![None; arg_fields.len()];
+        udf.return_field_from_args(ReturnFieldArgs {
+            arg_fields,
+            scalar_arguments,
+        })
+    })
 }
 
 fn get_udaf_args_and_return_types(
     udaf: &Arc<AggregateUDF>,
-) -> Result<BTreeSet<(Vec<String>, Option<String>)>> {
-    let signature = udaf.signature();
-    let arg_types = signature.type_signature.get_representative_types();
-    if arg_types.is_empty() {
-        Ok(vec![(vec![], None)].into_iter().collect::<BTreeSet<_>>())
-    } else {
-        arg_types
-            .into_iter()
-            .map(|arg_types| {
-                let arg_fields = arg_types
-                    .iter()
-                    .enumerate()
-                    .map(|(i, t)| resolve_informational_field(i, t))
-                    .collect::<Result<Vec<FieldRef>>>()?;
-                let return_type = udaf
-                    .return_field(&arg_fields)
-                    .map(|f| {
-                        remove_native_type_prefix(&NativeType::from(
-                            f.data_type().clone(),
-                        ))
-                    })
-                    .ok();
-                let arg_types = arg_types
-                    .into_iter()
-                    .map(|t| remove_native_type_prefix(&t))
-                    .collect::<Vec<_>>();
-                Ok((arg_types, return_type))
-            })
-            .collect::<Result<BTreeSet<_>>>()
-    }
+) -> Result<FunctionInformationSchema> {
+    get_args_and_return_types(udaf.signature(), |arg_fields| {
+        udaf.return_field(arg_fields)
+    })
 }
 
 fn get_udwf_args_and_return_types(
     udwf: &Arc<WindowUDF>,
-) -> Result<BTreeSet<(Vec<String>, Option<String>)>> {
-    let signature = udwf.signature();
-    let arg_types = signature.type_signature.get_representative_types();
-    if arg_types.is_empty() {
-        Ok(vec![(vec![], None)].into_iter().collect::<BTreeSet<_>>())
-    } else {
-        arg_types
-            .into_iter()
-            .map(|arg_types| {
-                let arg_fields = arg_types
-                    .iter()
-                    .enumerate()
-                    .map(|(i, t)| resolve_informational_field(i, t))
-                    .collect::<Result<Vec<FieldRef>>>()?;
-                let return_type = udwf
-                    .field(WindowUDFFieldArgs::new(&arg_fields, udwf.name()))
-                    .map(|f| {
-                        remove_native_type_prefix(&NativeType::from(
-                            f.data_type().clone(),
-                        ))
-                    })
-                    .ok();
-                let arg_types = arg_types
-                    .into_iter()
-                    .map(|t| remove_native_type_prefix(&t))
-                    .collect::<Vec<_>>();
-                Ok((arg_types, return_type))
-            })
-            .collect::<Result<BTreeSet<_>>>()
-    }
+) -> Result<FunctionInformationSchema> {
+    get_args_and_return_types(udwf.signature(), |arg_fields| {
+        udwf.field(WindowUDFFieldArgs::new(arg_fields, udwf.name()))
+    })
 }
 
 #[inline]
