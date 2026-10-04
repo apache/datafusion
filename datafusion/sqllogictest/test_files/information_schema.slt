@@ -918,6 +918,12 @@ abs Decimal(38, 10) SCALAR
 abs Float64 SCALAR
 abs Int64 SCALAR
 
+query TT rowsort
+select routine_name, data_type from information_schema.routines where routine_name = 'length';
+----
+length Int32
+length Int64
+
 # Schema for function with TypeSignature::Coercible plus uniform with exact float types
 query TTITI rowsort
 select specific_name, data_type, ordinal_position, parameter_mode, rid from information_schema.parameters where specific_name = 'floor';
@@ -950,6 +956,23 @@ query TTT rowsort
 select routine_name, data_type, function_type from information_schema.routines where routine_name = 'to_char';
 ----
 to_char String SCALAR
+
+# Return type cannot be deduced from the signature alone
+query TTT
+select routine_name, data_type, function_type from information_schema.routines where routine_name = 'date_part';
+----
+date_part NULL SCALAR
+
+# No args
+query TTT
+select routine_name, data_type, function_type from information_schema.routines where routine_name = 'pi';
+----
+pi NULL SCALAR
+
+query I
+select count(*) from information_schema.parameters where specific_name = 'date_part' and parameter_mode = 'OUT';
+----
+0
 
 # Table functions (UDTFs) appear in information_schema.routines with
 # function_type = TABLE and data_type = TABLE.
