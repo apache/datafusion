@@ -31,6 +31,7 @@ use crate::joins::hash_join::inlist_builder::build_struct_fields;
 use crate::joins::hash_join::partitioned_hash_eval::{
     HashExpr, HashTableLookupExpr, SeededRandomState,
 };
+use crate::joins::key_range_bitmap::KeyRangeBitmap;
 use crate::repartition::RangeExpr;
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, Schema};
@@ -136,12 +137,15 @@ fn create_membership_predicate(
             )?)))
         }
         // Use hash table lookup for large build sides
-        PushdownStrategy::Map(hash_map) => Ok(Some(Arc::new(HashTableLookupExpr::new(
-            on_right.to_vec(),
-            random_state.clone(),
-            hash_map,
-            "hash_lookup".to_string(),
-        )) as Arc<dyn PhysicalExpr>)),
+        PushdownStrategy::Map(hash_map, pruning_bitmap) => {
+            Ok(Some(Arc::new(HashTableLookupExpr::new(
+                on_right.to_vec(),
+                random_state.clone(),
+                hash_map,
+                "hash_lookup".to_string(),
+                pruning_bitmap,
+            )) as Arc<dyn PhysicalExpr>))
+        }
         // No membership term for either of the remaining variants. They look
         // alike only here: the pruning difference between them is applied by
         // the caller, which gives an `Empty` partition a `false` branch without
@@ -285,8 +289,9 @@ pub(crate) struct SharedBuildAccumulator {
 pub(crate) enum PushdownStrategy {
     /// Use InList for small build sides (< 128MB)
     InList(ArrayRef),
-    /// Use map lookup for large build sides
-    Map(Arc<Map>),
+    /// Use map lookup for large build sides. If `Some` the second field
+    /// represents the build side's keys using a bucket bitmap.
+    Map(Arc<Map>, Option<Arc<KeyRangeBitmap>>),
     /// This partition's build side is known to hold no rows at all, so nothing
     /// routed to it can ever match and every such probe row may be discarded.
     ///

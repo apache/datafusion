@@ -25,6 +25,7 @@ use crate::error::{_config_datafusion_err, _config_err};
 use crate::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
 use crate::parquet_config::{
     DFParquetCompression, DFParquetStatistics, DFParquetWriterVersion,
+    RowGroupRangeAssignment,
 };
 use crate::parsers::{CompressionTypeVariant, CsvQuoteStyle};
 use crate::utils::get_available_parallelism;
@@ -943,7 +944,7 @@ config_namespace! {
         /// The default time zone
         ///
         /// Some functions, e.g. `now` return timestamps in this time zone
-        pub time_zone: Option<String>, default = None
+        pub time_zone: Option<ConfigTimeZone>, default = None
 
         /// Parquet options
         pub parquet: ParquetOptions, default = Default::default()
@@ -1448,6 +1449,12 @@ config_namespace! {
         ///
         /// Defaults to 20.
         pub max_in_list_size: usize, default = 20
+
+        /// (reading) Which byte range of a split file reads each row group.
+        /// `start_offset` picks the range containing the row group's start.
+        /// `midpoint` picks the range containing its midpoint, as Spark does,
+        /// which spreads large row groups more evenly across ranges.
+        pub row_group_range_assignment: RowGroupRangeAssignment, default = RowGroupRangeAssignment::StartOffset
 
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
@@ -2035,6 +2042,76 @@ impl From<ConfigDurationFormat> for arrow::util::display::DurationFormat {
             ConfigDurationFormat::Iso8601 => {
                 arrow::util::display::DurationFormat::ISO8601
             }
+        }
+    }
+}
+
+/// A time zone that is known to parse as an Arrow
+/// [`Tz`](arrow::array::timezone::Tz), used for
+/// [`ExecutionOptions::time_zone`].
+///
+/// The value is kept as it was written, so `+08` stays `+08` rather than
+/// being normalized to `+08:00`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigTimeZone(String);
+
+impl ConfigTimeZone {
+    /// Returns the time zone as it was written.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl FromStr for ConfigTimeZone {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.parse::<arrow::array::timezone::Tz>() {
+            Ok(_) => Ok(Self(s.to_string())),
+            Err(_) => _config_err!(
+                "Invalid time zone: {s}. Valid values are UTC offsets such as +08:00 or IANA time zone names such as Asia/Taipei"
+            ),
+        }
+    }
+}
+
+impl Display for ConfigTimeZone {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// `ConfigField` for `Option<ConfigTimeZone>` parses before assigning so an
+/// invalid value leaves the current setting unchanged.
+impl ConfigField for Option<ConfigTimeZone> {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        match self {
+            Some(time_zone) => v.some(key, time_zone, description),
+            None => v.none(key, description),
+        }
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        if !key.is_empty() {
+            return _config_err!(
+                "Config field is a scalar Option<ConfigTimeZone> and does not have nested field \"{}\"",
+                key
+            );
+        }
+
+        *self = Some(ConfigTimeZone::from_str(value)?);
+        Ok(())
+    }
+
+    fn reset(&mut self, key: &str) -> Result<()> {
+        if key.is_empty() {
+            *self = None;
+            Ok(())
+        } else {
+            _config_err!(
+                "Config field is a scalar Option<ConfigTimeZone> and does not have nested field \"{}\"",
+                key
+            )
         }
     }
 }
@@ -4087,7 +4164,6 @@ impl Display for OutputFormat {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "parquet")]
     use crate::assert_contains;
     use crate::config::TableParquetOptions;
     use crate::config::{
@@ -4718,6 +4794,49 @@ mod tests {
         let mut scalar = DFParquetStatistics::Page;
         assert!(ConfigField::set(&mut scalar, "typo", "none").is_err());
         assert_eq!(scalar, DFParquetStatistics::Page);
+    }
+
+    #[test]
+    fn test_execution_time_zone_validation() {
+        use crate::config::ConfigOptions;
+
+        const KEY: &str = "datafusion.execution.time_zone";
+        let mut config = ConfigOptions::default();
+        assert_eq!(config.execution.time_zone, None);
+
+        // Valid values are kept exactly as written.
+        for value in ["+08:00", "-08:00", "+0800", "+08", "UTC", "Asia/Taipei"] {
+            config.set(KEY, value).unwrap();
+            assert_eq!(
+                config.execution.time_zone.as_ref().map(|tz| tz.as_str()),
+                Some(value)
+            );
+        }
+
+        // A rejected value leaves the previous one in place.
+        for value in ["+08:00:00", "08:00", "08", "Asia/Taipei2", "AEST", ""] {
+            let err = config.set(KEY, value).unwrap_err();
+            assert_contains!(err.to_string(), format!("Invalid time zone: {value}."));
+            assert_eq!(
+                config.execution.time_zone.as_ref().map(|tz| tz.as_str()),
+                Some("Asia/Taipei")
+            );
+        }
+
+        // An invalid update of an unset value leaves it unset.
+        config.reset(KEY).unwrap();
+        assert_eq!(config.execution.time_zone, None);
+        assert!(config.set(KEY, "Asia/Taipei2").is_err());
+        assert_eq!(config.execution.time_zone, None);
+
+        // The option has no nested fields.
+        config.set(KEY, "UTC").unwrap();
+        assert!(config.set(&format!("{KEY}.typo"), "UTC").is_err());
+        assert!(config.reset(&format!("{KEY}.typo")).is_err());
+        assert_eq!(
+            config.execution.time_zone.as_ref().map(|tz| tz.as_str()),
+            Some("UTC")
+        );
     }
 
     #[cfg(feature = "parquet")]
