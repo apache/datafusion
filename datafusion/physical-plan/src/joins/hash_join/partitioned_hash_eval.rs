@@ -34,6 +34,7 @@ use datafusion_expr_common::dyn_eq::DynHash;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, PhysicalExprRef};
 
 use crate::joins::Map;
+use crate::joins::key_range_bitmap::KeyRangeBitmap;
 
 /// RandomState wrapper that preserves the seed used to create it.
 ///
@@ -284,6 +285,8 @@ pub struct HashTableLookupExpr {
     map: Arc<Map>,
     /// Description for display
     description: String,
+    /// Shared pruning-only view of the build side's key range
+    pruning_bitmap: Option<Arc<KeyRangeBitmap>>,
 }
 impl HashTableLookupExpr {
     /// Create a new HashTableLookupExpr
@@ -293,6 +296,7 @@ impl HashTableLookupExpr {
     /// * `random_state` - SeededRandomState for hashing
     /// * `map` - Map to check membership (hash table or array map)
     /// * `description` - Description for debugging
+    /// * `pruning_bitmap` - key-range summary for pruning only, or `None`
     ///
     /// # Public Only for Internal Use:
     /// `datafusion-proto` tests require this constructor, but it is not part of
@@ -303,13 +307,20 @@ impl HashTableLookupExpr {
         random_state: SeededRandomState,
         map: Arc<Map>,
         description: String,
+        pruning_bitmap: Option<Arc<KeyRangeBitmap>>,
     ) -> Self {
         Self {
             on_columns,
             random_state,
             map,
             description,
+            pruning_bitmap,
         }
+    }
+
+    /// Which parts of this build side's key range hold keys, for container pruning.
+    pub fn pruning_bitmap(&self) -> Option<&Arc<KeyRangeBitmap>> {
+        self.pruning_bitmap.as_ref()
     }
 }
 impl std::fmt::Debug for HashTableLookupExpr {
@@ -330,26 +341,15 @@ impl Hash for HashTableLookupExpr {
         self.on_columns.dyn_hash(state);
         self.description.hash(state);
         self.random_state.seed().hash(state);
-        // Note that we compare hash_map by pointer equality.
-        // Actually comparing the contents of the hash maps would be expensive.
-        // The way these hash maps are used in actuality is that HashJoinExec creates
-        // one per partition per query execution, thus it is never possible for two different
-        // hash maps to have the same content in practice.
-        // Theoretically this is a public API and users could create identical hash maps,
-        // but that seems unlikely and not worth paying the cost of deep comparison all the time.
+        // Hash immutable map identity, consistently with pointer equality below.
         Arc::as_ptr(&self.map).hash(state);
     }
 }
 
 impl PartialEq for HashTableLookupExpr {
     fn eq(&self, other: &Self) -> bool {
-        // Note that we compare hash_map by pointer equality.
-        // Actually comparing the contents of the hash maps would be expensive.
-        // The way these hash maps are used in actuality is that HashJoinExec creates
-        // one per partition per query execution, thus it is never possible for two different
-        // hash maps to have the same content in practice.
-        // Theoretically this is a public API and users could create identical hash maps,
-        // but that seems unlikely and not worth paying the cost of deep comparison all the time.
+        // Sharing an immutable map implies equal contents, including across
+        // prepared-build consumers. Distinct maps need no expensive deep comparison.
         self.on_columns == other.on_columns
             && self.description == other.description
             && self.random_state.seed() == other.random_state.seed()
@@ -374,12 +374,13 @@ impl PhysicalExpr for HashTableLookupExpr {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        Ok(Arc::new(HashTableLookupExpr::new(
-            children,
-            self.random_state.clone(),
-            Arc::clone(&self.map),
-            self.description.clone(),
-        )))
+        Ok(Arc::new(HashTableLookupExpr {
+            on_columns: children,
+            random_state: self.random_state.clone(),
+            map: Arc::clone(&self.map),
+            description: self.description.clone(),
+            pruning_bitmap: self.pruning_bitmap.clone(),
+        }))
     }
 
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
@@ -425,6 +426,7 @@ impl PhysicalExpr for HashTableLookupExpr {
             random_state: _,
             map: _,
             description: _,
+            pruning_bitmap: _,
         } = self;
 
         // HashTableLookupExpr holds a runtime Arc<Map> (the build-side hash
@@ -471,6 +473,7 @@ fn evaluate_columns(
 mod tests {
     use super::*;
     use crate::joins::join_hash_map::JoinHashMapU32;
+    use datafusion_common::ScalarValue;
     use datafusion_physical_expr::expressions::Column;
     use std::collections::hash_map::DefaultHasher;
     use std::hash::Hasher;
@@ -479,6 +482,36 @@ mod tests {
         let mut hasher = DefaultHasher::new();
         value.hash(&mut hasher);
         hasher.finish()
+    }
+
+    /// The pruning bitmap must survive `with_new_children`, which a scan calls
+    /// once per file.
+    #[test]
+    fn test_pruning_bitmap_shared_with_derived_children() {
+        let keys: ArrayRef = Arc::new(arrow::array::Int64Array::from(vec![0, 1_000_000]));
+        let bitmap = Arc::new(
+            KeyRangeBitmap::try_new(
+                &keys,
+                &ScalarValue::Int64(Some(0)),
+                &ScalarValue::Int64(Some(1_000_000)),
+                2,
+            )
+            .expect("two keys a million apart leave prunable gaps"),
+        );
+        let expr = Arc::new(HashTableLookupExpr::new(
+            vec![Arc::new(Column::new("a", 0))],
+            SeededRandomState::with_seed(1),
+            Arc::new(Map::HashMap(Box::new(JoinHashMapU32::with_capacity(10)))),
+            "hash_lookup".to_string(),
+            Some(Arc::clone(&bitmap)),
+        ));
+
+        let derived = expr
+            .with_new_children(vec![Arc::new(Column::new("a", 7))])
+            .unwrap();
+        let derived = derived.downcast_ref::<HashTableLookupExpr>().unwrap();
+        assert_eq!(derived.children()[0].to_string(), "a@7");
+        assert!(Arc::ptr_eq(&bitmap, derived.pruning_bitmap().unwrap()));
     }
 
     #[test]
@@ -759,6 +792,7 @@ mod tests {
             SeededRandomState::with_seed(1),
             Arc::clone(&hash_map),
             "lookup".to_string(),
+            None,
         );
 
         let expr2 = HashTableLookupExpr::new(
@@ -766,6 +800,7 @@ mod tests {
             SeededRandomState::with_seed(1),
             Arc::clone(&hash_map),
             "lookup".to_string(),
+            None,
         );
 
         assert_eq!(expr1, expr2);
@@ -784,6 +819,7 @@ mod tests {
             SeededRandomState::with_seed(1),
             Arc::clone(&hash_map),
             "lookup".to_string(),
+            None,
         );
 
         let expr2 = HashTableLookupExpr::new(
@@ -791,6 +827,7 @@ mod tests {
             SeededRandomState::with_seed(1),
             Arc::clone(&hash_map),
             "lookup".to_string(),
+            None,
         );
 
         assert_ne!(expr1, expr2);
@@ -807,6 +844,7 @@ mod tests {
             SeededRandomState::with_seed(1),
             Arc::clone(&hash_map),
             "lookup_one".to_string(),
+            None,
         );
 
         let expr2 = HashTableLookupExpr::new(
@@ -814,6 +852,7 @@ mod tests {
             SeededRandomState::with_seed(1),
             Arc::clone(&hash_map),
             "lookup_two".to_string(),
+            None,
         );
 
         assert_ne!(expr1, expr2);
@@ -833,6 +872,7 @@ mod tests {
             SeededRandomState::with_seed(1),
             hash_map1,
             "lookup".to_string(),
+            None,
         );
 
         let expr2 = HashTableLookupExpr::new(
@@ -840,6 +880,7 @@ mod tests {
             SeededRandomState::with_seed(1),
             hash_map2,
             "lookup".to_string(),
+            None,
         );
 
         // Different Arc pointers means not equal (uses Arc::ptr_eq)
@@ -857,6 +898,7 @@ mod tests {
             SeededRandomState::with_seed(1),
             Arc::clone(&hash_map),
             "lookup".to_string(),
+            None,
         );
 
         let expr2 = HashTableLookupExpr::new(
@@ -864,6 +906,7 @@ mod tests {
             SeededRandomState::with_seed(1),
             Arc::clone(&hash_map),
             "lookup".to_string(),
+            None,
         );
 
         // Equal expressions should have equal hashes
