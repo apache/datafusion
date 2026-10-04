@@ -26,10 +26,14 @@ use crate::expressions::Literal;
 use crate::physical_expr::add_offset_to_expr;
 use crate::projection::ProjectionTargets;
 use crate::{PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement};
+use arrow::array::new_null_array;
+use arrow::datatypes::{Field, Schema, SchemaRef};
+use arrow::record_batch::RecordBatch;
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{JoinType, Result, ScalarValue};
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
+use datafusion_physical_expr_common::physical_expr::is_volatile;
 
 use indexmap::{IndexMap, IndexSet};
 
@@ -814,18 +818,43 @@ impl EquivalenceGroup {
         right_equivalences: &Self,
         join_type: &JoinType,
         left_size: usize,
+        join_schema: &SchemaRef,
         on: &[(PhysicalExprRef, PhysicalExprRef)],
     ) -> Result<Self> {
         let group = match join_type {
             JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
-                let mut result = Self::new(
-                    self.iter().cloned().chain(
-                        right_equivalences
-                            .iter()
-                            .map(|cls| cls.try_with_offset(left_size as _))
-                            .collect::<Result<Vec<_>>>()?,
-                    ),
+                let mut left = self.clone();
+                let mut right = Self::new(
+                    right_equivalences
+                        .iter()
+                        .map(|cls| cls.try_with_offset(left_size as _))
+                        .collect::<Result<Vec<_>>>()?,
                 );
+
+                // Outer joins introduce rows where one side's columns are all
+                // NULL. Keep only equivalences that remain true for that
+                // null-extended row; expressions such as coalesce(a, 0) do
+                // not, even when they were equivalent to a column before the
+                // join.
+                match join_type {
+                    JoinType::Left => {
+                        right = right
+                            .with_null_preserving_expressions(&null_batch(join_schema)?);
+                    }
+                    JoinType::Right => {
+                        left = left
+                            .with_null_preserving_expressions(&null_batch(join_schema)?);
+                    }
+                    JoinType::Full => {
+                        let batch = null_batch(join_schema)?;
+                        left = left.with_null_preserving_expressions(&batch);
+                        right = right.with_null_preserving_expressions(&batch);
+                    }
+                    _ => {}
+                }
+
+                let mut result =
+                    Self::new(left.iter().cloned().chain(right.iter().cloned()));
                 // In we have an inner join, expressions in the "on" condition
                 // are equal in the resulting table.
                 if join_type == &JoinType::Inner {
@@ -845,6 +874,24 @@ impl EquivalenceGroup {
             }
         };
         Ok(group)
+    }
+
+    /// Retain only expressions that evaluate to NULL when the joined row is
+    /// null-extended. Rebuilding the classes also drops constant information
+    /// that may no longer hold after an outer join.
+    fn with_null_preserving_expressions(self, null_batch: &RecordBatch) -> Self {
+        let classes = self.classes.into_iter().filter_map(|class| {
+            let expressions = class.into_iter().filter(|expr| {
+                !is_volatile(expr)
+                    && expr
+                        .evaluate(null_batch)
+                        .and_then(|value| value.into_array(1))
+                        .is_ok_and(|array| array.null_count() == 1)
+            });
+            let class = EquivalenceClass::new(expressions);
+            (!class.is_trivial()).then_some(class)
+        });
+        Self::new(classes)
     }
 
     /// Checks if two expressions are equal directly or through equivalence
@@ -900,6 +947,24 @@ impl EquivalenceGroup {
             .zip(right_children)
             .all(|(left_child, right_child)| self.exprs_equal(left_child, right_child))
     }
+}
+
+/// Build a one-row batch with every field NULL so expressions can be checked
+/// for their behavior on an outer join's null-extended rows.
+fn null_batch(schema: &SchemaRef) -> Result<RecordBatch> {
+    let schema = Arc::new(Schema::new(
+        schema
+            .fields()
+            .iter()
+            .map(|field| Field::new(field.name(), field.data_type().clone(), true))
+            .collect::<Vec<_>>(),
+    ));
+    let columns = schema
+        .fields()
+        .iter()
+        .map(|field| new_null_array(field.data_type(), 1))
+        .collect();
+    Ok(RecordBatch::try_new(schema, columns)?)
 }
 
 impl Deref for EquivalenceGroup {
