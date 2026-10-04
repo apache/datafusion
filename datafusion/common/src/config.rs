@@ -25,6 +25,7 @@ use crate::error::{_config_datafusion_err, _config_err};
 use crate::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
 use crate::parquet_config::{
     DFParquetCompression, DFParquetStatistics, DFParquetWriterVersion,
+    RowGroupRangeAssignment,
 };
 use crate::parsers::{CompressionTypeVariant, CsvQuoteStyle};
 use crate::utils::get_available_parallelism;
@@ -1422,6 +1423,12 @@ config_namespace! {
         ///
         /// Defaults to 20.
         pub max_in_list_size: usize, default = 20
+
+        /// (reading) Which byte range of a split file reads each row group.
+        /// `start_offset` picks the range containing the row group's start.
+        /// `midpoint` picks the range containing its midpoint, as Spark does,
+        /// which spreads large row groups more evenly across ranges.
+        pub row_group_range_assignment: RowGroupRangeAssignment, default = RowGroupRangeAssignment::StartOffset
 
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
