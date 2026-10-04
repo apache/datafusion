@@ -1040,11 +1040,14 @@ impl HashJoinExec {
 
     /// Returns what a partition needs to fall back to a sort-merge join when
     /// its build side does not fit in memory, or `None` when this join cannot
-    /// fall back (see the `sort_merge_fallback` module).
+    /// fall back (see the `sort_merge_fallback` module). `compute_bounds`
+    /// says whether a dynamic filter is pushed down, in which case a sorted
+    /// build side must report its join key bounds.
     fn sort_merge_fallback_context(
         &self,
         partition: usize,
         context: &Arc<TaskContext>,
+        compute_bounds: bool,
     ) -> Result<Option<SortMergeFallbackContext>> {
         if !context.runtime_env().disk_manager.tmp_files_enabled()
             // Only `Partitioned` joins are self-contained per partition. A
@@ -1089,6 +1092,7 @@ impl HashJoinExec {
             output_schema: self.schema(),
             projection: self.projection.as_deref().map(|p| p.to_vec()),
             fetch: self.fetch,
+            compute_bounds,
         }))
     }
 
@@ -1817,8 +1821,11 @@ impl ExecutionPlan for HashJoinExec {
             .flatten();
 
         let null_aware = self.null_aware_mode()?;
-        let sort_merge_fallback =
-            self.sort_merge_fallback_context(partition, &context)?;
+        let sort_merge_fallback = self.sort_merge_fallback_context(
+            partition,
+            &context,
+            enable_dynamic_filter_pushdown,
+        )?;
 
         let left_fut = match (&self.prepared_build, self.mode) {
             (Some(prepared), _) => {
@@ -2828,7 +2835,7 @@ fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
 /// The bounds are used for dynamic filter pushdown optimization, where filters
 /// based on the actual data ranges can be pushed down to the probe side to
 /// eliminate unnecessary data early.
-struct CollectLeftAccumulator {
+pub(super) struct CollectLeftAccumulator {
     /// The physical expression to evaluate for each batch
     expr: Arc<dyn PhysicalExpr>,
     /// Accumulator for tracking the minimum value across all batches
@@ -2846,7 +2853,10 @@ impl CollectLeftAccumulator {
     ///
     /// # Returns
     /// A new `CollectLeftAccumulator` instance configured for the expression's data type
-    fn try_new(expr: Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> Result<Self> {
+    pub(super) fn try_new(
+        expr: Arc<dyn PhysicalExpr>,
+        schema: &SchemaRef,
+    ) -> Result<Self> {
         /// Recursively unwraps dictionary types to get the underlying value type.
         fn dictionary_value_type(data_type: &DataType) -> DataType {
             match data_type {
@@ -2878,7 +2888,7 @@ impl CollectLeftAccumulator {
     ///
     /// # Returns
     /// Ok(()) if the update succeeds, or an error if expression evaluation fails
-    fn update_batch(&mut self, batch: &RecordBatch) -> Result<()> {
+    pub(super) fn update_batch(&mut self, batch: &RecordBatch) -> Result<()> {
         let array = self.expr.evaluate(batch)?.into_array(batch.num_rows())?;
         self.min.update_batch(std::slice::from_ref(&array))?;
         self.max.update_batch(std::slice::from_ref(&array))?;
@@ -2891,7 +2901,7 @@ impl CollectLeftAccumulator {
     ///
     /// # Returns
     /// The `ColumnBounds` containing the minimum and maximum values observed
-    fn evaluate(mut self) -> Result<ColumnBounds> {
+    pub(super) fn evaluate(mut self) -> Result<ColumnBounds> {
         Ok(ColumnBounds::new(
             self.min.evaluate()?,
             self.max.evaluate()?,
@@ -11462,10 +11472,15 @@ mod tests {
         Ok(())
     }
 
-    /// A falling-back partition has no hash table to test membership against,
-    /// so the dynamic filter pushed to the probe side must stay permissive.
-    /// Reporting the partition as empty instead would make the probe side
-    /// discard every row routed to it, losing matches.
+    /// A falling-back partition has no hash table left to test membership
+    /// against, so the dynamic filter it pushes to the probe side must stay
+    /// permissive.
+    ///
+    /// This is the guard for [`PushdownStrategy::Unknown`]. Reporting `Empty`
+    /// instead would claim the partition holds no rows at all, and the probe
+    /// side would then discard every row routed to it, losing matches. The
+    /// pruning semantics of the two reports are covered by
+    /// `partitioned_unknown_membership_keeps_its_probe_rows` in `shared_bounds`.
     #[tokio::test]
     async fn sort_merge_fallback_keeps_the_dynamic_filter_permissive() -> Result<()> {
         let (left, right) = sort_merge_fallback_inputs(32);
@@ -11495,8 +11510,9 @@ mod tests {
         );
         assert!(!batches.is_empty(), "the join should have produced rows");
 
-        // The partition reported itself canceled, so every probe row must
-        // survive the filter, including keys the build side lacks.
+        // Every probe row within the build side's key range (0..47) must
+        // survive the filter the fallback reported; the bounds it reported
+        // still prune a key outside that range.
         let probe = RecordBatch::try_new(
             Arc::clone(&probe_schema),
             vec![
@@ -11513,8 +11529,9 @@ mod tests {
             .expect("a filter evaluates to a BooleanArray");
         let kept: Vec<bool> = (0..kept.len()).map(|i| kept.value(i)).collect();
         assert_eq!(
-            kept, [true; 5],
-            "a fallen-back partition must not prune, filter was {filter}"
+            kept,
+            [true, true, true, true, false],
+            "a fallen-back partition prunes by bounds only, filter was {filter}"
         );
 
         Ok(())

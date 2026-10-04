@@ -52,9 +52,9 @@
 //! back is not by itself decisive: a single falling-back partition completes
 //! when the budget covers its sorts.
 //!
-//! A partition that falls back reports itself to the dynamic filter as if it
-//! had been canceled: the probe rows routed to it are not filtered at all,
-//! since it builds no hash table to test them against.
+//! A partition that falls back builds no hash table, so it reports only the
+//! bounds of its join keys to the dynamic filter: probe rows routed to it are
+//! pruned by those bounds but never on membership grounds.
 //!
 //! A join that promises its probe side's ordering never falls back, because a
 //! merge emits join-key order instead. That covers more than inputs with a
@@ -71,7 +71,8 @@ use std::sync::Arc;
 
 use crate::SendableRecordBatchStream;
 use crate::expressions::PhysicalSortExpr;
-use crate::joins::hash_join::exec::JoinLeftData;
+use crate::joins::hash_join::exec::{CollectLeftAccumulator, JoinLeftData};
+use crate::joins::hash_join::shared_bounds::PartitionBounds;
 use crate::joins::sort_merge_join::{SortMergeJoinInputs, sort_merge_join_stream};
 use crate::joins::utils::JoinFilter;
 use crate::limit::LimitStream;
@@ -79,6 +80,7 @@ use crate::metrics::{BaselineMetrics, Count, ExecutionPlanMetricsSet, SpillMetri
 use crate::sorts::sort::ExternalSorter;
 use crate::stream::RecordBatchStreamAdapter;
 
+use arrow::array::Array;
 use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -86,6 +88,7 @@ use datafusion_common::{DataFusionError, JoinType, NullEquality, Result, interna
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::{Stream, StreamExt, TryStreamExt, stream};
 use parking_lot::Mutex;
 
@@ -118,6 +121,9 @@ pub(super) struct SortMergeFallbackContext {
     pub(super) output_schema: SchemaRef,
     pub(super) projection: Option<Vec<usize>>,
     pub(super) fetch: Option<usize>,
+    /// Whether a dynamic filter is pushed down to the probe side, so that a
+    /// sorted build side must report its join key bounds.
+    pub(super) compute_bounds: bool,
 }
 
 impl SortMergeFallbackContext {
@@ -145,6 +151,11 @@ pub(super) struct SortedBuildSide {
     /// The build side, sorted on the join keys. Taken by the single stream
     /// of the partition.
     stream: Mutex<Option<SendableRecordBatchStream>>,
+    /// Min/max of the join keys, reported to the dynamic filter when one is
+    /// pushed down.
+    pub(super) bounds: Option<PartitionBounds>,
+    /// Whether any build-side join key is NULL.
+    pub(super) keys_have_null: bool,
 }
 
 impl SortedBuildSide {
@@ -225,6 +236,9 @@ async fn insert_all(
 /// consumed and the hash table itself did not fit). The caller has already
 /// released the reservation held for `batches`; the external sort reserves
 /// what it keeps in memory itself.
+///
+/// When a dynamic filter is pushed down, the join key bounds it needs are
+/// computed over every batch on its way into the sort.
 pub(super) async fn sort_build_side(
     ctx: SortMergeFallbackContext,
     schema: SchemaRef,
@@ -234,15 +248,55 @@ pub(super) async fn sort_build_side(
     ctx.fallback_count.add(1);
 
     let ordering = ctx.sort_ordering(&ctx.on_left)?;
-    let input = stream::iter(batches.into_iter().map(Ok)).chain(rest);
+    let mut accumulators = ctx
+        .compute_bounds
+        .then(|| {
+            ctx.on_left
+                .iter()
+                .map(|expr| CollectLeftAccumulator::try_new(Arc::clone(expr), &schema))
+                .collect::<Result<Vec<_>>>()
+        })
+        .transpose()?;
+    let mut keys_have_null = false;
+    let mut num_rows = 0;
+
+    let input = stream::iter(batches.into_iter().map(Ok)).chain(rest).map(
+        |batch| -> Result<RecordBatch> {
+            let batch = batch?;
+            num_rows += batch.num_rows();
+            if let Some(accumulators) = accumulators.as_mut() {
+                for accumulator in accumulators {
+                    accumulator.update_batch(&batch)?;
+                }
+            }
+            if !keys_have_null {
+                keys_have_null = evaluate_expressions_to_arrays(&ctx.on_left, &batch)?
+                    .iter()
+                    .any(|array| array.logical_null_count() > 0);
+            }
+            Ok(batch)
+        },
+    );
     let stream = sort_batches(&ctx, schema, ordering, input)
         .await
         .map_err(|e| {
             e.context("HashJoinExec sort-merge fallback: sorting the build side")
         })?;
 
+    let bounds = match accumulators {
+        Some(accumulators) if num_rows > 0 => Some(PartitionBounds::new(
+            accumulators
+                .into_iter()
+                .map(CollectLeftAccumulator::evaluate)
+                .collect::<Result<Vec<_>>>()?,
+        )),
+        _ => None,
+    };
+
     Ok(SortedBuildSide {
         stream: Mutex::new(Some(stream)),
+        bounds,
+        keys_have_null,
     })
 }
 
