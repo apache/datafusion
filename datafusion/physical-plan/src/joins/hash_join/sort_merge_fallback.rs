@@ -25,8 +25,9 @@
 //!
 //! The fallback is decided per output partition at runtime, after the hash
 //! join's own reservation failed, either while collecting the build batches or
-//! while building the hash table over them, so joins that fit in memory never
-//! pay for it.
+//! while building the hash table over them (or, with
+//! `hash_join_max_build_size` set, once the build side grew past that size),
+//! so joins that fit in memory never pay for it.
 //! It is restricted to [`PartitionMode::Partitioned`] joins: there every
 //! partition owns a disjoint slice of the key space on both sides, so each
 //! partition can sort and merge its own inputs independently of its siblings
@@ -118,6 +119,10 @@ pub(super) struct SortMergeFallbackContext {
     pub(super) output_schema: SchemaRef,
     pub(super) projection: Option<Vec<usize>>,
     pub(super) fetch: Option<usize>,
+    /// Build side size, in reserved bytes, past which the partition falls
+    /// back even though the memory pool would allow more; `None` for no limit
+    /// (`datafusion.execution.hash_join_max_build_size`)
+    pub(super) max_build_size: Option<usize>,
 }
 
 impl SortMergeFallbackContext {

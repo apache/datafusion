@@ -1046,6 +1046,7 @@ impl HashJoinExec {
         partition: usize,
         context: &Arc<TaskContext>,
     ) -> Result<Option<SortMergeFallbackContext>> {
+        let options = context.session_config().options();
         if !context.runtime_env().disk_manager.tmp_files_enabled()
             // Only `Partitioned` joins are self-contained per partition. A
             // `CollectLeft` build side is shared by every probe partition and
@@ -1089,6 +1090,7 @@ impl HashJoinExec {
             output_schema: self.schema(),
             projection: self.projection.as_deref().map(|p| p.to_vec()),
             fetch: self.fetch,
+            max_build_size: options.execution.hash_join_max_build_size,
         }))
     }
 
@@ -3105,9 +3107,10 @@ fn concat_build_batches(
 ///
 /// # Sort-Merge Fallback
 /// With `sort_merge_fallback` set, a build side that cannot reserve memory,
-/// for its batches or for the hash table built over them, is sorted with an
-/// external sort instead, and the partition finishes as a sort-merge join (see
-/// the `sort_merge_fallback` module).
+/// for its batches or for the hash table built over them, or whose batches
+/// grow past `hash_join_max_build_size`, is sorted with an external sort
+/// instead, and the partition finishes as a sort-merge join (see the
+/// `sort_merge_fallback` module).
 ///
 /// # Returns
 /// [`BuildSideOutcome::InMemory`] with the `JoinLeftData` containing the hash
@@ -3129,7 +3132,7 @@ async fn collect_left_input(
     null_aware: Option<NullAwareMode>,
     array_map_created_count: Count,
     mode: BuildMode,
-    sort_merge_fallback: Option<SortMergeFallbackContext>,
+    mut sort_merge_fallback: Option<SortMergeFallbackContext>,
 ) -> Result<BuildSideOutcome> {
     let schema = left_stream.schema();
     let prepared = mode == BuildMode::Prepared;
@@ -3153,29 +3156,35 @@ async fn collect_left_input(
             }
         }
         let batch_size = state.memory_counter.count_batch(&batch);
-        match state.reservation.try_grow(batch_size) {
-            Ok(()) => {}
+        let fallback = match state.reservation.try_grow(batch_size) {
+            // The build side grew past the configured size
+            Ok(()) => sort_merge_fallback.take_if(|fallback| {
+                fallback
+                    .max_build_size
+                    .is_some_and(|max| state.reservation.size() > max)
+            }),
             // Only the join's own exhausted reservation can be recovered from
             // by sorting; anything else (including errors of the input) is
             // reported as is.
-            Err(error) if is_resources_exhausted(&error) => {
-                let Some(fallback) = sort_merge_fallback else {
-                    return Err(error);
-                };
-                let BuildSideState {
-                    mut batches,
-                    reservation,
-                    ..
-                } = state;
-                batches.push(batch);
-                // Release what the collected batches reserved: the external
-                // sort accounts for what it keeps in memory itself.
-                drop(reservation);
-                let sorted =
-                    sort_build_side(fallback, schema, batches, left_stream).await?;
-                return Ok(BuildSideOutcome::SortMerge(sorted));
+            Err(error)
+                if sort_merge_fallback.is_some() && is_resources_exhausted(&error) =>
+            {
+                sort_merge_fallback.take()
             }
             Err(error) => return Err(error),
+        };
+        if let Some(fallback) = fallback {
+            let BuildSideState {
+                mut batches,
+                reservation,
+                ..
+            } = state;
+            batches.push(batch);
+            // Release what the collected batches reserved: the external sort
+            // accounts for what it keeps in memory itself.
+            drop(reservation);
+            let sorted = sort_build_side(fallback, schema, batches, left_stream).await?;
+            return Ok(BuildSideOutcome::SortMerge(sorted));
         }
         state.metrics.build_mem_used.add(batch_size);
         state.metrics.build_input_batches.add(1);
@@ -11298,6 +11307,22 @@ mod tests {
         )
     }
 
+    /// An unbounded pool with `hash_join_max_build_size` set, so that only the
+    /// cap, or a reason to decline, decides whether a partition falls back.
+    fn sort_merge_fallback_capped_ctx(max_build_size: Option<usize>) -> Arc<TaskContext> {
+        let unlimited = sort_merge_fallback_task_ctx(None);
+        let mut session_config = unlimited.session_config().clone();
+        session_config
+            .options_mut()
+            .execution
+            .hash_join_max_build_size = max_build_size;
+        Arc::new(
+            TaskContext::default()
+                .with_session_config(session_config)
+                .with_runtime(unlimited.runtime_env()),
+        )
+    }
+
     fn sorted_rows(batches: &[RecordBatch]) -> Vec<String> {
         batches_to_sort_string(batches)
             .lines()
@@ -11589,6 +11614,58 @@ mod tests {
         common::collect(left_join.execute(0, memory_limited())?).await?;
         assert_eq!(fallbacks(&left_join), 1);
 
+        Ok(())
+    }
+
+    /// `hash_join_max_build_size` triggers the fallback without any memory
+    /// limit, once the build side of the partition grows past it
+    #[tokio::test]
+    async fn sort_merge_fallback_on_max_build_size() -> Result<()> {
+        let (left, right) = sort_merge_fallback_inputs(32);
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+        )];
+        let join = || {
+            HashJoinExec::try_new(
+                Arc::clone(&left),
+                Arc::clone(&right),
+                on.clone(),
+                None,
+                &JoinType::Left,
+                None,
+                PartitionMode::Partitioned,
+                NullEquality::NullEqualsNothing,
+                false,
+            )
+        };
+        let in_memory = join()?;
+        let expected =
+            common::collect(in_memory.execute(0, sort_merge_fallback_capped_ctx(None))?)
+                .await?;
+        assert_eq!(
+            in_memory
+                .metrics()
+                .unwrap()
+                .sum_by_name(SORT_MERGE_FALLBACK_COUNT_METRIC_NAME)
+                .map(|v| v.as_usize()),
+            Some(0)
+        );
+
+        let fallback = join()?;
+        let actual = common::collect(
+            fallback.execute(0, sort_merge_fallback_capped_ctx(Some(1024)))?,
+        )
+        .await?;
+        assert_eq!(
+            fallback
+                .metrics()
+                .unwrap()
+                .sum_by_name(SORT_MERGE_FALLBACK_COUNT_METRIC_NAME)
+                .map(|v| v.as_usize()),
+            Some(1)
+        );
+        assert_eq!(sorted_rows(&actual), sorted_rows(&expected));
         Ok(())
     }
 }

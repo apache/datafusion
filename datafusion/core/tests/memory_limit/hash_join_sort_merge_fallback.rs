@@ -16,12 +16,14 @@
 // under the License.
 
 //! A partitioned hash join whose build side does not fit in memory finishes
-//! as a sort-merge join
+//! as a sort-merge join (see also `datafusion.execution.hash_join_max_build_size`)
 
 use std::sync::Arc;
 
-use arrow::array::{Int32Array, RecordBatch};
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::array::{AsArray, Int32Array, RecordBatch};
+use arrow::compute::concat_batches;
+use arrow::datatypes::{DataType, Field, Int32Type, Schema};
+use datafusion::physical_plan::displayable;
 use datafusion::prelude::*;
 use datafusion_common::assert_contains;
 use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
@@ -104,7 +106,18 @@ fn rows(batches: &[RecordBatch]) -> Vec<String> {
 
 /// A context whose tables are big enough that each partition builds about 1 MB,
 /// keyed widely so the join output stays small.
-fn wide_context(memory_limit: Option<usize>, spilling: bool) -> SessionContext {
+fn wide_context(
+    memory_limit: Option<usize>,
+    spilling: bool,
+    max_build_size: Option<usize>,
+) -> SessionContext {
+    let mut cfg = config();
+    if let Some(max_build_size) = max_build_size {
+        cfg = cfg.set_usize(
+            "datafusion.execution.hash_join_max_build_size",
+            max_build_size,
+        );
+    }
     let mut runtime = RuntimeEnvBuilder::new();
     if let Some(limit) = memory_limit {
         runtime = runtime.with_memory_limit(limit, 1.0);
@@ -114,7 +127,7 @@ fn wide_context(memory_limit: Option<usize>, spilling: bool) -> SessionContext {
             DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
         );
     }
-    let ctx = SessionContext::new_with_config_rt(config(), runtime.build_arc().unwrap());
+    let ctx = SessionContext::new_with_config_rt(cfg, runtime.build_arc().unwrap());
     ctx.register_batch("l", table_with_keys(240_000, "v", 11, 100_000))
         .unwrap();
     ctx.register_batch("r", table_with_keys(160_000, "w", 16, 100_000))
@@ -166,22 +179,23 @@ async fn config_matrix() {
 
     #[rustfmt::skip]
     let cases = [
-        //  what the configuration is                       memory limit    spilling  expected
-        ("no memory limit",                                  None,           true,     HashJoin),
-        ("memory limit under the build side, spilling on",   Some(512 * KB), true,     Fallback),
-        ("memory limit under the build side, spilling off",  Some(512 * KB), false,    Fails),
-        ("memory limit far above the build side",            Some(64 * MB),  true,     HashJoin),
+        //  what the configuration is                       memory limit  spilling  cap        expected
+        ("no memory limit and no cap",                       None,         true,     None,      HashJoin),
+        ("no memory limit, cap under the build side",        None,         true,     Some(16 * KB), Fallback),
+        ("memory limit under the build side, spilling on",   Some(512 * KB), true,   None,      Fallback),
+        ("memory limit under the build side, spilling off",  Some(512 * KB), false,  None,      Fails),
+        ("memory limit far above the build side",            Some(64 * MB), true,    None,      HashJoin),
     ];
 
     let reference = {
-        let ctx = wide_context(None, true);
+        let ctx = wide_context(None, true, None);
         let (rows, _) = run_counting_fallbacks(&ctx, sql).await;
         assert!(!rows.is_empty());
         rows
     };
 
-    for (what, limit, spilling, expect) in cases {
-        let ctx = wide_context(limit, spilling);
+    for (what, limit, spilling, cap, expect) in cases {
+        let ctx = wide_context(limit, spilling, cap);
         let plan = ctx
             .sql(sql)
             .await
@@ -213,4 +227,48 @@ async fn config_matrix() {
             }
         }
     }
+}
+
+/// A join that promises its probe side's ordering keeps that promise instead
+/// of falling back. The planner pushes `ORDER BY r.w` below the join because a
+/// hash join emits inner-join rows in probe order, and nothing above it sorts
+/// again, so a merge's join-key order would come out wrong.
+#[tokio::test]
+async fn a_promised_probe_ordering_wins_over_the_fallback() {
+    let sql = "SELECT l.k, r.w FROM l JOIN r ON l.k = r.k ORDER BY r.w";
+    let ctx = wide_context(None, true, Some(1024));
+    let plan = ctx
+        .sql(sql)
+        .await
+        .unwrap()
+        .create_physical_plan()
+        .await
+        .unwrap();
+    // Guard the premise: the sort must sit below the join, or this would pass
+    // without the join ever having promised anything.
+    let shape = displayable(plan.as_ref()).indent(true).to_string();
+    let join_at = shape.find("HashJoinExec").expect("a hash join");
+    let sort_at = shape.find("SortExec:").expect("a sort");
+    assert!(
+        sort_at > join_at,
+        "the sort should sit below the join:\n{shape}"
+    );
+
+    let batches = datafusion::physical_plan::collect(Arc::clone(&plan), ctx.task_ctx())
+        .await
+        .unwrap();
+    let output = concat_batches(&plan.schema(), &batches).unwrap();
+    let w = output
+        .column_by_name("w")
+        .unwrap()
+        .as_primitive::<Int32Type>();
+    assert!(
+        w.values().is_sorted(),
+        "the output must come out ordered by w"
+    );
+    assert_eq!(
+        plan_metric_sum(plan.as_ref(), "sort_merge_fallback_count"),
+        0,
+        "the join promised the probe order, so it must not have fallen back"
+    );
 }
