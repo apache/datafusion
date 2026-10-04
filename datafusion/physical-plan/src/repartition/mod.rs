@@ -1628,7 +1628,6 @@ impl DisplayAs for RepartitionExec {
                 if let Some(sort_exprs) = self.sort_exprs() {
                     write!(f, ", sort_exprs={}", sort_exprs.clone())?;
                 }
-                Ok(())
             }
             DisplayFormatType::TreeRender => {
                 writeln!(f, "partitioning_scheme={}", self.partitioning())?;
@@ -1643,9 +1642,9 @@ impl DisplayAs for RepartitionExec {
                 if self.preserve_order {
                     writeln!(f, "preserve_order={}", self.preserve_order)?;
                 }
-                Ok(())
             }
         }
+        Ok(())
     }
 }
 

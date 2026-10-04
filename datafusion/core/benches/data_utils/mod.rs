@@ -233,7 +233,7 @@ pub(crate) fn make_data(
                 })
         };
         let gen_sample_cnt =
-            |mut rng: &mut rand::rngs::SmallRng| pareto.sample(&mut rng).ceil() as u32;
+            |rng: &mut rand::rngs::SmallRng| pareto.sample(rng).ceil() as u32;
         let mut group_ids = (0..simultaneous_group_cnt)
             .map(|_| gen_id(&mut rng))
             .collect::<Vec<_>>();
