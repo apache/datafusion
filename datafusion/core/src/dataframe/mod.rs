@@ -51,6 +51,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::util::display::{ArrayFormatter, FormatOptions};
 use arrow_schema::FieldRef;
 use datafusion_common::config::{CsvOptions, JsonOptions};
+use datafusion_common::metadata::batches_with_display_names;
 use datafusion_common::{
     Column, DFSchema, DataFusionError, ParamValues, ScalarValue, SchemaError,
     TableReference, UnnestOptions, exec_err, internal_datafusion_err, not_impl_err,
@@ -1643,7 +1644,7 @@ impl DataFrame {
         let arrow_options =
             arrow_options.with_formatter_factory(Some(&formatter_factory));
 
-        let results = self.collect().await?;
+        let results = batches_with_display_names(&self.collect().await?)?;
         Ok(
             pretty::pretty_format_batches_with_options(&results, &arrow_options)?
                 .to_string(),
@@ -1669,7 +1670,9 @@ impl DataFrame {
     /// ```
     pub async fn show_limit(self, num: usize) -> Result<()> {
         let results = self.limit(0, Some(num))?.collect().await?;
-        Ok(pretty::print_batches(&results)?)
+        Ok(pretty::print_batches(&batches_with_display_names(
+            &results,
+        )?)?)
     }
 
     /// Return a new [`TaskContext`] which would be used to execute this DataFrame
