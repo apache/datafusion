@@ -777,6 +777,19 @@ SELECT c1%1, c2%1 FROM test_non_nullable_float
 NaN NaN
 
 statement ok
+SET datafusion.explain.logical_plan_only = true;
+
+query TT
+EXPLAIN SELECT c2 % 1 AS remainder FROM test_non_nullable_float;
+----
+logical_plan
+01)Projection: test_non_nullable_float.c2 % Float64(1) AS remainder
+02)--TableScan: test_non_nullable_float projection=[c2]
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
+
+statement ok
 drop table test_non_nullable_float
 
 
@@ -864,7 +877,7 @@ statement ok
 CREATE TABLE test_non_nullable_decimal(c1 DECIMAL(9,2) NOT NULL);
 
 query I
-INSERT INTO test_non_nullable_decimal VALUES(1)
+INSERT INTO test_non_nullable_decimal VALUES(1.50)
 ----
 1
 
@@ -878,6 +891,29 @@ SELECT c1/0 FROM test_non_nullable_decimal
 
 query error DataFusion error: Arrow error: Divide by zero error
 SELECT c1%0 FROM test_non_nullable_decimal
+
+query RR
+SELECT c1 % 1 AS int_literal, c1 % CAST(1 AS DECIMAL(9,2)) AS decimal_literal FROM test_non_nullable_decimal
+----
+0.50 0.50
+
+query I
+SELECT count(*) FROM test_non_nullable_decimal WHERE c1 % 1 = 0
+----
+0
+
+statement ok
+SET datafusion.explain.logical_plan_only = true;
+
+query TT
+EXPLAIN SELECT c1 % CAST(1 AS DECIMAL(9,2)) AS remainder FROM test_non_nullable_decimal;
+----
+logical_plan
+01)Projection: test_non_nullable_decimal.c1 % Decimal128(1.00,9,2) AS remainder
+02)--TableScan: test_non_nullable_decimal projection=[c1]
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
 
 statement ok
 drop table test_non_nullable_decimal
