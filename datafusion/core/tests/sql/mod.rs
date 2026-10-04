@@ -50,6 +50,7 @@ macro_rules! assert_metrics {
 }
 
 pub mod aggregates;
+mod column_labels;
 pub mod create_drop;
 pub mod explain_analyze;
 pub mod joins;
