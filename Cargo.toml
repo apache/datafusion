@@ -79,7 +79,7 @@ license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/apache/datafusion"
 # Define Minimum Supported Rust Version (MSRV)
-rust-version = "1.94.0"
+rust-version = "1.95.0"
 # Define DataFusion version
 version = "55.1.0"
 
@@ -197,6 +197,7 @@ rand = "0.9"
 recursive = "0.1.1"
 regex = "1.12"
 rstest = "0.27.0"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "^0.11.0"
 sqlparser = { version = "0.63.0", default-features = false, features = ["std", "visitor"] }
@@ -272,6 +273,7 @@ wildcard_dependencies = "warn"
 
 # Pedantic lints we opt out of, with the number of hits at the time we enabled `pedantic`.
 # Some of these we should consider enabling.
+assert_is_empty = "allow"                    # 105 hits
 cast_lossless = "allow"                      # 361 hits
 cast_possible_truncation = "allow"           # 911 hits
 cast_possible_wrap = "allow"                 # 493 hits

@@ -19,6 +19,7 @@ use std::marker::PhantomData;
 use std::mem::size_of;
 use std::sync::Arc;
 
+use datafusion_common::utils::offset_span_len;
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, internal_err,
     plan_err,
@@ -1324,7 +1325,7 @@ impl ColumnarValueRef<'_> {
             ColumnarValue::Array(array) => match array.data_type() {
                 DataType::Utf8 => {
                     let string_array = as_string_array(array)?;
-                    *data_size += string_array.values().len() * size_factor;
+                    *data_size += offset_span_len(string_array.offsets()) * size_factor;
                     let column = if array.is_nullable() {
                         ColumnarValueRef::NullableArray(string_array)
                     } else {
@@ -1334,7 +1335,7 @@ impl ColumnarValueRef<'_> {
                 }
                 DataType::LargeUtf8 => {
                     let string_array = as_largestring_array(array);
-                    *data_size += string_array.values().len() * size_factor;
+                    *data_size += offset_span_len(string_array.offsets()) * size_factor;
                     let column = if array.is_nullable() {
                         ColumnarValueRef::NullableLargeStringArray(string_array)
                     } else {
@@ -1354,7 +1355,7 @@ impl ColumnarValueRef<'_> {
                 }
                 DataType::Binary => {
                     let binary_array = as_binary_array(array)?;
-                    *data_size += binary_array.values().len() * size_factor;
+                    *data_size += offset_span_len(binary_array.offsets()) * size_factor;
                     let column = if array.is_nullable() {
                         ColumnarValueRef::NullableBinaryArray(binary_array)
                     } else {
@@ -1364,7 +1365,7 @@ impl ColumnarValueRef<'_> {
                 }
                 DataType::LargeBinary => {
                     let binary_array = as_large_binary_array(array)?;
-                    *data_size += binary_array.values().len() * size_factor;
+                    *data_size += offset_span_len(binary_array.offsets()) * size_factor;
                     let column = if array.is_nullable() {
                         ColumnarValueRef::NullableLargeBinaryArray(binary_array)
                     } else {
@@ -1427,6 +1428,32 @@ pub(crate) fn widest_string_type(types: &[DataType]) -> DataType {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::test::sliced_byte_array;
+
+    #[test]
+    fn concat_capacity_uses_visible_bytes() -> Result<()> {
+        for data_type in [
+            DataType::Utf8,
+            DataType::LargeUtf8,
+            DataType::Binary,
+            DataType::LargeBinary,
+        ] {
+            let array = sliced_byte_array(&[Some("abc")], &data_type)?;
+            for len in [0, 1] {
+                let input = ColumnarValue::Array(array.slice(0, len));
+                let mut data_size = 0;
+                ColumnarValueRef::from_columnar_value(
+                    &input,
+                    &mut data_size,
+                    len,
+                    2,
+                    false,
+                )?;
+                assert_eq!(data_size, 6 * len, "{data_type}");
+            }
+        }
+        Ok(())
+    }
 
     /// Run `scenario` against `builder`, finish with a null buffer derived
     /// from `expected` (a bit is set wherever `expected[i].is_some()`), and

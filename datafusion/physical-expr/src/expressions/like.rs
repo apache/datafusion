@@ -153,14 +153,21 @@ impl PhysicalExpr for LikeExpr {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
         use datafusion_proto_models::protobuf;
 
+        let Self {
+            negated,
+            case_insensitive,
+            expr,
+            pattern,
+        } = self;
+
         Ok(Some(protobuf::PhysicalExprNode {
             expr_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::LikeExpr(Box::new(
                 protobuf::PhysicalLikeExprNode {
-                    negated: self.negated,
-                    case_insensitive: self.case_insensitive,
-                    expr: Some(Box::new(ctx.encode_child(&self.expr)?)),
-                    pattern: Some(Box::new(ctx.encode_child(&self.pattern)?)),
+                    negated: *negated,
+                    case_insensitive: *case_insensitive,
+                    expr: Some(Box::new(ctx.encode_child(expr)?)),
+                    pattern: Some(Box::new(ctx.encode_child(pattern)?)),
                 },
             ))),
         }))
@@ -189,19 +196,18 @@ impl LikeExpr {
             "LikeExpr",
         );
 
+        let protobuf::PhysicalLikeExprNode {
+            negated,
+            case_insensitive,
+            expr,
+            pattern,
+        } = like_expr.as_ref();
+
         Ok(Arc::new(LikeExpr::new(
-            like_expr.negated,
-            like_expr.case_insensitive,
-            ctx.decode_required_expression(
-                like_expr.expr.as_deref(),
-                "LikeExpr",
-                "expr",
-            )?,
-            ctx.decode_required_expression(
-                like_expr.pattern.as_deref(),
-                "LikeExpr",
-                "pattern",
-            )?,
+            *negated,
+            *case_insensitive,
+            ctx.decode_required_expression(expr.as_deref(), "LikeExpr", "expr")?,
+            ctx.decode_required_expression(pattern.as_deref(), "LikeExpr", "pattern")?,
         )))
     }
 }

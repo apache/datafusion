@@ -72,6 +72,10 @@ datafusion-physical-expr = { workspace = true }
 
 [[bench]]
 harness = false
+name = "array_compact"
+
+[[bench]]
+harness = false
 name = "array_concat"
 
 [[bench]]

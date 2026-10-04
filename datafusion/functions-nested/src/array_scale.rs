@@ -26,7 +26,9 @@ use arrow::datatypes::{
     Field,
 };
 use datafusion_common::cast::{as_float64_array, as_generic_list_array};
-use datafusion_common::utils::{ListCoercion, coerced_type_with_base_type_only};
+use datafusion_common::utils::{
+    ListCoercion, coerced_type_with_base_type_only, offset_span_len,
+};
 use datafusion_common::{Result, internal_err, plan_err, utils::take_function_args};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -161,7 +163,7 @@ fn general_array_scale<O: OffsetSizeTrait>(
     let scalar_array = as_float64_array(scalar)?;
 
     let values = as_float64_array(list_array.values())?;
-    let offsets = list_array.value_offsets();
+    let offsets = list_array.offsets();
 
     // A row is null whenever either input row is null. The scalar applies
     // uniformly across the array, so a null scalar makes the whole row
@@ -169,7 +171,7 @@ fn general_array_scale<O: OffsetSizeTrait>(
     // rather than tracking row nulls inside the value loop.
     let row_nulls = NullBuffer::union(list_array.nulls(), scalar_array.nulls());
 
-    let mut value_builder = Float64Array::builder(values.len());
+    let mut value_builder = Float64Array::builder(offset_span_len(offsets));
     let mut new_offsets = Vec::<O>::with_capacity(list_array.len() + 1);
     new_offsets.push(O::zero());
 
@@ -216,4 +218,19 @@ fn general_array_scale<O: OffsetSizeTrait>(
         values_array,
         row_nulls,
     )?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sliced_capacity() -> Result<()> {
+        crate::utils::tests::check_sliced_list_behavior(|input| {
+            array_scale_inner(&[
+                Arc::clone(input),
+                Arc::new(Float64Array::from(vec![2.0; input.len()])),
+            ])
+        })
+    }
 }

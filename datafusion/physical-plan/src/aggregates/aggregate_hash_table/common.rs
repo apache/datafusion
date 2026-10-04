@@ -29,14 +29,15 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, internal_err};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::{AggregateMetrics, EmitTo, GroupsAccumulator};
+use datafusion_physical_expr::GroupsAccumulatorAdapter;
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
+use log::debug;
 
 use crate::PhysicalExpr;
 use crate::aggregates::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
     GroupByMetrics, GroupValues, new_group_values,
 };
-use crate::aggregates::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
     AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
@@ -55,6 +56,29 @@ pub(in crate::aggregates) struct PartialReduceMarker;
 pub(in crate::aggregates) struct PartialSkipMarker;
 /// Marker for partial state -> final value aggregation.
 pub(in crate::aggregates) struct FinalMarker;
+
+/// Create an accumulator for `agg_expr` -- a [`GroupsAccumulator`] if
+/// that is supported by the aggregate, or a
+/// [`GroupsAccumulatorAdapter`] if not.
+pub(in crate::aggregates) fn create_group_accumulator(
+    agg_expr: &Arc<AggregateFunctionExpr>,
+    metrics: Arc<dyn AggregateMetrics>,
+) -> Result<Box<dyn GroupsAccumulator>> {
+    if agg_expr.groups_accumulator_supported() {
+        agg_expr.create_groups_accumulator_with_metrics(metrics)
+    } else {
+        // Note in the log when the slow path is used
+        debug!(
+            "Creating GroupsAccumulatorAdapter for {}: {agg_expr:?}",
+            agg_expr.name()
+        );
+        let agg_expr = Arc::clone(agg_expr);
+        let mut adapter =
+            GroupsAccumulatorAdapter::new(move || agg_expr.create_accumulator());
+        adapter.set_metrics(metrics);
+        Ok(Box::new(adapter))
+    }
+}
 
 /// Grouped hash table shared by the partial and final paths.
 ///
@@ -132,12 +156,12 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         let input_schema = agg.input().schema();
         let metrics = AggregateTableMetrics::new(agg, partition);
         let aggregate_arguments = aggregate_expressions(
-            &agg.aggr_expr,
+            agg.aggr_expr(),
             &agg.mode,
-            agg.group_by.num_group_exprs(),
+            agg.group_by().num_group_exprs(),
         )?;
         let accumulators: Vec<_> = agg
-            .aggr_expr
+            .aggr_expr()
             .iter()
             .zip(aggregate_arguments)
             .zip(filters)
@@ -155,7 +179,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             })
             .collect::<Result<_>>()?;
 
-        let group_schema = agg.group_by.group_schema(&input_schema)?;
+        let group_schema = agg.group_by().group_schema(&input_schema)?;
         let group_values = new_group_values(group_schema, &GroupOrdering::None)?;
 
         Ok(Self {
@@ -168,7 +192,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             state_schema,
             batch_size,
             state: AggregateHashTableState::Building(AggregateHashTableBuffer {
-                group_by: Arc::clone(&agg.group_by),
+                group_by: Arc::clone(agg.group_by()),
                 group_values,
                 batch_group_indices: Default::default(),
                 accumulators,
