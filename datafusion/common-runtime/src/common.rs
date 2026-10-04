@@ -89,10 +89,9 @@ impl<R: 'static> SpawnedTask<R> {
             // `JoinError` can be caused either by panic or cancellation. We have to handle panics:
             if e.is_panic() {
                 std::panic::resume_unwind(e.into_panic());
-            } else {
-                log::warn!("SpawnedTask was polled during shutdown");
-                e
             }
+            log::warn!("SpawnedTask was polled during shutdown");
+            e
         })
     }
 }

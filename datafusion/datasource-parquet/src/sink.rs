@@ -388,9 +388,8 @@ impl FileSink for ParquetSink {
                 Err(e) => {
                     if e.is_panic() {
                         std::panic::resume_unwind(e.into_panic());
-                    } else {
-                        unreachable!();
                     }
+                    unreachable!();
                 }
             }
         }

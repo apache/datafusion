@@ -391,9 +391,6 @@ async fn test_fuzz_topk_filter_pushdown() {
         println!("\n\n");
     }
 
-    if !failures.is_empty() {
-        panic!("Some test cases failed");
-    } else {
-        println!("All test cases passed");
-    }
+    assert!(failures.is_empty(), "Some test cases failed");
+    println!("All test cases passed");
 }

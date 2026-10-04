@@ -1967,18 +1967,17 @@ mod tests {
             match self.partition {
                 0 => {
                     let _ = self.congestion.check_congested(self.partition, cx);
-                    if self.none_polled_once {
-                        panic!("Exhausted stream is polled more than once")
-                    } else {
-                        self.none_polled_once = true;
-                        Poll::Ready(None)
-                    }
+                    assert!(
+                        !self.none_polled_once,
+                        "Exhausted stream is polled more than once"
+                    );
+                    self.none_polled_once = true;
                 }
                 _ => {
                     ready!(self.congestion.check_congested(self.partition, cx));
-                    Poll::Ready(None)
                 }
             }
+            Poll::Ready(None)
         }
     }
 

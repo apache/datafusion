@@ -1371,14 +1371,12 @@ impl TestCase {
                 );
             }
             Err(e) => {
-                if expected_success {
-                    panic!(
-                        "Unexpected failure when running, expected success but got: {e}"
-                    )
-                } else {
-                    for error_substring in expected_errors {
-                        assert_contains!(e.to_string(), error_substring);
-                    }
+                assert!(
+                    !expected_success,
+                    "Unexpected failure when running, expected success but got: {e}"
+                );
+                for error_substring in expected_errors {
+                    assert_contains!(e.to_string(), error_substring);
                 }
             }
         }

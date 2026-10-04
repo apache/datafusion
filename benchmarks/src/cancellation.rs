@@ -220,12 +220,12 @@ async fn find_or_generate_files(
         println!("Done generating files");
         let files_on_disk = find_files_on_disk(data_dir)?;
 
-        if files_on_disk.is_empty() {
-            panic!("Tried to generate data files but there are still no files on disk");
-        } else {
-            println!("Using {} files now on disk", files_on_disk.len());
-            Ok(files_on_disk)
-        }
+        assert!(
+            !files_on_disk.is_empty(),
+            "Tried to generate data files but there are still no files on disk"
+        );
+        println!("Using {} files now on disk", files_on_disk.len());
+        Ok(files_on_disk)
     } else {
         println!("Using {} files found on disk", files_on_disk.len());
         Ok(files_on_disk)

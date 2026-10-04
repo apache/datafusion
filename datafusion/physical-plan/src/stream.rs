@@ -142,14 +142,13 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
                         if e.is_panic() {
                             // resume on the main thread
                             std::panic::resume_unwind(e.into_panic());
-                        } else {
-                            // This should only occur if the task is
-                            // cancelled, which would only occur if
-                            // the JoinSet were aborted, which in turn
-                            // would imply that the receiver has been
-                            // dropped and this code is not running
-                            return Some(exec_err!("Non Panic Task error: {e}"));
                         }
+                        // This should only occur if the task is
+                        // cancelled, which would only occur if
+                        // the JoinSet were aborted, which in turn
+                        // would imply that the receiver has been
+                        // dropped and this code is not running
+                        return Some(exec_err!("Non Panic Task error: {e}"));
                     }
                 }
             }
