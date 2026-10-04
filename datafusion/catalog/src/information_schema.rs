@@ -458,10 +458,10 @@ impl InformationSchemaConfig {
 /// Origins used to enumerate the physical types a native type can take
 const RESOLVE_CAST_SOURCES: [DataType; 2] = [DataType::Null, DataType::LargeUtf8];
 
-/// Build argument fields for `information_schema` to provide possbile return types
+/// Build argument fields for `information_schema` to provide possible return types
 fn resolve_informational_fields(idx: usize, t: &NativeType) -> Result<Vec<FieldRef>> {
     // Since native types map to several physical types, resolve it against
-    // ambigious types to get canonical `DataType`s for the native type
+    // ambiguous types to get canonical `DataType`s for the native type
     let data_types = RESOLVE_CAST_SOURCES
         .iter()
         .map(|source| t.default_cast_for(source))
