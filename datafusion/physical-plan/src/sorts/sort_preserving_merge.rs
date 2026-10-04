@@ -199,8 +199,6 @@ impl DisplayAs for SortPreservingMergeExec {
                 if let Some(fetch) = self.fetch {
                     write!(f, ", fetch={fetch}")?;
                 }
-
-                Ok(())
             }
             DisplayFormatType::TreeRender => {
                 if let Some(fetch) = self.fetch {
@@ -213,10 +211,9 @@ impl DisplayAs for SortPreservingMergeExec {
                         write!(f, ", ")?;
                     }
                 }
-
-                Ok(())
             }
         }
+        Ok(())
     }
 }
 

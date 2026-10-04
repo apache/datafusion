@@ -25,8 +25,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_plan::ExecutionPlan;
-use datafusion_physical_plan::aggregates::LimitOptions;
-use datafusion_physical_plan::aggregates::{AggregateExec, topk_types_supported};
+use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::execution_plan::CardinalityEffect;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
@@ -42,77 +41,20 @@ impl TopKAggregation {
         Self {}
     }
 
-    fn transform_agg(
-        aggr: &AggregateExec,
-        order_by: &str,
-        order_desc: bool,
-        nulls_first: bool,
-        limit: usize,
-    ) -> Option<Arc<dyn ExecutionPlan>> {
-        // Current only support single group key
-        let (group_key, group_key_alias) =
-            aggr.group_expr().expr().iter().exactly_one().ok()?;
-        let kt = group_key.data_type(&aggr.input().schema()).ok()?;
-        let vt = if let Some((field, _)) = aggr.get_minmax_desc() {
-            field.data_type().clone()
-        } else {
-            kt.clone()
-        };
-        if !topk_types_supported(&kt, &vt) {
-            return None;
-        }
-        if aggr.filter_expr().iter().any(|e| e.is_some()) {
-            return None;
-        }
-
-        // Check if this is ordering by an aggregate function (MIN/MAX)
-        if let Some((field, desc)) = aggr.get_minmax_desc() {
-            // A nullable MIN/MAX starts as NULL and becomes non-NULL when the
-            // group sees its first value. With NULLS FIRST that transition
-            // worsens the group's rank, so a bounded aggregation cannot safely
-            // discard other NULL groups. Use regular aggregation for exact
-            // results. Non-nullable inputs never take this transition and can
-            // still use TopK.
-            let input_nullable = aggr
-                .aggr_expr()
-                .iter()
-                .exactly_one()
-                .ok()?
-                .expressions()
-                .into_iter()
-                .exactly_one()
-                .ok()?
-                .nullable(aggr.input_schema.as_ref())
-                .ok()?;
-            if nulls_first && input_nullable {
-                return None;
-            }
-            // ensure the sort direction matches aggregate function
-            if desc != order_desc {
-                return None;
-            }
-            // ensure the sort is on the same field as the aggregate output
-            if order_by != field.name() {
-                return None;
-            }
-        } else if aggr.aggr_expr().is_empty() {
-            // This is a GROUP BY without aggregates, check if ordering is on the group key itself
-            if order_by != group_key_alias {
-                return None;
-            }
-        } else {
-            // Has aggregates but not MIN/MAX, or doesn't DISTINCT
-            return None;
-        }
-
-        // We found what we want: clone, copy the limit down, and return modified node
-        let new_aggr = AggregateExec::with_new_limit_options(
-            aggr,
-            Some(LimitOptions::new_with_order(limit, order_desc)),
-        );
-        Some(Arc::new(new_aggr))
-    }
-
+    /// Push the bound into eligible aggregates to retain fewer groups; keep the
+    /// sort to enforce the final ordering and row count.
+    ///
+    /// ```txt
+    /// Before:
+    /// Sort(fetch=K)
+    ///   Aggregate
+    ///     input
+    ///
+    /// After:
+    /// Sort(fetch=K)
+    ///   Aggregate(TopK(k))
+    ///     input
+    /// ```
     fn transform_sort(plan: &Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPlan>> {
         let sort = plan.downcast_ref::<SortExec>()?;
 
@@ -120,10 +62,9 @@ impl TopKAggregation {
         let child = children.into_iter().exactly_one().ok()?;
         let order = sort.properties().output_ordering()?;
         let order = order.iter().exactly_one().ok()?;
-        let order_desc = order.options.descending;
-        let nulls_first = order.options.nulls_first;
+        let sort_options = order.options;
         let order = order.expr.downcast_ref::<Column>()?;
-        let mut cur_col_name = order.name().to_string();
+        let mut sort_col_name = order.name().to_string();
         let limit = sort.fetch()?;
 
         let mut cardinality_preserved = true;
@@ -132,16 +73,12 @@ impl TopKAggregation {
                 return Ok(Transformed::no(plan));
             }
             if let Some(aggr) = plan.downcast_ref::<AggregateExec>() {
-                // either we run into an Aggregate and transform it
-                match Self::transform_agg(
-                    aggr,
-                    &cur_col_name,
-                    order_desc,
-                    nulls_first,
-                    limit,
-                ) {
+                match aggr
+                    .clone()
+                    .try_optimize_topk(limit, &sort_col_name, sort_options)
+                {
                     None => cardinality_preserved = false,
-                    Some(plan) => return Ok(Transformed::yes(plan)),
+                    Some(aggr) => return Ok(Transformed::yes(Arc::new(aggr.data))),
                 }
             } else if let Some(proj) = plan.downcast_ref::<ProjectionExec>() {
                 // track renames due to successive projections
@@ -149,8 +86,8 @@ impl TopKAggregation {
                     let Some(src_col) = proj_expr.expr.downcast_ref::<Column>() else {
                         continue;
                     };
-                    if proj_expr.alias == cur_col_name {
-                        cur_col_name = src_col.name().to_string();
+                    if proj_expr.alias == sort_col_name {
+                        sort_col_name = src_col.name().to_string();
                     }
                 }
             } else {
