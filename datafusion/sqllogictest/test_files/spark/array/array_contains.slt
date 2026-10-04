@@ -178,3 +178,18 @@ query B
 SELECT array_contains(array(1.5::double), 2.5::double);
 ----
 false
+
+query B
+SELECT array_contains(array(named_struct('v', -'NaN'::double)), named_struct('v', 'NaN'::double));
+----
+true
+
+query B
+SELECT array_contains(array(named_struct('v', -'NaN'::double), NULL), named_struct('v', 'NaN'::double));
+----
+true
+
+query B
+SELECT array_contains(array(named_struct('v', 1.5::double)), named_struct('v', 2.5::double));
+----
+false

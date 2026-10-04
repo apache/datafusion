@@ -17,7 +17,7 @@
 
 use arrow::array::{
     Array, ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder, FixedSizeListArray,
-    GenericListArray, OffsetSizeTrait,
+    GenericListArray, OffsetSizeTrait, StructArray,
 };
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::unary;
@@ -32,7 +32,7 @@ use std::sync::Arc;
 /// Spark-compatible `array_contains` function.
 ///
 /// Float elements are first canonicalized to Spark's equality, where `-0.0`
-/// equals `0.0` and all NaNs are equal (top-level elements only).
+/// equals `0.0` and all NaNs are equal (also inside lists and structs).
 ///
 /// Calls DataFusion's `array_has` and then applies Spark's null semantics:
 /// - If the result from `array_has` is `true`, return `true`.
@@ -124,6 +124,12 @@ fn canonicalize_floats(value: &ColumnarValue) -> Result<ColumnarValue> {
                         .into(),
                 ))
             }
+            ScalarValue::Struct(list) => ColumnarValue::Scalar(ScalarValue::Struct(
+                canonicalize_float_array(&(Arc::clone(list) as ArrayRef))
+                    .as_struct()
+                    .clone()
+                    .into(),
+            )),
             _ => value.clone(),
         },
     })
@@ -184,6 +190,19 @@ fn canonicalize_float_array(array: &ArrayRef) -> ArrayRef {
                 *size,
                 canonicalize_float_array(list.values()),
                 list.nulls().cloned(),
+            ))
+        }
+        // An empty struct has no child to infer its length from, so leave it.
+        DataType::Struct(fields) if !fields.is_empty() => {
+            let array = array.as_struct();
+            Arc::new(StructArray::new(
+                fields.clone(),
+                array
+                    .columns()
+                    .iter()
+                    .map(canonicalize_float_array)
+                    .collect(),
+                array.nulls().cloned(),
             ))
         }
         _ => Arc::clone(array),
@@ -272,5 +291,177 @@ fn mask_with_list_nulls(
     match list_nulls {
         Some(n) => &buf & n.inner(),
         None => buf,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{
+        Float32Array, Float64Array, Int32Array, LargeListArray, ListArray, ListBuilder,
+        builder::Float64Builder,
+    };
+    use arrow::datatypes::{Field, Fields, Int32Type};
+    use datafusion_common::config::ConfigOptions;
+
+    fn invoke(args: Vec<ColumnarValue>, rows: usize) -> Result<BooleanArray> {
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(i, a)| Field::new(format!("a{i}"), a.data_type(), true).into())
+            .collect();
+        let out = SparkArrayContains::new().invoke_with_args(ScalarFunctionArgs {
+            args,
+            arg_fields,
+            number_rows: rows,
+            return_field: Field::new("r", DataType::Boolean, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        })?;
+        Ok(out.to_array(rows)?.as_boolean().clone())
+    }
+
+    fn f64_list(values: Vec<Option<f64>>) -> ListArray {
+        let mut builder = ListBuilder::new(Float64Builder::new());
+        builder.values().append_slice(&[]);
+        for v in values {
+            builder.values().append_option(v);
+        }
+        builder.append(true);
+        builder.finish()
+    }
+
+    fn neg_nan() -> f64 {
+        -f64::NAN
+    }
+
+    #[test]
+    fn float_needle_scalar_and_array() -> Result<()> {
+        let haystack = Arc::new(f64_list(vec![Some(-0.0), Some(neg_nan())]));
+        for needle in [0.0, f64::NAN] {
+            let scalar = invoke(
+                vec![
+                    ColumnarValue::Array(Arc::clone(&haystack) as ArrayRef),
+                    ColumnarValue::Scalar(ScalarValue::Float64(Some(needle))),
+                ],
+                1,
+            )?;
+            assert!(scalar.value(0));
+            let array = invoke(
+                vec![
+                    ColumnarValue::Array(Arc::clone(&haystack) as ArrayRef),
+                    ColumnarValue::Array(Arc::new(Float64Array::from(vec![needle]))),
+                ],
+                1,
+            )?;
+            assert!(array.value(0));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn f32_needle() -> Result<()> {
+        let list = ListArray::from_iter_primitive::<Float32Type, _, _>(vec![Some(vec![
+            Some(-0.0f32),
+            Some(-f32::NAN),
+        ])]);
+        for needle in [0.0f32, f32::NAN] {
+            let out = invoke(
+                vec![
+                    ColumnarValue::Array(Arc::new(list.clone())),
+                    ColumnarValue::Array(Arc::new(Float32Array::from(vec![needle]))),
+                ],
+                1,
+            )?;
+            assert!(out.value(0));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn scalar_list_haystack_variants() -> Result<()> {
+        let list = f64_list(vec![Some(-0.0)]);
+        let large =
+            LargeListArray::from_iter_primitive::<Float64Type, _, _>(vec![Some(vec![
+                Some(-0.0f64),
+            ])]);
+        let fixed = FixedSizeListArray::from_iter_primitive::<Float64Type, _, _>(
+            vec![Some(vec![Some(-0.0f64)])],
+            1,
+        );
+        for haystack in [
+            ScalarValue::List(Arc::new(list)),
+            ScalarValue::LargeList(Arc::new(large)),
+            ScalarValue::FixedSizeList(Arc::new(fixed)),
+        ] {
+            let out = invoke(
+                vec![
+                    ColumnarValue::Scalar(haystack),
+                    ColumnarValue::Scalar(ScalarValue::Float64(Some(0.0))),
+                ],
+                1,
+            )?;
+            assert!(out.value(0));
+        }
+        Ok(())
+    }
+
+    fn struct_of(v: f64) -> StructArray {
+        StructArray::new(
+            Fields::from(vec![Field::new("v", DataType::Float64, true)]),
+            vec![Arc::new(Float64Array::from(vec![v])) as ArrayRef],
+            None,
+        )
+    }
+
+    #[test]
+    fn struct_fields_nan_payload() -> Result<()> {
+        let haystack = ListArray::new(
+            Arc::new(Field::new("item", struct_of(0.0).data_type().clone(), true)),
+            arrow::buffer::OffsetBuffer::new(vec![0, 1].into()),
+            Arc::new(struct_of(neg_nan())),
+            None,
+        );
+        let array_needle = invoke(
+            vec![
+                ColumnarValue::Array(Arc::new(haystack.clone())),
+                ColumnarValue::Array(Arc::new(struct_of(f64::NAN))),
+            ],
+            1,
+        )?;
+        assert!(array_needle.value(0));
+        let scalar_needle = invoke(
+            vec![
+                ColumnarValue::Array(Arc::new(haystack)),
+                ColumnarValue::Scalar(ScalarValue::Struct(Arc::new(struct_of(f64::NAN)))),
+            ],
+            1,
+        )?;
+        assert!(scalar_needle.value(0));
+        Ok(())
+    }
+
+    #[test]
+    fn non_float_values_are_unchanged() -> Result<()> {
+        let list = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+            Some(1),
+            Some(2),
+        ])]);
+        let hit = invoke(
+            vec![
+                ColumnarValue::Array(Arc::new(list.clone())),
+                ColumnarValue::Array(Arc::new(Int32Array::from(vec![2]))),
+            ],
+            1,
+        )?;
+        assert!(hit.value(0));
+        let miss = invoke(
+            vec![
+                ColumnarValue::Array(Arc::new(list)),
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(3))),
+            ],
+            1,
+        )?;
+        assert!(!miss.value(0));
+        Ok(())
     }
 }
