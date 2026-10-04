@@ -215,5 +215,14 @@ mod tests {
         assert_eq!(group_values.len(), 10);
         group_values.clear_shrink(0);
         assert_eq!(group_values.len(), 0);
+
+        // The first new distinct value after clearing should get group index 0
+        let values: ArrayRef = Arc::new(StringArray::from_iter_values([
+            "new value",
+            "another value",
+        ]));
+        group_values.intern(&[values], &mut groups).unwrap();
+        assert_eq!(groups, vec![0, 1]);
+        assert_eq!(group_values.len(), 2);
     }
 }
