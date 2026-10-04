@@ -126,21 +126,34 @@ pub(crate) enum StringCharLen {
 #[inline]
 fn left_right_byte_length(string: &str, n: i64) -> usize {
     let abs = n.unsigned_abs().min(usize::MAX as u64) as usize;
-    // For ASCII input every character is exactly one byte, so the byte offset of
-    // the n-th codepoint is just the (clamped) character count. This avoids the
-    // per-character `char_indices()` scan of the general path.
+    let bytes = string.as_bytes();
+    // ASCII bytes are never part of a multi-byte UTF-8 sequence, so if the
+    // `abs` bytes at the relevant end of the string are ASCII, they are exactly
+    // the `abs` characters at that end. Checking only those bytes is cheaper
+    // than either a `char_indices()` scan or checking the whole string.
     match n.cmp(&0) {
         Ordering::Equal => 0,
-        // `abs` chars trimmed from the end: keep the leading `len - abs`.
-        Ordering::Less if string.is_ascii() => string.len().saturating_sub(abs),
-        Ordering::Less => string
-            .char_indices()
-            .nth_back(abs - 1)
-            .map(|(index, _)| index)
-            .unwrap_or(0),
-        // First `abs` chars, but never past the end of the string.
-        Ordering::Greater if string.is_ascii() => abs.min(string.len()),
-        Ordering::Greater => byte_offset_of_char(string, abs),
+        // Byte offset of the `abs`-th character from the end.
+        Ordering::Less => {
+            let start = bytes.len().saturating_sub(abs);
+            if bytes[start..].is_ascii() {
+                start
+            } else {
+                string
+                    .char_indices()
+                    .nth_back(abs - 1)
+                    .map_or(0, |(index, _)| index)
+            }
+        }
+        // Byte offset of the `abs`-th character from the start.
+        Ordering::Greater => {
+            let end = abs.min(bytes.len());
+            if bytes[..end].is_ascii() {
+                end
+            } else {
+                byte_offset_of_char(string, abs)
+            }
+        }
     }
 }
 
