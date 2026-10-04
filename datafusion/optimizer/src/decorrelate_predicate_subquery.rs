@@ -1018,7 +1018,8 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_expr::builder::table_source;
     use datafusion_expr::{
-        and, binary_expr, col, cube, grouping_set, out_ref_col, rollup, table_scan,
+        TableScanBuilder, and, binary_expr, col, cube, grouping_set, out_ref_col, rollup,
+        table_scan,
     };
 
     macro_rules! assert_optimized_plan_equal {
@@ -2982,14 +2983,11 @@ mod tests {
             DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
             true,
         )]));
-        let subquery = LogicalPlanBuilder::scan_with_filters(
-            "sq",
-            subquery_table_source,
-            None,
-            vec![],
-        )?
-        .unnest_column("arr")?
-        .build()?;
+        let subquery_table_scan =
+            TableScanBuilder::new("sq", subquery_table_source).build()?;
+        let subquery = LogicalPlanBuilder::table_scan(subquery_table_scan)?
+            .unnest_column("arr")?
+            .build()?;
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(exists(Arc::new(subquery)))?
@@ -3017,15 +3015,12 @@ mod tests {
             DataType::List(Arc::new(Field::new_list_field(DataType::UInt32, true))),
             true,
         )]));
-        let subquery = LogicalPlanBuilder::scan_with_filters(
-            "sq",
-            subquery_table_source,
-            None,
-            vec![],
-        )?
-        .unnest_column("a")?
-        .filter(col("a").eq(out_ref_col(DataType::UInt32, "test.b")))?
-        .build()?;
+        let subquery_table_scan =
+            TableScanBuilder::new("sq", subquery_table_source).build()?;
+        let subquery = LogicalPlanBuilder::table_scan(subquery_table_scan)?
+            .unnest_column("a")?
+            .filter(col("a").eq(out_ref_col(DataType::UInt32, "test.b")))?
+            .build()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(exists(Arc::new(subquery)))?
             .project(vec![col("test.b")])?
@@ -3074,6 +3069,44 @@ mod tests {
             SubqueryAlias: __correlated_sq_1 [Int32(1):Int32, A:UInt32]
               Projection: Int32(1), TEST_B.A [Int32(1):Int32, A:UInt32]
                 TableScan: TEST_B [A:UInt32, B:UInt32]
+        "
+        )
+    }
+
+    /// An Unnest replaces the column it unnests with the values of that
+    /// column. A correlated filter on that column below the Unnest compares
+    /// the whole list, so it cannot move above the Unnest.
+    #[test]
+    fn exists_subquery_filter_on_unnested_column() -> Result<()> {
+        let list_type =
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("arr", list_type.clone(), true),
+        ]);
+        let subquery = Arc::new(
+            table_scan(Some("sq"), &schema, None)?
+                .filter(col("sq.arr").eq(out_ref_col(list_type, "outer_t.arr")))?
+                .unnest_column("arr")?
+                .project(vec![col("sq.id")])?
+                .build()?,
+        );
+        let plan = table_scan(Some("outer_t"), &schema, None)?
+            .filter(exists(subquery))?
+            .project(vec![col("outer_t.id")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: outer_t.id [id:Int32;N]
+          Filter: EXISTS (<subquery>) [id:Int32;N, arr:List(Int32);N]
+            Subquery: [id:Int32;N]
+              Projection: sq.id [id:Int32;N]
+                Unnest: lists[sq.arr|depth=1] structs[] [id:Int32;N, arr:Int32;N]
+                  Filter: sq.arr = outer_ref(outer_t.arr) [id:Int32;N, arr:List(Int32);N]
+                    TableScan: sq [id:Int32;N, arr:List(Int32);N]
+            TableScan: outer_t [id:Int32;N, arr:List(Int32);N]
         "
         )
     }
