@@ -38,15 +38,15 @@ use crate::logical_plan::{
 };
 use crate::select_expr::SelectExpr;
 use crate::utils::{
-    can_hash, check_all_columns_from_schema, columnize_expr, compare_sort_expr,
+    Columnizer, can_hash, check_all_columns_from_schema, compare_sort_expr,
     expand_qualified_wildcard, expand_wildcard, expr_to_columns,
     find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
     split_conjunction_owned,
 };
 use crate::{
     BinaryExpr, DmlStatement, ExplainOption, Expr, ExprSchemable, Operator,
-    RecursiveQuery, Statement, TableProviderFilterPushDown, TableSource, WriteOp, and,
-    binary_expr, lit,
+    RecursiveQuery, Statement, TableProviderFilterPushDown, TableScan, TableSource,
+    WriteOp, and, binary_expr, lit,
 };
 
 use super::dml::InsertOp;
@@ -417,7 +417,10 @@ impl LogicalPlanBuilder {
         table_source: Arc<dyn TableSource>,
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
-        Self::scan_with_filters(table_name, table_source, projection, vec![])
+        let table_scan = TableScanBuilder::new(table_name, table_source)
+            .with_projection(projection)
+            .build()?;
+        Self::table_scan(table_scan)
     }
 
     /// Create a [CopyTo] for copying the contents of this builder to the specified file(s)
@@ -485,33 +488,23 @@ impl LogicalPlanBuilder {
     }
 
     /// Convert a table provider into a builder with a TableScan
+    #[deprecated(since = "56.0.0", note = "Use table_scan([`TableScan`]) instead")]
     pub fn scan_with_filters(
         table_name: impl Into<TableReference>,
         table_source: Arc<dyn TableSource>,
         projection: Option<Vec<usize>>,
         filters: Vec<Expr>,
     ) -> Result<Self> {
-        Self::scan_with_filters_inner(table_name, table_source, projection, filters, None)
+        let table_scan = TableScanBuilder::new(table_name, table_source)
+            .with_projection(projection)
+            .with_filters(filters)
+            .build()?;
+        Self::table_scan(table_scan)
     }
 
     /// Convert a table provider into a builder with a TableScan with filter and fetch
+    #[deprecated(since = "56.0.0", note = "Use table_scan([`TableScan`]) instead")]
     pub fn scan_with_filters_fetch(
-        table_name: impl Into<TableReference>,
-        table_source: Arc<dyn TableSource>,
-        projection: Option<Vec<usize>>,
-        filters: Vec<Expr>,
-        fetch: Option<usize>,
-    ) -> Result<Self> {
-        Self::scan_with_filters_inner(
-            table_name,
-            table_source,
-            projection,
-            filters,
-            fetch,
-        )
-    }
-
-    fn scan_with_filters_inner(
         table_name: impl Into<TableReference>,
         table_source: Arc<dyn TableSource>,
         projection: Option<Vec<usize>>,
@@ -523,7 +516,11 @@ impl LogicalPlanBuilder {
             .with_filters(filters)
             .with_fetch(fetch)
             .build()?;
+        Self::table_scan(table_scan)
+    }
 
+    /// Convert a [`TableScan`] into a builder
+    pub fn table_scan(table_scan: TableScan) -> Result<Self> {
         // Inline TableScan
         if table_scan.filters.is_empty()
             && let Some(p) = table_scan.source.get_logical_plan()
@@ -1983,6 +1980,14 @@ pub fn add_group_by_exprs_from_dependencies(
     mut group_expr: Vec<Expr>,
     schema: &DFSchemaRef,
 ) -> Result<Vec<Expr>> {
+    // With no functional dependencies on the input schema,
+    // `get_target_functional_dependencies` below can never resolve any
+    // target indices, so skip formatting the GROUP BY expression names and
+    // return the GROUP BY list unchanged.
+    if schema.functional_dependencies().is_empty() {
+        return Ok(group_expr);
+    }
+
     // Names of the fields produced by the GROUP BY exprs for example, `GROUP BY
     // c1 + 1` produces an output field named `"c1 + 1"`
     let mut group_by_field_names = group_expr
@@ -2086,6 +2091,7 @@ fn project_with_validation(
     let mut projected_expr = vec![];
     let mut has_wildcard = false;
     let mut normalizer = ColumnNormalizer::new(&plan);
+    let columnizer = Columnizer::new(&plan);
     for (e, validate) in expr {
         let e = e.into();
         match e {
@@ -2104,7 +2110,7 @@ fn project_with_validation(
                 for e in expanded {
                     if validate {
                         projected_expr
-                            .push(columnize_expr(normalizer.normalize(e)?, &plan)?)
+                            .push(columnizer.columnize(normalizer.normalize(e)?)?)
                     } else {
                         projected_expr.push(e)
                     }
@@ -2126,7 +2132,7 @@ fn project_with_validation(
                 for e in expanded {
                     if validate {
                         projected_expr
-                            .push(columnize_expr(normalizer.normalize(e)?, &plan)?)
+                            .push(columnizer.columnize(normalizer.normalize(e)?)?)
                     } else {
                         projected_expr.push(e)
                     }
@@ -2134,7 +2140,7 @@ fn project_with_validation(
             }
             SelectExpr::Expression(e) => {
                 if validate {
-                    projected_expr.push(columnize_expr(normalizer.normalize(e)?, &plan)?)
+                    projected_expr.push(columnizer.columnize(normalizer.normalize(e)?)?)
                 } else {
                     projected_expr.push(e)
                 }
@@ -2161,6 +2167,8 @@ fn project_with_validation(
 
     validate_unique_names("Projections", projected_expr.iter())?;
 
+    // `columnizer` borrows `plan`, which moves into the projection below.
+    drop(columnizer);
     Projection::try_new(projected_expr, Arc::new(plan)).map(LogicalPlan::Projection)
 }
 
@@ -2213,11 +2221,7 @@ pub fn table_scan_with_filters(
     projection: Option<Vec<usize>>,
     filters: Vec<Expr>,
 ) -> Result<LogicalPlanBuilder> {
-    let table_source = table_source(table_schema);
-    let name = name
-        .map(|n| n.into())
-        .unwrap_or_else(|| TableReference::bare(UNNAMED_TABLE));
-    LogicalPlanBuilder::scan_with_filters(name, table_source, projection, filters)
+    table_scan_with_filter_and_fetch(name, table_schema, projection, filters, None)
 }
 
 /// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema,
@@ -2230,17 +2234,38 @@ pub fn table_scan_with_filter_and_fetch(
     filters: Vec<Expr>,
     fetch: Option<usize>,
 ) -> Result<LogicalPlanBuilder> {
+    table_scan_with_filter_and_fetch_and_skip(
+        name,
+        table_schema,
+        projection,
+        filters,
+        fetch,
+        None,
+    )
+}
+
+/// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema,
+/// filters, inlined fetch and offset.
+/// This is mostly used for testing and documentation.
+pub fn table_scan_with_filter_and_fetch_and_skip(
+    name: Option<impl Into<TableReference>>,
+    table_schema: &Schema,
+    projection: Option<Vec<usize>>,
+    filters: Vec<Expr>,
+    fetch: Option<usize>,
+    skip: Option<usize>,
+) -> Result<LogicalPlanBuilder> {
     let table_source = table_source(table_schema);
     let name = name
         .map(|n| n.into())
         .unwrap_or_else(|| TableReference::bare(UNNAMED_TABLE));
-    LogicalPlanBuilder::scan_with_filters_fetch(
-        name,
-        table_source,
-        projection,
-        filters,
-        fetch,
-    )
+    let table_scan = TableScanBuilder::new(name, table_source)
+        .with_projection(projection)
+        .with_filters(filters)
+        .with_fetch(fetch)
+        .with_skip(skip)
+        .build()?;
+    LogicalPlanBuilder::table_scan(table_scan)
 }
 
 pub fn table_source(table_schema: &Schema) -> Arc<dyn TableSource> {
@@ -3091,6 +3116,30 @@ mod tests {
     }
 
     #[test]
+    fn plan_builder_aggregate_with_implicit_group_by_exprs_no_constraints() -> Result<()>
+    {
+        // With no PRIMARY KEY / UNIQUE constraint on the input, there are no
+        // functional dependencies to expand the GROUP BY with, so the GROUP
+        // BY list must be left exactly as given.
+        let table_source = table_source(&employee_schema());
+
+        let options =
+            LogicalPlanBuilderOptions::new().with_add_implicit_group_by_exprs(true);
+        let plan =
+            LogicalPlanBuilder::scan("employee_csv", table_source, Some(vec![0, 3, 4]))?
+                .with_options(options)
+                .aggregate(vec![col("id")], vec![sum(col("salary"))])?
+                .build()?;
+
+        assert_snapshot!(plan, @r"
+        Aggregate: groupBy=[[employee_csv.id]], aggr=[[sum(employee_csv.salary)]]
+          TableScan: employee_csv projection=[id, state, salary]
+        ");
+
+        Ok(())
+    }
+
+    #[test]
     fn plan_builder_aggregate_rejects_nested_aggregates() -> Result<()> {
         // https://github.com/apache/datafusion/issues/23812
         let err = table_scan(
@@ -3236,7 +3285,8 @@ mod tests {
                 FunctionalDependence::new(vec![0], vec![0, 1, 2, 3], false)
                     .with_mode(Dependency::Single),
                 FunctionalDependence::new(vec![2], vec![2, 3], true)
-                    .with_mode(Dependency::Multi),
+                    .with_mode(Dependency::Multi)
+                    .with_null_equality(NullEquality::NullEqualsNull),
             ])
         );
         Ok(())

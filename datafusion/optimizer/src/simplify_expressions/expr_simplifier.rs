@@ -828,6 +828,26 @@ impl<'a> Simplifier<'a> {
     }
 }
 
+/// Returns whether values of the given type are guaranteed to satisfy `value % 1 == 0`.
+fn modulo_one_is_zero_type(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64 => true,
+        // A non-positive scale makes every decimal value an integer.
+        DataType::Decimal32(_, scale)
+        | DataType::Decimal64(_, scale)
+        | DataType::Decimal128(_, scale)
+        | DataType::Decimal256(_, scale) => *scale <= 0,
+        _ => false,
+    }
+}
+
 impl TreeNodeRewriter for Simplifier<'_> {
     type Node = Expr;
 
@@ -1207,13 +1227,13 @@ impl TreeNodeRewriter for Simplifier<'_> {
             // Rules for Modulo
             //
 
-            // A % 1 --> 0 (if A is not nullable and not floating, since NAN % 1 --> NAN)
+            // A % 1 --> 0 (if A is non-null and its type guarantees an integer value)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Modulo,
                 right,
             }) if !info.nullable(&left)?
-                && !info.get_data_type(&left)?.is_floating()
+                && modulo_one_is_zero_type(&info.get_data_type(&left)?)
                 && is_one(&right) =>
             {
                 Transformed::yes(Expr::Literal(
@@ -3073,6 +3093,55 @@ mod tests {
         let expr =
             col("c3_non_null") % lit(ScalarValue::Decimal128(Some(10000000000), 31, 10));
         assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_modulo_by_one_types() {
+        for (data_type, folds) in [
+            (DataType::Int8, true),
+            (DataType::Int16, true),
+            (DataType::Int32, true),
+            (DataType::Int64, true),
+            (DataType::UInt8, true),
+            (DataType::UInt16, true),
+            (DataType::UInt32, true),
+            (DataType::UInt64, true),
+            (DataType::Float32, false),
+            (DataType::Float64, false),
+            (DataType::Decimal32(9, -1), true),
+            (DataType::Decimal32(9, 0), true),
+            (DataType::Decimal32(9, 2), false),
+            (DataType::Decimal64(18, -1), true),
+            (DataType::Decimal64(18, 0), true),
+            (DataType::Decimal64(18, 2), false),
+            (DataType::Decimal128(38, -1), true),
+            (DataType::Decimal128(38, 0), true),
+            (DataType::Decimal128(38, 2), false),
+            (DataType::Decimal256(76, -1), true),
+            (DataType::Decimal256(76, 0), true),
+            (DataType::Decimal256(76, 2), false),
+        ] {
+            for nullable in [false, true] {
+                let schema =
+                    Schema::new(vec![Field::new("a", data_type.clone(), nullable)])
+                        .to_dfschema_ref()
+                        .unwrap();
+                let simplifier = ExprSimplifier::new(
+                    SimplifyContext::builder().with_schema(schema).build(),
+                );
+                let expr = col("a") % lit(1);
+                let expected = if folds && !nullable {
+                    lit(ScalarValue::new_zero(&data_type).unwrap())
+                } else {
+                    expr.clone()
+                };
+                assert_eq!(
+                    simplifier.simplify(expr).unwrap(),
+                    expected,
+                    "{data_type:?}, nullable={nullable}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -68,8 +68,8 @@ use datafusion_expr::{
     logical_plan::{
         Aggregate, AsOfJoin, AsOfMatch, CreateCatalog, CreateCatalogSchema,
         CreateExternalTable, CreateView, DdlStatement, Distinct, EmptyRelation,
-        Extension, Join, Prepare, Projection, Repartition, Sort, SubqueryAlias,
-        TableScan, TableScanBuilder, Values, Window, builder::project,
+        Extension, Filter, Join, Prepare, Projection, Repartition, Sort, SubqueryAlias,
+        TableScan, TableScanBuilder, Values, Window,
     },
 };
 use datafusion_proto_common::protobuf_common;
@@ -536,7 +536,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let expr: Vec<Expr> =
                     from_proto::parse_exprs(&projection.expr, ctx, extension_codec)?;
 
-                let new_proj = project(input, expr)?;
+                let new_proj =
+                    LogicalPlan::Projection(Projection::try_new(expr, Arc::new(input))?);
                 match projection.optional_alias.as_ref() {
                     Some(a) => match a {
                         protobuf::projection_node::OptionalAlias::Alias(alias) => {
@@ -558,14 +559,17 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .map(|expr| from_proto::parse_expr(expr, ctx, extension_codec))
                     .transpose()?
                     .ok_or_else(|| proto_error("expression required"))?;
-                LogicalPlanBuilder::from(input).filter(expr)?.build()
+                Ok(LogicalPlan::Filter(Filter::try_new(expr, Arc::new(input))?))
             }
             LogicalPlanType::Window(window) => {
                 let input: LogicalPlan =
                     into_logical_plan!(window.input, ctx, extension_codec)?;
                 let window_expr =
                     from_proto::parse_exprs(&window.window_expr, ctx, extension_codec)?;
-                LogicalPlanBuilder::from(input).window(window_expr)?.build()
+                Ok(LogicalPlan::Window(Window::try_new(
+                    window_expr,
+                    Arc::new(input),
+                )?))
             }
             LogicalPlanType::Aggregate(aggregate) => {
                 let input: LogicalPlan =
@@ -574,9 +578,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                     from_proto::parse_exprs(&aggregate.group_expr, ctx, extension_codec)?;
                 let aggr_expr =
                     from_proto::parse_exprs(&aggregate.aggr_expr, ctx, extension_codec)?;
-                LogicalPlanBuilder::from(input)
-                    .aggregate(group_expr, aggr_expr)?
-                    .build()
+                Ok(LogicalPlan::Aggregate(Aggregate::try_new(
+                    Arc::new(input),
+                    group_expr,
+                    aggr_expr,
+                )?))
             }
             LogicalPlanType::ListingScan(scan) => {
                 let schema: Schema = convert_required!(scan.schema)?;
@@ -696,13 +702,16 @@ impl AsLogicalPlan for LogicalPlanNode {
                     projection = Some(column_indices);
                 }
 
-                LogicalPlanBuilder::scan_with_filters(
+                let table_scan = TableScanBuilder::new(
                     table_name,
                     provider_as_source(Arc::new(provider)),
-                    projection,
-                    filters,
-                )?
-                .build()
+                )
+                .with_projection(projection)
+                .with_filters(filters)
+                .with_fetch(scan.fetch.map(|f| f as usize))
+                .with_skip(scan.skip.map(|o| o as usize))
+                .build()?;
+                LogicalPlanBuilder::table_scan(table_scan)?.build()
             }
             LogicalPlanType::CustomScan(scan) => {
                 let schema: Schema = convert_required!(scan.schema)?;
@@ -730,13 +739,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ctx,
                 )?;
 
-                LogicalPlanBuilder::scan_with_filters(
-                    table_name,
-                    provider_as_source(provider),
-                    projection,
-                    filters,
-                )?
-                .build()
+                let table_scan =
+                    TableScanBuilder::new(table_name, provider_as_source(provider))
+                        .with_projection(projection)
+                        .with_filters(filters)
+                        .with_fetch(scan.fetch.map(|f| f as usize))
+                        .with_skip(scan.skip.map(|o| o as usize))
+                        .build()?;
+                LogicalPlanBuilder::table_scan(table_scan)?.build()
             }
             LogicalPlanType::Sort(sort) => {
                 let input: LogicalPlan =
@@ -746,9 +756,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let fetch = (sort.fetch >= 0)
                     .then(|| usize_from_wire(sort.fetch, "Sort", "fetch"))
                     .transpose()?;
-                LogicalPlanBuilder::from(input)
-                    .sort_with_limit(sort_expr, fetch)?
-                    .build()
+                Ok(LogicalPlan::Sort(Sort {
+                    expr: sort_expr,
+                    input: Arc::new(input),
+                    fetch,
+                }))
             }
             LogicalPlanType::Repartition(repartition) => {
                 use datafusion_expr::Partitioning;
@@ -1222,12 +1234,15 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let table_name =
                     from_table_reference(scan.table_name.as_ref(), "ViewScan")?;
 
-                LogicalPlanBuilder::scan(
+                let table_scan = TableScanBuilder::new(
                     table_name,
                     provider_as_source(Arc::new(provider)),
-                    projection,
-                )?
-                .build()
+                )
+                .with_projection(projection)
+                .with_fetch(scan.fetch.map(|f| f as usize))
+                .with_skip(scan.skip.map(|o| o as usize))
+                .build()?;
+                LogicalPlanBuilder::table_scan(table_scan)?.build()
             }
             LogicalPlanType::Prepare(prepare) => {
                 let input: LogicalPlan =
@@ -1364,13 +1379,12 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 let provider = Arc::new(EmptyTable::new(Arc::clone(&schema)));
 
-                LogicalPlanBuilder::scan_with_filters(
-                    table_name,
-                    provider_as_source(provider),
-                    projection,
-                    filters,
-                )?
-                .build()
+                let table_scan =
+                    TableScanBuilder::new(table_name, provider_as_source(provider))
+                        .with_projection(projection)
+                        .with_filters(filters)
+                        .build()?;
+                LogicalPlanBuilder::table_scan(table_scan)?.build()
             }
             LogicalPlanType::Dml(dml_node) => {
                 let table_name =
@@ -1420,6 +1434,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                 source,
                 filters,
                 projection,
+                fetch,
+                skip,
                 ..
             }) => {
                 let provider = source_as_provider(source)?;
@@ -1552,6 +1568,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 projection,
                                 filters,
                                 file_sort_order: exprs_vec,
+                                fetch: fetch.map(|f| f as u64),
+                                skip: skip.map(|o| o as u64),
                             },
                         )),
                     })
@@ -1575,6 +1593,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                                     .definition()
                                     .map(|s| s.to_string())
                                     .unwrap_or_default(),
+                                fetch: fetch.map(|f| f as u64),
+                                skip: skip.map(|o| o as u64),
                             },
                         ))),
                     })
@@ -1622,6 +1642,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                         schema: Some(schema),
                         filters,
                         custom_table_data: bytes,
+                        fetch: fetch.map(|f| f as u64),
+                        skip: skip.map(|o| o as u64),
                     });
                     let node = LogicalPlanNode {
                         logical_plan_type: Some(scan),

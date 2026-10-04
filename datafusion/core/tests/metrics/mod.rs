@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[path = "metrics/plan.rs"]
 mod plan;
 
 use std::sync::Arc;
