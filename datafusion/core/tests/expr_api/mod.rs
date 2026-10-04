@@ -384,7 +384,7 @@ fn test_create_physical_expr_timestamp_subtraction_uses_session_timezone() {
     .unwrap();
     let df_schema = DFSchema::try_from(batch.schema()).unwrap();
     let mut config = SessionConfig::new();
-    config.options_mut().execution.time_zone = Some("+08:00".into());
+    config.options_mut().execution.time_zone = Some("+08:00".parse().unwrap());
     let ctx = SessionContext::new_with_config(config);
 
     let physical_expr = ctx

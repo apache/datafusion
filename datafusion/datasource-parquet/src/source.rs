@@ -50,6 +50,7 @@ use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_functions::core::file_row_index::FileRowIndexFunc;
 use datafusion_physical_expr::expressions::{Column, DynamicFilterTracking};
 use datafusion_physical_expr::projection::ProjectionExprs;
+use datafusion_physical_expr::utils::split_conjunction;
 use datafusion_physical_expr::{EquivalenceProperties, conjunction};
 use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
 use datafusion_physical_expr_adapter::rewrite::{
@@ -676,6 +677,10 @@ impl FileSource for ParquetSource {
             encryption_factory: self.get_encryption_factory_with_config(),
             max_predicate_cache_size: self.max_predicate_cache_size(),
             max_in_list_size: self.max_in_list_size(),
+            row_group_range_assignment: self
+                .table_parquet_options
+                .global
+                .row_group_range_assignment,
             reverse_row_groups: self.reverse_row_groups,
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             virtual_state,
@@ -700,6 +705,23 @@ impl FileSource for ParquetSource {
 
     fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
         self.predicate.clone()
+    }
+
+    /// The predicate is applied to every row only when filter pushdown is
+    /// enabled, and then only the conjuncts that can become a `RowFilter`.
+    /// Otherwise the predicate is used only for pruning.
+    fn exact_filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        if !self.pushdown_filters() {
+            return None;
+        }
+        let predicate = self.predicate.as_ref()?;
+        let pushable_schema = self.table_schema.schema_without_virtual_columns();
+        let exact = split_conjunction(predicate)
+            .into_iter()
+            .filter(|expr| can_expr_be_pushed_down_with_schemas(expr, pushable_schema))
+            .cloned()
+            .collect::<Vec<_>>();
+        (!exact.is_empty()).then(|| conjunction(exact))
     }
 
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
@@ -826,15 +848,14 @@ impl FileSource for ParquetSource {
                         )?;
                     }
                 }
-                Ok(())
             }
             DisplayFormatType::TreeRender => {
                 if let Some(predicate) = self.filter() {
                     writeln!(f, "predicate={}", fmt_sql(predicate.as_ref()))?;
                 }
-                Ok(())
             }
         }
+        Ok(())
     }
 
     fn try_pushdown_filters(
@@ -1357,6 +1378,42 @@ mod tests {
     use super::*;
     use arrow::datatypes::Schema;
     use datafusion_physical_expr::expressions::lit;
+
+    #[test]
+    fn partition_metrics_exclude_derived_plan_metrics() {
+        use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+        use datafusion_datasource::source::DataSourceExec;
+        use datafusion_execution::object_store::ObjectStoreUrl;
+        use datafusion_physical_plan::ExecutionPlan;
+        use datafusion_physical_plan::metrics::MetricBuilder;
+
+        let source = Arc::new(ParquetSource::new(Arc::new(Schema::empty())));
+        let metrics = source.metrics().clone();
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+                .build();
+        let plan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(config);
+        assert_eq!(plan.metrics().unwrap().for_partition(0).iter().count(), 0);
+        MetricBuilder::new(&metrics).output_rows(0).add(10);
+        MetricBuilder::new(&metrics).output_rows(1).add(20);
+        MetricBuilder::new(&metrics).global_counter("global").add(1);
+        let selected = plan.metrics().unwrap().for_partition(0);
+        assert_eq!(selected.output_rows(), Some(10));
+        assert!(selected.iter().all(|m| m.partition() == Some(0)));
+        let full = plan.metrics().unwrap();
+        assert_eq!(full.output_rows(), Some(30));
+        assert!(
+            full.iter().any(
+                |m| m.value().name() == "output_rows_skew" && m.partition().is_none()
+            )
+        );
+        MetricBuilder::new(&metrics).output_rows(0).add(5);
+        assert_eq!(selected.output_rows(), Some(10));
+        assert_eq!(
+            plan.metrics().unwrap().for_partition(0).output_rows(),
+            Some(15)
+        );
+    }
 
     #[test]
     fn test_reverse_scan_default_value() {

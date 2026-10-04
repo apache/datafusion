@@ -333,6 +333,10 @@ mod parquet {
                 options.global.writer_version,
                 ParquetOptions::default().writer_version
             );
+            assert_eq!(
+                options.global.row_group_range_assignment,
+                ParquetOptions::default().row_group_range_assignment
+            );
         }
     }
 }

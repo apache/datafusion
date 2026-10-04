@@ -104,7 +104,7 @@ impl AnalyzerRule for TypeCoercion {
                 analyze_internal(
                     &EMPTY_SCHEMA,
                     plan,
-                    config.execution.time_zone.as_deref(),
+                    config.execution.time_zone.as_ref().map(|tz| tz.as_str()),
                 )
             })?
             .data;
@@ -161,6 +161,16 @@ fn analyze_internal(
     // apply coercion rewrite all expressions in the plan individually
     plan.map_expressions(|expr| {
         let original_name = name_preserver.save(&expr);
+
+        // A lambda variable carries the field recorded when the plan was built, which
+        // need not be the one its function derives from the arguments. Resolve them
+        // before coercing, so lambda bodies are coerced against the types they receive.
+        let expr = if expr.exists(|e| Ok(matches!(e, Expr::HigherOrderFunction(_))))? {
+            expr.resolve_lambda_variables(&schema)?.data
+        } else {
+            expr
+        };
+
         expr.rewrite(&mut expr_rewrite)
             .map(|transformed| transformed.update_data(|e| original_name.restore(e)))
     })?
@@ -3372,7 +3382,7 @@ mod test {
         )?);
 
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = Some("+08:00".to_string());
+        options.execution.time_zone = Some("+08:00".parse()?);
         let rule = Arc::new(TypeCoercion::new());
         assert_analyzed_plan_with_config_eq_snapshot!(
             options,
@@ -3491,7 +3501,7 @@ mod test {
         let plan = LogicalPlan::Filter(Filter::try_new(set_comparison, outer)?);
 
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = Some("+08:00".to_string());
+        options.execution.time_zone = Some("+08:00".parse()?);
         let rule = Arc::new(TypeCoercion::new());
         assert_analyzed_plan_with_config_eq_snapshot!(
             options,

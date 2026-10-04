@@ -31,7 +31,7 @@ use datafusion_expr::expr::{Exists, InSubquery, SetComparison};
 use datafusion_expr::expr_rewriter::replace_col;
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{
-    ColumnarValue, DistinctHandling, Expr, Volatility, WriteOp, logical_plan::LogicalPlan,
+    ColumnarValue, DistinctHandling, Expr, WriteOp, logical_plan::LogicalPlan,
 };
 use datafusion_physical_expr::create_physical_expr;
 use log::{debug, trace};
@@ -41,7 +41,7 @@ use std::sync::Arc;
 /// as it was initially placed here and then moved elsewhere.
 pub use datafusion_expr::expr_rewriter::NamePreserver;
 
-/// Whether an expression is free of volatile scalar functions and subqueries.
+/// Whether an expression is free of volatile functions and subqueries.
 /// Subqueries are conservative barriers because their plans may contain
 /// volatile expressions that [`Expr::is_volatile`] does not visit.
 pub(crate) fn is_repeatable(expr: &Expr) -> bool {
@@ -79,11 +79,7 @@ pub(crate) fn is_duplicate_insensitive_aggregate(mut expr: &Expr) -> bool {
         // Variants added in the future are treated the same way.
         _ => false,
     };
-    // Expr::is_volatile checks scalar functions only; check the aggregate
-    // function's own volatility separately.
-    ignores_duplicates
-        && aggregate.func.signature().volatility != Volatility::Volatile
-        && is_repeatable(expr)
+    ignores_duplicates && is_repeatable(expr)
 }
 
 /// Return the expression schema for a MERGE DML node.

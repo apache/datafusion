@@ -117,6 +117,7 @@ fn roundtrip_hash_table_lookup_expr_to_lit() -> Result<()> {
         datafusion::physical_plan::joins::SeededRandomState::with_seed(0),
         hash_map,
         "test_lookup".to_string(),
+        None,
     ));
 
     // Create a filter with the lookup expression

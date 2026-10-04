@@ -32,7 +32,9 @@ use datafusion::datasource::listing::{
 use datafusion::execution::options::{ArrowReadOptions, JsonReadOptions};
 use datafusion::optimizer::Optimizer;
 use datafusion::optimizer::optimize_unions::OptimizeUnions;
-use datafusion_common::parquet_config::DFParquetWriterVersion;
+use datafusion_common::parquet_config::{
+    DFParquetWriterVersion, RowGroupRangeAssignment,
+};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_functions_aggregate::sum::sum_distinct;
 use prost::Message;
@@ -618,6 +620,43 @@ async fn roundtrip_logical_plan_sort() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_logical_plan_limit_skip() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let schema = Schema::new(vec![
+        Field::new("a", DataType::Int64, true),
+        Field::new("b", DataType::Decimal128(15, 2), true),
+    ]);
+
+    ctx.register_csv(
+        "t1",
+        "tests/testdata/test.csv",
+        CsvReadOptions::default().schema(&schema),
+    )
+    .await?;
+
+    let query = "SELECT a, b FROM t1 LIMIT 5 OFFSET 3";
+    let plan = ctx.sql(query).await?.into_optimized_plan()?;
+
+    // Sanity check that the `skip` was actually pushed into the `TableScan`
+    // (ListingTable opts into `supports_skip_pushdown`), so this test
+    // exercises the new `ListingTableScanNode.skip` wire field rather than
+    // trivially passing because nothing needed to round-trip.
+    let plan_str = plan.to_string();
+    assert_eq!(
+        plan_str,
+        "Limit: skip=0, fetch=5\n  TableScan: t1 projection=[a, b], fetch=5, skip=3",
+        "expected 'fetch=5' and 'skip=3' to be pushed into the scan, got: {plan_str}"
+    );
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(plan_str, logical_round_trip.to_string());
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn roundtrip_logical_plan_dml() -> Result<()> {
     let ctx = SessionContext::new();
     let schema = Schema::new(vec![
@@ -1128,6 +1167,7 @@ async fn roundtrip_logical_plan_copy_to_parquet() -> Result<()> {
 
     parquet_format.global.allow_single_file_parallelism = false;
     parquet_format.global.created_by = "test".to_string();
+    parquet_format.global.row_group_range_assignment = RowGroupRangeAssignment::Midpoint;
 
     let file_type = format_as_file_type(Arc::new(
         ParquetFormatFactory::new_with_options(parquet_format.clone()),
@@ -1170,6 +1210,10 @@ async fn roundtrip_logical_plan_copy_to_parquet() -> Result<()> {
             assert_eq!(parquet_config.key_value_metadata, key_value_metadata);
             assert!(!parquet_config.global.allow_single_file_parallelism);
             assert_eq!(parquet_config.global.created_by, "test".to_string());
+            assert_eq!(
+                parquet_config.global.row_group_range_assignment,
+                RowGroupRangeAssignment::Midpoint
+            );
         }
         _ => panic!(),
     }

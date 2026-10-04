@@ -300,20 +300,33 @@ impl<'a> BinaryTypeCoercer<'a> {
             return Ok(Signature { lhs, rhs, ret });
         }
         Plus | Minus | Multiply | Divide | Modulo  =>  {
+            // Interpret the naive operand in the session timezone when set,
+            // or in the aware operand's timezone otherwise. Coerce before the
+            // Arrow probe so equal units follow the same rule as different units.
             if self.op == &Minus
-                && let Some((lhs, rhs)) =
-                    timestamp_types_with_session_timezone(
-                        lhs,
-                        rhs,
-                        self.session_time_zone,
-                    )
+                && matches!(
+                    (lhs, rhs),
+                    (Timestamp(_, Some(_)), Timestamp(_, None))
+                        | (Timestamp(_, None), Timestamp(_, Some(_)))
+                )
+                && let Some(coerced) = timestamp_types_with_session_timezone(
+                    lhs,
+                    rhs,
+                    self.session_time_zone,
+                )
+                .map(|(lhs, _)| lhs)
+                .or_else(|| temporal_coercion_strict_timezone(lhs, rhs))
             {
-                let ret = self.get_result(&lhs, &rhs).map_err(|e| {
+                let ret = self.get_result(&coerced, &coerced).map_err(|e| {
                     plan_datafusion_err!(
-                        "Cannot get result type for temporal operation {} {} {}: {e}", self.lhs, self.op, self.rhs
+                        "Cannot get result type for temporal operation {coerced} {} {coerced}: {e}", self.op
                     )
                 })?;
-                return Ok(Signature { lhs, rhs, ret });
+                return Ok(Signature {
+                    lhs: coerced.clone(),
+                    rhs: coerced,
+                    ret,
+                });
             }
             if let Ok(ret) = self.get_result(lhs, rhs) {
 
