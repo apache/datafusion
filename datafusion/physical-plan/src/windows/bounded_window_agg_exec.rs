@@ -1656,6 +1656,89 @@ mod tests {
     use itertools::Itertools;
     use tokio::time::timeout;
 
+    #[tokio::test]
+    async fn signed_zero_partition_across_batches() -> Result<()> {
+        use arrow::array::{Float64Array, Int64Array, UInt64Array};
+        use datafusion_physical_expr::expressions::NormalizeFloatZeroExpr;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Float64, false),
+            Field::new("b", DataType::Int64, false),
+        ]));
+        let key: Arc<dyn PhysicalExpr> =
+            Arc::new(NormalizeFloatZeroExpr::new(col("a", &schema)?));
+        let b = col("b", &schema)?;
+        // Each signed zero starts a separate input batch. The row number must
+        // continue within a partition in all three search modes.
+        let batches = [(0.0, 1), (-0.0, 1), (0.0, 2), (-0.0, 2)]
+            .into_iter()
+            .map(|(a, b)| {
+                Ok(RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(Float64Array::from(vec![a])),
+                        Arc::new(Int64Array::from(vec![b])),
+                    ],
+                )?)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for mode in [
+            InputOrderMode::Sorted,
+            InputOrderMode::Linear,
+            InputOrderMode::PartiallySorted(vec![1]),
+        ] {
+            let sort_exprs = match &mode {
+                InputOrderMode::Sorted => vec![
+                    PhysicalSortExpr::new_default(Arc::clone(&key)),
+                    PhysicalSortExpr::new_default(Arc::clone(&b)),
+                ],
+                _ => vec![PhysicalSortExpr::new_default(Arc::clone(&b))],
+            };
+            let input = TestMemoryExec::try_new(
+                std::slice::from_ref(&batches),
+                Arc::clone(&schema),
+                None,
+            )?
+            .try_with_sort_information(vec![LexOrdering::new(sort_exprs).unwrap()])?;
+            let input: Arc<dyn ExecutionPlan> =
+                Arc::new(TestMemoryExec::update_cache(&Arc::new(input)));
+            let window_expr = create_window_expr(
+                &WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+                "rn".to_string(),
+                &[],
+                &[Arc::clone(&key), Arc::clone(&b)],
+                &[],
+                Arc::new(WindowFrame::new(None)),
+                Arc::clone(&schema),
+                false,
+                false,
+                None,
+            )?;
+            let plan: Arc<dyn ExecutionPlan> = Arc::new(BoundedWindowAggExec::try_new(
+                vec![window_expr],
+                input,
+                mode.clone(),
+                false,
+            )?);
+            let output =
+                collect(execute_stream(plan, Arc::new(TaskContext::default()))?).await?;
+            let row_numbers = output
+                .iter()
+                .flat_map(|batch| {
+                    batch
+                        .column(2)
+                        .as_any()
+                        .downcast_ref::<UInt64Array>()
+                        .unwrap()
+                        .values()
+                        .to_vec()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(row_numbers, vec![1, 2, 1, 2], "{mode:?}");
+        }
+        Ok(())
+    }
+
     #[derive(Debug, Clone)]
     struct TestStreamPartition {
         schema: SchemaRef,

@@ -67,6 +67,7 @@ use datafusion_common::HashMap as DFHashMap;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::format::ExplainAnalyzeCategories;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+use datafusion_common::utils::has_float_leaf;
 use datafusion_common::{
     DFSchema, DFSchemaRef, ScalarValue, exec_err, internal_datafusion_err, internal_err,
     not_impl_err, plan_err,
@@ -96,7 +97,7 @@ use datafusion_expr::{
 use datafusion_physical_expr::aggregate::{
     AggregateFunctionExpr, LoweredAggregate, LoweredAggregateBuilder,
 };
-use datafusion_physical_expr::expressions::Literal;
+use datafusion_physical_expr::expressions::{Literal, NormalizeFloatZeroExpr};
 use datafusion_physical_expr::{
     LexOrdering, PhysicalSortExpr, create_physical_sort_exprs,
 };
@@ -2694,7 +2695,19 @@ pub fn create_window_expr_with_name(
                 logical_schema,
                 execution_props,
                 planning_ctx,
-            )?;
+            )?
+            .into_iter()
+            .map(|expr| {
+                // Normalize before ordering/distribution requirements are derived so
+                // sorting and both window executors use the same partition keys.
+                if has_float_leaf(&expr.data_type(&physical_schema)?) {
+                    Ok(Arc::new(NormalizeFloatZeroExpr::new(expr))
+                        as Arc<dyn PhysicalExpr>)
+                } else {
+                    Ok(expr)
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
             let order_by = create_physical_sort_exprs(
                 order_by,
                 logical_schema,

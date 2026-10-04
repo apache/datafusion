@@ -306,3 +306,83 @@ fn roundtrip_lead_with_default_value() -> Result<()> {
         true,
     )?))
 }
+
+/// Raw [a, b] ordering is insufficient after signed-zero groups merge. Verify
+/// planning adds the required ordering and that it survives serialization.
+#[tokio::test]
+async fn roundtrip_signed_zero_window() -> Result<()> {
+    use datafusion::arrow::array::{Float64Array, Int64Array, RecordBatch, UInt64Array};
+    use datafusion::datasource::MemTable;
+    use datafusion::physical_plan::collect;
+    use datafusion::prelude::{SessionConfig, SessionContext, col};
+    use datafusion_proto::physical_plan::{
+        DefaultPhysicalExtensionCodec, DefaultPhysicalProtoConverter,
+    };
+
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(1));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Float64, false),
+        Field::new("b", DataType::Int64, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Float64Array::from(vec![-0.0, 0.0])),
+            Arc::new(Int64Array::from(vec![2, 1])),
+        ],
+    )?;
+    let table = MemTable::try_new(schema, vec![vec![batch]])?.with_sort_order(vec![
+        vec![col("a").sort(true, false), col("b").sort(true, false)],
+    ]);
+    ctx.register_table("signed_zeros", Arc::new(table))?;
+    let plan = ctx
+        .sql(
+            "SELECT a, b, row_number() OVER (PARTITION BY a ORDER BY b) AS rn \
+         FROM signed_zeros ORDER BY b",
+        )
+        .await?
+        .create_physical_plan()
+        .await?;
+    let decoded = super::roundtrip_test_and_return(
+        Arc::clone(&plan),
+        &ctx,
+        &DefaultPhysicalExtensionCodec {},
+        &DefaultPhysicalProtoConverter {},
+    )?;
+    let mut plans = vec![Arc::clone(&plan), decoded];
+    #[cfg(feature = "json")]
+    plans.push(super::roundtrip_test_json_and_return(plan, &ctx)?);
+    for plan in plans {
+        let batches = collect(plan, ctx.task_ctx()).await?;
+        let row_numbers = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(2)
+                    .as_any()
+                    .downcast_ref::<UInt64Array>()
+                    .unwrap()
+                    .values()
+                    .to_vec()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(row_numbers, vec![1, 2]);
+        let zero_bits = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Float64Array>()
+                    .unwrap()
+                    .values()
+                    .iter()
+                    .map(|v| v.to_bits())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(zero_bits, vec![0.0_f64.to_bits(), (-0.0_f64).to_bits()]);
+    }
+    Ok(())
+}
