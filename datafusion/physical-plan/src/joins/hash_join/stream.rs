@@ -1384,13 +1384,23 @@ fn null_aware_left_mark_column(
     left_side: &UInt64Array,
     right_side: &UInt32Array,
 ) -> ArrayRef {
-    let build_key_column = &left_data.values()[0];
     // Correlated joins precomputed the UNKNOWN decision per build row.
     let null_indices_bitmap = correlated.then(|| left_data.null_indices_bitmap().lock());
+    // `LeftMark` final indices are a contiguous chunk of build rows. Limit the
+    // potentially allocating dictionary logical-null computation to this chunk;
+    // correlated joins already carry the answer in `null_indices_bitmap`.
+    let build_key_nulls = if correlated || left_side.is_empty() {
+        None
+    } else {
+        let start = left_side.value(0) as usize;
+        left_data.values()[0]
+            .slice(start, left_side.len())
+            .logical_nulls()
+    };
     build_null_aware_left_mark_column(
         left_side,
         right_side,
-        build_key_column.as_ref(),
+        build_key_nulls.as_ref(),
         null_indices_bitmap.as_deref(),
         probe_summary.has_null,
         probe_summary.non_empty,
