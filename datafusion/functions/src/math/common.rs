@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::ArrowNativeTypeOp;
+use arrow::array::{Array, ArrowNativeTypeOp, ArrowPrimitiveType, PrimitiveArray};
 use arrow::error::ArrowError;
+use datafusion_common::{Result, exec_err};
 use num_traits::{CheckedMul, CheckedNeg, Signed};
 use std::fmt::Display;
 use std::mem::swap;
@@ -150,10 +151,48 @@ pub(crate) fn lcm_signed_int(x: i64, y: i64) -> Result<i64, ArrowError> {
         })
 }
 
+/// Applies `op` to every value in `array`, like `unary`, but returns an error
+/// if `input_error` returns a message for any non-null value.
+///
+/// Use this for functions that return an error for some argument values, such
+/// as `sqrt`, which returns an error for negative numbers. `try_unary` can also
+/// return errors, but it can return early on any value, which keeps the
+/// compiler from vectorizing its loop. That makes cheap functions like `sqrt`
+/// several times slower.
+///
+/// Instead, `input_error` is called on every value, including those in null
+/// slots, in the same loop as `op`; only if some value fails is the array
+/// searched again for an error to report. `input_error` should therefore be a
+/// cheap check, such as a comparison.
+pub(crate) fn unary_with_input_check<T: ArrowPrimitiveType>(
+    array: &PrimitiveArray<T>,
+    op: impl Fn(T::Native) -> T::Native,
+    input_error: impl Fn(T::Native) -> Option<&'static str>,
+) -> Result<PrimitiveArray<T>> {
+    let mut any_invalid = false;
+    let values: Vec<T::Native> = array
+        .values()
+        .iter()
+        .map(|&x| {
+            any_invalid |= input_error(x).is_some();
+            op(x)
+        })
+        .collect();
+
+    // The check above also ran on null slots, which can hold any value, so the
+    // failure may be spurious. Re-check just the non-null values.
+    if any_invalid && let Some(message) = array.iter().flatten().find_map(input_error) {
+        return exec_err!("{message}");
+    }
+
+    Ok(PrimitiveArray::new(values.into(), array.nulls().cloned()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_buffer::i256;
+    use arrow::array::Float64Array;
+    use arrow_buffer::{NullBuffer, i256};
 
     const GCD_COMMON_TEST_CASES: [(i64, i64, i64); 18] = [
         // Basic cases
@@ -316,5 +355,22 @@ mod tests {
                 "lcm_signed({a}, {b}) expected {expected}, actual {actual}"
             );
         }
+    }
+
+    #[test]
+    fn test_unary_with_input_check() {
+        let input_error = |x: f64| (x < 0.0).then_some("negative input");
+
+        // -1.0 is in a null slot, so it is not an error.
+        let array = Float64Array::new(
+            vec![4.0, -1.0, 9.0].into(),
+            Some(NullBuffer::from(vec![true, false, true])),
+        );
+        let result = unary_with_input_check(&array, f64::sqrt, input_error).unwrap();
+        assert_eq!(result, Float64Array::from(vec![Some(2.0), None, Some(3.0)]));
+
+        let array = Float64Array::from(vec![Some(4.0), None, Some(-1.0)]);
+        let error = unary_with_input_check(&array, f64::sqrt, input_error).unwrap_err();
+        assert_eq!(error.strip_backtrace(), "Execution error: negative input");
     }
 }
