@@ -82,6 +82,7 @@ use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::utils::memory::{
     RecordBatchMemoryCounter, estimate_memory_size, get_record_batch_memory_size,
 };
+use datafusion_common::utils::normalize_float_zero;
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, assert_or_internal_err, internal_err,
     plan_err, project_schema,
@@ -299,7 +300,11 @@ struct JoinBuildData {
     map: Arc<Map>,
     /// The input rows for the build side.
     batch: RecordBatch,
-    /// Evaluated build-side key expressions.
+    /// Evaluated build-side key expressions, with float `-0.0` rewritten to
+    /// `+0.0` so probe batches can compare against them without scanning the
+    /// build side again. The dynamic filters (`bounds`, `membership`) and
+    /// `build_side_has_null` were computed from the original keys in
+    /// `collect_left_input`.
     values: Vec<ArrayRef>,
     /// Bounds computed from the build side; absent for an empty partition.
     bounds: Option<PartitionBounds>,
@@ -370,7 +375,9 @@ impl JoinLeftData {
         !self.map().is_empty()
     }
 
-    /// returns a reference to the build side expressions values
+    /// Returns the build side key values, with float `-0.0` already rewritten
+    /// to `+0.0` for key comparison. The dynamic filters and
+    /// `build_side_has_null` were derived from the original keys instead.
     pub(super) fn values(&self) -> &[ArrayRef] {
         &self.build.values
     }
@@ -1856,7 +1863,7 @@ impl ExecutionPlan for HashJoinExec {
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.metrics.clone_inner())
+        Some(self.metrics.clone_inner().with_output_rows_skew())
     }
 
     fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
@@ -3208,12 +3215,20 @@ async fn collect_left_input(
         (Map::HashMap(hashmap), batch, left_values)
     };
 
+    // Rewrite float `-0.0` to `+0.0` once here, so the per probe batch key
+    // comparison does not rescan the build side. Arrays without `-0.0`, and
+    // non-float keys, are shared rather than copied.
+    let normalized_values: Vec<ArrayRef> =
+        left_values.iter().map(normalize_float_zero).collect();
+
     // Join keys that are plain columns share the buffers of `batch`, any other
     // expression evaluates to new arrays that are kept for the whole join.
+    // The same goes for normalized keys: only a rewritten copy adds memory.
     let mut key_counter = RecordBatchMemoryCounter::new();
     key_counter.count_batch(&batch);
     let keys_size = left_values
         .iter()
+        .chain(&normalized_values)
         .map(|values| key_counter.count_array(values.as_ref()))
         .sum::<usize>();
     reservation.try_grow(keys_size)?;
@@ -3276,7 +3291,7 @@ async fn collect_left_input(
             let build_indices = UInt64Array::from_iter_values(
                 null_mask.values().set_indices().map(|i| i as u64),
             );
-            let scope_values = left_values[1..]
+            let scope_values = normalized_values[1..]
                 .iter()
                 .map(|values| Ok(arrow::compute::filter(values.as_ref(), &null_mask)?))
                 .collect::<Result<Vec<_>>>()?;
@@ -3399,7 +3414,7 @@ async fn collect_left_input(
         build: Arc::new(JoinBuildData {
             map,
             batch,
-            values: left_values,
+            values: normalized_values,
             bounds,
             membership,
             reservation,
@@ -3488,11 +3503,11 @@ mod tests {
 
     use arrow::array::{
         Array, ArrayRef, AsArray, BinaryViewArray, Date32Array, DictionaryArray,
-        Float64Array, Int32Array, Int64Array, StringArray, StringViewArray, StructArray,
-        UInt32Array, UInt64Array,
+        Float32Array, Float64Array, Int32Array, Int64Array, StringArray, StringViewArray,
+        StructArray, UInt32Array, UInt64Array,
     };
     use arrow::buffer::NullBuffer;
-    use arrow::datatypes::{DataType, Field, Int32Type};
+    use arrow::datatypes::{DataType, Field, Float32Type, Float64Type, Int32Type};
     use datafusion_common::hash_utils::create_hashes;
     use datafusion_common::stats::Precision;
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
@@ -4252,6 +4267,165 @@ mod tests {
             | 2  | 1.5  | 13 | 2  | 1.5  | 102 |
             +----+------+----+----+------+-----+
             ");
+        }
+
+        Ok(())
+    }
+
+    /// Collects a single-column build side keyed on that column.
+    async fn collect_float_build(
+        keys: ArrayRef,
+    ) -> Result<(JoinLeftData, BuildProbeJoinMetrics)> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "f",
+            keys.data_type().clone(),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![keys])?;
+        let exec = TestMemoryExec::try_new_exec(&[vec![batch]], schema, None)?;
+        let stream = exec.execute(0, Arc::new(TaskContext::default()))?;
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
+        let on_left: Vec<PhysicalExprRef> = vec![Arc::new(Column::new("f", 0))];
+        let left_data = collect_left_input(
+            RandomState::with_seed(0),
+            stream,
+            on_left,
+            metrics.clone(),
+            MemoryConsumer::new("HashJoinInput").register(&pool),
+            false,
+            1,
+            false,
+            Arc::new(ConfigOptions::default()),
+            NullEquality::NullEqualsNothing,
+            None,
+            Count::new(),
+            BuildMode::Ordinary,
+        )
+        .await?;
+        Ok((left_data, metrics))
+    }
+
+    /// The stored build keys have `-0.0` rewritten to `+0.0`, while the build
+    /// batch keeps the original value. The rewritten copy is charged to the
+    /// build memory, and keys without `-0.0` are shared with the batch.
+    #[tokio::test]
+    async fn collect_left_input_stores_normalized_float_keys() -> Result<()> {
+        let (with_neg_zero, neg_metrics) =
+            collect_float_build(Arc::new(Float64Array::from(vec![-0.0, 1.0]))).await?;
+        let stored = with_neg_zero.values()[0].as_primitive::<Float64Type>();
+        assert_eq!(stored.value(0).to_bits(), 0.0_f64.to_bits());
+        assert_eq!(stored.value(1), 1.0);
+        let original = with_neg_zero
+            .batch()
+            .column(0)
+            .as_primitive::<Float64Type>();
+        assert_eq!(original.value(0).to_bits(), (-0.0_f64).to_bits());
+
+        let (without_neg_zero, pos_metrics) =
+            collect_float_build(Arc::new(Float64Array::from(vec![0.0, 1.0]))).await?;
+        assert!(Arc::ptr_eq(
+            &without_neg_zero.values()[0],
+            without_neg_zero.batch().column(0)
+        ));
+
+        // Both builds are the same shape, so they differ only by the copy.
+        assert_eq!(
+            neg_metrics.build_mem_used.value(),
+            pos_metrics.build_mem_used.value() + stored.values().inner().capacity()
+        );
+
+        let (f32_build, _) =
+            collect_float_build(Arc::new(Float32Array::from(vec![-0.0_f32, 1.0])))
+                .await?;
+        let stored = f32_build.values()[0].as_primitive::<Float32Type>();
+        assert_eq!(stored.value(0).to_bits(), 0.0_f32.to_bits());
+        let original = f32_build.batch().column(0).as_primitive::<Float32Type>();
+        assert_eq!(original.value(0).to_bits(), (-0.0_f32).to_bits());
+        Ok(())
+    }
+
+    /// A single Float64 key takes the general comparator path. Build and
+    /// probe both hold `-0.0` and `0.0`, which must all match each other,
+    /// while the output keeps each side's original sign.
+    #[rstest]
+    #[tokio::test]
+    async fn join_inner_single_float_key_negative_zero(
+        #[values(8192, 1)] batch_size: usize,
+        #[values(NullEquality::NullEqualsNothing, NullEquality::NullEqualsNull)]
+        null_equality: NullEquality,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        let table = |suffix: &str,
+                     f: Vec<Option<f64>>,
+                     v: Vec<i32>|
+         -> Result<Arc<dyn ExecutionPlan>> {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new(format!("f{suffix}"), DataType::Float64, true),
+                Field::new(format!("v{suffix}"), DataType::Int32, true),
+            ]));
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Float64Array::from(f)),
+                    Arc::new(Int32Array::from(v)),
+                ],
+            )?;
+            TestMemoryExec::try_new_exec(&[vec![batch]], schema, None)
+                .map(|exec| exec as _)
+        };
+
+        let left = table(
+            "1",
+            vec![Some(-0.0), Some(0.0), Some(1.5), None],
+            vec![10, 11, 12, 13],
+        )?;
+        let right = table(
+            "2",
+            vec![Some(0.0), Some(-0.0), Some(1.5), None],
+            vec![20, 21, 22, 23],
+        )?;
+        let on = vec![(
+            Arc::new(Column::new_with_schema("f1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("f2", &right.schema())?) as _,
+        )];
+
+        let (_, batches, _) =
+            join_collect(left, right, on, &JoinType::Inner, null_equality, task_ctx)
+                .await?;
+
+        // The NULL keys only pair up when NULL equals NULL.
+        allow_duplicates! {
+            match null_equality {
+                NullEquality::NullEqualsNothing => {
+                    assert_snapshot!(batches_to_sort_string(&batches), @r"
+                    +------+----+------+----+
+                    | f1   | v1 | f2   | v2 |
+                    +------+----+------+----+
+                    | -0.0 | 10 | -0.0 | 21 |
+                    | -0.0 | 10 | 0.0  | 20 |
+                    | 0.0  | 11 | -0.0 | 21 |
+                    | 0.0  | 11 | 0.0  | 20 |
+                    | 1.5  | 12 | 1.5  | 22 |
+                    +------+----+------+----+
+                    ");
+                }
+                NullEquality::NullEqualsNull => {
+                    assert_snapshot!(batches_to_sort_string(&batches), @r"
+                    +------+----+------+----+
+                    | f1   | v1 | f2   | v2 |
+                    +------+----+------+----+
+                    |      | 13 |      | 23 |
+                    | -0.0 | 10 | -0.0 | 21 |
+                    | -0.0 | 10 | 0.0  | 20 |
+                    | 0.0  | 11 | -0.0 | 21 |
+                    | 0.0  | 11 | 0.0  | 20 |
+                    | 1.5  | 12 | 1.5  | 22 |
+                    +------+----+------+----+
+                    ");
+                }
+            }
         }
 
         Ok(())
@@ -10419,6 +10593,96 @@ mod tests {
             | 1  | 1  | 1  |
             | 10 | 2  | 1  |
             +----+----+----+
+            ");
+        }
+
+        Ok(())
+    }
+
+    /// Correlated null-aware `LeftAnti` whose two scope keys are Float64, with
+    /// `-0.0` on the build side and `0.0` on the probe side. Both scopes must
+    /// still match in every direction: the full key lookup, NULL probe values
+    /// against all build rows, and NULL build values against the probe rows.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_left_anti_float_scope_negative_zero(
+        batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        fn table(
+            id: Vec<Option<i32>>,
+            g1: Vec<f64>,
+            g2: Vec<f64>,
+        ) -> Arc<dyn ExecutionPlan> {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int32, true),
+                Field::new("g1", DataType::Float64, true),
+                Field::new("g2", DataType::Float64, true),
+            ]));
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(id)),
+                    Arc::new(Float64Array::from(g1)),
+                    Arc::new(Float64Array::from(g2)),
+                ],
+            )
+            .unwrap();
+            TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap()
+        }
+
+        let left = table(
+            vec![Some(1), Some(3), None, Some(4), Some(5), None, Some(6)],
+            vec![-0.0, -0.0, -0.0, 2.0, -0.0, 3.0, 2.0],
+            vec![1.0, 1.0, 1.0, -0.0, -0.0, -0.0, 1.0],
+        );
+        let right = table(
+            vec![Some(1), Some(2), None, Some(7)],
+            vec![0.0, 0.0, 2.0, 2.0],
+            vec![1.0, 1.0, 0.0, 1.0],
+        );
+
+        let on = ["id", "g1", "g2"]
+            .into_iter()
+            .map(|name| {
+                Ok((
+                    Arc::new(Column::new_with_schema(name, &left.schema())?) as _,
+                    Arc::new(Column::new_with_schema(name, &right.schema())?) as _,
+                ))
+            })
+            .collect::<Result<JoinOn>>()?;
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::LeftAnti,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true,
+        )?;
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        // Scope (0, 1) holds 1 and 2: `1` matches and is dropped, `3` is kept,
+        // and the NULL build value there is UNKNOWN. Scope (2, 0) holds a
+        // NULL probe value, so `4` is UNKNOWN. Scopes (0, 0) and (3, 0) are
+        // empty, so `5` and the NULL build value in (3, 0) are kept. Scope
+        // (2, 1) holds only 7, so `6` is kept.
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+------+------+
+            | id | g1   | g2   |
+            +----+------+------+
+            |    | 3.0  | -0.0 |
+            | 3  | -0.0 | 1.0  |
+            | 5  | -0.0 | -0.0 |
+            | 6  | 2.0  | 1.0  |
+            +----+------+------+
             ");
         }
 

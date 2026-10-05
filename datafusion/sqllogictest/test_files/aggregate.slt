@@ -1862,6 +1862,55 @@ SELECT approx_distinct(arrow_cast(i, 'Dictionary(Int32, Float64)')) FROM approx_
 statement error DataFusion error: This feature is not implemented: Support for 'approx_distinct' for data type Dictionary\(Int32, Float64\) is not implemented
 SELECT g, approx_distinct(arrow_cast(i, 'Dictionary(Int32, Float64)')) FROM approx_distinct_group_test GROUP BY g;
 
+# RunEndEncoded: run-end encoded values must hash identically to the plain
+# values, so the counts below match the Utf8 / Int32 cases above.
+query I
+SELECT approx_distinct(arrow_cast(s, 'RunEndEncoded("run_ends": non-null Int32, "values": Utf8)')) FROM approx_distinct_group_test WHERE g = 2;
+----
+2
+
+query II
+SELECT g, approx_distinct(arrow_cast(s, 'RunEndEncoded("run_ends": non-null Int32, "values": Utf8)')) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+query II
+SELECT g, approx_distinct(arrow_cast(i, 'RunEndEncoded("run_ends": non-null Int64, "values": Int32)')) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+# RunEndEncoded over a fixed-domain value type (Int8) goes through the
+# HyperLogLog accumulators and must match the Int32 counts above.
+query II
+SELECT g, approx_distinct(arrow_cast(arrow_cast(i, 'Int8'), 'RunEndEncoded("run_ends": non-null Int32, "values": Int8)')) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+# RunEndEncoded over a dictionary
+query II
+SELECT g, approx_distinct(arrow_cast(s, 'RunEndEncoded("run_ends": non-null Int32, "values": Dictionary(Int32, Utf8))')) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+# Unsupported value types are rejected, as for a bare Float64
+statement error DataFusion error: This feature is not implemented: Support for 'approx_distinct' for data type RunEndEncoded
+SELECT approx_distinct(arrow_cast(i, 'RunEndEncoded("run_ends": non-null Int32, "values": Float64)')) FROM approx_distinct_group_test;
+
+statement error DataFusion error: This feature is not implemented: Support for 'approx_distinct' for data type RunEndEncoded
+SELECT g, approx_distinct(arrow_cast(i, 'RunEndEncoded("run_ends": non-null Int32, "values": Float64)')) FROM approx_distinct_group_test GROUP BY g;
+
 
 # List
 statement ok
@@ -7569,6 +7618,62 @@ staging 1
 
 statement ok
 DROP TABLE distinct_limit_window_table;
+
+# `LimitedDistinctAggregation` limits only the final aggregate when its grouping
+# differs from the partial's (columns not at their output positions, or
+# expression keys). `CombinePartialFinalAggregate` must leave such a pair
+# uncombined instead of failing to plan.
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+CREATE TABLE distinct_limit_combine AS
+SELECT * FROM (VALUES (1, 10), (2, 20), (3, 30), (4, 40), (5, 50), (6, 60)) AS v(a, b);
+
+query TT
+EXPLAIN SELECT b, a FROM distinct_limit_combine GROUP BY b, a LIMIT 2;
+----
+logical_plan
+01)Limit: skip=0, fetch=2
+02)--Aggregate: groupBy=[[distinct_limit_combine.b, distinct_limit_combine.a]], aggr=[[]]
+03)----TableScan: distinct_limit_combine projection=[a, b]
+physical_plan
+01)GlobalLimitExec: skip=0, fetch=2
+02)--AggregateExec: mode=Final, gby=[b@0 as b, a@1 as a], aggr=[], lim=[2]
+03)----AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# LIMIT without ORDER BY may return any two groups
+query II
+SELECT count(*), count(*) FILTER (WHERE b = a * 10)
+FROM (SELECT b, a FROM distinct_limit_combine GROUP BY b, a LIMIT 2);
+----
+2 2
+
+query TT
+EXPLAIN SELECT a % 3 FROM distinct_limit_combine GROUP BY a % 3 LIMIT 2;
+----
+logical_plan
+01)Limit: skip=0, fetch=2
+02)--Aggregate: groupBy=[[distinct_limit_combine.a % Int64(3)]], aggr=[[]]
+03)----TableScan: distinct_limit_combine projection=[a]
+physical_plan
+01)GlobalLimitExec: skip=0, fetch=2
+02)--AggregateExec: mode=Final, gby=[distinct_limit_combine.a % Int64(3)@0 as distinct_limit_combine.a % Int64(3)], aggr=[], lim=[2]
+03)----AggregateExec: mode=Partial, gby=[a@0 % 3 as distinct_limit_combine.a % Int64(3)], aggr=[]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT count(*), count(DISTINCT m)
+FROM (SELECT a % 3 AS m FROM distinct_limit_combine GROUP BY a % 3 LIMIT 2);
+----
+2 2
+
+statement ok
+DROP TABLE distinct_limit_combine;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
 
 #
 # regr_*() tests

@@ -96,6 +96,11 @@ committer who approved your PR to help remind them to merge it.
 
 ## Creating Pull Requests
 
+With coding agents, the number of open PRs now far exceeds our review capacity.
+To help reviewers focus on fewer PRs, users without write access are limited to
+**3 open, non-draft PRs** at a time. If you reach the limit, wait for existing PRs
+to be merged or close them until you have fewer than 3 before opening another.
+
 When possible, we recommend splitting your contributions into multiple smaller focused PRs rather than large PRs (500+ lines) because:
 
 1. The PR is more likely to be reviewed quickly -- our reviewers struggle to find the contiguous time needed to review large PRs.
