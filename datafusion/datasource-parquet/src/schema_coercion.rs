@@ -32,6 +32,13 @@
 //! That is long-standing behaviour for top-level and struct fields; it is not
 //! extended to map children, whose positional matching is newer, so binary map
 //! values keep going through the validating cast instead.
+//!
+//! A scan can turn this coercion off with the
+//! `datafusion.execution.parquet.coerce_binary_to_string` option (see
+//! [`apply_file_schema_type_coercions_with_options`]). Such columns are then
+//! read as binary and converted by the `PhysicalExprAdapter`'s cast, which
+//! rejects invalid UTF-8 by default and which a custom adapter can replace
+//! with its own conversion.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -76,8 +83,33 @@ pub fn apply_file_schema_type_coercions(
     table_schema: &Schema,
     file_schema: &Schema,
 ) -> Option<Schema> {
-    let fields =
-        coerce_fields_by_name(table_schema.fields(), file_schema.fields(), true)?;
+    apply_file_schema_type_coercions_with_options(table_schema, file_schema, true)
+}
+
+/// Like [`apply_file_schema_type_coercions`], with control over the binary to
+/// string coercion.
+///
+/// When `binary_to_string` is `false`, binary file columns stay binary even
+/// when the table schema declares a string type for them. The Parquet reader
+/// then decodes them as binary and the [`PhysicalExprAdapter`] casts them to
+/// the table type. The regular to view type coercions are unaffected.
+///
+/// The reader only validates UTF-8 for columns with the `UTF8` annotation, so
+/// the coercion turns invalid bytes in a binary column into an invalid string
+/// array. Disabling it lets the adapter's cast reject those bytes, or lets a
+/// custom adapter convert them its own way.
+///
+/// [`PhysicalExprAdapter`]: datafusion_physical_expr_adapter::PhysicalExprAdapter
+pub fn apply_file_schema_type_coercions_with_options(
+    table_schema: &Schema,
+    file_schema: &Schema,
+    binary_to_string: bool,
+) -> Option<Schema> {
+    let fields = coerce_fields_by_name(
+        table_schema.fields(),
+        file_schema.fields(),
+        binary_to_string,
+    )?;
     Some(Schema::new_with_metadata(
         fields,
         file_schema.metadata.clone(),
@@ -576,6 +608,59 @@ mod tests {
     use super::*;
 
     use parquet::schema::parser::parse_message_type;
+
+    /// Disabling the binary to string coercion leaves binary file columns
+    /// binary at every nesting level, while view type coercions still apply.
+    #[test]
+    fn binary_to_string_coercion_can_be_disabled() {
+        let list_of =
+            |data_type| DataType::List(Arc::new(Field::new("item", data_type, true)));
+        let file_schema = Schema::new(vec![
+            Field::new("b", DataType::Binary, true),
+            Field::new_struct(
+                "s",
+                vec![Field::new("b", DataType::LargeBinary, true)],
+                true,
+            ),
+            Field::new("l", list_of(DataType::Binary), true),
+            Field::new("u", DataType::Utf8, true),
+        ]);
+        let table_schema = Schema::new(vec![
+            Field::new("b", DataType::Utf8, true),
+            Field::new_struct("s", vec![Field::new("b", DataType::Utf8, true)], true),
+            Field::new("l", list_of(DataType::Utf8View), true),
+            Field::new("u", DataType::Utf8View, true),
+        ]);
+
+        let expected = Schema::new(vec![
+            Field::new("b", DataType::Binary, true),
+            Field::new_struct(
+                "s",
+                vec![Field::new("b", DataType::LargeBinary, true)],
+                true,
+            ),
+            Field::new("l", list_of(DataType::Binary), true),
+            Field::new("u", DataType::Utf8View, true),
+        ]);
+        assert_eq!(
+            apply_file_schema_type_coercions_with_options(
+                &table_schema,
+                &file_schema,
+                false
+            ),
+            Some(expected)
+        );
+
+        // The default still reads every binary column as a string.
+        let coerced =
+            apply_file_schema_type_coercions(&table_schema, &file_schema).unwrap();
+        assert_eq!(coerced.field(0).data_type(), &DataType::Utf8);
+        assert_eq!(
+            coerced.field(1).data_type(),
+            &DataType::Struct(vec![Field::new("b", DataType::Utf8, true)].into())
+        );
+        assert_eq!(coerced.field(2).data_type(), &list_of(DataType::Utf8View));
+    }
 
     #[test]
     fn nested_coercion_preserves_file_schema() {
