@@ -21,20 +21,21 @@
 
 DataFusion has the following policy for AI-assisted PRs:
 
-- We welcome AI-assisted PRs from anyone. We do not welcome unreviewed "AI 
+- We welcome AI-assisted PRs from anyone. We do not welcome unreviewed "AI
   dumps" (defined below).
-- The PR author should have personally read the entire PR they submit and 
-  **understand the core ideas end-to-end**. Authors should be ready to justify 
+- The PR author should have personally read the entire PR they submit and
+  **understand the core ideas end-to-end**. Authors should be ready to justify
   and help reviewers understand the design and code during review.
-- **Call out unknowns and assumptions**. It's okay to not fully understand 
-  some bits of AI-generated code. Please point these cases out so we can work 
+- **Call out unknowns and assumptions**. It's okay to not fully understand
+  some bits of AI-generated code. Please point these cases out so we can work
   together to clear up any concerns.
 
 While "understand the core ideas" is partly subjective, it means more than being
 able to follow the diff textually. We expect the PR author to take an active
 role in responding to feedback and crafting the PR to make sure it fits well
-into the project as a whole. The worst situation is where the reviewer is simply
-driving the contributor's LLM for the reasons described in the next section.
+into the project as a whole. The worst situation is one where the reviewer ends
+up simply driving the contributor's LLM, for the reasons described in the next
+section.
 
 ## What is an "AI dump" and why it is not helpful
 
@@ -45,8 +46,8 @@ falls on the reviewer.
 
 Code review serves two purposes:
 
-1. Finish the intended task.
-2. Share knowledge between authors and reviewers, as a long-term investment in
+1. Finishing the intended task.
+2. Sharing knowledge between authors and reviewers, as a long-term investment in
    the project. For this reason, even if someone familiar with the codebase
    could finish a task more quickly by themselves, we are still happy to help
    a new contributor work on it.
@@ -60,7 +61,7 @@ AI dumps may not get reviewed, and may eventually be closed.
 
 Multiple PRs created in a short amount of time, especially by a first-time
 contributor, that in our judgment show a lack of understanding or author
-engagement may be treated as spam and closed. One high quality PR that you work
+engagement may be treated as spam and closed. One high-quality PR that you work
 with maintainers to merge is far more valuable to you and the project than ten
 PRs you have your agent generate and submit for you.
 
@@ -68,11 +69,11 @@ PRs you have your agent generate and submit for you.
 
 The same policy applies to review discussion as to the code itself: reviewers
 want to talk to **you**, not to your AI tool. Please do not respond to reviewer
-comments with unreviewed, fully AI-generated responses as again this puts all the
-burden on the reviewer and you learn nothing. We expect your responses to be
+comments with unreviewed, fully AI-generated responses, as this again puts all
+the burden on the reviewer and you learn nothing. We expect your responses to be
 in your own words, though it is fine to use AI to help prepare your response
 (for example to understand the comment, or help translate your response to
-English). Examples of unhelpful unreviewed AI comment dumps:
+English). Examples of unreviewed AI-generated replies:
 
 - Summarizes the diff rather than answering the question that was asked.
 - Lists the commands run locally (e.g. `cargo fmt`, `cargo test`)
@@ -95,7 +96,7 @@ reply in your own words.
 ## AI-assisted reviews
 
 The same standard applies to AI-generated reviews as to AI-generated code: you
-should have read and understand anything you post. Raw AI review output is often
+should have read and understood anything you post. Raw AI review output is often
 verbose with unnecessary details, and it can take substantial effort to figure
 out what is actually being asked.
 
@@ -103,7 +104,7 @@ If you review PRs with the help of an AI tool, read all comments first, remove
 detail that is unnecessary or you don't understand, and explain the rest in your
 own words so that each comment makes a clear, specific request.
 
-## Better ways to contribute than an “AI dump”
+## Better ways to contribute than an "AI dump"
 
 It's recommended to write a high-quality issue with a clear problem statement
 and a minimal, reproducible example. The reproducer should focus on the
