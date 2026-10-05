@@ -22,6 +22,9 @@
 This document outlines the security model for Apache DataFusion and how to
 report vulnerabilities.
 
+This model also applies to the [datafusion-cli] command line tool, which is
+a thin wrapper around the DataFusion library.
+
 ## Security Model
 
 DataFusion is a low level library, designed to be embedded in applications
@@ -91,6 +94,7 @@ Include in your report:
 - Affected crates and versions.
 - Potential impact.
 
+[datafusion-cli]: https://datafusion.apache.org/user-guide/cli/index.html
 [`sqloptions::with_allow_dml`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SQLOptions.html#method.with_allow_dml
 [arrow validation apis]: https://docs.rs/arrow/latest/arrow/array/struct.ArrayData.html#method.validate_full
 [substrait]: https://docs.rs/datafusion-substrait/latest/datafusion_substrait/
