@@ -464,6 +464,21 @@ pub fn create_physical_expr(
                 planning_ctx,
             )?;
 
+            // A volatile value must be evaluated one time. The rewrite below
+            // names the value two times, so it also evaluates it two times and
+            // returns the wrong rows for `random() BETWEEN 0.4 AND 0.6`.
+            // `BetweenExpr` evaluates the value one time. See
+            // https://github.com/apache/datafusion/issues/25457
+            //
+            // Every other value keeps the rewrite, because the optimizer, the
+            // interval analysis and the pruning predicates all understand plain
+            // binary comparisons but not `BetweenExpr`.
+            if expr.is_volatile() {
+                return Ok(expressions::between(
+                    value_expr, *negated, low_expr, high_expr,
+                ));
+            }
+
             // rewrite the between into the two binary operators
             let binary_expr = binary(
                 binary(

@@ -35,9 +35,9 @@ use datafusion_physical_expr::{
     HigherOrderFunctionExpr, PhysicalSortExpr, ScalarFunctionExpr,
 };
 use datafusion_physical_plan::expressions::{
-    BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
-    LikeExpr, Literal, NegativeExpr, NotExpr, SqlSimilarToPattern, TryCastExpr,
-    UnKnownColumn,
+    BetweenExpr, BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr,
+    IsNullExpr, LikeExpr, Literal, NegativeExpr, NotExpr, SqlSimilarToPattern,
+    TryCastExpr, UnKnownColumn,
 };
 use datafusion_physical_plan::joins::HashExpr;
 use datafusion_physical_plan::proto::ExecutionPlanDecodeCtx;
@@ -287,6 +287,7 @@ pub fn parse_physical_expr_with_converter(
         ExprType::IsNullExpr(_) => IsNullExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::IsNotNullExpr(_) => IsNotNullExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::NotExpr(_) => NotExpr::try_from_proto(proto, &decode_ctx)?,
+        ExprType::Between(_) => BetweenExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::Negative(_) => NegativeExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::InList(_) => InListExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::Case(_) => CaseExpr::try_from_proto(proto, &decode_ctx)?,

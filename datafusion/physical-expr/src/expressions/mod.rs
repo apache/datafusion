@@ -19,6 +19,7 @@
 
 #[macro_use]
 mod binary;
+mod between;
 mod case;
 mod cast;
 mod column;
@@ -41,6 +42,7 @@ pub use crate::PhysicalSortExpr;
 /// Module with some convenient methods used in expression building
 pub use crate::aggregate::stats::StatsType;
 
+pub use between::{BetweenExpr, between};
 pub use binary::{BinaryExpr, binary, similar_to};
 pub use case::{CaseExpr, case};
 pub use cast::{CastExpr, cast};
