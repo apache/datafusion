@@ -36,8 +36,8 @@ use datafusion_expr::utils::{
     collect_subquery_cols, conjunction, find_join_exprs, split_conjunction,
 };
 use datafusion_expr::{
-    Aggregate, BinaryExpr, Cast, Distinct, EmptyRelation, Expr, ExprSchemable,
-    FetchType, LogicalPlan, LogicalPlanBuilder, Operator, SkipType, expr, lit,
+    Aggregate, BinaryExpr, Cast, Distinct, EmptyRelation, Expr, ExprSchemable, FetchType,
+    LogicalPlan, LogicalPlanBuilder, Operator, SkipType, expr, lit,
 };
 
 /// This struct rewrite the sub query plan by pull up the correlated
@@ -142,13 +142,6 @@ impl PullUpCorrelatedExpr {
     pub fn with_exists_sub_query(mut self, exists_sub_query: bool) -> Self {
         self.exists_sub_query = exists_sub_query;
         self
-    }
-
-    /// Mark the plan as one whose correlated expressions cannot be pulled up
-    /// and stop descending into it
-    fn unsupported(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
-        self.can_pull_up = false;
-        Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
     }
 
     /// Record the columns read above the subquery's `Aggregate`, computed
