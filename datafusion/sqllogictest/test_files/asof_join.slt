@@ -250,12 +250,11 @@ logical_plan
 07)--------TableScan: asof_right projection=[grp, ts, val]
 physical_plan
 01)FilterExec: val@1 != a6
-02)--ProjectionExec: expr=[id@0 as id, val@5 as val]
-03)----AsOfJoinExec: on=[(grp = grp)], match=[ts >= ts]
-04)------SortExec: expr=[grp@1 ASC, ts@2 ASC], preserve_partitioning=[false]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
-06)------SortExec: expr=[grp@0 ASC, ts@1 ASC], preserve_partitioning=[false]
-07)--------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--AsOfJoinExec: on=[(grp = grp)], match=[ts >= ts], projection=[id@0, val@5]
+03)----SortExec: expr=[grp@1 ASC, ts@2 ASC], preserve_partitioning=[false]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)----SortExec: expr=[grp@0 ASC, ts@1 ASC], preserve_partitioning=[false]
+06)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Projection pruning keeps only columns required by the ASOF contract.
 query TT
@@ -273,12 +272,11 @@ logical_plan
 05)----SubqueryAlias: r
 06)------TableScan: asof_right projection=[grp, ts]
 physical_plan
-01)ProjectionExec: expr=[id@0 as id]
-02)--AsOfJoinExec: on=[(grp = grp)], match=[ts >= ts]
-03)----SortExec: expr=[grp@1 ASC, ts@2 ASC], preserve_partitioning=[false]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
-05)----SortExec: expr=[grp@0 ASC, ts@1 ASC], preserve_partitioning=[false]
-06)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)AsOfJoinExec: on=[(grp = grp)], match=[ts >= ts], projection=[id@0]
+02)--SortExec: expr=[grp@1 ASC, ts@2 ASC], preserve_partitioning=[false]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--SortExec: expr=[grp@0 ASC, ts@1 ASC], preserve_partitioning=[false]
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Equality and ordered operands may be expressions.
 query IT
