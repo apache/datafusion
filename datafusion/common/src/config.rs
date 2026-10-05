@@ -2121,6 +2121,27 @@ config_namespace! {
 impl<'a> TryFrom<&'a FormatOptions> for arrow::util::display::FormatOptions<'a> {
     type Error = DataFusionError;
     fn try_from(options: &'a FormatOptions) -> Result<Self> {
+        for (name, format) in [
+            ("date_format", options.date_format.as_deref()),
+            ("datetime_format", options.datetime_format.as_deref()),
+            ("timestamp_format", options.timestamp_format.as_deref()),
+            (
+                "timestamp_tz_format",
+                options.timestamp_tz_format.as_deref(),
+            ),
+            ("time_format", options.time_format.as_deref()),
+        ] {
+            if let Some(format) = format {
+                chrono::format::StrftimeItems::new(format)
+                    .parse()
+                    .map_err(|error| {
+                        DataFusionError::Configuration(format!(
+                            "Invalid datafusion.format.{name}: {error}"
+                        ))
+                    })?;
+            }
+        }
+
         Ok(Self::new()
             .with_display_error(options.safe)
             .with_null(&options.null)
@@ -4146,6 +4167,63 @@ mod tests {
         ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ExtensionOptions,
         Extensions, TableOptions,
     };
+
+    #[test]
+    fn invalid_temporal_format_is_rejected_before_rendering() {
+        use crate::config::FormatOptions;
+
+        let invalid_options = [
+            (
+                "date_format",
+                FormatOptions {
+                    date_format: Some("%".to_owned()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "datetime_format",
+                FormatOptions {
+                    datetime_format: Some("%".to_owned()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "timestamp_format",
+                FormatOptions {
+                    timestamp_format: Some("%".to_owned()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "timestamp_tz_format",
+                FormatOptions {
+                    timestamp_tz_format: Some("%".to_owned()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "time_format",
+                FormatOptions {
+                    time_format: Some("%".to_owned()),
+                    ..Default::default()
+                },
+            ),
+        ];
+
+        for (name, options) in invalid_options {
+            let error = arrow::util::display::FormatOptions::try_from(&options)
+                .expect_err("invalid format strings must be rejected before rendering");
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("datafusion.format.{name}")),
+                "unexpected validation error: {error}"
+            );
+        }
+
+        arrow::util::display::FormatOptions::try_from(&FormatOptions::default())
+            .expect("the default temporal formats must remain valid");
+    }
     use std::any::Any;
     use std::collections::HashMap;
 
