@@ -8132,6 +8132,20 @@ FROM dup_sort_keys GROUP BY g ORDER BY g;
 1 [10, 20] 20,10
 2 [30, 40] 40,30
 
+# With DISTINCT, the ORDER BY may only sort by the aggregated expression. The
+# repeated key is dropped first, so these are accepted.
+query I?
+SELECT g, array_agg(DISTINCT k ORDER BY k, k) FROM dup_sort_keys GROUP BY g ORDER BY g;
+----
+1 [1, 2]
+2 [3, 4]
+
+query I?
+SELECT g, array_agg(DISTINCT k ORDER BY k DESC, k ASC) FROM dup_sort_keys GROUP BY g ORDER BY g;
+----
+1 [2, 1]
+2 [4, 3]
+
 query II
 SELECT DISTINCT ON (g) g, v FROM dup_sort_keys ORDER BY g, g, k;
 ----
