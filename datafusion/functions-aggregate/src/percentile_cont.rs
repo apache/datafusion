@@ -239,11 +239,10 @@ impl AggregateUDFImpl for PercentileCont {
 
     fn accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         // Always verify percentiles
-        let (percentile, is_descending) = get_percentile_param(&args)?;
+        let percentile = get_percentile_param(&args)?;
         create_percentile_accumulator(
             self.name(),
             percentile,
-            is_descending,
             args.expr_fields[0].data_type(),
             args.is_distinct,
         )
@@ -258,11 +257,10 @@ impl AggregateUDFImpl for PercentileCont {
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
         // Always verify percentiles
-        let (percentile, is_descending) = get_percentile_param(&args)?;
+        let percentile = get_percentile_param(&args)?;
         create_percentile_groups_accumulator(
             self.name(),
             percentile,
-            is_descending,
             args.expr_fields[0].data_type(),
         )
     }
@@ -282,36 +280,20 @@ impl AggregateUDFImpl for PercentileCont {
     }
 }
 
-fn get_percentile_param(args: &AccumulatorArgs) -> Result<(PercentileParam, bool)> {
-    let percentile = PercentileParam::try_new(&args.exprs[1], "PERCENTILE_CONT")?;
-
+fn get_percentile_param(args: &AccumulatorArgs) -> Result<PercentileParam> {
     let is_descending = args
         .order_bys
         .first()
         .map(|sort_expr| sort_expr.options.descending)
         .unwrap_or(false);
 
-    Ok((percentile, is_descending))
-}
-
-/// The percentile to use, applying the `1.0 - p` flip for descending
-/// `WITHIN GROUP (ORDER BY ... DESC)`.
-fn effective_percentile(
-    percentile: &PercentileParam,
-    is_descending: bool,
-) -> Result<f64> {
-    let percentile = percentile.get()?;
-    Ok(if is_descending {
-        1.0 - percentile
-    } else {
-        percentile
-    })
+    let percentile = PercentileParam::try_new(&args.exprs[1], "PERCENTILE_CONT", is_descending)?;
+    Ok(percentile)
 }
 
 pub fn create_percentile_accumulator(
     name: &str,
     percentile: PercentileParam,
-    is_descending: bool,
     input_dt: &DataType,
     is_distinct: bool,
 ) -> Result<Box<dyn Accumulator>> {
@@ -326,13 +308,11 @@ pub fn create_percentile_accumulator(
                 Ok(Box::new(DistinctPercentileContAccumulator::<$t, $i>::new(
                     percentile,
                     $dt.clone(),
-                    is_descending,
                 )))
             } else {
                 Ok(Box::new(PercentileContAccumulator::<$t, $i>::new(
                     percentile,
                     $dt.clone(),
-                    is_descending,
                 )))
             }
         };
@@ -360,7 +340,6 @@ pub fn create_percentile_accumulator(
 pub fn create_percentile_groups_accumulator(
     name: &str,
     percentile: PercentileParam,
-    is_descending: bool,
     input_dt: &DataType,
 ) -> Result<Box<dyn GroupsAccumulator>> {
     macro_rules! helper {
@@ -368,7 +347,6 @@ pub fn create_percentile_groups_accumulator(
             Ok(Box::new(PercentileContGroupsAccumulator::<$t, $i>::new(
                 percentile,
                 $dt.clone(),
-                is_descending,
             )))
         };
     }
@@ -465,7 +443,6 @@ struct PercentileContAccumulator<
 > {
     all_values: Vec<T::Native>,
     percentile: PercentileParam,
-    is_descending: bool,
     data_type: DataType,
     _interpolator: PhantomData<I>,
 }
@@ -476,12 +453,10 @@ impl<T: ArrowNumericType + Debug, I: PercentileInterpolator<T>>
     fn new(
         percentile: PercentileParam,
         data_type: DataType,
-        is_descending: bool,
     ) -> Self {
         Self {
             all_values: vec![],
             percentile,
-            is_descending,
             data_type,
             _interpolator: PhantomData,
         }
@@ -558,7 +533,7 @@ where
         if self.all_values.is_empty() {
             return ScalarValue::new_primitive::<T>(None, &self.data_type);
         }
-        let percentile = effective_percentile(&self.percentile, self.is_descending)?;
+        let percentile = self.percentile.effective_percentile()?;
         let value = calculate_percentile::<T, I>(&mut self.all_values, percentile)?;
         ScalarValue::new_primitive::<T>(value, &self.data_type)
     }
@@ -631,7 +606,6 @@ struct PercentileContGroupsAccumulator<
 > {
     group_values: Vec<Vec<T::Native>>,
     percentile: PercentileParam,
-    is_descending: bool,
     data_type: DataType,
     _interpolator: PhantomData<I>,
 }
@@ -642,12 +616,10 @@ impl<T: ArrowNumericType + Debug, I: PercentileInterpolator<T>>
     fn new(
         percentile: PercentileParam,
         data_type: DataType,
-        is_descending: bool,
     ) -> Self {
         Self {
             group_values: vec![],
             percentile,
-            is_descending,
             data_type,
             _interpolator: PhantomData,
         }
@@ -759,7 +731,7 @@ where
         // Emit values
         let mut emit_group_values = emit_to.take_needed(&mut self.group_values);
 
-        let percentile = effective_percentile(&self.percentile, self.is_descending)?;
+        let percentile = self.percentile.effective_percentile()?;
 
         // Calculate percentile for each group
         let mut evaluate_result_builder =
@@ -868,7 +840,6 @@ struct DistinctPercentileContAccumulator<
     /// SipHash, which is considerably slower for this hot path.
     counts: HashMap<Hashable<T::Native>, usize, RandomState>,
     percentile: PercentileParam,
-    is_descending: bool,
     data_type: DataType,
     _interpolator: PhantomData<I>,
 }
@@ -879,12 +850,10 @@ impl<T: ArrowNumericType, I: PercentileInterpolator<T>>
     fn new(
         percentile: PercentileParam,
         data_type: DataType,
-        is_descending: bool,
     ) -> Self {
         Self {
             counts: HashMap::default(),
             percentile,
-            is_descending,
             data_type,
             _interpolator: PhantomData,
         }
@@ -949,7 +918,7 @@ where
         if values.is_empty() {
             return ScalarValue::new_primitive::<T>(None, &self.data_type);
         }
-        let percentile = effective_percentile(&self.percentile, self.is_descending)?;
+        let percentile = self.percentile.effective_percentile()?;
         let value = calculate_percentile::<T, I>(&mut values, percentile)?;
         ScalarValue::new_primitive::<T>(value, &self.data_type)
     }
@@ -1207,9 +1176,9 @@ mod tests {
             PercentileParam {
                 aggregate_fn_name: "PERCENTILE_CONT".to_string(),
                 state: PercentileParamState::Resolved(0.5),
+                is_desc: false,
             },
             DataType::Float64,
-            false,
         )
     }
 
@@ -1225,9 +1194,8 @@ mod tests {
 
         let mut partial =
             PercentileContAccumulator::<Float64Type, FloatInterpolator>::new(
-                PercentileParam::try_new(&percentile_expr, "PERCENTILE_CONT").unwrap(),
+                PercentileParam::try_new(&percentile_expr, "PERCENTILE_CONT", false).unwrap(),
                 DataType::Float64,
-                false,
             );
         let values: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0]));
         let percentiles: ArrayRef = Arc::new(Float64Array::from(vec![0.5, 0.5, 0.5]));
@@ -1236,9 +1204,8 @@ mod tests {
 
         let mut final_acc =
             PercentileContAccumulator::<Float64Type, FloatInterpolator>::new(
-                PercentileParam::try_new(&percentile_expr, "PERCENTILE_CONT").unwrap(),
+                PercentileParam::try_new(&percentile_expr, "PERCENTILE_CONT", false).unwrap(),
                 DataType::Float64,
-                false,
             );
         let state_arrays: Vec<ArrayRef> =
             state.into_iter().map(|s| s.to_array().unwrap()).collect();

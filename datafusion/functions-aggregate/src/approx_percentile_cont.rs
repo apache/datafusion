@@ -47,6 +47,9 @@ use crate::utils::{PercentileParam, get_scalar_value};
 
 create_func!(ApproxPercentileCont, approx_percentile_cont_udaf);
 
+// state field index for the percentile argument
+pub const STATE_PERCENTILE_IDX: usize = 6;
+
 /// Computes the approximate percentile continuous of a set of numbers
 pub fn approx_percentile_cont(
     order_by: Sort,
@@ -172,14 +175,14 @@ impl ApproxPercentileCont {
         &self,
         args: &AccumulatorArgs,
     ) -> Result<ApproxPercentileAccumulator> {
-        let percentile =
-            PercentileParam::try_new(&args.exprs[1], "APPROX_PERCENTILE_CONT")?;
-
         let is_descending = args
             .order_bys
             .first()
             .map(|sort_expr| sort_expr.options.descending)
             .unwrap_or(false);
+
+        let percentile =
+            PercentileParam::try_new(&args.exprs[1], "APPROX_PERCENTILE_CONT", is_descending)?;
 
         let tdigest_max_size = if args.exprs.len() == 3 {
             Some(validate_input_max_size_expr(&args.exprs[2])?)
@@ -193,18 +196,14 @@ impl ApproxPercentileCont {
                 if let Some(max_size) = tdigest_max_size {
                     ApproxPercentileAccumulator::new_with_max_size(
                         percentile,
-                        is_descending,
                         data_type.clone(),
                         max_size,
                     )
-                    .should_track_percentile()
                 } else {
                     ApproxPercentileAccumulator::new(
                         percentile,
-                        is_descending,
                         data_type.clone(),
                     )
-                    .should_track_percentile()
                 }
             }
             other => {
@@ -344,44 +343,31 @@ impl AggregateUDFImpl for ApproxPercentileCont {
 pub struct ApproxPercentileAccumulator {
     digest: TDigest,
     percentile: PercentileParam,
-    is_descending: bool,
     return_type: DataType,
-    should_track_percentile: bool,
 }
 
 impl ApproxPercentileAccumulator {
     pub(crate) fn new(
         percentile: PercentileParam,
-        is_descending: bool,
         return_type: DataType,
     ) -> Self {
         Self {
             digest: TDigest::new(DEFAULT_MAX_SIZE),
             percentile,
-            is_descending,
             return_type,
-            should_track_percentile: false,
         }
     }
 
     pub(crate) fn new_with_max_size(
         percentile: PercentileParam,
-        is_descending: bool,
         return_type: DataType,
         max_size: usize,
     ) -> Self {
         Self {
             digest: TDigest::new(max_size),
             percentile,
-            is_descending,
             return_type,
-            should_track_percentile: false,
         }
-    }
-
-    pub(crate) fn should_track_percentile(mut self) -> Self {
-        self.should_track_percentile = true;
-        self
     }
 
     /// Callers must only invoke this when a percentile argument actually
@@ -391,18 +377,6 @@ impl ApproxPercentileAccumulator {
         percentile_array: &ArrayRef,
     ) -> Result<()> {
         self.percentile.resolve(percentile_array)
-    }
-
-    /// The percentile to use for quantile estimation, applying the `1.0 - p`
-    /// flip for descending `WITHIN GROUP (ORDER BY ... DESC)`. Errors if the
-    /// percentile has not been resolved yet.
-    fn effective_percentile(&self) -> Result<f64> {
-        let percentile = self.percentile.get()?;
-        Ok(if self.is_descending {
-            1.0 - percentile
-        } else {
-            percentile
-        })
     }
 
     // pub(crate) for approx_percentile_cont_with_weight
@@ -450,9 +424,7 @@ impl Accumulator for ApproxPercentileAccumulator {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         let mut state: Vec<ScalarValue> =
             self.digest.to_scalar_state().into_iter().collect();
-        if self.should_track_percentile {
             state.push(ScalarValue::Float64(self.percentile.get().ok()));
-        }
         Ok(state)
     }
 
@@ -476,7 +448,7 @@ impl Accumulator for ApproxPercentileAccumulator {
         if self.digest.count() == 0.0 {
             return ScalarValue::try_from(self.return_type.clone());
         }
-        let q = self.digest.estimate_quantile(self.effective_percentile()?);
+        let q = self.digest.estimate_quantile(self.percentile.effective_percentile()?);
 
         // These acceptable return types MUST match the validation in
         // ApproxPercentile::create_accumulator.
@@ -493,8 +465,7 @@ impl Accumulator for ApproxPercentileAccumulator {
             return Ok(());
         }
 
-        if self.should_track_percentile
-            && let Some(percentile_array) = states.get(6)
+        if let Some(percentile_array) = states.get(STATE_PERCENTILE_IDX)
         {
             self.percentile.resolve(percentile_array)?;
         }
@@ -539,8 +510,8 @@ mod tests {
             PercentileParam {
                 aggregate_fn_name: "APPROX_PERCENTILE_CONT".to_string(),
                 state: PercentileParamState::Resolved(0.5),
+                is_desc: false,
             },
-            false,
             DataType::Float64,
             100,
         )
@@ -582,9 +553,9 @@ mod tests {
                     )
                     .unwrap(),
                     "APPROX_PERCENTILE_CONT",
+                    false
                 )
                 .unwrap(),
-                false,
                 DataType::Float64,
                 100,
             );
@@ -592,7 +563,7 @@ mod tests {
         let percentile_array: ArrayRef =
             Arc::new(Float64Array::from(vec![0.5, 0.5, 0.5]));
         accumulator.resolve_percentile(&percentile_array).unwrap();
-        assert_eq!(accumulator.effective_percentile().unwrap(), 0.5);
+        assert_eq!(accumulator.percentile.effective_percentile().unwrap(), 0.5);
 
         // A later batch that disagrees with the resolved value must error.
         let bad_array: ArrayRef = Arc::new(Float64Array::from(vec![0.9]));
@@ -617,6 +588,7 @@ mod tests {
             )
             .unwrap(),
             "APPROX_PERCENTILE_CONT",
+            false
         )
         .unwrap();
 

@@ -142,8 +142,8 @@ impl AggregateUDFImpl for ApproxMedian {
                 PercentileParam {
                     aggregate_fn_name: "APPROX_MEDIAN".to_string(),
                     state: PercentileParamState::Resolved(0.5_f64),
+                    is_desc: false,
                 },
-                false,
                 acc_args.expr_fields[0].data_type().clone(),
             )))
         }

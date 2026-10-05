@@ -80,13 +80,14 @@ pub(crate) enum PercentileParamState {
 pub struct PercentileParam {
     pub aggregate_fn_name: String,
     pub(crate) state: PercentileParamState,
+    pub(crate) is_desc: bool,
 }
 
 impl PercentileParam {
     /// Try to resolve the percentile eagerly. If the expression can't be
     /// evaluated without row data (i.e. it references a column), defer
     /// resolution to the first batch instead of erroring here.
-    pub(crate) fn try_new(expr: &Arc<dyn PhysicalExpr>, fn_name: &str) -> Result<Self> {
+    pub(crate) fn try_new(expr: &Arc<dyn PhysicalExpr>, fn_name: &str, is_desc: bool) -> Result<Self> {
         match get_scalar_value(expr) {
             Ok(scalar_value) => Ok(PercentileParam {
                 aggregate_fn_name: fn_name.to_string(),
@@ -94,10 +95,12 @@ impl PercentileParam {
                     scalar_value,
                     fn_name,
                 )?),
+                is_desc,
             }),
             Err(_) => Ok(PercentileParam {
                 aggregate_fn_name: fn_name.to_string(),
                 state: PercentileParamState::Pending,
+                is_desc,
             }),
         }
     }
@@ -172,5 +175,16 @@ impl PercentileParam {
                 )
             }
         }
+    }
+
+    /// The percentile to use, applying the `1.0 - p` flip for descending
+    /// `WITHIN GROUP (ORDER BY ... DESC)`.
+    pub(crate) fn effective_percentile(&self) -> Result<f64> {
+        let percentile = self.get()?;
+        Ok(if self.is_desc {
+            1.0 - percentile
+        } else {
+            percentile
+        })
     }
 }

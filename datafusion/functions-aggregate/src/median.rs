@@ -127,8 +127,8 @@ impl AggregateUDFImpl for Median {
             PercentileParam {
                 aggregate_fn_name: "MEDIAN".to_string(),
                 state: PercentileParamState::Resolved(0.5),
+                is_desc: false,
             },
-            false,
             args.expr_fields[0].data_type(),
             args.is_distinct,
         )
@@ -147,8 +147,8 @@ impl AggregateUDFImpl for Median {
             PercentileParam {
                 aggregate_fn_name: "MEDIAN".to_string(),
                 state: PercentileParamState::Resolved(0.5),
+                is_desc: false,
             },
-            false,
             args.expr_fields[0].data_type(),
         )
     }
