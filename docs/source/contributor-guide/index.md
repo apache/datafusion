@@ -56,7 +56,7 @@ interests and thus you are free to work on any issue that interests you.
 If someone is already working on an issue that you want or need but hasn't
 been able to finish it yet, feel free to help them out.
 
-If there is an existing PR for an issue you plan to work on, please review that
+If there is an existing open PR for an issue you plan to work on, please review that
 PR before opening a new one. Duplicate, unacknowledged PRs consume valuable
 reviewer time and we may close them. If there is an existing PR, please identify
 it in the PR description and explain why you are opening a new one and not
