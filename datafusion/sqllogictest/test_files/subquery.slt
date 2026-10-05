@@ -3412,3 +3412,42 @@ DROP TABLE unnest_outer;
 statement ok
 DROP TABLE unnest_inner;
 
+# ---------------------------------------------------------
+# Test Scalar Subquery Selectivity Fallback (PR #25719)
+# ---------------------------------------------------------
+
+statement ok
+CREATE TABLE sq_fallback_table(name TEXT) AS VALUES
+('a'), ('b'), ('c'), ('d');
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+statement ok
+set datafusion.explain.show_statistics = true;
+
+# The physical plan for the Filter should use the NDV estimate for the scalar subquery
+query TT
+EXPLAIN SELECT * FROM sq_fallback_table WHERE name = (SELECT 'a');
+----
+logical_plan
+01)Filter: sq_fallback_table.name = (<subquery>)
+02)--Subquery:
+03)----Projection: Utf8View("a") AS Utf8("a")
+04)------EmptyRelation: rows=1
+05)--TableScan: sq_fallback_table projection=[name]
+physical_plan
+01)ScalarSubqueryExec: subqueries=1, statistics=[Rows=Inexact(1), Bytes=Inexact(36), [(Col[0]: Null=Exact(0))]]
+02)--FilterExec: name@0 = scalar_subquery(<pending>), statistics=[Rows=Inexact(1), Bytes=Inexact(36), [(Col[0]: Null=Exact(0))]]
+03)----DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(4), Bytes=Exact(176), [(Col[0]: Null=Exact(0))]]
+04)--ProjectionExec: expr=[a as Utf8("a")], statistics=[Rows=Exact(1), Bytes=Inexact(0), [(Col[0]: Min=Exact(Utf8View("a")) Max=Exact(Utf8View("a")) Null=Exact(0) Distinct=Exact(1))]]
+05)----PlaceholderRowExec, statistics=[Rows=Exact(1), Bytes=Exact(0), []]
+
+statement ok
+RESET datafusion.explain.show_statistics;
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
+
+statement ok
+DROP TABLE sq_fallback_table;
