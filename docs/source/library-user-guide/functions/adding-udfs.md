@@ -1386,7 +1386,29 @@ async fn main() -> Result<()> {
 
 ```
 
+### Implementing a `GroupsAccumulator`
+
+For better performance with many groups, an aggregate UDF can also implement a [`GroupsAccumulator`] by overriding
+`groups_accumulator_supported` and `create_groups_accumulator` (see [`advanced_udaf.rs`]). The intermediate state of
+the `GroupsAccumulator` must be interchangeable with the state of the `Accumulator`: each must be able to merge state
+produced by the other.
+
+To check this, enable the `testing` feature of `datafusion-functions-aggregate` in your `[dev-dependencies]` and call
+[`check_state_compatibility`] from a test:
+
+```rust,ignore
+use datafusion_functions_aggregate::testing::check_state_compatibility;
+
+#[test]
+fn state_compatibility() {
+    let udaf = Arc::new(AggregateUDF::from(MyUdaf::new()));
+    check_state_compatibility(&udaf).unwrap();
+}
+```
+
 [`aggregateudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.AggregateUDF.html
+[`groupsaccumulator`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.GroupsAccumulator.html
+[`check_state_compatibility`]: https://docs.rs/datafusion-functions-aggregate/latest/datafusion_functions_aggregate/testing/fn.check_state_compatibility.html
 [`create_udaf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udaf.html
 [`aggregateudfimpl::distinct_handling`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.AggregateUDFImpl.html#method.distinct_handling
 [`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udaf.rs

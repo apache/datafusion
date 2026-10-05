@@ -662,6 +662,12 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     ///
     /// For maximum performance, a [`GroupsAccumulator`] should be
     /// implemented in addition to [`Accumulator`].
+    ///
+    /// The intermediate state of the returned [`GroupsAccumulator`] must be
+    /// interchangeable with the state of the [`Accumulator`] returned by
+    /// [`Self::accumulator`] for the same arguments: each must be able to merge
+    /// state produced by the other, and both must match
+    /// [`Self::state_fields`]. See [`GroupsAccumulator`] for details.
     fn create_groups_accumulator(
         &self,
         _args: AccumulatorArgs,

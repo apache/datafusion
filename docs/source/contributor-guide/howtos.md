@@ -45,7 +45,11 @@ Make a PR to update the [rust-toolchain] file in the root of the repository.
 - Scalar functions are further grouped into modules for families of functions (e.g. string, math, datetime).
   Functions should be added to the relevant module; if a new module needs to be created then a new [Rust feature]
   should also be added to allow DataFusion users to conditionally compile the modules as needed
-- Aggregate functions can optionally implement a [`GroupsAccumulator`] for better performance
+- Aggregate functions can optionally implement a [`GroupsAccumulator`] for better performance. Its intermediate
+  state must be interchangeable with the state of the function's [`Accumulator`]: each must be able to merge state
+  produced by the other (see the [`GroupsAccumulator`] docs). This is checked for all built-in aggregate functions by
+  a test in [`state_compat.rs`]; if a new function cannot be exercised by that test, add it to `NOT_EXERCISED` with the
+  reason
 
 Spark compatible functions are [located in separate crate][df-spark] but otherwise follow the same steps, though all
 function types (e.g. scalar, nested, aggregate) are grouped together in the single location.
@@ -68,6 +72,7 @@ function types (e.g. scalar, nested, aggregate) are grouped together in the sing
 [`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udaf.rs
 [`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udwf.rs
 [`simple_udtf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/simple_udtf.rs
+[`state_compat.rs`]: https://github.com/apache/datafusion/blob/main/datafusion/functions-aggregate/src/testing/state_compat.rs
 [rust feature]: https://doc.rust-lang.org/cargo/reference/features.html
 
 **Testing**

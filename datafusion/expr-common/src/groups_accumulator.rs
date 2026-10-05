@@ -188,7 +188,33 @@ impl<'a> GroupSelection<'a> {
 /// expected that each `GroupsAccumulator` will use something like `Vec<..>`
 /// to store the group states.
 ///
+/// # State Compatibility with `Accumulator`
+///
+/// The intermediate state of a `GroupsAccumulator` and of the [`Accumulator`]
+/// for the same aggregate (created by the same `AggregateUDFImpl` with the same
+/// arguments) must be interchangeable:
+///
+/// * Each row of the state returned by [`Self::state`] or
+///   [`Self::convert_to_state`] must be accepted by
+///   [`Accumulator::merge_batch`].
+/// * [`Self::merge_batch`] must accept state returned by
+///   [`Accumulator::state`].
+///
+/// Merging state from the other kind of accumulator must produce the same
+/// result as merging the equivalent state from the same kind.
+///
+/// Aggregates that do not implement a `GroupsAccumulator` meet this
+/// requirement automatically, as they are run with a
+/// [`GroupsAccumulatorAdapter`] that wraps their [`Accumulator`].
+///
+/// Use [`check_state_compatibility`] to check that an aggregate meets this
+/// requirement.
+///
 /// [`Accumulator`]: crate::accumulator::Accumulator
+/// [`Accumulator::state`]: crate::accumulator::Accumulator::state
+/// [`Accumulator::merge_batch`]: crate::accumulator::Accumulator::merge_batch
+/// [`GroupsAccumulatorAdapter`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/struct.GroupsAccumulatorAdapter.html
+/// [`check_state_compatibility`]: https://docs.rs/datafusion-functions-aggregate/latest/datafusion_functions_aggregate/testing/fn.check_state_compatibility.html
 /// [Aggregating Millions of Groups Fast blog]: https://arrow.apache.org/blog/2023/08/05/datafusion_fast_grouping/
 pub trait GroupsAccumulator: Send + std::any::Any {
     /// Supplies optional metrics owned by this aggregate expression.
@@ -285,7 +311,13 @@ pub trait GroupsAccumulator: Send + std::any::Any {
     /// See [`Self::evaluate`] for details on the required output
     /// order and `emit_to`.
     ///
+    /// Each row of the returned state must also be accepted by
+    /// [`Accumulator::merge_batch`]. See the [State Compatibility] section
+    /// for details.
+    ///
     /// [`Accumulator::state`]: crate::accumulator::Accumulator::state
+    /// [`Accumulator::merge_batch`]: crate::accumulator::Accumulator::merge_batch
+    /// [State Compatibility]: GroupsAccumulator#state-compatibility-with-accumulator
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>>;
 
     /// Returns intermediate aggregate state without changing the logical state
@@ -325,6 +357,12 @@ pub trait GroupsAccumulator: Send + std::any::Any {
     /// there is no `opt_filter` — aggregate filters are applied during the
     /// partial (update) phase, so by the time intermediate states are merged
     /// no per-row filtering is needed.
+    ///
+    /// `values` may also contain state produced by [`Accumulator::state`]. See
+    /// the [State Compatibility] section for details.
+    ///
+    /// [`Accumulator::state`]: crate::accumulator::Accumulator::state
+    /// [State Compatibility]: GroupsAccumulator#state-compatibility-with-accumulator
     fn merge_batch(
         &mut self,
         values: &[ArrayRef],
@@ -366,7 +404,13 @@ pub trait GroupsAccumulator: Send + std::any::Any {
     /// state directly to the next aggregation phase with minimal processing
     /// using this method.
     ///
+    /// As with [`Self::state`], each row of the returned state must also be
+    /// accepted by [`Accumulator::merge_batch`]. See the
+    /// [State Compatibility] section for details.
+    ///
     /// [`Accumulator::state`]: crate::accumulator::Accumulator::state
+    /// [`Accumulator::merge_batch`]: crate::accumulator::Accumulator::merge_batch
+    /// [State Compatibility]: GroupsAccumulator#state-compatibility-with-accumulator
     fn convert_to_state(
         &self,
         values: &[ArrayRef],

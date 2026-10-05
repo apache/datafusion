@@ -97,8 +97,10 @@ impl Drop for AggregateMetricTimer<'_> {
 /// `Accumulator`s are stateful objects that implement a single group. They
 /// aggregate values from multiple rows together into a final output aggregate.
 ///
-/// [`GroupsAccumulator]` is an additional more performant (but also complex) API
-/// that manages state for multiple groups at once.
+/// [`GroupsAccumulator`] is an additional more performant (but also complex) API
+/// that manages state for multiple groups at once. If an aggregate implements
+/// both, their intermediate states must be interchangeable (see
+/// [`GroupsAccumulator`] for details).
 ///
 /// An accumulator knows how to:
 /// * update its state from inputs via [`update_batch`]
@@ -118,6 +120,7 @@ impl Drop for AggregateMetricTimer<'_> {
 /// [`state`]: Self::state
 /// [`evaluate`]: Self::evaluate
 /// [`merge_batch`]: Self::merge_batch
+/// [`GroupsAccumulator`]: crate::groups_accumulator::GroupsAccumulator
 /// [window function]: https://en.wikipedia.org/wiki/Window_function_(SQL)
 pub trait Accumulator: Send + Sync + Debug + std::any::Any {
     /// Supplies optional metrics owned by this aggregate expression.
@@ -270,6 +273,14 @@ pub trait Accumulator: Send + Sync + Debug + std::any::Any {
     /// values if the number of intermediate values is not known at
     /// planning time (e.g. for `MEDIAN`)
     ///
+    /// If the aggregate also implements a [`GroupsAccumulator`], the state
+    /// returned here must be accepted by [`GroupsAccumulator::merge_batch`],
+    /// and [`Self::merge_batch`] must accept state produced by the
+    /// [`GroupsAccumulator`]. See [`GroupsAccumulator`] for details.
+    ///
+    /// [`GroupsAccumulator`]: crate::groups_accumulator::GroupsAccumulator
+    /// [`GroupsAccumulator::merge_batch`]: crate::groups_accumulator::GroupsAccumulator::merge_batch
+    ///
     /// # Multi-phase repartitioned Grouping
     ///
     /// Many multi-phase grouping plans contain a Repartition operation
@@ -383,6 +394,15 @@ pub trait Accumulator: Send + Sync + Debug + std::any::Any {
     /// The `states` array passed was formed by concatenating the
     /// results of calling [`Self::state`] on zero or more other
     /// `Accumulator` instances.
+    ///
+    /// If the aggregate also implements a [`GroupsAccumulator`], `states` may
+    /// instead contain state produced by [`GroupsAccumulator::state`] or
+    /// [`GroupsAccumulator::convert_to_state`]. See [`GroupsAccumulator`] for
+    /// details.
+    ///
+    /// [`GroupsAccumulator`]: crate::groups_accumulator::GroupsAccumulator
+    /// [`GroupsAccumulator::state`]: crate::groups_accumulator::GroupsAccumulator::state
+    /// [`GroupsAccumulator::convert_to_state`]: crate::groups_accumulator::GroupsAccumulator::convert_to_state
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()>;
 
     /// Retracts (removed) an update (caused by the given inputs) to
