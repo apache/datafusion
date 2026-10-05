@@ -875,10 +875,14 @@ async fn test_all_null_struct_decimal_cast_filter_pushdown() -> Result<()> {
         write_parquet(batch, Arc::clone(&store), "null_decimal/data.parquet").await;
 
         for pushdown_filters in [false, true] {
+            // One target partition: with more, the scan of one file keeps the
+            // filter in a `FilterExec` above it, which runs in more
+            // partitions. This test checks the filter in the scan.
             let mut config = SessionConfig::new()
                 .with_collect_statistics(false)
                 .with_parquet_pruning(false)
-                .with_parquet_page_index_pruning(false);
+                .with_parquet_page_index_pruning(false)
+                .with_target_partitions(1);
             config.options_mut().execution.parquet.pushdown_filters = pushdown_filters;
             let ctx = SessionContext::new_with_config(config);
             register_memory_listing_table(

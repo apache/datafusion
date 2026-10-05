@@ -21,7 +21,9 @@ pub use guarantee::{Guarantee, LiteralGuarantee};
 use std::borrow::Borrow;
 use std::sync::Arc;
 
-use crate::expressions::{BinaryExpr, Column, Literal};
+use crate::expressions::{
+    BinaryExpr, Column, DynamicFilterPhysicalExpr, Literal, OptionalFilterPhysicalExpr,
+};
 use crate::tree_node::ExprContext;
 use crate::{
     AcrossPartitions, ConstExpr, EquivalenceProperties, PhysicalExpr, PhysicalSortExpr,
@@ -44,6 +46,80 @@ pub fn split_conjunction(
     predicate: &Arc<dyn PhysicalExpr>,
 ) -> Vec<&Arc<dyn PhysicalExpr>> {
     split_impl(Operator::And, predicate, vec![])
+}
+
+/// Split the root `AND` chain of `predicate` into required and optional
+/// filters.
+///
+/// Returns `(required, optional)`. `required` holds the conjuncts that must be
+/// applied. `optional` holds the *inner* expressions of the conjuncts that are
+/// an [`OptionalFilterPhysicalExpr`], which a consumer can skip without
+/// affecting correctness.
+///
+/// Only the root `AND` chain is examined (the same conjuncts as
+/// [`split_conjunction`]). An `Optional` in any other position, for example
+/// `NOT(Optional(x))` or `Optional(x) OR y`, stays inside a required conjunct.
+///
+/// For example, `a AND Optional(b) AND (c AND Optional(d))` gives
+/// `([a, c], [b, d])`.
+#[expect(clippy::type_complexity)]
+pub fn split_optional(
+    predicate: &Arc<dyn PhysicalExpr>,
+) -> (Vec<Arc<dyn PhysicalExpr>>, Vec<Arc<dyn PhysicalExpr>>) {
+    let mut required = vec![];
+    let mut optional = vec![];
+    for conjunct in split_conjunction(predicate) {
+        match conjunct.downcast_ref::<OptionalFilterPhysicalExpr>() {
+            Some(opt) => optional.push(Arc::clone(opt.inner())),
+            None => required.push(Arc::clone(conjunct)),
+        }
+    }
+    (required, optional)
+}
+
+/// Returns `true` if `expr` itself is an [`OptionalFilterPhysicalExpr`].
+///
+/// This does not examine the children of `expr`.
+pub fn is_optional_filter(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    expr.is::<OptionalFilterPhysicalExpr>()
+}
+
+/// Returns the [`DynamicFilterPhysicalExpr`] if `expr` is one, or if `expr` is
+/// an [`OptionalFilterPhysicalExpr`] that directly wraps one.
+pub fn as_dynamic_filter(
+    expr: &Arc<dyn PhysicalExpr>,
+) -> Option<&DynamicFilterPhysicalExpr> {
+    let expr = match expr.downcast_ref::<OptionalFilterPhysicalExpr>() {
+        Some(opt) => opt.inner(),
+        None => expr,
+    };
+    expr.downcast_ref::<DynamicFilterPhysicalExpr>()
+}
+
+/// In debug builds, panic if `predicate` has an [`OptionalFilterPhysicalExpr`]
+/// that is not a direct conjunct of the root `AND` chain, or that is nested
+/// in another `Optional`. In release builds, this function does nothing.
+///
+/// A misplaced `Optional` does not cause incorrect results (it is always
+/// evaluated), but it is not possible to skip it. Thus a misplaced
+/// `Optional` usually shows a bug in a producer or a rewriter.
+pub fn debug_assert_optional_on_root_chain(predicate: &Arc<dyn PhysicalExpr>) {
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    for conjunct in split_conjunction(predicate) {
+        let subtree = match conjunct.downcast_ref::<OptionalFilterPhysicalExpr>() {
+            Some(opt) => opt.inner(),
+            None => conjunct,
+        };
+        let misplaced = subtree
+            .exists(|e| Ok(is_optional_filter(e)))
+            .expect("infallible closure should not fail");
+        debug_assert!(
+            !misplaced,
+            "OptionalFilterPhysicalExpr must be a direct conjunct of the root AND chain: {predicate}"
+        );
+    }
 }
 
 impl ConstExpr {
@@ -643,5 +719,141 @@ pub(crate) mod tests {
         );
 
         Ok(())
+    }
+
+    fn optional_test_schema() -> Schema {
+        Schema::new(vec![
+            Field::new("a", DataType::Boolean, true),
+            Field::new("b", DataType::Boolean, true),
+            Field::new("c", DataType::Boolean, true),
+            Field::new("d", DataType::Boolean, true),
+        ])
+    }
+
+    fn optional(inner: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
+        Arc::new(OptionalFilterPhysicalExpr::new(inner))
+    }
+
+    fn and(
+        left: Arc<dyn PhysicalExpr>,
+        right: Arc<dyn PhysicalExpr>,
+    ) -> Arc<dyn PhysicalExpr> {
+        Arc::new(BinaryExpr::new(left, Operator::And, right))
+    }
+
+    fn or(
+        left: Arc<dyn PhysicalExpr>,
+        right: Arc<dyn PhysicalExpr>,
+    ) -> Arc<dyn PhysicalExpr> {
+        Arc::new(BinaryExpr::new(left, Operator::Or, right))
+    }
+
+    fn to_strings(exprs: &[Arc<dyn PhysicalExpr>]) -> Vec<String> {
+        exprs.iter().map(|e| e.to_string()).collect()
+    }
+
+    #[test]
+    fn test_split_optional_root_chain() -> Result<()> {
+        let schema = optional_test_schema();
+        let [a, b, c, d] = ["a", "b", "c", "d"].map(|n| col(n, &schema).unwrap());
+
+        // a AND Optional(b) AND (c AND Optional(d))
+        let predicate = and(
+            and(Arc::clone(&a), optional(Arc::clone(&b))),
+            and(Arc::clone(&c), optional(Arc::clone(&d))),
+        );
+        let (required, optional_filters) = split_optional(&predicate);
+        assert_eq!(to_strings(&required), vec!["a@0", "c@2"]);
+        assert_eq!(to_strings(&optional_filters), vec!["b@1", "d@3"]);
+        debug_assert_optional_on_root_chain(&predicate);
+
+        // A single Optional at the root is optional.
+        let predicate = optional(Arc::clone(&a));
+        let (required, optional_filters) = split_optional(&predicate);
+        assert!(required.is_empty());
+        assert_eq!(to_strings(&optional_filters), vec!["a@0"]);
+        debug_assert_optional_on_root_chain(&predicate);
+
+        // An Optional that wraps an AND is one optional filter.
+        let predicate = optional(and(Arc::clone(&a), Arc::clone(&b)));
+        let (required, optional_filters) = split_optional(&predicate);
+        assert!(required.is_empty());
+        assert_eq!(to_strings(&optional_filters), vec!["a@0 AND b@1"]);
+        debug_assert_optional_on_root_chain(&predicate);
+
+        // No Optional: everything is required.
+        let predicate = and(Arc::clone(&a), Arc::clone(&b));
+        let (required, optional_filters) = split_optional(&predicate);
+        assert_eq!(to_strings(&required), vec!["a@0", "b@1"]);
+        assert!(optional_filters.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_split_optional_not_on_root_chain() -> Result<()> {
+        let schema = optional_test_schema();
+        let [x, y] = ["a", "b"].map(|n| col(n, &schema).unwrap());
+
+        // NOT(Optional(x)) is required
+        let predicate = crate::expressions::not(optional(Arc::clone(&x)))?;
+        let (required, optional_filters) = split_optional(&predicate);
+        assert_eq!(required, vec![Arc::clone(&predicate)]);
+        assert!(optional_filters.is_empty());
+
+        // Optional(x) OR y is required
+        let predicate = or(optional(Arc::clone(&x)), Arc::clone(&y));
+        let (required, optional_filters) = split_optional(&predicate);
+        assert_eq!(required, vec![Arc::clone(&predicate)]);
+        assert!(optional_filters.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_is_optional_filter_and_as_dynamic_filter() -> Result<()> {
+        let schema = optional_test_schema();
+        let a = col("a", &schema)?;
+        let dynamic: Arc<dyn PhysicalExpr> = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::clone(&a)],
+            lit(true),
+        ));
+
+        assert!(is_optional_filter(&optional(Arc::clone(&a))));
+        assert!(!is_optional_filter(&a));
+        // Only the node itself is examined.
+        assert!(!is_optional_filter(&crate::expressions::not(optional(
+            Arc::clone(&a)
+        ))?));
+
+        assert!(as_dynamic_filter(&dynamic).is_some());
+        assert!(as_dynamic_filter(&optional(Arc::clone(&dynamic))).is_some());
+        assert!(as_dynamic_filter(&a).is_none());
+        assert!(as_dynamic_filter(&optional(Arc::clone(&a))).is_none());
+        // Only one Optional wrapper is removed.
+        assert!(as_dynamic_filter(&optional(optional(dynamic))).is_none());
+        Ok(())
+    }
+
+    #[test]
+    #[cfg_attr(
+        debug_assertions,
+        should_panic(expected = "must be a direct conjunct of the root AND chain")
+    )]
+    fn test_debug_assert_optional_under_not() {
+        let schema = optional_test_schema();
+        let a = col("a", &schema).unwrap();
+        let b = col("b", &schema).unwrap();
+        let predicate = and(a, crate::expressions::not(optional(b)).unwrap());
+        debug_assert_optional_on_root_chain(&predicate);
+    }
+
+    #[test]
+    #[cfg_attr(
+        debug_assertions,
+        should_panic(expected = "must be a direct conjunct of the root AND chain")
+    )]
+    fn test_debug_assert_nested_optional() {
+        let schema = optional_test_schema();
+        let a = col("a", &schema).unwrap();
+        debug_assert_optional_on_root_chain(&optional(optional(a)));
     }
 }

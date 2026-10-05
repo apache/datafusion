@@ -1265,7 +1265,11 @@ enum ShortCircuitStrategy {
 }
 
 /// Maximum share of rows still needing evaluation before filtering.
-const PRE_SELECTION_THRESHOLD: f32 = 0.2;
+///
+/// Public only so that the adaptive conjunct ordering of `FilterExec` can
+/// model the same rule. Not part of the stable API.
+#[doc(hidden)]
+pub const PRE_SELECTION_THRESHOLD: f32 = 0.2;
 
 /// Returns the short-circuit strategy for `OR` with a Boolean LHS.
 /// All true returns the LHS; all false returns the RHS. Sparse false rows

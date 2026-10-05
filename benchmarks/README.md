@@ -966,6 +966,28 @@ Several queries are included to test hash joins under various workloads.
 ./bench.sh run hj
 ```
 
+## Hash Join Dynamic Filter on an Ordered Subset
+
+This benchmark (`hj_ordered_subset`) measures the dynamic filter that a hash join pushes to its probe-side Parquet scan when the probe table is sorted by the join key and the build side matches an ordered subset of the key range. This is common for time-ordered fact tables: the events of one day, or of a range of days.
+
+The load SQL writes an `events` table of 100 days x 200,000 rows (20M rows, 100,000-row row groups) sorted by `event_id`, and two build tables with one row for each event. The queries join `events` to 1 day (Q01, Q04), to 10 days (Q02, Q05), or to 1% of the events scattered over the whole range (Q03, Q06, the control). The bounds of the dynamic filter (`event_id >= min AND event_id <= max`) can prune the `events` row groups outside the matched range, and the membership check passes almost every row that remains. In the control, the bounds cannot prune anything.
+
+The `partitioned` subgroup (Q01-Q03) forces `HashJoinExec` mode `Partitioned`, and the `collect_left` subgroup (Q04-Q06) forces mode `CollectLeft`.
+
+### Example Run
+
+```bash
+# No need to generate data: the suite's load SQL writes the Parquet files
+
+./bench.sh run hj_ordered_subset
+
+# With parquet filter pushdown
+DATAFUSION_EXECUTION_PARQUET_PUSHDOWN_FILTERS=true ./bench.sh run hj_ordered_subset
+
+# Smaller data: 50 days x 100,000 rows
+HJOS_DAYS=50 HJOS_ROWS_PER_DAY=100000 ./bench.sh run hj_ordered_subset
+```
+
 ## Null-Aware Join
 
 This benchmark focuses on `NOT IN` subqueries, which plan as null-aware joins: an

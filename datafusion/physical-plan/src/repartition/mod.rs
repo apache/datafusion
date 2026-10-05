@@ -1384,6 +1384,30 @@ impl BatchPartitioner {
     }
 }
 
+/// Returns `true` if the row count of an input makes a round-robin
+/// repartition of that input useful: the input has more rows than one batch,
+/// or its row count is unknown.
+///
+/// The optimizer uses an inexact row count only when
+/// `datafusion.execution.use_row_number_estimates_to_optimize_partitioning`
+/// is set. Otherwise it treats an inexact row count as unknown.
+pub fn round_robin_beneficial_for_rows(
+    num_rows: &Precision<usize>,
+    config: &ConfigOptions,
+) -> bool {
+    let batch_size = config.execution.batch_size.get();
+    match num_rows {
+        Precision::Exact(n_rows) => *n_rows > batch_size,
+        Precision::Inexact(n_rows) => {
+            !config
+                .execution
+                .use_row_number_estimates_to_optimize_partitioning
+                || *n_rows > batch_size
+        }
+        Precision::Absent => true,
+    }
+}
+
 /// Maps `N` input partitions to `M` output partitions based on a
 /// [`Partitioning`] scheme.
 ///
