@@ -246,6 +246,7 @@ datafusion.execution.parquet.content_defined_chunking.max_chunk_size 1048576
 datafusion.execution.parquet.content_defined_chunking.min_chunk_size 262144
 datafusion.execution.parquet.content_defined_chunking.norm_level 0
 datafusion.execution.parquet.created_by datafusion
+datafusion.execution.parquet.data_page_compression_ratio_threshold 1
 datafusion.execution.parquet.data_page_row_count_limit 20000
 datafusion.execution.parquet.data_pagesize_limit 1048576
 datafusion.execution.parquet.dictionary_enabled true
@@ -409,6 +410,7 @@ datafusion.execution.parquet.content_defined_chunking.max_chunk_size 1048576 Max
 datafusion.execution.parquet.content_defined_chunking.min_chunk_size 262144 Minimum chunk size in bytes. The rolling hash will not trigger a split until this many bytes have been accumulated. Default is 256 KiB.
 datafusion.execution.parquet.content_defined_chunking.norm_level 0 Normalization level. Increasing this improves deduplication ratio but increases fragmentation. Recommended range is [-3, 3], default is 0.
 datafusion.execution.parquet.created_by datafusion (writing) Sets "created by" property
+datafusion.execution.parquet.data_page_compression_ratio_threshold 1 (writing) Sets the default compression ratio threshold at or above which a Data Page v2's compressed values are discarded in favor of writing the values uncompressed.
 datafusion.execution.parquet.data_page_row_count_limit 20000 (writing) Sets best effort maximum number of rows in data page
 datafusion.execution.parquet.data_pagesize_limit 1048576 (writing) Sets best effort maximum size of data page in bytes
 datafusion.execution.parquet.dictionary_enabled true (writing) Sets if dictionary encoding is enabled. If NULL, uses default parquet writer setting

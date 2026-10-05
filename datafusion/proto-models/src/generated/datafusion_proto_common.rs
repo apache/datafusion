@@ -759,6 +759,13 @@ pub struct ParquetColumnOptions {
     >,
     #[prost(oneof = "parquet_column_options::CompressionOpt", tags = "4")]
     pub compression_opt: ::core::option::Option<parquet_column_options::CompressionOpt>,
+    #[prost(
+        oneof = "parquet_column_options::DataPageCompressionRatioThresholdOpt",
+        tags = "9"
+    )]
+    pub data_page_compression_ratio_threshold_opt: ::core::option::Option<
+        parquet_column_options::DataPageCompressionRatioThresholdOpt,
+    >,
     #[prost(oneof = "parquet_column_options::StatisticsEnabledOpt", tags = "5")]
     pub statistics_enabled_opt: ::core::option::Option<
         parquet_column_options::StatisticsEnabledOpt,
@@ -793,6 +800,11 @@ pub mod parquet_column_options {
     pub enum CompressionOpt {
         #[prost(string, tag = "4")]
         Compression(::prost::alloc::string::String),
+    }
+    #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
+    pub enum DataPageCompressionRatioThresholdOpt {
+        #[prost(double, tag = "9")]
+        DataPageCompressionRatioThreshold(f64),
     }
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum StatisticsEnabledOpt {
@@ -888,6 +900,13 @@ pub struct ParquetOptions {
     >,
     #[prost(oneof = "parquet_options::CompressionOpt", tags = "10")]
     pub compression_opt: ::core::option::Option<parquet_options::CompressionOpt>,
+    #[prost(
+        oneof = "parquet_options::DataPageCompressionRatioThresholdOpt",
+        tags = "39"
+    )]
+    pub data_page_compression_ratio_threshold_opt: ::core::option::Option<
+        parquet_options::DataPageCompressionRatioThresholdOpt,
+    >,
     #[prost(oneof = "parquet_options::DictionaryEnabledOpt", tags = "11")]
     pub dictionary_enabled_opt: ::core::option::Option<
         parquet_options::DictionaryEnabledOpt,
@@ -938,6 +957,11 @@ pub mod parquet_options {
     pub enum CompressionOpt {
         #[prost(string, tag = "10")]
         Compression(::prost::alloc::string::String),
+    }
+    #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
+    pub enum DataPageCompressionRatioThresholdOpt {
+        #[prost(double, tag = "39")]
+        DataPageCompressionRatioThreshold(f64),
     }
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum DictionaryEnabledOpt {

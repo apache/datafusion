@@ -390,6 +390,14 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
                     }
                 })
                 .transpose()?,
+            data_page_compression_ratio_threshold: proto
+                .data_page_compression_ratio_threshold_opt
+                .as_ref()
+                .map(|opt| match opt {
+                    parquet_options::DataPageCompressionRatioThresholdOpt::DataPageCompressionRatioThreshold(
+                        threshold,
+                    ) => *threshold,
+                }),
             dictionary_enabled: proto.dictionary_enabled_opt.as_ref().map(|opt| {
                 match opt {
                     parquet_options::DictionaryEnabledOpt::DictionaryEnabled(
@@ -524,6 +532,9 @@ impl From<ParquetColumnOptionsProto> for ParquetColumnOptions {
             compression: proto
                 .compression_opt
                 .map(|parquet_column_options::CompressionOpt::Compression(v)| v),
+            data_page_compression_ratio_threshold: proto
+                .data_page_compression_ratio_threshold_opt
+                .map(|parquet_column_options::DataPageCompressionRatioThresholdOpt::DataPageCompressionRatioThreshold(v)| v),
             statistics_enabled: proto.statistics_enabled_opt.map(
                 |parquet_column_options::StatisticsEnabledOpt::StatisticsEnabled(v)| v,
             ),

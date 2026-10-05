@@ -2600,7 +2600,7 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                             if compression_level__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("compressionLevel"));
                             }
-                            compression_level__ =
+                            compression_level__ = 
                                 map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
@@ -2614,7 +2614,7 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                             if terminator__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("terminator"));
                             }
-                            terminator__ =
+                            terminator__ = 
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -4056,7 +4056,7 @@ impl serde::Serialize for ExplainAnalyzeCategoriesNode {
             struct_ser.serialize_field("all", &self.all)?;
         }
         if !self.only.is_empty() {
-            let v = self.only.iter().copied().map(|v| {
+            let v = self.only.iter().cloned().map(|v| {
                 MetricCategory::try_from(v)
                     .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", v)))
                 }).collect::<std::result::Result<Vec<_>, _>>()?;
@@ -6012,6 +6012,9 @@ impl serde::Serialize for ParquetColumnOptions {
         if self.compression_opt.is_some() {
             len += 1;
         }
+        if self.data_page_compression_ratio_threshold_opt.is_some() {
+            len += 1;
+        }
         if self.statistics_enabled_opt.is_some() {
             len += 1;
         }
@@ -6047,6 +6050,13 @@ impl serde::Serialize for ParquetColumnOptions {
             match v {
                 parquet_column_options::CompressionOpt::Compression(v) => {
                     struct_ser.serialize_field("compression", v)?;
+                }
+            }
+        }
+        if let Some(v) = self.data_page_compression_ratio_threshold_opt.as_ref() {
+            match v {
+                parquet_column_options::DataPageCompressionRatioThresholdOpt::DataPageCompressionRatioThreshold(v) => {
+                    struct_ser.serialize_field("dataPageCompressionRatioThreshold", v)?;
                 }
             }
         }
@@ -6089,6 +6099,8 @@ impl<'de> serde::Deserialize<'de> for ParquetColumnOptions {
             "dictionary_enabled",
             "dictionaryEnabled",
             "compression",
+            "data_page_compression_ratio_threshold",
+            "dataPageCompressionRatioThreshold",
             "statistics_enabled",
             "statisticsEnabled",
             "bloom_filter_fpp",
@@ -6103,6 +6115,7 @@ impl<'de> serde::Deserialize<'de> for ParquetColumnOptions {
             Encoding,
             DictionaryEnabled,
             Compression,
+            DataPageCompressionRatioThreshold,
             StatisticsEnabled,
             BloomFilterFpp,
             BloomFilterNdv,
@@ -6131,6 +6144,7 @@ impl<'de> serde::Deserialize<'de> for ParquetColumnOptions {
                             "encoding" => Ok(GeneratedField::Encoding),
                             "dictionaryEnabled" | "dictionary_enabled" => Ok(GeneratedField::DictionaryEnabled),
                             "compression" => Ok(GeneratedField::Compression),
+                            "dataPageCompressionRatioThreshold" | "data_page_compression_ratio_threshold" => Ok(GeneratedField::DataPageCompressionRatioThreshold),
                             "statisticsEnabled" | "statistics_enabled" => Ok(GeneratedField::StatisticsEnabled),
                             "bloomFilterFpp" | "bloom_filter_fpp" => Ok(GeneratedField::BloomFilterFpp),
                             "bloomFilterNdv" | "bloom_filter_ndv" => Ok(GeneratedField::BloomFilterNdv),
@@ -6157,6 +6171,7 @@ impl<'de> serde::Deserialize<'de> for ParquetColumnOptions {
                 let mut encoding_opt__ = None;
                 let mut dictionary_enabled_opt__ = None;
                 let mut compression_opt__ = None;
+                let mut data_page_compression_ratio_threshold_opt__ = None;
                 let mut statistics_enabled_opt__ = None;
                 let mut bloom_filter_fpp_opt__ = None;
                 let mut bloom_filter_ndv_opt__ = None;
@@ -6186,6 +6201,12 @@ impl<'de> serde::Deserialize<'de> for ParquetColumnOptions {
                             }
                             compression_opt__ = map_.next_value::<::std::option::Option<_>>()?.map(parquet_column_options::CompressionOpt::Compression);
                         }
+                        GeneratedField::DataPageCompressionRatioThreshold => {
+                            if data_page_compression_ratio_threshold_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("dataPageCompressionRatioThreshold"));
+                            }
+                            data_page_compression_ratio_threshold_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_column_options::DataPageCompressionRatioThresholdOpt::DataPageCompressionRatioThreshold(x.0));
+                        }
                         GeneratedField::StatisticsEnabled => {
                             if statistics_enabled_opt__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("statisticsEnabled"));
@@ -6211,6 +6232,7 @@ impl<'de> serde::Deserialize<'de> for ParquetColumnOptions {
                     encoding_opt: encoding_opt__,
                     dictionary_enabled_opt: dictionary_enabled_opt__,
                     compression_opt: compression_opt__,
+                    data_page_compression_ratio_threshold_opt: data_page_compression_ratio_threshold_opt__,
                     statistics_enabled_opt: statistics_enabled_opt__,
                     bloom_filter_fpp_opt: bloom_filter_fpp_opt__,
                     bloom_filter_ndv_opt: bloom_filter_ndv_opt__,
@@ -6506,6 +6528,9 @@ impl serde::Serialize for ParquetOptions {
         if self.compression_opt.is_some() {
             len += 1;
         }
+        if self.data_page_compression_ratio_threshold_opt.is_some() {
+            len += 1;
+        }
         if self.dictionary_enabled_opt.is_some() {
             len += 1;
         }
@@ -6641,6 +6666,13 @@ impl serde::Serialize for ParquetOptions {
             match v {
                 parquet_options::CompressionOpt::Compression(v) => {
                     struct_ser.serialize_field("compression", v)?;
+                }
+            }
+        }
+        if let Some(v) = self.data_page_compression_ratio_threshold_opt.as_ref() {
+            match v {
+                parquet_options::DataPageCompressionRatioThresholdOpt::DataPageCompressionRatioThreshold(v) => {
+                    struct_ser.serialize_field("dataPageCompressionRatioThreshold", v)?;
                 }
             }
         }
@@ -6791,6 +6823,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "metadata_size_hint",
             "metadataSizeHint",
             "compression",
+            "data_page_compression_ratio_threshold",
+            "dataPageCompressionRatioThreshold",
             "dictionary_enabled",
             "dictionaryEnabled",
             "statistics_enabled",
@@ -6842,6 +6876,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             ContentDefinedChunking,
             MetadataSizeHint,
             Compression,
+            DataPageCompressionRatioThreshold,
             DictionaryEnabled,
             StatisticsEnabled,
             ColumnIndexTruncateLength,
@@ -6900,6 +6935,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "contentDefinedChunking" | "content_defined_chunking" => Ok(GeneratedField::ContentDefinedChunking),
                             "metadataSizeHint" | "metadata_size_hint" => Ok(GeneratedField::MetadataSizeHint),
                             "compression" => Ok(GeneratedField::Compression),
+                            "dataPageCompressionRatioThreshold" | "data_page_compression_ratio_threshold" => Ok(GeneratedField::DataPageCompressionRatioThreshold),
                             "dictionaryEnabled" | "dictionary_enabled" => Ok(GeneratedField::DictionaryEnabled),
                             "statisticsEnabled" | "statistics_enabled" => Ok(GeneratedField::StatisticsEnabled),
                             "columnIndexTruncateLength" | "column_index_truncate_length" => Ok(GeneratedField::ColumnIndexTruncateLength),
@@ -6956,6 +6992,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut content_defined_chunking__ = None;
                 let mut metadata_size_hint_opt__ = None;
                 let mut compression_opt__ = None;
+                let mut data_page_compression_ratio_threshold_opt__ = None;
                 let mut dictionary_enabled_opt__ = None;
                 let mut statistics_enabled_opt__ = None;
                 let mut column_index_truncate_length_opt__ = None;
@@ -7141,6 +7178,12 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             }
                             compression_opt__ = map_.next_value::<::std::option::Option<_>>()?.map(parquet_options::CompressionOpt::Compression);
                         }
+                        GeneratedField::DataPageCompressionRatioThreshold => {
+                            if data_page_compression_ratio_threshold_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("dataPageCompressionRatioThreshold"));
+                            }
+                            data_page_compression_ratio_threshold_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::DataPageCompressionRatioThresholdOpt::DataPageCompressionRatioThreshold(x.0));
+                        }
                         GeneratedField::DictionaryEnabled => {
                             if dictionary_enabled_opt__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("dictionaryEnabled"));
@@ -7236,6 +7279,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     content_defined_chunking: content_defined_chunking__,
                     metadata_size_hint_opt: metadata_size_hint_opt__,
                     compression_opt: compression_opt__,
+                    data_page_compression_ratio_threshold_opt: data_page_compression_ratio_threshold_opt__,
                     dictionary_enabled_opt: dictionary_enabled_opt__,
                     statistics_enabled_opt: statistics_enabled_opt__,
                     column_index_truncate_length_opt: column_index_truncate_length_opt__,
