@@ -17,31 +17,24 @@
 
 //! Encryption context used during Parquet file open.
 //!
-//! Isolated here so the `#[cfg(feature = "parquet_encryption")]` gating does
-//! not pollute the rest of the opener module.
+//! This module is only compiled with the `parquet_encryption` feature. It is
+//! isolated here so the feature gating does not pollute the rest of the
+//! opener module.
 
-#[cfg(feature = "parquet_encryption")]
 use std::sync::Arc;
 
 use datafusion_common::Result;
-#[cfg(feature = "parquet_encryption")]
 use datafusion_common::config::EncryptionFactoryOptions;
-#[cfg(feature = "parquet_encryption")]
 use datafusion_common::encryption::FileDecryptionProperties;
-#[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
 
 use super::ParquetMorselizer;
 
-#[derive(Default)]
 pub(super) struct EncryptionContext {
-    #[cfg(feature = "parquet_encryption")]
     file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
-    #[cfg(feature = "parquet_encryption")]
     encryption_factory: Option<(Arc<dyn EncryptionFactory>, EncryptionFactoryOptions)>,
 }
 
-#[cfg(feature = "parquet_encryption")]
 impl EncryptionContext {
     fn new(
         file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
@@ -74,32 +67,11 @@ impl EncryptionContext {
     }
 }
 
-#[cfg(not(feature = "parquet_encryption"))]
-#[expect(dead_code)]
-#[expect(clippy::unused_async)]
-impl EncryptionContext {
-    pub(super) async fn get_file_decryption_properties(
-        &self,
-        _file_location: &object_store::path::Path,
-    ) -> Result<
-        Option<std::sync::Arc<datafusion_common::encryption::FileDecryptionProperties>>,
-    > {
-        Ok(None)
-    }
-}
-
 impl ParquetMorselizer {
-    #[cfg(feature = "parquet_encryption")]
     pub(super) fn get_encryption_context(&self) -> EncryptionContext {
         EncryptionContext::new(
             self.file_decryption_properties.clone(),
             self.encryption_factory.clone(),
         )
-    }
-
-    #[cfg(not(feature = "parquet_encryption"))]
-    #[expect(dead_code)]
-    pub(super) fn get_encryption_context(&self) -> EncryptionContext {
-        EncryptionContext::default()
     }
 }

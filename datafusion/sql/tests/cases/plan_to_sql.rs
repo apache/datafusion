@@ -28,7 +28,7 @@ use datafusion_expr::test::function_stub::{
 };
 use datafusion_expr::{
     ColumnarValue, EmptyRelation, Expr, Extension, LogicalPlan, LogicalPlanBuilder,
-    ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Union,
+    ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TableScanBuilder, Union,
     UserDefinedLogicalNode, UserDefinedLogicalNodeCore, Volatility, WindowFrame,
     WindowFunctionDefinition, cast, col, exists, in_subquery, lit, scalar_subquery,
     table_scan, wildcard,
@@ -56,6 +56,7 @@ use std::{fmt, vec};
 use crate::common::{MockContextProvider, MockSessionState};
 use datafusion_expr::builder::{
     project, subquery_alias, table_scan_with_filter_and_fetch, table_scan_with_filters,
+    table_source,
 };
 use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions::unicode::planner::UnicodeFunctionPlanner;
@@ -4701,5 +4702,26 @@ fn snowflake_flatten_multiple_unnest_cross_join() -> Result<(), DataFusionError>
         unparser_dialect: snowflake,
         expected: @r#"SELECT "a"."VALUE", "b"."VALUE" FROM "multi_array_table" CROSS JOIN LATERAL FLATTEN(INPUT => "multi_array_table"."column_a") AS "a" CROSS JOIN LATERAL FLATTEN(INPUT => "multi_array_table"."column_b") AS "b""#,
     );
+    Ok(())
+}
+
+#[test]
+fn test_table_scan_with_skip() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("age", DataType::Utf8, false),
+    ]);
+    let scan = |skip, fetch| -> Result<String> {
+        let scan = TableScanBuilder::new("t1", table_source(&schema))
+            .with_skip(skip)
+            .with_fetch(fetch)
+            .build()?;
+        let plan = LogicalPlanBuilder::table_scan(scan)?.build()?;
+        Ok(plan_to_sql(&plan)?.to_string())
+    };
+
+    assert_snapshot!(scan(Some(5), Some(10))?, @"SELECT * FROM t1 LIMIT 10 OFFSET 5");
+    assert_snapshot!(scan(Some(5), None)?, @"SELECT * FROM t1 OFFSET 5");
+    assert_snapshot!(scan(None, Some(10))?, @"SELECT * FROM t1 LIMIT 10");
     Ok(())
 }

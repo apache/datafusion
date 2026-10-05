@@ -234,10 +234,6 @@ impl Metric {
 /// The set's members remain fixed as execution registers more metrics, but their
 /// values continue to reflect execution progress. Use [`Self::for_partition`] to
 /// select the metrics belonging to one partition.
-///
-/// Snapshots from [`ExecutionPlanMetricsSet::clone_inner`] retain the source
-/// registry, including later registrations, until dropped. A partition selection
-/// retains only the selected metrics.
 #[derive(Default, Debug, Clone)]
 pub struct MetricsSet {
     metrics: Snapshot,
@@ -252,6 +248,22 @@ impl MetricsSet {
     /// Add the specified metric without changing other snapshots.
     pub fn push(&mut self, metric: Arc<Metric>) {
         self.metrics.push(metric)
+    }
+
+    /// Returns this set with the derived `output_rows_skew` metric appended,
+    /// or unchanged if no partition reported `output_rows` yet.
+    ///
+    /// This is typically used in `ExecutionPlan::metrics` of operators that
+    /// execute in multiple partitions (e.g. repartitions, partitioned joins and
+    /// aggregations), where it shows how evenly their output rows are spread
+    /// across partitions. With a single partition the skew is always `0%`.
+    ///
+    /// See [`BaselineMetrics::output_rows_skew_metric`] for how skew is computed.
+    pub fn with_output_rows_skew(mut self) -> Self {
+        if let Some(output_rows_skew) = BaselineMetrics::output_rows_skew_metric(&self) {
+            self.push(output_rows_skew);
+        }
+        self
     }
 
     /// Return the metrics whose partition ID equals `partition`.

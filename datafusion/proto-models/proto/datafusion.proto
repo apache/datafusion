@@ -103,6 +103,10 @@ message ListingTableScanNode {
     datafusion_common.ArrowFormat arrow = 16;
   }
   repeated SortExprNodeCollection file_sort_order = 13;
+  // Optional number of rows to read.
+  optional uint64 fetch = 17;
+  // Optional number of rows to skip.
+  optional uint64 skip = 18;
 }
 
 message ViewTableScanNode {
@@ -112,6 +116,10 @@ message ViewTableScanNode {
   datafusion_common.Schema schema = 3;
   ProjectionColumns projection = 4;
   string definition = 5;
+  // Optional number of rows to read.
+  optional uint64 fetch = 7;
+  // Optional number of rows to skip.
+  optional uint64 skip = 8;
 }
 
 // Logical Plan to Scan a CustomTableProvider registered at runtime
@@ -122,6 +130,10 @@ message CustomTableScanNode {
   datafusion_common.Schema schema = 3;
   repeated LogicalExprNode filters = 4;
   bytes custom_table_data = 5;
+  // Optional number of rows to read.
+  optional uint64 fetch = 7;
+  // Optional number of rows to skip.
+  optional uint64 skip = 8;
 }
 
 message ProjectionNode {

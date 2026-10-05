@@ -1796,6 +1796,59 @@ ORDER BY b ASC NULLS LAST
 NULL
 NULL
 
+# Default bounds from nested functions retain their resolved output type.
+statement ok
+SET datafusion.explain.physical_plan_only = true;
+
+statement ok
+CREATE VIEW nested_trunc_ordering AS
+SELECT arrow_cast(column1, 'Timestamp(Second)') AS ts
+FROM (VALUES (90001::bigint), (3601::bigint))
+ORDER BY ts
+LIMIT 2;
+
+query I
+SELECT arrow_cast(date_trunc('day', date_trunc('hour', ts)), 'Int64') AS bucket
+FROM nested_trunc_ordering
+ORDER BY bucket;
+----
+0
+86400
+
+query TT
+EXPLAIN SELECT date_trunc('day', date_trunc('hour', ts)) AS bucket
+FROM nested_trunc_ordering
+ORDER BY bucket;
+----
+physical_plan
+01)ProjectionExec: expr=[date_trunc(day, date_trunc(hour, ts@0)) as bucket]
+02)--SortExec: TopK(fetch=2), expr=[ts@0 ASC NULLS LAST], preserve_partitioning=[false]
+03)----ProjectionExec: expr=[CAST(column1@0 AS Timestamp(s)) as ts]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP VIEW nested_trunc_ordering;
+
+# Recovering a named timezone must still retain the outer sort.
+query TT
+EXPLAIN SELECT date_trunc('hour', from_unixtime(c, 'America/Goose_Bay')) AS bucket
+FROM (
+  SELECT column1 AS c
+  FROM (VALUES (562129260::bigint), (562129259::bigint))
+  ORDER BY c
+  LIMIT 2
+)
+ORDER BY bucket;
+----
+physical_plan
+01)SortExec: expr=[bucket@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[date_trunc(hour, from_unixtime(column1@0, America/Goose_Bay)) as bucket]
+03)----SortExec: TopK(fetch=2), expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+RESET datafusion.explain.physical_plan_only;
+
 statement ok
 CREATE TABLE timestamp_strings(ts varchar)
 AS VALUES
@@ -2119,6 +2172,98 @@ query ?
 SELECT '2000-01-01T00:00:00'::timestamp - '2010-01-01T00:00:00'::timestamp;
 ----
 -3653 days 0 hours 0 mins 0.000000000 secs
+
+# Regression test for https://github.com/apache/datafusion/issues/13212
+statement ok
+SET TIME ZONE = '+08'
+
+query ???
+WITH timestamps(ts_tz, ts) AS (
+  VALUES ('2024-11-01T00:00:00+00:00'::timestamptz, '2024-11-01T00:00:00'::timestamp)
+)
+SELECT
+  '2024-11-01T00:00:00+00:00'::timestamptz - '2024-11-01T00:00:00'::timestamp,
+  ts_tz - ts,
+  ts - ts_tz
+FROM timestamps;
+----
+0 days 8 hours 0 mins 0.000000000 secs 0 days 8 hours 0 mins 0.000000000 secs 0 days -8 hours 0 mins 0.000000000 secs
+
+# The session timezone is propagated when coercing a scalar subquery.
+query ?
+SELECT (
+  SELECT ts_tz - ts
+  FROM (
+    VALUES ('2024-11-01T00:00:00+00:00'::timestamptz, '2024-11-01T00:00:00'::timestamp)
+  ) AS timestamps(ts_tz, ts)
+);
+----
+0 days 8 hours 0 mins 0.000000000 secs
+
+# The session timezone, not the aware operand's timezone, controls coercion.
+query BBBBBB??
+WITH timestamps(ts_tz, ts) AS (
+  VALUES (
+    arrow_cast('2024-11-01T00:00:00-04:00', 'Timestamp(Nanosecond, Some("America/New_York"))'),
+    '2024-11-01T00:00:00'::timestamp
+  )
+)
+SELECT
+  ts_tz = ts,
+  ts_tz > ts,
+  ts_tz IN (ts),
+  ts_tz BETWEEN ts AND ts,
+  ts_tz BETWEEN ts_tz AND ts,
+  CASE ts_tz WHEN ts THEN true ELSE false END,
+  ts_tz - ts,
+  ts - ts_tz
+FROM timestamps;
+----
+false true false false false false 0 days 12 hours 0 mins 0.000000000 secs 0 days -12 hours 0 mins 0.000000000 secs
+
+# Session-timezone coercion also applies through encoded and nested types.
+query BBB
+WITH timestamps(ts_tz, ts) AS (
+  VALUES (
+    arrow_cast('2024-11-01T00:00:00-04:00', 'Timestamp(Nanosecond, Some("America/New_York"))'),
+    '2024-11-01T00:00:00'::timestamp
+  )
+)
+SELECT
+  arrow_cast(ts_tz, 'Dictionary(Int32, Timestamp(Nanosecond, Some("America/New_York")))') = ts,
+  arrow_cast(ts_tz, 'RunEndEncoded("run_ends": non-null Int32, "values": Timestamp(Nanosecond, Some("America/New_York")))') = ts,
+  make_array(ts_tz) = make_array(ts)
+FROM timestamps;
+----
+false false false
+
+# IN subqueries use the same session-timezone comparison coercion.
+query I
+WITH timestamps(ts_tz, ts) AS (
+  VALUES (
+    arrow_cast('2024-11-01T00:00:00-04:00', 'Timestamp(Nanosecond, Some("America/New_York"))'),
+    '2024-11-01T00:00:00'::timestamp
+  )
+)
+SELECT count(*)
+FROM timestamps
+WHERE ts_tz IN (SELECT ts FROM timestamps);
+----
+0
+
+statement ok
+SET TIME ZONE = 'America/New_York'
+
+# The timezone-naive operand is interpreted in EST and EDT, respectively.
+query ??
+SELECT
+  '2024-01-15T00:00:00+00:00'::timestamptz - '2024-01-15T00:00:00'::timestamp,
+  '2024-07-15T00:00:00+00:00'::timestamptz - '2024-07-15T00:00:00'::timestamp;
+----
+0 days -5 hours 0 mins 0.000000000 secs 0 days -4 hours 0 mins 0.000000000 secs
+
+statement ok
+RESET datafusion.execution.time_zone
 
 # Subtracting a timezone-naive timestamp from a timezone-aware one reads the
 # naive operand in the aware operand's time zone at every time unit, as `=`
@@ -2687,9 +2832,32 @@ SELECT arrow_typeof(date_trunc('hour', TIME '14:30:45'));
 ----
 Time64(ns)
 
+# date_trunc accepts the same timestamps as a scalar as it does as a column,
+# including ones beyond the range of a nanosecond timestamp
+query P
+SELECT date_trunc('second', to_timestamp_seconds(10000000000));
+----
+2286-11-20T17:46:40
+
+query P
+SELECT date_trunc('second', to_timestamp_seconds(ts))
+FROM (VALUES (10000000000)) AS timestamps(ts);
+----
+2286-11-20T17:46:40
+
+query P
+SELECT date_trunc('minute', to_timestamp_millis(10000000019999));
+----
+2286-11-20T17:46:00
+
+query P
+SELECT date_trunc('millisecond', to_timestamp_micros(10000000000123456));
+----
+2286-11-20T17:46:40.123
+
 query error DataFusion error: Execution error: Timestamp 9223372036854775807 out of range
 SELECT date_trunc(
-  'hour',
+  'week',
   arrow_cast(9223372036854775807, 'Timestamp(Second, None)')
 );
 
