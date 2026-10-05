@@ -37,22 +37,12 @@
 //! - [`StatisticsRegistry`]: Chains providers, lives in SessionState
 //! - [`ExtendedStatistics`]: Statistics with type-safe custom extensions
 //!
-//! # Experimental Providers
+//! # Bundled Providers
 //!
-//! These optional providers hold estimation techniques not yet ready to move
-//! into the operator. A technique moves into the operator once it is shown to
-//! improve estimates in general. Each provider starts from the operator's
-//! [`ExecutionPlan::statistics_from_inputs`] and replaces only the values its
-//! technique estimates, so improvements to the operator also reach it. Register
-//! them with [`StatisticsRegistry::with_experimental_providers`].
-//!
-//! - [`FilterStatisticsProvider`] - adjusts the distinct count of each column
-//!   for the rows removed by the filter
-//! - [`JoinStatisticsProvider`] - estimates multi-key inner equi-joins assuming
-//!   independent keys
-//!
-//! The remaining bundled providers are deprecated because they duplicate the
-//! operators' own estimates.
+//! The providers bundled in this module are deprecated: the default statistics
+//! estimation is each operator's [`ExecutionPlan::statistics_from_inputs`], and
+//! estimation improvements belong there. Register user-defined providers to
+//! plug in other estimation.
 //!
 //! # Statistics walk
 //!
@@ -399,21 +389,7 @@ impl StatisticsRegistry {
         Self { providers }
     }
 
-    /// Create a registry with the experimental providers (see the
-    /// [module documentation](crate::operator_statistics)).
-    ///
-    /// Provider order (first match wins):
-    /// 1. [`FilterStatisticsProvider`]
-    /// 2. [`JoinStatisticsProvider`]
-    pub fn with_experimental_providers() -> Self {
-        Self::with_providers(vec![
-            Arc::new(FilterStatisticsProvider),
-            Arc::new(JoinStatisticsProvider),
-        ])
-    }
-
-    /// Create a registry with the experimental providers plus the deprecated
-    /// providers that duplicate the operators' own estimates.
+    /// Create a registry with the deprecated bundled providers.
     ///
     /// Provider order (first match wins):
     /// 1. [`FilterStatisticsProvider`]
@@ -425,7 +401,7 @@ impl StatisticsRegistry {
     /// 7. [`UnionStatisticsProvider`]
     #[deprecated(
         since = "56.0.0",
-        note = "use `with_experimental_providers`, which registers only the providers that start from the operators' own estimates"
+        note = "the bundled providers are deprecated; the statistics walk uses each operator's `statistics_from_inputs` when no provider matches"
     )]
     #[expect(deprecated)]
     pub fn default_with_builtin_providers() -> Self {
@@ -607,16 +583,21 @@ fn computed_with_row_count(
     Ok(StatisticsResult::Computed(ExtendedStatistics::new(base)))
 }
 
-/// Experimental statistics provider for [`FilterExec`].
+/// Statistics provider for [`FilterExec`].
 ///
 /// Starts from the operator's own [`ExecutionPlan::statistics_from_inputs`],
 /// then lowers each column's `distinct_count` to [`ndv_after_selectivity`] of
 /// the input column, using the ratio of output rows to input rows as the
 /// selectivity. Columns with a distinct count of 0 or 1 keep the value the
 /// operator returned.
+#[deprecated(
+    since = "56.0.0",
+    note = "its distinct count adjustment belongs in `FilterExec::statistics_from_inputs`; without a matching provider the statistics walk uses the operator's own estimate"
+)]
 #[derive(Debug, Default)]
 pub struct FilterStatisticsProvider;
 
+#[expect(deprecated)]
 impl StatisticsProvider for FilterStatisticsProvider {
     fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
         plan.downcast_ref::<FilterExec>().is_some()
@@ -861,16 +842,21 @@ impl StatisticsProvider for AggregateStatisticsProvider {
     }
 }
 
-/// Experimental statistics provider for [`HashJoinExec`] and [`SortMergeJoinExec`].
+/// Statistics provider for [`HashJoinExec`] and [`SortMergeJoinExec`].
 ///
 /// For inner joins with two or more keys, all with a known distinct count on
 /// both sides, replaces the operator's row count (based on the most selective
 /// key) with `left_rows * right_rows / product(max(left_ndv_i, right_ndv_i))`,
 /// assuming independent keys. Correlated keys make this estimate too low.
 /// Other joins keep the operator's estimate.
+#[deprecated(
+    since = "56.0.0",
+    note = "multi-key join estimation belongs in the join operators, see https://github.com/apache/datafusion/issues/21583; without a matching provider the statistics walk uses the operator's own estimate"
+)]
 #[derive(Debug, Default)]
 pub struct JoinStatisticsProvider;
 
+#[expect(deprecated)]
 impl StatisticsProvider for JoinStatisticsProvider {
     fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
         plan.downcast_ref::<HashJoinExec>().is_some()

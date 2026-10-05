@@ -23,8 +23,8 @@
 //!
 //! `(SELECT user_id FROM events WHERE amount < 50 GROUP BY user_id) JOIN dims`: a
 //! provider supplies the column stats a catalog knows (`amount` range, `user_id`
-//! distinct count); the experimental `FilterStatisticsProvider` then refines the
-//! post-filter distinct count with the survival formula
+//! distinct count); a second provider then refines the post-filter distinct
+//! count with the survival formula
 //! `NDV * (1 - (1 - selectivity)^(rows / NDV))` (Yao/Cardenas) to ~40, below `dims`
 //! (48), flipping the join build side. Core's simpler `min(NDV, rows)` cap would
 //! give 50 (> 48) and keep the other order; the refinement is the point. The
@@ -43,8 +43,10 @@ use datafusion::common::ScalarValue;
 use datafusion::common::stats::Precision;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::operator_statistics::{
     ClosureStatisticsProvider, ExtendedStatistics, StatisticsRegistry, StatisticsResult,
+    ndv_after_selectivity,
 };
 use datafusion::physical_plan::statistics::StatisticsArgs;
 use datafusion::prelude::*;
@@ -73,6 +75,45 @@ fn catalog_stats(
     stats.column_statistics[amount].max_value =
         Precision::Inexact(ScalarValue::Int32(Some(999)));
     stats.column_statistics[user_id].distinct_count = Precision::Inexact(100);
+    Ok(StatisticsResult::Computed(ExtendedStatistics::new(stats)))
+}
+
+fn filter_matches(plan: &dyn ExecutionPlan) -> bool {
+    plan.downcast_ref::<FilterExec>().is_some()
+}
+
+/// Starts from the filter's own estimate and lowers each column's distinct
+/// count with the survival formula, applied to the input distinct count.
+fn filter_stats(
+    plan: &dyn ExecutionPlan,
+    child_stats: &[ExtendedStatistics],
+) -> Result<StatisticsResult> {
+    let Some(filter) = plan.downcast_ref::<FilterExec>() else {
+        return Ok(StatisticsResult::Delegate);
+    };
+    let input = child_stats[0].base();
+    let mut stats = (*plan.statistics_from_inputs(
+        &[Arc::clone(child_stats[0].base_arc())],
+        &StatisticsArgs::new(),
+    )?)
+    .clone();
+    if let (Some(&input_rows), Some(&output_rows)) =
+        (input.num_rows.get_value(), stats.num_rows.get_value())
+        && output_rows < input_rows
+    {
+        let selectivity = output_rows as f64 / input_rows as f64;
+        for (i, col) in stats.column_statistics.iter_mut().enumerate() {
+            let input_index = filter.projection().as_ref().map_or(i, |p| p[i]);
+            if let Some(&ndv) = col.distinct_count.get_value()
+                && let Some(&input_ndv) = input.column_statistics[input_index]
+                    .distinct_count
+                    .get_value()
+            {
+                let survived = ndv_after_selectivity(input_ndv, input_rows, selectivity);
+                col.distinct_count = Precision::Inexact(survived.min(ndv));
+            }
+        }
+    }
     Ok(StatisticsResult::Computed(ExtendedStatistics::new(stats)))
 }
 
@@ -111,11 +152,16 @@ fn build_ctx(with_registry: bool) -> Result<SessionContext> {
         .with_config(config)
         .with_default_features();
     if with_registry {
-        let mut registry = StatisticsRegistry::with_experimental_providers();
-        registry.register(Arc::new(ClosureStatisticsProvider::with_matches(
-            catalog_matches,
-            catalog_stats,
-        )));
+        let registry = StatisticsRegistry::with_providers(vec![
+            Arc::new(ClosureStatisticsProvider::with_matches(
+                catalog_matches,
+                catalog_stats,
+            )),
+            Arc::new(ClosureStatisticsProvider::with_matches(
+                filter_matches,
+                filter_stats,
+            )),
+        ]);
         builder = builder.with_statistics_registry(registry);
     }
     let ctx = SessionContext::new_with_state(builder.build());
@@ -167,13 +213,13 @@ pub async fn join_reorder() -> Result<()> {
         "A hash join builds its in-memory hash table from one input and probes with\n\
          the other, so the smaller input should be the build side. Default estimation\n\
          sizes the grouped `events` at 1000 rows and builds from `dims`; the\n\
-         registry's refined ~32 estimate is below `dims` (48 rows), so it flips the\n\
+         registry's refined ~40 estimate is below `dims` (48 rows), so it flips the\n\
          build side to `events`. The ground-truth count above (also below 48)\n\
          confirms `events` really is the smaller, cheaper side.\n"
     );
     println!("-- Without the registry (default estimation) --");
     println!("{}\n", explain(&build_ctx(false)?).await?);
-    println!("-- With the registry (experimental refinement) --");
+    println!("-- With the registry (refined estimation) --");
     println!("{}", explain(&build_ctx(true)?).await?);
     Ok(())
 }
