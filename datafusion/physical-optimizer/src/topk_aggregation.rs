@@ -29,6 +29,7 @@ use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::execution_plan::CardinalityEffect;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
+use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use itertools::Itertools;
 
 /// An optimizer rule that passes a `limit` hint to aggregations if the whole result is not needed
@@ -90,6 +91,11 @@ impl TopKAggregation {
                         sort_col_name = src_col.name().to_string();
                     }
                 }
+            } else if plan.downcast_ref::<WindowAggExec>().is_some()
+                || plan.downcast_ref::<BoundedWindowAggExec>().is_some()
+            {
+                // Window values can depend on rows removed by a bounded aggregate.
+                cardinality_preserved = false;
             } else {
                 // or we continue down through types that don't reduce cardinality
                 match plan.cardinality_effect() {
