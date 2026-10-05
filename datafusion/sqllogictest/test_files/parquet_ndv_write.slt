@@ -83,6 +83,41 @@ physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/
 statement ok
 DROP TABLE with_ndv;
 
+######
+# Dictionary column NDV is unreliable (arrow-rs hashes dictionary keys, not
+# logical values), so stats-based `COUNT(DISTINCT)` folding must not use it.
+# Pin this: the written NDV for `d` is wrong (2), but the query still returns
+# the correct 6 because the Inexact precision prevents the stats fold.
+######
+
+statement ok
+set datafusion.execution.batch_size = 2;
+
+query I
+COPY (SELECT arrow_cast(column1, 'Dictionary(Int32, Utf8)') AS d, column2 AS x
+      FROM (VALUES ('a', 1), ('b', 2), ('c', 3), ('d', 4), ('e', 5), ('f', 6)))
+TO 'test_files/scratch/parquet_ndv_write/dict.parquet'
+STORED AS PARQUET;
+----
+6
+
+statement ok
+CREATE EXTERNAL TABLE dict_ndv
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_ndv_write/dict.parquet';
+
+# NDV written for `d` is wrong (2), so it must not be used as Exact
+query II
+SELECT count(DISTINCT d), count(DISTINCT x) FROM dict_ndv;
+----
+6 6
+
+statement ok
+DROP TABLE dict_ndv;
+
+statement ok
+RESET datafusion.execution.batch_size;
+
 # Reset settings
 statement ok
 RESET datafusion.execution.parquet.write_row_group_number_distinct_values;
