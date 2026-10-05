@@ -28,7 +28,7 @@ use crate::projection::ProjectionTargets;
 use crate::{PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement};
 use arrow::array::new_null_array;
 use arrow::datatypes::{Field, Schema, SchemaRef};
-use arrow::record_batch::RecordBatch;
+use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{JoinType, Result, ScalarValue};
@@ -964,7 +964,12 @@ fn null_batch(schema: &SchemaRef) -> Result<RecordBatch> {
         .iter()
         .map(|field| new_null_array(field.data_type(), 1))
         .collect();
-    Ok(RecordBatch::try_new(schema, columns)?)
+    // A cross join can have no output columns. Preserve the synthetic row count
+    // in that case so evaluating constant expressions still sees one row.
+    let options = RecordBatchOptions::new().with_row_count(Some(1));
+    Ok(RecordBatch::try_new_with_options(
+        schema, columns, &options,
+    )?)
 }
 
 impl Deref for EquivalenceGroup {
@@ -1021,6 +1026,18 @@ mod tests {
     use crate::equivalence::tests::create_test_params;
     use crate::expressions::{BinaryExpr, Column, binary, col, lit};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+
+    #[test]
+    fn full_join_equivalences_support_empty_schema() -> Result<()> {
+        let schema = Arc::new(Schema::empty());
+        let left = EquivalenceGroup::new(vec![]);
+        let right = EquivalenceGroup::new(vec![]);
+
+        let result = left.join(&right, &JoinType::Full, 0, &schema, &[])?;
+
+        assert_eq!(result.iter().count(), 0);
+        Ok(())
+    }
 
     use datafusion_expr::Operator;
 
