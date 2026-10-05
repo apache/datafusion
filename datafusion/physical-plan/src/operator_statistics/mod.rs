@@ -857,7 +857,7 @@ impl StatisticsProvider for AggregateStatisticsProvider {
 /// - Either input lacks row count information
 #[deprecated(
     since = "56.0.0",
-    note = "replaces the estimates of `HashJoinExec`, `SortMergeJoinExec` and `CrossJoinExec` with a separate estimation logic; without a matching provider the statistics walk uses the operator's own estimate"
+    note = "replaces the estimates of `HashJoinExec`, `SortMergeJoinExec` and `CrossJoinExec` with separate estimation logic; without a matching provider the statistics walk uses the operator's own estimate"
 )]
 #[derive(Debug, Default)]
 pub struct JoinStatisticsProvider;

@@ -166,7 +166,8 @@ impl TestContext {
                     let mut stats = Arc::unwrap_or_clone(
                         plan.statistics_from_inputs(&child_base, &StatisticsArgs::new())?,
                     );
-                    stats.num_rows = Precision::Inexact(left_rows * right_rows);
+                    stats.num_rows =
+                        Precision::Inexact(left_rows.saturating_mul(right_rows));
                     Ok(StatisticsResult::Computed(stats.into()))
                 },
             );
