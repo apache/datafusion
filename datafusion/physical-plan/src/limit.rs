@@ -27,7 +27,7 @@ use super::{
     SendableRecordBatchStream, Statistics,
 };
 use crate::execution_plan::{Boundedness, CardinalityEffect};
-use crate::statistics::{ChildStats, StatisticsArgs};
+use crate::statistics::{ChildStats, StatisticsArgs, with_per_partition_fetch};
 use crate::{
     ChildrenPropertiesMode, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     ReplaceChildrenOptions, validate_child_count,
@@ -45,7 +45,20 @@ use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
-/// Limit execution plan
+/// Applies a limit to the entire result.
+///
+/// Requires a single input partition; otherwise, plan validation or execution fails.
+/// For input with multiple partitions, merge them before applying the limit:
+/// (For SQL interface, coalescing will be enforced automatically in physical
+/// optimizer through [`ExecutionPlan::required_input_distribution`])
+///
+/// ```text
+/// GlobalLimitExec: skip=0, fetch=10
+///   CoalescePartitionsExec                 <--- combine to 1 partition output
+///     DataSourceExec: partitions=4         <--- 4 parallel scan partitions
+/// ```
+///
+/// To enforce a per-partition limit, use [`LocalLimitExec`].
 #[derive(Debug, Clone)]
 pub struct GlobalLimitExec {
     /// Input execution plan
@@ -352,7 +365,17 @@ impl GlobalLimitExec {
     }
 }
 
-/// LocalLimitExec applies a limit to a single partition
+/// Applies a limit independently to each input partition.
+///
+/// Preserves input partitioning. With four partitions, a limit of 10 allows
+/// up to 40 rows in total:
+///
+/// ```text
+/// LocalLimitExec: fetch=10
+///   DataSourceExec: partitions=4
+/// ```
+///
+/// To enforce a limit on the entire result, use [`GlobalLimitExec`].
 #[derive(Debug, Clone)]
 pub struct LocalLimitExec {
     /// Input execution plan
@@ -531,10 +554,15 @@ impl ExecutionPlan for LocalLimitExec {
     fn statistics_from_inputs(
         &self,
         input_stats: &[Arc<Statistics>],
-        _args: &StatisticsArgs,
+        args: &StatisticsArgs,
     ) -> Result<Arc<Statistics>> {
         let stats = input_stats[0].as_ref().clone();
-        Ok(Arc::new(stats.with_fetch(Some(self.fetch), 0, 1)?))
+        Ok(Arc::new(with_per_partition_fetch(
+            stats,
+            Some(self.fetch),
+            self.properties().output_partitioning().partition_count(),
+            args,
+        )?))
     }
 
     fn fetch(&self) -> Option<usize> {
@@ -1040,7 +1068,17 @@ mod tests {
 
     #[test]
     fn test_row_number_statistics_for_local_limit() -> Result<()> {
+        // Each of four partitions of 100 rows keeps 10 of them. How the rows
+        // are spread over the partitions is unknown, so the count is inexact.
         let row_count = row_number_statistics_for_local_limit(4, 10)?;
+        assert_eq!(row_count, Precision::Inexact(40));
+
+        // A limit as large as the whole input cannot drop any row.
+        let row_count = row_number_statistics_for_local_limit(4, 400)?;
+        assert_eq!(row_count, Precision::Exact(400));
+
+        // A single partition keeps exactly `fetch` rows.
+        let row_count = row_number_statistics_for_local_limit(1, 10)?;
         assert_eq!(row_count, Precision::Exact(10));
 
         Ok(())

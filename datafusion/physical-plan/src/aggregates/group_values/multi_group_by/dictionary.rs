@@ -234,6 +234,42 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
         }
     }
 
+    /// Compares the value at `val_idx` against `inner[lhs_slot]` directly,
+    /// memorizing `lhs_slot` in `val_to_inner` when they are equal.
+    ///
+    /// Each distinct value occupies exactly one slot in `inner`, so an equal
+    /// comparison proves `lhs_slot` is the slot for `val_idx` without probing
+    /// `value_dedup` or hashing. An unequal result is deliberately not
+    /// memoized: it says which slot the value is *not* in, not which one it
+    /// is. That is what keeps `val_to_inner` fill-only and never stale.
+    ///
+    /// Callers must have run [`Self::sync_value_cache`] for `dict_values`.
+    ///
+    /// Only called on a `val_to_inner` miss. It takes the fields it needs
+    /// rather than `&mut self`, so the caller's hot loop can keep its slices
+    /// of `val_to_inner` and `group_to_inner` in registers across the call.
+    #[cold]
+    #[inline(never)]
+    fn equal_to_uncached(
+        val_to_inner: &mut [usize],
+        inner: &dyn GroupColumn,
+        null_array: &ArrayRef,
+        dict_values: &ArrayRef,
+        val_idx: usize,
+        lhs_slot: usize,
+    ) -> bool {
+        let equal = if dict_values.is_null(val_idx) {
+            inner.equal_to(lhs_slot, null_array, 0)
+        } else {
+            inner.equal_to(lhs_slot, dict_values, val_idx)
+        };
+
+        if equal {
+            val_to_inner[val_idx] = lhs_slot;
+        }
+        equal
+    }
+
     fn find_or_insert_null(&mut self) -> Result<usize> {
         if let Some(slot) = self.null_inner_slot {
             return Ok(slot);
@@ -244,38 +280,13 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
         Ok(slot)
     }
 
-    fn build_lookup_table(
-        &self,
-        dict_values: &ArrayRef,
-        val_hashes: &[u64],
-    ) -> Vec<usize> {
-        let num_distinct = dict_values.len();
-        let mut table = vec![usize::MAX; num_distinct + 1];
-        let inner = &*self.inner;
-        for val_idx in 0..num_distinct {
-            if dict_values.is_null(val_idx) {
-                table[val_idx] = self.null_inner_slot.unwrap_or(usize::MAX);
-            } else {
-                let hash = val_hashes[val_idx];
-                if let Some(&(_, slot)) =
-                    self.value_dedup.find(hash, |&(entry_hash, slot)| {
-                        entry_hash == hash && inner.equal_to(slot, dict_values, val_idx)
-                    })
-                {
-                    table[val_idx] = slot;
-                }
-            }
-        }
-        table[num_distinct] = self.null_inner_slot.unwrap_or(usize::MAX);
-        table
-    }
-
-    /// Per-row fallback for `vectorized_equal_to` used when the number of rows
-    /// to check is smaller than the dictionary cardinality, making the O(D)
-    /// lookup-table build more expensive than direct value comparison.
+    /// Per-row fallback for `vectorized_equal_to` used when the values array is
+    /// not cached and the number of rows to check is smaller than the
+    /// dictionary cardinality, making the O(D) hashing in `sync_value_cache`
+    /// more expensive than direct value comparison.
     ///
     /// `#[cold]` + `#[inline(never)]` keeps this code out of the hot
-    /// lookup-table loops in `vectorized_equal_to` so LLVM can pipeline them.
+    /// `val_to_inner` loops in `vectorized_equal_to` so LLVM can pipeline them.
     #[cold]
     #[inline(never)]
     fn equal_to_per_row(
@@ -350,12 +361,12 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
         let dict = array.as_dictionary::<K>();
         let dict_keys = dict.keys();
         let dict_values = dict.values();
-        let num_distinct = dict_values.len();
 
-        // The fallback is in a separate #[cold] function so its code does not
-        // appear inline here and cannot prevent LLVM from pipelining / unrolling
-        // the hot lookup-table loops below.
-        if rhs_rows.len() < num_distinct {
+        let cached = self
+            .cached_values
+            .as_ref()
+            .is_some_and(|c| Arc::ptr_eq(c, dict_values));
+        if !cached && rhs_rows.len() < dict_values.len() {
             self.equal_to_per_row(
                 lhs_rows,
                 dict_values,
@@ -365,44 +376,64 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
             );
             return;
         }
+        self.sync_value_cache(dict_values);
 
-        let mut val_hashes = vec![0u64; dict_values.len()];
-        create_hashes(
-            std::slice::from_ref(dict_values),
-            &self.random_state,
-            &mut val_hashes,
-        )
-        .unwrap();
-        let lookup = self.build_lookup_table(dict_values, &val_hashes);
-
+        let raw_keys = dict_keys.values();
         let group_to_inner = self.group_to_inner.as_slice();
-
+        let val_to_inner = self.val_to_inner.as_mut_slice();
+        let inner = &*self.inner;
+        let null_array = &self.null_array;
+        let null_inner_slot = self.null_inner_slot;
         if dict_keys.null_count() == 0 {
             // No null keys : skip the get_bit guard: we only ever write false,
             // so overwriting an already-false bit is a no-op.
-            let raw_keys = dict_keys.values();
             for (idx, (&lhs_row, &rhs_row)) in
                 lhs_rows.iter().zip(rhs_rows.iter()).enumerate()
             {
-                let rhs_slot = lookup[raw_keys[rhs_row].as_usize()];
-                if rhs_slot == usize::MAX || group_to_inner[lhs_row] != rhs_slot {
+                let val_idx = raw_keys[rhs_row].as_usize();
+                let lhs_slot = group_to_inner[lhs_row];
+                let equal = match val_to_inner[val_idx] {
+                    usize::MAX => Self::equal_to_uncached(
+                        val_to_inner,
+                        inner,
+                        null_array,
+                        dict_values,
+                        val_idx,
+                        lhs_slot,
+                    ),
+                    slot => slot == lhs_slot,
+                };
+                if !equal {
                     equal_to_results.set_bit(idx, false);
                 }
             }
         } else {
             let null_buf = dict_keys.nulls().unwrap();
-            let raw_keys = dict_keys.values();
             for (idx, (&lhs_row, &rhs_row)) in
                 lhs_rows.iter().zip(rhs_rows.iter()).enumerate()
             {
                 if equal_to_results.get_bit(idx) {
-                    let val_idx = if null_buf.is_null(rhs_row) {
-                        num_distinct
+                    // A null key is not a position in the values array, so it
+                    // resolves straight to the null slot instead of going
+                    // through `val_to_inner`.
+                    let lhs_slot = group_to_inner[lhs_row];
+                    let equal = if null_buf.is_null(rhs_row) {
+                        null_inner_slot == Some(lhs_slot)
                     } else {
-                        raw_keys[rhs_row].as_usize()
+                        let val_idx = raw_keys[rhs_row].as_usize();
+                        match val_to_inner[val_idx] {
+                            usize::MAX => Self::equal_to_uncached(
+                                val_to_inner,
+                                inner,
+                                null_array,
+                                dict_values,
+                                val_idx,
+                                lhs_slot,
+                            ),
+                            slot => slot == lhs_slot,
+                        }
                     };
-                    let rhs_slot = lookup[val_idx];
-                    if rhs_slot == usize::MAX || group_to_inner[lhs_row] != rhs_slot {
+                    if !equal {
                         equal_to_results.set_bit(idx, false);
                     }
                 }
@@ -1073,5 +1104,102 @@ mod tests {
         col.vectorized_append(&batch, &[0, 1]).unwrap();
         assert_eq!(col.inner.len(), 2, "'a' must not be duplicated");
         assert_eq!(col.len(), 3);
+    }
+
+    /// On a cache miss `vectorized_equal_to` compares against the group's own
+    /// slot: an equal result proves the slot and is cached, an unequal one
+    /// only rules that slot out and must leave the entry unresolved.
+    #[test]
+    fn vectorized_equal_to_caches_only_equal_results() {
+        let mut col = utf8_col();
+        col.vectorized_append(
+            &i32_dict(&[Some(0), Some(1)], &[Some("a"), Some("b")]),
+            &[0, 1],
+        )
+        .unwrap();
+        let (group_a, group_b) = (0, 1);
+        let slot_a = col.group_to_inner[group_a];
+        let slot_b = col.group_to_inner[group_b];
+
+        // A new values array in the opposite order, so `val_idx` != slot.
+        // Two rows for two values keeps the per-row fallback out of the way.
+        let (idx_b, idx_a) = (0, 1);
+        let values: ArrayRef = Arc::new(StringArray::from(vec![Some("b"), Some("a")]));
+        let a_then_b =
+            dict_with_values(&[Some(idx_a as i32), Some(idx_b as i32)], &values);
+
+        // "a" vs group a is equal, "b" vs group a is not.
+        let mut buf = all_true(2);
+        col.vectorized_equal_to(&[group_a, group_a], &a_then_b, &[0, 1], &mut buf);
+        assert_eq!(bool_vec(&buf), vec![true, false]);
+        assert_eq!(col.val_to_inner[idx_a], slot_a);
+        assert_eq!(
+            col.val_to_inner[idx_b],
+            usize::MAX,
+            "unequal result was cached"
+        );
+
+        // Later, "b" vs group b fills the entry that was left unresolved.
+        let only_b = dict_with_values(&[Some(idx_b as i32)], &values);
+        let mut buf = all_true(1);
+        col.vectorized_equal_to(&[group_b], &only_b, &[0], &mut buf);
+        assert_eq!(bool_vec(&buf), vec![true]);
+        assert_eq!(col.val_to_inner[idx_b], slot_b);
+    }
+
+    /// A non-null key pointing at a null value and a null key must both
+    /// compare equal to the null group, and only the former goes through
+    /// `val_to_inner`.
+    #[test]
+    fn vectorized_equal_to_matches_null_value_and_null_key_to_null_group() {
+        let mut col = utf8_col();
+        col.vectorized_append(&i32_dict(&[None, Some(0)], &[Some("a")]), &[0, 1])
+            .unwrap();
+        let (null_group, group_a) = (0, 1);
+        let null_slot = col.null_inner_slot.unwrap();
+
+        let idx_null = 0;
+        let values: ArrayRef = Arc::new(StringArray::from(vec![None, Some("a")]));
+        let batch = dict_with_values(
+            &[Some(idx_null as i32), Some(idx_null as i32), None],
+            &values,
+        );
+
+        // null value vs null group, null value vs group a, null key vs null group.
+        let mut buf = all_true(3);
+        col.vectorized_equal_to(
+            &[null_group, group_a, null_group],
+            &batch,
+            &[0, 1, 2],
+            &mut buf,
+        );
+        assert_eq!(bool_vec(&buf), vec![true, false, true]);
+        assert_eq!(col.val_to_inner[idx_null], null_slot);
+    }
+
+    /// Fewer rows than values in an uncached values array takes the per-row
+    /// fallback, which must not rebuild the cache for that array.
+    #[test]
+    fn vectorized_equal_to_small_batch_of_new_values_skips_cache_rebuild() {
+        let old_values: ArrayRef = Arc::new(StringArray::from(vec![Some("a")]));
+        let mut col = utf8_col();
+        col.vectorized_append(&dict_with_values(&[Some(0)], &old_values), &[0])
+            .unwrap();
+        let group_a = 0;
+
+        // One row against three values in an array the cache has not seen.
+        let new_values: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("x"), Some("a"), Some("y")]));
+        let idx_a = 1;
+        let only_a = dict_with_values(&[Some(idx_a)], &new_values);
+        let mut buf = all_true(1);
+        col.vectorized_equal_to(&[group_a], &only_a, &[0], &mut buf);
+        assert_eq!(bool_vec(&buf), vec![true]);
+        assert!(
+            col.cached_values
+                .as_ref()
+                .is_some_and(|c| Arc::ptr_eq(c, &old_values)),
+            "fallback must leave the cache on the previous values array"
+        );
     }
 }

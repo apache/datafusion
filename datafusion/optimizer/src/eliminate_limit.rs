@@ -34,7 +34,7 @@ use std::sync::Arc;
 pub struct EliminateLimit;
 
 impl EliminateLimit {
-    #[expect(missing_docs)]
+    /// Create a new `EliminateLimit`
     pub fn new() -> Self {
         Self {}
     }
@@ -76,9 +76,8 @@ impl OptimizerRule for EliminateLimit {
                     }
                 } else if matches!(limit.get_skip_type()?, SkipType::Literal(0)) {
                     // If fetch is `None` and skip is 0, then Limit takes no effect and
-                    // we can remove it. Its input also can be Limit, so we should apply again.
-                    #[expect(clippy::used_underscore_binding)]
-                    return self.rewrite(Arc::unwrap_or_clone(limit.input), _config);
+                    // we can remove it.
+                    return Ok(Transformed::yes(Arc::unwrap_or_clone(limit.input)));
                 }
                 Ok(Transformed::no(LogicalPlan::Limit(limit)))
             }
@@ -297,6 +296,23 @@ mod tests {
             plan,
             @ r"
         Aggregate: groupBy=[[test.a]], aggr=[[sum(test.b)]]
+          TableScan: test
+        "
+        )
+    }
+
+    #[test]
+    fn remove_noop_limit_under_extension() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .limit(0, None)?
+            .build()?;
+        let plan = user_defined::new(plan);
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        TestUserDefined
           TableScan: test
         "
         )

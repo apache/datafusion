@@ -670,7 +670,7 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
             write_batch_size: global_options.global.write_batch_size as u64,
             writer_version: global_options.global.writer_version.to_string(),
             compression_opt: global_options.global.compression.map(|compression| {
-                parquet_options::CompressionOpt::Compression(compression)
+                parquet_options::CompressionOpt::Compression(compression.to_string())
             }),
             dictionary_enabled_opt: global_options.global.dictionary_enabled.map(|enabled| {
                 parquet_options::DictionaryEnabledOpt::DictionaryEnabled(enabled)
@@ -681,6 +681,7 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
             }),
             max_row_group_size: global_options.global.max_row_group_size as u64,
             max_in_list_size: global_options.global.max_in_list_size as u64,
+            row_group_range_assignment: global_options.global.row_group_range_assignment.to_string(),
             created_by: global_options.global.created_by.clone(),
             column_index_truncate_length_opt: global_options.global.column_index_truncate_length.map(|length| {
                 parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(length as u64)
