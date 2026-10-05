@@ -459,18 +459,16 @@ impl InformationSchemaConfig {
 const RESOLVE_CAST_SOURCES: [DataType; 2] = [DataType::Null, DataType::LargeUtf8];
 
 /// Build argument fields for `information_schema` to provide possible return types
-fn resolve_informational_fields(idx: usize, t: &NativeType) -> Result<Vec<FieldRef>> {
+fn resolve_informational_fields(idx: usize, t: &NativeType) -> Vec<FieldRef> {
     // Since native types map to several physical types, resolve it against
-    // ambiguous types to get canonical `DataType`s for the native type
-    let data_types = RESOLVE_CAST_SOURCES
+    // ambiguous types to get canonical `DataType`s for the native type.
+    // Skip origins the type has no cast from (e.g. `Struct` from `LargeUtf8`)
+    RESOLVE_CAST_SOURCES
         .iter()
-        .map(|source| t.default_cast_for(source))
-        .collect::<Result<Vec<DataType>, _>>()?;
-    Ok(data_types
-        .into_iter()
+        .filter_map(|source| t.default_cast_for(source).ok())
         .unique()
         .map(|dt| Arc::new(Field::new(format!("arg_{idx}"), dt, true)))
-        .collect())
+        .collect()
 }
 
 /// Function information schema is a set of tuples - argument types and an optional return type
@@ -494,7 +492,7 @@ fn get_args_and_return_types(
                 .iter()
                 .enumerate()
                 .map(|(i, t)| resolve_informational_fields(i, t))
-                .collect::<Result<Vec<_>>>()?;
+                .collect::<Vec<_>>();
             // Build combinations of arg types with the return type
             let return_types = arg_fields
                 .into_iter()
@@ -1491,6 +1489,7 @@ mod tests {
     use super::*;
     use crate::CatalogProvider;
     use arrow::array::Array;
+    use arrow::datatypes::Fields;
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
@@ -1613,6 +1612,17 @@ mod tests {
         );
         assert_eq!(*ret, Some(String::from("String")));
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_udf_args_and_return_types_nested() -> Result<()> {
+        let struct_type =
+            DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int32, true)]));
+        let signature = Signature::exact(vec![struct_type], Volatility::Stable);
+        let udf = Arc::new(ScalarUDF::from(TestScalarUDF { signature }));
+        let result = get_udf_args_and_return_types(&udf)?;
+        assert_eq!(result.len(), 1);
         Ok(())
     }
 
