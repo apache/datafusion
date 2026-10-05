@@ -95,6 +95,24 @@ fn criterion_benchmark(c: &mut Criterion) {
             supports_nulls: false,
         },
         BenchData {
+            name: "sparse_union (2 types)",
+            array: sparse_union_of(
+                (0..2)
+                    .map(|_| primitive_array::<Int64Type>(BATCH_SIZE))
+                    .collect(),
+            ),
+            supports_nulls: false,
+        },
+        BenchData {
+            name: "sparse_union (utf8)",
+            array: sparse_union_of(
+                (0..5)
+                    .map(|_| pool.string_array::<i32>(BATCH_SIZE))
+                    .collect(),
+            ),
+            supports_nulls: false,
+        },
+        BenchData {
             name: "dense_union",
             array: dense_union_array(BATCH_SIZE),
             supports_nulls: false,
@@ -354,6 +372,24 @@ fn sliced_array_benchmark(c: &mut Criterion) {
                 },
             );
         }
+
+        // Sliced Dense UnionArray
+        {
+            let full_array = dense_union_array(total_rows);
+            let sliced: ArrayRef = Arc::new(
+                full_array
+                    .as_any()
+                    .downcast_ref::<UnionArray>()
+                    .unwrap()
+                    .slice(slice_offset, slice_len),
+            );
+            c.bench_function(
+                &format!("dense_union_sliced: 1/{ratio} of {total_rows} rows"),
+                |b| {
+                    do_hash_test_with_len(b, std::slice::from_ref(&sliced), slice_len);
+                },
+            );
+        }
     }
 }
 
@@ -430,23 +466,25 @@ fn map_array(num_rows: usize) -> ArrayRef {
 }
 
 fn sparse_union_array(num_rows: usize) -> ArrayRef {
-    let mut rng = make_rng();
-    let num_types = 5;
+    sparse_union_of(
+        (0..5)
+            .map(|_| primitive_array::<Int64Type>(num_rows))
+            .collect(),
+    )
+}
 
-    let type_ids: Vec<i8> = (0..num_rows)
+/// Sparse union whose rows each select a random child
+fn sparse_union_of(children: Vec<ArrayRef>) -> ArrayRef {
+    let mut rng = make_rng();
+    let num_types = children.len() as i32;
+
+    let type_ids: Vec<i8> = (0..children[0].len())
         .map(|_| rng.random_range(0..num_types) as i8)
         .collect();
-    let (fields, children): (Vec<_>, Vec<_>) = (0..num_types)
-        .map(|i| {
-            (
-                (
-                    i as i8,
-                    Arc::new(Field::new(format!("f{i}"), DataType::Int64, true)),
-                ),
-                primitive_array::<Int64Type>(num_rows),
-            )
-        })
-        .unzip();
+    let fields = children.iter().enumerate().map(|(i, child)| {
+        let field = Field::new(format!("f{i}"), child.data_type().clone(), true);
+        (i as i8, Arc::new(field))
+    });
 
     Arc::new(
         UnionArray::try_new(

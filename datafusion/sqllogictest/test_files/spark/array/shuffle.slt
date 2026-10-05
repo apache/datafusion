@@ -45,6 +45,12 @@ SELECT shuffle(NULL);
 ----
 NULL
 
+# Typed null lists have no child values to shuffle.
+query ??
+SELECT shuffle(arrow_cast(NULL, 'List(Int32)')), shuffle(arrow_cast(NULL, 'LargeList(Int32)'));
+----
+NULL NULL
+
 # Test shuffle function with fixed size list arrays
 query ?
 SELECT shuffle(arrow_cast([1, 2, NULL, 3, 4, 5], 'FixedSizeList(6, Int64)'), 1);
