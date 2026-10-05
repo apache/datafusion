@@ -818,7 +818,35 @@ impl EquivalenceGroup {
         right_equivalences: &Self,
         join_type: &JoinType,
         left_size: usize,
+        on: &[(PhysicalExprRef, PhysicalExprRef)],
+    ) -> Result<Self> {
+        self.join_with_optional_schema(right_equivalences, join_type, left_size, None, on)
+    }
+
+    /// Combine equivalence groups for a join with its output schema available.
+    pub(crate) fn join_with_schema(
+        &self,
+        right_equivalences: &Self,
+        join_type: &JoinType,
+        left_size: usize,
         join_schema: &SchemaRef,
+        on: &[(PhysicalExprRef, PhysicalExprRef)],
+    ) -> Result<Self> {
+        self.join_with_optional_schema(
+            right_equivalences,
+            join_type,
+            left_size,
+            Some(join_schema),
+            on,
+        )
+    }
+
+    fn join_with_optional_schema(
+        &self,
+        right_equivalences: &Self,
+        join_type: &JoinType,
+        left_size: usize,
+        join_schema: Option<&SchemaRef>,
         on: &[(PhysicalExprRef, PhysicalExprRef)],
     ) -> Result<Self> {
         let group = match join_type {
@@ -836,21 +864,25 @@ impl EquivalenceGroup {
                 // null-extended row; expressions such as coalesce(a, 0) do
                 // not, even when they were equivalent to a column before the
                 // join.
-                match join_type {
-                    JoinType::Left => {
-                        right = right
-                            .with_null_preserving_expressions(&null_batch(join_schema)?);
+                if let Some(join_schema) = join_schema {
+                    match join_type {
+                        JoinType::Left => {
+                            right = right.with_null_preserving_expressions(&null_batch(
+                                join_schema,
+                            )?);
+                        }
+                        JoinType::Right => {
+                            left = left.with_null_preserving_expressions(&null_batch(
+                                join_schema,
+                            )?);
+                        }
+                        JoinType::Full => {
+                            let batch = null_batch(join_schema)?;
+                            left = left.with_null_preserving_expressions(&batch);
+                            right = right.with_null_preserving_expressions(&batch);
+                        }
+                        _ => {}
                     }
-                    JoinType::Right => {
-                        left = left
-                            .with_null_preserving_expressions(&null_batch(join_schema)?);
-                    }
-                    JoinType::Full => {
-                        let batch = null_batch(join_schema)?;
-                        left = left.with_null_preserving_expressions(&batch);
-                        right = right.with_null_preserving_expressions(&batch);
-                    }
-                    _ => {}
                 }
 
                 let mut result =
@@ -1033,7 +1065,7 @@ mod tests {
         let left = EquivalenceGroup::new(vec![]);
         let right = EquivalenceGroup::new(vec![]);
 
-        let result = left.join(&right, &JoinType::Full, 0, &schema, &[])?;
+        let result = left.join_with_schema(&right, &JoinType::Full, 0, &schema, &[])?;
 
         assert_eq!(result.iter().count(), 0);
         Ok(())

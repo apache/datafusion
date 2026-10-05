@@ -32,9 +32,13 @@ pub fn join_equivalence_properties(
     on: &[(PhysicalExprRef, PhysicalExprRef)],
 ) -> Result<EquivalenceProperties> {
     let left_size = left.schema.fields.len();
-    let equivalences =
-        left.eq_group()
-            .join(right.eq_group(), join_type, left_size, &join_schema, on)?;
+    let equivalences = left.eq_group().join_with_schema(
+        right.eq_group(),
+        join_type,
+        left_size,
+        &join_schema,
+        on,
+    )?;
     let mut result = EquivalenceProperties::new(join_schema);
     result.add_equivalence_group(equivalences)?;
 
