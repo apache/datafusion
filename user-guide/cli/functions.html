@@ -582,6 +582,133 @@ the meaning of these fields.</p>
 </table>
 </div>
 </section>
+<section id="parquet-file-metadata">
+<h2><code class="docutils literal notranslate"><span class="pre">parquet_file_metadata</span></code><a class="headerlink" href="#parquet-file-metadata" title="Link to this heading">#</a></h2>
+<p>The <code class="docutils literal notranslate"><span class="pre">parquet_file_metadata</span></code> table function returns one row with the file level
+metadata stored in the footer of a parquet file, such as the writer and the
+key-value metadata.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">created_by</span><span class="p">,</span><span class="w"> </span><span class="n">num_rows</span><span class="p">,</span><span class="w"> </span><span class="n">num_row_groups</span><span class="p">,</span><span class="w"> </span><span class="n">key_value_metadata</span><span class="p">,</span><span class="w"> </span><span class="n">footer_length</span>
+<span class="w">  </span><span class="k">FROM</span><span class="w"> </span><span class="n">parquet_file_metadata</span><span class="p">(</span><span class="s1">&#39;int32_with_null_pages.parquet&#39;</span><span class="p">);</span>
+<span class="o">+</span><span class="c1">-------------------------------------------------------------------------------------+----------+----------------+------------------------------+---------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">created_by</span><span class="w">                                                                          </span><span class="o">|</span><span class="w"> </span><span class="n">num_rows</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">num_row_groups</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">key_value_metadata</span><span class="w">           </span><span class="o">|</span><span class="w"> </span><span class="n">footer_length</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------------------------------------------------------------------------+----------+----------------+------------------------------+---------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">parquet</span><span class="o">-</span><span class="n">mr</span><span class="w"> </span><span class="k">version</span><span class="w"> </span><span class="mi">1</span><span class="p">.</span><span class="mi">13</span><span class="p">.</span><span class="mi">0</span><span class="o">-</span><span class="n">SNAPSHOT</span><span class="w"> </span><span class="p">(</span><span class="n">build</span><span class="w"> </span><span class="mi">433</span><span class="n">de8df33fcf31927f7b51456be9f53e64d48b9</span><span class="p">)</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">1000</span><span class="w">     </span><span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">              </span><span class="o">|</span><span class="w"> </span><span class="err">{</span><span class="n">writer</span><span class="p">.</span><span class="n">model</span><span class="p">.</span><span class="n">name</span><span class="p">:</span><span class="w"> </span><span class="n">example</span><span class="err">}</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">273</span><span class="w">           </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------------------------------------------------------------------------+----------+----------------+------------------------------+---------------+</span>
+</pre></div>
+</div>
+<p>The columns of the returned table are:</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>column_name</p></th>
+<th class="head"><p>data_type</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>filename</p></td>
+<td><p>Utf8</p></td>
+<td><p>Name of the file</p></td>
+</tr>
+<tr class="row-odd"><td><p>created_by</p></td>
+<td><p>Utf8</p></td>
+<td><p>Application that wrote the file, if stored</p></td>
+</tr>
+<tr class="row-even"><td><p>version</p></td>
+<td><p>Int64</p></td>
+<td><p>Version of the parquet format used to write the file</p></td>
+</tr>
+<tr class="row-odd"><td><p>num_rows</p></td>
+<td><p>Int64</p></td>
+<td><p>Total number of rows in the file</p></td>
+</tr>
+<tr class="row-even"><td><p>num_row_groups</p></td>
+<td><p>Int64</p></td>
+<td><p>Number of row groups in the file</p></td>
+</tr>
+<tr class="row-odd"><td><p>key_value_metadata</p></td>
+<td><p>Map(Utf8, Utf8)</p></td>
+<td><p>Application defined key-value metadata (e.g. <code class="docutils literal notranslate"><span class="pre">key_value_metadata['ARROW:schema']</span></code>)</p></td>
+</tr>
+<tr class="row-even"><td><p>footer_length</p></td>
+<td><p>Int64</p></td>
+<td><p>Size in bytes of the footer: the encoded file metadata plus the 8 byte length and magic</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="parquet-page-index">
+<h2><code class="docutils literal notranslate"><span class="pre">parquet_page_index</span></code><a class="headerlink" href="#parquet-page-index" title="Link to this heading">#</a></h2>
+<p>The <code class="docutils literal notranslate"><span class="pre">parquet_page_index</span></code> table function returns one row for each data page in
+the <a class="reference external" href="https://github.com/apache/parquet-format/blob/master/PageIndex.md"><code class="docutils literal notranslate"><span class="pre">page</span> <span class="pre">index</span></code></a> of a parquet file, combining the page location from the
+offset index with the page statistics from the column index. Files written
+without a page index return no rows.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">page_ordinal</span><span class="p">,</span><span class="w"> </span><span class="n">first_row_index</span><span class="p">,</span><span class="w"> </span><span class="n">compressed_page_size</span><span class="p">,</span><span class="w"> </span><span class="n">min_value</span><span class="p">,</span><span class="w"> </span><span class="n">max_value</span><span class="p">,</span><span class="w"> </span><span class="n">null_count</span>
+<span class="w">  </span><span class="k">FROM</span><span class="w"> </span><span class="n">parquet_page_index</span><span class="p">(</span><span class="s1">&#39;int32_with_null_pages.parquet&#39;</span><span class="p">)</span>
+<span class="w">  </span><span class="k">LIMIT</span><span class="w"> </span><span class="mi">4</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">--------------+-----------------+----------------------+-------------+------------+------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">page_ordinal</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">first_row_index</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">compressed_page_size</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">min_value</span><span class="w">   </span><span class="o">|</span><span class="w"> </span><span class="n">max_value</span><span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="n">null_count</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------+-----------------+----------------------+-------------+------------+------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">0</span><span class="w">            </span><span class="o">|</span><span class="w"> </span><span class="mi">0</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="mi">415</span><span class="w">                  </span><span class="o">|</span><span class="w"> </span><span class="o">-</span><span class="mi">2135807632</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">2144701119</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">8</span><span class="w">          </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">            </span><span class="o">|</span><span class="w"> </span><span class="mi">100</span><span class="w">             </span><span class="o">|</span><span class="w"> </span><span class="mi">220</span><span class="w">                  </span><span class="o">|</span><span class="w"> </span><span class="o">-</span><span class="mi">2104090659</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">1745329571</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">55</span><span class="w">         </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">            </span><span class="o">|</span><span class="w"> </span><span class="mi">200</span><span class="w">             </span><span class="o">|</span><span class="w"> </span><span class="mi">31</span><span class="w">                   </span><span class="o">|</span><span class="w"> </span><span class="k">NULL</span><span class="w">        </span><span class="o">|</span><span class="w"> </span><span class="k">NULL</span><span class="w">       </span><span class="o">|</span><span class="w"> </span><span class="mi">100</span><span class="w">        </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">3</span><span class="w">            </span><span class="o">|</span><span class="w"> </span><span class="mi">300</span><span class="w">             </span><span class="o">|</span><span class="w"> </span><span class="mi">228</span><span class="w">                  </span><span class="o">|</span><span class="w"> </span><span class="o">-</span><span class="mi">2116849709</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">2077105757</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">52</span><span class="w">         </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------+-----------------+----------------------+-------------+------------+------------+</span>
+</pre></div>
+</div>
+<p>The columns of the returned table are:</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>column_name</p></th>
+<th class="head"><p>data_type</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>filename</p></td>
+<td><p>Utf8</p></td>
+<td><p>Name of the file</p></td>
+</tr>
+<tr class="row-odd"><td><p>row_group_id</p></td>
+<td><p>Int64</p></td>
+<td><p>Row group index the page belongs to</p></td>
+</tr>
+<tr class="row-even"><td><p>column_id</p></td>
+<td><p>Int64</p></td>
+<td><p>ID of the column the page belongs to</p></td>
+</tr>
+<tr class="row-odd"><td><p>page_ordinal</p></td>
+<td><p>Int64</p></td>
+<td><p>Index of the page within its column chunk</p></td>
+</tr>
+<tr class="row-even"><td><p>first_row_index</p></td>
+<td><p>Int64</p></td>
+<td><p>Index within the row group of the first row in the page</p></td>
+</tr>
+<tr class="row-odd"><td><p>offset</p></td>
+<td><p>Int64</p></td>
+<td><p>Offset in the file of the page</p></td>
+</tr>
+<tr class="row-even"><td><p>compressed_page_size</p></td>
+<td><p>Int64</p></td>
+<td><p>Size in bytes of the page, including its header</p></td>
+</tr>
+<tr class="row-odd"><td><p>min_value</p></td>
+<td><p>Utf8</p></td>
+<td><p>The minimum value of the page, if stored in the column index, cast to a string</p></td>
+</tr>
+<tr class="row-even"><td><p>max_value</p></td>
+<td><p>Utf8</p></td>
+<td><p>The maximum value of the page, if stored in the column index, cast to a string</p></td>
+</tr>
+<tr class="row-odd"><td><p>null_count</p></td>
+<td><p>Int64</p></td>
+<td><p>Number of null values in the page, if stored in the column index</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
 <section id="metadata-cache">
 <h2><code class="docutils literal notranslate"><span class="pre">metadata_cache</span></code><a class="headerlink" href="#metadata-cache" title="Link to this heading">#</a></h2>
 <p>The <code class="docutils literal notranslate"><span class="pre">metadata_cache</span></code> function shows information about the default File Metadata Cache that is used by the
@@ -854,6 +981,8 @@ enabled.</p>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#parquet-metadata"><code class="docutils literal notranslate"><span class="pre">parquet_metadata</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#parquet-file-metadata"><code class="docutils literal notranslate"><span class="pre">parquet_file_metadata</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#parquet-page-index"><code class="docutils literal notranslate"><span class="pre">parquet_page_index</span></code></a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#metadata-cache"><code class="docutils literal notranslate"><span class="pre">metadata_cache</span></code></a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#statistics-cache"><code class="docutils literal notranslate"><span class="pre">statistics_cache</span></code></a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#list-files-cache"><code class="docutils literal notranslate"><span class="pre">list_files_cache</span></code></a></li>
