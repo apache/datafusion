@@ -1467,9 +1467,7 @@ mod tests {
                         .build_arc()?,
                 ),
         );
-        let mut streams = vec![];
-        let mut senders = vec![];
-        for partition in 0..PARTITIONS {
+        let make_stream = |partition| -> Result<_> {
             let (sender, receiver) = mpsc::unbounded();
             let input = Box::pin(RecordBatchStreamAdapter::new(
                 Arc::clone(&partial_schema),
@@ -1479,6 +1477,15 @@ mod tests {
                 &aggregate, &context, partition, input,
             )?
             .into_stream();
+            Ok((sender, stream))
+        };
+
+        // Construct the holders first. Their reservation is the baseline that
+        // must survive partition 0's spill/replay lifecycle.
+        let mut streams = vec![];
+        let mut senders = vec![];
+        for partition in 1..PARTITIONS {
+            let (sender, stream) = make_stream(partition)?;
             senders.push(sender);
             streams.push(stream);
         }
@@ -1522,25 +1529,27 @@ mod tests {
         };
         // Channel inputs return Pending after each supplied batch, so the
         // interleaving below does not depend on task scheduling.
-        let mut feed = |partition: usize, batch: i64| {
-            senders[partition]
-                .unbounded_send(Ok(make_batch(partition as i64, batch * 128)))
-                .unwrap();
-            assert!(streams[partition].next().now_or_never().is_none());
-        };
-        // Keep the state of partitions 1..3 live while partition 0 spills and
-        // replays.
         let mut held_batches = 0;
         while pool.reserved() < HELD_BYTES {
             assert!(held_batches < MAX_BATCHES, "held state stays small");
-            for partition in 1..PARTITIONS {
-                feed(partition, held_batches);
+            for (partition, (sender, stream)) in
+                senders.iter().zip(streams.iter_mut()).enumerate()
+            {
+                let partition = partition + 1;
+                sender
+                    .unbounded_send(Ok(make_batch(partition as i64, held_batches * 128)))
+                    .unwrap();
+                assert!(stream.next().now_or_never().is_none());
             }
             held_batches += 1;
         }
         let held = pool.reserved();
         let spill_count = || aggregate.metrics().unwrap().spill_count().unwrap();
         assert_eq!(spill_count(), 0);
+
+        // Do not include partition 0's empty table in `held`: it is correctly
+        // released when that stream spills, errors, or is dropped.
+        let (partition_zero_sender, mut first) = make_stream(0)?;
         // Feed partition 0 until it has spilled `spills` times. Key (0, 0)
         // repeats in every batch, so replay must merge its sum across runs.
         let mut batches = 0;
@@ -1554,24 +1563,29 @@ mod tests {
                 break;
             }
             assert!(batches < MAX_BATCHES, "partition 0 did not spill");
-            feed(0, batches);
+            partition_zero_sender
+                .unbounded_send(Ok(make_batch(0, batches * 128)))
+                .unwrap();
+            assert!(first.next().now_or_never().is_none());
             batches += 1;
         }
         // Add groups after the last spill so replay also merges the final
         // in-memory run.
         for _ in 0..8 {
-            feed(0, batches);
+            partition_zero_sender
+                .unbounded_send(Ok(make_batch(0, batches * 128)))
+                .unwrap();
+            assert!(first.next().now_or_never().is_none());
             batches += 1;
         }
         assert!(spill_count() >= spills);
         assert_eq!(spill_count() == 0, spills == 0);
-        let mut first = streams.remove(0);
         match finish {
             Finish::Collect => {
-                senders[0].close_channel();
+                partition_zero_sender.close_channel();
                 let mut output = collect(first).await?;
                 assert_eq!(pool.reserved(), held);
-                for sender in &senders[1..] {
+                for sender in &senders {
                     sender.close_channel();
                 }
                 for stream in streams.drain(..) {
@@ -1614,14 +1628,14 @@ mod tests {
                 assert_eq!(spill_count() == 0, spills == 0);
             }
             Finish::DropDuringReplay => {
-                senders[0].close_channel();
+                partition_zero_sender.close_channel();
                 first.next().await.unwrap()?;
                 assert!(pool.reserved() > held);
                 drop(first);
                 assert_eq!(pool.reserved(), held);
             }
             Finish::InputError => {
-                senders[0]
+                partition_zero_sender
                     .unbounded_send(datafusion_common::exec_err!(
                         "injected input failure"
                     ))
