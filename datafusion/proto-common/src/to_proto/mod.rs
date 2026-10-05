@@ -948,6 +948,7 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             statistics_enabled_opt: value.statistics_enabled.map(|v| protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled(v.to_string())),
             max_row_group_size: value.max_row_group_size as u64,
             max_in_list_size: value.max_in_list_size as u64,
+            row_group_range_assignment: value.row_group_range_assignment.to_string(),
             created_by: value.created_by.clone(),
             column_index_truncate_length_opt: value.column_index_truncate_length.map(|v| protobuf::parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(v as u64)),
             statistics_truncate_length_opt: value.statistics_truncate_length.map(|v| protobuf::parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(v as u64)),

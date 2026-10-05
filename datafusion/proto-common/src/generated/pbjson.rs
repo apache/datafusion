@@ -2600,7 +2600,7 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                             if compression_level__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("compressionLevel"));
                             }
-                            compression_level__ =
+                            compression_level__ = 
                                 map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
@@ -2614,7 +2614,7 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                             if terminator__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("terminator"));
                             }
-                            terminator__ =
+                            terminator__ = 
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -4056,9 +4056,9 @@ impl serde::Serialize for ExplainAnalyzeCategoriesNode {
             struct_ser.serialize_field("all", &self.all)?;
         }
         if !self.only.is_empty() {
-            let v = self.only.iter().copied().map(|v| {
+            let v = self.only.iter().cloned().map(|v| {
                 MetricCategory::try_from(v)
-                    .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {v}")))
+                    .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", v)))
                 }).collect::<std::result::Result<Vec<_>, _>>()?;
             struct_ser.serialize_field("only", &v)?;
         }
@@ -6491,7 +6491,10 @@ impl serde::Serialize for ParquetOptions {
         if self.max_in_list_size != 0 {
             len += 1;
         }
-        if self.enable_rle_to_dictionary != false {
+        if !self.row_group_range_assignment.is_empty() {
+            len += 1;
+        }
+        if self.enable_rle_to_dictionary {
             len += 1;
         }
         if !self.created_by.is_empty() {
@@ -6619,7 +6622,10 @@ impl serde::Serialize for ParquetOptions {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("maxInListSize", ToString::to_string(&self.max_in_list_size).as_str())?;
         }
-        if self.enable_rle_to_dictionary != false {
+        if !self.row_group_range_assignment.is_empty() {
+            struct_ser.serialize_field("rowGroupRangeAssignment", &self.row_group_range_assignment)?;
+        }
+        if self.enable_rle_to_dictionary {
             struct_ser.serialize_field("enableRleToDictionary", &self.enable_rle_to_dictionary)?;
         }
         if !self.created_by.is_empty() {
@@ -6782,6 +6788,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "maxRowGroupSize",
             "max_in_list_size",
             "maxInListSize",
+            "row_group_range_assignment",
+            "rowGroupRangeAssignment",
             "enable_rle_to_dictionary",
             "enableRleToDictionary",
             "created_by",
@@ -6837,6 +6845,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             DataPageRowCountLimit,
             MaxRowGroupSize,
             MaxInListSize,
+            RowGroupRangeAssignment,
             EnableRleToDictionary,
             CreatedBy,
             ContentDefinedChunking,
@@ -6895,6 +6904,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "dataPageRowCountLimit" | "data_page_row_count_limit" => Ok(GeneratedField::DataPageRowCountLimit),
                             "maxRowGroupSize" | "max_row_group_size" => Ok(GeneratedField::MaxRowGroupSize),
                             "maxInListSize" | "max_in_list_size" => Ok(GeneratedField::MaxInListSize),
+                            "rowGroupRangeAssignment" | "row_group_range_assignment" => Ok(GeneratedField::RowGroupRangeAssignment),
                             "enableRleToDictionary" | "enable_rle_to_dictionary" => Ok(GeneratedField::EnableRleToDictionary),
                             "createdBy" | "created_by" => Ok(GeneratedField::CreatedBy),
                             "contentDefinedChunking" | "content_defined_chunking" => Ok(GeneratedField::ContentDefinedChunking),
@@ -6951,6 +6961,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut data_page_row_count_limit__ = None;
                 let mut max_row_group_size__ = None;
                 let mut max_in_list_size__ = None;
+                let mut row_group_range_assignment__ = None;
                 let mut enable_rle_to_dictionary__ = None;
                 let mut created_by__ = None;
                 let mut content_defined_chunking__ = None;
@@ -7111,6 +7122,12 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::RowGroupRangeAssignment => {
+                            if row_group_range_assignment__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("rowGroupRangeAssignment"));
+                            }
+                            row_group_range_assignment__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::EnableRleToDictionary => {
                             if enable_rle_to_dictionary__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("enableRleToDictionary"));
@@ -7231,6 +7248,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     data_page_row_count_limit: data_page_row_count_limit__.unwrap_or_default(),
                     max_row_group_size: max_row_group_size__.unwrap_or_default(),
                     max_in_list_size: max_in_list_size__.unwrap_or_default(),
+                    row_group_range_assignment: row_group_range_assignment__.unwrap_or_default(),
                     enable_rle_to_dictionary: enable_rle_to_dictionary__.unwrap_or_default(),
                     created_by: created_by__.unwrap_or_default(),
                     content_defined_chunking: content_defined_chunking__,

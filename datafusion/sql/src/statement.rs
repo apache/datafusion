@@ -51,9 +51,9 @@ use datafusion_expr::{
     CreateExternalCatalog as PlanCreateExternalCatalog,
     CreateExternalTable as PlanCreateExternalTable, CreateFunction, CreateFunctionBody,
     CreateIndex as PlanCreateIndex, CreateMemoryTable, CreateView, Deallocate,
-    DescribeTable, DmlStatement, DropCatalogSchema, DropFunction, DropTable, DropView,
-    EmptyRelation, Execute, Explain, ExplainFormat, Expr, ExprSchemable, Filter,
-    LogicalPlan, LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare,
+    DescribeTable, DmlStatement, DropCatalog, DropCatalogSchema, DropFunction, DropTable,
+    DropView, EmptyRelation, Execute, Explain, ExplainFormat, Expr, ExprSchemable,
+    Filter, LogicalPlan, LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare,
     ResetVariable, SetVariable, SortExpr, Statement as PlanStatement, ToStringifiedPlan,
     TransactionAccessMode, TransactionConclusion, TransactionEnd,
     TransactionIsolationLevel, TransactionStart, Volatility, WriteOp, cast,
@@ -842,14 +842,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             },
                         )))
                     }
-                    ObjectType::Database => Ok(LogicalPlan::Ddl(
-                        DdlStatement::DropCatalog(datafusion_expr::DropCatalog {
-                            name: object_name_to_string(&name),
-                            if_exists,
-                            cascade,
-                            schema: DFSchemaRef::new(DFSchema::empty()),
-                        }),
-                    )),
+                    ObjectType::Database => {
+                        Ok(LogicalPlan::Ddl(DdlStatement::DropCatalog(
+                            DropCatalog::builder(object_name_to_string(&name))
+                                .with_if_exists(if_exists)
+                                .with_cascade(cascade)
+                                .build(),
+                        )))
+                    }
                     _ => not_impl_err!(
                         "Only `DROP TABLE/VIEW/SCHEMA/CATALOG/DATABASE  ...` statement is supported currently"
                     ),
@@ -1955,15 +1955,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
 
         Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalCatalog(
-            Box::new(PlanCreateExternalCatalog {
-                catalog_name: object_name_to_string(&catalog_name),
-                catalog_type,
-                location,
-                if_not_exists,
-                or_replace,
-                options: options_map,
-                schema: Arc::new(DFSchema::empty()),
-            }),
+            Box::new(
+                PlanCreateExternalCatalog::builder(
+                    object_name_to_string(&catalog_name),
+                    catalog_type,
+                )
+                .with_location(location)
+                .with_if_not_exists(if_not_exists)
+                .with_or_replace(or_replace)
+                .with_options(options_map)
+                .build(),
+            ),
         )))
     }
 

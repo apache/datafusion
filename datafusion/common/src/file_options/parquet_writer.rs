@@ -250,6 +250,7 @@ impl ParquetOptions {
             max_predicate_cache_size: _,
             max_in_list_size: _,
             enable_rle_to_dictionary: _,
+            row_group_range_assignment: _,
         } = self;
 
         let mut builder = WriterProperties::builder()
@@ -410,6 +411,7 @@ mod tests {
             enable_page_index: defaults.enable_page_index,
             pruning: defaults.pruning,
             max_in_list_size: defaults.max_in_list_size,
+            row_group_range_assignment: defaults.row_group_range_assignment,
             skip_metadata: defaults.skip_metadata,
             metadata_size_hint: defaults.metadata_size_hint,
             pushdown_filters: defaults.pushdown_filters,
@@ -536,6 +538,8 @@ mod tests {
                 enable_page_index: global_options_defaults.enable_page_index,
                 pruning: global_options_defaults.pruning,
                 max_in_list_size: global_options_defaults.max_in_list_size,
+                row_group_range_assignment: global_options_defaults
+                    .row_group_range_assignment,
                 skip_metadata: global_options_defaults.skip_metadata,
                 metadata_size_hint: global_options_defaults.metadata_size_hint,
                 pushdown_filters: global_options_defaults.pushdown_filters,
