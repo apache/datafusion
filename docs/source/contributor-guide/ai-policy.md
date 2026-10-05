@@ -62,15 +62,18 @@ PRs you have your agent generate and submit for you.
 ## Responding to review comments
 
 The same policy applies to review discussion as to the code itself: reviewers
-want to talk to **you**, not to your AI tool. Please do not paste an AI-generated
-response to a review comment verbatim or have your agent respond to
-reviewer comments. Some signs that a reply is an unreviewed AI dump:
+want to talk to **you**, not to your AI tool. Please do not respond to reviewer
+comments with unreviewed, fully AI-generated responses as again this puts all the
+burden on the reviewer and you learn nothing. We expect your responses to be
+in your own words, though it is fine to use AI to help prepare your response
+(for example to understand the comment, or help translate your response to
+English). Examples of unhelpful unreviewed AI comment dumps:
 
-- It summarizes the diff rather than answering the question that was asked.
-- It lists the commands that were run locally (e.g. `cargo fmt`, `cargo test`)
-  and whether they passed. This is not useful to reviewers because CI already
-  runs these checks.
-- It contains statements that don't make sense in context, such as claiming
+- Summarizes the diff rather than answering the question that was asked.
+- Lists the commands run locally (e.g. `cargo fmt`, `cargo test`)
+  and whether they passed. This is not useful to reviewers because CI already runs
+  these checks.
+- Contains statements that don't make sense in context, such as claiming
   tests could not be run because `cargo` is not installed.
 
 For example, see [this review thread in arrow-rs][arrow-rs-review-example] where
@@ -78,9 +81,9 @@ the reviewer asked a design question, and received several replies that
 described what had changed and which commands had been run, rather than an
 answer to the question.
 
-The point of code review is to help the project **and** to help you grow as an
-engineer, so please read each comment, make sure you understand it, and reply
-in your own words.
+Again, the point of code review is to help the project **and** to help you grow
+as an engineer, so please read each comment, make sure you understand it, and
+reply in your own words.
 
 [arrow-rs-review-example]: https://github.com/apache/arrow-rs/pull/11209#discussion_r4145512124
 
