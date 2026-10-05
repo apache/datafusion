@@ -22,27 +22,45 @@
 use crate::streaming::StreamingTable;
 use crate::table::TableFunction;
 use crate::{CatalogProviderList, SchemaProvider, TableProvider};
-use arrow::array::builder::{BooleanBuilder, UInt8Builder};
-use arrow::{
-    array::{StringBuilder, UInt64Builder},
-    datatypes::{DataType, Field, FieldRef, Schema, SchemaRef},
-    record_batch::RecordBatch,
-};
+use arrow::array::StringArray;
+use arrow::array::builder::{ListBuilder, StringBuilder};
+use arrow::compute::kernels::filter::filter_record_batch;
+use arrow::compute::like;
+use arrow::datatypes::{Field, FieldRef, Schema, SchemaRef};
+use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
-use datafusion_common::DataFusionError;
-use datafusion_common::config::{ConfigEntry, ConfigOptions};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
+use datafusion_common::information_schema::{
+    ColumnsDetail, InformationSchemaColumnsBuilder, InformationSchemaDfSettingsBuilder,
+    InformationSchemaParametersBuilder, InformationSchemaRoutinesBuilder,
+    InformationSchemaTablesBuilder, InformationSchemaViewBuilder, columns_schema,
+    df_settings_schema, parameters_schema, routines_schema, show_functions_schema,
+    tables_schema, views_schema,
+};
+use datafusion_common::{
+    DataFusionError, ResolvedTableReference, plan_datafusion_err, plan_err,
+};
+// Re-exported (rather than just `use`d) because these were already part of
+// this module's public API before it started sharing its schema/builder
+// definitions with `datafusion_common::information_schema`.
+pub use datafusion_common::information_schema::{
+    InformationSchemataBuilder, schemata_schema,
+};
 use datafusion_common::types::NativeType;
+use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_execution::TaskContext;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::function::WindowUDFFieldArgs;
 use datafusion_expr::{
-    AggregateUDF, ReturnFieldArgs, ScalarUDF, Signature, TypeSignature, WindowUDF,
+    AggregateUDF, Documentation, ReturnFieldArgs, ScalarUDF, Signature, TypeSignature,
+    WindowUDF,
 };
 use datafusion_expr::{TableType, Volatility};
-use datafusion_physical_plan::SendableRecordBatchStream;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion_physical_plan::streaming::PartitionStream;
+use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
+use datafusion_physical_plan::{ExecutionPlan, SendableRecordBatchStream};
+use datafusion_session::Session;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -80,10 +98,20 @@ pub struct InformationSchemaProvider {
 
 impl InformationSchemaProvider {
     /// Creates a new [`InformationSchemaProvider`] for the provided `catalog_list`
+    pub fn from(session: &dyn Session) -> Self {
+        let mut provider = Self::new(session.catalog_list());
+        provider.config.information_schema = session.config().information_schema();
+        provider.config.system_catalog_name =
+            session.config().system_catalog().map(str::to_owned);
+        provider
+    }
+
+    /// Creates a new [`InformationSchemaProvider`] for the provided `catalog_list`
     pub fn new(catalog_list: Arc<dyn CatalogProviderList>) -> Self {
         Self {
             config: InformationSchemaConfig {
                 system_catalog_name: None,
+                information_schema: true,
                 catalog_list,
                 table_functions: HashMap::new(),
             },
@@ -104,11 +132,295 @@ impl InformationSchemaProvider {
         self.config.system_catalog_name = Some(catalog_name);
         self
     }
+
+    /// `SHOW TABLES`.
+    pub fn show_tables(&self) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(StreamingTableExec::try_new(
+            SchemaRef::from(tables_schema()),
+            vec![Arc::new(InformationSchemaTables::new(self.config.clone()))],
+            None,
+            vec![],
+            false,
+            None,
+        )?))
+    }
+
+    /// `DESCRIBE <query>`.
+    pub fn describe_schema(&self, schema: &Schema) -> Result<Arc<dyn ExecutionPlan>> {
+        let mut builder = InformationSchemaColumnsBuilder::new(ColumnsDetail::Describe);
+        for (position, field) in schema.fields().iter().enumerate() {
+            builder.add_column("", "", "", position, field);
+        }
+        record_batch_to_exec(builder.finish())
+    }
+
+    /// `DESCRIBE <table>` / `SHOW [FULL|EXTENDED] COLUMNS FROM <table>`, at
+    /// the given [`ColumnsDetail`] level.
+    pub async fn show_columns(
+        &self,
+        table_ref: &ResolvedTableReference,
+        detail: ColumnsDetail,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let table = self.resolve_table(table_ref).await?;
+
+        let mut builder = InformationSchemaColumnsBuilder::new(detail);
+        for (position, field) in table.schema().fields().iter().enumerate() {
+            builder.add_column(
+                &table_ref.catalog,
+                &table_ref.schema,
+                &table_ref.table,
+                position,
+                field,
+            );
+        }
+        record_batch_to_exec(builder.finish())
+    }
+
+    /// `SHOW CREATE TABLE <table>`.
+    pub async fn show_create_table(
+        &self,
+        table_ref: &ResolvedTableReference,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let table = self.resolve_table(table_ref).await?;
+
+        let mut builder = InformationSchemaViewBuilder::new();
+        builder.add_view(
+            table_ref.catalog.as_ref(),
+            table_ref.schema.as_ref(),
+            table_ref.table.as_ref(),
+            table.get_table_definition(),
+        );
+        let batch = builder.finish();
+        record_batch_to_exec(batch)
+    }
+
+    async fn resolve_table(
+        &self,
+        table_ref: &ResolvedTableReference,
+    ) -> Result<Arc<dyn TableProvider>, DataFusionError> {
+        let not_found = || plan_datafusion_err!("table '{table_ref}' not found");
+        let schema_provider = self
+            .config
+            .catalog_list
+            .catalog(&table_ref.catalog)
+            .ok_or_else(not_found)?
+            .schema(&table_ref.schema)
+            .ok_or_else(not_found)?;
+        let table = schema_provider
+            .table(&table_ref.table)
+            .await?
+            .ok_or_else(not_found)?;
+        Ok(table)
+    }
+
+    /// `SHOW <variable>` / `SHOW ALL`. `name` is `None` for `SHOW ALL`.
+    pub fn show_variables(
+        &self,
+        config_options: &ConfigOptions,
+        runtime_env: &Arc<RuntimeEnv>,
+        name: Option<&str>,
+        verbose: bool,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let name = name.map(|n| {
+            if n == "timezone" || n == "time.zone" {
+                // we could introduce alias in OptionDefinition if this string matching thing grows
+                "datafusion.execution.time_zone"
+            } else {
+                n
+            }
+        });
+
+        if let Some(name) = name {
+            // These values are what are used to make the information_schema
+            // table, so we just check here, before actually executing the
+            // query, if it would produce no results, and error preemptively
+            // if it would (for a better UX).
+            let is_valid_variable =
+                config_options.entries().iter().any(|opt| opt.key == name);
+            let is_runtime_variable = name.starts_with("datafusion.runtime.");
+            if !is_valid_variable && !is_runtime_variable {
+                return plan_err!(
+                    "'{name}' is not a variable which can be viewed with 'SHOW'"
+                );
+            }
+        }
+        let mut builder = InformationSchemaDfSettingsBuilder::new(verbose);
+        self.config
+            .make_df_settings(config_options, runtime_env, name, &mut builder);
+        let batch = builder.finish();
+        record_batch_to_exec(batch)
+    }
+
+    /// `SHOW FUNCTIONS [LIKE <pattern>]`.
+    ///
+    /// Built directly from the session's scalar/aggregate/window UDF and
+    /// UDTF registries (the same sources `information_schema.routines` /
+    /// `information_schema.parameters` are built from, see
+    /// `InformationSchemaConfig::make_routines`/`::make_parameters`) by a
+    /// tight loop over each function and its overloads, rather than by
+    /// planning and executing the equivalent join/aggregate/union SQL
+    /// against those two tables.
+    pub fn show_functions(
+        &self,
+        udfs: &HashMap<String, Arc<ScalarUDF>>,
+        udafs: &HashMap<String, Arc<AggregateUDF>>,
+        udwfs: &HashMap<String, Arc<WindowUDF>>,
+        filter: Option<&str>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let mut builder = ShowFunctionsBuilder::new();
+
+        for (name, udf) in udfs {
+            for (arg_types, return_type) in get_udf_args_and_return_types(udf)? {
+                builder.add_overload(
+                    name,
+                    &arg_types,
+                    return_type.as_deref(),
+                    udf.documentation(),
+                    "SCALAR",
+                );
+            }
+        }
+        for (name, udaf) in udafs {
+            for (arg_types, return_type) in get_udaf_args_and_return_types(udaf)? {
+                builder.add_overload(
+                    name,
+                    &arg_types,
+                    return_type.as_deref(),
+                    udaf.documentation(),
+                    "AGGREGATE",
+                );
+            }
+        }
+        for (name, udwf) in udwfs {
+            for (arg_types, return_type) in get_udwf_args_and_return_types(udwf)? {
+                builder.add_overload(
+                    name,
+                    &arg_types,
+                    return_type.as_deref(),
+                    udwf.documentation(),
+                    "WINDOW",
+                );
+            }
+        }
+        // Table functions (UDTFs) have no scalar signature (no parameters,
+        // no return type beyond "TABLE") and no documentation, so they get
+        // their own, much simpler, row shape.
+        for name in self.config.table_functions.keys() {
+            builder.add_table_function(name);
+        }
+
+        record_batch_to_exec(builder.finish(filter)?)
+    }
+}
+
+/// Wraps a single [`RecordBatch`] (already matching the plan's output
+/// schema) in a one-partition in-memory [`ExecutionPlan`].
+fn record_batch_to_exec(record_batch: RecordBatch) -> Result<Arc<dyn ExecutionPlan>> {
+    let schema = record_batch.schema();
+    let partitions = vec![vec![record_batch]];
+    let mem_exec = MemorySourceConfig::try_new_exec(&partitions, schema, None)?;
+    Ok(mem_exec)
+}
+
+/// Builds `SHOW FUNCTIONS [LIKE <pattern>]` rows: one per concrete overload
+/// of each scalar/aggregate/window UDF, plus one per UDTF.
+struct ShowFunctionsBuilder {
+    function_names: StringBuilder,
+    return_types: StringBuilder,
+    parameters: ListBuilder<StringBuilder>,
+    parameter_types: ListBuilder<StringBuilder>,
+    function_types: StringBuilder,
+    descriptions: StringBuilder,
+    syntax_examples: StringBuilder,
+}
+
+impl ShowFunctionsBuilder {
+    fn new() -> Self {
+        Self {
+            function_names: StringBuilder::new(),
+            return_types: StringBuilder::new(),
+            parameters: ListBuilder::new(StringBuilder::new()),
+            parameter_types: ListBuilder::new(StringBuilder::new()),
+            function_types: StringBuilder::new(),
+            descriptions: StringBuilder::new(),
+            syntax_examples: StringBuilder::new(),
+        }
+    }
+
+    /// Append one row for a concrete scalar/aggregate/window overload.
+    /// `arg_types` is this overload's full, ordered argument type list;
+    /// argument *names* (when documented) are matched to them by position.
+    fn add_overload(
+        &mut self,
+        name: &str,
+        arg_types: &[String],
+        return_type: Option<&str>,
+        documentation: Option<&Documentation>,
+        function_type: &str,
+    ) {
+        self.function_names.append_value(name);
+        self.return_types.append_option(return_type);
+
+        let arg_names = documentation.and_then(|d| d.arguments.as_ref());
+        for (position, type_name) in arg_types.iter().enumerate() {
+            let param_name = arg_names
+                .and_then(|args| args.get(position))
+                .map(|(arg_name, _)| arg_name.as_str());
+            self.parameters.values().append_option(param_name);
+            self.parameter_types.values().append_value(type_name);
+        }
+        self.parameters.append(true);
+        self.parameter_types.append(true);
+
+        self.function_types.append_value(function_type);
+        self.descriptions
+            .append_option(documentation.map(|d| d.description.as_str()));
+        self.syntax_examples
+            .append_option(documentation.map(|d| d.syntax_example.as_str()));
+    }
+
+    /// Append one row for a table function (UDTF): no parameter or
+    /// documentation info is available for these.
+    fn add_table_function(&mut self, name: &str) {
+        self.function_names.append_value(name);
+        self.return_types.append_value("TABLE");
+        self.parameters.append(false);
+        self.parameter_types.append(false);
+        self.function_types.append_value("TABLE");
+        self.descriptions.append_null();
+        self.syntax_examples.append_null();
+    }
+
+    /// Finalize into a [`RecordBatch`], applying the optional `LIKE`
+    /// `filter` to `function_name` (matching `col("function_name")
+    /// .like(lit(filter))`'s semantics).
+    fn finish(mut self, filter: Option<&str>) -> Result<RecordBatch> {
+        let batch = RecordBatch::try_new(
+            SchemaRef::from(show_functions_schema()),
+            vec![
+                Arc::new(self.function_names.finish()),
+                Arc::new(self.return_types.finish()),
+                Arc::new(self.parameters.finish()),
+                Arc::new(self.parameter_types.finish()),
+                Arc::new(self.function_types.finish()),
+                Arc::new(self.descriptions.finish()),
+                Arc::new(self.syntax_examples.finish()),
+            ],
+        )?;
+        match filter {
+            Some(pattern) => {
+                let mask = like(batch.column(0), &StringArray::new_scalar(pattern))?;
+                Ok(filter_record_batch(&batch, &mask)?)
+            }
+            None => Ok(batch),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
 struct InformationSchemaConfig {
     system_catalog_name: Option<String>,
+    information_schema: bool,
     catalog_list: Arc<dyn CatalogProviderList>,
     table_functions: HashMap<String, Arc<TableFunction>>,
 }
@@ -143,19 +455,22 @@ impl InformationSchemaConfig {
                     }
                 }
             }
-
-            // Add a final list for the information schema tables themselves
-            for table_name in INFORMATION_SCHEMA_TABLES {
-                builder.add_table(
-                    &catalog_name,
-                    INFORMATION_SCHEMA,
-                    table_name,
-                    TableType::View,
-                );
+            if self.information_schema {
+                // Add a final list for the information schema tables themselves
+                for table_name in INFORMATION_SCHEMA_TABLES {
+                    builder.add_table(
+                        &catalog_name,
+                        INFORMATION_SCHEMA,
+                        table_name,
+                        TableType::View,
+                    );
+                }
             }
         }
 
-        if let Some(system_catalog_name) = &self.system_catalog_name {
+        if self.information_schema
+            && let Some(system_catalog_name) = &self.system_catalog_name
+        {
             for table_name in INFORMATION_SCHEMA_TABLES {
                 builder.add_table(
                     system_catalog_name,
@@ -204,14 +519,18 @@ impl InformationSchemaConfig {
                         .await?;
                     }
                 }
-
-                // Add the information schema views themselves
-                Self::add_views(builder, &catalog_name, INFORMATION_SCHEMA, self).await?;
+                if self.information_schema {
+                    // Add the information schema views themselves
+                    Self::add_views(builder, &catalog_name, INFORMATION_SCHEMA, self)
+                        .await?;
+                }
             }
         }
 
         // Add the system information schema
-        if let Some(system_catalog_name) = &self.system_catalog_name {
+        if self.information_schema
+            && let Some(system_catalog_name) = &self.system_catalog_name
+        {
             Self::add_views(builder, system_catalog_name, INFORMATION_SCHEMA, self)
                 .await?;
         }
@@ -226,7 +545,7 @@ impl InformationSchemaConfig {
         schema: &dyn SchemaProvider,
     ) -> Result<(), DataFusionError> {
         for table_name in schema.table_names() {
-            if let Some(table) = schema.table(&table_name).await? {
+            if let Some(table) = schema.table(&table_name).await? && table.table_type() == TableType::View {
                 builder.add_view(
                     catalog_name,
                     schema_name,
@@ -288,18 +607,28 @@ impl InformationSchemaConfig {
         Ok(())
     }
 
-    /// Construct the `information_schema.df_settings` virtual table
+    /// Construct the `information_schema.df_settings` virtual table.
+    ///
+    /// `name` restricts the output to just that setting (`SHOW <variable>`);
+    /// when `None` (`SHOW ALL` / the real `information_schema.df_settings`
+    /// table), every setting is included, ordered by name for a consistent,
+    /// deterministic result.
     fn make_df_settings(
         &self,
         config_options: &ConfigOptions,
         runtime_env: &Arc<RuntimeEnv>,
+        name: Option<&str>,
         builder: &mut InformationSchemaDfSettingsBuilder,
     ) {
-        for entry in config_options.entries() {
-            builder.add_setting(entry);
+        let mut entries = config_options.entries();
+        entries.extend(runtime_env.config_entries());
+
+        match name {
+            Some(name) => entries.retain(|entry| entry.key == name),
+            None => entries.sort_unstable_by(|a, b| a.key.cmp(&b.key)),
         }
-        // Add runtime configuration entries
-        for entry in runtime_env.config_entries() {
+
+        for entry in entries {
             builder.add_setting(entry);
         }
     }
@@ -701,23 +1030,9 @@ struct InformationSchemaTables {
 
 impl InformationSchemaTables {
     fn new(config: InformationSchemaConfig) -> Self {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("table_catalog", DataType::Utf8, false),
-            Field::new("table_schema", DataType::Utf8, false),
-            Field::new("table_name", DataType::Utf8, false),
-            Field::new("table_type", DataType::Utf8, false),
-        ]));
-
-        Self { schema, config }
-    }
-
-    fn builder(&self) -> InformationSchemaTablesBuilder {
-        InformationSchemaTablesBuilder {
-            catalog_names: StringBuilder::new(),
-            schema_names: StringBuilder::new(),
-            table_names: StringBuilder::new(),
-            table_types: StringBuilder::new(),
-            schema: Arc::clone(&self.schema),
+        Self {
+            schema: Arc::new(tables_schema()),
+            config,
         }
     }
 }
@@ -728,7 +1043,7 @@ impl PartitionStream for InformationSchemaTables {
     }
 
     fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
-        let mut builder = self.builder();
+        let mut builder = InformationSchemaTablesBuilder::new();
         let config = self.config.clone();
         Box::pin(RecordBatchStreamAdapter::new(
             Arc::clone(&self.schema),
@@ -741,50 +1056,6 @@ impl PartitionStream for InformationSchemaTables {
     }
 }
 
-/// Builds the `information_schema.TABLE` table row by row
-///
-/// Columns are based on <https://www.postgresql.org/docs/current/infoschema-columns.html>
-struct InformationSchemaTablesBuilder {
-    schema: SchemaRef,
-    catalog_names: StringBuilder,
-    schema_names: StringBuilder,
-    table_names: StringBuilder,
-    table_types: StringBuilder,
-}
-
-impl InformationSchemaTablesBuilder {
-    fn add_table(
-        &mut self,
-        catalog_name: impl AsRef<str>,
-        schema_name: impl AsRef<str>,
-        table_name: impl AsRef<str>,
-        table_type: TableType,
-    ) {
-        // Note: append_value is actually infallible.
-        self.catalog_names.append_value(catalog_name.as_ref());
-        self.schema_names.append_value(schema_name.as_ref());
-        self.table_names.append_value(table_name.as_ref());
-        self.table_types.append_value(match table_type {
-            TableType::Base => "BASE TABLE",
-            TableType::View => "VIEW",
-            TableType::Temporary => "LOCAL TEMPORARY",
-        });
-    }
-
-    fn finish(&mut self) -> RecordBatch {
-        RecordBatch::try_new(
-            Arc::clone(&self.schema),
-            vec![
-                Arc::new(self.catalog_names.finish()),
-                Arc::new(self.schema_names.finish()),
-                Arc::new(self.table_names.finish()),
-                Arc::new(self.table_types.finish()),
-            ],
-        )
-        .unwrap()
-    }
-}
-
 #[derive(Debug)]
 struct InformationSchemaViews {
     schema: SchemaRef,
@@ -793,23 +1064,9 @@ struct InformationSchemaViews {
 
 impl InformationSchemaViews {
     fn new(config: InformationSchemaConfig) -> Self {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("table_catalog", DataType::Utf8, false),
-            Field::new("table_schema", DataType::Utf8, false),
-            Field::new("table_name", DataType::Utf8, false),
-            Field::new("definition", DataType::Utf8, true),
-        ]));
-
-        Self { schema, config }
-    }
-
-    fn builder(&self) -> InformationSchemaViewBuilder {
-        InformationSchemaViewBuilder {
-            catalog_names: StringBuilder::new(),
-            schema_names: StringBuilder::new(),
-            table_names: StringBuilder::new(),
-            definitions: StringBuilder::new(),
-            schema: Arc::clone(&self.schema),
+        Self {
+            schema: Arc::new(views_schema()),
+            config,
         }
     }
 }
@@ -820,7 +1077,7 @@ impl PartitionStream for InformationSchemaViews {
     }
 
     fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
-        let mut builder = self.builder();
+        let mut builder = InformationSchemaViewBuilder::new();
         let config = self.config.clone();
         Box::pin(RecordBatchStreamAdapter::new(
             Arc::clone(&self.schema),
@@ -833,46 +1090,6 @@ impl PartitionStream for InformationSchemaViews {
     }
 }
 
-/// Builds the `information_schema.VIEWS` table row by row
-///
-/// Columns are based on <https://www.postgresql.org/docs/current/infoschema-columns.html>
-struct InformationSchemaViewBuilder {
-    schema: SchemaRef,
-    catalog_names: StringBuilder,
-    schema_names: StringBuilder,
-    table_names: StringBuilder,
-    definitions: StringBuilder,
-}
-
-impl InformationSchemaViewBuilder {
-    fn add_view(
-        &mut self,
-        catalog_name: impl AsRef<str>,
-        schema_name: impl AsRef<str>,
-        table_name: impl AsRef<str>,
-        definition: Option<&(impl AsRef<str> + ?Sized)>,
-    ) {
-        // Note: append_value is actually infallible.
-        self.catalog_names.append_value(catalog_name.as_ref());
-        self.schema_names.append_value(schema_name.as_ref());
-        self.table_names.append_value(table_name.as_ref());
-        self.definitions.append_option(definition.as_ref());
-    }
-
-    fn finish(&mut self) -> RecordBatch {
-        RecordBatch::try_new(
-            Arc::clone(&self.schema),
-            vec![
-                Arc::new(self.catalog_names.finish()),
-                Arc::new(self.schema_names.finish()),
-                Arc::new(self.table_names.finish()),
-                Arc::new(self.definitions.finish()),
-            ],
-        )
-        .unwrap()
-    }
-}
-
 #[derive(Debug)]
 struct InformationSchemaColumns {
     schema: SchemaRef,
@@ -881,50 +1098,12 @@ struct InformationSchemaColumns {
 
 impl InformationSchemaColumns {
     fn new(config: InformationSchemaConfig) -> Self {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("table_catalog", DataType::Utf8, false),
-            Field::new("table_schema", DataType::Utf8, false),
-            Field::new("table_name", DataType::Utf8, false),
-            Field::new("column_name", DataType::Utf8, false),
-            Field::new("ordinal_position", DataType::UInt64, false),
-            Field::new("column_default", DataType::Utf8, true),
-            Field::new("is_nullable", DataType::Utf8, false),
-            Field::new("data_type", DataType::Utf8, false),
-            Field::new("character_maximum_length", DataType::UInt64, true),
-            Field::new("character_octet_length", DataType::UInt64, true),
-            Field::new("numeric_precision", DataType::UInt64, true),
-            Field::new("numeric_precision_radix", DataType::UInt64, true),
-            Field::new("numeric_scale", DataType::UInt64, true),
-            Field::new("datetime_precision", DataType::UInt64, true),
-            Field::new("interval_type", DataType::Utf8, true),
-        ]));
-
-        Self { schema, config }
-    }
-
-    fn builder(&self) -> InformationSchemaColumnsBuilder {
-        // StringBuilder requires providing an initial capacity, so
-        // pick 10 here arbitrarily as this is not performance
-        // critical code and the number of tables is unavailable here.
-        let default_capacity = 10;
-
-        InformationSchemaColumnsBuilder {
-            catalog_names: StringBuilder::new(),
-            schema_names: StringBuilder::new(),
-            table_names: StringBuilder::new(),
-            column_names: StringBuilder::new(),
-            ordinal_positions: UInt64Builder::with_capacity(default_capacity),
-            column_defaults: StringBuilder::new(),
-            is_nullables: StringBuilder::new(),
-            data_types: StringBuilder::new(),
-            character_maximum_lengths: UInt64Builder::with_capacity(default_capacity),
-            character_octet_lengths: UInt64Builder::with_capacity(default_capacity),
-            numeric_precisions: UInt64Builder::with_capacity(default_capacity),
-            numeric_precision_radixes: UInt64Builder::with_capacity(default_capacity),
-            numeric_scales: UInt64Builder::with_capacity(default_capacity),
-            datetime_precisions: UInt64Builder::with_capacity(default_capacity),
-            interval_types: StringBuilder::new(),
-            schema: Arc::clone(&self.schema),
+        Self {
+            // The real `information_schema.columns` table is always the
+            // full column set; `Basic`/`Describe` are projections specific
+            // to the `SHOW COLUMNS` / `DESCRIBE` SQL surface, not this table.
+            schema: Arc::new(columns_schema(ColumnsDetail::Full)),
+            config,
         }
     }
 }
@@ -935,7 +1114,7 @@ impl PartitionStream for InformationSchemaColumns {
     }
 
     fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
-        let mut builder = self.builder();
+        let mut builder = InformationSchemaColumnsBuilder::new(ColumnsDetail::Full);
         let config = self.config.clone();
         Box::pin(RecordBatchStreamAdapter::new(
             Arc::clone(&self.schema),
@@ -948,280 +1127,18 @@ impl PartitionStream for InformationSchemaColumns {
     }
 }
 
-/// Builds the `information_schema.COLUMNS` table row by row
-///
-/// Columns are based on <https://www.postgresql.org/docs/current/infoschema-columns.html>
-struct InformationSchemaColumnsBuilder {
-    schema: SchemaRef,
-    catalog_names: StringBuilder,
-    schema_names: StringBuilder,
-    table_names: StringBuilder,
-    column_names: StringBuilder,
-    ordinal_positions: UInt64Builder,
-    column_defaults: StringBuilder,
-    is_nullables: StringBuilder,
-    data_types: StringBuilder,
-    character_maximum_lengths: UInt64Builder,
-    character_octet_lengths: UInt64Builder,
-    numeric_precisions: UInt64Builder,
-    numeric_precision_radixes: UInt64Builder,
-    numeric_scales: UInt64Builder,
-    datetime_precisions: UInt64Builder,
-    interval_types: StringBuilder,
-}
-
-impl InformationSchemaColumnsBuilder {
-    fn add_column(
-        &mut self,
-        catalog_name: &str,
-        schema_name: &str,
-        table_name: &str,
-        field_position: usize,
-        field: &Field,
-    ) {
-        use DataType::*;
-
-        // Note: append_value is actually infallible.
-        self.catalog_names.append_value(catalog_name);
-        self.schema_names.append_value(schema_name);
-        self.table_names.append_value(table_name);
-
-        self.column_names.append_value(field.name());
-
-        self.ordinal_positions.append_value(field_position as u64);
-
-        // DataFusion does not support column default values, so null
-        self.column_defaults.append_null();
-
-        // "YES if the column is possibly nullable, NO if it is known not nullable. "
-        let nullable_str = if field.is_nullable() { "YES" } else { "NO" };
-        self.is_nullables.append_value(nullable_str);
-
-        // "System supplied type" --> Use debug format of the datatype
-        self.data_types.append_value(field.data_type().to_string());
-
-        // "If data_type identifies a character or bit string type, the
-        // declared maximum length; null for all other data types or
-        // if no maximum length was declared."
-        //
-        // Arrow has no equivalent of VARCHAR(20), so we leave this as Null
-        let max_chars = None;
-        self.character_maximum_lengths.append_option(max_chars);
-
-        // "Maximum length, in bytes, for binary data, character data,
-        // or text and image data."
-        let char_len: Option<u64> = match field.data_type() {
-            Utf8 | Binary => Some(i32::MAX as u64),
-            LargeBinary | LargeUtf8 => Some(i64::MAX as u64),
-            _ => None,
-        };
-        self.character_octet_lengths.append_option(char_len);
-
-        // numeric_precision: "If data_type identifies a numeric type, this column
-        // contains the (declared or implicit) precision of the type
-        // for this column. The precision indicates the number of
-        // significant digits. It can be expressed in decimal (base
-        // 10) or binary (base 2) terms, as specified in the column
-        // numeric_precision_radix. For all other data types, this
-        // column is null."
-        //
-        // numeric_radix: If data_type identifies a numeric type, this
-        // column indicates in which base the values in the columns
-        // numeric_precision and numeric_scale are expressed. The
-        // value is either 2 or 10. For all other data types, this
-        // column is null.
-        //
-        // numeric_scale: If data_type identifies an exact numeric
-        // type, this column contains the (declared or implicit) scale
-        // of the type for this column. The scale indicates the number
-        // of significant digits to the right of the decimal point. It
-        // can be expressed in decimal (base 10) or binary (base 2)
-        // terms, as specified in the column
-        // numeric_precision_radix. For all other data types, this
-        // column is null.
-        let (numeric_precision, numeric_radix, numeric_scale) = match field.data_type() {
-            Int8 | UInt8 => (Some(8), Some(2), None),
-            Int16 | UInt16 => (Some(16), Some(2), None),
-            Int32 | UInt32 => (Some(32), Some(2), None),
-            // From max value of 65504 as explained on
-            // https://en.wikipedia.org/wiki/Half-precision_floating-point_format#Exponent_encoding
-            Float16 => (Some(15), Some(2), None),
-            // Numbers from postgres `real` type
-            Float32 => (Some(24), Some(2), None),
-            // Numbers from postgres `double` type
-            Float64 => (Some(24), Some(2), None),
-            Decimal128(precision, scale) => {
-                (Some(*precision as u64), Some(10), Some(*scale as u64))
-            }
-            _ => (None, None, None),
-        };
-
-        self.numeric_precisions.append_option(numeric_precision);
-        self.numeric_precision_radixes.append_option(numeric_radix);
-        self.numeric_scales.append_option(numeric_scale);
-
-        self.datetime_precisions.append_option(None);
-        self.interval_types.append_null();
-    }
-
-    fn finish(&mut self) -> RecordBatch {
-        RecordBatch::try_new(
-            Arc::clone(&self.schema),
-            vec![
-                Arc::new(self.catalog_names.finish()),
-                Arc::new(self.schema_names.finish()),
-                Arc::new(self.table_names.finish()),
-                Arc::new(self.column_names.finish()),
-                Arc::new(self.ordinal_positions.finish()),
-                Arc::new(self.column_defaults.finish()),
-                Arc::new(self.is_nullables.finish()),
-                Arc::new(self.data_types.finish()),
-                Arc::new(self.character_maximum_lengths.finish()),
-                Arc::new(self.character_octet_lengths.finish()),
-                Arc::new(self.numeric_precisions.finish()),
-                Arc::new(self.numeric_precision_radixes.finish()),
-                Arc::new(self.numeric_scales.finish()),
-                Arc::new(self.datetime_precisions.finish()),
-                Arc::new(self.interval_types.finish()),
-            ],
-        )
-        .unwrap()
-    }
-}
-
 #[derive(Debug)]
 struct InformationSchemata {
     schema: SchemaRef,
     config: InformationSchemaConfig,
 }
 
-/// The Arrow schema of [`information_schema.schemata`] rows.
-///
-/// Useful for downstream catalog implementations that want to declare a
-/// `TableProvider` for `schemata` before populating any rows via
-/// [`InformationSchemataBuilder`].
-///
-/// Columns and nullability match
-/// <https://www.postgresql.org/docs/current/infoschema-schemata.html>.
-///
-/// [`information_schema.schemata`]: https://www.postgresql.org/docs/current/infoschema-schemata.html
-pub fn schemata_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("catalog_name", DataType::Utf8, false),
-        Field::new("schema_name", DataType::Utf8, false),
-        Field::new("schema_owner", DataType::Utf8, true),
-        Field::new("default_character_set_catalog", DataType::Utf8, true),
-        Field::new("default_character_set_schema", DataType::Utf8, true),
-        Field::new("default_character_set_name", DataType::Utf8, true),
-        Field::new("sql_path", DataType::Utf8, true),
-    ]))
-}
-
 impl InformationSchemata {
     fn new(config: InformationSchemaConfig) -> Self {
         Self {
-            schema: schemata_schema(),
+            schema: Arc::new(schemata_schema()),
             config,
         }
-    }
-
-    fn builder(&self) -> InformationSchemataBuilder {
-        InformationSchemataBuilder {
-            schema: Arc::clone(&self.schema),
-            catalog_name: StringBuilder::new(),
-            schema_name: StringBuilder::new(),
-            schema_owner: StringBuilder::new(),
-            default_character_set_catalog: StringBuilder::new(),
-            default_character_set_schema: StringBuilder::new(),
-            default_character_set_name: StringBuilder::new(),
-            sql_path: StringBuilder::new(),
-        }
-    }
-}
-
-/// Builder that produces [`RecordBatch`] values matching the schema of
-/// `information_schema.schemata` (see [`schemata_schema`]).
-///
-/// Intended for downstream catalog implementations that need to emit
-/// `schemata` rows from their own metadata source rather than going
-/// through DataFusion's `InformationSchemaProvider`, which enumerates
-/// schemas synchronously via `CatalogProviderList` and so is unsuitable
-/// for catalog backends that resolve asynchronously.
-#[derive(Debug)]
-pub struct InformationSchemataBuilder {
-    schema: SchemaRef,
-    catalog_name: StringBuilder,
-    schema_name: StringBuilder,
-    schema_owner: StringBuilder,
-    default_character_set_catalog: StringBuilder,
-    default_character_set_schema: StringBuilder,
-    default_character_set_name: StringBuilder,
-    sql_path: StringBuilder,
-}
-
-impl Default for InformationSchemataBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl InformationSchemataBuilder {
-    /// Construct an empty builder.
-    pub fn new() -> Self {
-        Self {
-            schema: schemata_schema(),
-            catalog_name: StringBuilder::new(),
-            schema_name: StringBuilder::new(),
-            schema_owner: StringBuilder::new(),
-            default_character_set_catalog: StringBuilder::new(),
-            default_character_set_schema: StringBuilder::new(),
-            default_character_set_name: StringBuilder::new(),
-            sql_path: StringBuilder::new(),
-        }
-    }
-
-    /// Append one row to the builder. `schema_owner` is the optional SQL
-    /// schema owner; the three `default_character_set_*` columns and
-    /// `sql_path` are written as null (DataFusion does not model those
-    /// concepts; see the PostgreSQL docs link on [`schemata_schema`]).
-    pub fn add_schemata(
-        &mut self,
-        catalog_name: &str,
-        schema_name: &str,
-        schema_owner: Option<&str>,
-    ) {
-        self.catalog_name.append_value(catalog_name);
-        self.schema_name.append_value(schema_name);
-        match schema_owner {
-            Some(owner) => self.schema_owner.append_value(owner),
-            None => self.schema_owner.append_null(),
-        }
-        self.default_character_set_catalog.append_null();
-        self.default_character_set_schema.append_null();
-        self.default_character_set_name.append_null();
-        self.sql_path.append_null();
-    }
-
-    /// Finalize the builder into a [`RecordBatch`].
-    ///
-    /// Returns an error only if Arrow buffer construction fails, which
-    /// the builder's column-count and type invariants make unreachable
-    /// under normal use. The `Result` return type preserves room to add
-    /// validation in the future without a breaking API change.
-    pub fn finish(&mut self) -> Result<RecordBatch> {
-        RecordBatch::try_new(
-            Arc::clone(&self.schema),
-            vec![
-                Arc::new(self.catalog_name.finish()),
-                Arc::new(self.schema_name.finish()),
-                Arc::new(self.schema_owner.finish()),
-                Arc::new(self.default_character_set_catalog.finish()),
-                Arc::new(self.default_character_set_schema.finish()),
-                Arc::new(self.default_character_set_name.finish()),
-                Arc::new(self.sql_path.finish()),
-            ],
-        )
-        .map_err(DataFusionError::from)
     }
 }
 
@@ -1231,7 +1148,7 @@ impl PartitionStream for InformationSchemata {
     }
 
     fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
-        let mut builder = self.builder();
+        let mut builder = InformationSchemataBuilder::new();
         let config = self.config.clone();
         Box::pin(RecordBatchStreamAdapter::new(
             Arc::clone(&self.schema),
@@ -1252,21 +1169,9 @@ struct InformationSchemaDfSettings {
 
 impl InformationSchemaDfSettings {
     fn new(config: InformationSchemaConfig) -> Self {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("name", DataType::Utf8, false),
-            Field::new("value", DataType::Utf8, true),
-            Field::new("description", DataType::Utf8, true),
-        ]));
-
-        Self { schema, config }
-    }
-
-    fn builder(&self) -> InformationSchemaDfSettingsBuilder {
-        InformationSchemaDfSettingsBuilder {
-            names: StringBuilder::new(),
-            values: StringBuilder::new(),
-            descriptions: StringBuilder::new(),
-            schema: Arc::clone(&self.schema),
+        Self {
+            schema: Arc::new(df_settings_schema(true)),
+            config,
         }
     }
 }
@@ -1278,7 +1183,7 @@ impl PartitionStream for InformationSchemaDfSettings {
 
     fn execute(&self, ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
         let config = self.config.clone();
-        let mut builder = self.builder();
+        let mut builder = InformationSchemaDfSettingsBuilder::new(true);
         Box::pin(RecordBatchStreamAdapter::new(
             Arc::clone(&self.schema),
             // TODO: Stream this
@@ -1288,38 +1193,12 @@ impl PartitionStream for InformationSchemaDfSettings {
                 config.make_df_settings(
                     ctx.session_config().options(),
                     &runtime_env,
+                    None,
                     &mut builder,
                 );
                 Ok(builder.finish())
             }),
         ))
-    }
-}
-
-struct InformationSchemaDfSettingsBuilder {
-    schema: SchemaRef,
-    names: StringBuilder,
-    values: StringBuilder,
-    descriptions: StringBuilder,
-}
-
-impl InformationSchemaDfSettingsBuilder {
-    fn add_setting(&mut self, entry: ConfigEntry) {
-        self.names.append_value(entry.key);
-        self.values.append_option(entry.value);
-        self.descriptions.append_value(entry.description);
-    }
-
-    fn finish(&mut self) -> RecordBatch {
-        RecordBatch::try_new(
-            Arc::clone(&self.schema),
-            vec![
-                Arc::new(self.names.finish()),
-                Arc::new(self.values.finish()),
-                Arc::new(self.descriptions.finish()),
-            ],
-        )
-        .unwrap()
     }
 }
 
@@ -1331,106 +1210,10 @@ struct InformationSchemaRoutines {
 
 impl InformationSchemaRoutines {
     fn new(config: InformationSchemaConfig) -> Self {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("specific_catalog", DataType::Utf8, false),
-            Field::new("specific_schema", DataType::Utf8, false),
-            Field::new("specific_name", DataType::Utf8, false),
-            Field::new("routine_catalog", DataType::Utf8, false),
-            Field::new("routine_schema", DataType::Utf8, false),
-            Field::new("routine_name", DataType::Utf8, false),
-            Field::new("routine_type", DataType::Utf8, false),
-            Field::new("is_deterministic", DataType::Boolean, true),
-            Field::new("data_type", DataType::Utf8, true),
-            Field::new("function_type", DataType::Utf8, true),
-            Field::new("description", DataType::Utf8, true),
-            Field::new("syntax_example", DataType::Utf8, true),
-        ]));
-
-        Self { schema, config }
-    }
-
-    fn builder(&self) -> InformationSchemaRoutinesBuilder {
-        InformationSchemaRoutinesBuilder {
-            schema: Arc::clone(&self.schema),
-            specific_catalog: StringBuilder::new(),
-            specific_schema: StringBuilder::new(),
-            specific_name: StringBuilder::new(),
-            routine_catalog: StringBuilder::new(),
-            routine_schema: StringBuilder::new(),
-            routine_name: StringBuilder::new(),
-            routine_type: StringBuilder::new(),
-            is_deterministic: BooleanBuilder::new(),
-            data_type: StringBuilder::new(),
-            function_type: StringBuilder::new(),
-            description: StringBuilder::new(),
-            syntax_example: StringBuilder::new(),
+        Self {
+            schema: Arc::new(routines_schema()),
+            config,
         }
-    }
-}
-
-struct InformationSchemaRoutinesBuilder {
-    schema: SchemaRef,
-    specific_catalog: StringBuilder,
-    specific_schema: StringBuilder,
-    specific_name: StringBuilder,
-    routine_catalog: StringBuilder,
-    routine_schema: StringBuilder,
-    routine_name: StringBuilder,
-    routine_type: StringBuilder,
-    is_deterministic: BooleanBuilder,
-    data_type: StringBuilder,
-    function_type: StringBuilder,
-    description: StringBuilder,
-    syntax_example: StringBuilder,
-}
-
-impl InformationSchemaRoutinesBuilder {
-    #[expect(clippy::too_many_arguments)]
-    fn add_routine(
-        &mut self,
-        catalog_name: impl AsRef<str>,
-        schema_name: impl AsRef<str>,
-        routine_name: impl AsRef<str>,
-        routine_type: impl AsRef<str>,
-        is_deterministic: bool,
-        data_type: Option<&impl AsRef<str>>,
-        function_type: impl AsRef<str>,
-        description: Option<impl AsRef<str>>,
-        syntax_example: Option<impl AsRef<str>>,
-    ) {
-        self.specific_catalog.append_value(catalog_name.as_ref());
-        self.specific_schema.append_value(schema_name.as_ref());
-        self.specific_name.append_value(routine_name.as_ref());
-        self.routine_catalog.append_value(catalog_name.as_ref());
-        self.routine_schema.append_value(schema_name.as_ref());
-        self.routine_name.append_value(routine_name.as_ref());
-        self.routine_type.append_value(routine_type.as_ref());
-        self.is_deterministic.append_value(is_deterministic);
-        self.data_type.append_option(data_type.as_ref());
-        self.function_type.append_value(function_type.as_ref());
-        self.description.append_option(description);
-        self.syntax_example.append_option(syntax_example);
-    }
-
-    fn finish(&mut self) -> RecordBatch {
-        RecordBatch::try_new(
-            Arc::clone(&self.schema),
-            vec![
-                Arc::new(self.specific_catalog.finish()),
-                Arc::new(self.specific_schema.finish()),
-                Arc::new(self.specific_name.finish()),
-                Arc::new(self.routine_catalog.finish()),
-                Arc::new(self.routine_schema.finish()),
-                Arc::new(self.routine_name.finish()),
-                Arc::new(self.routine_type.finish()),
-                Arc::new(self.is_deterministic.finish()),
-                Arc::new(self.data_type.finish()),
-                Arc::new(self.function_type.finish()),
-                Arc::new(self.description.finish()),
-                Arc::new(self.syntax_example.finish()),
-            ],
-        )
-        .unwrap()
     }
 }
 
@@ -1441,7 +1224,7 @@ impl PartitionStream for InformationSchemaRoutines {
 
     fn execute(&self, ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
         let config = self.config.clone();
-        let mut builder = self.builder();
+        let mut builder = InformationSchemaRoutinesBuilder::new();
         Box::pin(RecordBatchStreamAdapter::new(
             Arc::clone(&self.schema),
             futures::stream::once(async move {
@@ -1466,103 +1249,10 @@ struct InformationSchemaParameters {
 
 impl InformationSchemaParameters {
     fn new(config: InformationSchemaConfig) -> Self {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("specific_catalog", DataType::Utf8, false),
-            Field::new("specific_schema", DataType::Utf8, false),
-            Field::new("specific_name", DataType::Utf8, false),
-            Field::new("ordinal_position", DataType::UInt64, false),
-            Field::new("parameter_mode", DataType::Utf8, false),
-            Field::new("parameter_name", DataType::Utf8, true),
-            Field::new("data_type", DataType::Utf8, false),
-            Field::new("parameter_default", DataType::Utf8, true),
-            Field::new("is_variadic", DataType::Boolean, false),
-            // `rid` (short for `routine id`) is used to differentiate parameters from different signatures
-            // (It serves as the group-by key when generating the `SHOW FUNCTIONS` query).
-            // For example, the following signatures have different `rid` values:
-            //     - `datetrunc(Utf8, Timestamp(Microsecond, Some("+TZ"))) -> Timestamp(Microsecond, Some("+TZ"))`
-            //     - `datetrunc(Utf8View, Timestamp(Nanosecond, None)) -> Timestamp(Nanosecond, None)`
-            Field::new("rid", DataType::UInt8, false),
-        ]));
-
-        Self { schema, config }
-    }
-
-    fn builder(&self) -> InformationSchemaParametersBuilder {
-        InformationSchemaParametersBuilder {
-            schema: Arc::clone(&self.schema),
-            specific_catalog: StringBuilder::new(),
-            specific_schema: StringBuilder::new(),
-            specific_name: StringBuilder::new(),
-            ordinal_position: UInt64Builder::new(),
-            parameter_mode: StringBuilder::new(),
-            parameter_name: StringBuilder::new(),
-            data_type: StringBuilder::new(),
-            parameter_default: StringBuilder::new(),
-            is_variadic: BooleanBuilder::new(),
-            rid: UInt8Builder::new(),
+        Self {
+            schema: Arc::new(parameters_schema()),
+            config,
         }
-    }
-}
-
-struct InformationSchemaParametersBuilder {
-    schema: SchemaRef,
-    specific_catalog: StringBuilder,
-    specific_schema: StringBuilder,
-    specific_name: StringBuilder,
-    ordinal_position: UInt64Builder,
-    parameter_mode: StringBuilder,
-    parameter_name: StringBuilder,
-    data_type: StringBuilder,
-    parameter_default: StringBuilder,
-    is_variadic: BooleanBuilder,
-    rid: UInt8Builder,
-}
-
-impl InformationSchemaParametersBuilder {
-    #[expect(clippy::too_many_arguments)]
-    fn add_parameter(
-        &mut self,
-        specific_catalog: impl AsRef<str>,
-        specific_schema: impl AsRef<str>,
-        specific_name: impl AsRef<str>,
-        ordinal_position: u64,
-        parameter_mode: impl AsRef<str>,
-        parameter_name: Option<&(impl AsRef<str> + ?Sized)>,
-        data_type: impl AsRef<str>,
-        parameter_default: Option<impl AsRef<str>>,
-        is_variadic: bool,
-        rid: u8,
-    ) {
-        self.specific_catalog
-            .append_value(specific_catalog.as_ref());
-        self.specific_schema.append_value(specific_schema.as_ref());
-        self.specific_name.append_value(specific_name.as_ref());
-        self.ordinal_position.append_value(ordinal_position);
-        self.parameter_mode.append_value(parameter_mode.as_ref());
-        self.parameter_name.append_option(parameter_name.as_ref());
-        self.data_type.append_value(data_type.as_ref());
-        self.parameter_default.append_option(parameter_default);
-        self.is_variadic.append_value(is_variadic);
-        self.rid.append_value(rid);
-    }
-
-    fn finish(&mut self) -> RecordBatch {
-        RecordBatch::try_new(
-            Arc::clone(&self.schema),
-            vec![
-                Arc::new(self.specific_catalog.finish()),
-                Arc::new(self.specific_schema.finish()),
-                Arc::new(self.specific_name.finish()),
-                Arc::new(self.ordinal_position.finish()),
-                Arc::new(self.parameter_mode.finish()),
-                Arc::new(self.parameter_name.finish()),
-                Arc::new(self.data_type.finish()),
-                Arc::new(self.parameter_default.finish()),
-                Arc::new(self.is_variadic.finish()),
-                Arc::new(self.rid.finish()),
-            ],
-        )
-        .unwrap()
     }
 }
 
@@ -1573,7 +1263,7 @@ impl PartitionStream for InformationSchemaParameters {
 
     fn execute(&self, ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
         let config = self.config.clone();
-        let mut builder = self.builder();
+        let mut builder = InformationSchemaParametersBuilder::new();
         Box::pin(RecordBatchStreamAdapter::new(
             Arc::clone(&self.schema),
             futures::stream::once(async move {
@@ -1596,74 +1286,26 @@ mod tests {
     use crate::CatalogProvider;
     use arrow::array::Array;
 
-    #[test]
-    fn schemata_builder_emits_canonical_schema_and_rows() {
-        // Construct via `Default` so the test exercises both `new()` (via
-        // the `Default` impl) and the public column-layout contract.
-        let mut builder = InformationSchemataBuilder::default();
-        builder.add_schemata("cat", "schema_one", Some("alice"));
-        builder.add_schemata("cat", "schema_two", None);
-        let batch = builder.finish().expect("finish should not fail");
-
-        assert_eq!(batch.schema(), schemata_schema());
-        assert_eq!(batch.num_rows(), 2);
-
-        let col = |name: &str| {
-            batch
-                .column_by_name(name)
-                .unwrap_or_else(|| panic!("missing column {name}"))
-        };
-        let string_col = |name: &str| {
-            col(name)
-                .as_any()
-                .downcast_ref::<arrow::array::StringArray>()
-                .unwrap_or_else(|| panic!("{name} should be a StringArray"))
-        };
-
-        let catalog = string_col("catalog_name");
-        assert_eq!(catalog.value(0), "cat");
-        assert_eq!(catalog.value(1), "cat");
-
-        let schema = string_col("schema_name");
-        assert_eq!(schema.value(0), "schema_one");
-        assert_eq!(schema.value(1), "schema_two");
-
-        let owner = string_col("schema_owner");
-        assert_eq!(owner.value(0), "alice");
-        assert!(owner.is_null(1));
-
-        // The three character-set columns and sql_path are unconditionally
-        // null — they exist for SQL-standard column-layout compatibility.
-        for name in [
-            "default_character_set_catalog",
-            "default_character_set_schema",
-            "default_character_set_name",
-            "sql_path",
-        ] {
-            let c = string_col(name);
-            assert!(c.is_null(0), "{name} row 0 should be null");
-            assert!(c.is_null(1), "{name} row 1 should be null");
-        }
-    }
-
     #[tokio::test]
     async fn make_tables_uses_table_type() {
         let config = InformationSchemaConfig {
             system_catalog_name: None,
+            information_schema: true,
             catalog_list: Arc::new(Fixture),
             table_functions: HashMap::new(),
         };
-        let mut builder = InformationSchemaTablesBuilder {
-            catalog_names: StringBuilder::new(),
-            schema_names: StringBuilder::new(),
-            table_names: StringBuilder::new(),
-            table_types: StringBuilder::new(),
-            schema: Arc::new(Schema::empty()),
-        };
+        let mut builder = InformationSchemaTablesBuilder::new();
 
         assert!(config.make_tables(&mut builder).await.is_ok());
 
-        assert_eq!("BASE TABLE", builder.table_types.finish().value(0));
+        let batch = builder.finish();
+        let table_types = batch
+            .column_by_name("table_type")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!("BASE TABLE", table_types.value(0));
     }
 
     #[derive(Debug)]

@@ -21,8 +21,8 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::{
-    Aggregate, AsOfJoin, DescribeTable, Distinct, DistinctOn, DmlStatement, Expr, Filter,
-    Join, Limit, LogicalPlan, Partitioning, Projection, RecursiveQuery, Repartition,
+    Aggregate, AsOfJoin, Distinct, DistinctOn, DmlStatement, Expr, Filter, Join, Limit,
+    LogicalPlan, Partitioning, Projection, RecursiveQuery, Repartition, Show, ShowKind,
     Sort, Subquery, SubqueryAlias, TableProviderFilterPushDown, TableScan, Unnest,
     Values, Window, expr_vec_fmt,
 };
@@ -30,6 +30,7 @@ use crate::{
 use crate::dml::CopyTo;
 use arrow::datatypes::Schema;
 use datafusion_common::display::GraphvizBuilder;
+use datafusion_common::information_schema::ColumnsDetail;
 use datafusion_common::tree_node::{TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::{Column, DataFusionError, internal_datafusion_err};
 use serde_json::json;
@@ -634,11 +635,59 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     "Detail": format!("{:?}", e.node)
                 })
             }
-            LogicalPlan::DescribeTable(DescribeTable { .. }) => {
-                json!({
-                    "Node Type": "DescribeTable"
-                })
-            }
+            LogicalPlan::Show(Show { kind, .. }) => match kind {
+                ShowKind::Describe { .. } => {
+                    json!({
+                        "Node Type": "Describe"
+                    })
+                }
+                ShowKind::Tables => {
+                    json!({
+                        "Node Type": "ShowTables"
+                    })
+                }
+                ShowKind::Columns {
+                    table_ref,
+                    detail: ColumnsDetail::Describe,
+                } => {
+                    json!({
+                        "Node Type": "DescribeTable",
+                        "Relation Name": table_ref.table()
+                    })
+                }
+                ShowKind::Columns { table_ref, detail } => {
+                    json!({
+                        "Node Type": "ShowColumns",
+                        "Relation Name": table_ref.table(),
+                        "Detail": format!("{detail:?}")
+                    })
+                }
+                ShowKind::CreateTable { table_ref } => {
+                    json!({
+                        "Node Type": "ShowCreateTable",
+                        "Relation Name": table_ref.table()
+                    })
+                }
+                ShowKind::Variables { name, verbose } => {
+                    let mut object = json!({
+                        "Node Type": "ShowVariables",
+                        "Verbose": verbose
+                    });
+                    if let Some(name) = name {
+                        object["Variable"] = serde_json::Value::String(name.clone());
+                    }
+                    object
+                }
+                ShowKind::Functions { filter } => {
+                    let mut object = json!({
+                        "Node Type": "ShowFunctions"
+                    });
+                    if let Some(filter) = filter {
+                        object["Filter"] = serde_json::Value::String(filter.clone());
+                    }
+                    object
+                }
+            },
             LogicalPlan::Unnest(Unnest {
                 input: plan,
                 list_type_columns: list_col_indices,

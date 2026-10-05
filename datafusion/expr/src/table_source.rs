@@ -20,6 +20,7 @@
 use crate::{Expr, LogicalPlan};
 
 use arrow::datatypes::SchemaRef;
+pub use datafusion_common::TableType;
 use datafusion_common::{Constraints, Result};
 
 use std::{any::Any, borrow::Cow};
@@ -48,27 +49,6 @@ pub enum TableProviderFilterPushDown {
     ///
     /// In this case, DataFusion will not apply additional filtering.
     Exact,
-}
-
-/// Indicates the type of this table for metadata/catalog purposes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TableType {
-    /// An ordinary physical table.
-    Base,
-    /// A non-materialized table that itself uses a query internally to provide data.
-    View,
-    /// A transient table.
-    Temporary,
-}
-
-impl std::fmt::Display for TableType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TableType::Base => write!(f, "Base"),
-            TableType::View => write!(f, "View"),
-            TableType::Temporary => write!(f, "Temporary"),
-        }
-    }
 }
 
 /// Planning time information about a table.

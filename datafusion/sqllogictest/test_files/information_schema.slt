@@ -23,8 +23,12 @@ SELECT * from information_schema.tables
 statement error DataFusion error: Error during planning: table 'datafusion.information_schema.schemata' not found
 SELECT * from information_schema.schemata
 
-statement error DataFusion error: Error during planning: SHOW \[VARIABLE\] is not supported unless information_schema is enabled
-show all
+# SHOW resolves its content directly (like DESCRIBE/SHOW COLUMNS), so it
+# works regardless of whether information_schema is enabled.
+query TT
+SHOW datafusion.catalog.information_schema
+----
+datafusion.catalog.information_schema false
 
 # Turn it on
 
@@ -640,12 +644,17 @@ datafusion information_schema views VIEW
 
 
 # information_schema_show_tables_no_information_schema
+#
+# SHOW TABLES reuses the information_schema.tables machinery directly, so it
+# works regardless of whether information_schema is enabled; it just won't
+# list the information_schema tables themselves when disabled.
 
 statement ok
 set datafusion.catalog.information_schema = false;
 
-statement error Error during planning: SHOW TABLES is not supported unless information_schema is enabled
+query TTTT rowsort
 SHOW TABLES
+----
 
 statement ok
 set datafusion.catalog.information_schema = true;
@@ -683,12 +692,17 @@ SHOW EXTENDED COLUMNS FROM t;
 datafusion public t i 0 NULL NO Int32 NULL NULL 32 2 NULL NULL NULL
 
 # information_schema_show_columns_no_information_schema
+#
+# SHOW COLUMNS resolves the table directly (like DESCRIBE), so it works
+# regardless of whether information_schema is enabled.
 
 statement ok
 set datafusion.catalog.information_schema = false;
 
-statement error Error during planning: SHOW COLUMNS is not supported unless information_schema is enabled
+query TTTTTT
 SHOW COLUMNS FROM t
+----
+datafusion public t i Int32 NO
 
 statement ok
 set datafusion.catalog.information_schema = true;
@@ -719,16 +733,25 @@ SHOW SOMETHING_UNKNOWN;
 statement ok
 DROP TABLE t;
 
-# show_unsupported_when_information_schema_off
+# show_variable_when_information_schema_off
+#
+# SHOW resolves its content directly, so it still works (and still rejects
+# unknown variable names) regardless of whether information_schema is
+# enabled.
 
 statement ok
 set datafusion.catalog.information_schema = false;
 
-statement error Error during planning: SHOW \[VARIABLE\] is not supported unless information_schema is enabled
+statement error DataFusion error: Error during planning: 'something' is not a variable which can be viewed with 'SHOW'
 SHOW SOMETHING
 
-statement error Error during planning: SHOW \[VARIABLE\] is not supported unless information_schema is enabled
+statement error DataFusion error: Error during planning: 'something' is not a variable which can be viewed with 'SHOW'
 SHOW SOMETHING VERBOSE
+
+query TT
+SHOW datafusion.catalog.information_schema
+----
+datafusion.catalog.information_schema false
 
 statement ok
 set datafusion.catalog.information_schema = true;

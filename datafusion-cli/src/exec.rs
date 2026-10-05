@@ -373,9 +373,7 @@ impl AdjustedPrintOptions {
         // all rows
         if matches!(
             plan,
-            LogicalPlan::Explain(_)
-                | LogicalPlan::DescribeTable(_)
-                | LogicalPlan::Analyze(_)
+            LogicalPlan::Explain(_) | LogicalPlan::Show(_) | LogicalPlan::Analyze(_)
         ) {
             self.inner.maxrows = MaxRows::Unlimited;
         }

@@ -19,8 +19,12 @@
 statement error DataFusion error: Error during planning: table 'datafusion.information_schema.tables' not found
 SELECT * from information_schema.tables
 
-statement error DataFusion error: Error during planning: SHOW \[VARIABLE\] is not supported unless information_schema is enabled
-show all
+# SHOW resolves its content directly (like DESCRIBE/SHOW COLUMNS), so it
+# works regardless of whether information_schema is enabled.
+query TT
+SHOW datafusion.catalog.information_schema
+----
+datafusion.catalog.information_schema false
 
 # Turn it on
 

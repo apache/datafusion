@@ -33,8 +33,8 @@ use crate::expr_rewriter::{
 use crate::logical_plan::{
     Aggregate, Analyze, AsOfJoin, AsOfMatch, Distinct, DistinctOn, EmptyRelation,
     Explain, Filter, Join, JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning,
-    PlanType, Prepare, Projection, Repartition, Sort, SubqueryAlias, TableScanBuilder,
-    Union, Unnest, Values, Window,
+    PlanType, Prepare, Projection, Repartition, Show, ShowKind, Sort, SubqueryAlias,
+    TableScanBuilder, Union, Unnest, Values, Window,
 };
 use crate::select_expr::SelectExpr;
 use crate::utils::{
@@ -54,6 +54,7 @@ use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
+use datafusion_common::information_schema::ColumnsDetail;
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
     Column, Constraints, DFSchema, DFSchemaRef, FunctionalDependencies, NullEquality,
@@ -171,6 +172,72 @@ impl LogicalPlanBuilder {
             produce_one_row,
             schema: DFSchemaRef::new(DFSchema::empty()),
         }))
+    }
+
+    /// Create a `DESCRIBE <query>` plan, describing the schema of a query (or
+    /// other statement) that isn't backed by any catalog table.
+    pub fn describe(schema: Arc<Schema>) -> Result<Self> {
+        Self::show(
+            ShowKind::Describe { schema },
+            datafusion_common::information_schema::columns_schema(
+                ColumnsDetail::Describe,
+            ),
+        )
+    }
+
+    /// Create a `SHOW TABLES` plan.
+    pub fn show_tables() -> Result<Self> {
+        Self::show(
+            ShowKind::Tables,
+            datafusion_common::information_schema::tables_schema(),
+        )
+    }
+
+    /// Create a `DESCRIBE <table>` / `SHOW COLUMNS FROM <table>` plan.
+    /// `SHOW FULL COLUMNS` / `SHOW EXTENDED COLUMNS` are treated the same and
+    /// should pass [`ColumnsDetail::Full`]; `DESCRIBE <table>` should pass
+    /// [`ColumnsDetail::Describe`].
+    pub fn show_columns(
+        table_ref: TableReference,
+        detail: ColumnsDetail,
+    ) -> Result<Self> {
+        Self::show(
+            ShowKind::Columns { table_ref, detail },
+            datafusion_common::information_schema::columns_schema(detail),
+        )
+    }
+
+    /// Create a `SHOW CREATE TABLE <table>` plan.
+    pub fn show_create_table(table_ref: TableReference) -> Result<Self> {
+        Self::show(
+            ShowKind::CreateTable { table_ref },
+            datafusion_common::information_schema::views_schema(),
+        )
+    }
+
+    /// Create a `SHOW <variable>` / `SHOW ALL` plan. `name` is `None` for
+    /// `SHOW ALL`.
+    pub fn show_variables(name: Option<String>, verbose: bool) -> Result<Self> {
+        Self::show(
+            ShowKind::Variables { name, verbose },
+            datafusion_common::information_schema::df_settings_schema(verbose),
+        )
+    }
+
+    /// Create a `SHOW FUNCTIONS [LIKE <pattern>]` plan.
+    pub fn show_functions(filter: Option<String>) -> Result<Self> {
+        Self::show(
+            ShowKind::Functions { filter },
+            datafusion_common::information_schema::show_functions_schema(),
+        )
+    }
+
+    /// Shared helper for the `SHOW`-class factory methods above.
+    fn show(kind: ShowKind, output_schema: Schema) -> Result<Self> {
+        Ok(Self::new(LogicalPlan::Show(Show {
+            kind,
+            output_schema: Arc::new(DFSchema::try_from(output_schema)?),
+        })))
     }
 
     /// Convert a regular plan into a recursive query.

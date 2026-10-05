@@ -33,6 +33,7 @@ mod param_value;
 mod partitioning;
 mod schema_reference;
 mod table_reference;
+mod table_type;
 mod unnest;
 
 pub mod alias;
@@ -49,6 +50,7 @@ pub mod file_options;
 pub mod format;
 pub mod hash_utils;
 pub mod heap_size;
+pub mod information_schema;
 pub mod instant;
 pub mod metadata;
 pub mod nested_struct;
@@ -99,6 +101,7 @@ pub use schema_reference::SchemaReference;
 pub use spans::{Location, Span, Spans};
 pub use stats::{ColumnStatistics, Statistics};
 pub use table_reference::{ResolvedTableReference, TableReference};
+pub use table_type::TableType;
 pub use unnest::{NullHandling, RecursionUnnestOption, UnnestOptions};
 pub use utils::project_schema;
 

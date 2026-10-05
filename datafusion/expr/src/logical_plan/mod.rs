@@ -42,10 +42,10 @@ pub use dml::{
     WriteOp,
 };
 pub use plan::{
-    Aggregate, Analyze, AsOfJoin, AsOfMatch, ColumnUnnestList, DescribeTable, Distinct,
-    DistinctOn, EmptyRelation, Explain, ExplainOption, Extension, FetchType, Filter,
-    Join, JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType,
-    Projection, RangePartitioning, RecursiveQuery, Repartition, SkipType, Sort,
+    Aggregate, Analyze, AsOfJoin, AsOfMatch, ColumnUnnestList, Distinct, DistinctOn,
+    EmptyRelation, Explain, ExplainOption, Extension, FetchType, Filter, Join,
+    JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Projection,
+    RangePartitioning, RecursiveQuery, Repartition, Show, ShowKind, SkipType, Sort,
     StringifiedPlan, Subquery, SubqueryAlias, TableScan, TableScanBuilder,
     ToStringifiedPlan, Union, Unnest, Values, Window, projection_schema,
 };

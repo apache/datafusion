@@ -2353,8 +2353,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::DescribeTable(_) => Err(proto_error(
-                "LogicalPlan serde is not yet implemented for DescribeTable",
+            LogicalPlan::Show(_) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for Show",
             )),
             LogicalPlan::RecursiveQuery(recursive) => {
                 let static_term = LogicalPlanNode::try_from_logical_plan(

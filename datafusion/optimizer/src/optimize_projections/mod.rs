@@ -365,9 +365,7 @@ fn optimize_projections(
                     .collect()
             }
         }
-        LogicalPlan::EmptyRelation(_)
-        | LogicalPlan::Values(_)
-        | LogicalPlan::DescribeTable(_) => {
+        LogicalPlan::EmptyRelation(_) | LogicalPlan::Values(_) | LogicalPlan::Show(_) => {
             // These operators have no inputs, so stop the optimization process.
             return Ok(Transformed::no(plan));
         }
