@@ -362,10 +362,7 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
         let dict_keys = dict.keys();
         let dict_values = dict.values();
 
-        let cached = self
-            .cached_values
-            .as_ref()
-            .is_some_and(|c| Arc::ptr_eq(c, dict_values));
+        let cached = self.is_cached(dict_values);
         if !cached && rhs_rows.len() < dict_values.len() {
             self.equal_to_per_row(
                 lhs_rows,
@@ -1196,9 +1193,7 @@ mod tests {
         col.vectorized_equal_to(&[group_a], &only_a, &[0], &mut buf);
         assert_eq!(bool_vec(&buf), vec![true]);
         assert!(
-            col.cached_values
-                .as_ref()
-                .is_some_and(|c| Arc::ptr_eq(c, &old_values)),
+            col.is_cached(&old_values),
             "fallback must leave the cache on the previous values array"
         );
     }
