@@ -4985,7 +4985,7 @@ mod tests {
             "{label}: store.batches_size drifted"
         );
 
-        // 4. The bound `compact_store` exists to enforce. Without it, what stays
+        // 4. The bound compaction exists to enforce. Without it, what stays
         //    pinned tracks the *input* rather than `partitions × K`.
         assert!(
             store.total_rows <= live_slots * STORE_COMPACTION_RATIO,
