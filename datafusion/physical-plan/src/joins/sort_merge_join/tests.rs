@@ -728,6 +728,224 @@ async fn join_chain_reuses_memory_released_by_completed_child() -> Result<()> {
     Ok(())
 }
 
+/// A 2 MB pool with spilling disabled, so a reservation a join fails to release shows up in
+/// `reserved()` or as an allocation failure rather than as a spill.
+fn small_pool_no_spill_ctx() -> Result<Arc<TaskContext>> {
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(2_000_000, 1.0)
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
+        )
+        .build_arc()?;
+    Ok(Arc::new(TaskContext::default().with_runtime(runtime)))
+}
+
+/// Drains `stream`, returning its row count and the pool's reservation while each output
+/// batch is in hand, before the stream ends and is dropped.
+async fn rows_and_reserved_per_batch(
+    mut stream: SendableRecordBatchStream,
+    ctx: &TaskContext,
+) -> Result<(usize, Vec<usize>)> {
+    let mut rows = 0;
+    let mut reserved = vec![];
+    while let Some(batch) = stream.next().await {
+        rows += batch?.num_rows();
+        reserved.push(ctx.memory_pool().reserved());
+    }
+    Ok((rows, reserved))
+}
+
+/// A semi/anti/mark join whose filter (`c1 < c2`) buffers a large inner key group (32 x 4096
+/// rows with key 2) and rejects all of it. The outer row with key 1 passes against the one
+/// inner row with key 1, so every join type has output with `a1 = 1`. Without
+/// `inner_runs_out_first` the outer side ends inside the large group. With it, 3 x 4096
+/// outer rows with key 3 and `a1 = 2` follow, which the join drains after the inner side
+/// ends, emitting a full output batch before the final one.
+fn bitwise_large_inner_key_group_join(
+    inner_runs_out_first: bool,
+    join_type: JoinType,
+) -> Result<SortMergeJoinExec> {
+    let mut outer = vec![build_table_i32(
+        ("a1", &vec![1, 1]),
+        ("b1", &vec![1, 2]),
+        ("c1", &vec![0, 9]),
+    )];
+    if inner_runs_out_first {
+        outer.extend((0..3).map(|_| {
+            build_table_i32(
+                ("a1", &vec![2; 4096]),
+                ("b1", &vec![3; 4096]),
+                ("c1", &vec![9; 4096]),
+            )
+        }));
+    }
+    let left = build_table_from_batches(outer);
+    let right = build_table_from_batches(
+        std::iter::once(build_table_i32(
+            ("a2", &vec![1]),
+            ("b1", &vec![1]),
+            ("c2", &vec![1]),
+        ))
+        .chain((0..32).map(|_| {
+            build_table_i32(
+                ("a2", &vec![2; 4096]),
+                ("b1", &vec![2; 4096]),
+                ("c2", &vec![2; 4096]),
+            )
+        }))
+        .collect(),
+    );
+    let on = on_b1(&left, &right)?;
+    let filter = build_c1_lt_c2_filter(&left.schema(), &right.schema());
+    join_with_filter(
+        left,
+        right,
+        on,
+        filter,
+        join_type,
+        vec![SortOptions::default()],
+        NullEquality::NullEqualsNothing,
+    )
+}
+
+/// Output rows with `a1 = 1`: semi keeps the outer row with key 1, anti the one with key 2,
+/// mark both.
+fn bitwise_large_inner_key_group_a1_rows(join_type: JoinType) -> usize {
+    if join_type == LeftMark { 2 } else { 1 }
+}
+
+/// Once either input runs out, the join must give the last inner key group's reservation back
+/// before it emits anything else, not when the stream is dropped.
+#[tokio::test]
+async fn bitwise_join_releases_inner_key_group_reservation_before_output() -> Result<()> {
+    for inner_runs_out_first in [false, true] {
+        for join_type in [LeftSemi, LeftAnti, LeftMark] {
+            let join =
+                bitwise_large_inner_key_group_join(inner_runs_out_first, join_type)?;
+            let ctx = small_pool_no_spill_ctx()?;
+            let stream = join.execute(0, Arc::clone(&ctx))?;
+            let (rows, reserved) = rows_and_reserved_per_batch(stream, &ctx).await?;
+            let drained = if inner_runs_out_first && join_type != LeftSemi {
+                3 * 4096
+            } else {
+                0
+            };
+            let case =
+                format!("{join_type:?}, inner_runs_out_first={inner_runs_out_first}");
+            assert_eq!(
+                rows,
+                bitwise_large_inner_key_group_a1_rows(join_type) + drained,
+                "{case}"
+            );
+            assert!(
+                reserved.iter().all(|&r| r == 0),
+                "{case}: reservation held while emitting output: {reserved:?}"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// The parent join consumes the child's output while the child stream is still alive, with
+/// spilling disabled, so an inner key group reservation the child failed to release surfaces
+/// as an allocation failure in the parent.
+#[tokio::test]
+async fn bitwise_join_chain_reuses_memory_released_by_completed_child() -> Result<()> {
+    for inner_runs_out_first in [false, true] {
+        for join_type in [LeftSemi, LeftAnti, LeftMark] {
+            let child: Arc<dyn ExecutionPlan> = Arc::new(
+                bitwise_large_inner_key_group_join(inner_runs_out_first, join_type)?,
+            );
+            let parent_right = build_table_from_batches(
+                (0..10)
+                    .map(|_| {
+                        build_table_i32(
+                            ("a3", &vec![1; 4096]),
+                            ("b3", &vec![1; 4096]),
+                            ("c3", &vec![1; 4096]),
+                        )
+                    })
+                    .collect(),
+            );
+            let on = vec![(
+                Arc::new(Column::new("a1", 0)) as _,
+                Arc::new(Column::new("a3", 0)) as _,
+            )];
+            let parent = join(child, parent_right, on, Inner)?;
+            let case =
+                format!("{join_type:?}, inner_runs_out_first={inner_runs_out_first}");
+            let batches = common::collect(parent.execute(0, small_pool_no_spill_ctx()?)?)
+                .await
+                .map_err(|e| e.context(case.clone()))?;
+            assert_eq!(
+                batches.iter().map(|b| b.num_rows()).sum::<usize>(),
+                bitwise_large_inner_key_group_a1_rows(join_type) * 40_960,
+                "{case}"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// A sorted input that sorts into two batches: key 1 first, then 16,383 rows with key 5.
+fn sorted_key_1_then_key_5(names: [&str; 3]) -> Result<Arc<dyn ExecutionPlan>> {
+    let mut keys = vec![5; 16_384];
+    keys[16_383] = 1;
+    let input = build_table((names[0], &keys), (names[1], &keys), (names[2], &keys));
+    let ordering = LexOrdering::new(vec![PhysicalSortExpr::new_default(Arc::new(
+        Column::new_with_schema("b1", &input.schema())?,
+    ))])
+    .unwrap();
+    Ok(Arc::new(SortExec::new(ordering, input)))
+}
+
+/// A sorted input keeps its unread sorted batches reserved until it is read to the end or
+/// dropped. Once the join cannot use an input's remaining rows, it must drop that input
+/// before its final batch: the outer input of a semi join whose inner side ran out, and the
+/// inner input of any join whose outer side ran out.
+#[tokio::test]
+async fn bitwise_join_releases_unread_input_before_final_batch() -> Result<()> {
+    let one_row = build_table(("a2", &vec![1]), ("b1", &vec![1]), ("c2", &vec![1]));
+    let two_rows = build_table(
+        ("a1", &vec![0, 1]),
+        ("b1", &vec![0, 1]),
+        ("c1", &vec![0, 1]),
+    );
+    let cases = [
+        (
+            "inner runs out first",
+            sorted_key_1_then_key_5(["a1", "b1", "c1"])?,
+            one_row,
+            [1, 16_383, 16_384],
+        ),
+        (
+            "outer runs out first",
+            two_rows,
+            sorted_key_1_then_key_5(["a2", "b1", "c2"])?,
+            [1, 1, 2],
+        ),
+    ];
+    for (shape, left, right, semi_anti_mark_rows) in cases {
+        for (join_type, expected_rows) in [LeftSemi, LeftAnti, LeftMark]
+            .into_iter()
+            .zip(semi_anti_mark_rows)
+        {
+            let on = on_b1(&left, &right)?;
+            let join = join(Arc::clone(&left), Arc::clone(&right), on, join_type)?;
+            let ctx = small_pool_no_spill_ctx()?;
+            let stream = join.execute(0, Arc::clone(&ctx))?;
+            let (rows, reserved) = rows_and_reserved_per_batch(stream, &ctx).await?;
+            assert_eq!(rows, expected_rows, "{join_type:?}, {shape}");
+            assert_eq!(
+                reserved.last(),
+                Some(&0),
+                "{join_type:?}, {shape}: unread input held at the final batch"
+            );
+        }
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn join_inner_one() -> Result<()> {
     let left = build_table(
