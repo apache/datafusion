@@ -21,9 +21,14 @@
 
 DataFusion has the following policy for AI-assisted PRs:
 
-- We welcome AI-assisted PRs from anyone. We do not welcome unreviewed "AI dumps" (defined below).
-- The PR author should have personally read the entire PR they submit and **understand the core ideas end-to-end**. Authors should be ready to justify and help reviewers understand the design and code during review.
-- **Call out unknowns and assumptions**. It's okay to not fully understand some bits of AI-generated code. Please point these cases out so we can work together to clear up any concerns.
+- We welcome AI-assisted PRs from anyone. We do not welcome unreviewed "AI 
+  dumps" (defined below).
+- The PR author should have personally read the entire PR they submit and 
+  **understand the core ideas end-to-end**. Authors should be ready to justify 
+  and help reviewers understand the design and code during review.
+- **Call out unknowns and assumptions**. It's okay to not fully understand 
+  some bits of AI-generated code. Please point these cases out so we can work 
+  together to clear up any concerns.
 
 While "understand the core ideas" is partly subjective, it means more than being
 able to follow the diff textually. We expect the PR author to take an active
@@ -101,8 +106,9 @@ own words so that each comment makes a clear, specific request.
 ## Better ways to contribute than an “AI dump”
 
 It's recommended to write a high-quality issue with a clear problem statement
-and a minimal, reproducible example. The reproducer should focus on the end-user-visible
-behavior rather than explaining the details of some code defect.
+and a minimal, reproducible example. The reproducer should focus on the
+end-user-visible behavior rather than explaining the details of some code
+defect.
 
 This will make it easier for others to contribute and for reviewers to
 understand the problem being addressed.
