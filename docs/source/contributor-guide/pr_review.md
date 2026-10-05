@@ -238,7 +238,7 @@ so it is clear what was verified and what was not.
 
 AI tools can help you review, but please read and edit their output before
 posting it so each comment is a clear, specific request in your own words. See
-[AI-assisted reviews](index.md#ai-assisted-reviews) in the contributor guide.
+[AI-assisted reviews](ai-policy.md#ai-assisted-reviews) in the contributor guide.
 
 ### Invite Additional Committers on Core Changes
 
