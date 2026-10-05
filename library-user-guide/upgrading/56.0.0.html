@@ -778,6 +778,38 @@ to target 128 MiB output files in Rust:</p>
 </pre></div>
 </div>
 </section>
+<section id="new-field-enable-rle-to-dictionary-added-to-parquetoptions">
+<h3>New field <code class="docutils literal notranslate"><span class="pre">enable_rle_to_dictionary</span></code> added to <code class="docutils literal notranslate"><span class="pre">ParquetOptions</span></code><a class="headerlink" href="#new-field-enable-rle-to-dictionary-added-to-parquetoptions" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">ParquetOptions</span></code> gained a new field <code class="docutils literal notranslate"><span class="pre">enable_rle_to_dictionary:</span> <span class="pre">bool</span></code> (default
+<code class="docutils literal notranslate"><span class="pre">false</span></code>). It controls whether top-level string and binary Parquet columns with
+dictionary pages are read as <code class="docutils literal notranslate"><span class="pre">Dictionary&lt;Int32,</span> <span class="pre">Utf8&gt;</span></code> / <code class="docutils literal notranslate"><span class="pre">Dictionary&lt;Int32,</span> <span class="pre">Binary&gt;</span></code> instead of their plain type.</p>
+<p><code class="docutils literal notranslate"><span class="pre">ParquetOptions</span></code> is a public struct without <code class="docutils literal notranslate"><span class="pre">#[non_exhaustive]</span></code>, so downstream
+crates that construct it with an exhaustive struct literal will fail to compile
+with <code class="docutils literal notranslate"><span class="pre">E0063:</span> <span class="pre">missing</span> <span class="pre">field</span> <span class="pre">'enable_rle_to_dictionary'</span></code>.</p>
+<p><strong>Migration guide:</strong></p>
+<p>Add <code class="docutils literal notranslate"><span class="pre">enable_rle_to_dictionary:</span> <span class="pre">false</span></code> to any exhaustive <code class="docutils literal notranslate"><span class="pre">ParquetOptions</span> <span class="pre">{</span> <span class="pre">..</span> <span class="pre">}</span></code>
+literal, or use <code class="docutils literal notranslate"><span class="pre">..Default::default()</span></code> to future-proof against further additions:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
+<span class="n">ParquetOptions</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">enable_page_index</span><span class="p">:</span><span class="w"> </span><span class="nc">true</span><span class="p">,</span>
+<span class="w">    </span><span class="c1">// ... every other field ...</span>
+<span class="p">}</span>
+
+<span class="c1">// After: set it explicitly</span>
+<span class="n">ParquetOptions</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">enable_page_index</span><span class="p">:</span><span class="w"> </span><span class="nc">true</span><span class="p">,</span>
+<span class="w">    </span><span class="n">enable_rle_to_dictionary</span><span class="p">:</span><span class="w"> </span><span class="nc">false</span><span class="p">,</span>
+<span class="w">    </span><span class="c1">// ... every other field ...</span>
+<span class="p">}</span>
+
+<span class="c1">// After: or let remaining fields come from Default</span>
+<span class="n">ParquetOptions</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">enable_page_index</span><span class="p">:</span><span class="w"> </span><span class="nc">true</span><span class="p">,</span>
+<span class="w">    </span><span class="o">..</span><span class="nb">Default</span><span class="p">::</span><span class="n">default</span><span class="p">()</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
 <section id="datafusion-optimizer-use-statistics-registry-is-deprecated-and-ignored">
 <h3><code class="docutils literal notranslate"><span class="pre">datafusion.optimizer.use_statistics_registry</span></code> is deprecated and ignored<a class="headerlink" href="#datafusion-optimizer-use-statistics-registry-is-deprecated-and-ignored" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">datafusion.optimizer.use_statistics_registry</span></code> config flag is deprecated and
@@ -1288,6 +1320,7 @@ the API breaks.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionoptions-has-a-new-enable-nlj-coordinated-fallback-field"><code class="docutils literal notranslate"><span class="pre">ExecutionOptions</span></code> has a new <code class="docutils literal notranslate"><span class="pre">enable_nlj_coordinated_fallback</span></code> field</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionoptions-time-zone-is-now-a-validated-configtimezone"><code class="docutils literal notranslate"><span class="pre">ExecutionOptions::time_zone</span></code> is now a validated <code class="docutils literal notranslate"><span class="pre">ConfigTimeZone</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionoptions-has-a-new-soft-max-bytes-per-output-file-field"><code class="docutils literal notranslate"><span class="pre">ExecutionOptions</span></code> has a new <code class="docutils literal notranslate"><span class="pre">soft_max_bytes_per_output_file</span></code> field</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#new-field-enable-rle-to-dictionary-added-to-parquetoptions">New field <code class="docutils literal notranslate"><span class="pre">enable_rle_to_dictionary</span></code> added to <code class="docutils literal notranslate"><span class="pre">ParquetOptions</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-optimizer-use-statistics-registry-is-deprecated-and-ignored"><code class="docutils literal notranslate"><span class="pre">datafusion.optimizer.use_statistics_registry</span></code> is deprecated and ignored</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#generated-protobuf-jsonwriteroptions-gained-a-compression-level-field">Generated protobuf <code class="docutils literal notranslate"><span class="pre">JsonWriterOptions</span></code> gained a <code class="docutils literal notranslate"><span class="pre">compression_level</span></code> field</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#generated-protobuf-parquet-structs-gained-state-fields">Generated protobuf Parquet structs gained state fields</a></li>
