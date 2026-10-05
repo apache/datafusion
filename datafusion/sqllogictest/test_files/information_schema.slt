@@ -844,8 +844,6 @@ string_agg String AGGREGATE
 query TTTTTTTBTTTT rowsort
 select * from information_schema.routines where routine_name = 'date_trunc' OR routine_name = 'string_agg' OR routine_name = 'rank' ORDER BY routine_name
 ----
-datafusion public date_trunc datafusion public date_trunc FUNCTION true Date SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
-datafusion public date_trunc datafusion public date_trunc FUNCTION true String SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
 datafusion public date_trunc datafusion public date_trunc FUNCTION true Time(ns) SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
 datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(ns) SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
 datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(ns, "+TZ") SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
@@ -861,12 +859,12 @@ false
 query TTTITTTTBI
 select * from information_schema.parameters where specific_name = 'date_trunc' OR specific_name = 'string_agg' OR specific_name = 'rank' ORDER BY specific_name, rid, data_type;
 ----
-datafusion public date_trunc 1 OUT NULL Date NULL false 0
 datafusion public date_trunc 2 IN expression Date NULL false 0
 datafusion public date_trunc 1 IN precision String NULL false 0
+datafusion public date_trunc 1 OUT NULL Timestamp(ns) NULL false 0
 datafusion public date_trunc 1 IN precision String NULL false 1
 datafusion public date_trunc 2 IN expression String NULL false 1
-datafusion public date_trunc 1 OUT NULL String NULL false 1
+datafusion public date_trunc 1 OUT NULL Timestamp(ns) NULL false 1
 datafusion public date_trunc 1 IN precision String NULL false 2
 datafusion public date_trunc 2 IN expression Time(ns) NULL false 2
 datafusion public date_trunc 1 OUT NULL Time(ns) NULL false 2
@@ -894,9 +892,9 @@ repeat String 1 OUT 0
 query TT??TTT rowsort
 show functions like 'date_trunc';
 ----
-date_trunc Date [precision, expression] [String, Date] SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
-date_trunc String [precision, expression] [String, String] SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
 date_trunc Time(ns) [precision, expression] [String, Time(ns)] SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(ns) [precision, expression] [String, Date] SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(ns) [precision, expression] [String, String] SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
 date_trunc Timestamp(ns) [precision, expression] [String, Timestamp(ns)] SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
 date_trunc Timestamp(ns, "+TZ") [precision, expression] [String, Timestamp(ns, "+TZ")] SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
 
