@@ -32,7 +32,9 @@ use datafusion::datasource::listing::{
 use datafusion::execution::options::{ArrowReadOptions, JsonReadOptions};
 use datafusion::optimizer::Optimizer;
 use datafusion::optimizer::optimize_unions::OptimizeUnions;
-use datafusion_common::parquet_config::DFParquetWriterVersion;
+use datafusion_common::parquet_config::{
+    DFParquetWriterVersion, RowGroupRangeAssignment,
+};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_functions_aggregate::sum::sum_distinct;
 use prost::Message;
@@ -1165,6 +1167,7 @@ async fn roundtrip_logical_plan_copy_to_parquet() -> Result<()> {
 
     parquet_format.global.allow_single_file_parallelism = false;
     parquet_format.global.created_by = "test".to_string();
+    parquet_format.global.row_group_range_assignment = RowGroupRangeAssignment::Midpoint;
 
     let file_type = format_as_file_type(Arc::new(
         ParquetFormatFactory::new_with_options(parquet_format.clone()),
@@ -1207,6 +1210,10 @@ async fn roundtrip_logical_plan_copy_to_parquet() -> Result<()> {
             assert_eq!(parquet_config.key_value_metadata, key_value_metadata);
             assert!(!parquet_config.global.allow_single_file_parallelism);
             assert_eq!(parquet_config.global.created_by, "test".to_string());
+            assert_eq!(
+                parquet_config.global.row_group_range_assignment,
+                RowGroupRangeAssignment::Midpoint
+            );
         }
         _ => panic!(),
     }
