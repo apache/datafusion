@@ -1,0 +1,50 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+SET datafusion.optimizer.enable_piecewise_merge_join = true;
+
+statement ok
+CREATE TABLE l AS SELECT * FROM (VALUES (make_array(5), 'l5')) t(a, p);
+
+statement ok
+CREATE TABLE r AS SELECT * FROM (VALUES (make_array(arrow_cast(NULL, 'Int64')), 'rnull'), (make_array(7), 'r7'), (make_array(1), 'r1')) t(b, q);
+
+query TT
+SELECT l.p, r.q FROM l JOIN r ON l.a < r.b ORDER BY 1, 2;
+----
+l5 r7
+
+statement ok
+CREATE TABLE sl AS SELECT * FROM (VALUES (named_struct('x', 5), 'l5')) t(a, p);
+
+statement ok
+CREATE TABLE sr AS SELECT * FROM (VALUES (named_struct('x', 7), 'r7'), (named_struct('x', 1), 'r1')) t(b, q);
+
+query TT
+SELECT sl.p, sr.q FROM sl JOIN sr ON sl.a < sr.b ORDER BY 1, 2;
+----
+l5 r7
+
+statement ok
+RESET datafusion.optimizer.enable_piecewise_merge_join;
+
+statement ok
+SET datafusion.execution.target_partitions = 4;

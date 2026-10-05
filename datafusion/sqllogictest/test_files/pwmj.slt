@@ -1813,15 +1813,11 @@ SELECT r.id FROM rex_sv_l l RIGHT ANTI JOIN rex_sv_r r ON l.v > r.v ORDER BY 1;
 4
 
 # ------------------------------------------------------------------
-# Right existence joins: nested and dictionary key regressions, PWMJ on vs. off
+# Right existence joins: nested key fallback with PWMJ enabled
 # ------------------------------------------------------------------
-# The buffered-side reduction (`min_batch`/`max_batch`) handles List/Struct/Dictionary keys
-# through the same generic path the earlier Dictionary case above exercises, but comparing the
-# reduced extreme against the streamed batch is a separate step: it goes through `apply_cmp`,
-# which dispatches List/Struct (and a dictionary of either) to a nested-aware comparator instead
-# of arrow's `lt`/`lt_eq`/`gt`/`gt_eq` kernels, which reject those types outright. Each key type
-# below runs the same query with PWMJ enabled and disabled and checks the two agree, so a
-# regression in that dispatch fails a result comparison rather than only an internal error.
+# Nested comparisons can contain inner NULLs, whose SQL comparison semantics do not match a total
+# sort order, and Arrow cannot sort every nested type. The planner must use NestedLoopJoin for
+# nested range keys even when PWMJ is enabled. These cases check both the selected plan and results.
 
 statement ok
 CREATE TABLE rex_list_l(v INT[]);
@@ -1884,9 +1880,7 @@ SELECT r.id FROM rex_list_l l RIGHT ANTI JOIN rex_list_r r ON l.v > r.v ORDER BY
 statement ok
 set datafusion.optimizer.enable_piecewise_merge_join = true;
 
-# `LargeList` and `FixedSizeList` go through the same nested-aware `apply_cmp` dispatch as
-# `List` above (`DataType::is_nested()` is true for all three), so this pins that the dispatch
-# isn't accidentally keyed on `List` specifically. Same shape and expected rows as the `List`
+# `LargeList` also uses the NestedLoopJoin fallback. Same shape and expected rows as the `List`
 # case, cast from the same underlying array.
 statement ok
 CREATE TABLE rex_largelist_l AS SELECT arrow_cast(v, 'LargeList(Int32)') AS v FROM rex_list_l;
@@ -1909,10 +1903,9 @@ logical_plan
 07)--------TableScan: rex_largelist_r projection=[id, v]
 physical_plan
 01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--ProjectionExec: expr=[id@0 as id]
-03)----PiecewiseMergeJoin: operator=Gt, join_type=RightSemi, on=(v > v)
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
-05)------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--NestedLoopJoinExec: join_type=RightSemi, filter=v@0 > v@1, projection=[id@0]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 query I
 SELECT r.id FROM rex_largelist_l l RIGHT SEMI JOIN rex_largelist_r r ON l.v > r.v ORDER BY 1;
@@ -1946,12 +1939,8 @@ SELECT r.id FROM rex_largelist_l l RIGHT ANTI JOIN rex_largelist_r r ON l.v > r.
 statement ok
 set datafusion.optimizer.enable_piecewise_merge_join = true;
 
-# `FixedSizeList` additionally has a statically known width, which is a different arrow layout
-# from `List`/`LargeList`'s offsets buffer. Built from literal `VALUES` rather than cast from
-# `rex_list_l`/`rex_list_r` (unlike the `LargeList` case above): a `WHERE v IS NOT NULL` filter
-# to drop the source's NULL row -- needed because a NULL `FixedSizeList` value still has to
-# report the declared list size -- repartitions the result, which would make the `EXPLAIN`
-# below depend on `target_partitions` instead of pinning the join operator choice.
+# `FixedSizeList` has a statically known width and a different Arrow layout from `List` and
+# `LargeList`. This plan check confirms it also uses the fallback.
 statement ok
 CREATE TABLE rex_fsl_l AS
   SELECT arrow_cast(column1, 'FixedSizeList(1, Int32)') AS v FROM (VALUES ([2]), ([4]));
@@ -1974,10 +1963,9 @@ logical_plan
 07)--------TableScan: rex_fsl_r projection=[id, v]
 physical_plan
 01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--ProjectionExec: expr=[id@0 as id]
-03)----PiecewiseMergeJoin: operator=Gt, join_type=RightSemi, on=(v > v)
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
-05)------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--NestedLoopJoinExec: join_type=RightSemi, filter=v@0 > v@1, projection=[id@0]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 query I
 SELECT r.id FROM rex_fsl_l l RIGHT SEMI JOIN rex_fsl_r r ON l.v > r.v ORDER BY 1;

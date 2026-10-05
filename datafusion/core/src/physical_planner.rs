@@ -1743,6 +1743,26 @@ impl DefaultPhysicalPlanner {
                             planning_ctx,
                         )?;
 
+                        // PWMJ relies on a total sort order for its range scan, but nested
+                        // comparisons can produce SQL NULLs for inner NULL values and Arrow
+                        // cannot sort every nested type. Keep those predicates on the general
+                        // nested-loop path, which evaluates the original comparison directly.
+                        if on_left
+                            .data_type(physical_left.schema().as_ref())?
+                            .is_nested()
+                            || on_right
+                                .data_type(physical_right.schema().as_ref())?
+                                .is_nested()
+                        {
+                            return Ok(Arc::new(NestedLoopJoinExec::try_new(
+                                physical_left,
+                                physical_right,
+                                join_filter,
+                                join_type,
+                                None,
+                            )?));
+                        }
+
                         Arc::new(PiecewiseMergeJoinExec::try_new(
                             physical_left,
                             physical_right,
