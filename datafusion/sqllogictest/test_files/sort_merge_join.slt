@@ -971,6 +971,50 @@ WHERE t1_sorted.data < 0
 ----
 100
 
+# Complex predicates retain the ordinary residual path. OR clauses can have
+# different witnesses, and a missing inner group must survive an anti join.
+statement ok
+CREATE TABLE identities(id BIGINT, k BIGINT, user_id VARCHAR, org_id VARCHAR) AS VALUES
+  (1, 1, 'alice', 'x'), (2, 2, 'alice', 'x'),
+  (3, 3, NULL, 'x'), (4, 4, 'alice', NULL), (5, 5, 'carol', 'x');
+
+statement ok
+CREATE TABLE observations(k BIGINT, user_id VARCHAR, org_id VARCHAR, active BOOLEAN) AS VALUES
+  (1, 'alice', 'x', true), (1, 'alice', 'x', true),
+  (1, 'bob', 'y', false), (2, 'alice', 'y', true),
+  (2, 'bob', 'x', true), (3, 'bob', NULL, true), (4, 'bob', NULL, true);
+
+query I rowsort
+SELECT l.id FROM identities l LEFT ANTI JOIN observations r
+ON l.k = r.k AND r.active AND (l.user_id <> r.user_id OR l.org_id <> r.org_id);
+----
+1
+3
+5
+
+query I rowsort
+SELECT l.id FROM identities l LEFT SEMI JOIN observations r
+ON l.k = r.k AND r.active AND (l.user_id <> r.user_id OR l.org_id <> r.org_id);
+----
+2
+4
+
+# Keeping the side-local guard within one OR arm prevents it from being
+# pushed below the join; the full residual must use generic evaluation.
+query I rowsort
+SELECT l.id FROM identities l LEFT ANTI JOIN observations r
+ON l.k = r.k AND ((r.active AND l.user_id <> r.user_id) OR l.org_id <> r.org_id);
+----
+3
+5
+
+# Independent summaries cannot prove that the same observation has both
+# differences: group 2 has different user and organization on separate rows.
+query I rowsort
+SELECT l.id FROM identities l LEFT SEMI JOIN observations r
+ON l.k = r.k AND r.active AND l.user_id <> r.user_id AND l.org_id <> r.org_id;
+----
+
 # Config reset
 statement ok
 RESET datafusion.optimizer.prefer_hash_join;
