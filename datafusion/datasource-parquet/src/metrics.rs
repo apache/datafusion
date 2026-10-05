@@ -16,6 +16,7 @@
 // under the License.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use datafusion_physical_plan::metrics::{
     Count, ExecutionPlanMetricsSet, Gauge, Label, MetricBuilder, MetricCategory,
@@ -465,5 +466,92 @@ impl RowFilterSkippedFullyMatchedMetric {
                 .counter("row_filter_skipped_fully_matched", self.partition)
         });
         count.add(1);
+    }
+}
+
+/// Lazily-registered counters for optional filters that an
+/// [`OptionalFilterGate`](datafusion_physical_expr::optional_filter_gate::OptionalFilterGate)
+/// evaluates in the Parquet `RowFilter` (when
+/// `datafusion.execution.optional_filter_mode` is `adaptive`):
+///
+/// * `optional_filter_rows_skipped`: rows for which the gate skipped an
+///   optional filter (all these rows passed that filter without evaluation).
+/// * `optional_filter_pauses`: number of times a gate paused an optional
+///   filter (because it removed no rows or cost more than it saved).
+/// * `optional_filter_eval_time`: time spent to evaluate optional filters.
+///   `row_pushdown_eval_time` includes this time.
+///
+/// Like [`RowFilterSkippedFullyMatchedMetric`], each counter is registered
+/// only when it first fires, so scans that never skip an optional filter do
+/// not show zero-valued counters in `EXPLAIN ANALYZE`.
+#[derive(Debug)]
+pub(crate) struct OptionalFilterMetrics {
+    metrics: ExecutionPlanMetricsSet,
+    partition: usize,
+    filename: String,
+    rows_skipped: Option<Count>,
+    pauses: Option<Count>,
+    eval_time: Option<Time>,
+}
+
+impl OptionalFilterMetrics {
+    pub(crate) fn new(
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
+        filename: &str,
+    ) -> Self {
+        Self {
+            metrics: metrics.clone(),
+            partition,
+            filename: filename.to_string(),
+            rows_skipped: None,
+            pauses: None,
+            eval_time: None,
+        }
+    }
+
+    fn counter(&self, name: &'static str) -> Count {
+        MetricBuilder::new(&self.metrics)
+            .with_new_label("filename", self.filename.clone())
+            .with_type(MetricType::Summary)
+            .with_category(MetricCategory::Rows)
+            .counter(name, self.partition)
+    }
+
+    /// Record `n` rows for which an optional filter was skipped.
+    pub(crate) fn add_rows_skipped(&mut self, n: usize) {
+        if n == 0 {
+            return;
+        }
+        if self.rows_skipped.is_none() {
+            self.rows_skipped = Some(self.counter("optional_filter_rows_skipped"));
+        }
+        if let Some(count) = &self.rows_skipped {
+            count.add(n);
+        }
+    }
+
+    /// Record `elapsed` time spent to evaluate an optional filter.
+    pub(crate) fn add_eval_time(&mut self, elapsed: Duration) {
+        let eval_time = self.eval_time.get_or_insert_with(|| {
+            MetricBuilder::new(&self.metrics)
+                .with_new_label("filename", self.filename.clone())
+                .with_type(MetricType::Summary)
+                .subset_time("optional_filter_eval_time", self.partition)
+        });
+        eval_time.add_duration(elapsed);
+    }
+
+    /// Record `n` new pauses of an optional filter.
+    pub(crate) fn add_pauses(&mut self, n: usize) {
+        if n == 0 {
+            return;
+        }
+        if self.pauses.is_none() {
+            self.pauses = Some(self.counter("optional_filter_pauses"));
+        }
+        if let Some(count) = &self.pauses {
+            count.add(n);
+        }
     }
 }
