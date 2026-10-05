@@ -563,16 +563,32 @@ async fn test_limit_offset_parameters_leave_cast_inputs_unresolved() -> Result<(
     for sql in [
         "SELECT $1 AS value",
         "SELECT $1 AS value LIMIT CAST($1 AS INT)",
+        "SELECT $1 AS value LIMIT CAST($1 AS BIGINT)",
+        "SELECT $1 AS value FROM (VALUES (1), (2)) AS t(v) \
+         OFFSET CAST($1 AS BIGINT)",
+        "SELECT $1 AS value FROM \
+         (SELECT 1 LIMIT CAST($1 AS BIGINT)) AS t",
     ] {
         let df = ctx.sql(sql).await?;
+        println!("explicit cast SQL: {sql}");
         assert_eq!(
             df.logical_plan().get_parameter_types()?,
             HashMap::from([("$1".to_string(), None)])
+        );
+        let optimized = ctx.state().optimize(df.logical_plan())?;
+        assert_eq!(
+            optimized.get_parameter_types()?,
+            HashMap::from([("$1".to_string(), None)])
+        );
+        println!(
+            "optimized parameters={:?}",
+            optimized.get_parameter_types()?
         );
         let results = df
             .with_param_values(vec![ScalarValue::from("1")])?
             .collect()
             .await?;
+        println!("{}", batches_to_sort_string(&results));
         datafusion::assert_batches_eq!(
             [
                 "+-------+",
