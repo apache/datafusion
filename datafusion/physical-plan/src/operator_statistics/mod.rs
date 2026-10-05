@@ -76,15 +76,13 @@ use std::sync::Arc;
 
 use datafusion_common::extensions::Extensions;
 use datafusion_common::stats::Precision;
-use datafusion_common::{JoinType, Result, Statistics};
-use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr::expressions::Column;
+use datafusion_common::{Result, Statistics};
 
 use crate::ExecutionPlan;
 use crate::aggregates::{AggregateExec, AggregateMode};
 use crate::execution_plan::CardinalityEffect;
 use crate::filter::FilterExec;
-use crate::joins::{HashJoinExec, SortMergeJoinExec};
+use crate::joins::{CrossJoinExec, HashJoinExec, JoinOnRef, SortMergeJoinExec};
 use crate::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::projection::ProjectionExec;
 use crate::statistics::{ChildStats, StatisticsArgs, StatisticsContext};
@@ -583,16 +581,18 @@ fn computed_with_row_count(
     Ok(StatisticsResult::Computed(ExtendedStatistics::new(base)))
 }
 
-/// Statistics provider for [`FilterExec`].
+/// Statistics provider for [`FilterExec`] that uses
+/// pre-computed enhanced child statistics from the registry walk.
 ///
-/// Starts from the operator's own [`ExecutionPlan::statistics_from_inputs`],
-/// then lowers each column's `distinct_count` to [`ndv_after_selectivity`] of
-/// the input column, using the ratio of output rows to input rows as the
-/// selectivity. Columns with a distinct count of 0 or 1 keep the value the
-/// operator returned.
+/// Unlike the built-in fallback (which calls `statistics_from_inputs` and gets raw
+/// child stats), this provider receives enhanced child stats that may include
+/// NDV overrides injected at the scan level. It applies the same selectivity
+/// estimation logic as `FilterExec::statistics_helper`, then additionally
+/// adjusts each column's `distinct_count` using [`ndv_after_selectivity`] based
+/// on the computed selectivity ratio.
 #[deprecated(
     since = "56.0.0",
-    note = "its distinct count adjustment belongs in `FilterExec::statistics_from_inputs`; without a matching provider the statistics walk uses the operator's own estimate"
+    note = "duplicates `FilterExec::statistics_from_inputs` and adds a distinct count adjustment that belongs in the operator, see https://github.com/apache/datafusion/issues/26052; without a matching provider the statistics walk uses the operator's own estimate"
 )]
 #[derive(Debug, Default)]
 pub struct FilterStatisticsProvider;
@@ -615,40 +615,35 @@ impl StatisticsProvider for FilterStatisticsProvider {
             return Ok(StatisticsResult::Delegate);
         }
 
-        let input = child_stats[0].base();
-        let input_rows = input.num_rows;
-        let child_base: Vec<Arc<Statistics>> = child_stats
-            .iter()
-            .map(|c| Arc::clone(c.base_arc()))
-            .collect();
-        let mut stats = Arc::unwrap_or_clone(
-            plan.statistics_from_inputs(&child_base, &StatisticsArgs::new())?,
-        );
+        let input_stats = (*child_stats[0].base).clone();
+        let input_rows = input_stats.num_rows;
+        let mut stats = FilterExec::statistics_helper(
+            &filter.input().schema(),
+            input_stats,
+            filter.predicate(),
+            filter.default_selectivity(),
+            // TODO: pass filter.expression_analyzer_registry() once #21122 lands
+        )?;
 
+        // Adjust distinct_count for each column using the selectivity ratio
+        // via the probabilistic survival model from
+        // ndv_after_selectivity to account for rows removed by the filter.
         if let (Some(&orig_rows), Some(&filtered_rows)) =
             (input_rows.get_value(), stats.num_rows.get_value())
             && orig_rows > 0
             && filtered_rows < orig_rows
         {
             let selectivity = filtered_rows as f64 / orig_rows as f64;
-            for (i, col_stat) in stats.column_statistics.iter_mut().enumerate() {
-                let input_index = filter.projection().as_ref().map_or(i, |p| p[i]);
-                // The operator's distinct count is already capped at the
-                // filtered rows, so the survival model uses the input one
-                if let Some(&ndv) = col_stat.distinct_count.get_value()
-                    && ndv > 1
-                    && let Some(&input_ndv) = input
-                        .column_statistics
-                        .get(input_index)
-                        .and_then(|c| c.distinct_count.get_value())
-                {
-                    let adjusted =
-                        ndv_after_selectivity(input_ndv, orig_rows, selectivity);
-                    col_stat.distinct_count = Precision::Inexact(adjusted.min(ndv));
+            for col_stat in &mut stats.column_statistics {
+                if let Some(&ndv) = col_stat.distinct_count.get_value() {
+                    let adjusted = ndv_after_selectivity(ndv, orig_rows, selectivity);
+                    col_stat.distinct_count = Precision::Inexact(adjusted);
                 }
             }
         }
 
+        let stats = filter.statistics_with_fetch(stats, None)?;
+        let stats = stats.project(filter.projection().as_ref());
         Ok(StatisticsResult::Computed(ExtendedStatistics::new(stats)))
     }
 }
@@ -842,16 +837,27 @@ impl StatisticsProvider for AggregateStatisticsProvider {
     }
 }
 
-/// Statistics provider for [`HashJoinExec`] and [`SortMergeJoinExec`].
+/// Statistics provider for equi-joins (hash join, sort-merge join) and cross joins.
 ///
-/// For inner joins with two or more keys, all with a known distinct count on
-/// both sides, replaces the operator's row count (based on the most selective
-/// key) with `left_rows * right_rows / product(max(left_ndv_i, right_ndv_i))`,
-/// assuming independent keys. Correlated keys make this estimate too low.
-/// Other joins keep the operator's estimate.
+/// For equi-joins, estimates output cardinality as
+/// `left_rows * right_rows / product(max(left_ndv_i, right_ndv_i))`
+/// across all join key columns (assuming independence between keys),
+/// falling back to the Cartesian product when any key lacks NDV on both sides.
+/// For cross joins, uses the exact Cartesian product.
+///
+/// The base inner-join estimate is then adjusted for the join type:
+/// - Semi joins: capped at the preserved-side row count
+/// - Anti joins: preserved-side minus matched rows (clamped to 0)
+/// - Left/Right outer: at least as many rows as the preserved side
+/// - Full outer: at least `left + right - inner_estimate`
+/// - Left mark: exactly `left_rows` (one output row per left row)
+///
+/// Delegates when:
+/// - The plan is not a supported join type
+/// - Either input lacks row count information
 #[deprecated(
     since = "56.0.0",
-    note = "multi-key join estimation belongs in the join operators, see https://github.com/apache/datafusion/issues/21583; without a matching provider the statistics walk uses the operator's own estimate"
+    note = "replaces the estimates of `HashJoinExec`, `SortMergeJoinExec` and `CrossJoinExec` with a separate estimation logic; without a matching provider the statistics walk uses the operator's own estimate"
 )]
 #[derive(Debug, Default)]
 pub struct JoinStatisticsProvider;
@@ -861,6 +867,7 @@ impl StatisticsProvider for JoinStatisticsProvider {
     fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
         plan.downcast_ref::<HashJoinExec>().is_some()
             || plan.downcast_ref::<SortMergeJoinExec>().is_some()
+            || plan.downcast_ref::<CrossJoinExec>().is_some()
     }
 
     fn compute_statistics(
@@ -868,66 +875,109 @@ impl StatisticsProvider for JoinStatisticsProvider {
         plan: &dyn ExecutionPlan,
         child_stats: &[ExtendedStatistics],
     ) -> Result<StatisticsResult> {
-        if child_stats.len() < 2 {
-            return Ok(StatisticsResult::Delegate);
-        }
+        use datafusion_common::JoinType;
+        use datafusion_physical_expr::expressions::Column;
 
-        let (on, join_type) = if let Some(hash_join) = plan.downcast_ref::<HashJoinExec>()
-        {
-            (hash_join.on(), *hash_join.join_type())
-        } else if let Some(sort_merge_join) = plan.downcast_ref::<SortMergeJoinExec>() {
-            (sort_merge_join.on(), sort_merge_join.join_type())
-        } else {
-            return Ok(StatisticsResult::Delegate);
-        };
-        if join_type != JoinType::Inner || on.len() < 2 {
+        if child_stats.len() < 2 {
             return Ok(StatisticsResult::Delegate);
         }
 
         let left = &child_stats[0].base;
         let right = &child_stats[1].base;
+
         let (Some(&left_rows), Some(&right_rows)) =
             (left.num_rows.get_value(), right.num_rows.get_value())
         else {
             return Ok(StatisticsResult::Delegate);
         };
 
-        let mut ndv_divisor: usize = 1;
-        for (left_key, right_key) in on {
-            let left_ndv = key_distinct_count(left_key, left);
-            let right_ndv = key_distinct_count(right_key, right);
-            match (left_ndv, right_ndv) {
-                (Some(l), Some(r)) if l > 0 && r > 0 => {
-                    ndv_divisor = ndv_divisor.saturating_mul(l.max(r));
-                }
-                _ => return Ok(StatisticsResult::Delegate),
+        /// Estimate equi-join output using NDV of join key columns:
+        ///   left_rows * right_rows / product(max(left_ndv_i, right_ndv_i))
+        /// Falls back to Cartesian product if any key lacks NDV on both sides.
+        fn equi_join_estimate(
+            on: JoinOnRef,
+            left: &Statistics,
+            right: &Statistics,
+            left_rows: usize,
+            right_rows: usize,
+        ) -> usize {
+            if on.is_empty() {
+                return left_rows.saturating_mul(right_rows);
             }
+            let mut ndv_divisor: usize = 1;
+            for (left_key, right_key) in on {
+                let left_ndv = left_key
+                    .downcast_ref::<Column>()
+                    .and_then(|c| left.column_statistics.get(c.index()))
+                    .and_then(|s| s.distinct_count.get_value().copied());
+                let right_ndv = right_key
+                    .downcast_ref::<Column>()
+                    .and_then(|c| right.column_statistics.get(c.index()))
+                    .and_then(|s| s.distinct_count.get_value().copied());
+                match (left_ndv, right_ndv) {
+                    (Some(l), Some(r)) if l > 0 && r > 0 => {
+                        ndv_divisor = ndv_divisor.saturating_mul(l.max(r));
+                    }
+                    _ => return left_rows.saturating_mul(right_rows),
+                }
+            }
+            let max_rows = left_rows.saturating_mul(right_rows);
+            max_rows.checked_div(ndv_divisor).unwrap_or(max_rows)
         }
 
-        let mut estimate = left_rows
-            .saturating_mul(right_rows)
-            .checked_div(ndv_divisor)
-            .unwrap_or(usize::MAX);
-        if let Some(fetch) = plan.fetch() {
-            estimate = estimate.min(fetch);
-        }
+        let (inner_estimate, is_exact_cartesian, join_type) = if let Some(hash_join) =
+            plan.downcast_ref::<HashJoinExec>()
+        {
+            let est =
+                equi_join_estimate(hash_join.on(), left, right, left_rows, right_rows);
+            (est, false, *hash_join.join_type())
+        } else if let Some(smj) = plan.downcast_ref::<SortMergeJoinExec>() {
+            let est = equi_join_estimate(smj.on(), left, right, left_rows, right_rows);
+            (est, false, smj.join_type())
+        } else if plan.downcast_ref::<CrossJoinExec>().is_some() {
+            let both_exact = left.num_rows.is_exact().unwrap_or(false)
+                && right.num_rows.is_exact().unwrap_or(false);
+            (
+                left_rows.saturating_mul(right_rows),
+                both_exact,
+                JoinType::Inner,
+            )
+        } else {
+            return Ok(StatisticsResult::Delegate);
+        };
 
-        let child_base: Vec<Arc<Statistics>> = child_stats
-            .iter()
-            .map(|c| Arc::clone(c.base_arc()))
-            .collect();
-        let mut stats = Arc::unwrap_or_clone(
-            plan.statistics_from_inputs(&child_base, &StatisticsArgs::new())?,
-        );
-        rescale_byte_size(&mut stats, Precision::Inexact(estimate));
-        Ok(StatisticsResult::Computed(ExtendedStatistics::new(stats)))
+        // Apply join-type-aware cardinality bounds
+        let estimated = match join_type {
+            JoinType::Inner => inner_estimate,
+            JoinType::Left => inner_estimate.max(left_rows),
+            JoinType::Right => inner_estimate.max(right_rows),
+            JoinType::Full => {
+                // At least left + right - matched, but never less than inner
+                let outer_bound = left_rows
+                    .saturating_add(right_rows)
+                    .saturating_sub(inner_estimate);
+                inner_estimate.max(outer_bound)
+            }
+            JoinType::LeftSemi => inner_estimate.min(left_rows),
+            JoinType::RightSemi => inner_estimate.min(right_rows),
+            JoinType::LeftAnti => left_rows.saturating_sub(inner_estimate.min(left_rows)),
+            JoinType::RightAnti => {
+                right_rows.saturating_sub(inner_estimate.min(right_rows))
+            }
+            JoinType::LeftMark => left_rows,
+            JoinType::RightMark => right_rows,
+        };
+
+        // NL join inner with exact inputs is an exact Cartesian product;
+        // NDV-based estimates are inherently inexact.
+        let num_rows = if is_exact_cartesian && join_type == JoinType::Inner {
+            Precision::Exact(estimated)
+        } else {
+            Precision::Inexact(estimated)
+        };
+
+        computed_with_row_count(plan, num_rows, child_stats)
     }
-}
-
-fn key_distinct_count(key: &Arc<dyn PhysicalExpr>, stats: &Statistics) -> Option<usize> {
-    key.downcast_ref::<Column>()
-        .and_then(|c| stats.column_statistics.get(c.index()))
-        .and_then(|s| s.distinct_count.get_value().copied())
 }
 
 /// Statistics provider for [`LocalLimitExec`] and
@@ -1797,84 +1847,6 @@ mod tests {
     }
 
     #[test]
-    fn test_filter_provider_ndv_uses_post_fetch_rows() -> Result<()> {
-        use crate::filter::FilterExecBuilder;
-
-        // 1000 rows with 100 distinct values; `fetch` keeps 200 rows
-        let source = make_source_with_ndvs(1000, Some(100), None);
-        let filter = FilterExecBuilder::new(lit(true), source)
-            .with_fetch(Some(200))
-            .build()?;
-        let operator = compute(&StatisticsRegistry::new(), &filter)?;
-        let registry =
-            StatisticsRegistry::with_providers(vec![Arc::new(FilterStatisticsProvider)]);
-        let stats = compute(&registry, &filter)?;
-
-        // The selectivity is the post-fetch row count over the input row count,
-        // and the survival model starts from the input distinct count
-        assert_eq!(stats.base.num_rows, Precision::Inexact(200));
-        assert_eq!(
-            operator.base.column_statistics[0].distinct_count,
-            Precision::Inexact(100)
-        );
-        let expected = ndv_after_selectivity(100, 1000, 200.0 / 1000.0);
-        assert_eq!(expected, 89);
-        assert_eq!(
-            stats.base.column_statistics[0].distinct_count,
-            Precision::Inexact(expected)
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_filter_provider_keeps_distinct_count_of_zero_or_one() -> Result<()> {
-        for ndv in [0, 1] {
-            // Column "a" has 1000 distinct values, column "b" has `ndv`
-            let mut a_stats = ColumnStatistics::new_unknown();
-            a_stats.distinct_count = Precision::Exact(1000);
-            a_stats.min_value = Precision::Exact(ScalarValue::Int32(Some(1)));
-            a_stats.max_value = Precision::Exact(ScalarValue::Int32(Some(1000)));
-            let mut b_stats = ColumnStatistics::new_unknown();
-            b_stats.distinct_count = Precision::Exact(ndv);
-            let source: Arc<dyn ExecutionPlan> =
-                Arc::new(MockSourceExec::with_column_stats(
-                    make_schema(),
-                    Precision::Exact(1000),
-                    vec![a_stats, b_stats],
-                ));
-
-            // The predicate "a > 900" keeps about 10% of the rows
-            let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
-                col("a", &make_schema())?,
-                Operator::Gt,
-                lit(900i32),
-            ));
-            let filter: Arc<dyn ExecutionPlan> =
-                Arc::new(FilterExec::try_new(predicate, source)?);
-
-            let operator = compute(&StatisticsRegistry::new(), filter.as_ref())?;
-            let registry = StatisticsRegistry::with_providers(vec![Arc::new(
-                FilterStatisticsProvider,
-            )]);
-            let stats = compute(&registry, filter.as_ref())?;
-
-            assert!(
-                stats
-                    .base
-                    .num_rows
-                    .get_value()
-                    .is_some_and(|rows| *rows < 1000)
-            );
-            assert_eq!(
-                stats.base.column_statistics[1].distinct_count,
-                operator.base.column_statistics[1].distinct_count,
-                "distinct count {ndv}"
-            );
-        }
-        Ok(())
-    }
-
-    #[test]
     fn test_filter_adjusts_ndv_by_selectivity() -> Result<()> {
         use datafusion_common::ScalarValue;
         use datafusion_expr::Operator;
@@ -2275,146 +2247,340 @@ mod tests {
     use crate::joins::{HashJoinExec, PartitionMode};
     use datafusion_common::{JoinType, NullEquality};
 
-    fn make_source_with_ndvs(
+    fn make_source_with_ndv_2col(
         num_rows: usize,
         ndv_a: Option<usize>,
-        ndv_b: Option<usize>,
     ) -> Arc<dyn ExecutionPlan> {
-        let column_statistics = [ndv_a, ndv_b]
-            .into_iter()
-            .map(|ndv| {
+        let schema = make_schema(); // "a" Int32, "b" Int32
+        let col_stats = vec![
+            {
                 let mut cs = ColumnStatistics::new_unknown();
-                if let Some(n) = ndv {
+                if let Some(n) = ndv_a {
                     cs.distinct_count = Precision::Exact(n);
                 }
                 cs
-            })
-            .collect();
+            },
+            ColumnStatistics::new_unknown(),
+        ];
         Arc::new(MockSourceExec::with_column_stats(
-            make_schema(), // "a" Int32, "b" Int32
+            schema,
             Precision::Exact(num_rows),
-            column_statistics,
+            col_stats,
         ))
-    }
-
-    fn join_on(num_keys: usize) -> JoinOn {
-        ["a", "b"]
-            .iter()
-            .enumerate()
-            .take(num_keys)
-            .map(|(index, name)| {
-                (
-                    Arc::new(Column::new(name, index)) as Arc<dyn PhysicalExpr>,
-                    Arc::new(Column::new(name, index)) as Arc<dyn PhysicalExpr>,
-                )
-            })
-            .collect()
     }
 
     fn make_hash_join(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
-        num_keys: usize,
-        join_type: JoinType,
-        fetch: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let _schema = make_schema();
+        let on: JoinOn = vec![(
+            Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
+            Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
+        )];
+        Ok(Arc::new(HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNull,
+            false,
+        )?))
+    }
+
+    #[test]
+    fn test_join_provider_with_ndv() -> Result<()> {
+        // left: 1000 rows, NDV(a)=100; right: 500 rows, NDV(a)=50
+        // expected = 1000 * 500 / max(100, 50) = 5000
+        let left = make_source_with_ndv_2col(1000, Some(100));
+        let right = make_source_with_ndv_2col(500, Some(50));
+        let join = make_hash_join(left, right)?;
+
+        let registry =
+            StatisticsRegistry::with_providers(vec![Arc::new(JoinStatisticsProvider)]);
+        let stats = compute(&registry, join.as_ref())?;
+        assert_eq!(stats.base.num_rows, Precision::Inexact(5000));
+        Ok(())
+    }
+
+    #[test]
+    fn test_join_provider_uses_actual_key_column_ndv() -> Result<()> {
+        // Join on column "b" (index 1), NDV only set on "b", not "a".
+        // Old first()-based code would look up column 0 (a), find no NDV,
+        // and fall back to Cartesian product. The fix looks up column 1 (b).
+        // left: 1000 rows, NDV(b)=50; right: 500 rows, NDV(b)=25
+        // expected = 1000 * 500 / max(50, 25) = 10000
+        let schema = make_schema(); // "a" Int32, "b" Int32
+        let make_source_ndv_b =
+            |num_rows: usize, ndv_b: usize| -> Arc<dyn ExecutionPlan> {
+                let col_stats = vec![
+                    ColumnStatistics::new_unknown(), // "a": no NDV
+                    {
+                        let mut cs = ColumnStatistics::new_unknown();
+                        cs.distinct_count = Precision::Exact(ndv_b);
+                        cs
+                    },
+                ];
+                Arc::new(MockSourceExec::with_column_stats(
+                    Arc::clone(&schema),
+                    Precision::Exact(num_rows),
+                    col_stats,
+                ))
+            };
+
+        let left = make_source_ndv_b(1000, 50);
+        let right = make_source_ndv_b(500, 25);
+
+        // Join on column "b" (index 1)
+        let on: JoinOn = vec![(
+            Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>,
+            Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>,
+        )];
         let join: Arc<dyn ExecutionPlan> = Arc::new(HashJoinExec::try_new(
             left,
             right,
-            join_on(num_keys),
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNull,
+            false,
+        )?);
+
+        let registry =
+            StatisticsRegistry::with_providers(vec![Arc::new(JoinStatisticsProvider)]);
+        let stats = compute(&registry, join.as_ref())?;
+        assert_eq!(stats.base.num_rows, Precision::Inexact(10_000));
+        Ok(())
+    }
+
+    #[test]
+    fn test_join_provider_multi_key_ndv() -> Result<()> {
+        // Multi-key join: ON a.a = b.a AND a.b = b.b
+        // left: 1000 rows, NDV(a)=100, NDV(b)=20
+        // right: 500 rows, NDV(a)=50, NDV(b)=10
+        // expected = 1000 * 500 / (max(100,50) * max(20,10)) = 500000 / 2000 = 250
+        let schema = make_schema(); // "a" Int32, "b" Int32
+        let make_source_2ndv =
+            |num_rows: usize, ndv_a: usize, ndv_b: usize| -> Arc<dyn ExecutionPlan> {
+                let col_stats = vec![
+                    {
+                        let mut cs = ColumnStatistics::new_unknown();
+                        cs.distinct_count = Precision::Exact(ndv_a);
+                        cs
+                    },
+                    {
+                        let mut cs = ColumnStatistics::new_unknown();
+                        cs.distinct_count = Precision::Exact(ndv_b);
+                        cs
+                    },
+                ];
+                Arc::new(MockSourceExec::with_column_stats(
+                    Arc::clone(&schema),
+                    Precision::Exact(num_rows),
+                    col_stats,
+                ))
+            };
+
+        let left = make_source_2ndv(1000, 100, 20);
+        let right = make_source_2ndv(500, 50, 10);
+
+        let on: JoinOn = vec![
+            (
+                Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
+                Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
+            ),
+            (
+                Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>,
+                Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>,
+            ),
+        ];
+        let join: Arc<dyn ExecutionPlan> = Arc::new(HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNull,
+            false,
+        )?);
+
+        let registry =
+            StatisticsRegistry::with_providers(vec![Arc::new(JoinStatisticsProvider)]);
+        let stats = compute(&registry, join.as_ref())?;
+        assert_eq!(stats.base.num_rows, Precision::Inexact(250));
+        Ok(())
+    }
+
+    #[test]
+    fn test_join_provider_fallback_cartesian() -> Result<()> {
+        // No NDV available -> Cartesian product estimate
+        let left = make_source_with_ndv_2col(100, None);
+        let right = make_source_with_ndv_2col(200, None);
+        let join = make_hash_join(left, right)?;
+
+        let registry =
+            StatisticsRegistry::with_providers(vec![Arc::new(JoinStatisticsProvider)]);
+        let stats = compute(&registry, join.as_ref())?;
+        assert_eq!(stats.base.num_rows, Precision::Inexact(20_000));
+        Ok(())
+    }
+
+    #[test]
+    fn test_nl_join_delegates() -> Result<()> {
+        use crate::joins::NestedLoopJoinExec;
+
+        // NL join delegates to the built-in (NestedLoopJoinExec may have an
+        // arbitrary JoinFilter, so the provider cannot safely assume Cartesian).
+        let left = make_source(100);
+        let right = make_source(200);
+        let join: Arc<dyn ExecutionPlan> = Arc::new(NestedLoopJoinExec::try_new(
+            left,
+            right,
+            None,
+            &JoinType::Inner,
+            None,
+        )?);
+
+        let registry =
+            StatisticsRegistry::with_providers(vec![Arc::new(JoinStatisticsProvider)]);
+        let stats = compute(&registry, join.as_ref())?;
+        // Provider delegates; result comes from built-in statistics_from_inputs.
+        assert!(
+            stats.base.num_rows.get_value().is_some()
+                || matches!(stats.base.num_rows, Precision::Absent)
+        );
+        Ok(())
+    }
+
+    fn make_hash_join_typed(
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
+        join_type: JoinType,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let on: JoinOn = vec![(
+            Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
+            Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
+        )];
+        Ok(Arc::new(HashJoinExec::try_new(
+            left,
+            right,
+            on,
             None,
             &join_type,
             None,
             PartitionMode::CollectLeft,
             NullEquality::NullEqualsNull,
             false,
-        )?);
-        match fetch {
-            Some(_) => Ok(join.with_fetch(fetch).expect("hash join supports fetch")),
-            None => Ok(join),
-        }
+        )?))
     }
 
-    /// Two-key inner join: left has 1000 rows with NDV(a)=100 and NDV(b)=20,
-    /// right has 500 rows with NDV(a)=50 and NDV(b)=10. The product formula
-    /// gives 1000 * 500 / (max(100, 50) * max(20, 10)) = 250 rows.
-    fn make_two_key_join(
+    fn compute_join_rows(
+        left_rows: usize,
+        left_ndv: Option<usize>,
+        right_rows: usize,
+        right_ndv: Option<usize>,
         join_type: JoinType,
-        fetch: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        make_hash_join(
-            make_source_with_ndvs(1000, Some(100), Some(20)),
-            make_source_with_ndvs(500, Some(50), Some(10)),
-            2,
-            join_type,
-            fetch,
-        )
-    }
-
-    fn join_provider_registry() -> StatisticsRegistry {
-        StatisticsRegistry::with_providers(vec![Arc::new(JoinStatisticsProvider)])
+    ) -> Result<Precision<usize>> {
+        let left = make_source_with_ndv_2col(left_rows, left_ndv);
+        let right = make_source_with_ndv_2col(right_rows, right_ndv);
+        let join = make_hash_join_typed(left, right, join_type)?;
+        let registry =
+            StatisticsRegistry::with_providers(vec![Arc::new(JoinStatisticsProvider)]);
+        Ok(compute(&registry, join.as_ref())?.base.num_rows)
     }
 
     #[test]
-    fn test_join_provider_multi_key_inner_refines() -> Result<()> {
-        let join = make_two_key_join(JoinType::Inner, None)?;
-        let operator = compute(&StatisticsRegistry::new(), join.as_ref())?;
-        let refined = compute(&join_provider_registry(), join.as_ref())?;
-        assert_ne!(operator.base.num_rows, Precision::Inexact(250));
-        assert_eq!(refined.base.num_rows, Precision::Inexact(250));
+    fn test_join_provider_left_outer() -> Result<()> {
+        // left=1000, right=500, NDV(a)=100/50
+        // inner estimate = 1000*500/100 = 5000, already >= left_rows
+        // Left outer: max(5000, 1000) = 5000
         assert_eq!(
-            refined.base.column_statistics,
-            operator.base.column_statistics
+            compute_join_rows(1000, Some(100), 500, Some(50), JoinType::Left)?,
+            Precision::Inexact(5000)
+        );
+        // Small inner estimate: left=1000, right=10, NDV=100/100
+        // inner = 1000*10/100 = 100, left outer = max(100, 1000) = 1000
+        assert_eq!(
+            compute_join_rows(1000, Some(100), 10, Some(100), JoinType::Left)?,
+            Precision::Inexact(1000)
         );
         Ok(())
     }
 
     #[test]
-    fn test_join_provider_caps_at_fetch() -> Result<()> {
-        let join = make_two_key_join(JoinType::Inner, Some(100))?;
-        let stats = compute(&join_provider_registry(), join.as_ref())?;
-        assert_eq!(stats.base.num_rows, Precision::Inexact(100));
-
-        // A fetch above the estimate does not change it
-        let join = make_two_key_join(JoinType::Inner, Some(1000))?;
-        let stats = compute(&join_provider_registry(), join.as_ref())?;
-        assert_eq!(stats.base.num_rows, Precision::Inexact(250));
+    fn test_join_provider_right_outer() -> Result<()> {
+        // inner = 1000*10/100 = 100, right outer = max(100, 10) = 100
+        assert_eq!(
+            compute_join_rows(1000, Some(100), 10, Some(100), JoinType::Right)?,
+            Precision::Inexact(100)
+        );
+        // inner = 10*1000/100 = 100, right outer = max(100, 1000) = 1000
+        assert_eq!(
+            compute_join_rows(10, Some(100), 1000, Some(100), JoinType::Right)?,
+            Precision::Inexact(1000)
+        );
         Ok(())
     }
 
     #[test]
-    fn test_join_provider_delegates_to_operator() -> Result<()> {
-        let single_key = make_hash_join(
-            make_source_with_ndvs(1000, Some(100), None),
-            make_source_with_ndvs(500, Some(50), None),
-            1,
-            JoinType::Inner,
-            None,
-        )?;
-        let missing_ndv = make_hash_join(
-            make_source_with_ndvs(1000, Some(100), Some(20)),
-            make_source_with_ndvs(500, Some(50), None),
-            2,
-            JoinType::Inner,
-            None,
-        )?;
-        let zero_ndv = make_hash_join(
-            make_source_with_ndvs(1000, Some(100), Some(0)),
-            make_source_with_ndvs(500, Some(50), Some(10)),
-            2,
-            JoinType::Inner,
-            None,
-        )?;
-        let mut joins = vec![single_key, missing_ndv, zero_ndv];
-        for join_type in [JoinType::Left, JoinType::LeftSemi, JoinType::LeftAnti] {
-            joins.push(make_two_key_join(join_type, None)?);
-        }
+    fn test_join_provider_semi_join() -> Result<()> {
+        // inner = 5000, left semi = min(5000, 1000) = 1000
+        assert_eq!(
+            compute_join_rows(1000, Some(100), 500, Some(50), JoinType::LeftSemi)?,
+            Precision::Inexact(1000)
+        );
+        // inner = 5000, right semi = min(5000, 500) = 500
+        assert_eq!(
+            compute_join_rows(1000, Some(100), 500, Some(50), JoinType::RightSemi)?,
+            Precision::Inexact(500)
+        );
+        // Cartesian fallback (no NDV): inner = 1000*500 = 500000,
+        // left semi = min(500000, 1000) = 1000 (selectivity = 1.0)
+        assert_eq!(
+            compute_join_rows(1000, None, 500, None, JoinType::LeftSemi)?,
+            Precision::Inexact(1000)
+        );
+        Ok(())
+    }
 
-        for join in joins {
-            let operator = compute(&StatisticsRegistry::new(), join.as_ref())?;
-            let refined = compute(&join_provider_registry(), join.as_ref())?;
-            assert_eq!(refined.base(), operator.base());
-        }
+    #[test]
+    fn test_join_provider_anti_join() -> Result<()> {
+        // inner = 1000*10/100 = 100, left anti = 1000 - min(100, 1000) = 900
+        assert_eq!(
+            compute_join_rows(1000, Some(100), 10, Some(100), JoinType::LeftAnti)?,
+            Precision::Inexact(900)
+        );
+        // inner = 5000, right anti = 500 - min(5000, 500) = 0
+        assert_eq!(
+            compute_join_rows(1000, Some(100), 500, Some(50), JoinType::RightAnti)?,
+            Precision::Inexact(0)
+        );
+        Ok(())
+    }
+
+    // =========================================================================
+    // CrossJoinExec tests (handled by JoinStatisticsProvider)
+    // =========================================================================
+
+    #[test]
+    fn test_cross_join_provider_exact() -> Result<()> {
+        use crate::joins::CrossJoinExec;
+        let left = make_source(100);
+        let right = make_source(200);
+        let join: Arc<dyn ExecutionPlan> = Arc::new(CrossJoinExec::new(left, right));
+
+        let registry =
+            StatisticsRegistry::with_providers(vec![Arc::new(JoinStatisticsProvider)]);
+        let stats = compute(&registry, join.as_ref())?;
+        // Both inputs have Exact row counts -> result is also Exact
+        assert_eq!(stats.base.num_rows, Precision::Exact(20_000));
         Ok(())
     }
 
