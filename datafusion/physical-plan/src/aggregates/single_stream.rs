@@ -364,7 +364,8 @@ impl Aggregating {
                         0,
                         "Single hash aggregate ran out of memory with no aggregated groups"
                     );
-                    spill_context.sort_and_spill(self.hash_table.take_state_batch()?)?;
+                    spill_context
+                        .sort_and_spill_batches(self.hash_table.take_state_batches()?)?;
                     reservation
                         .try_resize(self.hash_table.memory_size())
                         .map_err(|e| {
@@ -393,8 +394,8 @@ impl Aggregating {
             // Input was exhausted after spilling. Spill the last in-memory run.
             let mut hash_table = self.hash_table;
             hash_table
-              .take_state_batches()
-              .and_then(|batch| spill_context.sort_and_spill_batches(batch))?;
+                .take_state_batches()
+                .and_then(|batch| spill_context.sort_and_spill_batches(batch))?;
 
             // Construct the replay stream: an ordered final aggregate stream
             // over the sort-preserving merge of all spill runs.
