@@ -972,6 +972,18 @@ select count(*) from information_schema.parameters where specific_name = 'date_p
 ----
 0
 
+# Verify coerced return type of `generate_series`: it should be Date32
+query TI?T rowsort
+select specific_name, rid,
+    array_agg(data_type order by ordinal_position) filter (where parameter_mode = 'IN') as args,
+    max(data_type) filter (where parameter_mode = 'OUT') as return
+from information_schema.parameters where specific_name = 'generate_series'
+group by specific_name, rid
+having args[1] = 'String' and args[2] like 'Date' and args[3] like 'Interval%';
+----
+generate_series 7 [String, Date, Interval(DayTime)] List(Date)
+generate_series 8 [String, Date, Interval(MonthDayNano)] List(Date)
+
 # Table functions (UDTFs) appear in information_schema.routines with
 # function_type = TABLE and data_type = TABLE.
 # Note: built-in `generate_series` and `range` are registered as BOTH a
