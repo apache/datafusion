@@ -70,9 +70,7 @@ pub fn to_substrait_rel(
         LogicalPlan::Dml(plan) => not_impl_err!("Unsupported plan type: {plan:?}")?,
         LogicalPlan::Ddl(plan) => not_impl_err!("Unsupported plan type: {plan:?}")?,
         LogicalPlan::Copy(plan) => not_impl_err!("Unsupported plan type: {plan:?}")?,
-        LogicalPlan::DescribeTable(plan) => {
-            not_impl_err!("Unsupported plan type: {plan:?}")?
-        }
+        LogicalPlan::Show(plan) => not_impl_err!("Unsupported plan type: {plan:?}")?,
         LogicalPlan::Unnest(plan) => not_impl_err!("Unsupported plan type: {plan:?}")?,
         LogicalPlan::RecursiveQuery(plan) => {
             not_impl_err!("Unsupported plan type: {plan:?}")?
