@@ -321,4 +321,46 @@ from values
 [y, x, NULL, NULL, NULL]
 [l, k, j, NULL, NULL, NULL]
 
+query ?
+select array_sort(arr, sort_order)
+from values
+  (make_array(2, 1), 'ASC'),
+  (make_array(2, 1), NULL),
+  (make_array(2, 1), 'DESC') as t(arr, sort_order);
+----
+[1, 2]
+NULL
+[2, 1]
+
+query ?
+select array_sort(arr, sort_order)
+from values
+  (make_array('b', 'a'), 'ASC'),
+  (make_array('b', 'a'), NULL),
+  (make_array('b', 'a'), 'DESC') as t(arr, sort_order);
+----
+[a, b]
+NULL
+[b, a]
+
+query ?
+select array_sort(arr, 'ASC', null_order)
+from values
+  (make_array(2, 1), 'NULLS FIRST'),
+  (make_array(2, 1), NULL),
+  (make_array(2, 1), 'NULLS LAST') as t(arr, null_order);
+----
+[1, 2]
+NULL
+[1, 2]
+
+query ?
+select array_sort(arr)
+from values
+  (make_array(2, null, 1)),
+  (arrow_cast(make_array(), 'List(Int64)')) as t(arr);
+----
+[NULL, 1, 2]
+[]
+
 include ./cleanup.slt.part
