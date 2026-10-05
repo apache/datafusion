@@ -27,7 +27,8 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{
-    Column, DFSchemaRef, HashMap, Result, ScalarValue, assert_or_internal_err, plan_err,
+    Column, DFSchemaRef, HashMap, Result, ScalarValue, TableReference,
+    assert_or_internal_err, plan_err,
 };
 use datafusion_expr::expr::{Alias, GroupingSet};
 use datafusion_expr::logical_plan::{Join, JoinType};
@@ -91,6 +92,12 @@ pub struct PullUpCorrelatedExpr {
     /// The list is cleared when the pull up passes a node that can put a NULL
     /// back into such a column: an outer join, a union or a grouping set.
     pub correlated_filters: Vec<Expr>,
+    /// `join_filters.len()` at each `SubqueryAlias` on the way down.
+    ///
+    /// Filters appended while that alias is being rewritten belong to its
+    /// subtree. On the way up, only those filters are requalified to the
+    /// alias, so a sibling filter that names the same column is left alone.
+    alias_filter_base: Vec<usize>,
 }
 
 impl Default for PullUpCorrelatedExpr {
@@ -113,6 +120,7 @@ impl PullUpCorrelatedExpr {
             pull_up_having_expr: None,
             pulled_up_scalar_agg: false,
             correlated_filters: Vec::new(),
+            alias_filter_base: Vec::new(),
         }
     }
 
@@ -237,6 +245,17 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     _ => Ok(self.stop_pull_up(plan)),
                 }
             }
+            // Remember how many join filters exist before this alias's
+            // children are rewritten. `f_up` requalifies only the filters
+            // those children add. See #25837.
+            LogicalPlan::SubqueryAlias(_) => {
+                self.alias_filter_base.push(self.join_filters.len());
+                if plan.contains_outer_reference() {
+                    Ok(self.stop_pull_up(plan))
+                } else {
+                    Ok(Transformed::no(plan))
+                }
+            }
             // A correlated filter below these nodes can move above them. The
             // node itself must not hold an outer reference, because only a
             // Filter gives its outer references to the join.
@@ -263,7 +282,6 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             | LogicalPlan::Join(_)
             | LogicalPlan::AsOfJoin(_)
             | LogicalPlan::Repartition(_)
-            | LogicalPlan::SubqueryAlias(_)
             | LogicalPlan::TableScan(_)
             | LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Values(_) => {
@@ -521,6 +539,19 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     &self.correlated_subquery_cols_map,
                     &mut local_correlated_cols,
                 );
+                // A filter pulled up from below this alias still names the
+                // inner table (`l.id`). The alias's output names that column
+                // `l2.id`, and the join condition has to match.
+                // https://github.com/apache/datafusion/issues/25837
+                let base = self
+                    .alias_filter_base
+                    .pop()
+                    .expect("SubqueryAlias f_down pushes alias_filter_base");
+                requalify_join_filter_columns(
+                    &mut self.join_filters[base..],
+                    &local_correlated_cols,
+                    &alias.alias,
+                )?;
                 let mut new_correlated_cols = BTreeSet::new();
                 for col in local_correlated_cols.iter() {
                     new_correlated_cols
@@ -826,6 +857,36 @@ fn can_pullup_over_aggregation(expr: &Expr) -> bool {
     } else {
         false
     }
+}
+
+/// Rewrite columns in `filters` that are listed in `cols` so they use `alias`.
+///
+/// `cols` are the correlated columns as named below the alias. Outer
+/// references are not in that set, so they stay as they are. The caller
+/// passes only the filters added under this alias.
+fn requalify_join_filter_columns(
+    filters: &mut [Expr],
+    cols: &BTreeSet<Column>,
+    alias: &TableReference,
+) -> Result<()> {
+    if cols.is_empty() || filters.is_empty() {
+        return Ok(());
+    }
+    for filter in filters {
+        *filter = filter
+            .clone()
+            .transform(|expr| {
+                if let Expr::Column(col) = &expr
+                    && cols.contains(col)
+                {
+                    let new_col = Column::new(Some(alias.clone()), col.name.clone());
+                    return Ok(Transformed::yes(Expr::Column(new_col)));
+                }
+                Ok(Transformed::no(expr))
+            })
+            .data()?;
+    }
+    Ok(())
 }
 
 fn collect_local_correlated_cols(

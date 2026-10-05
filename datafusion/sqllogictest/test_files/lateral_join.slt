@@ -936,6 +936,77 @@ physical_plan
 03)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 ###########################################################
+# Section 8: Derived-table alias differs from the inner table
+#
+# https://github.com/apache/datafusion/issues/25837
+# The correlated filter is pulled through a SubqueryAlias whose name is
+# not the inner table's name. The join condition must use the alias.
+###########################################################
+
+statement ok
+CREATE TABLE o(k INT) AS VALUES (1), (2);
+
+statement ok
+CREATE TABLE l(id INT, v INT) AS VALUES (1, 10), (2, 20);
+
+statement ok
+CREATE TABLE m(id INT) AS VALUES (1), (2);
+
+query II
+SELECT o.k, s.v
+FROM o, LATERAL (
+  SELECT l2.v FROM (SELECT * FROM l WHERE l.id = o.k) AS l2
+) AS s
+ORDER BY o.k;
+----
+1 10
+2 20
+
+# Projection inside the derived table still uses the inner qualifier.
+query II
+SELECT o.k, s.v
+FROM o, LATERAL (
+  SELECT x.v FROM (SELECT l.v, l.id FROM l WHERE l.id = o.k) AS x
+) AS s
+ORDER BY o.k;
+----
+1 10
+2 20
+
+# Matching alias and table name already worked; keep it that way.
+query II
+SELECT o.k, s.v
+FROM o, LATERAL (
+  SELECT l.v FROM (SELECT * FROM l WHERE l.id = o.k) AS l
+) AS s
+ORDER BY o.k;
+----
+1 10
+2 20
+
+# The derived table is one input of a join inside the LATERAL subquery.
+query II
+SELECT o.k, s.v
+FROM o, LATERAL (
+  SELECT l2.v
+  FROM (SELECT * FROM l WHERE l.id = o.k) AS l2
+  JOIN m ON m.id = l2.id
+) AS s
+ORDER BY o.k;
+----
+1 10
+2 20
+
+statement ok
+DROP TABLE o;
+
+statement ok
+DROP TABLE l;
+
+statement ok
+DROP TABLE m;
+
+###########################################################
 # Cleanup
 ###########################################################
 
