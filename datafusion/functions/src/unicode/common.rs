@@ -17,10 +17,9 @@
 
 //! Common utilities for implementing unicode functions
 
-use crate::strings::sub_view;
+use crate::strings::{MAX_INLINE_LEN, sub_view};
 use arrow::array::{
-    Array, ArrayRef, GenericStringArray, Int64Array, MAX_INLINE_VIEW_LEN,
-    OffsetSizeTrait, StringViewArray,
+    Array, ArrayRef, GenericStringArray, Int64Array, OffsetSizeTrait, StringViewArray,
 };
 use arrow::datatypes::DataType;
 use arrow_buffer::{NullBuffer, ScalarBuffer};
@@ -218,7 +217,7 @@ fn general_left_right_view<F: LeftRightSlicer>(
             let n = n_array.value(idx);
 
             let range = F::slice(string, n);
-            if range.len() > MAX_INLINE_VIEW_LEN as usize {
+            if range.len() > MAX_INLINE_LEN {
                 has_out_of_line = true;
             }
             sub_view(views[idx], string.as_bytes(), range)
@@ -235,6 +234,8 @@ fn general_left_right_view<F: LeftRightSlicer>(
     // SAFETY:
     // - Each view is produced by `sub_view` from the input view and a range
     //   within the input string, as returned by `F::slice`
+    // - `F::slice` returns ranges that start and end on char boundaries (see
+    //   `left_right_byte_length`), so every result is valid UTF-8
     // - Out-of-line views reuse the original buffer index and adjusted offset
     unsafe {
         let array = StringViewArray::new_unchecked(views, data_buffers, new_nulls);

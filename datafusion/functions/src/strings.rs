@@ -1220,7 +1220,7 @@ pub(crate) fn append_view(
 }
 
 /// Values of at most this many bytes are stored inline in their view.
-const MAX_INLINE_LEN: usize = MAX_INLINE_VIEW_LEN as usize;
+pub(crate) const MAX_INLINE_LEN: usize = MAX_INLINE_VIEW_LEN as usize;
 
 /// Returns the view for a substring of the value an existing view refers to.
 ///
