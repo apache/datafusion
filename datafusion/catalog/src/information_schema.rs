@@ -36,6 +36,7 @@ use datafusion_common::types::{LogicalType, NativeType};
 use datafusion_execution::TaskContext;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::function::WindowUDFFieldArgs;
+use datafusion_expr::type_coercion::functions::fields_with_udf;
 use datafusion_expr::{
     AggregateUDF, ReturnFieldArgs, ScalarUDF, Signature, TypeSignature, WindowUDF,
 };
@@ -523,6 +524,7 @@ fn get_udf_args_and_return_types(
     udf: &Arc<ScalarUDF>,
 ) -> Result<FunctionInformationSchema> {
     get_args_and_return_types(udf.signature(), |arg_fields| {
+        let arg_fields = &fields_with_udf(arg_fields, udf.as_ref())?;
         let scalar_arguments = &vec![None; arg_fields.len()];
         udf.return_field_from_args(ReturnFieldArgs {
             arg_fields,
@@ -535,6 +537,7 @@ fn get_udaf_args_and_return_types(
     udaf: &Arc<AggregateUDF>,
 ) -> Result<FunctionInformationSchema> {
     get_args_and_return_types(udaf.signature(), |arg_fields| {
+        let arg_fields = &fields_with_udf(arg_fields, udaf.as_ref())?;
         udaf.return_field(arg_fields)
     })
 }
@@ -543,6 +546,7 @@ fn get_udwf_args_and_return_types(
     udwf: &Arc<WindowUDF>,
 ) -> Result<FunctionInformationSchema> {
     get_args_and_return_types(udwf.signature(), |arg_fields| {
+        let arg_fields = &fields_with_udf(arg_fields, udwf.as_ref())?;
         udwf.field(WindowUDFFieldArgs::new(arg_fields, udwf.name()))
     })
 }
