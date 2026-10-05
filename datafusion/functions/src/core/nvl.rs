@@ -21,7 +21,7 @@ use datafusion_common::Result;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
-    ScalarUDFImpl, Signature, Volatility,
+    ScalarUDFImpl, Signature,
 };
 use datafusion_macros::user_doc;
 
@@ -59,26 +59,6 @@ pub struct NVLFunc {
     aliases: Vec<String>,
 }
 
-/// Currently supported types by the nvl/ifnull function.
-/// The order of these types correspond to the order on which coercion applies
-/// This should thus be from least informative to most informative
-static SUPPORTED_NVL_TYPES: &[DataType] = &[
-    DataType::Boolean,
-    DataType::UInt8,
-    DataType::UInt16,
-    DataType::UInt32,
-    DataType::UInt64,
-    DataType::Int8,
-    DataType::Int16,
-    DataType::Int32,
-    DataType::Int64,
-    DataType::Float32,
-    DataType::Float64,
-    DataType::Utf8View,
-    DataType::Utf8,
-    DataType::LargeUtf8,
-];
-
 impl Default for NVLFunc {
     fn default() -> Self {
         Self::new()
@@ -88,13 +68,7 @@ impl Default for NVLFunc {
 impl NVLFunc {
     pub fn new() -> Self {
         Self {
-            coalesce: CoalesceFunc {
-                signature: Signature::uniform(
-                    2,
-                    SUPPORTED_NVL_TYPES.to_vec(),
-                    Volatility::Immutable,
-                ),
-            },
+            coalesce: CoalesceFunc::new(),
             aliases: vec![String::from("ifnull")],
         }
     }
@@ -111,6 +85,32 @@ impl ScalarUDFImpl for NVLFunc {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         self.coalesce.return_type(arg_types)
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        // Preserve the existing type for an all-NULL call. The uniform
+        // signature previously selected the first supported type (Boolean).
+        if arg_types.iter().all(DataType::is_null) {
+            return Ok(vec![DataType::Boolean; arg_types.len()]);
+        }
+
+        match self.coalesce.coerce_types(arg_types) {
+            Ok(coerced_types) => Ok(coerced_types),
+            Err(err) => {
+                // NVL historically allowed a boolean fallback for numeric
+                // inputs (for example IFNULL(int_col, false)). Keep that
+                // behavior while using COALESCE's broader type resolution.
+                if let [left, right] = arg_types {
+                    if *left == DataType::Boolean && is_legacy_numeric_type(right) {
+                        return Ok(vec![right.clone(), right.clone()]);
+                    }
+                    if *right == DataType::Boolean && is_legacy_numeric_type(left) {
+                        return Ok(vec![left.clone(), left.clone()]);
+                    }
+                }
+                Err(err)
+            }
+        }
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
@@ -147,4 +147,20 @@ impl ScalarUDFImpl for NVLFunc {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+}
+
+fn is_legacy_numeric_type(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::Float32
+            | DataType::Float64
+    )
 }

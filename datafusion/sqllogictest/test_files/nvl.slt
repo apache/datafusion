@@ -149,6 +149,39 @@ SELECT NVL(arrow_cast('a', 'Utf8View'), NULL);
 ----
 a
 
+statement ok
+CREATE TABLE nvl_type_test AS SELECT
+  CAST('12345678901234567890123456789012345678' AS DECIMAL(38,0)) AS big,
+  CAST(1.23 AS DECIMAL(5,2)) AS d,
+  TIMESTAMP '2024-01-01 10:00:00' AS ts,
+  DATE '2024-01-01' AS dt;
+
+# NVL and IFNULL should use the same common type resolution as COALESCE.
+query TTTTTTTTT
+SELECT
+  arrow_typeof(nvl(big, 0)),
+  arrow_typeof(nvl(d, d)),
+  arrow_typeof(ifnull(d, d)),
+  arrow_typeof(nvl(ts, ts)),
+  arrow_typeof(ifnull(ts, ts)),
+  arrow_typeof(nvl(dt, dt)),
+  arrow_typeof(ifnull(dt, dt)),
+  arrow_typeof(coalesce(ts, ts)),
+  arrow_typeof(coalesce(dt, dt))
+FROM nvl_type_test;
+----
+Decimal128(38, 0) Decimal128(5, 2) Decimal128(5, 2) Timestamp(ns) Timestamp(ns) Date32 Date32 Timestamp(ns) Date32
+
+query T
+SELECT CAST(nvl(big, 0) AS VARCHAR) FROM nvl_type_test;
+----
+12345678901234567890123456789012345678
+
+query T
+SELECT CAST(nvl(ts, ts) + INTERVAL '1 hour' AS VARCHAR) FROM nvl_type_test;
+----
+2024-01-01T11:00:00
+
 # nvl is implemented as a case, and short-circuits evaluation
 # so the following query should not error
 query I
