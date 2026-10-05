@@ -910,7 +910,9 @@ impl DataSource for FileScanConfig {
         )
         .with_constraints(self.constraints.clone());
 
-        if let Some(filter) = self.file_source.filter() {
+        // Only a filter that the source applies exactly gives valid equivalences.
+        // A filter that is used only for pruning lets non-matching rows through.
+        if let Some(filter) = self.file_source.exact_filter() {
             // We need to remap column indexes to match the projected schema since that's what the equivalence properties deal with.
             // Note that this will *ignore* any non-projected columns: these don't factor into ordering / equivalence.
             match Self::add_filter_equivalence_info(&filter, &mut eq_properties, schema) {
@@ -957,9 +959,11 @@ impl DataSource for FileScanConfig {
                 // Project the statistics based on the projection
                 let output_schema = self.projected_schema()?;
                 return if let Some(projection) = self.file_source.projection() {
-                    Ok(Arc::new(
-                        projection.project_statistics(stat.clone(), &output_schema)?,
-                    ))
+                    Ok(Arc::new(projection.project_statistics_with_input_schema(
+                        stat.clone(),
+                        self.file_source.table_schema().table_schema(),
+                        &output_schema,
+                    )?))
                 } else {
                     Ok(Arc::new(stat.clone()))
                 };
@@ -974,9 +978,11 @@ impl DataSource for FileScanConfig {
             let projection = self.file_source.projection();
             let output_schema = self.projected_schema()?;
             if let Some(projection) = &projection {
-                Ok(Arc::new(
-                    projection.project_statistics(statistics.clone(), &output_schema)?,
-                ))
+                Ok(Arc::new(projection.project_statistics_with_input_schema(
+                    statistics.clone(),
+                    self.file_source.table_schema().table_schema(),
+                    &output_schema,
+                )?))
             } else {
                 Ok(Arc::new(statistics))
             }

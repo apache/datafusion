@@ -43,6 +43,43 @@ Examples of non-breaking changes include:
 - Marking a function as deprecated (`#[deprecated]`)
 - Adding a new function to a `trait` with a default implementation
 
+<!-- Keep this anchor stable: it is linked from Rust API documentation. -->
+
+<a id="internal-public-apis"></a>
+
+### DataFusion-internal Public APIs
+
+Some internal implementation details require `pub` visibility because they are
+shared across DataFusion crates. These APIs are not intended as downstream
+extension points. They are hidden from generated documentation and are not part
+of DataFusion's supported public API, so they may be changed or removed without
+notice or a deprecation period. Examples include:
+
+1. Test helpers.
+2. Operator APIs required by the optimizer to inspect or rewrite execution plans
+   across crate boundaries.
+
+Do not expose internal APIs solely for tests or microbenchmarks. Some legacy code
+does so, but new tests and benchmarks should exercise observable behavior to
+simplify maintenance.
+
+For APIs intended only for internal use, add `#[doc(hidden)]` and a doc comment
+section headed `# Public Only for Internal Use:`. Name the crate or component
+that requires access and explain why the API is not intended for downstream use.
+For example:
+
+```txt
+impl HashTableLookupExpr {
+    /// ...
+    ///
+    /// # Public Only for Internal Use:
+    /// `datafusion-proto` tests require this constructor, but it is not part of
+    /// the supported public API.
+    #[doc(hidden)]
+    pub fn new(...) {...}
+}
+```
+
 ### What is the public SQL API and what is a breaking SQL change?
 
 DataFusion is also used as a SQL engine, so changes to SQL semantics (the

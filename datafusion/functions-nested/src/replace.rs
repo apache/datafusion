@@ -24,7 +24,7 @@ use arrow::array::{
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::utils::{ListCoercion, offset_span};
+use datafusion_common::utils::{ListCoercion, offset_span, offset_span_len};
 use datafusion_common::{
     Result, ScalarValue, exec_err, internal_err, utils::take_function_args,
 };
@@ -445,7 +445,7 @@ fn general_replace<O: OffsetSizeTrait>(
     let values = list_array.values();
     let original_data = values.to_data();
     let to_data = to_array.to_data();
-    let capacity = Capacities::Array(original_data.len());
+    let capacity = Capacities::Array(offset_span_len(list_array.offsets()));
 
     // First array is the original array, second array is the element to replace with.
     let mut mutable = MutableArrayData::with_capacities(
@@ -823,5 +823,23 @@ mod tests {
         assert_eq!(result.as_list::<i32>(), &expected);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_sliced_capacity() -> Result<()> {
+        crate::utils::tests::check_sliced_list_behavior(|input| {
+            let from: ArrayRef =
+                Arc::new(arrow::array::Float64Array::from(vec![3.0; input.len()]));
+            let to: ArrayRef =
+                Arc::new(arrow::array::Float64Array::from(vec![7.0; input.len()]));
+            super::array_replace_internal(
+                "array_replace",
+                input,
+                &from,
+                &to,
+                &vec![Some(1); input.len()],
+                input.data_type(),
+            )
+        })
     }
 }
