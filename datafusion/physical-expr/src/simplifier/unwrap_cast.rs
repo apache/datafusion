@@ -42,7 +42,17 @@ use datafusion_expr_common::casts::{
 };
 
 use crate::PhysicalExpr;
-use crate::expressions::{BinaryExpr, CastExpr, Literal, TryCastExpr, lit};
+use crate::expressions::{BinaryExpr, CastExpr, Column, Literal, TryCastExpr, lit};
+
+fn is_timestamp_timezone_change(from_type: &DataType, to_type: &DataType) -> bool {
+    matches!(
+        (from_type, to_type),
+        (
+            DataType::Timestamp(_, from_timezone),
+            DataType::Timestamp(_, to_timezone)
+        ) if from_timezone.is_none() && to_timezone.is_some()
+    )
+}
 
 /// Attempts to unwrap casts in comparison expressions.
 pub(crate) fn unwrap_cast_in_comparison(
@@ -132,6 +142,8 @@ fn try_unwrap_cast_comparison(
 
     if is_timestamp_precision_narrowing_cast(&inner_type, cast_type)
         || is_date_narrowing_cast(&inner_type, cast_type)
+        || (inner_expr.downcast_ref::<Column>().is_some()
+            && is_timestamp_timezone_change(&inner_type, cast_type))
     {
         return Ok(None);
     }
@@ -628,6 +640,32 @@ mod tests {
             right_literal.value(),
             &ScalarValue::TimestampMillisecond(Some(1), None)
         );
+    }
+
+    #[test]
+    fn test_not_unwrap_timestamp_timezone_cast() {
+        let schema = Schema::new(vec![Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            false,
+        )]);
+
+        let column_expr = col("ts", &schema).unwrap();
+        let cast_expr = Arc::new(CastExpr::new(
+            column_expr,
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("+05:00".into())),
+            None,
+        ));
+        let literal_expr = lit(ScalarValue::TimestampNanosecond(
+            Some(1_000_000),
+            Some("+05:00".into()),
+        ));
+        let binary_expr =
+            Arc::new(BinaryExpr::new(cast_expr, Operator::Eq, literal_expr));
+
+        let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
+
+        assert!(!result.transformed);
     }
 
     #[test]

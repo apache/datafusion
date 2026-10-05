@@ -610,23 +610,19 @@ SELECT column1 FROM naive_col WHERE column1 = '2024-07-01T12:00:00Z'::timestampt
 ----
 2024-07-01T12:00:00
 
-# KNOWN WRONG. The same comparison under a non-UTC session zone. The literal is
-# now tz-aware (18:00Z, i.e. 12:00 Denver), so coercion casts the tz-naive
-# column to America/Denver, which reads its 12:00 as 12:00 Denver and should
-# match the July row. unwrap_cast then moves the cast off the column and onto
-# the literal, and that cast renders the literal as its UTC wall clock (18:00),
-# so no row matches. PostgreSQL under TimeZone='America/Denver' returns 1.
-# See https://github.com/apache/datafusion/issues/25095
+# A tz-naive column coerced to the session zone must retain the cast during
+# comparison simplification. Moving it to the tz-aware literal changes the
+# instant represented by the comparison.
+# See https://github.com/apache/datafusion/issues/25941
 statement ok
 SET datafusion.execution.time_zone = 'America/Denver'
 
 query I
 SELECT count(*) FROM naive_col WHERE column1 = '2024-07-01T18:00:00Z'::timestamptz
 ----
-0
+1
 
-# The plan shows the rewrite: the filter compares the naive column against a
-# naive 18:00 (1719856800 s), not against 12:00.
+# The plan retains the cast on the naive column.
 statement ok
 set datafusion.explain.logical_plan_only = true
 
@@ -634,7 +630,7 @@ query TT
 EXPLAIN SELECT column1 FROM naive_col WHERE column1 = '2024-07-01T18:00:00Z'::timestamptz
 ----
 logical_plan
-01)Filter: naive_col.column1 = TimestampNanosecond(1719856800000000000, None)
+01)Filter: CAST(naive_col.column1 AS Timestamp(ns, "America/Denver")) = TimestampNanosecond(1719856800000000000, Some("America/Denver"))
 02)--TableScan: naive_col projection=[column1]
 
 statement ok
