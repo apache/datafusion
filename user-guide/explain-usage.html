@@ -674,6 +674,11 @@ by all 16 cores.</p>
 <li><p><code class="docutils literal notranslate"><span class="pre">row_pushdown_eval_time</span></code>: time spent evaluating row-level filters</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">page_index_eval_time</span></code>: time required to evaluate the page index filters</p></li>
 </ul>
+<p><code class="docutils literal notranslate"><span class="pre">output_rows_skew</span></code> is also reported by operators that execute in multiple
+partitions: <code class="docutils literal notranslate"><span class="pre">RepartitionExec</span></code>, <code class="docutils literal notranslate"><span class="pre">HashJoinExec</span></code>, <code class="docutils literal notranslate"><span class="pre">AggregateExec</span></code>,
+<code class="docutils literal notranslate"><span class="pre">BoundedWindowAggExec</span></code> and <code class="docutils literal notranslate"><span class="pre">WindowAggExec</span></code>. It shows how evenly their output
+rows are spread across partitions, which helps spot data skew (for example, a
+hot join or grouping key). With a single partition the skew is always <code class="docutils literal notranslate"><span class="pre">0%</span></code>.</p>
 </section>
 <section id="postgres-style-explain-options">
 <h2>Postgres-style <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">(...)</span></code> options<a class="headerlink" href="#postgres-style-explain-options" title="Link to this heading">#</a></h2>
