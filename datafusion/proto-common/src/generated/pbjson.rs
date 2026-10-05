@@ -2600,7 +2600,7 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                             if compression_level__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("compressionLevel"));
                             }
-                            compression_level__ =
+                            compression_level__ = 
                                 map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
@@ -2614,7 +2614,7 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                             if terminator__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("terminator"));
                             }
-                            terminator__ =
+                            terminator__ = 
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -4056,7 +4056,7 @@ impl serde::Serialize for ExplainAnalyzeCategoriesNode {
             struct_ser.serialize_field("all", &self.all)?;
         }
         if !self.only.is_empty() {
-            let v = self.only.iter().copied().map(|v| {
+            let v = self.only.iter().cloned().map(|v| {
                 MetricCategory::try_from(v)
                     .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", v)))
                 }).collect::<std::result::Result<Vec<_>, _>>()?;
@@ -6533,6 +6533,9 @@ impl serde::Serialize for ParquetOptions {
         if self.max_predicate_cache_size_opt.is_some() {
             len += 1;
         }
+        if self.read_ahead_bytes_opt.is_some() {
+            len += 1;
+        }
         if self.max_row_group_bytes_opt.is_some() {
             len += 1;
         }
@@ -6715,6 +6718,15 @@ impl serde::Serialize for ParquetOptions {
                 }
             }
         }
+        if let Some(v) = self.read_ahead_bytes_opt.as_ref() {
+            match v {
+                parquet_options::ReadAheadBytesOpt::ReadAheadBytes(v) => {
+                    #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
+                    struct_ser.serialize_field("readAheadBytes", ToString::to_string(&v).as_str())?;
+                }
+            }
+        }
         if let Some(v) = self.max_row_group_bytes_opt.as_ref() {
             match v {
                 parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(v) => {
@@ -6808,6 +6820,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "coerceInt96",
             "max_predicate_cache_size",
             "maxPredicateCacheSize",
+            "read_ahead_bytes",
+            "readAheadBytes",
             "max_row_group_bytes",
             "maxRowGroupBytes",
             "coerce_int96_tz",
@@ -6851,6 +6865,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             BloomFilterNdv,
             CoerceInt96,
             MaxPredicateCacheSize,
+            ReadAheadBytes,
             MaxRowGroupBytes,
             CoerceInt96Tz,
         }
@@ -6909,6 +6924,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "bloomFilterNdv" | "bloom_filter_ndv" => Ok(GeneratedField::BloomFilterNdv),
                             "coerceInt96" | "coerce_int96" => Ok(GeneratedField::CoerceInt96),
                             "maxPredicateCacheSize" | "max_predicate_cache_size" => Ok(GeneratedField::MaxPredicateCacheSize),
+                            "readAheadBytes" | "read_ahead_bytes" => Ok(GeneratedField::ReadAheadBytes),
                             "maxRowGroupBytes" | "max_row_group_bytes" => Ok(GeneratedField::MaxRowGroupBytes),
                             "coerceInt96Tz" | "coerce_int96_tz" => Ok(GeneratedField::CoerceInt96Tz),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
@@ -6965,6 +6981,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut bloom_filter_ndv_opt__ = None;
                 let mut coerce_int96_opt__ = None;
                 let mut max_predicate_cache_size_opt__ = None;
+                let mut read_ahead_bytes_opt__ = None;
                 let mut max_row_group_bytes_opt__ = None;
                 let mut coerce_int96_tz_opt__ = None;
                 while let Some(k) = map_.next_key()? {
@@ -7195,6 +7212,12 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             }
                             max_predicate_cache_size_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(x.0));
                         }
+                        GeneratedField::ReadAheadBytes => {
+                            if read_ahead_bytes_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("readAheadBytes"));
+                            }
+                            read_ahead_bytes_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::ReadAheadBytesOpt::ReadAheadBytes(x.0));
+                        }
                         GeneratedField::MaxRowGroupBytes => {
                             if max_row_group_bytes_opt__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("maxRowGroupBytes"));
@@ -7245,6 +7268,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     bloom_filter_ndv_opt: bloom_filter_ndv_opt__,
                     coerce_int96_opt: coerce_int96_opt__,
                     max_predicate_cache_size_opt: max_predicate_cache_size_opt__,
+                    read_ahead_bytes_opt: read_ahead_bytes_opt__,
                     max_row_group_bytes_opt: max_row_group_bytes_opt__,
                     coerce_int96_tz_opt: coerce_int96_tz_opt__,
                 })

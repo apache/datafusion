@@ -36,6 +36,8 @@ use datafusion_common::config::EncryptionFactoryOptions;
 use datafusion_datasource::as_file_source;
 use datafusion_datasource::file_stream::FileOpener;
 use datafusion_datasource::morsel::Morselizer;
+use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::MemoryPool;
 
 use arrow::array::timezone::Tz;
 use arrow::datatypes::TimeUnit;
@@ -575,24 +577,16 @@ impl From<ParquetSource> for Arc<dyn FileSource> {
     }
 }
 
-impl FileSource for ParquetSource {
-    fn create_file_opener(
-        &self,
-        _object_store: Arc<dyn ObjectStore>,
-        _base_config: &FileScanConfig,
-        _partition: usize,
-    ) -> datafusion_common::Result<Arc<dyn FileOpener>> {
-        datafusion_common::internal_err!(
-            "ParquetSource::create_file_opener called but it supports the Morsel API, please use that instead"
-        )
-    }
-
-    fn create_morselizer(
+impl ParquetSource {
+    /// Build the [`ParquetMorselizer`]. `memory_pool` accounts read-ahead
+    /// buffers; `None` uses an unbounded pool.
+    fn build_morselizer(
         &self,
         object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
         partition: usize,
-    ) -> datafusion_common::Result<Box<dyn Morselizer>> {
+        memory_pool: Option<Arc<dyn MemoryPool>>,
+    ) -> datafusion_common::Result<ParquetMorselizer> {
         let expr_adapter_factory = base_config
             .expr_adapter_factory
             .clone()
@@ -648,7 +642,7 @@ impl FileSource for ParquetSource {
             self.pushdown_filters(),
         )?;
 
-        Ok(Box::new(ParquetMorselizer {
+        Ok(ParquetMorselizer {
             partition_index: partition,
             projection: self.projection.clone(),
             batch_size: self
@@ -681,10 +675,64 @@ impl FileSource for ParquetSource {
                 .table_parquet_options
                 .global
                 .row_group_range_assignment,
+            read_ahead_bytes: self
+                .table_parquet_options
+                .global
+                .read_ahead_bytes
+                .map(|bytes| bytes as u64),
             reverse_row_groups: self.reverse_row_groups,
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             virtual_state,
-        }))
+            memory_pool,
+        })
+    }
+}
+
+impl FileSource for ParquetSource {
+    fn create_file_opener(
+        &self,
+        _object_store: Arc<dyn ObjectStore>,
+        _base_config: &FileScanConfig,
+        _partition: usize,
+    ) -> datafusion_common::Result<Arc<dyn FileOpener>> {
+        datafusion_common::internal_err!(
+            "ParquetSource::create_file_opener called but it supports the Morsel API, please use that instead"
+        )
+    }
+
+    fn create_morselizer(
+        &self,
+        object_store: Arc<dyn ObjectStore>,
+        base_config: &FileScanConfig,
+        partition: usize,
+    ) -> datafusion_common::Result<Box<dyn Morselizer>> {
+        Ok(Box::new(self.build_morselizer(
+            object_store,
+            base_config,
+            partition,
+            None,
+        )?))
+    }
+
+    fn create_morselizer_with_context(
+        &self,
+        object_store: Arc<dyn ObjectStore>,
+        base_config: &FileScanConfig,
+        partition: usize,
+        context: &Arc<TaskContext>,
+    ) -> datafusion_common::Result<Box<dyn Morselizer>> {
+        // Only read-ahead accounts memory in the pool.
+        let memory_pool = self
+            .table_parquet_options
+            .global
+            .read_ahead_bytes
+            .map(|_| Arc::clone(context.memory_pool()));
+        Ok(Box::new(self.build_morselizer(
+            object_store,
+            base_config,
+            partition,
+            memory_pool,
+        )?))
     }
 
     fn reorder_files(

@@ -248,6 +248,7 @@ impl ParquetOptions {
             coerce_int96_tz: _,  // not used for writer props
             skip_arrow_metadata: _,
             max_predicate_cache_size: _,
+            read_ahead_bytes: _,
             max_in_list_size: _,
             row_group_range_assignment: _,
         } = self;
@@ -428,6 +429,7 @@ mod tests {
             coerce_int96: None,
             coerce_int96_tz: None,
             max_predicate_cache_size: defaults.max_predicate_cache_size,
+            read_ahead_bytes: defaults.read_ahead_bytes,
             content_defined_chunking: defaults.content_defined_chunking.clone(),
         }
     }
@@ -552,6 +554,7 @@ mod tests {
                 bloom_filter_on_read: global_options_defaults.bloom_filter_on_read,
                 max_predicate_cache_size: global_options_defaults
                     .max_predicate_cache_size,
+                read_ahead_bytes: global_options_defaults.read_ahead_bytes,
                 schema_force_view_types: global_options_defaults.schema_force_view_types,
                 binary_as_string: global_options_defaults.binary_as_string,
                 skip_arrow_metadata: global_options_defaults.skip_arrow_metadata,
