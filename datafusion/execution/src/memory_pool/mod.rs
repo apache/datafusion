@@ -24,6 +24,7 @@ use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use std::{cmp::Ordering, sync::Arc, sync::atomic};
 
+mod drift;
 mod merge_memory_pool;
 mod peak_recording;
 mod pool;
@@ -38,6 +39,7 @@ pub mod proxy {
 pub use datafusion_common::{
     human_readable_count, human_readable_duration, human_readable_size, units,
 };
+pub use drift::*;
 pub use merge_memory_pool::{MergeMemoryPool, WorkspaceLoan};
 pub use peak_recording::*;
 pub use pool::*;
@@ -410,7 +412,7 @@ impl MemoryReservation {
     /// Panics if `capacity` exceeds [`Self::size`]
     pub fn shrink(&self, capacity: usize) {
         self.size
-            .fetch_update(
+            .try_update(
                 atomic::Ordering::Relaxed,
                 atomic::Ordering::Relaxed,
                 |prev| prev.checked_sub(capacity),
@@ -428,7 +430,7 @@ impl MemoryReservation {
     pub fn try_shrink(&self, capacity: usize) -> Result<usize> {
         let prev = self
             .size
-            .fetch_update(
+            .try_update(
                 atomic::Ordering::Relaxed,
                 atomic::Ordering::Relaxed,
                 |prev| prev.checked_sub(capacity),
@@ -493,7 +495,7 @@ impl MemoryReservation {
     /// Panics if `capacity` exceeds [`Self::size`]
     pub fn split(&self, capacity: usize) -> MemoryReservation {
         self.size
-            .fetch_update(
+            .try_update(
                 atomic::Ordering::Relaxed,
                 atomic::Ordering::Relaxed,
                 |prev| prev.checked_sub(capacity),
