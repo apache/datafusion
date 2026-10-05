@@ -320,7 +320,7 @@ impl ExecutionPlan for WindowAggExec {
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.metrics.clone_inner())
+        Some(self.metrics.clone_inner().with_output_rows_skew())
     }
 
     fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
@@ -423,6 +423,7 @@ impl WindowAggExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         use super::BoundedWindowAggExec;
         use crate::InputOrderMode;
+        use datafusion_common::utils::usize_from_wire;
         use datafusion_proto_models::protobuf;
         use protobuf::window_agg_exec_node::InputOrderMode as ProtoInputOrderMode;
 
@@ -458,7 +459,12 @@ impl WindowAggExec {
                 ProtoInputOrderMode::PartiallySorted(
                     protobuf::PartiallySortedInputOrderMode { columns },
                 ) => InputOrderMode::PartiallySorted(
-                    columns.iter().map(|column| *column as usize).collect(),
+                    columns
+                        .iter()
+                        .map(|column| {
+                            usize_from_wire(*column, "WindowAggExec", "columns")
+                        })
+                        .collect::<Result<Vec<_>>>()?,
                 ),
                 ProtoInputOrderMode::Sorted(_) => InputOrderMode::Sorted,
             };

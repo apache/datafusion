@@ -60,8 +60,8 @@ mod tests {
             ("abs_b", Float64, vec![5., 4., 3., 2., 1.])
         )?;
 
-        assert!(result.len() == 1);
-        assert!(result[0] == expected);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], expected);
 
         Ok(())
     }
@@ -83,7 +83,7 @@ mod tests {
 
         let result = df.collect().await?;
 
-        assert!(result.len() == 1);
+        assert_eq!(result.len(), 1);
         assert_eq!(
             result[0].column_by_name("time_now").unwrap().data_type(),
             &DataType::Float64
@@ -141,7 +141,8 @@ mod tests {
         assert!(result[0].column(0).as_string::<i32>().is_null(0));
 
         let mut config = SessionConfig::new();
-        config.options_mut().execution.time_zone = Some("AEST".into());
+        config.options_mut().execution.time_zone =
+            Some("Australia/Sydney".parse().unwrap());
 
         let ctx = SessionContext::new_with_config(config);
 
@@ -151,10 +152,10 @@ mod tests {
 
         let result = df.collect().await?;
 
-        assert!(result.len() == 1);
+        assert_eq!(result.len(), 1);
         assert!(!result[0].column(0).as_string::<i32>().is_null(0));
         let result = result[0].column(0).as_string::<i32>().value(0);
-        assert_eq!(result, "AEST");
+        assert_eq!(result, "Australia/Sydney");
 
         Ok(())
     }
@@ -175,7 +176,7 @@ mod tests {
         );
 
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = Some("AEST".into());
+        options.execution.time_zone = Some("Australia/Sydney".parse().unwrap());
 
         let updated = foreign_udf
             .with_updated_config(&options)

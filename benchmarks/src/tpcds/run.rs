@@ -142,7 +142,7 @@ pub fn get_query_sql(base_query_path: &str, query: usize) -> Result<Vec<String>>
                     .collect());
             }
             Err(e) => errors.push(format!("{filename}: {e}")),
-        };
+        }
 
         plan_err!("invalid query. Could not find query: {:?}", errors)
     } else {

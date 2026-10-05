@@ -21,6 +21,7 @@ use crate::PhysicalExpr;
 use crate::expressions::SqlSimilarToPattern;
 use crate::expressions::translate_scalar;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -28,7 +29,7 @@ use std::sync::Arc;
 use arrow::array::*;
 use arrow::compute::kernels::boolean::{and_kleene, or_kleene};
 use arrow::compute::kernels::concat_elements::concat_elements_dyn;
-use arrow::compute::{SlicesIterator, cast, filter_record_batch};
+use arrow::compute::{SlicesIterator, cast, filter, filter_record_batch};
 use arrow::datatypes::*;
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
@@ -120,6 +121,23 @@ impl BinaryExpr {
     /// Get the operator for this binary expression
     pub fn op(&self) -> &Operator {
         &self.op
+    }
+
+    /// Mathematical intervals do not cover values produced by wrapping arithmetic.
+    fn integer_arithmetic_may_wrap(
+        &self,
+        left: &Interval,
+        right: &Interval,
+        result: &Interval,
+    ) -> bool {
+        !self.fail_on_overflow
+            && result.data_type().is_integer()
+            && matches!(
+                self.op,
+                Operator::Plus | Operator::Minus | Operator::Multiply
+            )
+            && (result.is_unbounded()
+                || unsigned_subtraction_may_underflow(self.op, left, right, result))
     }
 
     /// Wrapping on overflow breaks monotonicity (e.g. the sum of two
@@ -530,11 +548,21 @@ impl PhysicalExpr for BinaryExpr {
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
-        Ok(self.left.nullable(input_schema)? || self.right.nullable(input_schema)?)
+        match self.op {
+            Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => Ok(false),
+            _ => {
+                Ok(self.left.nullable(input_schema)?
+                    || self.right.nullable(input_schema)?)
+            }
+        }
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         use arrow::compute::kernels::numeric::*;
+
+        if self.op == Operator::And {
+            return self.evaluate_conjunction(batch);
+        }
 
         // Evaluate left-hand side expression.
         let lhs = self.left.evaluate(batch)?;
@@ -694,7 +722,12 @@ impl PhysicalExpr for BinaryExpr {
         let left_interval = children[0];
         let right_interval = children[1];
         // Calculate current node's interval:
-        apply_operator(&self.op, left_interval, right_interval)
+        let result = apply_operator(&self.op, left_interval, right_interval)?;
+        if self.integer_arithmetic_may_wrap(left_interval, right_interval, &result) {
+            Interval::make_unbounded(&result.data_type())
+        } else {
+            Ok(result)
+        }
     }
 
     fn propagate_constraints(
@@ -705,6 +738,36 @@ impl PhysicalExpr for BinaryExpr {
         // Get children intervals.
         let left_interval = children[0];
         let right_interval = children[1];
+
+        if left_interval.data_type().is_integer()
+            && right_interval.data_type().is_integer()
+            && matches!(
+                self.op,
+                Operator::Plus | Operator::Minus | Operator::Multiply | Operator::Divide
+            )
+        {
+            // Integer division truncates: a / 2 = 1 permits both 2 and 3.
+            // Wrapping arithmetic is likewise not invertible over mathematical
+            // intervals. Keep the input domains rather than exclude valid rows.
+            let contains_zero = |range: &Interval| -> Result<bool> {
+                range.contains_value(ScalarValue::new_zero(&range.data_type())?)
+            };
+            // If an operand can be zero, a zero product does not constrain
+            // the other operand. Dividing the parent interval loses that case.
+            let zero_product = self.op == Operator::Multiply
+                && contains_zero(interval)?
+                && (contains_zero(left_interval)? || contains_zero(right_interval)?);
+            if self.op == Operator::Divide
+                || zero_product
+                || self.integer_arithmetic_may_wrap(
+                    left_interval,
+                    right_interval,
+                    &apply_operator(&self.op, left_interval, right_interval)?,
+                )
+            {
+                return Ok(Some(vec![]));
+            }
+        }
 
         if self.op.eq(&Operator::And) {
             if interval.eq(&Interval::TRUE) {
@@ -826,7 +889,7 @@ impl PhysicalExpr for BinaryExpr {
         let (r_order, r_range) = (children[1].sort_properties, &children[1].range);
         match self.op() {
             Operator::Plus => {
-                let range = l_range.add(r_range)?;
+                let range = self.evaluate_bounds(&[l_range, r_range])?;
                 Ok(ExprProperties {
                     sort_properties: self.arithmetic_sort_properties(
                         l_order.add(&r_order),
@@ -840,7 +903,7 @@ impl PhysicalExpr for BinaryExpr {
                 })
             }
             Operator::Minus => {
-                let range = l_range.sub(r_range)?;
+                let range = self.evaluate_bounds(&[l_range, r_range])?;
                 Ok(ExprProperties {
                     sort_properties: self.arithmetic_sort_properties(
                         l_order.sub(&r_order),
@@ -878,13 +941,13 @@ impl PhysicalExpr for BinaryExpr {
                 strictly_order_preserving: false,
             }),
             Operator::And => Ok(ExprProperties {
-                sort_properties: r_order.and_or(&l_order),
+                sort_properties: l_order.and(&r_order),
                 range: l_range.and(r_range)?,
                 preserves_lex_ordering: false,
                 strictly_order_preserving: false,
             }),
             Operator::Or => Ok(ExprProperties {
-                sort_properties: r_order.and_or(&l_order),
+                sort_properties: l_order.or(&r_order),
                 range: l_range.or(r_range)?,
                 preserves_lex_ordering: false,
                 strictly_order_preserving: false,
@@ -926,19 +989,27 @@ impl PhysicalExpr for BinaryExpr {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
         use datafusion_proto_models::protobuf;
 
-        // Linearize a nested binary expression tree of the same operator
-        // into a flat vector of operands to avoid deep recursion in proto.
-        let op = self.op;
-        let mut operand_refs: Vec<&Arc<dyn PhysicalExpr>> = vec![&self.right];
-        let mut current_expr: &BinaryExpr = self;
+        let Self {
+            left,
+            op,
+            right,
+            fail_on_overflow,
+        } = self;
+
+        // Linearize a nested binary expression tree with the same operator and
+        // overflow policy into flat operands to avoid deep recursion in proto.
+        let mut operand_refs: Vec<&Arc<dyn PhysicalExpr>> = vec![right];
+        let mut current_left = left;
         loop {
-            match current_expr.left.downcast_ref::<BinaryExpr>() {
-                Some(bin) if bin.op == op => {
+            match current_left.downcast_ref::<BinaryExpr>() {
+                Some(bin)
+                    if bin.op == *op && bin.fail_on_overflow == *fail_on_overflow =>
+                {
                     operand_refs.push(&bin.right);
-                    current_expr = bin;
+                    current_left = &bin.left;
                 }
                 _ => {
-                    operand_refs.push(&current_expr.left);
+                    operand_refs.push(current_left);
                     break;
                 }
             }
@@ -956,6 +1027,7 @@ impl PhysicalExpr for BinaryExpr {
                     r: None,
                     op: format!("{op:?}"),
                     operands,
+                    fail_on_overflow: *fail_on_overflow,
                 }),
             )),
         }))
@@ -987,17 +1059,23 @@ impl BinaryExpr {
             protobuf::physical_expr_node::ExprType::BinaryExpr,
             "BinaryExpr",
         );
-        let op = Operator::from_proto_name(&node.op).ok_or_else(|| {
+        let protobuf::PhysicalBinaryExprNode {
+            l,
+            r,
+            op,
+            operands,
+            fail_on_overflow,
+        } = node.as_ref();
+        let op = Operator::from_proto_name(op).ok_or_else(|| {
             datafusion_common::DataFusionError::Internal(format!(
-                "Unsupported binary operator '{}'",
-                node.op
+                "Unsupported binary operator '{op}'"
             ))
         })?;
 
-        if !node.operands.is_empty() {
+        if !operands.is_empty() {
             // New linearized format: reduce the flat operands list back into
             // a nested binary expression tree.
-            let operands = ctx.decode_children_expressions(&node.operands)?;
+            let operands = ctx.decode_children_expressions(operands)?;
 
             if operands.len() < 2 {
                 return internal_err!(
@@ -1008,16 +1086,21 @@ impl BinaryExpr {
             Ok(operands
                 .into_iter()
                 .reduce(|left, right| {
-                    Arc::new(BinaryExpr::new(left, op, right)) as Arc<dyn PhysicalExpr>
+                    Arc::new(
+                        BinaryExpr::new(left, op, right)
+                            .with_fail_on_overflow(*fail_on_overflow),
+                    ) as Arc<dyn PhysicalExpr>
                 })
                 .expect("Binary expression could not be reduced to a single expression."))
         } else {
             // Legacy format with l/r fields.
             let left =
-                ctx.decode_required_expression(node.l.as_deref(), "BinaryExpr", "left")?;
+                ctx.decode_required_expression(l.as_deref(), "BinaryExpr", "left")?;
             let right =
-                ctx.decode_required_expression(node.r.as_deref(), "BinaryExpr", "right")?;
-            Ok(Arc::new(BinaryExpr::new(left, op, right)))
+                ctx.decode_required_expression(r.as_deref(), "BinaryExpr", "right")?;
+            Ok(Arc::new(
+                BinaryExpr::new(left, op, right).with_fail_on_overflow(*fail_on_overflow),
+            ))
         }
     }
 }
@@ -1089,19 +1172,7 @@ impl BinaryExpr {
         match &self.op {
             IsDistinctFrom | IsNotDistinctFrom | Lt | LtEq | Gt | GtEq | Eq | NotEq
             | Plus | Minus | Multiply | Divide | Modulo | LikeMatch | ILikeMatch
-            | NotLikeMatch | NotILikeMatch => unreachable!(),
-            And => {
-                if left_data_type == &DataType::Boolean {
-                    Ok(boolean_op(&left, &right, and_kleene)?)
-                } else {
-                    internal_err!(
-                        "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
-                        self.op,
-                        left.data_type(),
-                        right.data_type()
-                    )
-                }
-            }
+            | NotLikeMatch | NotILikeMatch | And => unreachable!(),
             Or => {
                 if left_data_type == &DataType::Boolean {
                     Ok(boolean_op(&left, &right, or_kleene)?)
@@ -1134,69 +1205,87 @@ impl BinaryExpr {
             }
         }
     }
+
+    /// Evaluates nested `AND`s together to avoid repeated filtering (#25035).
+    ///
+    /// When at most [`PRE_SELECTION_THRESHOLD`] of original rows remain,
+    /// filters before conjuncts that may be costly or fail, so they never see
+    /// rows nested evaluation would skip. `NULL` rows stay for a later `false`.
+    fn evaluate_conjunction(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        // Keep each filter mask for the final scatter.
+        let mut selections = vec![];
+        let mut input = Cow::Borrowed(batch);
+        let mut result = ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)));
+
+        // Returns whether to go on to the next conjunct.
+        let mut evaluate = |conjunct: &Arc<dyn PhysicalExpr>| -> Result<bool> {
+            if let Some(undecided) = rows_to_filter_before(
+                conjunct,
+                &result,
+                batch.schema_ref(),
+                batch.num_rows(),
+            ) {
+                let array = result.to_array(input.num_rows())?;
+                // Every kept row is true when there are no NULLs.
+                result = if array.null_count() == 0 {
+                    ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)))
+                } else {
+                    ColumnarValue::Array(filter(&array, &undecided)?)
+                };
+                input = Cow::Owned(filter_record_batch(&input, &undecided)?);
+                selections.push(undecided);
+            }
+
+            let value = conjunct.evaluate(&input)?;
+            let so_far =
+                std::mem::replace(&mut result, ColumnarValue::Scalar(ScalarValue::Null));
+            result = and_kleene_columnar(so_far, value, input.num_rows())?;
+            Ok(!is_all_false(&result))
+        };
+        if for_each_conjunct(&self.left, &mut evaluate)? {
+            for_each_conjunct(&self.right, &mut evaluate)?;
+        }
+
+        selections
+            .into_iter()
+            .rev()
+            .try_fold(result, |result, selection| unfilter(selection, result))
+    }
 }
 
 enum ShortCircuitStrategy {
     None,
     ReturnLeft,
     ReturnRight,
-    /// Evaluate the right-hand side only on the rows selected by `mask`, then
-    /// scatter the results back, filling the unselected rows with `fill_value`.
-    ///
-    /// - For `AND`, `mask` selects the rows where the LHS is `true` and
-    ///   `fill_value` is `false` (rows where the LHS is `false` are `false`).
-    /// - For `OR`, `mask` selects the rows where the LHS is `false` and
-    ///   `fill_value` is `true` (rows where the LHS is `true` are `true`).
+    /// Evaluate the RHS where the LHS is `false`; fill other rows with `true`.
     PreSelection {
         mask: BooleanArray,
         fill_value: bool,
     },
 }
 
-/// Based on the results calculated from the left side of the short-circuit operation,
-/// pre-selection filters the `RecordBatch` before evaluating the right-hand side when
-/// the side that cannot short-circuit the operator is rare:
-/// - for `AND`, when the proportion of `true` is less than or equal to 0.2
-/// - for `OR`, when the proportion of `false` is less than or equal to 0.2
+/// Maximum share of rows still needing evaluation before filtering.
 const PRE_SELECTION_THRESHOLD: f32 = 0.2;
 
-/// Checks if a logical operator (`AND`/`OR`) can short-circuit evaluation based on the left-hand side (lhs) result.
-///
-/// Short-circuiting occurs under these circumstances:
-/// - For `AND`:
-///    - if LHS is all false => short-circuit → return LHS
-///    - if LHS is all true  => short-circuit → return RHS
-///    - if LHS is mixed and true_count / len <= [`PRE_SELECTION_THRESHOLD`] -> pre-selection
-/// - For `OR`:
-///    - if LHS is all true  => short-circuit → return LHS
-///    - if LHS is all false => short-circuit → return RHS
-///    - if LHS is mixed and false_count / len <= [`PRE_SELECTION_THRESHOLD`] -> pre-selection
-/// # Arguments
-/// * `lhs` - The left-hand side (lhs) columnar value (array or scalar)
-/// * `op` - The logical operator (`AND` or `OR`)
-///
-/// # Implementation Notes
-/// 1. Only works with Boolean-typed arguments (other types automatically return `false`)
-/// 2. Handles both scalar values and array values
-/// 3. For arrays, uses optimized bit counting techniques for boolean arrays
+/// Returns the short-circuit strategy for `OR` with a Boolean LHS.
+/// All true returns the LHS; all false returns the RHS. Sparse false rows
+/// trigger pre-selection at [`PRE_SELECTION_THRESHOLD`].
+/// `AND` uses [`BinaryExpr::evaluate_conjunction`].
 fn check_short_circuit(lhs: &ColumnarValue, op: &Operator) -> ShortCircuitStrategy {
-    // Only logical operators can use this path.
-    let is_and = match op {
-        Operator::And => true,
-        Operator::Or => false,
-        _ => return ShortCircuitStrategy::None,
-    };
+    if *op != Operator::Or {
+        return ShortCircuitStrategy::None;
+    }
 
-    // Non-boolean types can't be short-circuited
+    // Only Boolean values can short-circuit.
     if lhs.data_type() != DataType::Boolean {
         return ShortCircuitStrategy::None;
     }
 
     match lhs {
         ColumnarValue::Array(array) => {
-            // Fast path for arrays - try to downcast to boolean array
+            // Check Boolean arrays directly.
             if let Ok(bool_array) = as_boolean_array(array) {
-                // Arrays with nulls can't be short-circuited
+                // NULLs still need the RHS.
                 if bool_array.null_count() > 0 {
                     return ShortCircuitStrategy::None;
                 }
@@ -1207,70 +1296,43 @@ fn check_short_circuit(lhs: &ColumnarValue, op: &Operator) -> ShortCircuitStrate
                 }
 
                 let true_count = bool_array.values().count_set_bits();
-                if is_and {
-                    if true_count == 0 {
-                        return ShortCircuitStrategy::ReturnLeft;
-                    }
+                if true_count == len {
+                    return ShortCircuitStrategy::ReturnLeft;
+                }
 
-                    if true_count == len {
-                        return ShortCircuitStrategy::ReturnRight;
-                    }
+                if true_count == 0 {
+                    return ShortCircuitStrategy::ReturnRight;
+                }
 
-                    if true_count as f32 / len as f32 <= PRE_SELECTION_THRESHOLD {
-                        // Select rows where the LHS is true; rows where the LHS
-                        // is false are false regardless of the RHS.
-                        return ShortCircuitStrategy::PreSelection {
-                            mask: bool_array.clone(),
-                            fill_value: false,
-                        };
-                    }
-                } else {
-                    if true_count == len {
-                        return ShortCircuitStrategy::ReturnLeft;
-                    }
-
-                    if true_count == 0 {
-                        return ShortCircuitStrategy::ReturnRight;
-                    }
-
-                    let false_count = len - true_count;
-                    if false_count as f32 / len as f32 <= PRE_SELECTION_THRESHOLD {
-                        // Select rows where the LHS is false; rows where the LHS
-                        // is true are true regardless of the RHS. The LHS has no
-                        // nulls here, so negating its bits is infallible.
-                        let mask = BooleanArray::new(!bool_array.values(), None);
-                        return ShortCircuitStrategy::PreSelection {
-                            mask,
-                            fill_value: true,
-                        };
-                    }
+                let false_count = len - true_count;
+                if false_count as f32 / len as f32 <= PRE_SELECTION_THRESHOLD {
+                    // Only false rows need the RHS; the LHS has no NULLs here.
+                    let mask = BooleanArray::new(!bool_array.values(), None);
+                    return ShortCircuitStrategy::PreSelection {
+                        mask,
+                        fill_value: true,
+                    };
                 }
             }
         }
         ColumnarValue::Scalar(scalar) => {
-            // Fast path for scalar values
+            // Scalars need no mask.
             if let ScalarValue::Boolean(Some(is_true)) = scalar {
-                // Return Left for:
-                // - AND with false value
-                // - OR with true value
-                if (is_and && !is_true) || (!is_and && *is_true) {
-                    return ShortCircuitStrategy::ReturnLeft;
+                return if *is_true {
+                    ShortCircuitStrategy::ReturnLeft
                 } else {
-                    return ShortCircuitStrategy::ReturnRight;
-                }
+                    ShortCircuitStrategy::ReturnRight
+                };
             }
         }
     }
 
-    // If we can't short-circuit, indicate that normal evaluation should continue
+    // Evaluate both sides normally.
     ShortCircuitStrategy::None
 }
 
-/// Collapses a pre-selected expression whose RHS is uniformly `rhs_value` across
-/// every selected row, avoiding a scatter:
-/// - when it equals `fill_value`, every row is `fill_value` (a scalar);
-/// - otherwise the selected rows already equal the RHS, which matches the LHS
-///   there, and the unselected rows are the LHS value too, so the result is `lhs`.
+/// Avoids scattering when the selected RHS rows are uniform.
+/// Returns a scalar if they match `fill_value`; otherwise returns the LHS.
 fn uniform_pre_selection_result(
     rhs_value: bool,
     fill_value: bool,
@@ -1283,21 +1345,8 @@ fn uniform_pre_selection_result(
     }
 }
 
-/// Creates a boolean array by scattering compact RHS results into the positions
-/// selected by `mask`.
-///
-/// This function is used for short-circuit evaluation optimization of logical AND/OR operations:
-/// - Only selected rows are evaluated on the RHS
-/// - Values are copied from `right_result` where `mask` is true
-/// - All other positions are filled with `fill_value` (`false` for AND, `true` for OR)
-///
-/// # Parameters
-/// - `mask` Boolean array with the rows whose result depends on the RHS
-/// - `right_result` Result of evaluating right side of expression (only for selected positions)
-/// - `fill_value` The value for the unselected positions (`false` for AND, `true` for OR)
-///
-/// # Returns
-/// A combined `ColumnarValue` with the same length as `mask`.
+/// Scatters compact RHS values where `mask` is true and fills other rows with
+/// `fill_value`. If `right_result` is `None`, selected rows become NULL.
 fn pre_selection_scatter(
     mask: &BooleanArray,
     right_result: Option<&BooleanArray>,
@@ -1316,7 +1365,7 @@ fn pre_selection_scatter(
                     result_array_builder.append_n(start - last_end, fill_value);
                 }
 
-                // copy values from right array for this slice
+                // Copy the selected RHS slice.
                 let len = end - start;
                 right_result
                     .slice(right_array_pos, len)
@@ -1339,13 +1388,157 @@ fn pre_selection_scatter(
         }),
     }
 
-    // Fill any remaining positions with `fill_value`
+    // Fill the tail.
     if last_end < result_len {
         result_array_builder.append_n(result_len - last_end, fill_value);
     }
     let boolean_result = result_array_builder.finish();
 
     Ok(ColumnarValue::Array(Arc::new(boolean_result)))
+}
+
+/// Selects undecided rows when some are false, at most
+/// [`PRE_SELECTION_THRESHOLD`] of the original batch remain, and evaluating
+/// `conjunct` on all rows is not cheap and infallible.
+fn rows_to_filter_before(
+    conjunct: &Arc<dyn PhysicalExpr>,
+    result: &ColumnarValue,
+    schema: &Schema,
+    num_rows: usize,
+) -> Option<BooleanArray> {
+    let ColumnarValue::Array(array) = result else {
+        return None;
+    };
+    let undecided = not_false(array.as_boolean());
+    let undecided_count = undecided.true_count();
+    // Classify last: it walks the whole conjunct.
+    (undecided_count < array.len()
+        && undecided_count as f32 / num_rows as f32 <= PRE_SELECTION_THRESHOLD
+        && !is_cheap_and_infallible(conjunct, schema))
+    .then_some(undecided)
+}
+
+/// Whether evaluating `expr` on all rows is cheap and cannot fail.
+/// Inspired by `reorder_predicates`' cheap forms, with fallible forms excluded.
+fn is_cheap_and_infallible(expr: &Arc<dyn PhysicalExpr>, schema: &Schema) -> bool {
+    use crate::expressions::{
+        CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr, Literal, NotExpr,
+    };
+    use Operator::*;
+
+    let is_number = |expr: &Arc<dyn PhysicalExpr>| {
+        expr.data_type(schema)
+            .is_ok_and(|t| t.is_integer() || t.is_floating())
+    };
+    let is_cheap = if let Some(binary) = expr.downcast_ref::<BinaryExpr>() {
+        match binary.op {
+            Eq | NotEq | Lt | LtEq | Gt | GtEq | IsDistinctFrom | IsNotDistinctFrom
+            | And | Or => true,
+            // Wraps on overflow instead of failing.
+            Plus | Minus | Multiply => {
+                !binary.fail_on_overflow
+                    && is_number(&binary.left)
+                    && is_number(&binary.right)
+            }
+            _ => false,
+        }
+    } else if let Some(cast) = expr.downcast_ref::<CastExpr>() {
+        cast.expr()
+            .data_type(schema)
+            .is_ok_and(|from| cast.is_bigger_cast(&from))
+    } else {
+        expr.is::<Column>()
+            || expr.is::<Literal>()
+            || expr.is::<InListExpr>()
+            || expr.is::<NotExpr>()
+            || expr.is::<IsNullExpr>()
+            || expr.is::<IsNotNullExpr>()
+    };
+    is_cheap
+        && expr
+            .children()
+            .into_iter()
+            .all(|child| is_cheap_and_infallible(child, schema))
+}
+
+/// Calls `f` on each conjunct of the `AND` chain under `expr`, left to right,
+/// until it returns `false`. Walks the tree in place, so it doesn't allocate.
+fn for_each_conjunct(
+    expr: &Arc<dyn PhysicalExpr>,
+    f: &mut impl FnMut(&Arc<dyn PhysicalExpr>) -> Result<bool>,
+) -> Result<bool> {
+    match expr.downcast_ref::<BinaryExpr>() {
+        Some(binary) if binary.op == Operator::And => {
+            Ok(for_each_conjunct(&binary.left, f)?
+                && for_each_conjunct(&binary.right, f)?)
+        }
+        _ => f(expr),
+    }
+}
+
+/// Whether every row is already `false`.
+fn is_all_false(value: &ColumnarValue) -> bool {
+    match value {
+        ColumnarValue::Array(array) => {
+            let array = array.as_boolean();
+            array.null_count() == 0 && !array.has_true()
+        }
+        ColumnarValue::Scalar(scalar) => *scalar == ScalarValue::Boolean(Some(false)),
+    }
+}
+
+/// Scatters `result` back to all rows of `selection`; dropped rows are `false`.
+fn unfilter(selection: BooleanArray, result: ColumnarValue) -> Result<ColumnarValue> {
+    let result = result.into_array(selection.true_count())?;
+    let result = result.as_boolean();
+    if result.null_count() == 0 {
+        if !result.has_false() {
+            return Ok(ColumnarValue::Array(Arc::new(selection)));
+        }
+        if !result.has_true() {
+            return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(false))));
+        }
+    }
+    pre_selection_scatter(&selection, Some(result), false)
+}
+
+/// A null-free mask of the rows of `array` that are `true` or `NULL`.
+fn not_false(array: &BooleanArray) -> BooleanArray {
+    let values = match array.nulls() {
+        Some(nulls) => array.values() | &!nulls.inner(),
+        None => array.values().clone(),
+    };
+    BooleanArray::new(values, None)
+}
+
+/// Kleene `AND` of `lhs` and `rhs` over `num_rows` rows.
+fn and_kleene_columnar(
+    lhs: ColumnarValue,
+    rhs: ColumnarValue,
+    num_rows: usize,
+) -> Result<ColumnarValue> {
+    use ColumnarValue::Scalar;
+    use ScalarValue::Boolean;
+
+    if rhs.data_type() != DataType::Boolean {
+        return internal_err!("Cannot evaluate AND with a {} operand", rhs.data_type());
+    }
+    Ok(match (lhs, rhs) {
+        (Scalar(Boolean(Some(true))), other) | (other, Scalar(Boolean(Some(true)))) => {
+            other
+        }
+        (Scalar(Boolean(Some(false))), _) | (_, Scalar(Boolean(Some(false)))) => {
+            Scalar(Boolean(Some(false)))
+        }
+        (lhs, rhs) => {
+            let lhs = lhs.into_array(num_rows)?;
+            let rhs = rhs.into_array(num_rows)?;
+            ColumnarValue::Array(Arc::new(and_kleene(
+                lhs.as_boolean(),
+                rhs.as_boolean(),
+            )?))
+        }
+    })
 }
 
 /// Create a binary expression whose arguments are correctly coerced.
@@ -4194,6 +4387,27 @@ mod tests {
     }
 
     #[test]
+    fn distinct_from_op_nullability() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("nullable", DataType::Boolean, true),
+            Field::new("non_nullable", DataType::Boolean, false),
+        ]);
+        let cases = [
+            (Operator::IsDistinctFrom, "nullable", false),
+            (Operator::IsNotDistinctFrom, "nullable", false),
+            (Operator::Eq, "nullable", true),
+            (Operator::Eq, "non_nullable", false),
+        ];
+
+        for (op, column, expected) in cases {
+            let expr = BinaryExpr::new(col(column, &schema)?, op, lit(true));
+            assert_eq!(expr.nullable(&schema)?, expected, "{op} with {column}");
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn is_not_distinct_from_op_bool() {
         let (schema, a, b) = bool_test_arrays();
         let expected = [
@@ -5939,32 +6153,13 @@ mod tests {
         )
         .unwrap();
 
-        // op: AND left: all false
+        // `AND` uses `evaluate_conjunction` instead.
         let left_expr = logical2physical(&logical_col("a").eq(expr_lit(2)), &schema);
         let left_value = left_expr.evaluate(&batch).unwrap();
         assert!(matches!(
             check_short_circuit(&left_value, &Operator::And),
-            ShortCircuitStrategy::ReturnLeft
+            ShortCircuitStrategy::None
         ));
-
-        // op: AND left: not all false
-        let left_expr = logical2physical(&logical_col("a").eq(expr_lit(3)), &schema);
-        let left_value = left_expr.evaluate(&batch).unwrap();
-        let ColumnarValue::Array(array) = &left_value else {
-            panic!("Expected ColumnarValue::Array");
-        };
-        let ShortCircuitStrategy::PreSelection { mask, fill_value } =
-            check_short_circuit(&left_value, &Operator::And)
-        else {
-            panic!("Expected ShortCircuitStrategy::PreSelection");
-        };
-        // For AND, the mask selects the rows where the LHS is true and the
-        // unselected rows are filled with `false`.
-        assert!(!fill_value);
-        let expected_boolean_arr: Vec<_> =
-            as_boolean_array(array).unwrap().iter().collect();
-        let boolean_arr: Vec<_> = mask.iter().collect();
-        assert_eq!(expected_boolean_arr, boolean_arr);
 
         // op: OR left: all true
         let left_expr = logical2physical(&logical_col("a").gt(expr_lit(0)), &schema);
@@ -6034,15 +6229,9 @@ mod tests {
         )
         .unwrap();
 
-        // Case: Mixed values with nulls - shouldn't short-circuit for AND
+        // Case: Mixed values with nulls - shouldn't short-circuit for OR
         let mixed_nulls = logical2physical(&logical_col("c"), &schema_nullable);
         let mixed_nulls_value = mixed_nulls.evaluate(&batch_nullable).unwrap();
-        assert!(matches!(
-            check_short_circuit(&mixed_nulls_value, &Operator::And),
-            ShortCircuitStrategy::None
-        ));
-
-        // Case: Mixed values with nulls - shouldn't short-circuit for OR
         assert!(matches!(
             check_short_circuit(&mixed_nulls_value, &Operator::Or),
             ShortCircuitStrategy::None
@@ -6059,11 +6248,7 @@ mod tests {
         let null_expr = logical2physical(&logical_col("e"), &null_batch.schema());
         let null_value = null_expr.evaluate(&null_batch).unwrap();
 
-        // All nulls shouldn't short-circuit for AND or OR
-        assert!(matches!(
-            check_short_circuit(&null_value, &Operator::And),
-            ShortCircuitStrategy::None
-        ));
+        // All nulls shouldn't short-circuit for OR
         assert!(matches!(
             check_short_circuit(&null_value, &Operator::Or),
             ShortCircuitStrategy::None
@@ -6076,17 +6261,9 @@ mod tests {
             check_short_circuit(&scalar_true, &Operator::Or),
             ShortCircuitStrategy::ReturnLeft
         )); // Should short-circuit OR
-        assert!(matches!(
-            check_short_circuit(&scalar_true, &Operator::And),
-            ShortCircuitStrategy::ReturnRight
-        )); // Should return the RHS for AND
 
         // Scalar false
         let scalar_false = ColumnarValue::Scalar(ScalarValue::Boolean(Some(false)));
-        assert!(matches!(
-            check_short_circuit(&scalar_false, &Operator::And),
-            ShortCircuitStrategy::ReturnLeft
-        )); // Should short-circuit AND
         assert!(matches!(
             check_short_circuit(&scalar_false, &Operator::Or),
             ShortCircuitStrategy::ReturnRight
@@ -6095,19 +6272,12 @@ mod tests {
         // Scalar null
         let scalar_null = ColumnarValue::Scalar(ScalarValue::Boolean(None));
         assert!(matches!(
-            check_short_circuit(&scalar_null, &Operator::And),
-            ShortCircuitStrategy::None
-        ));
-        assert!(matches!(
             check_short_circuit(&scalar_null, &Operator::Or),
             ShortCircuitStrategy::None
         ));
     }
 
-    /// Test for [pre_selection_scatter].
-    ///
-    /// `check_short_circuit` only calls this helper with a non-empty,
-    /// non-null mask that is neither all true nor all false.
+    /// Tests [`pre_selection_scatter`] with non-empty, null-free, mixed masks.
     #[test]
     fn test_pre_selection_scatter() {
         fn create_bool_array(bools: Vec<bool>) -> BooleanArray {
@@ -6324,6 +6494,684 @@ mod tests {
                 "OR pre-selection must match Kleene OR for d = {d:?}"
             );
         }
+    }
+
+    fn left_deep_and(conjuncts: &[Arc<dyn PhysicalExpr>]) -> Arc<dyn PhysicalExpr> {
+        conjuncts
+            .iter()
+            .cloned()
+            .reduce(|l, r| Arc::new(BinaryExpr::new(l, Operator::And, r)))
+            .unwrap()
+    }
+
+    fn right_deep_and(conjuncts: &[Arc<dyn PhysicalExpr>]) -> Arc<dyn PhysicalExpr> {
+        conjuncts
+            .iter()
+            .cloned()
+            .rev()
+            .reduce(|r, l| Arc::new(BinaryExpr::new(l, Operator::And, r)))
+            .unwrap()
+    }
+
+    fn balanced_and(conjuncts: &[Arc<dyn PhysicalExpr>]) -> Arc<dyn PhysicalExpr> {
+        if let [conjunct] = conjuncts {
+            return Arc::clone(conjunct);
+        }
+        let (l, r) = conjuncts.split_at(conjuncts.len() / 2);
+        Arc::new(BinaryExpr::new(
+            balanced_and(l),
+            Operator::And,
+            balanced_and(r),
+        ))
+    }
+
+    type RowCountLog = Arc<std::sync::Mutex<Vec<(usize, usize)>>>;
+
+    /// Records rows seen by each conjunct and bypasses the cheap-expression path.
+    #[derive(Debug)]
+    struct RowCountRecorder {
+        id: usize,
+        inner: Arc<dyn PhysicalExpr>,
+        log: RowCountLog,
+    }
+
+    impl RowCountRecorder {
+        fn wrap(
+            id: usize,
+            inner: &Arc<dyn PhysicalExpr>,
+            log: &RowCountLog,
+        ) -> Arc<dyn PhysicalExpr> {
+            Arc::new(Self {
+                id,
+                inner: Arc::clone(inner),
+                log: Arc::clone(log),
+            })
+        }
+    }
+
+    impl PartialEq for RowCountRecorder {
+        fn eq(&self, other: &Self) -> bool {
+            self.id == other.id && self.inner.eq(&other.inner)
+        }
+    }
+
+    impl Eq for RowCountRecorder {}
+
+    impl Hash for RowCountRecorder {
+        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+            self.id.hash(state);
+            self.inner.hash(state);
+        }
+    }
+
+    impl std::fmt::Display for RowCountRecorder {
+        fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(f, "{}", self.inner)
+        }
+    }
+
+    impl PhysicalExpr for RowCountRecorder {
+        fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
+            self.inner.data_type(input_schema)
+        }
+
+        fn nullable(&self, input_schema: &Schema) -> Result<bool> {
+            self.inner.nullable(input_schema)
+        }
+
+        fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+            self.log.lock().unwrap().push((self.id, batch.num_rows()));
+            self.inner.evaluate(batch)
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+            vec![&self.inner]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            mut children: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            Ok(Self::wrap(self.id, &children.swap_remove(0), &self.log))
+        }
+
+        fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            self.inner.fmt_sql(f)
+        }
+    }
+
+    #[test]
+    fn test_conjunction_matches_kleene_and() -> Result<()> {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+
+        let log = RowCountLog::default();
+        let mut rng = StdRng::seed_from_u64(25035);
+        for num_rows in [0, 1, 7, 100, 1000] {
+            for _ in 0..50 {
+                let mut fields = vec![];
+                let mut columns: Vec<ArrayRef> = vec![];
+                let mut conjuncts: Vec<Arc<dyn PhysicalExpr>> = vec![];
+                let mut expected: Option<BooleanArray> = None;
+                for id in 0..rng.random_range(2..=6) {
+                    // Mostly nullable columns, sometimes a boolean literal.
+                    let (conjunct, values): (Arc<dyn PhysicalExpr>, BooleanArray) = if rng
+                        .random_bool(0.15)
+                    {
+                        let value =
+                            [Some(true), Some(false), None][rng.random_range(0..3)];
+                        (
+                            lit(ScalarValue::Boolean(value)),
+                            vec![value; num_rows].into(),
+                        )
+                    } else {
+                        let p_true = [0.05, 0.3, 0.7, 0.95, 1.0][rng.random_range(0..5)];
+                        let p_null = [0.0, 0.0, 0.1, 0.5][rng.random_range(0..4)];
+                        let values = (0..num_rows)
+                            .map(|_| {
+                                (!rng.random_bool(p_null))
+                                    .then(|| rng.random_bool(p_true))
+                            })
+                            .collect::<BooleanArray>();
+                        let index = columns.len();
+                        let name = format!("c{index}");
+                        fields.push(Field::new(&name, DataType::Boolean, true));
+                        columns.push(Arc::new(values.clone()));
+                        (Arc::new(Column::new(&name, index)), values)
+                    };
+                    // Opaque half the time, so filtering kicks in.
+                    let conjunct = if rng.random_bool(0.5) {
+                        RowCountRecorder::wrap(id, &conjunct, &log)
+                    } else {
+                        conjunct
+                    };
+                    conjuncts.push(conjunct);
+                    expected = Some(match expected {
+                        None => values,
+                        Some(acc) => and_kleene(&acc, &values)?,
+                    });
+                }
+                let expected = expected.unwrap();
+                let batch = RecordBatch::try_new_with_options(
+                    Arc::new(Schema::new(fields)),
+                    columns,
+                    &RecordBatchOptions::new().with_row_count(Some(num_rows)),
+                )?;
+
+                for expr in [
+                    left_deep_and(&conjuncts),
+                    right_deep_and(&conjuncts),
+                    balanced_and(&conjuncts),
+                ] {
+                    let result = expr.evaluate(&batch)?.into_array(num_rows)?;
+                    assert_eq!(&expected, result.as_boolean(), "{expr}");
+                }
+            }
+        }
+        // Filtering did kick in.
+        let log = log.lock().unwrap();
+        assert!(log.iter().any(|(_, rows)| (8..100).contains(rows)));
+        Ok(())
+    }
+
+    /// Compares three tree shapes and records rows seen by each conjunct.
+    fn evaluate_recorded_conjunction(
+        conjuncts: &[Arc<dyn PhysicalExpr>],
+        batch: &RecordBatch,
+    ) -> Result<(ArrayRef, Vec<usize>)> {
+        let log = RowCountLog::default();
+        let recorded: Vec<_> = conjuncts
+            .iter()
+            .enumerate()
+            .map(|(id, conjunct)| RowCountRecorder::wrap(id, conjunct, &log))
+            .collect();
+
+        let mut outcomes = vec![];
+        for expr in [
+            left_deep_and(&recorded),
+            right_deep_and(&recorded),
+            balanced_and(&recorded),
+        ] {
+            let result = expr.evaluate(batch)?.into_array(batch.num_rows())?;
+            let log = std::mem::take(&mut *log.lock().unwrap());
+            let (ids, rows): (Vec<_>, Vec<_>) = log.into_iter().unzip();
+            assert_eq!(ids, (0..conjuncts.len()).collect::<Vec<_>>(), "{expr}");
+            outcomes.push((result, rows));
+        }
+        // Tree shape must not change results or row counts.
+        assert!(outcomes.windows(2).all(|w| w[0] == w[1]), "{outcomes:?}");
+        Ok(outcomes.swap_remove(0))
+    }
+
+    #[test]
+    fn test_conjunction_filters_to_undecided_rows() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from_iter_values(0..100))],
+        )?;
+        let id_lt =
+            |n: i32| logical2physical(&logical_col("id").lt(expr_lit(n)), &schema);
+
+        let (result, rows) = evaluate_recorded_conjunction(
+            &[
+                id_lt(50),
+                id_lt(30),
+                id_lt(20),
+                // Filter when 20% remain.
+                id_lt(10),
+                // Filter again to the undecided rows.
+                logical2physical(&logical_col("id").gt_eq(expr_lit(0)), &schema),
+                id_lt(5),
+            ],
+            &batch,
+        )?;
+        assert_eq!(rows, vec![100, 100, 100, 20, 10, 10]);
+        let expected: BooleanArray = (0..100).map(|id| Some(id < 5)).collect();
+        assert_eq!(&expected, result.as_boolean());
+        Ok(())
+    }
+
+    #[test]
+    fn test_conjunction_keeps_null_rows_undecided() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("c", DataType::Boolean, true),
+        ]));
+        // `c` is NULL for ids 0..10, true for 10..15 and false otherwise.
+        let c: BooleanArray = (0..100).map(|id| (id >= 10).then_some(id < 15)).collect();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from_iter_values(0..100)), Arc::new(c)],
+        )?;
+
+        let (result, rows) = evaluate_recorded_conjunction(
+            &[
+                logical2physical(&logical_col("c"), &schema),
+                logical2physical(&logical_col("id").gt_eq(expr_lit(5)), &schema),
+            ],
+            &batch,
+        )?;
+        // Keep all 10 NULL rows and the 5 true rows.
+        assert_eq!(rows, vec![100, 15]);
+        // A later false resolves the first 5 NULL rows.
+        let expected: BooleanArray = (0..100)
+            .map(|id| match id {
+                0..5 => Some(false),
+                5..10 => None,
+                10..15 => Some(true),
+                _ => Some(false),
+            })
+            .collect();
+        assert_eq!(&expected, result.as_boolean());
+        Ok(())
+    }
+
+    #[test]
+    fn test_conjunction_filters_before_fallible_conjunct() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("a", DataType::Int32, false),
+        ]));
+        // `a` is only non-zero where `id < 10`.
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from_iter_values(0..100)),
+                Arc::new(Int32Array::from_iter_values(
+                    (0..100).map(|id| if id < 10 { id + 1 } else { 0 }),
+                )),
+            ],
+        )?;
+        let conjuncts = [
+            logical2physical(&logical_col("id").gt_eq(expr_lit(0)), &schema),
+            logical2physical(&logical_col("id").lt(expr_lit(10)), &schema),
+            // Divides by zero on the other 90 rows.
+            logical2physical(
+                &(expr_lit(100) / logical_col("a")).gt(expr_lit(1)),
+                &schema,
+            ),
+        ];
+
+        let expected: BooleanArray = (0..100).map(|id| Some(id < 10)).collect();
+        for expr in [
+            left_deep_and(&conjuncts),
+            right_deep_and(&conjuncts),
+            balanced_and(&conjuncts),
+        ] {
+            let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+            assert_eq!(&expected, result.as_boolean(), "{expr}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_is_cheap_and_infallible() {
+        use datafusion_expr::{binary_expr, cast, not};
+
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Boolean, true),
+            Field::new("s", DataType::Utf8, true),
+        ]);
+        let is_cheap = |expr: &datafusion_expr::Expr| {
+            is_cheap_and_infallible(&logical2physical(expr, &schema), &schema)
+        };
+        let (a, b, c, s) = (
+            logical_col("a"),
+            logical_col("b"),
+            logical_col("c"),
+            logical_col("s"),
+        );
+
+        assert!(is_cheap(&a.clone().lt(expr_lit(5))));
+        assert!(is_cheap(&a.clone().eq(b.clone()).and(not(c.clone()))));
+        assert!(is_cheap(
+            &c.clone().is_null().or(a.clone().gt_eq(expr_lit(1)))
+        ));
+        assert!(is_cheap(&binary_expr(
+            a.clone(),
+            Operator::IsDistinctFrom,
+            b.clone(),
+        )));
+        assert!(is_cheap(&s.clone().not_eq(expr_lit("x"))));
+        assert!(is_cheap(
+            &a.clone().in_list(vec![expr_lit(1), expr_lit(2)], false)
+        ));
+        // Widening and wrapping arithmetic cannot fail.
+        assert!(is_cheap(
+            &cast(a.clone(), DataType::Int64).lt(expr_lit(5i64))
+        ));
+        assert!(is_cheap(
+            &(a.clone() * b.clone() - expr_lit(1)).gt(a.clone())
+        ));
+
+        // Narrowing, parsing, division, and checked arithmetic can fail.
+        let checked_plus = BinaryExpr::new(
+            logical2physical(&a, &schema),
+            Operator::Plus,
+            logical2physical(&b, &schema),
+        )
+        .with_fail_on_overflow(true);
+        assert!(!is_cheap_and_infallible(
+            &(Arc::new(checked_plus) as _),
+            &schema
+        ));
+        assert!(!is_cheap(
+            &cast(a.clone(), DataType::Int8).lt(expr_lit(5i8))
+        ));
+        assert!(!is_cheap(&cast(s.clone(), DataType::Int32).gt(a.clone())));
+        assert!(!is_cheap(&(expr_lit(10) / a.clone()).gt(expr_lit(1))));
+        assert!(!is_cheap(&a.in_list(vec![expr_lit(10) / b.clone()], false)));
+        assert!(!is_cheap(&s.clone().like(expr_lit("x%"))));
+        assert!(!is_cheap(&binary_expr(
+            s,
+            Operator::RegexMatch,
+            expr_lit("x")
+        )));
+    }
+
+    #[test]
+    fn test_rows_to_filter_before() {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let cheap = logical2physical(&logical_col("a").lt(expr_lit(5)), &schema);
+        let fallible =
+            logical2physical(&(expr_lit(10) / logical_col("a")).gt(expr_lit(1)), &schema);
+        // 1 true and 1 NULL row out of 10.
+        let few_left = ColumnarValue::Array(Arc::new(BooleanArray::from(
+            (0..10)
+                .map(|i| (i != 1).then_some(i == 0))
+                .collect::<Vec<_>>(),
+        )));
+        let many_left = ColumnarValue::Array(Arc::new(BooleanArray::from(
+            (0..10).map(|i| Some(i < 3)).collect::<Vec<_>>(),
+        )));
+        let all_true = ColumnarValue::Array(Arc::new(BooleanArray::from(vec![true; 10])));
+
+        // Filter before fallible work when few rows remain; keep NULLs.
+        let expected = BooleanArray::from((0..10).map(|i| i < 2).collect::<Vec<_>>());
+        assert_eq!(
+            rows_to_filter_before(&fallible, &few_left, &schema, 10),
+            Some(expected)
+        );
+        assert_eq!(rows_to_filter_before(&cheap, &few_left, &schema, 10), None);
+        assert_eq!(
+            rows_to_filter_before(&fallible, &many_left, &schema, 10),
+            None
+        );
+        assert_eq!(
+            rows_to_filter_before(&fallible, &all_true, &schema, 10),
+            None
+        );
+        let scalar = ColumnarValue::Scalar(ScalarValue::Boolean(None));
+        assert_eq!(rows_to_filter_before(&fallible, &scalar, &schema, 10), None);
+    }
+
+    #[test]
+    fn test_conjunction_rejects_non_boolean_operand() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Boolean, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])),
+                Arc::new(BooleanArray::from(vec![true, false])),
+            ],
+        )?;
+        let (a, b) = (col("a", &schema)?, col("b", &schema)?);
+
+        for expr in [
+            BinaryExpr::new(Arc::clone(&a), Operator::And, Arc::clone(&b)),
+            BinaryExpr::new(b, Operator::And, a),
+        ] {
+            let err = expr.evaluate(&batch).unwrap_err();
+            assert_contains!(err.to_string(), "Cannot evaluate AND with a Int32 operand");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_integer_interval_propagation_covers_runtime_values() {
+        // Enumerate small domains and both ends of Int8, including zero divisors,
+        // truncation, signed overflow and checked arithmetic. Every successful
+        // runtime evaluation must remain possible after interval propagation.
+        let batch = RecordBatch::new_empty(Arc::new(Schema::empty()));
+        let domains = [
+            (-3i8, 3i8),
+            (0, 1),
+            (1, 3),
+            (-3, -1),
+            (-128, -127),
+            (126, 127),
+        ];
+        for checked in [false, true] {
+            for op in [
+                Operator::Plus,
+                Operator::Minus,
+                Operator::Multiply,
+                Operator::Divide,
+            ] {
+                let expr = BinaryExpr::new(lit(0i8), op, lit(0i8))
+                    .with_fail_on_overflow(checked);
+                for (lo, hi) in domains {
+                    for (rlo, rhi) in
+                        domains.into_iter().chain([(-1, -1), (0, 0), (2, 2)])
+                    {
+                        let left = Interval::make(Some(lo), Some(hi)).unwrap();
+                        let right = Interval::make(Some(rlo), Some(rhi)).unwrap();
+                        let bounds = expr.evaluate_bounds(&[&left, &right]).unwrap();
+                        if matches!(op, Operator::Plus | Operator::Minus) {
+                            let children = [left.clone(), right.clone()].map(|range| {
+                                ExprProperties {
+                                    range,
+                                    ..ExprProperties::new_unknown()
+                                }
+                            });
+                            assert_eq!(
+                                expr.get_properties(&children).unwrap().range,
+                                bounds
+                            );
+                        }
+                        for a in lo..=hi {
+                            for b in rlo..=rhi {
+                                // Use the execution kernel as the oracle rather than
+                                // duplicating its checked and wrapping arithmetic.
+                                let runtime = BinaryExpr::new(lit(a), op, lit(b))
+                                    .with_fail_on_overflow(checked);
+                                let result = match runtime.evaluate(&batch) {
+                                    Ok(value) => value.into_array(1).unwrap(),
+                                    Err(error) => {
+                                        assert!(
+                                            checked || op == Operator::Divide,
+                                            "wrapping {a} {op} {b} failed: {error}"
+                                        );
+                                        continue;
+                                    }
+                                };
+                                let result = result.as_primitive::<Int8Type>().value(0);
+                                let result =
+                                    Interval::make(Some(result), Some(result)).unwrap();
+                                assert_eq!(
+                                    bounds.contains(&result).unwrap(),
+                                    Interval::TRUE,
+                                    "forward {a} {op} {b}, checked={checked}, bounds={bounds:?}"
+                                );
+                                let propagated = expr
+                                    .propagate_constraints(&result, &[&left, &right])
+                                    .unwrap();
+                                let propagated = propagated
+                                    .expect("successful runtime result must be feasible");
+                                if !propagated.is_empty() {
+                                    assert_eq!(
+                                        propagated[0]
+                                            .contains(
+                                                Interval::make(Some(a), Some(a)).unwrap()
+                                            )
+                                            .unwrap(),
+                                        Interval::TRUE,
+                                        "left input excluded for {a} {op} {b}, checked={checked}: {propagated:?}"
+                                    );
+                                    assert_eq!(
+                                        propagated[1]
+                                            .contains(
+                                                Interval::make(Some(b), Some(b)).unwrap()
+                                            )
+                                            .unwrap(),
+                                        Interval::TRUE,
+                                        "right input excluded for {a} {op} {b}, checked={checked}: {propagated:?}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_integer_interval_error_propagation() {
+        // Compare error messages without backtraces, which differ by call path.
+        let integer = Interval::make(Some(1i32), Some(2i32)).unwrap();
+        let boolean = Interval::TRUE;
+        for op in [Operator::Plus, Operator::Minus] {
+            let expr = BinaryExpr::new(lit(1i32), op, lit(true));
+            let expected = apply_operator(&op, &integer, &boolean)
+                .unwrap_err()
+                .strip_backtrace();
+            assert_eq!(
+                expr.evaluate_bounds(&[&integer, &boolean])
+                    .unwrap_err()
+                    .strip_backtrace(),
+                expected
+            );
+            let children =
+                [integer.clone(), boolean.clone()].map(|range| ExprProperties {
+                    range,
+                    ..ExprProperties::new_unknown()
+                });
+            assert_eq!(
+                expr.get_properties(&children)
+                    .unwrap_err()
+                    .strip_backtrace(),
+                expected
+            );
+        }
+
+        // A nonnumeric parent cannot describe an integer product. Preserve
+        // the error from constructing zero for its unsupported type.
+        let parent = Interval::make_unbounded(&DataType::Utf8).unwrap();
+        let expr = BinaryExpr::new(lit(1i32), Operator::Multiply, lit(2i32));
+        assert_eq!(
+            expr.propagate_constraints(&parent, &[&integer, &integer])
+                .unwrap_err()
+                .strip_backtrace(),
+            ScalarValue::new_zero(&DataType::Utf8)
+                .unwrap_err()
+                .strip_backtrace()
+        );
+    }
+
+    #[test]
+    fn test_unsigned_subtraction_interval_underflow() {
+        let expr = BinaryExpr::new(lit(0u8), Operator::Minus, lit(1u8));
+        let left = Interval::make(Some(0u8), Some(2u8)).unwrap();
+        let right = Interval::make(Some(1u8), Some(1u8)).unwrap();
+        let wrapped = Interval::make(Some(255u8), Some(255u8)).unwrap();
+        assert_eq!(
+            expr.evaluate_bounds(&[&left, &right])
+                .unwrap()
+                .contains(&wrapped)
+                .unwrap(),
+            Interval::TRUE
+        );
+        assert_eq!(
+            expr.propagate_constraints(&wrapped, &[&left, &right])
+                .unwrap(),
+            Some(vec![])
+        );
+    }
+
+    #[test]
+    fn test_nested_wrapping_arithmetic_properties() {
+        let difference = Arc::new(BinaryExpr::new(lit(0u8), Operator::Minus, lit(1u8)));
+        let singleton = |value: u8| ExprProperties {
+            sort_properties: SortProperties::Singleton,
+            range: Interval::make(Some(value), Some(value)).unwrap(),
+            ..ExprProperties::new_unknown()
+        };
+        let difference_props = difference
+            .get_properties(&[singleton(0), singleton(1)])
+            .unwrap();
+        assert_eq!(difference_props.sort_properties, SortProperties::Singleton);
+        assert!(
+            difference_props
+                .range
+                .contains_value(ScalarValue::UInt8(Some(255)))
+                .unwrap()
+        );
+
+        // The inner constant wraps to 255. An incorrect range of [0, 0]
+        // would let the outer addition claim to preserve ascending order.
+        let expr =
+            BinaryExpr::new(Arc::new(Column::new("a", 0)), Operator::Plus, difference);
+        let properties = expr
+            .get_properties(&[
+                ExprProperties {
+                    sort_properties: SortProperties::Ordered(SortOptions::default()),
+                    range: Interval::make(Some(0u8), Some(1u8)).unwrap(),
+                    ..ExprProperties::new_unknown()
+                },
+                difference_props,
+            ])
+            .unwrap();
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("a", DataType::UInt8, false)])),
+            vec![Arc::new(UInt8Array::from(vec![0, 1]))],
+        )
+        .unwrap();
+        let actual = expr.evaluate(&batch).unwrap().into_array(2).unwrap();
+        assert_eq!(actual.as_ref(), &UInt8Array::from(vec![255, 0]));
+        assert_eq!(properties.sort_properties, SortProperties::Unordered);
+        for value in [0u8, 255] {
+            assert!(
+                properties
+                    .range
+                    .contains_value(ScalarValue::UInt8(Some(value)))
+                    .unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn test_integer_comparison_still_propagates() {
+        // Integer comparisons must bypass the arithmetic overflow guard and
+        // still narrow their inputs: a = 5 restricts a in [0, 10] to [5, 5].
+        let expr = BinaryExpr::new(lit(0i32), Operator::Eq, lit(5i32));
+        let left = Interval::make(Some(0i32), Some(10i32)).unwrap();
+        let right = Interval::make(Some(5i32), Some(5i32)).unwrap();
+        assert_eq!(
+            expr.propagate_constraints(&Interval::TRUE, &[&left, &right])
+                .unwrap(),
+            Some(vec![right.clone(), right])
+        );
+    }
+
+    #[test]
+    fn test_safe_integer_multiplication_still_propagates() {
+        let expr = BinaryExpr::new(lit(0i32), Operator::Multiply, lit(2i32));
+        let left = Interval::make(Some(0i32), Some(10i32)).unwrap();
+        let right = Interval::make(Some(2i32), Some(2i32)).unwrap();
+        let parent = Interval::make(Some(4i32), Some(4i32)).unwrap();
+        assert_eq!(
+            expr.propagate_constraints(&parent, &[&left, &right])
+                .unwrap(),
+            Some(vec![Interval::make(Some(2i32), Some(2i32)).unwrap(), right])
+        );
     }
 
     #[test]

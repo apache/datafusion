@@ -31,3 +31,7 @@ description = "Run H2O window query 3."
 [[examples]]
 command = "cargo run --release --bin benchmark_runner -- h2o --subgroup join --size medium -f parquet"
 description = "Run the H2O join queries with the medium Parquet dataset."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- h2o --subgroup window_sorted"
+description = "Run the window Top-N sweep over an input that declares its ordering."

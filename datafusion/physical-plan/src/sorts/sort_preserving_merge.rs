@@ -198,14 +198,12 @@ impl DisplayAs for SortPreservingMergeExec {
                 write!(f, "SortPreservingMergeExec: [{}]", self.expr)?;
                 if let Some(fetch) = self.fetch {
                     write!(f, ", fetch={fetch}")?;
-                };
-
-                Ok(())
+                }
             }
             DisplayFormatType::TreeRender => {
                 if let Some(fetch) = self.fetch {
                     writeln!(f, "limit={fetch}")?;
-                };
+                }
 
                 for (i, e) in self.expr().iter().enumerate() {
                     e.fmt_sql(f)?;
@@ -213,10 +211,9 @@ impl DisplayAs for SortPreservingMergeExec {
                         write!(f, ", ")?;
                     }
                 }
-
-                Ok(())
             }
         }
+        Ok(())
     }
 }
 
@@ -472,10 +469,26 @@ impl ExecutionPlan for SortPreservingMergeExec {
         &self,
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_common::utils::usize_to_wire;
         use datafusion_proto_models::protobuf;
-        let input = ctx.encode_child(self.input())?;
-        let expr = self
-            .expr()
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `SortPreservingMergeExec` is a compile error here until it is either
+        // serialized or explicitly documented as not needing to be.
+        let Self {
+            input,
+            expr,
+            // Runtime metrics, not part of the plan shape.
+            metrics: _,
+            fetch,
+            // Derived plan properties, recomputed on decode.
+            cache: _,
+            // Not serialized: `SortPreservingMergeExecNode` has no field for it,
+            // so decoding always yields the `true` default from
+            // `SortPreservingMergeExec::new`.
+            enable_round_robin_repartition: _,
+        } = self;
+        let input = ctx.encode_child(input)?;
+        let expr = expr
             .iter()
             .map(|e| {
                 Ok(protobuf::PhysicalExprNode {
@@ -496,7 +509,12 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     Box::new(protobuf::SortPreservingMergeExecNode {
                         input: Some(Box::new(input)),
                         expr,
-                        fetch: self.fetch().map(|f| f as i64).unwrap_or(-1),
+                        fetch: match fetch {
+                            Some(n) => {
+                                usize_to_wire(*n, "SortPreservingMergeExec", "fetch")?
+                            }
+                            None => -1, // no limit
+                        },
                     }),
                 ),
             ),
@@ -511,6 +529,7 @@ impl SortPreservingMergeExec {
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         use arrow::compute::SortOptions;
+        use datafusion_common::utils::usize_from_wire;
         use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
         use datafusion_proto_models::protobuf;
         let spm = crate::expect_plan_variant!(
@@ -518,23 +537,25 @@ impl SortPreservingMergeExec {
             protobuf::physical_plan_node::PhysicalPlanType::SortPreservingMerge,
             "SortPreservingMergeExec",
         );
+        // Destructure exhaustively so that a new field on
+        // `SortPreservingMergeExecNode` is a compile error here rather than a
+        // silently dropped field.
+        let protobuf::SortPreservingMergeExecNode { input, expr, fetch } = &**spm;
         let input = ctx.decode_required_child(
-            spm.input.as_deref(),
+            input.as_deref(),
             "SortPreservingMergeExec",
             "input",
         )?;
         let input_schema = input.schema();
-        let exprs = spm
-            .expr
+        let exprs = expr
             .iter()
             .map(|e| {
-                let sort = match &e.expr_type {
-                    Some(protobuf::physical_expr_node::ExprType::Sort(s)) => s,
-                    _ => {
-                        return internal_err!(
-                            "SortPreservingMergeExec expression is not a sort expression"
-                        );
-                    }
+                let Some(protobuf::physical_expr_node::ExprType::Sort(sort)) =
+                    &e.expr_type
+                else {
+                    return internal_err!(
+                        "SortPreservingMergeExec expression is not a sort expression"
+                    );
                 };
                 let expr = ctx.decode_required_expr(
                     sort.expr.as_deref(),
@@ -554,7 +575,9 @@ impl SortPreservingMergeExec {
         let Some(ordering) = LexOrdering::new(exprs) else {
             return internal_err!("SortPreservingMergeExec requires an ordering");
         };
-        let fetch = (spm.fetch >= 0).then_some(spm.fetch as usize);
+        let fetch = (*fetch >= 0)
+            .then(|| usize_from_wire(*fetch, "SortPreservingMergeExec", "fetch"))
+            .transpose()?;
         Ok(Arc::new(
             SortPreservingMergeExec::new(ordering, input).with_fetch(fetch),
         ))
@@ -671,20 +694,24 @@ mod proto_tests {
         assert_eq!(encode(&spm_fixture(Some(0)), &encoder).fetch, 0);
     }
 
-    /// ... and `usize::MAX` does not survive it at all: `fetch` goes onto the
-    /// wire as `usize as i64`, so on a 64-bit target it wraps to `-1`, the
-    /// "absent" value, and reads back as an unlimited merge. Same pre-existing
-    /// `i64` wire behavior as `SortExec`, pinned here for the same reason.
+    /// `usize::MAX` does not fit the signed wire field on a 64-bit target and
+    /// must be rejected instead of wrapping to the `-1` "absent" encoding.
     #[test]
     #[cfg(target_pointer_width = "64")]
-    fn try_to_proto_wraps_usize_max_fetch_into_the_absent_encoding() {
+    fn try_to_proto_rejects_usize_max_fetch() {
         let encoder = StubPlanEncoder::ok();
-        let node = encode(&spm_fixture(Some(usize::MAX)), &encoder);
+        let ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        let err = spm_fixture(Some(usize::MAX))
+            .try_to_proto(&ctx)
+            .unwrap_err();
 
-        assert_eq!(node.fetch, -1);
-
-        let decoder = StubPlanDecoder::ok();
-        assert_eq!(decode(decodable_node(node.fetch), &decoder).fetch(), None);
+        assert_eq!(
+            err.strip_backtrace(),
+            format!(
+                "Error during planning: SortPreservingMergeExec: fetch value {} is out of range for the plan wire format",
+                usize::MAX
+            )
+        );
     }
 
     #[test]
@@ -1910,7 +1937,7 @@ mod tests {
         fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
             match t {
                 DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                    write!(f, "CongestedExec",).unwrap()
+                    write!(f, "CongestedExec").unwrap()
                 }
                 DisplayFormatType::TreeRender => {
                     // TODO: collect info

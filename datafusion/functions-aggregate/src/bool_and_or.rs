@@ -29,6 +29,7 @@ use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::internal_err;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_common::{downcast_value, not_impl_err};
+use datafusion_expr::DistinctHandling;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
 use datafusion_expr::{
@@ -97,9 +98,9 @@ make_udaf_expr_and_func!(
     sql_example = r#"```sql
 > SELECT bool_and(column_name) FROM table_name;
 +----------------------------+
-| bool_and(column_name)       |
+| bool_and(column_name)      |
 +----------------------------+
-| true                        |
+| true                       |
 +----------------------------+
 ```"#,
     standard_argument(name = "expression", prefix = "The")
@@ -183,6 +184,11 @@ impl AggregateUDFImpl for BoolAnd {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // Boolean AND/OR are idempotent: duplicates cannot change the result.
+        DistinctHandling::Insensitive
+    }
 }
 
 #[derive(Debug, Default)]
@@ -221,14 +227,14 @@ impl Accumulator for BoolAndAccumulator {
 
 #[user_doc(
     doc_section(label = "General Functions"),
-    description = "Returns true if all non-null input values are true, otherwise false.",
-    syntax_example = "bool_and(expression)",
+    description = "Returns true if any non-null input value is true, otherwise false.",
+    syntax_example = "bool_or(expression)",
     sql_example = r#"```sql
-> SELECT bool_and(column_name) FROM table_name;
+> SELECT bool_or(column_name) FROM table_name;
 +----------------------------+
-| bool_and(column_name)       |
+| bool_or(column_name)       |
 +----------------------------+
-| true                        |
+| true                       |
 +----------------------------+
 ```"#,
     standard_argument(name = "expression", prefix = "The")
@@ -312,6 +318,11 @@ impl AggregateUDFImpl for BoolOr {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // Boolean AND/OR are idempotent: duplicates cannot change the result.
+        DistinctHandling::Insensitive
     }
 }
 

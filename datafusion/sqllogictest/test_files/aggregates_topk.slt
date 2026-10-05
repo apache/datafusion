@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -789,3 +789,85 @@ drop table topk_two_groups;
 
 statement ok
 drop table t0;
+
+# Rebuilding an aggregate must keep its TopK limit. Post-optimization filter
+# pushdown rebuilds a Parquet scan that accepts a dynamic filter, which
+# recomputes the aggregates above it.
+statement ok
+COPY (SELECT (v % 100)::int AS k, v AS x FROM generate_series(1, 1000) AS s(v))
+TO 'test_files/scratch/aggregates_topk/topk.parquet' STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE topk_parquet STORED AS PARQUET
+LOCATION 'test_files/scratch/aggregates_topk/topk.parquet';
+
+# The TopK dynamic filter on `k` is pushed through the aggregates into the scan
+query TT
+EXPLAIN SELECT DISTINCT k FROM topk_parquet ORDER BY k LIMIT 10;
+----
+logical_plan
+01)Sort: topk_parquet.k ASC NULLS LAST, fetch=10
+02)--Aggregate: groupBy=[[topk_parquet.k]], aggr=[[]]
+03)----TableScan: topk_parquet projection=[k]
+physical_plan
+01)SortPreservingMergeExec: [k@0 ASC NULLS LAST], fetch=10
+02)--SortExec: TopK(fetch=10), expr=[k@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----AggregateExec: mode=FinalPartitioned, gby=[k@0 as k], aggr=[], lim=[10]
+04)------RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[k@0 as k], aggr=[], lim=[10]
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/aggregates_topk/topk.parquet]]}, projection=[k], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+
+query I
+SELECT DISTINCT k FROM topk_parquet ORDER BY k LIMIT 10;
+----
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+
+# The semi join's dynamic filter is pushed into the scan below the TopK MAX aggregates
+statement ok
+CREATE TABLE topk_parquet_keys AS VALUES (1), (2), (3);
+
+query TT
+EXPLAIN SELECT k, max(x) FROM topk_parquet
+WHERE k IN (SELECT column1 FROM topk_parquet_keys)
+GROUP BY k ORDER BY max(x) DESC NULLS LAST LIMIT 2;
+----
+logical_plan
+01)Sort: max(topk_parquet.x) DESC NULLS LAST, fetch=2
+02)--Aggregate: groupBy=[[topk_parquet.k]], aggr=[[max(topk_parquet.x)]]
+03)----LeftSemi Join: CAST(topk_parquet.k AS Int64) = __correlated_sq_1.column1
+04)------TableScan: topk_parquet projection=[k, x]
+05)------SubqueryAlias: __correlated_sq_1
+06)--------TableScan: topk_parquet_keys projection=[column1]
+physical_plan
+01)SortPreservingMergeExec: [max(topk_parquet.x)@1 DESC NULLS LAST], fetch=2
+02)--SortExec: TopK(fetch=2), expr=[max(topk_parquet.x)@1 DESC NULLS LAST], preserve_partitioning=[true]
+03)----AggregateExec: mode=FinalPartitioned, gby=[k@0 as k], aggr=[max(topk_parquet.x)], lim=[2]
+04)------RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=4
+05)--------AggregateExec: mode=Partial, gby=[k@0 as k], aggr=[max(topk_parquet.x)], lim=[2]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+07)------------HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(column1@0, CAST(topk_parquet.k AS Int64)@2)], projection=[k@0, x@1]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+09)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/aggregates_topk/topk.parquet]]}, projection=[k, x, CAST(k@0 AS Int64) as CAST(topk_parquet.k AS Int64)], output_ordering=[x@1 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+
+query II
+SELECT k, max(x) FROM topk_parquet
+WHERE k IN (SELECT column1 FROM topk_parquet_keys)
+GROUP BY k ORDER BY max(x) DESC NULLS LAST LIMIT 2;
+----
+3 903
+2 902
+
+statement ok
+drop table topk_parquet_keys;
+
+statement ok
+drop table topk_parquet;

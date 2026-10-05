@@ -52,9 +52,8 @@ pub fn simplify_not_expr(
     schema: &Schema,
 ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
     // Check if this is a NOT expression
-    let not_expr = match expr.downcast_ref::<NotExpr>() {
-        Some(not_expr) => not_expr,
-        None => return Ok(Transformed::no(expr)),
+    let Some(not_expr) = expr.downcast_ref::<NotExpr>() else {
+        return Ok(Transformed::no(expr));
     };
 
     let inner_expr = not_expr.arg();

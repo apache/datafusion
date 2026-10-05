@@ -116,7 +116,7 @@ impl ScalarUDFImpl for CurrentTimeFunc {
             .execution
             .time_zone
             .as_ref()
-            .and_then(|tz| tz.parse::<Tz>().ok())
+            .and_then(|tz| tz.as_str().parse::<Tz>().ok())
             .map_or_else(
                 || datetime_to_time_nanos(&now_ts),
                 |tz| {
@@ -158,7 +158,7 @@ mod tests {
         config.execution.time_zone = if tz.is_empty() {
             None
         } else {
-            Some(tz.to_string())
+            Some(tz.parse().unwrap())
         };
         let schema = Arc::new(DFSchema::empty());
         SimplifyContext::builder()
@@ -186,20 +186,20 @@ mod tests {
             .unwrap();
 
         // Extract nanoseconds from results
-        let nanos_plus_5 = match result_plus_5 {
-            ExprSimplifyResult::Simplified(Expr::Literal(
-                ScalarValue::Time64Nanosecond(Some(n)),
-                _,
-            )) => n,
-            _ => panic!("Expected Time64Nanosecond literal"),
+        let ExprSimplifyResult::Simplified(Expr::Literal(
+            ScalarValue::Time64Nanosecond(Some(nanos_plus_5)),
+            _,
+        )) = result_plus_5
+        else {
+            panic!("Expected Time64Nanosecond literal")
         };
 
-        let nanos_minus_5 = match result_minus_5 {
-            ExprSimplifyResult::Simplified(Expr::Literal(
-                ScalarValue::Time64Nanosecond(Some(n)),
-                _,
-            )) => n,
-            _ => panic!("Expected Time64Nanosecond literal"),
+        let ExprSimplifyResult::Simplified(Expr::Literal(
+            ScalarValue::Time64Nanosecond(Some(nanos_minus_5)),
+            _,
+        )) = result_minus_5
+        else {
+            panic!("Expected Time64Nanosecond literal")
         };
 
         // Calculate the difference: UTC+05:00 should be 10 hours ahead of UTC-05:00

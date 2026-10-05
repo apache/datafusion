@@ -27,7 +27,7 @@ use super::{
     SendableRecordBatchStream, Statistics,
 };
 use crate::execution_plan::{Boundedness, CardinalityEffect};
-use crate::statistics::{ChildStats, StatisticsArgs};
+use crate::statistics::{ChildStats, StatisticsArgs, with_per_partition_fetch};
 use crate::{
     ChildrenPropertiesMode, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     ReplaceChildrenOptions, validate_child_count,
@@ -36,6 +36,8 @@ use crate::{
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::TreeNodeRecursion;
+#[cfg(feature = "proto")]
+use datafusion_common::utils::{usize_from_wire, usize_to_wire};
 use datafusion_common::{Result, assert_eq_or_internal_err};
 use datafusion_execution::TaskContext;
 
@@ -43,7 +45,20 @@ use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
-/// Limit execution plan
+/// Applies a limit to the entire result.
+///
+/// Requires a single input partition; otherwise, plan validation or execution fails.
+/// For input with multiple partitions, merge them before applying the limit:
+/// (For SQL interface, coalescing will be enforced automatically in physical
+/// optimizer through [`ExecutionPlan::required_input_distribution`])
+///
+/// ```text
+/// GlobalLimitExec: skip=0, fetch=10
+///   CoalescePartitionsExec                 <--- combine to 1 partition output
+///     DataSourceExec: partitions=4         <--- 4 parallel scan partitions
+/// ```
+///
+/// To enforce a per-partition limit, use [`LocalLimitExec`].
 #[derive(Debug, Clone)]
 pub struct GlobalLimitExec {
     /// Input execution plan
@@ -278,20 +293,31 @@ impl ExecutionPlan for GlobalLimitExec {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_physical_expr_common::sort_expr::optional_ordering_try_to_proto;
         use datafusion_proto_models::protobuf;
-        let input = ctx.encode_child(self.input())?;
-        let required_ordering = optional_ordering_try_to_proto(
-            self.required_ordering.as_ref(),
-            &ctx.expr_ctx(),
-        )?;
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `GlobalLimitExec` is a compile error here until it is either
+        // serialized or explicitly documented as not needing to be.
+        let Self {
+            input,
+            skip,
+            fetch,
+            required_ordering,
+            // Runtime metrics, not part of the plan shape.
+            metrics: _,
+            // Derived plan properties, recomputed on decode.
+            cache: _,
+        } = self;
+        let input = ctx.encode_child(input)?;
+        let required_ordering =
+            optional_ordering_try_to_proto(required_ordering.as_ref(), &ctx.expr_ctx())?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::GlobalLimit(Box::new(
                     protobuf::GlobalLimitExecNode {
                         input: Some(Box::new(input)),
-                        skip: self.skip() as u32,
-                        fetch: match self.fetch() {
-                            Some(n) => n as i64,
-                            _ => -1, // no limit
+                        skip: usize_to_wire(*skip, "GlobalLimitExec", "skip")?,
+                        fetch: match fetch {
+                            Some(n) => usize_to_wire(*n, "GlobalLimitExec", "fetch")?,
+                            None => -1, // no limit
                         },
                         required_ordering,
                     },
@@ -314,27 +340,42 @@ impl GlobalLimitExec {
             protobuf::physical_plan_node::PhysicalPlanType::GlobalLimit,
             "GlobalLimitExec",
         );
-        let input = ctx.decode_required_child(
-            limit.input.as_deref(),
-            "GlobalLimitExec",
-            "input",
-        )?;
-        let fetch = if limit.fetch >= 0 {
-            Some(limit.fetch as usize)
-        } else {
-            None
-        };
+        // Destructure exhaustively so that a new field on
+        // `GlobalLimitExecNode` is a compile error here rather than a silently
+        // dropped field.
+        let protobuf::GlobalLimitExecNode {
+            input,
+            skip,
+            fetch,
+            required_ordering,
+        } = &**limit;
+        let input =
+            ctx.decode_required_child(input.as_deref(), "GlobalLimitExec", "input")?;
+        let fetch = (*fetch >= 0)
+            .then(|| usize_from_wire(*fetch, "GlobalLimitExec", "fetch"))
+            .transpose()?;
         let required_ordering = optional_ordering_try_from_proto(
-            &limit.required_ordering,
+            required_ordering,
             &ctx.expr_ctx(input.schema().as_ref()),
         )?;
-        let mut exec = GlobalLimitExec::new(input, limit.skip as usize, fetch);
+        let skip = usize_from_wire(*skip, "GlobalLimitExec", "skip")?;
+        let mut exec = GlobalLimitExec::new(input, skip, fetch);
         exec.set_required_ordering(required_ordering);
         Ok(Arc::new(exec))
     }
 }
 
-/// LocalLimitExec applies a limit to a single partition
+/// Applies a limit independently to each input partition.
+///
+/// Preserves input partitioning. With four partitions, a limit of 10 allows
+/// up to 40 rows in total:
+///
+/// ```text
+/// LocalLimitExec: fetch=10
+///   DataSourceExec: partitions=4
+/// ```
+///
+/// To enforce a limit on the entire result, use [`GlobalLimitExec`].
 #[derive(Debug, Clone)]
 pub struct LocalLimitExec {
     /// Input execution plan
@@ -513,10 +554,15 @@ impl ExecutionPlan for LocalLimitExec {
     fn statistics_from_inputs(
         &self,
         input_stats: &[Arc<Statistics>],
-        _args: &StatisticsArgs,
+        args: &StatisticsArgs,
     ) -> Result<Arc<Statistics>> {
         let stats = input_stats[0].as_ref().clone();
-        Ok(Arc::new(stats.with_fetch(Some(self.fetch), 0, 1)?))
+        Ok(Arc::new(with_per_partition_fetch(
+            stats,
+            Some(self.fetch),
+            self.properties().output_partitioning().partition_count(),
+            args,
+        )?))
     }
 
     fn fetch(&self) -> Option<usize> {
@@ -538,17 +584,27 @@ impl ExecutionPlan for LocalLimitExec {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_physical_expr_common::sort_expr::optional_ordering_try_to_proto;
         use datafusion_proto_models::protobuf;
-        let input = ctx.encode_child(self.input())?;
-        let required_ordering = optional_ordering_try_to_proto(
-            self.required_ordering.as_ref(),
-            &ctx.expr_ctx(),
-        )?;
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `LocalLimitExec` is a compile error here until it is either
+        // serialized or explicitly documented as not needing to be.
+        let Self {
+            input,
+            fetch,
+            required_ordering,
+            // Runtime metrics, not part of the plan shape.
+            metrics: _,
+            // Derived plan properties, recomputed on decode.
+            cache: _,
+        } = self;
+        let input = ctx.encode_child(input)?;
+        let required_ordering =
+            optional_ordering_try_to_proto(required_ordering.as_ref(), &ctx.expr_ctx())?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::LocalLimit(Box::new(
                     protobuf::LocalLimitExecNode {
                         input: Some(Box::new(input)),
-                        fetch: self.fetch() as u32,
+                        fetch: usize_to_wire(*fetch, "LocalLimitExec", "fetch")?,
                         required_ordering,
                     },
                 )),
@@ -570,13 +626,21 @@ impl LocalLimitExec {
             protobuf::physical_plan_node::PhysicalPlanType::LocalLimit,
             "LocalLimitExec",
         );
+        // Destructure exhaustively so that a new field on `LocalLimitExecNode`
+        // is a compile error here rather than a silently dropped field.
+        let protobuf::LocalLimitExecNode {
+            input,
+            fetch,
+            required_ordering,
+        } = &**limit;
         let input =
-            ctx.decode_required_child(limit.input.as_deref(), "LocalLimitExec", "input")?;
+            ctx.decode_required_child(input.as_deref(), "LocalLimitExec", "input")?;
         let required_ordering = optional_ordering_try_from_proto(
-            &limit.required_ordering,
+            required_ordering,
             &ctx.expr_ctx(input.schema().as_ref()),
         )?;
-        let mut exec = LocalLimitExec::new(input, limit.fetch as usize);
+        let fetch = usize_from_wire(*fetch, "LocalLimitExec", "fetch")?;
+        let mut exec = LocalLimitExec::new(input, fetch);
         exec.set_required_ordering(required_ordering);
         Ok(Arc::new(exec))
     }
@@ -1004,7 +1068,17 @@ mod tests {
 
     #[test]
     fn test_row_number_statistics_for_local_limit() -> Result<()> {
+        // Each of four partitions of 100 rows keeps 10 of them. How the rows
+        // are spread over the partitions is unknown, so the count is inexact.
         let row_count = row_number_statistics_for_local_limit(4, 10)?;
+        assert_eq!(row_count, Precision::Inexact(40));
+
+        // A limit as large as the whole input cannot drop any row.
+        let row_count = row_number_statistics_for_local_limit(4, 400)?;
+        assert_eq!(row_count, Precision::Exact(400));
+
+        // A single partition keeps exactly `fetch` rows.
+        let row_count = row_number_statistics_for_local_limit(1, 10)?;
         assert_eq!(row_count, Precision::Exact(10));
 
         Ok(())

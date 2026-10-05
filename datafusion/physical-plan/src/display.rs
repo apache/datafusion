@@ -23,15 +23,18 @@ use std::fmt;
 use std::fmt::Formatter;
 use std::time::Duration;
 
+use serde::Serialize;
+
 use arrow::datatypes::SchemaRef;
 
-use datafusion_common::display::{GraphvizBuilder, PlanType, StringifiedPlan};
+use datafusion_common::display::GraphvizBuilder;
 use datafusion_expr::display_schema;
 use datafusion_physical_expr::LexOrdering;
 
 use crate::metrics::{MetricCategory, MetricType, MetricValue};
 use crate::render_tree::RenderTree;
 
+use crate::operator_statistics::StatisticsRegistry;
 use crate::statistics::{StatisticsArgs, StatisticsContext};
 
 use super::{ExecutionPlan, ExecutionPlanVisitor, accept};
@@ -122,6 +125,7 @@ pub struct DisplayableExecutionPlan<'a> {
     show_metrics: ShowMetrics,
     /// If statistics should be displayed
     show_statistics: bool,
+    registry: StatisticsRegistry,
     /// If schema should be displayed. See [`Self::set_show_schema`]
     show_schema: bool,
     /// Which metric categories should be included when rendering
@@ -155,43 +159,31 @@ impl<'a> DisplayableExecutionPlan<'a> {
     /// Create a wrapper around an [`ExecutionPlan`] which can be
     /// pretty printed in a variety of ways
     pub fn new(inner: &'a dyn ExecutionPlan) -> Self {
-        Self {
-            inner,
-            show_metrics: ShowMetrics::None,
-            show_statistics: false,
-            show_schema: false,
-            metric_types: Self::default_metric_types(),
-            metric_categories: None,
-            metric_names: None,
-            tree_maximum_render_width: 240,
-            summary: None,
-        }
+        Self::with_show_metrics(inner, ShowMetrics::None)
     }
 
     /// Create a wrapper around an [`ExecutionPlan`] which can be
     /// pretty printed in a variety of ways that also shows aggregated
     /// metrics
     pub fn with_metrics(inner: &'a dyn ExecutionPlan) -> Self {
-        Self {
-            inner,
-            show_metrics: ShowMetrics::Aggregated,
-            show_statistics: false,
-            show_schema: false,
-            metric_types: Self::default_metric_types(),
-            metric_categories: None,
-            metric_names: None,
-            tree_maximum_render_width: 240,
-            summary: None,
-        }
+        Self::with_show_metrics(inner, ShowMetrics::Aggregated)
     }
 
     /// Create a wrapper around an [`ExecutionPlan`] which can be
     /// pretty printed in a variety of ways that also shows all low
     /// level metrics
     pub fn with_full_metrics(inner: &'a dyn ExecutionPlan) -> Self {
+        Self::with_show_metrics(inner, ShowMetrics::Full)
+    }
+
+    fn with_show_metrics(
+        inner: &'a dyn ExecutionPlan,
+        show_metrics: ShowMetrics,
+    ) -> Self {
         Self {
             inner,
-            show_metrics: ShowMetrics::Full,
+            registry: StatisticsRegistry::new(),
+            show_metrics,
             show_statistics: false,
             show_schema: false,
             metric_types: Self::default_metric_types(),
@@ -214,6 +206,12 @@ impl<'a> DisplayableExecutionPlan<'a> {
     /// Enable display of statistics
     pub fn set_show_statistics(mut self, show_statistics: bool) -> Self {
         self.show_statistics = show_statistics;
+        self
+    }
+
+    /// Set the [`StatisticsRegistry`] consulted when computing displayed statistics.
+    pub fn set_statistics_registry(mut self, registry: StatisticsRegistry) -> Self {
+        self.registry = registry;
         self
     }
 
@@ -294,6 +292,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             plan: &'a dyn ExecutionPlan,
             show_metrics: ShowMetrics,
             show_statistics: bool,
+            registry: StatisticsRegistry,
             show_schema: bool,
             metric_types: Vec<MetricType>,
             metric_categories: Option<Vec<MetricCategory>>,
@@ -307,6 +306,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
                     indent: 0,
                     show_metrics: self.show_metrics,
                     show_statistics: self.show_statistics,
+                    registry: self.registry.clone(),
                     show_schema: self.show_schema,
                     metric_types: &self.metric_types,
                     metric_categories: self.metric_categories.as_deref(),
@@ -320,6 +320,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             plan: self.inner,
             show_metrics: self.show_metrics,
             show_statistics: self.show_statistics,
+            registry: self.registry.clone(),
             show_schema: self.show_schema,
             metric_types: self.metric_types.clone(),
             metric_categories: self.metric_categories.clone(),
@@ -343,6 +344,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             plan: &'a dyn ExecutionPlan,
             show_metrics: ShowMetrics,
             show_statistics: bool,
+            registry: StatisticsRegistry,
             metric_types: Vec<MetricType>,
             metric_categories: Option<Vec<MetricCategory>>,
             metric_names: Option<Vec<String>>,
@@ -356,6 +358,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
                     t,
                     show_metrics: self.show_metrics,
                     show_statistics: self.show_statistics,
+                    registry: self.registry.clone(),
                     metric_types: &self.metric_types,
                     metric_categories: self.metric_categories.as_deref(),
                     metric_names: self.metric_names.as_deref(),
@@ -376,6 +379,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             plan: self.inner,
             show_metrics: self.show_metrics,
             show_statistics: self.show_statistics,
+            registry: self.registry.clone(),
             metric_types: self.metric_types.clone(),
             metric_categories: self.metric_categories.clone(),
             metric_names: self.metric_names.clone(),
@@ -446,17 +450,14 @@ impl<'a> DisplayableExecutionPlan<'a> {
                 };
                 accept(self.plan, &mut visitor).map_err(|_| fmt::Error)?;
                 let root = visitor.root.ok_or(fmt::Error)?;
-                let mut root_entry = serde_json::json!({ "Plan": root });
-                if let Some(summary) = self.summary {
-                    if let Some(total_rows) = summary.total_rows {
-                        root_entry["Total Rows"] = serde_json::Value::from(total_rows);
-                    }
-                    if let Some(duration) = summary.duration {
-                        root_entry["Duration"] =
-                            serde_json::Value::from(format!("{duration:?}"));
-                    }
-                }
-                let doc = serde_json::Value::Array(vec![root_entry]);
+                let doc = [PgJsonRoot {
+                    plan: root,
+                    total_rows: self.summary.and_then(|s| s.total_rows),
+                    duration: self
+                        .summary
+                        .and_then(|s| s.duration)
+                        .map(|d| format!("{d:?}")),
+                }];
                 write!(
                     f,
                     "{}",
@@ -484,6 +485,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             plan: &'a dyn ExecutionPlan,
             show_metrics: ShowMetrics,
             show_statistics: bool,
+            registry: StatisticsRegistry,
             show_schema: bool,
             metric_types: Vec<MetricType>,
             metric_categories: Option<Vec<MetricCategory>>,
@@ -498,6 +500,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
                     indent: 0,
                     show_metrics: self.show_metrics,
                     show_statistics: self.show_statistics,
+                    registry: self.registry.clone(),
                     show_schema: self.show_schema,
                     metric_types: &self.metric_types,
                     metric_categories: self.metric_categories.as_deref(),
@@ -512,25 +515,11 @@ impl<'a> DisplayableExecutionPlan<'a> {
             plan: self.inner,
             show_metrics: self.show_metrics,
             show_statistics: self.show_statistics,
+            registry: self.registry.clone(),
             show_schema: self.show_schema,
             metric_types: self.metric_types.clone(),
             metric_categories: self.metric_categories.clone(),
             metric_names: self.metric_names.clone(),
-        }
-    }
-
-    #[deprecated(since = "47.0.0", note = "indent() or tree_render() instead")]
-    pub fn to_stringified(
-        &self,
-        verbose: bool,
-        plan_type: PlanType,
-        explain_format: DisplayFormatType,
-    ) -> StringifiedPlan {
-        match (&explain_format, &plan_type) {
-            (DisplayFormatType::TreeRender, PlanType::FinalPhysicalPlan) => {
-                StringifiedPlan::new(plan_type, self.tree_render().to_string())
-            }
-            _ => StringifiedPlan::new(plan_type, self.indent(verbose).to_string()),
         }
     }
 }
@@ -568,6 +557,7 @@ struct IndentVisitor<'a, 'b> {
     show_metrics: ShowMetrics,
     /// If statistics should be displayed
     show_statistics: bool,
+    registry: StatisticsRegistry,
     /// If schema should be displayed
     show_schema: bool,
     /// Which metric types should be rendered
@@ -619,7 +609,7 @@ impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
             }
         }
         if self.show_statistics {
-            let stats = StatisticsContext::new()
+            let stats = StatisticsContext::new_with_registry(self.registry.clone())
                 .compute(plan, &StatisticsArgs::new())
                 .map_err(|_e| fmt::Error)?;
             write!(self.f, ", statistics=[{stats}]")?;
@@ -650,6 +640,7 @@ struct GraphvizVisitor<'a, 'b> {
     show_metrics: ShowMetrics,
     /// If statistics should be displayed
     show_statistics: bool,
+    registry: StatisticsRegistry,
     /// Which metric types should be rendered
     metric_types: &'a [MetricType],
     /// Optional filter by semantic category
@@ -725,7 +716,7 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
         };
 
         let statistics = if self.show_statistics {
-            let stats = StatisticsContext::new()
+            let stats = StatisticsContext::new_with_registry(self.registry.clone())
                 .compute(plan, &StatisticsArgs::new())
                 .map_err(|_e| fmt::Error)?;
             format!("statistics=[{stats}]")
@@ -776,10 +767,67 @@ struct PgJsonExecutionPlanVisitor<'a> {
     metric_types: &'a [MetricType],
     metric_categories: Option<&'a [MetricCategory]>,
     metric_names: Option<&'a [String]>,
-    objects: HashMap<u32, serde_json::Value>,
+    objects: HashMap<u32, PgJsonNode>,
     parent_ids: Vec<u32>,
     next_id: u32,
-    root: Option<serde_json::Value>,
+    root: Option<PgJsonNode>,
+}
+
+/// Top-level entry of the `pgjson` output. Field order is the output order.
+#[derive(Serialize)]
+struct PgJsonRoot {
+    #[serde(rename = "Plan")]
+    plan: PgJsonNode,
+    #[serde(rename = "Total Rows", skip_serializing_if = "Option::is_none")]
+    total_rows: Option<usize>,
+    #[serde(rename = "Duration", skip_serializing_if = "Option::is_none")]
+    duration: Option<String>,
+}
+
+/// One node of the `pgjson` output. Field order is the output order, so the
+/// JSON reads top-down like a PostgreSQL plan, with `"Plans"` last.
+#[derive(Serialize)]
+struct PgJsonNode {
+    #[serde(rename = "Node Type")]
+    node_type: String,
+    #[serde(rename = "Details")]
+    details: String,
+    #[serde(rename = "Output", skip_serializing_if = "Option::is_none")]
+    output: Option<Vec<String>>,
+    #[serde(rename = "Actual Rows", skip_serializing_if = "Option::is_none")]
+    actual_rows: Option<usize>,
+    #[serde(rename = "Actual Total Time", skip_serializing_if = "Option::is_none")]
+    actual_total_time: Option<f64>,
+    #[serde(rename = "Extras", skip_serializing_if = "PgJsonExtras::is_empty")]
+    extras: PgJsonExtras,
+    #[serde(rename = "Plans")]
+    plans: Vec<PgJsonNode>,
+}
+
+/// Non-canonical metrics of a node, serialized as a JSON object whose keys
+/// keep their insertion order (independent of `serde_json`'s
+/// `preserve_order` feature).
+#[derive(Default)]
+struct PgJsonExtras(Vec<(String, serde_json::Value)>);
+
+impl PgJsonExtras {
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Insert or replace `key`. A replaced key keeps its original position.
+    fn insert(&mut self, key: &str, value: serde_json::Value) {
+        match self.0.iter_mut().find(|(k, _)| k == key) {
+            Some((_, v)) => *v = value,
+            None => self.0.push((key.to_string(), value)),
+        }
+    }
+}
+
+impl Serialize for PgJsonExtras {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_map(self.0.iter().map(|(k, v)| (k, v)))
+    }
 }
 
 impl PgJsonExecutionPlanVisitor<'_> {
@@ -821,8 +869,8 @@ impl PgJsonExecutionPlanVisitor<'_> {
                 serde_json::Value::from(ms)
             }
             MetricValue::Count { count, .. } => serde_json::Value::from(count.value()),
-            MetricValue::Gauge { gauge, .. } => serde_json::Value::from(gauge.value()),
-            MetricValue::PeakMemoryUsage { gauge, .. } => {
+            MetricValue::Gauge { gauge, .. }
+            | MetricValue::PeakMemoryUsage { gauge, .. } => {
                 serde_json::Value::from(gauge.value())
             }
             MetricValue::Time { time, .. } => {
@@ -837,7 +885,7 @@ impl PgJsonExecutionPlanVisitor<'_> {
     /// Populate `"Actual Rows"`, `"Actual Total Time"`, and `"Extras"` for
     /// the given node from its aggregated `MetricsSet`, honoring the same
     /// filtering pipeline used by `IndentVisitor`.
-    fn attach_metrics(&self, plan: &dyn ExecutionPlan, object: &mut serde_json::Value) {
+    fn attach_metrics(&self, plan: &dyn ExecutionPlan, object: &mut PgJsonNode) {
         if matches!(self.show_metrics, ShowMetrics::None) {
             return;
         }
@@ -868,27 +916,22 @@ impl PgJsonExecutionPlanVisitor<'_> {
 
         // Build the Extras bucket, while extracting PG-canonical keys to the
         // top level.
-        let mut extras = serde_json::Map::new();
         for metric in metrics.iter() {
             let value = metric.value();
             match value {
                 MetricValue::OutputRows(c) => {
-                    object["Actual Rows"] = serde_json::Value::from(c.value());
+                    object.actual_rows = Some(c.value());
                 }
                 MetricValue::ElapsedCompute(t) => {
                     let ms = (t.value() as f64) / 1_000_000.0;
-                    object["Actual Total Time"] = serde_json::Value::from(ms);
+                    object.actual_total_time = Some(ms);
                 }
                 _ => {
-                    extras.insert(
-                        value.name().to_string(),
-                        Self::metric_value_to_json(value),
-                    );
+                    object
+                        .extras
+                        .insert(value.name(), Self::metric_value_to_json(value));
                 }
             }
-        }
-        if !extras.is_empty() {
-            object["Extras"] = serde_json::Value::Object(extras);
         }
     }
 }
@@ -903,27 +946,30 @@ impl ExecutionPlanVisitor for PgJsonExecutionPlanVisitor<'_> {
         // Build fields in reading order: Node Type, Details, (schema),
         // (metrics), Plans last — so the JSON output reads top-down like a
         // PostgreSQL plan.
-        let mut object = serde_json::json!({
-            "Node Type": plan.name(),
-            "Details": Self::one_line_details(plan),
-        });
+        let mut object = PgJsonNode {
+            node_type: plan.name().to_string(),
+            details: Self::one_line_details(plan),
+            output: None,
+            actual_rows: None,
+            actual_total_time: None,
+            extras: PgJsonExtras::default(),
+            plans: vec![],
+        };
 
         if self.show_schema || self.verbose {
             // Always include output columns when a caller asked for schema;
             // also include them in verbose mode so the pgjson output mirrors
             // the extra context shown by indent's verbose flag.
-            let columns: Vec<serde_json::Value> = plan
-                .schema()
-                .fields()
-                .iter()
-                .map(|f| serde_json::Value::String(f.name().to_string()))
-                .collect();
-            object["Output"] = serde_json::Value::Array(columns);
+            object.output = Some(
+                plan.schema()
+                    .fields()
+                    .iter()
+                    .map(|f| f.name().to_string())
+                    .collect(),
+            );
         }
 
         self.attach_metrics(plan, &mut object);
-
-        object["Plans"] = serde_json::Value::Array(vec![]);
 
         self.objects.insert(id, object);
         self.parent_ids.push(id);
@@ -936,11 +982,7 @@ impl ExecutionPlanVisitor for PgJsonExecutionPlanVisitor<'_> {
 
         if let Some(parent_id) = self.parent_ids.last() {
             let parent = self.objects.get_mut(parent_id).ok_or(fmt::Error)?;
-            let plans = parent
-                .get_mut("Plans")
-                .and_then(|p| p.as_array_mut())
-                .ok_or(fmt::Error)?;
-            plans.push(current);
+            parent.plans.push(current);
         } else {
             self.root = Some(current);
         }
@@ -1347,7 +1389,10 @@ impl TreeRenderVisitor<'_, '_> {
     fn adjust_text_for_rendering(source: &str, max_render_width: usize) -> String {
         let render_width = source.chars().count();
         if render_width > max_render_width {
-            let truncated = &source[..max_render_width - 3];
+            let truncated = source
+                .chars()
+                .take(max_render_width - 3)
+                .collect::<String>();
             format!("{truncated}...")
         } else {
             let total_spaces = max_render_width - render_width;
@@ -1409,7 +1454,7 @@ impl TreeRenderVisitor<'_, '_> {
                     last_possible_split = character_pos;
                 }
 
-                result.push(source[start_pos..last_possible_split].to_string());
+                result.push(chars[start_pos..last_possible_split].iter().collect());
                 render_width = character_pos - last_possible_split;
                 start_pos = last_possible_split;
                 character_pos = last_possible_split;
@@ -1424,9 +1469,9 @@ impl TreeRenderVisitor<'_, '_> {
             render_width += char_width;
         }
 
-        if source.len() > start_pos {
+        if chars.len() > start_pos {
             // append the remainder of the input
-            result.push(source[start_pos..].to_string());
+            result.push(chars[start_pos..].iter().collect());
         }
     }
 
@@ -1516,7 +1561,30 @@ mod tests {
         ReplaceChildrenOptions,
     };
 
-    use super::DisplayableExecutionPlan;
+    use super::{DisplayableExecutionPlan, TreeRenderVisitor};
+
+    #[test]
+    fn test_tree_renderer_splits_multibyte_characters() {
+        let source = "weather_code_emoji🌤weather_code_text🌧conditions";
+        let mut lines = Vec::new();
+        TreeRenderVisitor::split_string_buffer(source, &mut lines);
+
+        assert_eq!(lines.concat(), source);
+        assert!(
+            lines
+                .iter()
+                .all(|line| line.chars().count()
+                    <= TreeRenderVisitor::NODE_RENDER_WIDTH - 2)
+        );
+    }
+
+    #[test]
+    fn test_tree_renderer_truncates_multibyte_characters() {
+        assert_eq!(
+            TreeRenderVisitor::adjust_text_for_rendering("weather🌤conditions", 12,),
+            "weather🌤c..."
+        );
+    }
 
     #[derive(Debug, Clone, Copy)]
     enum TestStatsExecPlan {
@@ -1856,8 +1924,6 @@ mod tests {
             let out = DisplayableExecutionPlan::new(plan.as_ref())
                 .pgjson(false)
                 .to_string();
-            // This snapshot assumes `serde_json` is built with the
-            // `preserve_order` feature (enabled via this crate's dev-deps).
             assert_snapshot!(out, @r#"
             [
               {

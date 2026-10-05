@@ -28,6 +28,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_datasource_parquet::metadata::DFParquetMetadata;
 use parquet::arrow::ArrowSchemaConverter;
+use parquet::basic::ColumnOrder;
 use parquet::data_type::ByteArray;
 use parquet::file::metadata::{
     ColumnChunkMetaData, FileMetaData, ParquetMetaData, RowGroupMetaData,
@@ -169,13 +170,19 @@ fn make_synthetic_metadata(
         })
         .collect::<Vec<_>>();
 
+    // Model a modern writer so byte-array bounds have a trustworthy order.
+    let column_orders = schema_descr
+        .columns()
+        .iter()
+        .map(|column| ColumnOrder::TYPE_DEFINED_ORDER(column.sort_order()))
+        .collect();
     let file_metadata = FileMetaData::new(
         1,
         (spec.row_groups * ROWS_PER_GROUP) as i64,
         Some("datafusion parquet metadata benchmark".to_string()),
         None,
         schema_descr,
-        None,
+        Some(column_orders),
     );
 
     ParquetMetaData::new(file_metadata, row_groups)

@@ -291,6 +291,9 @@ impl GenerateSeriesTable {
         &self,
         batch_size: usize,
     ) -> Result<Arc<RwLock<dyn LazyBatchGenerator>>> {
+        if batch_size == 0 {
+            return plan_err!("GenerateSeriesTable: batch_size must be greater than 0");
+        }
         let generator: Arc<RwLock<dyn LazyBatchGenerator>> = match &self.args {
             GenSeriesArgs::ContainsNull { name } => Arc::new(RwLock::new(Empty { name })),
             GenSeriesArgs::Int64Args {
@@ -531,9 +534,63 @@ fn reach_end_int64(val: i64, end: i64, step: i64, include_end: bool) -> bool {
     }
 }
 
+/// `i64::MIN` nanoseconds since the Unix epoch, rendered as a timestamp.
+const NANOS_RANGE_MIN: &str = "1677-09-21T00:12:43.145224192";
+/// `i64::MAX` nanoseconds since the Unix epoch, rendered as a timestamp.
+const NANOS_RANGE_MAX: &str = "2262-04-11T23:47:16.854775807";
+
+/// Reads a timestamp literal of any [`TimeUnit`] as nanoseconds since the
+/// epoch, plus its timezone. A NULL yields `None`. Errors if the value does not
+/// fit in an `i64` of nanoseconds.
+fn timestamp_arg_to_nanos(
+    expr: &Expr,
+    arg_desc: &str,
+    name: &str,
+) -> Result<(Option<i64>, Option<Arc<str>>)> {
+    let Expr::Literal(scalar, _) = expr else {
+        return plan_err!(
+            "{arg_desc} for {name} must be a TIMESTAMP or NULL constant, got {expr}"
+        );
+    };
+
+    let (value, nanos_per_unit, tz) = match scalar {
+        ScalarValue::Null => return Ok((None, None)),
+        ScalarValue::TimestampSecond(v, tz) => (v, 1_000_000_000i64, tz),
+        ScalarValue::TimestampMillisecond(v, tz) => (v, 1_000_000, tz),
+        ScalarValue::TimestampMicrosecond(v, tz) => (v, 1_000, tz),
+        ScalarValue::TimestampNanosecond(v, tz) => (v, 1, tz),
+        other => {
+            return plan_err!(
+                "{arg_desc} for {name} must be a TIMESTAMP or NULL constant, got {:?}",
+                other.data_type()
+            );
+        }
+    };
+
+    let Some(value) = value else {
+        return Ok((None, tz.clone()));
+    };
+
+    let nanos = value.checked_mul(nanos_per_unit).ok_or_else(|| {
+        plan_datafusion_err!(
+            "{arg_desc} for {name} is out of range of nanosecond timestamps: \
+             {value} ({:?}) is outside {NANOS_RANGE_MIN} to {NANOS_RANGE_MAX}",
+            scalar.data_type()
+        )
+    })?;
+
+    Ok((Some(nanos), tz.clone()))
+}
+
 fn validate_interval_step(step: IntervalMonthDayNano) -> Result<()> {
-    if step.months == 0 && step.days == 0 && step.nanoseconds == 0 {
+    let has_positive_component = step.months > 0 || step.days > 0 || step.nanoseconds > 0;
+    let has_negative_component = step.months < 0 || step.days < 0 || step.nanoseconds < 0;
+
+    if !has_positive_component && !has_negative_component {
         return plan_err!("Step interval cannot be zero");
+    }
+    if has_positive_component && has_negative_component {
+        return plan_err!("Step interval cannot have mixed signs");
     }
 
     Ok(())
@@ -620,7 +677,7 @@ impl GenerateSeriesFuncImpl {
                         other
                     );
                 }
-            };
+            }
         }
 
         let schema = Arc::new(Schema::new(vec![Field::new(
@@ -670,38 +727,29 @@ impl GenerateSeriesFuncImpl {
             );
         }
 
-        // Parse start timestamp
-        let (start_ts, tz) = match &exprs[0] {
-            Expr::Literal(ScalarValue::TimestampNanosecond(ts, tz), _) => {
-                (*ts, tz.clone())
-            }
-            other => {
-                return plan_err!(
-                    "First argument must be a timestamp or NULL, got {:?}",
-                    other
-                );
-            }
-        };
+        let (start_ts, tz) =
+            timestamp_arg_to_nanos(&exprs[0], "First argument", self.name)?;
+        let (end_ts, _end_tz) =
+            timestamp_arg_to_nanos(&exprs[1], "Second argument", self.name)?;
 
-        // Parse end timestamp
-        let end_ts = match &exprs[1] {
-            Expr::Literal(ScalarValue::Null, _) => None,
-            Expr::Literal(ScalarValue::TimestampNanosecond(ts, _), _) => *ts,
-            other => {
-                return plan_err!(
-                    "Second argument must be a timestamp or NULL, got {:?}",
-                    other
-                );
-            }
-        };
+        // The output timezone (which also drives month/day step arithmetic)
+        // comes from the start. The end's zone does not change its instant.
 
         // Parse step interval
         let step_interval = match &exprs[2] {
             Expr::Literal(ScalarValue::Null, _) => None,
             Expr::Literal(ScalarValue::IntervalMonthDayNano(interval), _) => *interval,
+            Expr::Literal(scalar, _) => {
+                return plan_err!(
+                    "Third argument for {} must be an INTERVAL or NULL constant, got {:?}",
+                    self.name,
+                    scalar.data_type()
+                );
+            }
             other => {
                 return plan_err!(
-                    "Third argument must be an interval or NULL, got {:?}",
+                    "Third argument for {} must be an INTERVAL or NULL constant, got {}",
+                    self.name,
                     other
                 );
             }
@@ -762,9 +810,17 @@ impl GenerateSeriesFuncImpl {
                     args: GenSeriesArgs::ContainsNull { name: self.name },
                 }));
             }
+            Expr::Literal(scalar, _) => {
+                return plan_err!(
+                    "First argument for {} must be a DATE or NULL constant, got {:?}",
+                    self.name,
+                    scalar.data_type()
+                );
+            }
             other => {
                 return plan_err!(
-                    "First argument must be a date or NULL, got {:?}",
+                    "First argument for {} must be a DATE or NULL constant, got {}",
+                    self.name,
                     other
                 );
             }
@@ -780,9 +836,17 @@ impl GenerateSeriesFuncImpl {
                     args: GenSeriesArgs::ContainsNull { name: self.name },
                 }));
             }
+            Expr::Literal(scalar, _) => {
+                return plan_err!(
+                    "Second argument for {} must be a DATE or NULL constant, got {:?}",
+                    self.name,
+                    scalar.data_type()
+                );
+            }
             other => {
                 return plan_err!(
-                    "Second argument must be a date or NULL, got {:?}",
+                    "Second argument for {} must be a DATE or NULL constant, got {}",
+                    self.name,
                     other
                 );
             }
@@ -800,9 +864,17 @@ impl GenerateSeriesFuncImpl {
                     args: GenSeriesArgs::ContainsNull { name: self.name },
                 }));
             }
+            Expr::Literal(scalar, _) => {
+                return plan_err!(
+                    "Third argument for {} must be an INTERVAL or NULL constant, got {:?}",
+                    self.name,
+                    scalar.data_type()
+                );
+            }
             other => {
                 return plan_err!(
-                    "Third argument must be an interval or NULL, got {:?}",
+                    "Third argument for {} must be an INTERVAL or NULL constant, got {}",
+                    self.name,
                     other
                 );
             }
@@ -873,11 +945,41 @@ impl TableFunctionImpl for RangeFunc {
 mod generate_series_tests {
     use std::sync::Arc;
 
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::{DataType, Field, IntervalMonthDayNano, Schema};
     use datafusion_common::Result;
     use datafusion_physical_plan::memory::LazyBatchGenerator;
 
-    use crate::generate_series::GenericSeriesState;
+    use crate::generate_series::{
+        GenSeriesArgs, GenerateSeriesTable, GenericSeriesState, validate_interval_step,
+    };
+
+    #[test]
+    fn rejects_mixed_sign_interval_steps() {
+        assert!(validate_interval_step(IntervalMonthDayNano::new(1, -29, 0)).is_err());
+        assert!(validate_interval_step(IntervalMonthDayNano::new(-1, 29, 0)).is_err());
+
+        validate_interval_step(IntervalMonthDayNano::new(1, 29, 1))
+            .expect("positive interval should be valid");
+        validate_interval_step(IntervalMonthDayNano::new(-1, -29, -1))
+            .expect("negative interval should be valid");
+    }
+
+    #[test]
+    fn generate_series_rejects_zero_batch_size() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let table = GenerateSeriesTable::new(
+            schema,
+            GenSeriesArgs::Int64Args {
+                start: 1,
+                end: 2,
+                step: 1,
+                include_end: true,
+                name: "generate_series",
+            },
+        );
+
+        assert!(table.as_generator(0).is_err());
+    }
 
     #[test]
     fn test_generic_series_state_reset() -> Result<()> {

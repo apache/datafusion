@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -41,6 +41,28 @@ select * from validate_partitioned_parquet order by col1, col2;
 ----
 1 Foo
 2 Bar
+
+# Reject NULL partition values instead of writing them into the zero partition.
+statement ok
+CREATE TABLE nullable_partition_source (id INT, p INT) AS VALUES (1, NULL), (2, 0);
+
+statement error DataFusion error: Execution error: NULL values are not supported for partition column 'p'
+COPY nullable_partition_source TO 'test_files/scratch/copy/null_partition/' STORED AS PARQUET PARTITIONED BY (p);
+
+# Nullable partition columns still work when the copied rows contain no NULLs.
+query I
+COPY (SELECT * FROM nullable_partition_source WHERE p IS NOT NULL) TO 'test_files/scratch/copy/non_null_partition/' STORED AS PARQUET PARTITIONED BY (p);
+----
+1
+
+statement ok
+CREATE EXTERNAL TABLE validate_non_null_partition (id INT, p INT)
+STORED AS PARQUET LOCATION 'test_files/scratch/copy/non_null_partition/' PARTITIONED BY (p);
+
+query II
+SELECT id, p FROM validate_non_null_partition;
+----
+2 0
 
 # validate partition paths were actually generated
 statement ok
@@ -227,6 +249,33 @@ query TT
 select column1, column2 from validate_partitioned_parquet4 order by column1,column2;
 ----
 1 a
+
+# The files written above physically contain the partition column (because
+# keep_partition_by_columns was enabled), so a hive-partitioned table over the
+# whole directory must not end up with that column twice.
+# See https://github.com/apache/datafusion/issues/17420
+statement ok
+CREATE EXTERNAL TABLE validate_partitioned_parquet4_hive STORED AS PARQUET
+LOCATION 'test_files/scratch/copy/partitioned_table4/' PARTITIONED BY (column1);
+
+query TT
+select column1, column2 from validate_partitioned_parquet4_hive order by column1, column2;
+----
+1 a
+2 b
+3 c
+
+# Same directory, but letting the factory infer the hive partitions from the path
+statement ok
+CREATE EXTERNAL TABLE validate_partitioned_parquet4_inferred STORED AS PARQUET
+LOCATION 'test_files/scratch/copy/partitioned_table4/';
+
+query TT
+select column1, column2 from validate_partitioned_parquet4_inferred order by column1, column2;
+----
+1 a
+2 b
+3 c
 
 # Copy more files to directory via query
 query I

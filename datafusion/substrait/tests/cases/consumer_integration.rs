@@ -52,7 +52,7 @@ mod tests {
         let all_lines: Vec<&str> = pretty.trim().lines().collect();
         let header = &all_lines[..3];
         let mut data: Vec<&str> = all_lines[3..all_lines.len() - 1].to_vec();
-        data.sort();
+        data.sort_unstable();
         let footer = &all_lines[all_lines.len() - 1..];
         header
             .iter()

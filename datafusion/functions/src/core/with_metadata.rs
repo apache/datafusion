@@ -29,15 +29,15 @@ use datafusion_macros::user_doc;
     syntax_example = "with_metadata(expression, key1, value1[, key2, value2, ...])",
     sql_example = r#"```sql
 > select arrow_metadata(with_metadata(column1, 'unit', 'ms'), 'unit') from (values (1));
-+---------------------------------------------------------------+
++-----------------------------------------------------------------------------+
 | arrow_metadata(with_metadata(column1,Utf8("unit"),Utf8("ms")),Utf8("unit")) |
-+---------------------------------------------------------------+
-| ms                                                            |
-+---------------------------------------------------------------+
++-----------------------------------------------------------------------------+
+| ms                                                                          |
++-----------------------------------------------------------------------------+
 > select arrow_metadata(with_metadata(column1, 'unit', 'ms', 'source', 'sensor')) from (values (1));
-+--------------------------+
++----------------------------+
 | {source: sensor, unit: ms} |
-+--------------------------+
++----------------------------+
 ```"#,
     argument(
         name = "expression",
@@ -157,7 +157,7 @@ impl ScalarUDFImpl for WithMetadataFunc {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::Field;
+    use arrow::datatypes::{Field, Metadata};
     use datafusion_common::ScalarValue;
     use std::sync::Arc;
 
@@ -197,14 +197,7 @@ mod tests {
     fn merges_existing_metadata_and_overwrites_on_collision() {
         let udf = WithMetadataFunc::new();
         let mut existing = Field::new("x", DataType::Float64, false);
-        existing.set_metadata(
-            [
-                ("keep".to_string(), "yes".to_string()),
-                ("unit".to_string(), "old".to_string()),
-            ]
-            .into_iter()
-            .collect(),
-        );
+        existing.set_metadata(Metadata::new().with("keep", "yes").with("unit", "old"));
         let input: FieldRef = Arc::new(existing);
         let k = str_lit("unit");
         let v = str_lit("new");

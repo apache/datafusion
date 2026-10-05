@@ -98,6 +98,15 @@ running:
 cargo check -p datafusion
 ```
 
+Within the user documentation there are references to the current version number.
+Update these to the current version. At the time of this writing we need to manually
+update the following files
+
+- `docs/source/download.md`
+- `docs/source/user-guide/configs.md`
+- `docs/source/user-guide/crate-configuration.md`
+- `docs/source/user-guide/example-usage.md`
+
 Then commit the changes and create a PR targeting the release branch `branch-N`.
 
 ```shell

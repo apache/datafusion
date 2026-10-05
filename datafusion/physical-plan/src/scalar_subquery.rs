@@ -285,10 +285,29 @@ impl ExecutionPlan for ScalarSubqueryExec {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
 
-        let input = ctx.encode_child(self.input())?;
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `ScalarSubqueryExec` is a compile error here until it is either
+        // serialized or explicitly documented as not needing to be.
+        let Self {
+            input,
+            subqueries,
+            // Execution-time one-shot future, created on `execute()`.
+            subquery_future: _,
+            // Runtime results container, rebuilt (empty) on decode and shared
+            // with the input's `ScalarSubqueryExpr` nodes.
+            results: _,
+            // Copied from the input's properties, recomputed on decode.
+            cache: _,
+        } = self;
+        let input = ctx.encode_child(input)?;
         // Subquery indices are positional and recovered during decoding.
-        let subqueries =
-            ctx.encode_children(self.subqueries().iter().map(|subquery| &subquery.plan))?;
+        let subqueries = ctx.encode_children(subqueries.iter().map(
+            |ScalarSubqueryLink {
+                 plan,
+                 // Positional: recovered from the element's position on decode.
+                 index: _,
+             }| plan,
+        ))?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::ScalarSubquery(Box::new(
@@ -316,8 +335,12 @@ impl ScalarSubqueryExec {
             protobuf::physical_plan_node::PhysicalPlanType::ScalarSubquery,
             "ScalarSubqueryExec",
         );
-        let results = ScalarSubqueryResults::new(scalar_subquery.subqueries.len());
-        let input_node = scalar_subquery.input.as_deref().ok_or_else(|| {
+        // Destructure exhaustively so that a new field on
+        // `ScalarSubqueryExecNode` is a compile error here rather than a
+        // silently dropped field.
+        let protobuf::ScalarSubqueryExecNode { input, subqueries } = &**scalar_subquery;
+        let results = ScalarSubqueryResults::new(subqueries.len());
+        let input_node = input.as_deref().ok_or_else(|| {
             datafusion_common::internal_datafusion_err!(
                 "ScalarSubqueryExec is missing required field 'input'"
             )
@@ -325,8 +348,7 @@ impl ScalarSubqueryExec {
         // The input's ScalarSubqueryExpr nodes must share this results container.
         let input =
             ctx.decode_child_with_scalar_subquery_results(input_node, results.clone())?;
-        let subqueries = scalar_subquery
-            .subqueries
+        let subqueries = subqueries
             .iter()
             .enumerate()
             .map(|(index, plan)| {

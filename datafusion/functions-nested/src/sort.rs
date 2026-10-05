@@ -25,11 +25,11 @@ use arrow::array::{
 use arrow::array::{BooleanBufferBuilder, StringArray};
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::datatypes::{ArrowNativeTypeOp, DataType, FieldRef};
-use arrow::row::{RowConverter, SortField};
+use arrow::row::{RowConverter, Rows, SortField};
 use arrow::{compute, compute::SortOptions, downcast_primitive_array};
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_string_array};
-use datafusion_common::utils::ListCoercion;
-use datafusion_common::{Result, exec_err, internal_datafusion_err};
+use datafusion_common::utils::{ListCoercion, offset_span};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
     ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
@@ -233,50 +233,85 @@ fn sort_primitive_list<T: ArrowPrimitiveType, OffsetSize: OffsetSizeTrait>(
 where
     T::Native: ArrowNativeTypeOp,
 {
-    if prim_values.null_count() > 0 {
-        sort_list_with_nulls(prim_values, list_array, field, sort_order, null_order)
-    } else {
-        sort_list_no_nulls(prim_values, list_array, field, sort_order, null_order)
+    let row_count = list_array.len();
+    let list_nulls = list_array.nulls();
+    let offsets = list_array.offsets();
+    let mut list_validity = BooleanBufferBuilder::new(row_count);
+
+    let (values, validity) = match prim_values.nulls() {
+        Some(element_nulls) if element_nulls.null_count() > 0 => {
+            let (values, validity) = sort_rows_with_nulls(
+                prim_values.values(),
+                element_nulls,
+                offsets,
+                list_nulls,
+                sort_order,
+                null_order,
+                &mut list_validity,
+            )?;
+            (values, Some(validity))
+        }
+        _ => {
+            let values = sort_rows_no_nulls(
+                prim_values.values(),
+                offsets,
+                list_nulls,
+                sort_order,
+                null_order,
+                &mut list_validity,
+            )?;
+            (values, None)
+        }
+    };
+
+    let sorted_values = Arc::new(
+        PrimitiveArray::<T>::new(values.into(), validity)
+            .with_data_type(prim_values.data_type().clone()),
+    );
+
+    Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
+        field,
+        rebase_offsets(offsets),
+        sorted_values,
+        Some(NullBuffer::from(list_validity.finish())),
+    )?))
+}
+
+/// Sorts one row's values in place.
+///
+/// [`ArrowNativeTypeOp::compare`] is a total order, so a descending sort is the
+/// reverse of the ascending one. Sorting one way and reversing keeps a single
+/// instantiation of the standard library's sort per native type, instead of one
+/// per comparator closure.
+#[inline]
+fn sort_row<N: ArrowNativeTypeOp>(row: &mut [N], descending: bool) {
+    row.sort_unstable_by(|a, b| a.compare(*b));
+    if descending {
+        row.reverse();
     }
 }
 
 /// Fast path for primitive values with no element-level nulls. Copies all
 /// values into a single `Vec` and sorts each row's slice in-place.
-fn sort_list_no_nulls<T: ArrowPrimitiveType, OffsetSize: OffsetSizeTrait>(
-    prim_values: &PrimitiveArray<T>,
-    list_array: &GenericListArray<OffsetSize>,
-    field: FieldRef,
+fn sort_rows_no_nulls<N: ArrowNativeTypeOp, O: OffsetSizeTrait>(
+    src_values: &[N],
+    offsets: &OffsetBuffer<O>,
+    list_nulls: Option<&NullBuffer>,
     sort_order: Option<&StringArray>,
     null_order: Option<&StringArray>,
-) -> Result<ArrayRef>
-where
-    T::Native: ArrowNativeTypeOp,
-{
-    let row_count = list_array.len();
-    let offsets = list_array.offsets();
-    let values_start = offsets[0].as_usize();
-    let values_end = offsets[row_count].as_usize();
-    let mut list_validity = BooleanBufferBuilder::new(row_count);
+    list_validity: &mut BooleanBufferBuilder,
+) -> Result<Vec<N>> {
+    let (values_start, total_values) = offset_span(offsets);
 
     // Copy all values into a mutable buffer
-    let mut values: Vec<T::Native> =
-        prim_values.values()[values_start..values_end].to_vec();
+    let mut values = src_values[values_start..values_start + total_values].to_vec();
 
     for (row_index, window) in offsets.windows(2).enumerate() {
-        if list_array.is_null(row_index) {
+        if list_nulls.is_some_and(|n| n.is_null(row_index)) {
             list_validity.append(false);
             continue;
         }
-        let start = window[0].as_usize() - values_start;
-        let end = window[1].as_usize() - values_start;
-        let slice = &mut values[start..end];
-        if let Some(null_order) = null_order {
-            if null_order.is_null(row_index) {
-                list_validity.append(false);
-                continue;
-            }
-            order_nulls_first(null_order.value(row_index))?;
-        }
+
         let descending = if let Some(sort_order) = sort_order {
             if sort_order.is_null(row_index) {
                 list_validity.append(false);
@@ -286,55 +321,38 @@ where
         } else {
             false
         };
-        if descending {
-            slice.sort_unstable_by(|a, b| b.compare(*a));
-        } else {
-            slice.sort_unstable_by(|a, b| a.compare(*b));
+
+        if let Some(null_order) = null_order {
+            if null_order.is_null(row_index) {
+                list_validity.append(false);
+                continue;
+            }
+            order_nulls_first(null_order.value(row_index))?;
         }
+
+        let start = window[0].as_usize() - values_start;
+        let end = window[1].as_usize() - values_start;
+        sort_row(&mut values[start..end], descending);
         list_validity.append(true);
     }
 
-    let new_offsets = rebase_offsets(offsets);
-    let sorted_values = Arc::new(
-        PrimitiveArray::<T>::new(values.into(), None)
-            .with_data_type(prim_values.data_type().clone()),
-    );
-
-    Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
-        field,
-        new_offsets,
-        sorted_values,
-        Some(NullBuffer::from(list_validity.finish())),
-    )?))
+    Ok(values)
 }
 
 /// Slow path for primitive values with element-level nulls.
-fn sort_list_with_nulls<T: ArrowPrimitiveType, OffsetSize: OffsetSizeTrait>(
-    prim_values: &PrimitiveArray<T>,
-    list_array: &GenericListArray<OffsetSize>,
-    field: FieldRef,
+fn sort_rows_with_nulls<N: ArrowNativeTypeOp, O: OffsetSizeTrait>(
+    src_values: &[N],
+    src_nulls: &NullBuffer,
+    offsets: &OffsetBuffer<O>,
+    list_nulls: Option<&NullBuffer>,
     sort_order: Option<&StringArray>,
     null_order: Option<&StringArray>,
-) -> Result<ArrayRef>
-where
-    T::Native: ArrowNativeTypeOp,
-{
-    let row_count = list_array.len();
-    let offsets = list_array.offsets();
-    let values_start = offsets[0].as_usize();
-    let values_end = offsets[row_count].as_usize();
-    let total_values = values_end - values_start;
-    let mut list_validity = BooleanBufferBuilder::new(row_count);
+    list_validity: &mut BooleanBufferBuilder,
+) -> Result<(Vec<N>, NullBuffer)> {
+    let (values_start, total_values) = offset_span(offsets);
 
-    let mut out_values: Vec<T::Native> = vec![T::Native::default(); total_values];
+    let mut out_values: Vec<N> = vec![N::default(); total_values];
     let mut validity = BooleanBufferBuilder::new(total_values);
-
-    let src_nulls = prim_values.nulls().ok_or_else(|| {
-        internal_datafusion_err!(
-            "sort_list_with_nulls called but values have no null buffer"
-        )
-    })?;
-    let src_values = prim_values.values();
 
     for (row_index, window) in offsets.windows(2).enumerate() {
         let start = window[0].as_usize();
@@ -342,19 +360,22 @@ where
         let row_len = end - start;
         let out_start = start - values_start;
 
-        if list_array.is_null(row_index) {
+        if list_nulls.is_some_and(|n| n.is_null(row_index)) {
             validity.append_n(row_len, false);
             list_validity.append(false);
             continue;
         }
 
-        if row_len == 0 {
-            list_validity.append(true);
-            continue;
-        }
-
-        let null_count = src_nulls.slice(start, row_len).null_count();
-        let valid_count = row_len - null_count;
+        let descending = if let Some(sort_order) = sort_order {
+            if sort_order.is_null(row_index) {
+                validity.append_n(row_len, false);
+                list_validity.append(false);
+                continue;
+            }
+            order_desc(sort_order.value(row_index))?
+        } else {
+            false
+        };
 
         let nulls_first = if let Some(null_order) = null_order {
             if null_order.is_null(row_index) {
@@ -367,34 +388,25 @@ where
             true
         };
 
+        let null_count = src_nulls.slice(start, row_len).null_count();
+        let valid_count = row_len - null_count;
+
         // Compact valid values directly into the target region of the output
         // buffer: after nulls (if nulls_first) or at the start (if nulls_last).
         let valid_offset = if nulls_first { null_count } else { 0 };
         let mut write_pos = out_start + valid_offset;
-        for i in start..end {
-            if src_nulls.is_valid(i) {
-                out_values[write_pos] = src_values[i];
+        for (i, &value) in src_values[start..end].iter().enumerate() {
+            if src_nulls.is_valid(start + i) {
+                out_values[write_pos] = value;
                 write_pos += 1;
             }
         }
 
-        let valid_slice = &mut out_values
-            [out_start + valid_offset..out_start + valid_offset + valid_count];
-        let descending = if let Some(sort_order) = sort_order {
-            if sort_order.is_null(row_index) {
-                validity.append_n(row_len, false);
-                list_validity.append(false);
-                continue;
-            }
-            order_desc(sort_order.value(row_index))?
-        } else {
-            false
-        };
-        if descending {
-            valid_slice.sort_unstable_by(|a, b| b.compare(*a));
-        } else {
-            valid_slice.sort_unstable_by(|a, b| a.compare(*b));
-        }
+        sort_row(
+            &mut out_values
+                [out_start + valid_offset..out_start + valid_offset + valid_count],
+            descending,
+        );
 
         // Build validity bits
         if nulls_first {
@@ -408,20 +420,7 @@ where
         list_validity.append(true);
     }
 
-    let new_offsets = rebase_offsets(offsets);
-
-    let null_buffer = NullBuffer::from(validity.finish());
-    let sorted_values = Arc::new(
-        PrimitiveArray::<T>::new(out_values.into(), Some(null_buffer))
-            .with_data_type(prim_values.data_type().clone()),
-    );
-
-    Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
-        field,
-        new_offsets,
-        sorted_values,
-        Some(NullBuffer::from(list_validity.finish())),
-    )?))
+    Ok((out_values, NullBuffer::from(validity.finish())))
 }
 
 /// Sort a non-primitive-typed ListArray by converting all rows at once using
@@ -437,8 +436,7 @@ fn array_sort_non_primitive<OffsetSize: OffsetSizeTrait>(
     let row_count = list_array.len();
     let values = list_array.values();
     let offsets = list_array.offsets();
-    let values_start = offsets[0].as_usize();
-    let total_values = offsets[row_count].as_usize() - values_start;
+    let (values_start, total_values) = offset_span(offsets);
 
     let mut list_validity = BooleanBufferBuilder::new(row_count);
 
@@ -528,31 +526,20 @@ fn array_sort_non_primitive<OffsetSize: OffsetSizeTrait>(
         if len <= 1 {
             indices.extend((local_start..local_start + len).map(OffsetSize::usize_as));
         } else {
-            sort_scratch.clear();
-            sort_scratch.extend(local_start..local_start + len);
-
-            if descending {
+            let rows = if descending {
                 if nulls_first {
-                    sort_scratch.sort_unstable_by(|&a, &b| {
-                        desc_first_rows.row(a).cmp(&desc_first_rows.row(b))
-                    });
+                    &desc_first_rows
                 } else {
-                    sort_scratch.sort_unstable_by(|&a, &b| {
-                        desc_last_rows.row(a).cmp(&desc_last_rows.row(b))
-                    });
+                    &desc_last_rows
                 }
             } else {
                 if nulls_first {
-                    sort_scratch.sort_unstable_by(|&a, &b| {
-                        asc_first_rows.row(a).cmp(&asc_first_rows.row(b))
-                    });
+                    &asc_first_rows
                 } else {
-                    sort_scratch.sort_unstable_by(|&a, &b| {
-                        asc_last_rows.row(a).cmp(&asc_last_rows.row(b))
-                    });
+                    &asc_last_rows
                 }
-            }
-
+            };
+            sort_row_indices(&mut sort_scratch, rows, local_start, len);
             indices.extend(sort_scratch.iter().map(|&i| OffsetSize::usize_as(i)));
         }
 
@@ -572,6 +559,15 @@ fn array_sort_non_primitive<OffsetSize: OffsetSizeTrait>(
         sorted_values,
         Some(NullBuffer::from(list_validity.finish())),
     )?))
+}
+
+/// Sorts `scratch` to hold the indices `start..start + len` ordered by their
+/// encoded rows. Kept free of the offset width so the standard library's sort
+/// is instantiated once rather than once per list type.
+fn sort_row_indices(scratch: &mut Vec<usize>, rows: &Rows, start: usize, len: usize) {
+    scratch.clear();
+    scratch.extend(start..start + len);
+    scratch.sort_unstable_by(|&a, &b| rows.row(a).cmp(&rows.row(b)));
 }
 
 /// Select elements from `values` at the given `indices` using `compute::take`.

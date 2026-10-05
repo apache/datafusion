@@ -26,7 +26,7 @@ use datafusion_common::Result;
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
-use datafusion_expr::EmitTo;
+use datafusion_expr::{EmitTo, GroupSelection};
 use half::f16;
 use hashbrown::hash_table::HashTable;
 #[cfg(not(feature = "force_hash_collisions"))]
@@ -239,11 +239,43 @@ where
         Ok(vec![Arc::new(array.with_data_type(self.data_type.clone()))])
     }
 
+    fn values_preserving(
+        &mut self,
+        selection: GroupSelection<'_>,
+    ) -> Result<Vec<ArrayRef>> {
+        selection.validate_num_groups(self.values.len())?;
+        let values: Vec<T::Native> =
+            selection.iter().map(|index| self.values[index]).collect();
+        let nulls = if let Some(null_group) = self.null_group {
+            let mut nulls = NullBufferBuilder::new(values.len());
+            for index in selection.iter() {
+                if index == null_group {
+                    nulls.append_null();
+                } else {
+                    nulls.append_non_null();
+                }
+            }
+            nulls.finish()
+        } else {
+            None
+        };
+        let array = PrimitiveArray::<T>::new(values.into(), nulls)
+            .with_data_type(self.data_type.clone());
+        Ok(vec![Arc::new(array)])
+    }
+
+    fn supports_values_preserving(&self) -> bool {
+        true
+    }
+
     fn clear_shrink(&mut self, num_rows: usize) {
         self.values.clear();
         self.values.shrink_to(num_rows);
         self.map.clear();
         self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
+
+        // Reset the null group index
+        self.null_group = None;
     }
 }
 
@@ -290,6 +322,34 @@ mod tests {
             gv.values.capacity(),
             capacity_before,
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn clear_shrink_reset_null_group() -> Result<()> {
+        let mut gv = GroupValuesPrimitive::<Int32Type>::new(DataType::Int32);
+
+        // Intern some values including a null
+        let arr: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(2)]));
+        let mut groups = vec![];
+        gv.intern(&[arr], &mut groups)?;
+
+        assert_eq!(groups.len(), 3);
+
+        let null_group = groups[1];
+        assert_eq!(null_group, 1);
+
+        // Clear and shrink
+        gv.clear_shrink(0);
+
+        let arr: ArrayRef = Arc::new(Int32Array::from(vec![None::<i32>]));
+        let mut groups = vec![];
+        gv.intern(&[arr], &mut groups)?;
+        assert_eq!(groups.len(), 1);
+
+        let new_null_group = groups[0];
+        assert_eq!(new_null_group, 0);
 
         Ok(())
     }

@@ -75,14 +75,11 @@ impl CliHelper {
 
     fn validate_input(&self, input: &str) -> Result<ValidationResult> {
         if let Some(sql) = input.strip_suffix(';') {
-            let dialect = match dialect_from_str(self.dialect) {
-                Some(dialect) => dialect,
-                None => {
-                    return Ok(ValidationResult::Invalid(Some(format!(
-                        "  🤔 Invalid dialect: {}",
-                        self.dialect
-                    ))));
-                }
+            let Some(dialect) = dialect_from_str(self.dialect) else {
+                return Ok(ValidationResult::Invalid(Some(format!(
+                    "  🤔 Invalid dialect: {}",
+                    self.dialect
+                ))));
             };
             let lines = split_from_semicolon(sql);
             for line in lines {
@@ -164,7 +161,7 @@ impl Completer for CliHelper {
         if is_open_quote_for_location(line, pos) {
             self.completer.complete(line, pos, ctx)
         } else {
-            Ok((0, Vec::with_capacity(0)))
+            Ok((0, Vec::new()))
         }
     }
 }

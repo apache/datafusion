@@ -496,27 +496,27 @@ impl ExplainStatementOptions {
             let name = opt.name.value.to_ascii_lowercase();
             match name.as_str() {
                 "analyze" => {
-                    out.analyze = parse_bool_arg(&opt.arg, &name)?;
+                    out.analyze = parse_bool_arg(opt.arg.as_ref(), &name)?;
                 }
                 "verbose" => {
-                    out.verbose = parse_bool_arg(&opt.arg, &name)?;
+                    out.verbose = parse_bool_arg(opt.arg.as_ref(), &name)?;
                 }
                 "format" => {
-                    let s = parse_ident_or_string_arg(&opt.arg, &name)?;
+                    let s = parse_ident_or_string_arg(opt.arg.as_ref(), &name)?;
                     out.format = Some(ExplainFormat::from_str(&s)?);
                 }
                 "metrics" => {
-                    let s = parse_ident_or_string_arg(&opt.arg, &name)?;
+                    let s = parse_ident_or_string_arg(opt.arg.as_ref(), &name)?;
                     out.analyze_categories =
                         Some(ExplainAnalyzeCategories::from_str(&s)?);
                     metrics_explicit = true;
                 }
                 "level" => {
-                    let s = parse_ident_or_string_arg(&opt.arg, &name)?;
+                    let s = parse_ident_or_string_arg(opt.arg.as_ref(), &name)?;
                     out.analyze_level = Some(MetricType::from_str(&s)?);
                 }
                 "timing" => {
-                    let enable = parse_bool_arg(&opt.arg, &name)?;
+                    let enable = parse_bool_arg(opt.arg.as_ref(), &name)?;
                     out.analyze_categories = Some(adjust_timing(
                         out.analyze_categories.take(),
                         enable,
@@ -524,7 +524,7 @@ impl ExplainStatementOptions {
                     ));
                 }
                 "summary" => {
-                    let summary = parse_bool_arg(&opt.arg, &name)?;
+                    let summary = parse_bool_arg(opt.arg.as_ref(), &name)?;
                     out.analyze_level = Some(if summary {
                         MetricType::Summary
                     } else {
@@ -532,7 +532,7 @@ impl ExplainStatementOptions {
                     });
                 }
                 "costs" => {
-                    out.show_statistics = Some(parse_bool_arg(&opt.arg, &name)?);
+                    out.show_statistics = Some(parse_bool_arg(opt.arg.as_ref(), &name)?);
                 }
                 // Postgres options DataFusion does not model. Give a helpful
                 // pointer rather than silently accepting them.
@@ -562,7 +562,7 @@ impl ExplainStatementOptions {
 /// identifiers `TRUE`/`FALSE`/`ON`/`OFF` (case-insensitive) and the numeric
 /// literals `0` / `1`.
 #[cfg(feature = "sql")]
-fn parse_bool_arg(arg: &Option<Expr>, name: &str) -> Result<bool> {
+fn parse_bool_arg(arg: Option<&Expr>, name: &str) -> Result<bool> {
     let Some(expr) = arg else {
         return Ok(true);
     };
@@ -605,8 +605,8 @@ fn parse_bool_arg(arg: &Option<Expr>, name: &str) -> Result<bool> {
 /// Parse an identifier-or-string argument (used for `FORMAT`, `METRICS`,
 /// `LEVEL`).
 #[cfg(feature = "sql")]
-fn parse_ident_or_string_arg(arg: &Option<Expr>, name: &str) -> Result<String> {
-    let expr = arg.as_ref().ok_or_else(|| {
+fn parse_ident_or_string_arg(arg: Option<&Expr>, name: &str) -> Result<String> {
+    let expr = arg.ok_or_else(|| {
         DataFusionError::Plan(format!(
             "EXPLAIN option {} requires an argument",
             name.to_ascii_uppercase()

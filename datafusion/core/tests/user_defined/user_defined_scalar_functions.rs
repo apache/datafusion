@@ -20,12 +20,12 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, Float32Array, Float64Array, Int32Array, RecordBatch, StringArray,
-    builder::BooleanBuilder, cast::AsArray,
+    Array, ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, RecordBatch,
+    StringArray, builder::BooleanBuilder, cast::AsArray,
 };
 use arrow::array::{Int8Array, UInt64Array, as_string_array, create_array, record_batch};
 use arrow::compute::kernels::numeric::add;
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, Metadata, Schema};
 use arrow_schema::extension::{Bool8, CanonicalExtensionType, ExtensionType};
 use arrow_schema::{ArrowError, FieldRef, SchemaRef};
 use datafusion::common::test_util::batches_to_string;
@@ -40,13 +40,15 @@ use datafusion_common::{
     DFSchema, DataFusionError, Result, ScalarValue, assert_batches_eq,
     assert_batches_sorted_eq, assert_contains, exec_datafusion_err, exec_err,
     not_impl_err, plan_err,
+    types::{NativeType, logical_int16},
 };
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody, LogicalPlanBuilder,
     OperateFunctionArg, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
-    Signature, Volatility, lit_with_metadata,
+    Signature, TypeSignatureClass, Volatility, lit_with_metadata,
 };
+use datafusion_expr_common::signature::Coercion;
 use datafusion_expr_common::signature::TypeSignature;
 use datafusion_functions_nested::range::range_udf;
 use parking_lot::Mutex;
@@ -1022,7 +1024,7 @@ impl TryFrom<CreateFunction> for ScalarFunctionWrapper {
             Some(pos) => {
                 let mut type_signatures: Vec<TypeSignature> = vec![];
                 // Generate all valid signatures
-                for n in pos..defaults.len() + 1 {
+                for n in pos..=defaults.len() {
                     if n == 0 {
                         type_signatures.push(TypeSignature::Nullary)
                     } else {
@@ -1645,10 +1647,8 @@ async fn test_metadata_based_udf() -> Result<()> {
     let data_array = Arc::new(UInt64Array::from(vec![0, 5, 10, 15, 20])) as ArrayRef;
     let schema = Arc::new(Schema::new(vec![
         Field::new("no_metadata", DataType::UInt64, true),
-        Field::new("with_metadata", DataType::UInt64, true).with_metadata(
-            std::iter::once(("modify_values".to_string(), "double_output".to_string()))
-                .collect(),
-        ),
+        Field::new("with_metadata", DataType::UInt64, true)
+            .with_metadata(Metadata::new().with("modify_values", "double_output")),
     ]));
     let batch = RecordBatch::try_new(
         schema,
@@ -1965,7 +1965,12 @@ async fn test_config_options_work_for_scalar_func() -> Result<()> {
         }
 
         fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-            let tz = args.config_options.execution.time_zone.clone();
+            let tz = args
+                .config_options
+                .execution
+                .time_zone
+                .as_ref()
+                .map(ToString::to_string);
             Ok(ColumnarValue::Scalar(ScalarValue::from(tz)))
         }
     }
@@ -1975,7 +1980,7 @@ async fn test_config_options_work_for_scalar_func() -> Result<()> {
     });
 
     let mut config = SessionConfig::new();
-    config.options_mut().execution.time_zone = Some("AEST".into());
+    config.options_mut().execution.time_zone = Some("Australia/Sydney".parse().unwrap());
 
     let ctx = SessionContext::new_with_config(config);
 
@@ -1988,7 +1993,7 @@ async fn test_config_options_work_for_scalar_func() -> Result<()> {
     let expected_schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
     let expected = RecordBatch::try_new(
         SchemaRef::from(expected_schema),
-        vec![create_array!(Utf8, ["AEST"])],
+        vec![create_array!(Utf8, ["Australia/Sydney"])],
     )?;
 
     assert_eq!(expected, actual[0]);
@@ -2070,6 +2075,93 @@ AS t(string, extension)
             .get("ARROW:extension:metadata"),
         Some(&"foofy.foofy".into())
     );
+    Ok(())
+}
+
+/// https://github.com/apache/datafusion/issues/19982
+#[tokio::test]
+async fn test_return_field_args_scalar_argument_types_match_arg_fields() -> Result<()> {
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct TestUdf {
+        name: &'static str,
+        expect_literal: bool,
+        signature: Signature,
+    }
+
+    impl TestUdf {
+        fn new(name: &'static str, expect_literal: bool) -> Self {
+            Self {
+                name,
+                expect_literal,
+                signature: Signature::coercible(
+                    vec![Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_int16()),
+                        vec![TypeSignatureClass::Numeric],
+                        NativeType::Int16,
+                    )],
+                    Volatility::Immutable,
+                ),
+            }
+        }
+    }
+
+    impl ScalarUDFImpl for TestUdf {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            unreachable!("return_field_from_args is implemented")
+        }
+
+        fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+            assert_eq!(args.arg_fields.len(), 1);
+            assert_eq!(args.scalar_arguments.len(), 1);
+            assert_eq!(
+                args.scalar_arguments[0].is_some(),
+                self.expect_literal,
+                "unexpected scalar argument for {}",
+                self.name
+            );
+            if self.expect_literal {
+                let scalar = args.scalar_arguments[0].unwrap();
+                assert_eq!(args.arg_fields[0].data_type(), &scalar.data_type());
+            }
+            Ok(
+                Field::new(self.name(), args.arg_fields[0].data_type().clone(), true)
+                    .into(),
+            )
+        }
+
+        fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            assert_eq!(args.args[0].data_type(), DataType::Int16);
+            Ok(args.args[0].clone())
+        }
+    }
+
+    let ctx = SessionContext::new();
+    let coerced_literal_udf: ScalarUDF = TestUdf::new("coerced_literal_udf", true).into();
+    let expression_arg_udf: ScalarUDF = TestUdf::new("expression_arg_udf", false).into();
+    ctx.register_udf(coerced_literal_udf);
+    ctx.register_udf(expression_arg_udf.clone());
+
+    ctx.sql("select coerced_literal_udf(1), coerced_literal_udf(NULL)")
+        .await?
+        .collect()
+        .await?;
+    let batch = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new("a", DataType::Int16, false)])),
+        vec![Arc::new(Int16Array::from(vec![1]))],
+    )?;
+    ctx.read_batch(batch)?
+        .select(vec![expression_arg_udf.call(vec![col("a")])])?
+        .collect()
+        .await?;
+
     Ok(())
 }
 
@@ -2164,5 +2256,101 @@ async fn test_extension_metadata_preserve_in_subquery() -> Result<()> {
         )
         .await?;
     assert!(!df.collect().await?.is_empty());
+    Ok(())
+}
+
+/// Uncorrelated scalar subqueries must keep Arrow field metadata on the
+/// physical expression so UDFs that distinguish extension types still type-check.
+/// https://github.com/apache/datafusion/issues/24933
+#[tokio::test]
+async fn test_extension_metadata_preserve_in_uncorrelated_scalar_subquery() -> Result<()>
+{
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct MetadataRequired {
+        signature: Signature,
+    }
+
+    impl Default for MetadataRequired {
+        fn default() -> Self {
+            Self {
+                signature: Signature::user_defined(Volatility::Immutable),
+            }
+        }
+    }
+
+    impl ScalarUDFImpl for MetadataRequired {
+        fn name(&self) -> &str {
+            "metadata_required"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+            Ok(arg_types.to_vec())
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            unreachable!("return_field_from_args is implemented")
+        }
+
+        fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+            for (i, field) in args.arg_fields.iter().enumerate() {
+                if !field.metadata().contains_key("ARROW:extension:name") {
+                    return exec_err!(
+                        "argument {i} lost ARROW:extension:name; field={field:?} metadata={:?}",
+                        field.metadata()
+                    );
+                }
+            }
+
+            Ok(Field::new("metadata_required", DataType::Boolean, true).into())
+        }
+
+        fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(
+                args.arg_fields
+                    .iter()
+                    .all(|field| field.metadata().contains_key("ARROW:extension:name")),
+            ))))
+        }
+    }
+
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("geometry", DataType::Utf8, false).with_metadata(HashMap::from([(
+            "ARROW:extension:name".to_string(),
+            "example.extension".to_string(),
+        )])),
+    ]);
+
+    let batch = RecordBatch::try_new(
+        schema.clone().into(),
+        vec![
+            create_array!(Int64, [1, 2]),
+            create_array!(Utf8, [Some("a"), Some("b")]),
+        ],
+    )?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("l", batch.clone())?;
+    ctx.register_batch("r", batch)?;
+    ctx.register_udf(MetadataRequired::default().into());
+
+    let df = ctx
+        .sql(
+            "
+        SELECT id
+        FROM l
+        WHERE metadata_required(
+            l.geometry,
+            (SELECT r.geometry FROM r WHERE r.id = 1)
+        )
+        ",
+        )
+        .await?;
+    let batches = df.collect().await?;
+    assert!(!batches.is_empty());
     Ok(())
 }
