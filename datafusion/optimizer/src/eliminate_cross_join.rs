@@ -27,7 +27,7 @@ use datafusion_expr::logical_plan::{
     Filter, Join, JoinConstraint, JoinType, LogicalPlan, Projection,
 };
 use datafusion_expr::utils::{can_hash, find_valid_equijoin_key_pair};
-use datafusion_expr::{ExprSchemable, Operator, and, build_join_schema};
+use datafusion_expr::{ExprSchemable, Operator, and, binary_expr, build_join_schema};
 
 #[derive(Default, Debug)]
 pub struct EliminateCrossJoin;
@@ -98,6 +98,7 @@ impl OptimizerRule for EliminateCrossJoin {
 
         let plan_schema = Arc::clone(plan.schema());
         let mut possible_join_keys = JoinKeySet::new();
+        let mut original_join_keys = vec![];
         let mut all_inputs: Vec<LogicalPlan> = vec![];
         let mut all_filters: Vec<Expr> = vec![];
         let mut null_equality = NullEquality::NullEqualsNothing;
@@ -122,6 +123,8 @@ impl OptimizerRule for EliminateCrossJoin {
                 input, predicate, ..
             } = filter;
 
+            collect_flattened_join_keys(input.as_ref(), &mut original_join_keys);
+
             // Extract null_equality setting from the input join
             if let LogicalPlan::Join(join) = input.as_ref() {
                 null_equality = join.null_equality;
@@ -143,6 +146,7 @@ impl OptimizerRule for EliminateCrossJoin {
                     null_equality: original_null_equality,
                     ..
                 }) => {
+                    collect_flattened_join_keys(&plan, &mut original_join_keys);
                     flatten_join_inputs(
                         plan,
                         &mut possible_join_keys,
@@ -173,6 +177,23 @@ impl OptimizerRule for EliminateCrossJoin {
         }
 
         left = rewrite_children(self, left, config)?.data;
+
+        // Keep any original ON predicates that could not be assigned to one
+        // of the rebuilt joins. In particular, an equijoin key can reference
+        // columns from more than one flattened input on the same side, so it
+        // may only become evaluable after the join graph has been rebuilt.
+        for (left_key, right_key, original_null_equality) in original_join_keys {
+            if !all_join_keys.contains(&left_key, &right_key) {
+                all_filters.push(binary_expr(
+                    left_key.clone(),
+                    match original_null_equality {
+                        NullEquality::NullEqualsNothing => Operator::Eq,
+                        NullEquality::NullEqualsNull => Operator::IsNotDistinctFrom,
+                    },
+                    right_key.clone(),
+                ));
+            }
+        }
 
         if &plan_schema != left.schema() {
             left = LogicalPlan::Projection(Projection::new_from_schema(
@@ -290,6 +311,35 @@ fn flatten_join_inputs(
         _ => {
             all_inputs.push(plan);
         }
+    }
+}
+
+/// Collect the ON keys from the inner joins that `flatten_join_inputs` will
+/// flatten. Keeping this set separate from keys extracted from a parent filter
+/// lets the rewrite restore only original join predicates that it could not
+/// attach to a rebuilt join.
+fn collect_flattened_join_keys(
+    plan: &LogicalPlan,
+    keys: &mut Vec<(Expr, Expr, NullEquality)>,
+) {
+    if let LogicalPlan::Join(join) = plan
+        && join.join_type == JoinType::Inner
+    {
+        for (left, right) in &join.on {
+            let key = (left.clone(), right.clone(), join.null_equality);
+            if !keys
+                .iter()
+                .any(|(existing_left, existing_right, null_equality)| {
+                    null_equality == &key.2
+                        && ((existing_left == &key.0 && existing_right == &key.1)
+                            || (existing_left == &key.1 && existing_right == &key.0))
+                })
+            {
+                keys.push(key);
+            }
+        }
+        collect_flattened_join_keys(join.left.as_ref(), keys);
+        collect_flattened_join_keys(join.right.as_ref(), keys);
     }
 }
 
@@ -1450,6 +1500,45 @@ mod tests {
             "null_equality setting should be preserved after optimization"
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn preserve_null_equality_for_unassigned_join_key() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+        let t3 = test_table_scan_with_name("t3")?;
+        let left = LogicalPlanBuilder::from(t1).cross_join(t2)?.build()?;
+        let join_schema = Arc::new(build_join_schema(
+            left.schema(),
+            t3.schema(),
+            &JoinType::Inner,
+        )?);
+
+        // The first key can be assigned to a rebuilt join, but the second
+        // spans two inputs on the left and must remain as a residual filter.
+        let plan = LogicalPlan::Join(Join {
+            left: Arc::new(left),
+            right: Arc::new(t3),
+            join_type: JoinType::Inner,
+            join_constraint: JoinConstraint::On,
+            on: vec![
+                (col("t1.a"), col("t3.a")),
+                (
+                    binary_expr(col("t1.b"), Operator::Plus, col("t2.b")),
+                    col("t3.c"),
+                ),
+            ],
+            filter: None,
+            schema: join_schema,
+            null_equality: NullEquality::NullEqualsNull,
+            null_aware: false,
+        });
+
+        let optimized = EliminateCrossJoin::new()
+            .rewrite(plan, &OptimizerContext::new())?
+            .data;
+        assert!(optimized.to_string().contains("IS NOT DISTINCT FROM"));
         Ok(())
     }
 
