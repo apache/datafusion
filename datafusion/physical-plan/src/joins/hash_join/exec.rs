@@ -10607,4 +10607,117 @@ mod tests {
         assert!(join.set_dynamic_filter(df).is_err());
         Ok(())
     }
+
+    // -----------------------------------------------------------------------
+    // Unit tests for deduplicate_view_array_buffers /
+    //                deduplicate_record_batch_view_buffers
+    // -----------------------------------------------------------------------
+
+    /// Fast path: an array with a single data buffer must be returned as-is
+    /// (pointer-equal clone, zero allocations).
+    #[test]
+    fn test_dedup_view_array_single_buffer_is_noop() {
+        let array = StringViewArray::from(vec![
+            "hello world long string!",
+            "another long value!",
+        ]);
+        let result = deduplicate_view_array_buffers(&array);
+        // Same number of data buffers — nothing removed.
+        assert_eq!(result.data_buffers().len(), array.data_buffers().len());
+    }
+
+    /// Fast path: multiple distinct buffers (no duplicates) → returned as-is.
+    #[test]
+    fn test_dedup_view_array_no_duplicates_is_noop() {
+        // Build two separate StringViewArrays so their buffers are distinct.
+        let a = StringViewArray::from(vec!["first long string value here"]);
+        let b = StringViewArray::from(vec!["second long string value here"]);
+        // Concatenate to get an array with two *different* buffers.
+        let combined = arrow::compute::concat(&[&a as _, &b as _]).unwrap();
+        let combined = combined.as_any().downcast_ref::<StringViewArray>().unwrap();
+        let n_before = combined.data_buffers().len();
+        let result = deduplicate_view_array_buffers(combined);
+        // Still the same number of unique buffers — nothing deduplicated.
+        assert_eq!(result.data_buffers().len(), n_before);
+    }
+
+    /// Deduplication path: concatenating an array with itself produces N refs to
+    /// the same K buffers; deduplicate_view_array_buffers collapses them to K.
+    #[test]
+    fn test_dedup_view_array_removes_duplicate_buffers() {
+        let base = StringViewArray::from(vec!["this is a long string value abc"]);
+        // concat gives us 2 references to the same underlying buffer.
+        let doubled = arrow::compute::concat(&[&base as _, &base as _]).unwrap();
+        let doubled = doubled.as_any().downcast_ref::<StringViewArray>().unwrap();
+        assert_eq!(doubled.data_buffers().len(), 2);
+        let deduped = deduplicate_view_array_buffers(doubled);
+        // After deduplication only 1 unique buffer should remain.
+        assert_eq!(deduped.data_buffers().len(), 1);
+        // Values must be preserved.
+        assert_eq!(deduped.value(0), "this is a long string value abc");
+        assert_eq!(deduped.value(1), "this is a long string value abc");
+    }
+
+    /// Inline-string path: strings with length ≤ 12 are stored inline in the
+    /// view descriptor and carry no buffer index; they must survive deduplication.
+    #[test]
+    fn test_dedup_view_array_inline_strings_preserved() {
+        // "hi" is 2 bytes — well within the 12-byte inline threshold.
+        let base = StringViewArray::from(vec!["hi", "short"]);
+        let doubled = arrow::compute::concat(&[&base as _, &base as _]).unwrap();
+        let doubled = doubled.as_any().downcast_ref::<StringViewArray>().unwrap();
+        let deduped = deduplicate_view_array_buffers(doubled);
+        assert_eq!(deduped.value(0), "hi");
+        assert_eq!(deduped.value(1), "short");
+        assert_eq!(deduped.value(2), "hi");
+        assert_eq!(deduped.value(3), "short");
+    }
+
+    /// BinaryView path: `deduplicate_record_batch_view_buffers` must also
+    /// deduplicate `BinaryView` columns (exercises the BinaryView arm).
+    #[test]
+    fn test_dedup_record_batch_binary_view_column() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "data",
+            DataType::BinaryView,
+            false,
+        )]));
+        let base = BinaryViewArray::from_iter_values(vec![
+            b"this is definitely longer than 12 bytes",
+        ]);
+        let doubled = arrow::compute::concat(&[&base as _, &base as _]).unwrap();
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![doubled]).unwrap();
+        assert_eq!(
+            batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<BinaryViewArray>()
+                .unwrap()
+                .data_buffers()
+                .len(),
+            2
+        );
+        let deduped = deduplicate_record_batch_view_buffers(&batch).unwrap();
+        let result = deduped
+            .column(0)
+            .as_any()
+            .downcast_ref::<BinaryViewArray>()
+            .unwrap();
+        assert_eq!(result.data_buffers().len(), 1);
+    }
+
+    /// Fast path: a batch with no Utf8View or BinaryView columns must be
+    /// returned as a cheap clone with no allocations.
+    #[test]
+    fn test_dedup_record_batch_no_view_columns_is_noop() {
+        let schema = Arc::new(Schema::new(vec![Field::new("n", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef],
+        )
+        .unwrap();
+        // Should succeed without error and return the same data.
+        let result = deduplicate_record_batch_view_buffers(&batch).unwrap();
+        assert_eq!(result.num_rows(), 3);
+    }
 }
