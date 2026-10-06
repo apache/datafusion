@@ -41,7 +41,7 @@ use crate::spill::spill_manager::SpillManager;
 use crate::stream::RecordBatchStreamAdapter;
 
 /// Number of bits of the routing hash consumed by one bucketing level.
-const BUCKET_BITS: u32 = 8;
+const BUCKET_BITS: u32 = 5;
 
 /// Number of buckets rows are split into at each level.
 const NUM_BUCKETS: usize = 1 << BUCKET_BITS;
@@ -60,7 +60,7 @@ pub(super) const MAX_BUCKET_LEVELS: u32 = 4;
 const BUCKET_HASH_SEED: RandomState = RandomState::with_seed(5364907223173859721);
 
 /// A bucket is compacted for the first time once it holds this many batches
-/// worth of rows. With 256 buckets per partition this floor is what the
+/// worth of rows. With 32 buckets per partition this floor is what the
 /// buckets hold when every bucket has few groups, so it is kept small.
 const MIN_COMPACTION_BATCHES: usize = 1;
 

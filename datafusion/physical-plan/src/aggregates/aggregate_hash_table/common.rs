@@ -425,7 +425,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
     pub(in crate::aggregates) fn take_state_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
-        self.take_state_batch_inner(false)
+        self.take_state_batch_inner(false, false)
     }
 
     /// Like [`Self::take_state_batch`], but keeps the table's capacity for as
@@ -433,12 +433,20 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
     pub(in crate::aggregates) fn take_state_batch_keep_capacity(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
-        self.take_state_batch_inner(true)
+        self.take_state_batch_inner(true, false)
+    }
+
+    /// Emits a Partial threshold flush while allowing string-key storage reuse.
+    pub(in crate::aggregates) fn take_state_batch_for_partial_flush(
+        &mut self,
+    ) -> Result<Option<RecordBatch>> {
+        self.take_state_batch_inner(false, true)
     }
 
     fn take_state_batch_inner(
         &mut self,
         keep_capacity: bool,
+        is_partial_flush: bool,
     ) -> Result<Option<RecordBatch>> {
         let state_schema = Arc::clone(&self.state_schema);
         let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
@@ -449,7 +457,11 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         }
 
         let output = group_by_metrics.time_emitting(|| {
-            let mut output = state.group_values.emit(EmitTo::All)?;
+            let mut output = if is_partial_flush {
+                state.group_values.emit_for_partial_flush()?
+            } else {
+                state.group_values.emit(EmitTo::All)?
+            };
             for (idx, acc) in state.accumulators.iter_mut().enumerate() {
                 output.extend(accumulator_metrics.time(
                     idx,
@@ -466,9 +478,13 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         // `emit(EmitTo::All)` resets accumulator state. Explicitly shrink the
         // key/index buffers too so the memory reservation can be released
         // before the batch is sorted for spilling.
-        state
-            .group_values
-            .clear_shrink(if keep_capacity { batch.num_rows() } else { 0 });
+        if !is_partial_flush {
+            state.group_values.clear_shrink(if keep_capacity {
+                batch.num_rows()
+            } else {
+                0
+            });
+        }
         state.batch_group_indices.clear();
         state.batch_group_indices.shrink_to_fit();
 

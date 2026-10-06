@@ -116,6 +116,14 @@ pub trait GroupValues: Send {
     /// Emits the group values
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>>;
 
+    /// Emits all keys for a Partial threshold flush, preparing for more input.
+    /// Implementations may retain allocations when the table is filled again.
+    fn emit_for_partial_flush(&mut self) -> Result<Vec<ArrayRef>> {
+        let values = self.emit(EmitTo::All)?;
+        self.clear_shrink(0);
+        Ok(values)
+    }
+
     /// Materializes selected group values without changing the stored values or
     /// their group indices.
     ///
