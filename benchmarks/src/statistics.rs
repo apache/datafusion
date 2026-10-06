@@ -184,7 +184,10 @@ impl RunOpt {
         let logical_plan = state.optimize(&logical_plan)?;
         let physical_plan = state.create_physical_plan(&logical_plan).await?;
 
-        let statistics = capture_statistics(physical_plan.as_ref())?;
+        let statistics = capture_statistics(
+            physical_plan.as_ref(),
+            &state.statistics_registry().cloned().unwrap_or_default(),
+        )?;
         collect(Arc::clone(&physical_plan), state.task_ctx()).await?;
 
         let mut report = Vec::with_capacity(statistics.len());
@@ -248,10 +251,12 @@ enum QError {
     ExactZero,
 }
 
-fn capture_statistics(plan: &dyn ExecutionPlan) -> Result<Vec<CapturedStatistics>> {
-    let statistics_context = StatisticsRegistry::new();
+fn capture_statistics(
+    plan: &dyn ExecutionPlan,
+    statistics_context: &StatisticsRegistry,
+) -> Result<Vec<CapturedStatistics>> {
     let mut result = vec![];
-    capture_statistics_inner(plan, &statistics_context, "0", &mut result)?;
+    capture_statistics_inner(plan, statistics_context, "0", &mut result)?;
     Ok(result)
 }
 
@@ -723,6 +728,11 @@ fn collect_parquet_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion::execution::session_state::SessionStateBuilder;
+    use datafusion::physical_plan::Statistics;
+    use datafusion::physical_plan::operator_statistics::{
+        ClosureStatisticsProvider, StatisticsResult,
+    };
     use tempfile::tempdir;
 
     #[test]
@@ -784,6 +794,43 @@ mod tests {
             .await
             .unwrap();
         assert!(!reports.is_empty());
+    }
+
+    #[tokio::test]
+    async fn reports_estimates_from_session_statistics_registry() {
+        let directory = tempdir().unwrap();
+        let options = RunOpt {
+            query: None,
+            compare: None,
+            path: directory.path().to_path_buf(),
+            query_path: directory.path().to_path_buf(),
+        };
+        let mut registry = StatisticsRegistry::new();
+        registry.register(Arc::new(ClosureStatisticsProvider::new(
+            |plan, _child_stats| {
+                Ok(StatisticsResult::Computed(
+                    Statistics {
+                        num_rows: Precision::Inexact(42),
+                        ..Statistics::new_unknown(plan.schema().as_ref())
+                    }
+                    .into(),
+                ))
+            },
+        )));
+        let ctx = SessionContext::from(
+            SessionStateBuilder::new()
+                .with_default_features()
+                .with_statistics_registry(registry)
+                .build(),
+        );
+        let statement =
+            sql_statements("SELECT 1", &ctx.state().config_options().sql_parser)
+                .unwrap()
+                .pop_front()
+                .unwrap();
+
+        let reports = options.report_statement(&ctx, statement).await.unwrap();
+        assert_eq!(reports[0].estimated_rows, StatisticValue::Inexact(42));
     }
 
     async fn report_query_files(
