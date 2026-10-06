@@ -1018,6 +1018,10 @@ query I
 SELECT x FROM nmnull_o WHERE CAST(NULL AS INT) NOT IN (SELECT id FROM nmnull_i) OR x = 99;
 ----
 
+# Assert decorrelation and null-awareness, not physical join choices.
+statement ok
+SET datafusion.explain.logical_plan_only = true;
+
 # The NULL constant is the key of a null-aware mark join.
 query TT
 EXPLAIN SELECT x FROM nmnull_o WHERE CAST(NULL AS INT) NOT IN (SELECT id FROM nmnull_i) OR x = 99;
@@ -1031,13 +1035,9 @@ logical_plan
 06)----------TableScan: nmnull_o projection=[x]
 07)--------SubqueryAlias: __correlated_sq_1
 08)----------TableScan: nmnull_i projection=[id]
-physical_plan
-01)FilterExec: NOT mark@1 OR x@0 = 99, projection=[x@0]
-02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(__correlated_sq_1_value@1, id@0)], projection=[x@0, mark@2], null_aware
-04)------ProjectionExec: expr=[x@0 as x, NULL as __correlated_sq_1_value]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
-06)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
 
 # Nullable expression over a `NOT NULL` column.
 query I

@@ -1006,6 +1006,10 @@ SELECT x FROM nanull_o WHERE 5 NOT IN (SELECT id FROM nanull_i);
 1
 2
 
+# Assert decorrelation and null-awareness, not physical join choices.
+statement ok
+SET datafusion.explain.logical_plan_only = true;
+
 # The NULL constant is projected as the key of a null-aware anti join, and no
 # filter is pushed into the subquery.
 query TT
@@ -1018,11 +1022,6 @@ logical_plan
 04)------TableScan: nanull_o projection=[x]
 05)----SubqueryAlias: __correlated_sq_1
 06)------TableScan: nanull_i projection=[id]
-physical_plan
-01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(__correlated_sq_1_value@1, id@0)], projection=[x@0], null_aware
-02)--ProjectionExec: expr=[x@0 as x, NULL as __correlated_sq_1_value]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Nullable expressions over `NOT NULL` columns: NULL for every row, so no rows.
 query I
@@ -1062,12 +1061,6 @@ logical_plan
 03)--SubqueryAlias: __correlated_sq_1
 04)----Projection: CAST(nanull_i.id AS Int64)
 05)------TableScan: nanull_i projection=[id]
-physical_plan
-01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(nanull_i.id@0, CASE WHEN nanull_o.x > Int32(100) THEN Int64(1) END@1)], projection=[x@0], null_aware
-02)--ProjectionExec: expr=[CAST(id@0 AS Int64) as nanull_i.id]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)--ProjectionExec: expr=[x@0 as x, CASE WHEN x@0 > 100 THEN 1 END as CASE WHEN nanull_o.x > Int32(100) THEN Int64(1) END]
-05)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 # `x + 1` over `NOT NULL x` cannot be NULL, so the anti join stays plain.
 query I
@@ -1084,12 +1077,9 @@ logical_plan
 03)--SubqueryAlias: __correlated_sq_1
 04)----Projection: CAST(nanull_i.id AS Int64)
 05)------TableScan: nanull_i projection=[id]
-physical_plan
-01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(nanull_i.id@0, nanull_o.x + Int64(1)@1)], projection=[x@0]
-02)--ProjectionExec: expr=[CAST(id@0 AS Int64) as nanull_i.id]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)--ProjectionExec: expr=[x@0 as x, CAST(x@0 AS Int64) + 1 as nanull_o.x + Int64(1)]
-05)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
 
 # The same results with a single partition.
 statement ok
