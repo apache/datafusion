@@ -59,4 +59,31 @@ impl ExpressionPlacement {
             ExpressionPlacement::Column | ExpressionPlacement::MoveTowardsLeafNodes
         )
     }
+
+    pub fn reduce(placements: &[ExpressionPlacement]) -> ExpressionPlacement {
+        let mut all_literal = true;
+        let mut all_column = true;
+
+        for placement in placements {
+            match placement {
+                ExpressionPlacement::Literal => all_column = false,
+                ExpressionPlacement::Column => all_literal = false,
+                ExpressionPlacement::MoveTowardsLeafNodes => {
+                    all_column = false;
+                    all_literal = false;
+                }
+                ExpressionPlacement::KeepInPlace => {
+                    return ExpressionPlacement::KeepInPlace;
+                }
+            };
+        }
+
+        if all_literal {
+            ExpressionPlacement::Literal
+        } else if all_column {
+            ExpressionPlacement::Column
+        } else {
+            ExpressionPlacement::MoveTowardsLeafNodes
+        }
+    }
 }
