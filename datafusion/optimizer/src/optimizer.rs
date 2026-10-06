@@ -466,9 +466,7 @@ fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
                         Ok(plan)
                     })
                     .collect::<Result<Vec<_>>>()?;
-                if changed {
-                    *node = node.with_exprs_and_inputs(exprs, new_inputs)?;
-                }
+                *node = node.with_exprs_and_inputs(exprs, new_inputs)?;
                 changed
             }
         }
@@ -480,10 +478,12 @@ fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
         | LogicalPlan::Ddl(DdlStatement::CreateExternalTable(_))
         | LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(_))
         | LogicalPlan::Ddl(DdlStatement::CreateCatalog(_))
+        | LogicalPlan::Ddl(DdlStatement::CreateExternalCatalog(_))
         | LogicalPlan::Ddl(DdlStatement::CreateIndex(_))
         | LogicalPlan::Ddl(DdlStatement::DropTable(_))
         | LogicalPlan::Ddl(DdlStatement::DropView(_))
         | LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(_))
+        | LogicalPlan::Ddl(DdlStatement::DropCatalog(_))
         | LogicalPlan::Ddl(DdlStatement::CreateFunction(_))
         | LogicalPlan::Ddl(DdlStatement::DropFunction(_))
         | LogicalPlan::Statement(_) => false,
@@ -790,6 +790,8 @@ fn assert_valid_optimization(
 mod tests {
     use std::sync::{Arc, Mutex};
 
+    use arrow::datatypes::Metadata;
+
     use datafusion_common::tree_node::Transformed;
     use datafusion_common::{
         Column, DFSchema, DFSchemaRef, DataFusionError, Result, assert_contains, plan_err,
@@ -969,8 +971,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(i, (qualifier, field))| {
-                let metadata =
-                    std::iter::once(("key".into(), format!("value {i}"))).collect();
+                let metadata = Metadata::new().with("key", format!("value {i}"));
 
                 let new_arrow_field = field.as_ref().clone().with_metadata(metadata);
                 (qualifier.cloned(), Arc::new(new_arrow_field))

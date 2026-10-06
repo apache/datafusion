@@ -29,7 +29,7 @@ use arrow::datatypes::{
     TimeUnit, UnionFields, UnionMode, i256,
 };
 use arrow::ipc::{
-    convert::fb_to_schema,
+    convert::try_fb_to_schema,
     reader::{read_dictionary, read_record_batch},
     root_as_message,
     writer::{DictionaryTracker, IpcDataGenerator, IpcWriteOptions},
@@ -44,6 +44,7 @@ use datafusion_common::{
         ParquetColumnOptions, ParquetOptions, TableParquetOptions,
     },
     file_options::{csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions},
+    parquet_config::RowGroupRangeAssignment,
     parsers::CompressionTypeVariant,
     plan_datafusion_err,
     stats::Precision,
@@ -463,7 +464,11 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                                 .to_string(),
                         )
                     })?;
-                    fb_to_schema(ipc_schema)
+                    try_fb_to_schema(ipc_schema).map_err(|e| {
+                        Error::General(format!(
+                            "Error converting IPC schema while deserializing nested ScalarValue: {e}"
+                        ))
+                    })?
                 };
 
                 let message = root_as_message(ipc_message.as_slice()).map_err(|e| {
@@ -1198,9 +1203,9 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             writer_version: value.writer_version.parse().map_err(|e| {
                 DataFusionError::Internal(format!("Failed to parse writer_version: {e}"))
             })?,
-            compression: value.compression_opt.clone().map(|opt| match opt {
-                protobuf::parquet_options::CompressionOpt::Compression(v) => Some(v),
-            }).unwrap_or(None),
+            compression: value.compression_opt.as_ref().map(|opt| match opt {
+                protobuf::parquet_options::CompressionOpt::Compression(v) => v.parse(),
+            }).transpose()?,
             dictionary_enabled: value.dictionary_enabled_opt.as_ref().map(|protobuf::parquet_options::DictionaryEnabledOpt::DictionaryEnabled(v)| *v),
             // Continuing from where we left off in the TryFrom implementation
             dictionary_page_size_limit: to_usize(
@@ -1215,6 +1220,9 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                 .transpose()?,
             max_row_group_size: to_usize(value.max_row_group_size, "max_row_group_size")?,
             max_in_list_size: to_usize(value.max_in_list_size, "max_in_list_size")?,
+            row_group_range_assignment: RowGroupRangeAssignment::from_proto_str(
+                &value.row_group_range_assignment,
+            )?,
             created_by: value.created_by.clone(),
             column_index_truncate_length: value
                 .column_index_truncate_length_opt.as_ref()
@@ -1285,6 +1293,7 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                 }
             }).transpose()?,
             content_defined_chunking: value.content_defined_chunking.map(ParquetCdcOptions::try_from).transpose()?.unwrap_or_default(),
+            enable_rle_to_dictionary: value.enable_rle_to_dictionary,
         })
     }
 }
@@ -1434,7 +1443,9 @@ mod tests {
     use datafusion_common::config::{
         MaxRowGroupBytes, ParquetCdcOptions, ParquetOptions, TableParquetOptions,
     };
-    use datafusion_common::parquet_config::DFParquetStatistics;
+    use datafusion_common::parquet_config::{
+        DFParquetCompression, DFParquetStatistics, RowGroupRangeAssignment,
+    };
 
     #[test]
     fn constraint_requires_mode() {
@@ -1545,6 +1556,24 @@ mod tests {
     }
 
     #[test]
+    fn test_parquet_options_row_group_range_assignment_round_trip() {
+        let opts = ParquetOptions {
+            row_group_range_assignment: RowGroupRangeAssignment::Midpoint,
+            ..ParquetOptions::default()
+        };
+        let mut proto: crate::protobuf_common::ParquetOptions =
+            (&opts).try_into().expect("to_proto");
+        assert_eq!(ParquetOptions::try_from(&proto).unwrap(), opts);
+
+        // Options encoded before the field existed decode with the default
+        proto.row_group_range_assignment.clear();
+        assert_eq!(
+            ParquetOptions::try_from(&proto).unwrap(),
+            ParquetOptions::default()
+        );
+    }
+
+    #[test]
     fn test_parquet_statistics_round_trip() {
         let opts = ParquetOptions {
             statistics_enabled: Some(DFParquetStatistics::Chunk),
@@ -1554,6 +1583,35 @@ mod tests {
         assert_eq!(
             recovered.statistics_enabled,
             Some(DFParquetStatistics::Chunk)
+        );
+    }
+
+    #[test]
+    fn test_parquet_compression_round_trip() {
+        let opts = ParquetOptions {
+            compression: Some(DFParquetCompression::Gzip(6)),
+            ..ParquetOptions::default()
+        };
+        let recovered = parquet_options_proto_round_trip(opts);
+        assert_eq!(recovered.compression, Some(DFParquetCompression::Gzip(6)));
+    }
+
+    #[test]
+    fn test_invalid_parquet_compression_rejected_from_proto() {
+        let opts = ParquetOptions::default();
+        let mut proto: crate::protobuf_common::ParquetOptions =
+            (&opts).try_into().expect("to_proto");
+        proto.compression_opt = Some(
+            crate::protobuf_common::parquet_options::CompressionOpt::Compression(
+                "zstd".to_string(),
+            ),
+        );
+
+        let err = ParquetOptions::try_from(&proto).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("zstd compression requires specifying a level such as zstd(4)"),
+            "unexpected error: {err}"
         );
     }
 

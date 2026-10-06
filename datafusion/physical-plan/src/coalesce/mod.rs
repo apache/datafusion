@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::RecordBatch;
-use arrow::compute::BatchCoalescer;
+use arrow::array::{Array, BooleanArray, RecordBatch};
+use arrow::compute::{BatchCoalescer, prep_null_mask_filter};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{Result, assert_or_internal_err};
 
@@ -117,6 +117,53 @@ impl LimitedBatchCoalescer {
         self.total_rows += batch.num_rows();
         self.inner.push_batch(batch)?;
 
+        Ok(PushBatchStatus::Continue)
+    }
+
+    /// Pushes the next [`RecordBatch`] into the coalescer after applying `filter`,
+    /// avoiding a separate materialization pass compared to calling
+    /// [`filter_record_batch`] followed by [`Self::push_batch`].
+    ///
+    /// [`filter_record_batch`]: arrow::compute::filter_record_batch
+    pub fn push_batch_with_filter(
+        &mut self,
+        batch: RecordBatch,
+        filter: &BooleanArray,
+    ) -> Result<PushBatchStatus> {
+        assert_or_internal_err!(
+            !self.finished,
+            "LimitedBatchCoalescer: cannot push batch after finish"
+        );
+
+        let Some(fetch) = self.fetch else {
+            self.inner.push_batch_with_filter(batch, filter)?;
+            return Ok(PushBatchStatus::Continue);
+        };
+
+        if self.total_rows >= fetch {
+            return Ok(PushBatchStatus::LimitReached);
+        }
+
+        let selected_count = filter.true_count();
+        if self.total_rows + selected_count >= fetch {
+            let remaining = fetch - self.total_rows;
+            let mask = match filter.null_count() {
+                0 => filter.clone(),
+                _ => prep_null_mask_filter(filter),
+            };
+            let end = mask
+                .values()
+                .set_indices()
+                .nth(remaining - 1)
+                .map_or(0, |i| i + 1);
+            self.total_rows += remaining;
+            self.inner
+                .push_batch_with_filter(batch.slice(0, end), &mask.slice(0, end))?;
+            return Ok(PushBatchStatus::LimitReached);
+        }
+
+        self.total_rows += selected_count;
+        self.inner.push_batch_with_filter(batch, filter)?;
         Ok(PushBatchStatus::Continue)
     }
 
@@ -223,6 +270,94 @@ mod tests {
             .with_fetch(Some(7))
             .with_expected_output_sizes(vec![7])
             .run()
+    }
+
+    #[test]
+    fn test_push_batch_with_filter_nulls_and_fetch() {
+        let batch = uint32_batch(0..8);
+        let mut coalescer = LimitedBatchCoalescer::new(batch.schema(), 100, Some(3));
+        let filter = BooleanArray::from(vec![
+            None,
+            Some(true),
+            None,
+            Some(false),
+            Some(true),
+            Some(true),
+            None,
+            Some(true),
+        ]);
+
+        assert_eq!(
+            coalescer.push_batch_with_filter(batch, &filter).unwrap(),
+            PushBatchStatus::LimitReached,
+        );
+        coalescer.finish().unwrap();
+        assert_next_batch_values(&mut coalescer, vec![1, 4, 5]);
+    }
+
+    #[test]
+    fn test_push_batch_with_filter_fetch_boundaries() {
+        let batch1 = uint32_batch(0..4);
+        let batch2 = uint32_batch(4..8);
+        let mut coalescer = LimitedBatchCoalescer::new(batch1.schema(), 100, Some(3));
+
+        assert_eq!(
+            coalescer
+                .push_batch_with_filter(
+                    batch1,
+                    &BooleanArray::from(vec![true, false, true, false]),
+                )
+                .unwrap(),
+            PushBatchStatus::Continue,
+        );
+        assert_eq!(
+            coalescer
+                .push_batch_with_filter(
+                    batch2,
+                    &BooleanArray::from(vec![true, true, true, true]),
+                )
+                .unwrap(),
+            PushBatchStatus::LimitReached,
+        );
+        coalescer.finish().unwrap();
+        assert_next_batch_values(&mut coalescer, vec![0, 2, 4]);
+
+        let batch = uint32_batch(0..4);
+        let mut coalescer = LimitedBatchCoalescer::new(batch.schema(), 100, Some(2));
+        assert_eq!(
+            coalescer
+                .push_batch_with_filter(
+                    batch,
+                    &BooleanArray::from(vec![true, false, true, false]),
+                )
+                .unwrap(),
+            PushBatchStatus::LimitReached,
+        );
+        assert_eq!(
+            coalescer
+                .push_batch_with_filter(
+                    uint32_batch(4..8),
+                    &BooleanArray::from(vec![true, true, true, true]),
+                )
+                .unwrap(),
+            PushBatchStatus::LimitReached,
+        );
+        coalescer.finish().unwrap();
+        assert_next_batch_values(&mut coalescer, vec![0, 2]);
+
+        let batch = uint32_batch(0..4);
+        let mut coalescer = LimitedBatchCoalescer::new(batch.schema(), 100, Some(0));
+        assert_eq!(
+            coalescer
+                .push_batch_with_filter(
+                    batch,
+                    &BooleanArray::from(vec![true, true, true, true]),
+                )
+                .unwrap(),
+            PushBatchStatus::LimitReached,
+        );
+        coalescer.finish().unwrap();
+        assert!(coalescer.next_completed_batch().is_none());
     }
 
     /// Test for [`LimitedBatchCoalescer`]
@@ -365,6 +500,15 @@ mod tests {
             vec![Arc::new(UInt32Array::from_iter_values(range))],
         )
         .unwrap()
+    }
+
+    fn assert_next_batch_values(
+        coalescer: &mut LimitedBatchCoalescer,
+        expected: Vec<u32>,
+    ) {
+        let output = coalescer.next_completed_batch().unwrap();
+        let expected = UInt32Array::from(expected);
+        assert_eq!(output.column(0).as_ref(), &expected as &dyn Array);
     }
 
     fn batch_to_pretty_strings(batch: &RecordBatch) -> String {

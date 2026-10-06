@@ -14,7 +14,7 @@ WHERE o.id NOT IN (SELECT i.id_n1 FROM large_inner i);
 true
 
 expect_plan HashJoinExec
-expect_plan null_aware: true
+expect_plan null_aware
 
 run
 -- Q2: uncorrelated NOT IN, 1% NULL on the subquery side.

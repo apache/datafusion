@@ -93,12 +93,11 @@ impl PhysicalExpr for UnKnownColumn {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
         use datafusion_proto_models::protobuf;
 
+        let Self { name } = self;
         Ok(Some(protobuf::PhysicalExprNode {
             expr_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::UnknownColumn(
-                protobuf::UnknownColumn {
-                    name: self.name.clone(),
-                },
+                protobuf::UnknownColumn { name: name.clone() },
             )),
         }))
     }
@@ -114,12 +113,12 @@ impl UnKnownColumn {
         use datafusion_physical_expr_common::expect_expr_variant;
         use datafusion_proto_models::protobuf;
 
-        let unknown_col = expect_expr_variant!(
+        let protobuf::UnknownColumn { name } = expect_expr_variant!(
             node,
             protobuf::physical_expr_node::ExprType::UnknownColumn,
             "UnKnownColumn",
         );
-        Ok(Arc::new(UnKnownColumn::new(&unknown_col.name)))
+        Ok(Arc::new(UnKnownColumn::new(name)))
     }
 }
 

@@ -123,6 +123,12 @@ pub struct ListingTableScanNode {
     pub table_partition_cols: ::prost::alloc::vec::Vec<PartitionColumn>,
     #[prost(message, repeated, tag = "13")]
     pub file_sort_order: ::prost::alloc::vec::Vec<SortExprNodeCollection>,
+    /// Optional number of rows to read.
+    #[prost(uint64, optional, tag = "17")]
+    pub fetch: ::core::option::Option<u64>,
+    /// Optional number of rows to skip.
+    #[prost(uint64, optional, tag = "18")]
+    pub skip: ::core::option::Option<u64>,
     #[prost(
         oneof = "listing_table_scan_node::FileFormatType",
         tags = "10, 11, 12, 15, 16"
@@ -159,6 +165,12 @@ pub struct ViewTableScanNode {
     pub projection: ::core::option::Option<ProjectionColumns>,
     #[prost(string, tag = "5")]
     pub definition: ::prost::alloc::string::String,
+    /// Optional number of rows to read.
+    #[prost(uint64, optional, tag = "7")]
+    pub fetch: ::core::option::Option<u64>,
+    /// Optional number of rows to skip.
+    #[prost(uint64, optional, tag = "8")]
+    pub skip: ::core::option::Option<u64>,
 }
 /// Logical Plan to Scan a CustomTableProvider registered at runtime
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -173,6 +185,12 @@ pub struct CustomTableScanNode {
     pub filters: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(bytes = "vec", tag = "5")]
     pub custom_table_data: ::prost::alloc::vec::Vec<u8>,
+    /// Optional number of rows to read.
+    #[prost(uint64, optional, tag = "7")]
+    pub fetch: ::core::option::Option<u64>,
+    /// Optional number of rows to skip.
+    #[prost(uint64, optional, tag = "8")]
+    pub skip: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ProjectionNode {
@@ -552,13 +570,17 @@ pub mod dml_node {
         }
     }
 }
-/// Carries the ON condition and WHEN clauses of a MERGE INTO operation.
+/// Carries the target qualifier, ON condition, and WHEN clauses of a MERGE INTO operation.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MergeIntoOpNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub on: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
     #[prost(message, repeated, tag = "2")]
     pub clauses: ::prost::alloc::vec::Vec<MergeIntoClauseNode>,
+    /// SQL-visible target qualifier. Absent in payloads written before this field
+    /// was introduced; readers then fall back to DmlNode.table_name.
+    #[prost(message, optional, tag = "3")]
+    pub target_qualifier: ::core::option::Option<TableReference>,
 }
 /// A single WHEN clause within a MERGE INTO statement.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1609,7 +1631,7 @@ pub struct PhysicalExprNode {
     pub expr_id: ::core::option::Option<u64>,
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -1678,7 +1700,19 @@ pub mod physical_expr_node {
         SqlSimilarToPattern(
             ::prost::alloc::boxed::Box<super::PhysicalSqlSimilarToPatternNode>,
         ),
+        #[prost(message, tag = "29")]
+        LiteralWithMetadata(super::PhysicalLiteralNode),
     }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalLiteralNode {
+    #[prost(message, optional, tag = "1")]
+    pub value: ::core::option::Option<super::datafusion_common::ScalarValue>,
+    #[prost(map = "string, string", tag = "2")]
+    pub metadata: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalDynamicFilterNode {
@@ -1829,10 +1863,12 @@ pub struct PhysicalBinaryExprNode {
     pub r: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
     #[prost(string, tag = "3")]
     pub op: ::prost::alloc::string::String,
-    /// Linearized operands for chains of the same operator (e.g. a AND b AND c).
+    /// Linearized operands for chains of the same operator and overflow policy.
     /// When present, `l` and `r` are ignored and `operands` holds the flattened list.
     #[prost(message, repeated, tag = "4")]
     pub operands: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(bool, tag = "5")]
+    pub fail_on_overflow: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalDateTimeIntervalExprNode {
@@ -2428,8 +2464,15 @@ pub struct PhysicalHashRepartition {
 pub struct PhysicalRangePartitioning {
     #[prost(message, repeated, tag = "1")]
     pub sort_expr: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
+    /// Effective split points. Kept for compatibility with older readers.
     #[prost(message, repeated, tag = "2")]
     pub split_point: ::prost::alloc::vec::Vec<PhysicalRangeSplitPoint>,
+    /// Maximum-resolution sample points used to derive effective split points.
+    #[prost(message, repeated, tag = "3")]
+    pub sample_point: ::prost::alloc::vec::Vec<PhysicalRangeSplitPoint>,
+    /// Zero in legacy payloads means split_point.len() + 1.
+    #[prost(uint64, tag = "4")]
+    pub partition_count: u64,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalRangeSplitPoint {

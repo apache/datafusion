@@ -17,8 +17,10 @@
 
 use std::marker::PhantomData;
 use std::mem::size_of;
+use std::ops::Range;
 use std::sync::Arc;
 
+use datafusion_common::utils::offset_span_len;
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, internal_err,
     plan_err,
@@ -26,8 +28,9 @@ use datafusion_common::{
 
 use arrow::array::{
     Array, ArrayAccessor, ArrayDataBuilder, ArrayRef, BinaryArray, BinaryViewArray,
-    ByteView, GenericStringArray, LargeBinaryArray, LargeStringArray, OffsetSizeTrait,
-    StringArray, StringViewArray, as_largestring_array, make_view,
+    ByteView, GenericStringArray, LargeBinaryArray, LargeStringArray,
+    MAX_INLINE_VIEW_LEN, OffsetSizeTrait, StringArray, StringViewArray,
+    as_largestring_array, make_view,
 };
 use arrow::buffer::{Buffer, MutableBuffer, NullBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
@@ -299,7 +302,7 @@ impl ConcatBuilder for ConcatStringViewBuilder {
         let array = unsafe {
             StringViewArray::new_unchecked(
                 ScalarBuffer::from(self.views),
-                buffers,
+                buffers.into(),
                 null_buffer,
             )
         };
@@ -948,7 +951,7 @@ impl StringViewArrayBuilder {
         let array = unsafe {
             StringViewArray::new_unchecked(
                 ScalarBuffer::from(self.views),
-                self.completed,
+                self.completed.into(),
                 null_buffer,
             )
         };
@@ -1216,6 +1219,73 @@ pub(crate) fn append_view(
     views_buffer.push(sub_view);
 }
 
+/// Values of at most this many bytes are stored inline in their view.
+pub(crate) const MAX_INLINE_LEN: usize = MAX_INLINE_VIEW_LEN as usize;
+
+/// Returns the view for a substring of the value an existing view refers to.
+///
+/// # Arguments
+/// - view: The original view value
+/// - source: The bytes the original view refers to
+/// - range: The byte range within `source` of the substring to return a view for
+///
+/// Substrings longer than 12 bytes point into the same data buffer as `view`;
+/// shorter ones are stored inline in the new view.
+///
+/// This uses shifts and masks rather than [`make_view`], which picks copy code
+/// based on the substring's length; the CPU often mispredicts that choice when
+/// lengths vary from row to row.
+#[inline]
+pub(crate) fn sub_view(view: u128, source: &[u8], range: Range<usize>) -> u128 {
+    debug_assert!(range.start <= range.end && range.end <= source.len());
+
+    // The substring's first bytes, in the low-order bits. Any bits past the
+    // end of the substring are masked off by `inline_view`.
+    let leading_bytes = if source.len() <= MAX_INLINE_LEN {
+        // `source` is stored in `view` itself, after its 4-byte length.
+        (view >> 32) >> (8 * range.start)
+    } else {
+        // `source` has more than 12 bytes, so read the 12 bytes starting at
+        // `range.start`, or the last 12 bytes if that would run past the end,
+        // and skip any that come before `range.start`.
+        let window_start = range.start.min(source.len() - MAX_INLINE_LEN);
+        let window = source[window_start..window_start + MAX_INLINE_LEN]
+            .try_into()
+            .unwrap();
+        read_12_bytes(window) >> (8 * (range.start - window_start))
+    };
+
+    let len = range.len();
+    if len <= MAX_INLINE_LEN {
+        inline_view(leading_bytes, len)
+    } else {
+        let original = ByteView::from(view);
+        ByteView {
+            length: len as u32,
+            prefix: leading_bytes as u32,
+            offset: original.offset + range.start as u32,
+            ..original
+        }
+        .as_u128()
+    }
+}
+
+/// Reads `bytes` as a little-endian integer.
+#[inline]
+fn read_12_bytes(bytes: &[u8; 12]) -> u128 {
+    let low = u64::from_le_bytes(bytes[..8].try_into().unwrap());
+    let high = u32::from_le_bytes(bytes[8..].try_into().unwrap());
+    u128::from(low) | (u128::from(high) << 64)
+}
+
+/// Returns an inline view of the `len` low-order bytes of `bytes`.
+#[inline]
+fn inline_view(bytes: u128, len: usize) -> u128 {
+    debug_assert!(len <= MAX_INLINE_LEN);
+    let mask = (1u128 << (8 * len)) - 1;
+    ((bytes & mask) << 32) | len as u128
+}
+
 #[derive(Debug)]
 pub(crate) enum ColumnarValueRef<'a> {
     Scalar(&'a [u8]),
@@ -1324,7 +1394,7 @@ impl ColumnarValueRef<'_> {
             ColumnarValue::Array(array) => match array.data_type() {
                 DataType::Utf8 => {
                     let string_array = as_string_array(array)?;
-                    *data_size += string_array.values().len() * size_factor;
+                    *data_size += offset_span_len(string_array.offsets()) * size_factor;
                     let column = if array.is_nullable() {
                         ColumnarValueRef::NullableArray(string_array)
                     } else {
@@ -1334,7 +1404,7 @@ impl ColumnarValueRef<'_> {
                 }
                 DataType::LargeUtf8 => {
                     let string_array = as_largestring_array(array);
-                    *data_size += string_array.values().len() * size_factor;
+                    *data_size += offset_span_len(string_array.offsets()) * size_factor;
                     let column = if array.is_nullable() {
                         ColumnarValueRef::NullableLargeStringArray(string_array)
                     } else {
@@ -1354,7 +1424,7 @@ impl ColumnarValueRef<'_> {
                 }
                 DataType::Binary => {
                     let binary_array = as_binary_array(array)?;
-                    *data_size += binary_array.values().len() * size_factor;
+                    *data_size += offset_span_len(binary_array.offsets()) * size_factor;
                     let column = if array.is_nullable() {
                         ColumnarValueRef::NullableBinaryArray(binary_array)
                     } else {
@@ -1364,7 +1434,7 @@ impl ColumnarValueRef<'_> {
                 }
                 DataType::LargeBinary => {
                     let binary_array = as_large_binary_array(array)?;
-                    *data_size += binary_array.values().len() * size_factor;
+                    *data_size += offset_span_len(binary_array.offsets()) * size_factor;
                     let column = if array.is_nullable() {
                         ColumnarValueRef::NullableLargeBinaryArray(binary_array)
                     } else {
@@ -1427,6 +1497,57 @@ pub(crate) fn widest_string_type(types: &[DataType]) -> DataType {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::test::sliced_byte_array;
+
+    #[test]
+    fn sub_view_matches_make_view() {
+        let buffer_index = 3;
+        let offset = 100;
+        for source_len in 0..=40 {
+            // Include bytes >= 0x80 so that masking errors would show up.
+            let source: Vec<u8> = (0..source_len).map(|i| (i * 37 + 11) as u8).collect();
+            let view = make_view(&source, buffer_index, offset);
+            for start in 0..=source_len {
+                for end in start..=source_len {
+                    let expected = make_view(
+                        &source[start..end],
+                        buffer_index,
+                        offset + start as u32,
+                    );
+                    assert_eq!(
+                        sub_view(view, &source, start..end),
+                        expected,
+                        "source_len={source_len}, range={start}..{end}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn concat_capacity_uses_visible_bytes() -> Result<()> {
+        for data_type in [
+            DataType::Utf8,
+            DataType::LargeUtf8,
+            DataType::Binary,
+            DataType::LargeBinary,
+        ] {
+            let array = sliced_byte_array(&[Some("abc")], &data_type)?;
+            for len in [0, 1] {
+                let input = ColumnarValue::Array(array.slice(0, len));
+                let mut data_size = 0;
+                ColumnarValueRef::from_columnar_value(
+                    &input,
+                    &mut data_size,
+                    len,
+                    2,
+                    false,
+                )?;
+                assert_eq!(data_size, 6 * len, "{data_type}");
+            }
+        }
+        Ok(())
+    }
 
     /// Run `scenario` against `builder`, finish with a null buffer derived
     /// from `expected` (a bit is set wherever `expected[i].is_some()`), and
