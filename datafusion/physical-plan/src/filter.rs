@@ -4696,6 +4696,23 @@ mod tests {
         assert!((result - 0.2).abs() < 1e-12, "expected 0.2, got {result}");
     }
 
+    #[test]
+    fn test_fallback_selectivity_non_binary_expr_returns_default() {
+        // A non-BinaryExpr predicate (e.g. IsNotNull) → downcast to BinaryExpr fails,
+        // so it is unhandled and default selectivity is applied.
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let predicate: Arc<dyn PhysicalExpr> =
+            Arc::new(datafusion_physical_expr::expressions::IsNotNullExpr::new(
+                col("a", &schema).unwrap(),
+            ));
+        let col_stats = vec![ColumnStatistics {
+            distinct_count: Precision::Inexact(100),
+            ..Default::default()
+        }];
+        let result = compute_fallback_selectivity(&predicate, &col_stats, 20);
+        assert!((result - 0.2).abs() < 1e-12, "expected 0.2, got {result}");
+    }
+
     /// Verify that `FilterExec` uses NDV-based fallback selectivity for predicates
     /// that `check_support` cannot handle. A Utf8 equality `name = 'alice'` fails
     /// interval analysis, so the filter falls back to `1 / NDV` instead of the
