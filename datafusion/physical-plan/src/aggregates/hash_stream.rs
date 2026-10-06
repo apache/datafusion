@@ -819,11 +819,8 @@ impl FinalHashAggregateStream {
 
         let group_values_soft_limit = agg.limit_options().map(|config| config.limit());
 
-        let bucket_threshold = context
-            .session_config()
-            .options()
-            .execution
-            .hash_aggregate_bucket_threshold;
+        // Benchmark ablation: disable Final bucketing, preserving Partial policy.
+        let bucket_threshold = 0;
         // A soft limit stops reading input early, which bucketing cannot do.
         let bucketing = (bucket_threshold > 0
             && group_values_soft_limit.is_none()
