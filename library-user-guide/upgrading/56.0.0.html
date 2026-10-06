@@ -828,9 +828,7 @@ removed in a future release.</p></li>
 <ul class="simple">
 <li><p>Drop any <code class="docutils literal notranslate"><span class="pre">use_statistics_registry</span></code> setting.</p></li>
 <li><p>To use statistics providers, register them on the session with
-<code class="docutils literal notranslate"><span class="pre">SessionStateBuilder::with_statistics_registry(...)</span></code>. To keep the built-in
-NDV-aware providers the flag previously enabled, register
-<code class="docutils literal notranslate"><span class="pre">StatisticsRegistry::default_with_builtin_providers()</span></code>.</p></li>
+<code class="docutils literal notranslate"><span class="pre">SessionStateBuilder::with_statistics_registry(...)</span></code>.</p></li>
 <li><p>To opt out, register nothing (the default).</p></li>
 </ul>
 </section>
@@ -925,6 +923,25 @@ part of <code class="docutils literal notranslate"><span class="pre">StatisticsR
 <ul class="simple">
 <li><p>Remove <code class="docutils literal notranslate"><span class="pre">DefaultStatisticsProvider</span></code> from any custom provider chain; register no
 terminal provider instead (the walk falls back on its own).</p></li>
+</ul>
+</section>
+<section id="the-bundled-statistics-providers-are-deprecated">
+<h3>The bundled statistics providers are deprecated<a class="headerlink" href="#the-bundled-statistics-providers-are-deprecated" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">StatisticsRegistry::default_with_builtin_providers()</span></code> and all the statistics
+providers bundled in <code class="docutils literal notranslate"><span class="pre">datafusion_physical_plan::operator_statistics</span></code>
+(<code class="docutils literal notranslate"><span class="pre">FilterStatisticsProvider</span></code>, <code class="docutils literal notranslate"><span class="pre">ProjectionStatisticsProvider</span></code>,
+<code class="docutils literal notranslate"><span class="pre">PassthroughStatisticsProvider</span></code>, <code class="docutils literal notranslate"><span class="pre">AggregateStatisticsProvider</span></code>,
+<code class="docutils literal notranslate"><span class="pre">JoinStatisticsProvider</span></code>, <code class="docutils literal notranslate"><span class="pre">LimitStatisticsProvider</span></code> and
+<code class="docutils literal notranslate"><span class="pre">UnionStatisticsProvider</span></code>) are deprecated. They duplicate or replace the
+estimation each operator already does in <code class="docutils literal notranslate"><span class="pre">statistics_from_inputs</span></code>, which is the
+default. <code class="docutils literal notranslate"><span class="pre">StatisticsRegistry</span></code> remains the extension point for user-defined
+providers.</p>
+<p><strong>Migration guide:</strong></p>
+<ul class="simple">
+<li><p>Stop registering the bundled providers; with no matching provider, the
+statistics walk uses the operator’s own estimate.</p></li>
+<li><p>To keep a bundled estimation technique, implement it in a user-defined
+<code class="docutils literal notranslate"><span class="pre">StatisticsProvider</span></code>.</p></li>
 </ul>
 </section>
 <section id="statisticsregistry-compute-and-compute-base-are-deprecated">
@@ -1326,6 +1343,7 @@ the API breaks.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#generated-protobuf-parquet-structs-gained-state-fields">Generated protobuf Parquet structs gained state fields</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#generated-protobuf-csvwriteroptions-changed">Generated protobuf <code class="docutils literal notranslate"><span class="pre">CsvWriterOptions</span></code> changed</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#defaultstatisticsprovider-is-deprecated"><code class="docutils literal notranslate"><span class="pre">DefaultStatisticsProvider</span></code> is deprecated</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#the-bundled-statistics-providers-are-deprecated">The bundled statistics providers are deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#statisticsregistry-compute-and-compute-base-are-deprecated"><code class="docutils literal notranslate"><span class="pre">StatisticsRegistry::compute</span></code> and <code class="docutils literal notranslate"><span class="pre">compute_base</span></code> are deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#api-change-for-floor-and-ceil-udf">API change for <code class="docutils literal notranslate"><span class="pre">floor</span></code> and <code class="docutils literal notranslate"><span class="pre">ceil</span></code> UDF</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#map-extract-element-at-return-an-empty-list-for-absent-keys"><code class="docutils literal notranslate"><span class="pre">map_extract</span></code> / <code class="docutils literal notranslate"><span class="pre">element_at</span></code> return an empty list for absent keys</a></li>
