@@ -40,7 +40,7 @@ use datafusion_expr::utils::{
     conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
 };
 use datafusion_expr::{
-    BinaryExpr, Distinct, Expr, ExprSchemable, Filter, Operator, Projection,
+    BinaryExpr, Distinct, Expr, Filter, Operator, Projection,
     TableProviderFilterPushDown, and, or,
 };
 
@@ -233,22 +233,18 @@ impl<'a> ColumnChecker<'a> {
 
 /// Determine whether the predicate can evaluate as the join conditions
 fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
-    let mut is_evaluate = true;
-    predicate.apply(|expr| match expr {
-        Expr::Column(_)
-        | Expr::Literal(_, _)
-        | Expr::Placeholder(_)
-        | Expr::ScalarVariable(_, _) => Ok(TreeNodeRecursion::Jump),
+    Ok(!predicate.exists(|expr| match expr {
         Expr::Exists { .. }
         | Expr::InSubquery(_)
         | Expr::SetComparison(_)
         | Expr::ScalarSubquery(_)
         | Expr::OuterReferenceColumn(_, _)
-        | Expr::Unnest(_) => {
-            is_evaluate = false;
-            Ok(TreeNodeRecursion::Stop)
-        }
-        Expr::Alias(_)
+        | Expr::Unnest(_) => Ok(true),
+        Expr::Column(_)
+        | Expr::Literal(_, _)
+        | Expr::Placeholder(_)
+        | Expr::ScalarVariable(_, _)
+        | Expr::Alias(_)
         | Expr::BinaryExpr(_)
         | Expr::Like(_)
         | Expr::SimilarTo(_)
@@ -270,15 +266,14 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::ScalarFunction(_)
         | Expr::HigherOrderFunction(_)
         | Expr::Lambda(_)
-        | Expr::LambdaVariable(_) => Ok(TreeNodeRecursion::Continue),
+        | Expr::LambdaVariable(_) => Ok(false),
         // TODO: remove the next line after `Expr::Wildcard` is removed
         #[expect(deprecated)]
         Expr::AggregateFunction(_)
         | Expr::WindowFunction(_)
         | Expr::Wildcard { .. }
         | Expr::GroupingSet(_) => internal_err!("Unsupported predicate type"),
-    })?;
-    Ok(is_evaluate)
+    })?)
 }
 
 /// examine OR clause to see if any useful clauses can be extracted and push down.
@@ -790,6 +785,45 @@ fn infer_join_predicates_impl<
     Ok(())
 }
 
+/// Whether `expr` depends on any of the columns named in `names`.
+///
+/// This is the columns `Expr::column_refs` would collect plus the outer columns
+/// that any subquery inside `expr` correlates on. A subquery records those in
+/// `Subquery::outer_ref_columns` rather than as an `Expr::Column` in the
+/// predicate, and `Expr`'s own traversal does not descend into that field, so
+/// looking only at `column_refs` would report such a predicate as depending on
+/// nothing and let it be pushed past a node that asked to keep those columns.
+fn references_any_column(expr: &Expr, names: &HashSet<String>) -> bool {
+    let mut found = false;
+    expr.apply(|e| {
+        let outer_refs = match e {
+            Expr::Column(col) => {
+                if names.contains(&col.name) {
+                    found = true;
+                    return Ok(TreeNodeRecursion::Stop);
+                }
+                return Ok(TreeNodeRecursion::Continue);
+            }
+            Expr::Exists(exists) => &exists.subquery.outer_ref_columns,
+            Expr::InSubquery(in_subquery) => &in_subquery.subquery.outer_ref_columns,
+            Expr::ScalarSubquery(subquery) => &subquery.outer_ref_columns,
+            Expr::SetComparison(set_comparison) => {
+                &set_comparison.subquery.outer_ref_columns
+            }
+            _ => return Ok(TreeNodeRecursion::Continue),
+        };
+        if outer_refs.iter().any(|outer_ref| {
+            matches!(outer_ref, Expr::OuterReferenceColumn(_, c) if names.contains(&c.name))
+        }) {
+            found = true;
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .expect("traversal is infallible");
+    found
+}
+
 impl OptimizerRule for PushDownFilter {
     fn name(&self) -> &str {
         "push_down_filter"
@@ -1175,41 +1209,27 @@ impl OptimizerRule for PushDownFilter {
                                 })
                         });
 
-                // A literal comparison on an equal, same-typed key has the
-                // same value for every matching pair. Mirroring it to the
-                // right can prune groups without changing the ASOF candidate.
+                // Every matching pair has equal key values, so a deterministic
+                // predicate that refers only to left keys also holds for the
+                // corresponding right keys. Expression-based join keys are not
+                // mirrored because they cannot be replaced column-for-column.
+                let key_replacements = join
+                    .on
+                    .iter()
+                    .filter_map(|(left, right)| {
+                        Some((left.try_as_col()?, right.try_as_col()?))
+                    })
+                    .collect::<HashMap<_, _>>();
                 let mut right_predicates = Vec::new();
                 for predicate in &push_predicates {
-                    let Expr::BinaryExpr(BinaryExpr {
-                        left,
-                        op: Operator::Eq,
-                        right,
-                    }) = predicate
-                    else {
-                        continue;
-                    };
-                    let ((Expr::Column(left_column), Expr::Literal(_, _))
-                    | (Expr::Literal(_, _), Expr::Column(left_column))) =
-                        (left.as_ref(), right.as_ref())
-                    else {
-                        continue;
-                    };
-                    for (left_key, right_key) in &join.on {
-                        let (Some(left_key_column), Some(right_key_column)) =
-                            (left_key.try_as_col(), right_key.try_as_col())
-                        else {
-                            continue;
-                        };
-                        if left_column == left_key_column
-                            && left_key.get_type(join.left.schema())?
-                                == right_key.get_type(join.right.schema())?
-                        {
-                            let replacements =
-                                HashMap::from([(left_key_column, right_key_column)]);
-                            right_predicates
-                                .push(replace_col(predicate.clone(), &replacements)?);
-                            break;
-                        }
+                    let columns = predicate.column_refs();
+                    if !columns.is_empty()
+                        && columns
+                            .iter()
+                            .all(|column| key_replacements.contains_key(column))
+                    {
+                        right_predicates
+                            .push(replace_col(predicate.clone(), &key_replacements)?);
                     }
                 }
                 if let Some(predicate) = conjunction(right_predicates) {
@@ -1322,12 +1342,7 @@ impl OptimizerRule for PushDownFilter {
                 let predicate_push_or_keep: Vec<bool> =
                     split_conjunction(&filter.predicate)
                         .iter()
-                        .map(|expr| {
-                            !expr
-                                .column_refs()
-                                .iter()
-                                .any(|c| prevent_cols.contains(&c.name))
-                        })
+                        .map(|expr| !references_any_column(expr, &prevent_cols))
                         .collect();
 
                 // all predicates are kept, no changes needed
@@ -1512,19 +1527,10 @@ fn unalias(expr: &Expr) -> &Expr {
 
 /// check whether the expression uses the columns in `check_map`.
 fn contain<T>(e: &Expr, check_map: &HashMap<String, T>) -> bool {
-    let mut is_contain = false;
-    e.apply(|expr| {
-        if let Expr::Column(c) = &expr
-            && check_map.contains_key(&c.flat_name())
-        {
-            is_contain = true;
-            Ok(TreeNodeRecursion::Stop)
-        } else {
-            Ok(TreeNodeRecursion::Continue)
-        }
+    e.exists(|expr| {
+        Ok(matches!(expr, Expr::Column(c) if check_map.contains_key(&c.flat_name())))
     })
-    .unwrap();
-    is_contain
+    .unwrap()
 }
 
 fn with_filters(predicates: Vec<Expr>, plan: LogicalPlan) -> LogicalPlan {
@@ -1553,14 +1559,14 @@ mod tests {
     use arrow::datatypes::{Field, Metadata, Schema, SchemaRef};
     use async_trait::async_trait;
 
-    use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
-    use datafusion_expr::expr::ScalarFunction;
+    use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue, Spans};
+    use datafusion_expr::expr::{ScalarFunction, SetComparison, SetQuantifier};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
         ColumnarValue, ExprFunctionExt, Extension, LogicalPlanBuilder,
-        ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TableScan, TableSource,
-        TableType, UserDefinedLogicalNodeCore, Volatility, WindowFunctionDefinition, col,
-        in_list, in_subquery, lit,
+        ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Subquery, TableScan,
+        TableSource, TableType, UserDefinedLogicalNodeCore, Volatility,
+        WindowFunctionDefinition, col, exists, in_list, in_subquery, lit, out_ref_col,
     };
 
     use crate::OptimizerContext;
@@ -2213,6 +2219,90 @@ mod tests {
         fn supports_limit_pushdown(&self) -> bool {
             false // Disallow limit push-down by default
         }
+    }
+
+    #[test]
+    fn user_defined_plan_outer_referenced_column() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // A subquery correlated on `test.c` — the column `NoopPlan` refuses to
+        // have predicates pushed past. The correlation is carried by the
+        // subquery's `outer_ref_columns`, not by an `Expr::Column` in the
+        // predicate itself.
+        let subquery = LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
+            .filter(out_ref_col(DataType::UInt32, "test.c").eq(col("sq.a")))?
+            .project(vec![col("sq.a")])?
+            .build()?;
+
+        let custom_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(NoopPlan {
+                input: vec![table_scan.clone()],
+                schema: Arc::clone(table_scan.schema()),
+            }),
+        });
+        let plan = LogicalPlanBuilder::from(custom_plan)
+            .filter(exists(Arc::new(subquery)))?
+            .build()?;
+
+        // The predicate depends on `test.c`, so it must stay above NoopPlan.
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: EXISTS (<subquery>)
+          Subquery:
+            Projection: sq.a
+              TableScan: sq, full_filters=[outer_ref(test.c) = sq.a]
+          NoopPlan
+            TableScan: test
+        "
+        )
+    }
+
+    #[test]
+    fn user_defined_plan_outer_referenced_column_set_comparison() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // `test.a > ANY (SELECT sq.a FROM sq WHERE test.c = sq.a)`: the
+        // comparison expression names only `test.a`, so the dependency on
+        // `test.c` exists solely in the subquery's `outer_ref_columns`.
+        let subquery = LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
+            .filter(out_ref_col(DataType::UInt32, "test.c").eq(col("sq.a")))?
+            .project(vec![col("sq.a")])?
+            .build()?;
+        let outer_ref_columns = subquery.all_out_ref_exprs();
+        let set_comparison = Expr::SetComparison(SetComparison::new(
+            Box::new(col("test.a")),
+            Subquery {
+                subquery: Arc::new(subquery),
+                outer_ref_columns,
+                spans: Spans::new(),
+            },
+            Operator::Gt,
+            SetQuantifier::Any,
+        ));
+
+        let custom_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(NoopPlan {
+                input: vec![table_scan.clone()],
+                schema: Arc::clone(table_scan.schema()),
+            }),
+        });
+        let plan = LogicalPlanBuilder::from(custom_plan)
+            .filter(set_comparison)?
+            .build()?;
+
+        // The predicate depends on `test.c`, so it must stay above NoopPlan.
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test.a > ANY (<subquery>)
+          Subquery:
+            Projection: sq.a
+              TableScan: sq, full_filters=[outer_ref(test.c) = sq.a]
+          NoopPlan
+            TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -3251,7 +3341,8 @@ mod tests {
             projection,
             source: Arc::new(test_provider),
             fetch: None,
-            statistics_requests: std::collections::BTreeSet::new(),
+            skip: None,
+            statistics_requests: Box::default(),
         });
 
         Ok(LogicalPlanBuilder::from(table_scan))
