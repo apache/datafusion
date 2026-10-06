@@ -14,280 +14,152 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-
-use arrow::array::{ArrayRef, Int64Array, OffsetSizeTrait};
-use arrow::datatypes::{DataType, Field};
-use arrow::util::bench_util::{
-    create_string_array_with_len, create_string_view_array_with_len,
-};
-use criterion::{Criterion, SamplingMode, criterion_group};
-use datafusion_common::config::ConfigOptions;
-use datafusion_common::{DataFusionError, ScalarValue};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
-use datafusion_functions::unicode;
 use std::hint::black_box;
+use std::ops::{Range, RangeInclusive};
 use std::sync::Arc;
 
-fn make_i64_arg(value: i64, size: usize, as_scalar: bool) -> ColumnarValue {
-    if as_scalar {
-        ColumnarValue::Scalar(ScalarValue::from(value))
-    } else {
-        ColumnarValue::Array(Arc::new(Int64Array::from(vec![value; size])))
+use arrow::array::StringViewArray;
+use arrow::datatypes::{Field, Int64Type};
+use arrow::util::bench_util::{
+    create_primitive_array_range, create_string_array_with_len_range_and_prefix_and_seed,
+};
+use criterion::{Criterion, criterion_group};
+use datafusion_common::ScalarValue;
+use datafusion_common::config::ConfigOptions;
+use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs};
+use datafusion_functions::unicode::substr;
+
+const BATCH_SIZE: usize = 8192;
+
+/// How an integer argument is passed.
+enum IntArg {
+    /// The same value for every row, as in `substr(s, 1, 5)`.
+    Scalar(i64),
+    /// A different value for each row, drawn from the range.
+    PerRow(Range<i64>),
+}
+
+impl IntArg {
+    fn to_columnar_value(&self) -> ColumnarValue {
+        match self {
+            IntArg::Scalar(value) => {
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(*value)))
+            }
+            IntArg::PerRow(range) => ColumnarValue::Array(Arc::new(
+                create_primitive_array_range::<Int64Type>(BATCH_SIZE, 0.0, range.clone()),
+            )),
+        }
     }
 }
 
-fn create_args_without_count<O: OffsetSizeTrait>(
-    size: usize,
-    str_len: usize,
-    start_half_way: bool,
-    force_view_types: bool,
-    scalar_start: bool,
+fn create_args(
+    str_len: &RangeInclusive<usize>,
+    start: &IntArg,
+    count: Option<&IntArg>,
+    is_string_view: bool,
 ) -> Vec<ColumnarValue> {
-    let start_val = if start_half_way {
-        (str_len / 2) as i64
+    let strings = create_string_array_with_len_range_and_prefix_and_seed::<i32>(
+        BATCH_SIZE,
+        0.1,
+        *str_len.start(),
+        *str_len.end(),
+        "",
+        42,
+    );
+    let string_arg = if is_string_view {
+        ColumnarValue::Array(Arc::new(strings.iter().collect::<StringViewArray>()))
     } else {
-        1i64
-    };
-    let start = make_i64_arg(start_val, size, scalar_start);
-
-    let string_array: ArrayRef = if force_view_types {
-        Arc::new(create_string_view_array_with_len(size, 0.1, str_len, false))
-    } else {
-        Arc::new(create_string_array_with_len::<O>(size, 0.1, str_len))
-    };
-
-    vec![ColumnarValue::Array(string_array), start]
-}
-
-fn create_args_with_count<O: OffsetSizeTrait>(
-    size: usize,
-    str_len: usize,
-    count_max: usize,
-    force_view_types: bool,
-    scalar_args: bool,
-) -> Vec<ColumnarValue> {
-    let count = count_max.min(str_len) as i64;
-    let start = make_i64_arg(1i64, size, scalar_args);
-    let count = make_i64_arg(count, size, scalar_args);
-
-    let string_array: ArrayRef = if force_view_types {
-        Arc::new(create_string_view_array_with_len(size, 0.1, str_len, false))
-    } else {
-        Arc::new(create_string_array_with_len::<O>(size, 0.1, str_len))
+        ColumnarValue::Array(Arc::new(strings))
     };
 
-    vec![ColumnarValue::Array(string_array), start, count]
-}
-
-#[expect(clippy::needless_pass_by_value)]
-fn invoke_substr_with_args(
-    args: Vec<ColumnarValue>,
-    number_rows: usize,
-) -> Result<ColumnarValue, DataFusionError> {
-    let arg_fields = args
-        .iter()
-        .enumerate()
-        .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true).into())
-        .collect::<Vec<_>>();
-    let config_options = Arc::new(ConfigOptions::default());
-
-    unicode::substr().invoke_with_args(ScalarFunctionArgs {
-        args: args.clone(),
-        arg_fields,
-        number_rows,
-        return_field: Field::new("f", DataType::Utf8View, true).into(),
-        config_options: Arc::clone(&config_options),
-    })
+    let mut args = vec![string_arg, start.to_columnar_value()];
+    args.extend(count.map(IntArg::to_columnar_value));
+    args
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    for size in [1024, 4096] {
-        // string_len = 12, substring_len=6 (see `create_args_without_count`)
-        let len = 12;
-        let mut group = c.benchmark_group("substr, no count, short strings");
-        group.sampling_mode(SamplingMode::Flat);
-        group.sample_size(10);
+    // Input lengths vary within each case, as in real data: with fixed-length
+    // inputs, per-row work that depends on the input length is unrealistically
+    // predictable.
+    let cases = [
+        // Results of up to 5 chars, stored inline in StringView arrays (≤12 bytes).
+        (
+            "short_result",
+            1..=32,
+            IntArg::Scalar(1),
+            Some(IntArg::Scalar(5)),
+        ),
+        // 25-char results, stored out of line.
+        (
+            "long_result",
+            32..=64,
+            IntArg::Scalar(5),
+            Some(IntArg::Scalar(25)),
+        ),
+        // Short results from long inputs.
+        (
+            "short_result_long_input",
+            96..=256,
+            IntArg::Scalar(1),
+            Some(IntArg::Scalar(5)),
+        ),
+        // No count, so each result runs to the end of the input.
+        ("no_count", 1..=64, IntArg::Scalar(5), None),
+        // `start` computed per row, as in `substr(s, strpos(s, ':') + 1, 8)`.
+        (
+            "per_row_start",
+            1..=32,
+            IntArg::PerRow(1..11),
+            Some(IntArg::Scalar(8)),
+        ),
+    ];
+    let function = substr();
+    let config_options = Arc::new(ConfigOptions::default());
+    let mut group = c.benchmark_group(function.name().to_string());
 
-        let args = create_args_without_count::<i32>(size, len, true, true, false);
-        group.bench_function(
-            format!("substr_string_view [size={size}, strlen={len}]"),
-            |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
-        );
+    for is_string_view in [false, true] {
+        let array_type = if is_string_view {
+            "string_view"
+        } else {
+            "string"
+        };
 
-        let args = create_args_without_count::<i32>(size, len, false, false, false);
-        group.bench_function(format!("substr_string [size={size}, strlen={len}]"), |b| {
-            b.iter(|| black_box(invoke_substr_with_args(args.clone(), size)))
-        });
+        for (case_name, str_len, start, count) in &cases {
+            let args = create_args(str_len, start, count.as_ref(), is_string_view);
+            let arg_fields: Vec<_> = args
+                .iter()
+                .enumerate()
+                .map(|(idx, arg)| {
+                    Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+                })
+                .collect();
+            let scalar_arguments = vec![None; arg_fields.len()];
+            let return_field = function
+                .return_field_from_args(ReturnFieldArgs {
+                    arg_fields: &arg_fields,
+                    scalar_arguments: &scalar_arguments,
+                })
+                .expect("should resolve return field");
 
-        let args = create_args_without_count::<i64>(size, len, true, false, false);
-        group.bench_function(
-            format!("substr_large_string [size={size}, strlen={len}]"),
-            |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
-        );
-
-        group.finish();
-
-        // string_len = 128, start=1, count=64, substring_len=64
-        let len = 128;
-        let count = 64;
-        let mut group = c.benchmark_group("substr, with count, long strings");
-        group.sampling_mode(SamplingMode::Flat);
-        group.sample_size(10);
-
-        let args = create_args_with_count::<i32>(size, len, count, true, false);
-        group.bench_function(
-            format!("substr_string_view [size={size}, count={count}, strlen={len}]"),
-            |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
-        );
-
-        let args = create_args_with_count::<i32>(size, len, count, false, false);
-        group.bench_function(
-            format!("substr_string [size={size}, count={count}, strlen={len}]"),
-            |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
-        );
-
-        let args = create_args_with_count::<i64>(size, len, count, false, false);
-        group.bench_function(
-            format!("substr_large_string [size={size}, count={count}, strlen={len}]"),
-            |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
-        );
-
-        group.finish();
-
-        // string_len = 128, start=1, count=6, substring_len=6
-        let len = 128;
-        let count = 6;
-        let mut group = c.benchmark_group("substr, short count, long strings");
-        group.sampling_mode(SamplingMode::Flat);
-        group.sample_size(10);
-
-        let args = create_args_with_count::<i32>(size, len, count, true, false);
-        group.bench_function(
-            format!("substr_string_view [size={size}, count={count}, strlen={len}]"),
-            |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
-        );
-
-        let args = create_args_with_count::<i32>(size, len, count, false, false);
-        group.bench_function(
-            format!("substr_string [size={size}, count={count}, strlen={len}]"),
-            |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
-        );
-
-        let args = create_args_with_count::<i64>(size, len, count, false, false);
-        group.bench_function(
-            format!("substr_large_string [size={size}, count={count}, strlen={len}]"),
-            |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
-        );
-
-        group.finish();
-
-        // Scalar start, no count, short strings
-        let len = 12;
-        let mut group =
-            c.benchmark_group("substr, scalar start, no count, short strings");
-        group.sampling_mode(SamplingMode::Flat);
-        group.sample_size(10);
-
-        let args = create_args_without_count::<i32>(size, len, true, true, true);
-        group.bench_function(
-            format!("substr_string_view [size={size}, strlen={len}]"),
-            |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
-        );
-
-        let args = create_args_without_count::<i32>(size, len, false, false, true);
-        group.bench_function(format!("substr_string [size={size}, strlen={len}]"), |b| {
-            b.iter(|| black_box(invoke_substr_with_args(args.clone(), size)))
-        });
-
-        group.finish();
-
-        // Scalar start, no count, long strings, start near middle
-        let len = 128;
-        let mut group = c.benchmark_group("substr, scalar start, no count, long strings");
-        group.sampling_mode(SamplingMode::Flat);
-        group.sample_size(10);
-
-        let args = create_args_without_count::<i32>(size, len, true, true, true);
-        group.bench_function(
-            format!("substr_string_view [size={size}, strlen={len}]"),
-            |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
-        );
-
-        let args = create_args_without_count::<i32>(size, len, false, false, true);
-        group.bench_function(format!("substr_string [size={size}, strlen={len}]"), |b| {
-            b.iter(|| black_box(invoke_substr_with_args(args.clone(), size)))
-        });
-
-        group.finish();
-
-        // Scalar start=1, no count, long strings
-        let len = 128;
-        let mut group =
-            c.benchmark_group("substr, scalar start=1, no count, long strings");
-        group.sampling_mode(SamplingMode::Flat);
-        group.sample_size(10);
-
-        let args = create_args_without_count::<i32>(size, len, false, true, true);
-        group.bench_function(
-            format!("substr_string_view [size={size}, strlen={len}]"),
-            |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
-        );
-
-        let args = create_args_without_count::<i32>(size, len, false, false, true);
-        group.bench_function(format!("substr_string [size={size}, strlen={len}]"), |b| {
-            b.iter(|| black_box(invoke_substr_with_args(args.clone(), size)))
-        });
-
-        group.finish();
-
-        // Scalar start and count, short strings
-        let len = 12;
-        let count = 6;
-        let mut group = c.benchmark_group("substr, scalar args, short strings");
-        group.sampling_mode(SamplingMode::Flat);
-        group.sample_size(10);
-
-        let args = create_args_with_count::<i32>(size, len, count, true, true);
-        group.bench_function(
-            format!("substr_string_view [size={size}, count={count}, strlen={len}]"),
-            |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
-        );
-
-        let args = create_args_with_count::<i32>(size, len, count, false, true);
-        group.bench_function(
-            format!("substr_string [size={size}, count={count}, strlen={len}]"),
-            |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
-        );
-
-        group.finish();
-
-        // Scalar start and count, long strings
-        let len = 128;
-        let count = 64;
-        let mut group = c.benchmark_group("substr, scalar args, long strings");
-        group.sampling_mode(SamplingMode::Flat);
-        group.sample_size(10);
-
-        let args = create_args_with_count::<i32>(size, len, count, true, true);
-        group.bench_function(
-            format!("substr_string_view [size={size}, count={count}, strlen={len}]"),
-            |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
-        );
-
-        let args = create_args_with_count::<i32>(size, len, count, false, true);
-        group.bench_function(
-            format!("substr_string [size={size}, count={count}, strlen={len}]"),
-            |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
-        );
-
-        let args = create_args_with_count::<i64>(size, len, count, false, true);
-        group.bench_function(
-            format!("substr_large_string [size={size}, count={count}, strlen={len}]"),
-            |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
-        );
-
-        group.finish();
+            group.bench_function(format!("{array_type} {case_name}"), |b| {
+                b.iter(|| {
+                    black_box(
+                        function
+                            .invoke_with_args(ScalarFunctionArgs {
+                                args: args.clone(),
+                                arg_fields: arg_fields.clone(),
+                                number_rows: BATCH_SIZE,
+                                return_field: Arc::clone(&return_field),
+                                config_options: Arc::clone(&config_options),
+                            })
+                            .expect("should work"),
+                    )
+                })
+            });
+        }
     }
+
+    group.finish();
 }
 
 criterion_group!(benches, criterion_benchmark);
