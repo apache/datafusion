@@ -249,7 +249,7 @@ enum QError {
 }
 
 fn capture_statistics(plan: &dyn ExecutionPlan) -> Result<Vec<CapturedStatistics>> {
-    let statistics_context = StatisticsRegistry::default_with_builtin_providers();
+    let statistics_context = StatisticsRegistry::new();
     let mut result = vec![];
     capture_statistics_inner(plan, &statistics_context, "0", &mut result)?;
     Ok(result)
