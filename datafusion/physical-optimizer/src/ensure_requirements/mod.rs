@@ -225,24 +225,12 @@ impl PhysicalOptimizerRule for EnsureRequirements {
         // subtree's statistics are computed once instead of once per ancestor.
         // Build it from the session's statistics registry so registered providers
         // are consulted (an empty registry, the default, is unchanged behavior).
-        // `StatsCache` is keyed by raw node pointer, so reset it after any node
-        // whose plan pointer actually changed: a rewrite can free a cached node
-        // and a later allocation could reuse its address. A node that makes no
-        // change cannot free anything, so the cache safely persists across the
-        // no-op nodes that dominate a deep plan.
         let stats_ctx = match context.statistics_registry() {
             Some(registry) => StatisticsContext::new_with_registry(registry.clone()),
             None => StatisticsContext::new(),
         };
         let dist_ctx = dist_ctx
-            .transform_up(|ctx| {
-                let before = Arc::clone(&ctx.plan);
-                let result = ensure_distribution_with_stats(ctx, config, &stats_ctx)?;
-                if !Arc::ptr_eq(&before, &result.data.plan) {
-                    stats_ctx.reset_cache();
-                }
-                Ok(result)
-            })
+            .transform_up(|ctx| ensure_distribution_with_stats(ctx, config, &stats_ctx))
             .data()?;
 
         // Step 2b: Sorting enforcement (bottom-up) — runs on distribution-fixed plan
