@@ -4908,4 +4908,21 @@ mod tests {
             "expected 1/500 = 0.002 when left NDV dominates, got {result}"
         );
     }
+
+    #[test]
+    fn test_fallback_selectivity_column_index_out_of_bounds() {
+        // column_ndv: `column_statistics.get(col.index())` returns None when the
+        // column index exceeds the stats slice length. The conjunct is then
+        // unhandled → default selectivity is applied.
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let predicate: Arc<dyn PhysicalExpr> =
+            binary(col("a", &schema).unwrap(), Operator::Eq, lit(1i32), &schema).unwrap();
+        // Empty stats slice: col.index() == 0 is out of bounds.
+        let col_stats: Vec<ColumnStatistics> = vec![];
+        let result = compute_fallback_selectivity(&predicate, &col_stats, 20);
+        assert!(
+            (result - 0.2).abs() < 1e-12,
+            "expected default 0.2 when column index is out of bounds, got {result}"
+        );
+    }
 }
