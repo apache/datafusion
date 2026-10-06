@@ -287,7 +287,7 @@ impl TopKDynamicFilters {
     fn mark_topk_emitted(&self) {
         let previous = self
             .remaining_topk_emitters
-            .fetch_update(
+            .try_update(
                 AtomicOrdering::AcqRel,
                 AtomicOrdering::Acquire,
                 |remaining| remaining.checked_sub(1),

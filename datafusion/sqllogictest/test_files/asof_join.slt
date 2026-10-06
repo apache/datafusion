@@ -551,3 +551,106 @@ FROM asof_left l
 ASOF JOIN asof_right r
 MATCH_CONDITION (l.ts)
 ON l.grp = r.grp;
+
+# Correlated subqueries around an ASOF join. See
+# https://github.com/apache/datafusion/issues/25834.
+statement ok
+CREATE TABLE asof_corr_o(k INT) AS VALUES (1), (2);
+
+statement ok
+CREATE TABLE asof_corr_l(id INT, ts INT) AS VALUES (1, 10);
+
+statement ok
+CREATE TABLE asof_corr_r(ts INT, val INT) AS VALUES (5, 1), (8, 2);
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+# A correlated filter on the right side of an ASOF join selects the rows the
+# join can match. Above the join, it removes rows instead, so the subquery stays
+# correlated. The derived table uses the table name as its alias: with a
+# different alias, the lateral join rewrite fails with a schema error first.
+query TT
+EXPLAIN SELECT o.k, s.rts FROM asof_corr_o o, LATERAL (SELECT asof_corr_r.ts AS rts FROM asof_corr_l l ASOF JOIN (SELECT * FROM asof_corr_r WHERE asof_corr_r.val = o.k) AS asof_corr_r MATCH_CONDITION (l.ts >= asof_corr_r.ts)) AS s ORDER BY o.k;
+----
+logical_plan
+01)Sort: o.k ASC NULLS LAST
+02)--Cross Join:
+03)----SubqueryAlias: o
+04)------TableScan: asof_corr_o projection=[k]
+05)----SubqueryAlias: s
+06)------Subquery:
+07)--------Projection: asof_corr_r.ts AS rts
+08)----------AsOf Join: match=[l.ts >= asof_corr_r.ts], constraint=On
+09)------------SubqueryAlias: l
+10)--------------TableScan: asof_corr_l projection=[ts]
+11)------------SubqueryAlias: asof_corr_r
+12)--------------Projection: asof_corr_r.ts
+13)----------------Filter: asof_corr_r.val = outer_ref(o.k)
+14)------------------TableScan: asof_corr_r projection=[ts, val]
+
+# It errors rather than returning wrong results. The right answer is
+# `(1, 5), (2, 8)`.
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn
+SELECT o.k, s.rts FROM asof_corr_o o, LATERAL (SELECT asof_corr_r.ts AS rts FROM asof_corr_l l ASOF JOIN (SELECT * FROM asof_corr_r WHERE asof_corr_r.val = o.k) AS asof_corr_r MATCH_CONDITION (l.ts >= asof_corr_r.ts)) AS s ORDER BY o.k;
+
+# The same for EXISTS. The right answer is `1`.
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT o.k FROM asof_corr_o o WHERE EXISTS (SELECT 1 FROM asof_corr_l l ASOF JOIN (SELECT * FROM asof_corr_r WHERE asof_corr_r.val = o.k) AS r MATCH_CONDITION (l.ts >= r.ts) WHERE r.ts = 5);
+
+# An ASOF join keeps each left row once, so a correlated filter on the left
+# side is still pulled up.
+query TT
+EXPLAIN SELECT o.k FROM asof_corr_o o WHERE EXISTS (SELECT 1 FROM (SELECT * FROM asof_corr_l WHERE asof_corr_l.id = o.k) AS l ASOF JOIN asof_corr_r r MATCH_CONDITION (l.ts >= r.ts));
+----
+logical_plan
+01)LeftSemi Join: o.k = __correlated_sq_1.id
+02)--SubqueryAlias: o
+03)----TableScan: asof_corr_o projection=[k]
+04)--SubqueryAlias: __correlated_sq_1
+05)----Projection: l.id
+06)------AsOf Join: match=[l.ts >= r.ts], constraint=On
+07)--------SubqueryAlias: l
+08)----------TableScan: asof_corr_l projection=[id, ts]
+09)--------SubqueryAlias: r
+10)----------TableScan: asof_corr_r projection=[ts]
+
+query I
+SELECT o.k FROM asof_corr_o o WHERE EXISTS (SELECT 1 FROM (SELECT * FROM asof_corr_l WHERE asof_corr_l.id = o.k) AS l ASOF JOIN asof_corr_r r MATCH_CONDITION (l.ts >= r.ts));
+----
+1
+
+# So is a correlated filter above the ASOF join.
+query TT
+EXPLAIN SELECT o.k, s.rts FROM asof_corr_o o, LATERAL (SELECT r.ts AS rts FROM asof_corr_l l ASOF JOIN asof_corr_r r MATCH_CONDITION (l.ts >= r.ts) WHERE r.val = o.k) AS s ORDER BY o.k;
+----
+logical_plan
+01)Sort: o.k ASC NULLS LAST
+02)--Projection: o.k, s.rts
+03)----Inner Join: o.k = s.val
+04)------SubqueryAlias: o
+05)--------TableScan: asof_corr_o projection=[k]
+06)------SubqueryAlias: s
+07)--------Projection: r.ts AS rts, r.val
+08)----------AsOf Join: match=[l.ts >= r.ts], constraint=On
+09)------------SubqueryAlias: l
+10)--------------TableScan: asof_corr_l projection=[ts]
+11)------------SubqueryAlias: r
+12)--------------TableScan: asof_corr_r projection=[ts, val]
+
+query II
+SELECT o.k, s.rts FROM asof_corr_o o, LATERAL (SELECT r.ts AS rts FROM asof_corr_l l ASOF JOIN asof_corr_r r MATCH_CONDITION (l.ts >= r.ts) WHERE r.val = o.k) AS s ORDER BY o.k;
+----
+2 8
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
+
+statement ok
+DROP TABLE asof_corr_o;
+
+statement ok
+DROP TABLE asof_corr_l;
+
+statement ok
+DROP TABLE asof_corr_r;
