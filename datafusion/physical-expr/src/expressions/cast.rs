@@ -477,6 +477,28 @@ fn can_propagate_cast_constraints(source: &DataType, target: &DataType) -> bool 
         || (source.is_integer() && target.is_integer())
         // NaN bounds are unbounded; finite Float32 values widen exactly.
         || (*source == Float32 && *target == Float64)
+        || is_decimal_widening(source, target)
+}
+
+/// Whether a decimal-to-decimal cast keeps every value exactly, i.e. the target
+/// has at least as many fractional and integer digits as the source. Casting
+/// bounds back to the source then rounds to a neighboring representable value,
+/// which never excludes a valid input.
+fn is_decimal_widening(source: &DataType, target: &DataType) -> bool {
+    fn precision_scale(data_type: &DataType) -> Option<(i16, i16)> {
+        match data_type {
+            Decimal32(p, s) | Decimal64(p, s) | Decimal128(p, s) | Decimal256(p, s) => {
+                Some((*p as i16, *s as i16))
+            }
+            _ => None,
+        }
+    }
+    match (precision_scale(source), precision_scale(target)) {
+        (Some((source_p, source_s)), Some((target_p, target_s))) => {
+            target_s >= source_s && target_p - target_s >= source_p - source_s
+        }
+        _ => false,
+    }
 }
 
 #[cfg(feature = "proto")]
@@ -675,6 +697,11 @@ mod tests {
             (Int32, Float64, true),
             (Float32, Float64, true),
             (Decimal128(4, 1), Decimal128(4, 1), true),
+            (Decimal128(4, 1), Decimal128(6, 2), true),
+            (Decimal128(15, 2), Decimal128(30, 15), true),
+            (Decimal32(9, 2), Decimal128(20, 4), true),
+            (Decimal128(6, 2), Decimal128(6, 3), false),
+            (Decimal128(6, 2), Decimal128(8, 1), false),
         ] {
             let schema = Schema::new(vec![Field::new("x", source.clone(), true)]);
             let expr = CastExpr::new(col("x", &schema)?, target.clone(), None);
@@ -691,6 +718,44 @@ mod tests {
                 Some(expected),
                 "{source} -> {target}"
             );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_decimal_widening_constraint_boundaries() -> Result<()> {
+        // Every Decimal128(3, 2) value near zero, widened to Decimal128(5, 3):
+        let values: Vec<i128> = (-20..=20).collect();
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("x", Decimal128(3, 2), false)]));
+        let expr = CastExpr::new(col("x", &schema)?, Decimal128(5, 3), None);
+        let input = Interval::make_unbounded(&Decimal128(3, 2))?;
+        // Output bounds at every Decimal128(5, 3) value in range, including ones
+        // between two inputs, so casting back rounds in both directions:
+        let bounds: Vec<i128> = (-210..=210).collect();
+        for (i, lower) in bounds.iter().enumerate() {
+            for upper in &bounds[i..] {
+                let output = Interval::try_new(
+                    ScalarValue::Decimal128(Some(*lower), 5, 3),
+                    ScalarValue::Decimal128(Some(*upper), 5, 3),
+                )?;
+                let propagated = expr.propagate_constraints(&output, &[&input])?.unwrap();
+                assert_eq!(propagated.len(), 1);
+                for value in &values {
+                    let widened = ScalarValue::Decimal128(Some(value * 10), 5, 3);
+                    if output.contains_value(widened)? {
+                        assert!(
+                            propagated[0].contains_value(ScalarValue::Decimal128(
+                                Some(*value),
+                                3,
+                                2
+                            ))?,
+                            "input={value}, output={output}, propagated={:?}",
+                            propagated[0]
+                        );
+                    }
+                }
+            }
         }
         Ok(())
     }
