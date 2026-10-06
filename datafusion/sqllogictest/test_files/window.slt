@@ -7187,8 +7187,7 @@ statement error Error during planning: RANGE window frames are not supported for
 select count(*) over (order by d, m) from (values (arrow_cast(1, 'Duration(Second)'), map(['a'], [1])), (arrow_cast(1, 'Duration(Second)'), map(['a'], [2]))) t(d, m)
 
 # the trailing key check also runs when the first ORDER BY type supports offset
-# arithmetic; otherwise these maps are treated as peers because their keys are
-# equal even though their values differ
+# arithmetic, so a map after an integer is rejected as well
 statement error Error during planning: RANGE window frames are not supported for ORDER BY type Map
 select count(*) over (order by i, m) from (values (1, map(['a'], [1])), (1, map(['a'], [2]))) t(i, m)
 
@@ -7207,23 +7206,21 @@ select count(*) over (order by l) from (values ([1]), ([2])) t(l)
 1
 2
 
-# but a list whose elements are nested (struct, list) plans and then fails at
-# execution: the peer comparison in the RANGE frame goes through
-# `ScalarValue::partial_cmp`, which cannot compare nested list elements, while
-# the sort that produced the input uses `make_comparator` and can. Documented
-# here so the fix to the scalar comparison can flip these expectations.
-query error DataFusion error: Internal error: Uncomparable values: List\(\[\{c0: 1\}\]\), List\(\[\{c0: 1\}\]\)
+# Lists containing structs or lists also form RANGE peer groups.
+query I
 select count(*) over (order by l) from (values ([struct(1)]), ([struct(2)])) t(l)
+----
+1
+2
 
-query error DataFusion error: Internal error: Uncomparable values: List\(\[\[1\]\]\), List\(\[\[1\]\]\)
+query I
 select count(*) over (order by l) from (values ([[1]]), ([[2]])) t(l)
+----
+1
+2
 
-# after a duration key the free-range check looks at every ORDER BY type, and
-# a list is rejected at planning even though it sorts fine: the RANGE peer
-# check (`compare_rows`, then `ScalarValue::partial_cmp`) always orders a NULL
-# list element after a non-NULL one, while the sort applies NULLS FIRST to the
-# elements as well, so with tied durations `[NULL]` and `[1]` would be sorted
-# one way and compared the other
+# after a duration key the free-range check looks at every ORDER BY type.
+# Trailing list keys remain rejected by this check.
 query error Error during planning: RANGE window frames are not supported for ORDER BY type List
 select count(*) over (order by d, l nulls first) from (values (arrow_cast(1, 'Duration(Second)'), [NULL]), (arrow_cast(1, 'Duration(Second)'), [1])) t(d, l)
 
