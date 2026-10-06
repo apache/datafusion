@@ -16,6 +16,17 @@
 // under the License.
 
 //! [`OptimizeProjections`] identifies and eliminates unused columns
+//!
+//! # Precedence over `PushDownLeafProjections`
+//!
+//! `OptimizeProjections` merges adjacent projections, including a recovery
+//! projection over an extraction projection that
+//! [`PushDownLeafProjections`] creates. To keep the two rules from undoing each
+//! other, `PushDownLeafProjections` only creates that pair when the extraction
+//! projection moves below the input. See the module documentation of
+//! [`extract_leaf_expressions`](crate::extract_leaf_expressions).
+//!
+//! [`PushDownLeafProjections`]: crate::extract_leaf_expressions::PushDownLeafProjections
 
 mod required_indices;
 
