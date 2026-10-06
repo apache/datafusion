@@ -1737,7 +1737,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn final_hash_aggregate_compacts_repeated_groups() -> Result<()> {
+    async fn final_hash_aggregate_buffers_repeated_groups_without_compaction()
+    -> Result<()> {
         // Every group arrives 40 times, so buffering the input as is would
         // hold 40 rows per group.
         let (rows, splits, spills) =
@@ -1747,7 +1748,7 @@ mod tests {
         assert!(splits >= 1);
         assert_eq!(spills, 0);
         let compactions = BUCKET_COMPACTIONS.with(|compactions| compactions.get());
-        assert!(compactions > 0, "buckets were compacted");
+        assert_eq!(compactions, 0, "intermediate compaction is disabled");
         Ok(())
     }
 
