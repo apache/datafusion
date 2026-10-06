@@ -1178,11 +1178,8 @@ fn extract_window_frame_target_type(col_type: &DataType) -> Option<DataType> {
 /// run over an ORDER BY column of `col_type` even though the type has no
 /// arithmetic for finite offsets.
 ///
-/// Such a frame only compares rows to find peers, so the type must compare
-/// the same way in the RANGE peer check (`ScalarValue::partial_cmp`) as in
-/// the sort that produced the input order. That holds for durations and
-/// intervals; it does not for structs and maps, whose `ScalarValue`
-/// comparison differs from the sorter's, so they stay unsupported.
+/// This fallback admits durations and intervals, including encoded values.
+/// Structs and maps remain outside its supported types.
 fn supports_free_range_frame(col_type: &DataType) -> bool {
     match col_type {
         DataType::Duration(_) | DataType::Interval(_) => true,
@@ -1196,15 +1193,6 @@ fn supports_free_range_frame(col_type: &DataType) -> bool {
 
 /// Whether `col_type` is a list, possibly behind dictionary or run-end
 /// encoding.
-///
-/// Lists are kept out of the free-range fallback because their peer
-/// comparison and the sort do not agree on element NULLs: `compare_rows`
-/// applies the NULLS FIRST / NULLS LAST option to the top-level value only and
-/// then calls `ScalarValue::partial_cmp`, whose `partial_cmp_list` always
-/// orders a NULL element after a non-NULL one (Postgres semantics), while the
-/// sorter's `make_comparator` applies the option to the elements as well. Under
-/// `ORDER BY d, l NULLS FIRST` with tied `d`, the sort puts `[NULL]` before
-/// `[1]` and the peer check orders them the other way round.
 fn is_list_type(col_type: &DataType) -> bool {
     match col_type {
         DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _) => {
@@ -1217,8 +1205,8 @@ fn is_list_type(col_type: &DataType) -> bool {
 }
 
 /// Errors if any ORDER BY expression has a type not supported in a free RANGE
-/// frame: a type with neither an offset target nor a sound peer comparison, or
-/// a list (see `is_list_type`).
+/// frame: a type with neither an offset target nor support in the free-range
+/// fallback, or a list (see `is_list_type`).
 fn check_free_range_order_by_types(
     expressions: &[Sort],
     schema: &DFSchema,
@@ -1260,9 +1248,8 @@ fn coerce_window_frame(
                         }
                         target_type
                     }
-                    // A free range frame has no offsets to coerce, so ORDER BY
-                    // types without arithmetic are fine as long as their peer
-                    // comparison is sound (see `supports_free_range_frame`).
+                    // A free range frame has no offsets to coerce. Check whether
+                    // its ORDER BY types are supported by the free-range fallback.
                     None if window_frame.free_range() => {
                         check_free_range_order_by_types(expressions, schema)?;
                         return Ok(window_frame);
