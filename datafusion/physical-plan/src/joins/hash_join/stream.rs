@@ -1289,14 +1289,19 @@ fn null_aware_skip_probe_batch(
         | NullAwareMode::LeftMark {
             correlated: false, ..
         } => {
-            // `on[0]` is the `NOT IN` value key for both modes.
-            let probe_key_column = &state.values[0];
             let is_anti = matches!(mode, NullAwareMode::LeftAnti { .. });
-            let probe_has_null = probe_key_column.logical_null_count() > 0;
-            // Only batches with rows count: `NULL NOT IN (empty)` is TRUE.
-            left_data.record_probe_batch(state.batch.num_rows() > 0, probe_has_null);
+            if state.offset == (0, None) {
+                // `on[0]` is the `NOT IN` value key for both modes. A probe
+                // batch may resume lookup many times, but its summary is
+                // invariant and only needs to be computed once.
+                let probe_has_null = state.values[0].logical_null_count() > 0;
+                // Only batches with rows count: `NULL NOT IN (empty)` is TRUE.
+                left_data.record_probe_batch(state.batch.num_rows() > 0, probe_has_null);
+            }
             // Best-effort early exit; the final stage re-checks the flag
-            // through `report_probe_completed`.
+            // through `report_probe_completed`. Keep this outside the first-
+            // chunk guard so a sibling partition can stop an anti join between
+            // resumed lookups.
             is_anti && left_data.probe_side_has_null_hint()
         }
     }
@@ -1386,21 +1391,17 @@ fn null_aware_left_mark_column(
 ) -> ArrayRef {
     // Correlated joins precomputed the UNKNOWN decision per build row.
     let null_indices_bitmap = correlated.then(|| left_data.null_indices_bitmap().lock());
-    // `LeftMark` final indices are a contiguous chunk of build rows. Limit the
-    // potentially allocating dictionary logical-null computation to this chunk;
-    // correlated joins already carry the answer in `null_indices_bitmap`.
-    let build_key_nulls = if correlated || left_side.is_empty() {
+    // Uncorrelated joins use the logical-null bitmap computed once with the
+    // build side. Correlated joins carry the answer in `null_indices_bitmap`.
+    let build_key_nulls = if correlated {
         None
     } else {
-        let start = left_side.value(0) as usize;
-        left_data.values()[0]
-            .slice(start, left_side.len())
-            .logical_nulls()
+        left_data.left_mark_build_key_nulls()
     };
     build_null_aware_left_mark_column(
         left_side,
         right_side,
-        build_key_nulls.as_ref(),
+        build_key_nulls,
         null_indices_bitmap.as_deref(),
         probe_summary.has_null,
         probe_summary.non_empty,

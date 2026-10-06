@@ -355,6 +355,11 @@ struct JoinBuildData {
     /// `build_side_has_null` were computed from the original keys in
     /// `collect_left_input`.
     values: Vec<ArrayRef>,
+    /// Logical nulls of the scalar key for uncorrelated null-aware `LeftMark`.
+    ///
+    /// Computed once while collecting the build side because dictionary
+    /// logical-null discovery can scan nested dictionary values.
+    left_mark_build_key_nulls: Option<NullBuffer>,
     /// Bounds computed from the build side; absent for an empty partition.
     bounds: Option<PartitionBounds>,
     /// IN-list values or a hash-table reference used for filter pushdown.
@@ -429,6 +434,10 @@ impl JoinLeftData {
     /// `build_side_has_null` were derived from the original keys instead.
     pub(super) fn values(&self) -> &[ArrayRef] {
         &self.build.values
+    }
+
+    pub(super) fn left_mark_build_key_nulls(&self) -> Option<&NullBuffer> {
+        self.build.left_mark_build_key_nulls.as_ref()
     }
 
     /// returns a reference to the visited indices bitmap
@@ -3543,6 +3552,33 @@ async fn collect_left_input(
         && !left_values.is_empty()
         && left_values[0].logical_null_count() > 0;
 
+    let left_mark_build_key_nulls = if matches!(
+        null_aware,
+        Some(NullAwareMode::LeftMark {
+            correlated: false,
+            ..
+        })
+    ) {
+        left_values[0]
+            .logical_nulls()
+            .filter(|nulls| nulls.null_count() > 0)
+    } else {
+        None
+    };
+    if let Some(nulls) = &left_mark_build_key_nulls {
+        // `logical_nulls` reuses an array's physical null buffer when it can.
+        // Only charge newly materialized buffers, such as dictionary logical
+        // nulls, because the build batch's buffers were reserved above.
+        let reuses_input_buffer = left_values[0]
+            .nulls()
+            .is_some_and(|input| input.inner().ptr_eq(nulls.inner()));
+        if !reuses_input_buffer {
+            let retained_size = nulls.buffer().capacity();
+            reservation.try_grow(retained_size)?;
+            metrics.build_mem_used.add(retained_size);
+        }
+    }
+
     if prepared {
         drop(batches);
         // Prepared keys are direct columns. IN-list arrays share these batch
@@ -3561,6 +3597,7 @@ async fn collect_left_input(
             map,
             batch,
             values: normalized_values,
+            left_mark_build_key_nulls,
             bounds,
             membership,
             reservation,
@@ -10432,6 +10469,79 @@ mod tests {
             +----+-------+-------+
             ");
         }
+        Ok(())
+    }
+
+    fn build_single_column_table(name: &str, array: ArrayRef) -> Arc<dyn ExecutionPlan> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            name,
+            array.data_type().clone(),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![array]).unwrap();
+        TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap()
+    }
+
+    fn nested_dictionary_array(
+        leaf_values: Vec<Option<i32>>,
+        inner_keys: Vec<i32>,
+        outer_keys: Vec<i32>,
+    ) -> ArrayRef {
+        let leaf_values: ArrayRef = Arc::new(Int32Array::from(leaf_values));
+        let inner_keys = Int32Array::from(inner_keys);
+        let inner_values: ArrayRef =
+            Arc::new(DictionaryArray::<Int32Type>::new(inner_keys, leaf_values));
+        Arc::new(DictionaryArray::<Int32Type>::new(
+            Int32Array::from(outer_keys),
+            inner_values,
+        ))
+    }
+
+    /// A nested dictionary's logical null bitmap must be computed once for the
+    /// complete build key and remain indexed by the original build row.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_left_mark_nested_dictionary_logical_null(
+        batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+        let left_key = nested_dictionary_array(
+            vec![Some(1), None, Some(4)],
+            vec![0, 1, 2],
+            vec![0, 1, 2],
+        );
+        assert_eq!(left_key.logical_null_count(), 1);
+        let left = build_single_column_table("c1", left_key);
+        let right = build_single_column_table(
+            "c2",
+            nested_dictionary_array(
+                vec![Some(1), Some(2), Some(3)],
+                vec![0, 1, 2],
+                vec![0, 1, 2],
+            ),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("c1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("c2", &right.schema())?) as _,
+        )];
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::LeftMark,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true,
+        )?;
+
+        let batches = common::collect(join.execute(0, task_ctx)?).await?;
+        let marks = batches
+            .iter()
+            .flat_map(|batch| batch.column(batch.num_columns() - 1).as_boolean().iter())
+            .collect::<Vec<_>>();
+        assert_eq!(marks, vec![Some(true), None, Some(false)]);
         Ok(())
     }
 
