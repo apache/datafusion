@@ -20,11 +20,11 @@
 mod boolean;
 mod bytes;
 pub mod bytes_view;
+mod clustered;
 mod dictionary;
 mod fixed_size_binary;
 mod list;
-mod ordered;
-pub(super) use ordered::GroupValuesOrdered;
+pub(super) use clustered::GroupValuesClustered;
 pub mod primitive;
 pub mod row_backed;
 

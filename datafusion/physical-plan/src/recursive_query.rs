@@ -23,7 +23,7 @@ use std::task::{Context, Poll};
 
 use super::work_table::{ReservedBatches, WorkTable};
 use crate::aggregates::group_values::{GroupValues, new_group_values};
-use crate::aggregates::order::GroupOrdering;
+use crate::aggregates::order::GroupCompletion;
 use crate::common::project_plan_to_schema;
 use crate::execution_plan::{Boundedness, EmissionType, reset_plan_states};
 use crate::metrics::{
@@ -464,7 +464,7 @@ struct DistinctDeduplicator {
 
 impl DistinctDeduplicator {
     fn new(schema: SchemaRef, task_context: &TaskContext) -> Result<Self> {
-        let group_values = new_group_values(schema, &GroupOrdering::None)?;
+        let group_values = new_group_values(schema, &GroupCompletion::None)?;
         let reservation = MemoryConsumer::new("RecursiveQueryHashTable")
             .register(task_context.memory_pool());
         Ok(Self {

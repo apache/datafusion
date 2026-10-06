@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Single-stage aggregate stream for ordered raw input.
+//! Single-stage aggregate stream for raw input with group-completion guarantees.
 
 use std::ops::ControlFlow;
 use std::sync::Arc;
@@ -28,51 +28,52 @@ use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
 
-use super::aggregate_hash_table::{OrderedAggregateTable, SingleMarker};
+use super::aggregate_hash_table::{ClusteredAggregateTable, SingleMarker};
+use super::order::GroupCompletionMode;
 use super::spill::AggregateSpill;
 use super::{AggregateExec, create_schema};
 use crate::aggregates::AggregateMode;
 use crate::metrics::{BaselineMetrics, RecordOutput, SpillMetrics};
 use crate::stream::EmptyRecordBatchStream;
-use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream};
+use crate::{RecordBatchStream, SendableRecordBatchStream};
 
-/// Single aggregate stream for `InputOrderMode::Sorted` and
-/// `InputOrderMode::PartiallySorted`.
+/// Single aggregate stream for [`GroupCompletionMode::Partial`] and
+/// [`GroupCompletionMode::Full`].
 ///
 /// # Example
 ///
 /// SELECT k, AVG(v) FROM t GROUP BY k;
 ///
-/// If the input is ordered by `k`, and there are existing key partitioning on group
-/// by keys, the single mode aggregation with ordering optimization can be used:
+/// If the input is ordered by `k` and already key-partitioned on the group-by
+/// keys, clustered single aggregation can be used:
 ///
 /// ## Plan
-/// AggregateExec(stage=single, ordered)
+/// AggregateExec(stage=single, clustered)
 /// -- DataSourceExec(t)
 ///
 /// ## Single Stage Behavior
 /// Input: raw rows
 /// Output: final results for all groups (for example, `AVG(x)`)
 ///
-/// # Order-based Optimization
+/// # Group Completion Optimization
 ///
 /// For the aggregation work, the hash aggregation implementation is reused.
 ///
-/// After each input batch, check whether any groups can be emitted eagerly to
-/// improve memory efficiency. For example, if the last group key seen is
-/// `k = 100`, it is safe to emit all groups with keys less than 100 because the
-/// input is ordered. Materialize that entire completed prefix once, then emit
-/// slices of it before reading more input. See
-/// [`OrderedPartialAggregateStream::into_stream`] for why this avoids
+/// After each input batch, the group-completion mode determines whether any
+/// groups can be emitted eagerly to improve memory efficiency. Materialize
+/// that entire completed prefix once, then emit slices of it before reading
+/// more input. See
+/// [`ClusteredPartialAggregateStream::into_stream`] for why this avoids
 /// repeatedly removing small batches of groups from the table.
 ///
-/// [`OrderedPartialAggregateStream::into_stream`]: super::ordered_partial_stream::OrderedPartialAggregateStream::into_stream
+/// [`ClusteredPartialAggregateStream::into_stream`]: super::clustered_partial_stream::ClusteredPartialAggregateStream::into_stream
 ///
 /// # Memory Pressure and Spilling
 ///
-/// ## Fully ordered case
+/// ## Full group completion
 ///
-/// If the input is ordered by every group key, for example:
+/// Every complete grouping tuple is contiguous. Ordering by every group key is
+/// one way to establish this mode, for example:
 ///
 /// - Input order: `a, b`
 /// - `GROUP BY`: `a, b`
@@ -84,9 +85,10 @@ use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream};
 /// If a memory reservation nevertheless fails, the stream returns the error
 /// directly, indicating an unexpected behavior.
 ///
-/// ## Partially ordered case
+/// ## Partial group completion
 ///
-/// If the input is ordered by only a subset of the group keys, for example:
+/// Rows are contiguous for a subset of the group keys. Ordering by that subset
+/// is one way to establish this mode, for example:
 ///
 /// - Input order: `a`
 /// - `GROUP BY`: `a, b`
@@ -97,27 +99,27 @@ use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream};
 /// On reservation failure, the stream sorts the current intermediate states by
 /// the complete group key and spills them as one run. After the input ends, it
 /// spills any remaining states, performs a sort-preserving merge of all runs,
-/// and feeds the merged input into a fully ordered final aggregate stream.
-pub(crate) struct OrderedSingleAggregateStream {
+/// and feeds the merged input into a fully clustered final aggregate stream.
+pub(crate) struct ClusteredSingleAggregateStream {
     schema: SchemaRef,
     input: SendableRecordBatchStream,
     reservation: MemoryReservation,
     baseline_metrics: BaselineMetrics,
     batch_size: usize,
-    state: Option<OrderedSingleAggregateState>,
+    state: Option<ClusteredSingleAggregateState>,
 }
 
 /// See comments at `poll_next()` for details.
-enum OrderedSingleAggregateState {
+enum ClusteredSingleAggregateState {
     ReadingInput {
-        table: OrderedAggregateTable<SingleMarker>,
+        table: ClusteredAggregateTable<SingleMarker>,
         /// None if either
         /// - Disk Manager doesn't enable temporary file creation
-        /// - The group keys are fully ordered, it's expected to use bounded memory
+        /// - Full group completion is used, so completed groups can be released
         spill_context: Option<Box<AggregateSpill>>,
     },
     Spilling {
-        table: OrderedAggregateTable<SingleMarker>,
+        table: ClusteredAggregateTable<SingleMarker>,
         spill_context: Box<AggregateSpill>,
     },
     /// Emits one materialized batch in `batch_size` slices, then continues
@@ -126,10 +128,10 @@ enum OrderedSingleAggregateState {
         batch: RecordBatch,
         /// Reserved memory of `batch`, released when handing off the last slice.
         batch_memory: usize,
-        next_state: Box<OrderedSingleAggregateState>,
+        next_state: Box<ClusteredSingleAggregateState>,
     },
     PreparingMergeInput {
-        table: OrderedAggregateTable<SingleMarker>,
+        table: ClusteredAggregateTable<SingleMarker>,
         spill_context: Box<AggregateSpill>,
     },
     MergingSpills {
@@ -142,13 +144,13 @@ enum OrderedSingleAggregateState {
     Error,
 }
 
-type OrderedSingleAggregatePoll = Poll<Option<Result<RecordBatch>>>;
-type OrderedSingleAggregateStateTransition = ControlFlow<
-    (OrderedSingleAggregatePoll, OrderedSingleAggregateState),
-    OrderedSingleAggregateState,
+type ClusteredSingleAggregatePoll = Poll<Option<Result<RecordBatch>>>;
+type ClusteredSingleAggregateStateTransition = ControlFlow<
+    (ClusteredSingleAggregatePoll, ClusteredSingleAggregateState),
+    ClusteredSingleAggregateState,
 >;
 
-impl OrderedSingleAggregateStream {
+impl ClusteredSingleAggregateStream {
     pub fn new(
         agg: &AggregateExec,
         context: &Arc<TaskContext>,
@@ -158,7 +160,7 @@ impl OrderedSingleAggregateStream {
             agg.mode,
             AggregateMode::Single | AggregateMode::SinglePartitioned
         ));
-        debug_assert_ne!(agg.input_order_mode, InputOrderMode::Linear);
+        debug_assert_ne!(agg.group_completion_mode, GroupCompletionMode::None);
 
         let schema = Arc::clone(&agg.schema);
         let input = agg.input.execute(partition, Arc::clone(context))?;
@@ -173,7 +175,7 @@ impl OrderedSingleAggregateStream {
             AggregateMode::Partial,
         )?);
 
-        let table = OrderedAggregateTable::<SingleMarker>::new(
+        let table = ClusteredAggregateTable::<SingleMarker>::new(
             agg,
             partition,
             Arc::clone(&schema),
@@ -181,16 +183,16 @@ impl OrderedSingleAggregateStream {
         )?;
 
         let can_spill =
-            matches!(agg.input_order_mode, InputOrderMode::PartiallySorted(_))
+            matches!(agg.group_completion_mode, GroupCompletionMode::Partial(_))
                 && context.runtime_env().disk_manager.tmp_files_enabled();
         let spill_context = if can_spill {
             Some(Box::new(AggregateSpill::try_new(
-                "OrderedSingleAggregateSpill",
+                "ClusteredSingleAggregateSpill",
                 agg,
                 context,
                 partition,
                 batch_size,
-                &agg.input_order_mode,
+                &agg.group_completion_mode,
                 &state_schema,
                 spill_metrics,
             )?))
@@ -199,7 +201,7 @@ impl OrderedSingleAggregateStream {
         };
 
         let reservation =
-            MemoryConsumer::new(format!("OrderedSingleAggregateStream[{partition}]"))
+            MemoryConsumer::new(format!("ClusteredSingleAggregateStream[{partition}]"))
                 .with_can_spill(can_spill)
                 .register(context.memory_pool());
 
@@ -212,7 +214,7 @@ impl OrderedSingleAggregateStream {
             reservation,
             baseline_metrics,
             batch_size,
-            state: Some(OrderedSingleAggregateState::ReadingInput {
+            state: Some(ClusteredSingleAggregateState::ReadingInput {
                 table,
                 spill_context,
             }),
@@ -224,25 +226,25 @@ impl OrderedSingleAggregateStream {
         self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
     }
 
-    fn break_with_err(error: DataFusionError) -> OrderedSingleAggregateStateTransition {
+    fn break_with_err(error: DataFusionError) -> ClusteredSingleAggregateStateTransition {
         ControlFlow::Break((
             Poll::Ready(Some(Err(error))),
-            OrderedSingleAggregateState::Error,
+            ClusteredSingleAggregateState::Error,
         ))
     }
 
-    fn break_with_internal_err(message: &str) -> OrderedSingleAggregateStateTransition {
+    fn break_with_internal_err(message: &str) -> ClusteredSingleAggregateStateTransition {
         Self::break_with_err(internal_datafusion_err!("{message}"))
     }
 
     /// Reserve memory for the current aggregate table.
     fn reservation_size_for_table(
-        table: &OrderedAggregateTable<SingleMarker>,
+        table: &ClusteredAggregateTable<SingleMarker>,
         spill_context: Option<&AggregateSpill>,
     ) -> usize {
         let table_size = table.memory_size();
         if spill_context.is_some() {
-            // See `OrderedSingleAggregateStream` comments for how is it estimated
+            // See `ClusteredSingleAggregateStream` comments for how is it estimated
             table_size.saturating_add(table.num_groups().saturating_mul(size_of::<u32>()))
         } else {
             table_size
@@ -256,11 +258,11 @@ impl OrderedSingleAggregateStream {
         &mut self,
         batch: RecordBatch,
         table_memory: usize,
-        next_state: OrderedSingleAggregateState,
-    ) -> OrderedSingleAggregateStateTransition {
+        next_state: ClusteredSingleAggregateState,
+    ) -> ClusteredSingleAggregateStateTransition {
         let batch_memory = batch.get_array_memory_size();
         match self.reservation.try_resize(table_memory + batch_memory) {
-            Ok(()) => ControlFlow::Continue(OrderedSingleAggregateState::Outputting {
+            Ok(()) => ControlFlow::Continue(ClusteredSingleAggregateState::Outputting {
                 batch,
                 batch_memory,
                 next_state: Box::new(next_state),
@@ -279,8 +281,8 @@ impl OrderedSingleAggregateStream {
         }
     }
 
-    /// Consumes one ordered raw input batch, then materializes all finalized
-    /// groups if the ordering proves any group is ready.
+    /// Consumes one clustered raw input batch, then materializes all finalized
+    /// groups if any are complete.
     ///
     /// See comments at `poll_next()` for details.
     ///
@@ -288,22 +290,22 @@ impl OrderedSingleAggregateStream {
     fn handle_reading_input(
         &mut self,
         cx: &mut Context<'_>,
-        original_state: OrderedSingleAggregateState,
-    ) -> OrderedSingleAggregateStateTransition {
-        let OrderedSingleAggregateState::ReadingInput {
+        original_state: ClusteredSingleAggregateState,
+    ) -> ClusteredSingleAggregateStateTransition {
+        let ClusteredSingleAggregateState::ReadingInput {
             mut table,
             spill_context,
         } = original_state
         else {
             return Self::break_with_internal_err(
-                "Ordered single aggregate stream expected ReadingInput state",
+                "Clustered single aggregate stream expected ReadingInput state",
             );
         };
 
         match self.input.poll_next_unpin(cx) {
             Poll::Pending => ControlFlow::Break((
                 Poll::Pending,
-                OrderedSingleAggregateState::ReadingInput {
+                ClusteredSingleAggregateState::ReadingInput {
                     table,
                     spill_context,
                 },
@@ -332,16 +334,16 @@ impl OrderedSingleAggregateStream {
                     Err(e @ DataFusionError::ResourcesExhausted(_)) => {
                         let Some(spill_context) = spill_context else {
                             // `None` means spilling is not supported, see comments
-                            // at `OrderedSingleAggregateState` for details.
+                            // at `ClusteredSingleAggregateState` for details.
                             return Self::break_with_err(e);
                         };
                         if table.is_empty() {
                             return Self::break_with_internal_err(
-                                "Ordered single aggregate ran out of memory with no aggregated groups",
+                                "Clustered single aggregate ran out of memory with no aggregated groups",
                             );
                         }
                         return ControlFlow::Continue(
-                            OrderedSingleAggregateState::Spilling {
+                            ClusteredSingleAggregateState::Spilling {
                                 table,
                                 spill_context,
                             },
@@ -377,19 +379,19 @@ impl OrderedSingleAggregateStream {
                         self.start_outputting(
                             batch,
                             table_memory,
-                            OrderedSingleAggregateState::ReadingInput {
+                            ClusteredSingleAggregateState::ReadingInput {
                                 table,
                                 spill_context,
                             },
                         )
                     }
                     // Can't do early emit, continue aggregating.
-                    Ok(None) => {
-                        ControlFlow::Continue(OrderedSingleAggregateState::ReadingInput {
+                    Ok(None) => ControlFlow::Continue(
+                        ClusteredSingleAggregateState::ReadingInput {
                             table,
                             spill_context,
-                        })
-                    }
+                        },
+                    ),
                     Err(e) => Self::break_with_err(e),
                 }
             }
@@ -399,7 +401,7 @@ impl OrderedSingleAggregateStream {
                 match spill_context {
                     Some(spill_context) if spill_context.has_spills() => {
                         ControlFlow::Continue(
-                            OrderedSingleAggregateState::PreparingMergeInput {
+                            ClusteredSingleAggregateState::PreparingMergeInput {
                                 table,
                                 spill_context,
                             },
@@ -417,10 +419,10 @@ impl OrderedSingleAggregateStream {
                             Ok(Some(batch)) => self.start_outputting(
                                 batch,
                                 0,
-                                OrderedSingleAggregateState::Done,
+                                ClusteredSingleAggregateState::Done,
                             ),
                             Ok(None) => {
-                                ControlFlow::Continue(OrderedSingleAggregateState::Done)
+                                ControlFlow::Continue(ClusteredSingleAggregateState::Done)
                             }
                             Err(e) => Self::break_with_err(e),
                         }
@@ -437,22 +439,22 @@ impl OrderedSingleAggregateStream {
     /// Returns the next operator state with control flow decision.
     fn handle_spilling(
         &mut self,
-        original_state: OrderedSingleAggregateState,
-    ) -> OrderedSingleAggregateStateTransition {
-        let OrderedSingleAggregateState::Spilling {
+        original_state: ClusteredSingleAggregateState,
+    ) -> ClusteredSingleAggregateStateTransition {
+        let ClusteredSingleAggregateState::Spilling {
             mut table,
             mut spill_context,
         } = original_state
         else {
             return Self::break_with_internal_err(
-                "Ordered single aggregate stream expected Spilling state",
+                "Clustered single aggregate stream expected Spilling state",
             );
         };
 
         // Sanity check: it's impossible to OOM when the table is empty
         if table.is_empty() {
             return Self::break_with_internal_err(
-                "Ordered single aggregation entered Spilling with an empty table",
+                "Clustered single aggregation entered Spilling with an empty table",
             );
         }
 
@@ -472,10 +474,12 @@ impl OrderedSingleAggregateStream {
 
         match result {
             // Finished spilling the aggregate table, continue aggregating from input
-            Ok(()) => ControlFlow::Continue(OrderedSingleAggregateState::ReadingInput {
-                table,
-                spill_context: Some(spill_context),
-            }),
+            Ok(()) => {
+                ControlFlow::Continue(ClusteredSingleAggregateState::ReadingInput {
+                    table,
+                    spill_context: Some(spill_context),
+                })
+            }
             Err(e) => Self::break_with_err(e),
         }
     }
@@ -483,7 +487,7 @@ impl OrderedSingleAggregateStream {
     /// 1. Spills the last in-memory run.
     /// 2. Constructs a globally ordered input stream by applying a sort-preserving
     ///    merge to all spills.
-    /// 3. Constructs a replay stream: an ordered aggregate stream over the fully
+    /// 3. Constructs a replay stream: a clustered aggregate stream over the fully
     ///    ordered input constructed from the spills.
     ///
     /// See comments at `poll_next()` for details.
@@ -491,15 +495,15 @@ impl OrderedSingleAggregateStream {
     /// Returns the next operator state with control flow decision.
     fn handle_preparing_merge_input(
         &mut self,
-        original_state: OrderedSingleAggregateState,
-    ) -> OrderedSingleAggregateStateTransition {
-        let OrderedSingleAggregateState::PreparingMergeInput {
+        original_state: ClusteredSingleAggregateState,
+    ) -> ClusteredSingleAggregateStateTransition {
+        let ClusteredSingleAggregateState::PreparingMergeInput {
             mut table,
             mut spill_context,
         } = original_state
         else {
             return Self::break_with_internal_err(
-                "Ordered single aggregate stream expected PreparingMergeInput state",
+                "Clustered single aggregate stream expected PreparingMergeInput state",
             );
         };
 
@@ -527,7 +531,7 @@ impl OrderedSingleAggregateStream {
 
         match replay {
             Ok(stream) => {
-                ControlFlow::Continue(OrderedSingleAggregateState::MergingSpills {
+                ControlFlow::Continue(ClusteredSingleAggregateState::MergingSpills {
                     stream,
                 })
             }
@@ -544,26 +548,28 @@ impl OrderedSingleAggregateStream {
     fn handle_merging_spills(
         &mut self,
         cx: &mut Context<'_>,
-        original_state: OrderedSingleAggregateState,
-    ) -> OrderedSingleAggregateStateTransition {
-        let OrderedSingleAggregateState::MergingSpills { mut stream } = original_state
+        original_state: ClusteredSingleAggregateState,
+    ) -> ClusteredSingleAggregateStateTransition {
+        let ClusteredSingleAggregateState::MergingSpills { mut stream } = original_state
         else {
             return Self::break_with_internal_err(
-                "Ordered single aggregate stream expected MergingSpills state",
+                "Clustered single aggregate stream expected MergingSpills state",
             );
         };
 
         match stream.poll_next_unpin(cx) {
             Poll::Pending => ControlFlow::Break((
                 Poll::Pending,
-                OrderedSingleAggregateState::MergingSpills { stream },
+                ClusteredSingleAggregateState::MergingSpills { stream },
             )),
             Poll::Ready(Some(Ok(batch))) => ControlFlow::Break((
                 Poll::Ready(Some(Ok(batch))),
-                OrderedSingleAggregateState::MergingSpills { stream },
+                ClusteredSingleAggregateState::MergingSpills { stream },
             )),
             Poll::Ready(Some(Err(e))) => Self::break_with_err(e),
-            Poll::Ready(None) => ControlFlow::Continue(OrderedSingleAggregateState::Done),
+            Poll::Ready(None) => {
+                ControlFlow::Continue(ClusteredSingleAggregateState::Done)
+            }
         }
     }
 
@@ -574,16 +580,16 @@ impl OrderedSingleAggregateStream {
     /// Returns the next operator state with control flow decision.
     fn handle_outputting(
         &mut self,
-        original_state: OrderedSingleAggregateState,
-    ) -> OrderedSingleAggregateStateTransition {
-        let OrderedSingleAggregateState::Outputting {
+        original_state: ClusteredSingleAggregateState,
+    ) -> ClusteredSingleAggregateStateTransition {
+        let ClusteredSingleAggregateState::Outputting {
             batch,
             batch_memory,
             next_state,
         } = original_state
         else {
             return Self::break_with_internal_err(
-                "Ordered single aggregate stream expected Outputting state",
+                "Clustered single aggregate stream expected Outputting state",
             );
         };
 
@@ -592,7 +598,7 @@ impl OrderedSingleAggregateStream {
             let batch = batch.slice(self.batch_size, batch.num_rows() - self.batch_size);
             return ControlFlow::Break((
                 Poll::Ready(Some(Ok(output.record_output(&self.baseline_metrics)))),
-                OrderedSingleAggregateState::Outputting {
+                ClusteredSingleAggregateState::Outputting {
                     batch,
                     batch_memory,
                     next_state,
@@ -611,20 +617,20 @@ impl OrderedSingleAggregateStream {
     }
 }
 
-impl Stream for OrderedSingleAggregateStream {
+impl Stream for ClusteredSingleAggregateStream {
     type Item = Result<RecordBatch>;
 
-    /// Entry point for the ordered single aggregate state machine.
+    /// Entry point for the clustered single aggregate state machine.
     ///
-    /// See comments in [`OrderedSingleAggregateStream`] for high-level ideas.
+    /// See comments in [`ClusteredSingleAggregateStream`] for high-level ideas.
     ///
     /// State transition graph:
     ///
     /// ```text
     /// (start)
     ///   -> ReadingInput
-    ///      The stream starts by polling ordered raw input and updating the
-    ///      ordered single aggregate table.
+    ///      The stream starts by polling clustered raw input and updating the
+    ///      clustered single aggregate table.
     ///
     /// ReadingInput
     ///   -> ReadingInput
@@ -634,7 +640,7 @@ impl Stream for OrderedSingleAggregateStream {
     ///      The table cannot reserve enough memory. Move all current states into
     ///      one fully group-key-sorted spill run.
     ///   -> Outputting
-    ///      Either the input ordering proves some groups complete, or input was
+    ///      Either some groups are complete, or input was
     ///      exhausted without spilling and every remaining group is complete.
     ///      Materialize all of them once into one batch. If the batch cannot be
     ///      reserved, yield it whole and go to the state after `Outputting`.
@@ -689,31 +695,31 @@ impl Stream for OrderedSingleAggregateStream {
             let cur_state = self
                 .state
                 .take()
-                .expect("OrderedSingleAggregateStream state should not be None");
+                .expect("ClusteredSingleAggregateStream state should not be None");
 
             let next_state = match cur_state {
-                state @ OrderedSingleAggregateState::ReadingInput { .. } => {
+                state @ ClusteredSingleAggregateState::ReadingInput { .. } => {
                     self.handle_reading_input(cx, state)
                 }
-                state @ OrderedSingleAggregateState::Spilling { .. } => {
+                state @ ClusteredSingleAggregateState::Spilling { .. } => {
                     self.handle_spilling(state)
                 }
-                state @ OrderedSingleAggregateState::PreparingMergeInput { .. } => {
+                state @ ClusteredSingleAggregateState::PreparingMergeInput { .. } => {
                     self.handle_preparing_merge_input(state)
                 }
-                state @ OrderedSingleAggregateState::MergingSpills { .. } => {
+                state @ ClusteredSingleAggregateState::MergingSpills { .. } => {
                     self.handle_merging_spills(cx, state)
                 }
-                state @ OrderedSingleAggregateState::Outputting { .. } => {
+                state @ ClusteredSingleAggregateState::Outputting { .. } => {
                     self.handle_outputting(state)
                 }
-                state @ OrderedSingleAggregateState::Error => {
+                state @ ClusteredSingleAggregateState::Error => {
                     self.close_input();
                     self.reservation.free();
                     self.state = Some(state);
                     return Poll::Ready(None);
                 }
-                state @ OrderedSingleAggregateState::Done => {
+                state @ ClusteredSingleAggregateState::Done => {
                     let _ = self.reservation.try_resize(0);
                     self.state = Some(state);
                     return Poll::Ready(None);
@@ -727,14 +733,14 @@ impl Stream for OrderedSingleAggregateStream {
                 ControlFlow::Break((Poll::Ready(Some(Err(e))), next_state)) => {
                     debug_assert!(matches!(
                         next_state,
-                        OrderedSingleAggregateState::Error
+                        ClusteredSingleAggregateState::Error
                     ));
 
                     // The handler has already discarded its state-owned resources.
                     // Release the remaining stream-owned resources before returning.
                     self.close_input();
                     self.reservation.free();
-                    self.state = Some(OrderedSingleAggregateState::Error);
+                    self.state = Some(ClusteredSingleAggregateState::Error);
                     return Poll::Ready(Some(Err(e)));
                 }
                 ControlFlow::Break((poll, next_state)) => {
@@ -746,7 +752,7 @@ impl Stream for OrderedSingleAggregateStream {
     }
 }
 
-impl RecordBatchStream for OrderedSingleAggregateStream {
+impl RecordBatchStream for ClusteredSingleAggregateStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }

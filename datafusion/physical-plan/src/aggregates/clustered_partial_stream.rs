@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Partial aggregate stream for ordered group input.
+//! Partial aggregate stream for input with group-completion guarantees.
 
 use std::sync::Arc;
 
@@ -27,27 +27,27 @@ use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
 use futures::stream::StreamExt;
 
 use super::AggregateExec;
-use super::aggregate_hash_table::{OrderedAggregateTable, PartialMarker};
+use super::aggregate_hash_table::{ClusteredAggregateTable, PartialMarker};
 use crate::aggregates::AggregateMode;
-use crate::aggregates::order::GroupOrdering;
+use crate::aggregates::order::{GroupCompletion, GroupCompletionMode};
 use crate::metrics::{BaselineMetrics, MetricBuilder, SpillMetrics};
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
-use crate::{InputOrderMode, SendableRecordBatchStream, metrics};
+use crate::{SendableRecordBatchStream, metrics};
 
-/// Partial aggregate stream for `InputOrderMode::Sorted` and
-/// `InputOrderMode::PartiallySorted`.
+/// Partial aggregate stream for [`GroupCompletionMode::Partial`] and
+/// [`GroupCompletionMode::Full`].
 ///
 /// # Example
 ///
 /// SELECT k, AVG(v) FROM t GROUP BY k;
 ///
-/// If the input is ordered by `k`, the aggregate can use ordered partial and
+/// If the input is ordered by `k`, the aggregate can use clustered partial and
 /// final stages:
 ///
 /// ## Plan
-/// AggregateExec(stage=final, ordered)
+/// AggregateExec(stage=final, clustered)
 /// -- RepartitionExec(hash(k), preserves_order=true)
-/// ---- AggregateExec(stage=partial, ordered)
+/// ---- AggregateExec(stage=partial, clustered)
 ///
 /// ## Partial Stage Behavior
 /// Input: raw rows
@@ -59,22 +59,24 @@ use crate::{InputOrderMode, SendableRecordBatchStream, metrics};
 /// Output: results for all groups (for example, `AVG(x)` calculated from the
 /// state)
 ///
-/// # Order-based Optimization
+/// # Group Completion Optimization
 ///
 /// For the aggregation work, the hash aggregation implementation is reused.
 ///
-/// After each input batch, check whether any groups can be emitted eagerly to
-/// improve memory efficiency. For example, if the last group key seen is
-/// `k = 100`, it is safe to emit all groups with keys less than 100 because the
-/// input is ordered. Materialize that entire completed prefix once, then emit
-/// slices of it before reading more input. This avoids repeatedly removing small
-/// batches of groups and shifting the remaining hash table and accumulator state.
+/// After each input batch, the group-completion mode determines whether any
+/// groups can be emitted eagerly to improve memory efficiency. For example, if
+/// the input is ordered by `k` and the last group key seen is `k = 100`, all
+/// groups with keys less than 100 are complete. Materialize that entire completed
+/// prefix once, then emit slices of it before reading more input. This avoids
+/// repeatedly removing small batches of groups and shifting the remaining hash
+/// table and accumulator state.
 ///
 /// # Memory Pressure and Spilling
 ///
-/// ## Fully ordered case
+/// ## Full group completion
 ///
-/// If the input is ordered by every group key, for example:
+/// Every complete grouping tuple is contiguous. Ordering by every group key is
+/// one way to establish this mode, for example:
 ///
 /// - Input order: `a, b`
 /// - `GROUP BY`: `a, b`
@@ -86,9 +88,10 @@ use crate::{InputOrderMode, SendableRecordBatchStream, metrics};
 /// If a memory reservation nevertheless fails, the stream returns the error
 /// directly, indicating an unexpected behavior.
 ///
-/// ## Partially ordered case
+/// ## Partial group completion
 ///
-/// If the input is ordered by only a subset of the group keys, for example:
+/// Rows are contiguous for a subset of the group keys. Ordering by that subset
+/// is one way to establish this mode, for example:
 ///
 /// - Input order: `a`
 /// - `GROUP BY`: `a, b`
@@ -96,21 +99,21 @@ use crate::{InputOrderMode, SendableRecordBatchStream, metrics};
 /// If one `a` value contains many distinct `b` values, the table may accumulate
 /// enough groups to exceed the memory limit.
 ///
-/// - `OrderedPartialAggregateStream`: On reservation failure, it emits all current
+/// - `ClusteredPartialAggregateStream`: On reservation failure, it emits all current
 ///   intermediate states downstream and resets the table. The final stage can
 ///   merge repeated `(a, b)` state rows, so no disk spill is required.
-/// - `OrderedFinalAggregateStream`: It cannot emit incomplete final results. On
+/// - `ClusteredFinalAggregateStream`: It cannot emit incomplete final results. On
 ///   reservation failure, it sorts the current intermediate states by the complete
 ///   group key and spills them as one run. After the input ends, it spills any
 ///   remaining states, performs a sort-preserving merge of all runs, and feeds the
-///   merged input into a fully ordered final aggregate stream.
-pub(crate) struct OrderedPartialAggregateStream {
+///   merged input into a fully clustered final aggregate stream.
+pub(crate) struct ClusteredPartialAggregateStream {
     reservation: MemoryReservation,
-    context: OrderedPartialAggregateContext,
+    context: ClusteredPartialAggregateContext,
     stage: ExecutionStage,
 }
 
-/// Execution stages described in [`OrderedPartialAggregateStream::into_stream`].
+/// Execution stages described in [`ClusteredPartialAggregateStream::into_stream`].
 enum ExecutionStage {
     Aggregating(Aggregating),
     Outputting(Outputting),
@@ -118,7 +121,7 @@ enum ExecutionStage {
 
 struct Aggregating {
     input: SendableRecordBatchStream,
-    table: OrderedAggregateTable<PartialMarker>,
+    table: ClusteredAggregateTable<PartialMarker>,
 }
 
 struct Outputting {
@@ -130,21 +133,21 @@ struct Outputting {
 }
 
 /// Immutable execution context shared by aggregation and output emission.
-struct OrderedPartialAggregateContext {
+struct ClusteredPartialAggregateContext {
     schema: SchemaRef,
     batch_size: usize,
     baseline_metrics: BaselineMetrics,
     reduction_factor: metrics::RatioMetrics,
 }
 
-impl OrderedPartialAggregateStream {
+impl ClusteredPartialAggregateStream {
     pub fn new(
         agg: &AggregateExec,
         context: &Arc<TaskContext>,
         partition: usize,
     ) -> Result<Self> {
         debug_assert_eq!(agg.mode, AggregateMode::Partial);
-        debug_assert_ne!(agg.input_order_mode, InputOrderMode::Linear);
+        debug_assert_ne!(agg.group_completion_mode, GroupCompletionMode::None);
 
         let schema = Arc::clone(&agg.schema);
         let input = agg.input.execute(partition, Arc::clone(context))?;
@@ -157,16 +160,16 @@ impl OrderedPartialAggregateStream {
             .with_type(metrics::MetricType::Summary)
             .ratio_metrics("reduction_factor", partition);
 
-        let table = OrderedAggregateTable::<PartialMarker>::new(
+        let table = ClusteredAggregateTable::<PartialMarker>::new(
             agg,
             partition,
             Arc::clone(&schema),
         )?;
         let reservation =
-            MemoryConsumer::new(format!("OrderedPartialAggregateStream[{partition}]"))
+            MemoryConsumer::new(format!("ClusteredPartialAggregateStream[{partition}]"))
                 .with_can_spill(matches!(
-                    table.group_ordering(),
-                    GroupOrdering::Partial(_)
+                    table.group_completion(),
+                    GroupCompletion::Partial(_)
                 ))
                 .register(context.memory_pool());
 
@@ -175,7 +178,7 @@ impl OrderedPartialAggregateStream {
 
         Ok(Self {
             reservation,
-            context: OrderedPartialAggregateContext {
+            context: ClusteredPartialAggregateContext {
                 schema,
                 batch_size,
                 baseline_metrics,
@@ -185,9 +188,9 @@ impl OrderedPartialAggregateStream {
         })
     }
 
-    /// Entry point for the ordered partial aggregate execution stages.
+    /// Entry point for the clustered partial aggregate execution stages.
     ///
-    /// See [`OrderedPartialAggregateStream`] for high-level ideas.
+    /// See [`ClusteredPartialAggregateStream`] for high-level ideas.
     ///
     /// # Stage transition graph:
     ///
@@ -256,10 +259,10 @@ impl OrderedPartialAggregateStream {
     /// 2. Aggregate one input batch. If memory fits and no groups are complete,
     ///    continue reading input.
     /// 3. Prepare output:
-    ///    - Ordering proves a prefix complete: materialize the entire prefix once,
+    ///    - A prefix of groups is complete: materialize the entire prefix once,
     ///      retaining the input and active groups to resume aggregation.
-    ///    - On memory pressure with partial ordering, materialize all current
-    ///      states instead, including incomplete groups, and reset the table.
+    ///    - On memory pressure with partial group completion, materialize all
+    ///      current states, including incomplete groups, and reset the table.
     ///    - At EOF, materialize all remaining states and prepare to output.
     /// 4. Input was exhausted with no remaining groups, directly end.
     /// 5. Yield one slice without materializing the table again. Keep the shared
@@ -299,10 +302,10 @@ impl OrderedPartialAggregateStream {
 impl Aggregating {
     /// Aggregates raw input and materializes one batch of partial states.
     ///
-    /// See [`OrderedPartialAggregateStream::into_stream`] for stage transitions.
+    /// See [`ClusteredPartialAggregateStream::into_stream`] for stage transitions.
     async fn handle_stage(
         mut self,
-        context: &OrderedPartialAggregateContext,
+        context: &ClusteredPartialAggregateContext,
         reservation: &MemoryReservation,
     ) -> Result<Option<ExecutionStage>> {
         let elapsed_compute = context.baseline_metrics.elapsed_compute();
@@ -315,9 +318,9 @@ impl Aggregating {
             let output = match reservation.try_resize(self.table.memory_size()) {
                 Ok(()) => self.table.take_completed_state_batch()?,
                 Err(oom @ DataFusionError::ResourcesExhausted(_)) => {
-                    // Partial ordering may have an unbounded active key range.
+                    // Partial group completion may have an unbounded active key range.
                     // The final stage can merge incomplete states emitted here.
-                    if matches!(self.table.group_ordering(), GroupOrdering::Full(_)) {
+                    if matches!(self.table.group_completion(), GroupCompletion::Full(_)) {
                         return Err(oom);
                     }
                     let Some(batch) = self.table.take_state_batch()? else {
@@ -363,11 +366,11 @@ impl Aggregating {
 impl Outputting {
     /// Emits slices of one materialized batch without touching the hash table.
     ///
-    /// See [`OrderedPartialAggregateStream::into_stream`] for stage transitions
+    /// See [`ClusteredPartialAggregateStream::into_stream`] for stage transitions
     /// and output memory accounting.
     async fn handle_stage(
         self,
-        context: &OrderedPartialAggregateContext,
+        context: &ClusteredPartialAggregateContext,
         reservation: &MemoryReservation,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<Option<ExecutionStage>> {

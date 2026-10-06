@@ -48,19 +48,19 @@
 //!
 //! See [`PartialHashAggregateStream`] and [`FinalHashAggregateStream`] for details.
 //!
-//! ### Ordering optimization
+//! ### Group completion optimization
 //!
-//! When the input is ordered by the group key, an ordered fast path is used. It
-//! uses a similar two-stage hash aggregation with an early-emission optimization.
+//! When the input is ordered by group keys, rows are clustered by those keys.
+//! The clustered paths use this guarantee to emit completed groups early.
 //!
 //! ```text
-//! AggregateExec (final, ordered)
+//! AggregateExec (final, clustered)
 //!   RepartitionExec (hash by group keys, order-preserving)
-//!     AggregateExec (partial, ordered)
+//!     AggregateExec (partial, clustered)
 //! ```
 //!
-//! See [`OrderedPartialAggregateStream`], [`OrderedFinalAggregateStream`], and
-//! [`OrderedSingleAggregateStream`] for details.
+//! See [`ClusteredPartialAggregateStream`], [`ClusteredFinalAggregateStream`], and
+//! [`ClusteredSingleAggregateStream`] for details.
 //!
 //! Related configuration:
 //!
@@ -81,7 +81,7 @@
 //!   input
 //! ```
 //!
-//! See [`SingleHashAggregateStream`] and [`OrderedSingleAggregateStream`] for
+//! See [`SingleHashAggregateStream`] and [`ClusteredSingleAggregateStream`] for
 //! details.
 //!
 //! Related configuration:
@@ -153,12 +153,12 @@ use std::sync::Arc;
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
 use crate::aggregates::{
     aggregate_stream::AggregateStream,
+    clustered_final_stream::ClusteredFinalAggregateStream,
+    clustered_partial_stream::ClusteredPartialAggregateStream,
+    clustered_single_stream::ClusteredSingleAggregateStream,
     grouped_hash_stream::GroupedHashAggregateStream,
     grouped_topk_stream::GroupedTopKAggregateStream,
     hash_stream::{FinalHashAggregateStream, PartialHashAggregateStream},
-    ordered_final_stream::OrderedFinalAggregateStream,
-    ordered_partial_stream::OrderedPartialAggregateStream,
-    ordered_single_stream::OrderedSingleAggregateStream,
     partial_reduce_stream::PartialReduceHashAggregateStream,
     single_stream::SingleHashAggregateStream,
 };
@@ -174,7 +174,7 @@ use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{ChildrenPropertiesMode, ReplaceChildrenOptions, validate_child_count};
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, InputDistributionRequirements,
-    InputOrderMode, Partitioning, SendableRecordBatchStream, Statistics,
+    Partitioning, SendableRecordBatchStream, Statistics,
 };
 use datafusion_common::config::ConfigOptions;
 use parking_lot::Mutex;
@@ -207,19 +207,20 @@ use datafusion_physical_expr_common::sort_expr::{
 use datafusion_expr::utils::AggregateOrderSensitivity;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use itertools::Itertools;
+pub use order::GroupCompletionMode;
 use topk::hash_table::is_supported_hash_key_type;
 use topk::heap::is_supported_heap_type;
 
 mod aggregate_hash_table;
 mod aggregate_stream;
+mod clustered_final_stream;
+mod clustered_partial_stream;
+mod clustered_single_stream;
 pub mod group_values;
 mod grouped_hash_stream;
 mod grouped_topk_stream;
 mod hash_stream;
 pub mod order;
-mod ordered_final_stream;
-mod ordered_partial_stream;
-mod ordered_single_stream;
 mod partial_reduce_stream;
 mod single_stream;
 mod skip_partial;
@@ -691,12 +692,12 @@ enum StreamType {
     /// Single stage of the hash aggregation
     /// Input output scheme: initial input -> final result
     SingleHash(SingleHashAggregateStream),
-    /// Partial stage of aggregation for ordered input.
-    OrderedPartialAggregate(OrderedPartialAggregateStream),
-    /// Final stage of aggregation for ordered input.
-    OrderedFinalAggregate(OrderedFinalAggregateStream),
-    /// Single stage of aggregation for ordered input.
-    OrderedSingleAggregate(OrderedSingleAggregateStream),
+    /// Partial stage of aggregation for clustered input.
+    ClusteredPartialAggregate(ClusteredPartialAggregateStream),
+    /// Final stage of aggregation for clustered input.
+    ClusteredFinalAggregate(ClusteredFinalAggregateStream),
+    /// Single stage of aggregation for clustered input.
+    ClusteredSingleAggregate(ClusteredSingleAggregateStream),
     /// Legacy hash aggregation reused for multiple stages
     ///
     /// Every path it handles now has a dedicated stream, so this variant is only
@@ -719,9 +720,9 @@ impl From<StreamType> for SendableRecordBatchStream {
             StreamType::PartialReduceHash(stream) => Box::pin(stream),
             StreamType::FinalHash(stream) => stream.into_stream(),
             StreamType::SingleHash(stream) => stream.into_stream(),
-            StreamType::OrderedPartialAggregate(stream) => stream.into_stream(),
-            StreamType::OrderedFinalAggregate(stream) => stream.into_stream(),
-            StreamType::OrderedSingleAggregate(stream) => Box::pin(stream),
+            StreamType::ClusteredPartialAggregate(stream) => stream.into_stream(),
+            StreamType::ClusteredFinalAggregate(stream) => stream.into_stream(),
+            StreamType::ClusteredSingleAggregate(stream) => Box::pin(stream),
             StreamType::GroupedHash(stream) => Box::pin(stream),
             StreamType::GroupedPriorityQueue(stream) => Box::pin(stream),
         }
@@ -910,12 +911,12 @@ pub struct AggregateExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     required_input_ordering: Option<OrderingRequirements>,
-    /// Describes how the input is ordered relative to the group by columns
+    /// Describes when the executor can determine that groups are complete.
     ///
-    /// This field is also overloaded to mean "the output MUST preserve this
-    /// input order". When that is not possible, the constructor overwrites it
-    /// with the unordered variant [`InputOrderMode::Linear`].
-    input_order_mode: InputOrderMode,
+    /// Input ordering describes a subset of the cases in which groups can be
+    /// safely emitted before the input ends. Full group completion requires only
+    /// that rows for each complete grouping tuple are contiguous.
+    group_completion_mode: GroupCompletionMode,
     cache: Arc<PlanProperties>,
     /// During initialization, if the plan supports dynamic filtering (see [`AggrDynFilter`]),
     /// it is set to `Some(..)` regardless of whether it can be pushed down to a child node.
@@ -1106,7 +1107,7 @@ impl AggregateExec {
 
         // Commit the kind and properties together: heap output is unordered and final.
         self.kind = kind;
-        self.input_order_mode = InputOrderMode::Linear;
+        self.group_completion_mode = GroupCompletionMode::None;
         self.required_input_ordering = None;
         // Keep unchanged properties so parent aggregates do not need rebuilding.
         if !self.cache.eq_properties.oeq_class().is_empty()
@@ -1331,21 +1332,21 @@ impl AggregateExec {
             .iter()
             .filter(|expr| input_eq_properties.is_expr_constant(expr).is_none())
             .count();
-        let mut input_order_mode = if indices.len() == num_non_constant_groupby_exprs
+        let mut group_completion_mode = if indices.len() == num_non_constant_groupby_exprs
             && !indices.is_empty()
             && group_by.groups.len() == 1
         {
-            InputOrderMode::Sorted
+            GroupCompletionMode::Full
         } else if !indices.is_empty() {
-            InputOrderMode::PartiallySorted(indices)
+            GroupCompletionMode::Partial(indices)
         } else {
-            InputOrderMode::Linear
+            GroupCompletionMode::None
         };
 
-        // Input order mode is also used to advertise plan output ordering, grouping
-        // sets handling, and partial reduce aggregation can't promise that.
+        // Grouping sets can change group keys. PartialReduce combines intermediate
+        // states without using group boundaries to recognize completed groups.
         if group_by.has_grouping_set() || mode == AggregateMode::PartialReduce {
-            input_order_mode = InputOrderMode::Linear;
+            group_completion_mode = GroupCompletionMode::None;
         }
 
         // construct a map from the input expression to the output expression of the Aggregation group by
@@ -1361,7 +1362,7 @@ impl AggregateExec {
                 &group_expr_mapping,
                 group_by.is_true_no_grouping(),
                 &mode,
-                &input_order_mode,
+                &group_completion_mode,
                 aggr_expr.as_ref(),
             )?
         };
@@ -1378,7 +1379,7 @@ impl AggregateExec {
             input_schema,
             metrics: ExecutionPlanMetricsSet::new(),
             required_input_ordering,
-            input_order_mode,
+            group_completion_mode,
             cache: Arc::new(cache),
             dynamic_filter: None,
         };
@@ -1683,47 +1684,51 @@ impl AggregateExec {
             );
         }
 
-        // Choose the execution path based on (aggregation mode, ordering).
-        //
-        // Note that `self.input_order_mode` represents both input ordering and output
-        // order promise. See its comment for details.
+        // Choose the execution path based on aggregation mode and when groups
+        // are known to be complete.
         use AggregateMode::*;
-        use InputOrderMode::*;
-        let stream = match (self.mode, &self.input_order_mode) {
-            (Partial, Linear) => StreamType::PartialHash(
+        let stream = match (self.mode, &self.group_completion_mode) {
+            (Partial, GroupCompletionMode::None) => StreamType::PartialHash(
                 PartialHashAggregateStream::new(self, context, partition)?,
             ),
-            (Partial, Sorted | PartiallySorted(_)) => {
-                StreamType::OrderedPartialAggregate(OrderedPartialAggregateStream::new(
-                    self, context, partition,
-                )?)
+            (Partial, GroupCompletionMode::Partial(_) | GroupCompletionMode::Full) => {
+                StreamType::ClusteredPartialAggregate(
+                    ClusteredPartialAggregateStream::new(self, context, partition)?,
+                )
             }
-            (PartialReduce, Linear) => StreamType::PartialReduceHash(
+            (PartialReduce, GroupCompletionMode::None) => StreamType::PartialReduceHash(
                 PartialReduceHashAggregateStream::new(self, context, partition)?,
             ),
-            (PartialReduce, Sorted | PartiallySorted(_)) => {
-                // See the comment above: the builder enforces `Linear` order for
-                // `PartialReduce` mode.
+            (
+                PartialReduce,
+                GroupCompletionMode::Partial(_) | GroupCompletionMode::Full,
+            ) => {
                 return internal_err!(
-                    "PartialReduce aggregation must use InputOrderMode::Linear"
+                    "PartialReduce aggregation must use GroupCompletionMode::None"
                 );
             }
-            (Final | FinalPartitioned, Linear) => StreamType::FinalHash(
-                FinalHashAggregateStream::new(self, context, partition)?,
-            ),
-            (Final | FinalPartitioned, Sorted | PartiallySorted(_)) => {
-                StreamType::OrderedFinalAggregate(OrderedFinalAggregateStream::new(
+            (Final | FinalPartitioned, GroupCompletionMode::None) => {
+                StreamType::FinalHash(FinalHashAggregateStream::new(
                     self, context, partition,
                 )?)
             }
-            (Single | SinglePartitioned, Linear) => StreamType::SingleHash(
-                SingleHashAggregateStream::new(self, context, partition)?,
-            ),
-            (Single | SinglePartitioned, Sorted | PartiallySorted(_)) => {
-                StreamType::OrderedSingleAggregate(OrderedSingleAggregateStream::new(
+            (
+                Final | FinalPartitioned,
+                GroupCompletionMode::Partial(_) | GroupCompletionMode::Full,
+            ) => StreamType::ClusteredFinalAggregate(ClusteredFinalAggregateStream::new(
+                self, context, partition,
+            )?),
+            (Single | SinglePartitioned, GroupCompletionMode::None) => {
+                StreamType::SingleHash(SingleHashAggregateStream::new(
                     self, context, partition,
                 )?)
             }
+            (
+                Single | SinglePartitioned,
+                GroupCompletionMode::Partial(_) | GroupCompletionMode::Full,
+            ) => StreamType::ClusteredSingleAggregate(
+                ClusteredSingleAggregateStream::new(self, context, partition)?,
+            ),
         };
         Ok(stream)
     }
@@ -1781,7 +1786,7 @@ impl AggregateExec {
         group_expr_mapping: &ProjectionMapping,
         is_true_no_grouping: bool,
         mode: &AggregateMode,
-        input_order_mode: &InputOrderMode,
+        group_completion_mode: &GroupCompletionMode,
         aggr_exprs: &[Arc<AggregateFunctionExpr>],
     ) -> Result<PlanProperties> {
         // Construct equivalence properties:
@@ -1789,9 +1794,11 @@ impl AggregateExec {
             .equivalence_properties()
             .project(group_expr_mapping, schema);
 
-        // An aggregation that does not maintain its input order must not
-        // propegrate the input's ordering either, match `maintains_input_order` value
-        if *input_order_mode == InputOrderMode::Linear {
+        // Only the clustered paths preserve existing ordering on group keys.
+        // Project the input's actual sort expressions; completion alone does
+        // not establish an output ordering. Keep this consistent with
+        // `maintains_input_order`.
+        if *group_completion_mode == GroupCompletionMode::None {
             eq_properties.clear_orderings();
         }
 
@@ -1839,7 +1846,7 @@ impl AggregateExec {
         };
 
         // TODO: Emission type and boundedness information can be enhanced here
-        let emission_type = if *input_order_mode == InputOrderMode::Linear {
+        let emission_type = if *group_completion_mode == GroupCompletionMode::None {
             EmissionType::Final
         } else {
             input.pipeline_behavior()
@@ -1869,8 +1876,12 @@ impl AggregateExec {
         )
     }
 
-    pub fn input_order_mode(&self) -> &InputOrderMode {
-        &self.input_order_mode
+    /// Describes when groups can be completed before the input ends.
+    ///
+    /// This does not imply a sort order. See [`ExecutionPlanProperties::output_ordering`]
+    /// for the ordering of the aggregate's output.
+    pub fn group_completion_mode(&self) -> &GroupCompletionMode {
+        &self.group_completion_mode
     }
 
     /// Estimates output statistics for this aggregate node.
@@ -2354,8 +2365,12 @@ impl DisplayAs for AggregateExec {
                     write!(f, ", lim=[{}]", config.limit)?;
                 }
 
-                if self.input_order_mode != InputOrderMode::Linear {
-                    write!(f, ", ordering_mode={:?}", self.input_order_mode)?;
+                if self.group_completion_mode != GroupCompletionMode::None {
+                    write!(
+                        f,
+                        ", group_completion_mode={:?}",
+                        self.group_completion_mode
+                    )?;
                 }
             }
             DisplayFormatType::TreeRender => {
@@ -2481,17 +2496,10 @@ impl ExecutionPlan for AggregateExec {
         vec![self.required_input_ordering.clone()]
     }
 
-    /// The output ordering of [`AggregateExec`] is determined by its `group_by`
-    /// columns. Although this method is not explicitly used by any optimizer
-    /// rules yet, overriding the default implementation ensures that it
-    /// accurately reflects the actual behavior.
-    ///
-    /// If the [`InputOrderMode`] is `Linear`, the `group_by` columns don't have
-    /// an ordering, which means the results do not either. However, in the
-    /// `Ordered` and `PartiallyOrdered` cases, the `group_by` columns do have
-    /// an ordering, which is preserved in the output.
+    /// Clustered aggregation preserves existing ordering on the group-by
+    /// columns. Aggregate result columns do not inherit input ordering.
     fn maintains_input_order(&self) -> Vec<bool> {
-        vec![self.input_order_mode != InputOrderMode::Linear]
+        vec![self.group_completion_mode != GroupCompletionMode::None]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -2780,7 +2788,7 @@ impl ExecutionPlan for AggregateExec {
             // Derived at construction from the input ordering and `group_by`.
             required_input_ordering: _,
             // Derived at construction from the input ordering and `group_by`.
-            input_order_mode: _,
+            group_completion_mode: _,
             // Derived at construction by `Self::compute_properties`.
             cache: _,
             dynamic_filter,
@@ -4190,11 +4198,11 @@ mod tests {
         match (mode, ordered, &stream) {
             (AggregateMode::Final, false, StreamType::FinalHash(_))
             | (AggregateMode::Single, false, StreamType::SingleHash(_)) => {}
-            (AggregateMode::Final, true, StreamType::OrderedFinalAggregate(_))
-            | (AggregateMode::Single, true, StreamType::OrderedSingleAggregate(_)) => {
+            (AggregateMode::Final, true, StreamType::ClusteredFinalAggregate(_))
+            | (AggregateMode::Single, true, StreamType::ClusteredSingleAggregate(_)) => {
                 assert_eq!(
-                    aggregate.input_order_mode(),
-                    &InputOrderMode::PartiallySorted(vec![0])
+                    aggregate.group_completion_mode(),
+                    &GroupCompletionMode::Partial(vec![0])
                 );
             }
             _ => panic!("unexpected stream for {mode:?}, ordered={ordered}"),
@@ -5136,12 +5144,12 @@ mod tests {
         let stream = aggregate.execute_typed(0, &fits)?;
         match (mode, ordered, &stream) {
             (AggregateMode::Partial, false, StreamType::PartialHash(_))
-            | (AggregateMode::Partial, true, StreamType::OrderedPartialAggregate(_))
+            | (AggregateMode::Partial, true, StreamType::ClusteredPartialAggregate(_))
             | (AggregateMode::PartialReduce, false, StreamType::PartialReduceHash(_))
             | (AggregateMode::Final, false, StreamType::FinalHash(_))
-            | (AggregateMode::Final, true, StreamType::OrderedFinalAggregate(_))
+            | (AggregateMode::Final, true, StreamType::ClusteredFinalAggregate(_))
             | (AggregateMode::Single, false, StreamType::SingleHash(_))
-            | (AggregateMode::Single, true, StreamType::OrderedSingleAggregate(_)) => {}
+            | (AggregateMode::Single, true, StreamType::ClusteredSingleAggregate(_)) => {}
             _ => panic!("unexpected stream for {mode:?}, ordered={ordered}"),
         }
         let reserved = fits.memory_pool().reserved();
@@ -5629,7 +5637,116 @@ mod tests {
         Ok(())
     }
 
-    /// Ensures `OrderedSingleAggregateStream` is used for ordered raw input.
+    #[rstest::rstest]
+    #[case::full(true)]
+    #[case::partial(false)]
+    fn group_completion_preserves_sort_options(
+        #[case] full: bool,
+        #[values(AggregateMode::Partial, AggregateMode::Single)] mode: AggregateMode,
+        #[values(false, true)] descending: bool,
+        #[values(false, true)] nulls_first: bool,
+    ) -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("value", DataType::Int64, true),
+        ]));
+        let options = SortOptions::new(descending, nulls_first);
+        let mut input_ordering = vec![PhysicalSortExpr::new(col("a", &schema)?, options)];
+        let mut output_ordering = vec![PhysicalSortExpr::new(
+            Arc::new(Column::new("group_a", 1)),
+            options,
+        )];
+        if full {
+            input_ordering.push(PhysicalSortExpr::new(col("b", &schema)?, options));
+            output_ordering.push(PhysicalSortExpr::new(
+                Arc::new(Column::new("group_b", 0)),
+                options,
+            ));
+        }
+        let input_ordering = LexOrdering::new(input_ordering).unwrap();
+        let input = TestMemoryExec::try_new(&[vec![]], Arc::clone(&schema), None)?
+            .try_with_sort_information(vec![input_ordering.clone()])?;
+        let aggregate = AggregateExec::try_new(
+            mode,
+            PhysicalGroupBy::new_single(vec![
+                (col("b", &schema)?, "group_b".to_string()),
+                (col("a", &schema)?, "group_a".to_string()),
+            ]),
+            vec![Arc::new(
+                AggregateExprBuilder::new(sum_udaf(), vec![col("value", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("SUM(value)")
+                    .build()?,
+            )],
+            vec![None],
+            Arc::new(TestMemoryExec::update_cache(&Arc::new(input))),
+            schema,
+        )?;
+
+        let expected_mode = if full {
+            GroupCompletionMode::Full
+        } else {
+            GroupCompletionMode::Partial(vec![1])
+        };
+        assert_eq!(aggregate.group_completion_mode(), &expected_mode);
+        assert_eq!(aggregate.maintains_input_order(), vec![true]);
+        assert_eq!(
+            aggregate.properties().emission_type,
+            EmissionType::Incremental
+        );
+        assert_eq!(
+            aggregate.properties().output_ordering(),
+            LexOrdering::new(output_ordering).as_ref()
+        );
+        assert_eq!(
+            aggregate.required_input_ordering(),
+            vec![Some(OrderingRequirements::new_soft(input_ordering.into()))]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn group_completion_is_recomputed_with_new_children() -> Result<()> {
+        let aggregate = Arc::new(single_test_aggregate()?);
+        let original_input = Arc::clone(aggregate.input());
+        let schema = original_input.schema();
+        let ordering =
+            LexOrdering::new([PhysicalSortExpr::new_default(col("a", &schema)?)])
+                .unwrap();
+        let sorted_input = TestMemoryExec::try_new(&[vec![]], schema, None)?
+            .try_with_sort_information(vec![ordering.clone()])?;
+        let sorted_input =
+            Arc::new(TestMemoryExec::update_cache(&Arc::new(sorted_input)));
+
+        let sorted = aggregate.replace_children(
+            vec![sorted_input],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+        let sorted_aggregate = sorted.downcast_ref::<AggregateExec>().unwrap();
+        assert_eq!(
+            sorted_aggregate.group_completion_mode(),
+            &GroupCompletionMode::Full
+        );
+        assert_eq!(sorted.output_ordering(), Some(&ordering));
+        assert_eq!(sorted.pipeline_behavior(), EmissionType::Incremental);
+
+        let unordered = sorted.replace_children(
+            vec![original_input],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+        let unordered_aggregate = unordered.downcast_ref::<AggregateExec>().unwrap();
+        assert_eq!(
+            unordered_aggregate.group_completion_mode(),
+            &GroupCompletionMode::None
+        );
+        assert_eq!(unordered.maintains_input_order(), vec![false]);
+        assert!(unordered.output_ordering().is_none());
+        assert_eq!(unordered.pipeline_behavior(), EmissionType::Final);
+        Ok(())
+    }
+
+    /// Ensures `ClusteredSingleAggregateStream` is used for ordered raw input.
     #[tokio::test]
     async fn ordered_single_aggregate_planning() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
@@ -5678,14 +5795,14 @@ mod tests {
             input,
             Arc::clone(&schema),
         )?;
-        assert!(matches!(
-            aggregate.input_order_mode(),
-            InputOrderMode::PartiallySorted(_)
-        ));
+        assert_eq!(
+            aggregate.group_completion_mode(),
+            &GroupCompletionMode::Partial(vec![0])
+        );
 
         let task_ctx = new_migrated_hash_ctx(2);
         let stream = aggregate.execute_typed(0, &task_ctx)?;
-        assert!(matches!(stream, StreamType::OrderedSingleAggregate(_)));
+        assert!(matches!(stream, StreamType::ClusteredSingleAggregate(_)));
         let stream: SendableRecordBatchStream = stream.into();
         let output = collect(stream).await?;
         assert_snapshot!(batches_to_sort_string(&output), @r"
@@ -5701,7 +5818,7 @@ mod tests {
 
         let finite_memory_task_ctx = new_finite_memory_migrated_hash_ctx(2, 1024 * 1024)?;
         let stream = aggregate.execute_typed(0, &finite_memory_task_ctx)?;
-        assert!(matches!(stream, StreamType::OrderedSingleAggregate(_)));
+        assert!(matches!(stream, StreamType::ClusteredSingleAggregate(_)));
 
         Ok(())
     }
@@ -5738,7 +5855,10 @@ mod tests {
             Arc::clone(&schema),
         )?;
 
-        assert_eq!(partial_reduce.input_order_mode(), &InputOrderMode::Linear);
+        assert_eq!(
+            partial_reduce.group_completion_mode(),
+            &GroupCompletionMode::None
+        );
         assert_eq!(partial_reduce.maintains_input_order(), vec![false]);
         assert!(
             partial_reduce.properties().output_ordering().is_none(),
@@ -5793,7 +5913,10 @@ mod tests {
             None,
         )?;
         let aggregate = build_aggregate(unordered_input)?;
-        assert_eq!(aggregate.input_order_mode(), &InputOrderMode::Linear);
+        assert_eq!(
+            aggregate.group_completion_mode(),
+            &GroupCompletionMode::None
+        );
         assert_eq!(
             aggregate.schema().as_ref(),
             &Schema::new(vec![
@@ -5825,7 +5948,10 @@ mod tests {
         let ordered_input =
             Arc::new(TestMemoryExec::update_cache(&Arc::new(ordered_input)));
         let aggregate = build_aggregate(ordered_input)?;
-        assert_eq!(aggregate.input_order_mode(), &InputOrderMode::Sorted);
+        assert_eq!(
+            aggregate.group_completion_mode(),
+            &GroupCompletionMode::Full
+        );
 
         Ok(())
     }
@@ -6143,7 +6269,10 @@ mod tests {
             schema,
         )?;
 
-        assert_eq!(aggregate.input_order_mode(), &InputOrderMode::Linear);
+        assert_eq!(
+            aggregate.group_completion_mode(),
+            &GroupCompletionMode::None
+        );
         // This captures the behavior before #24438. When the source can declare
         // `(key, time_bin)` group-contiguous, the corresponding case can use
         // `EmissionType::Incremental`.
@@ -6168,7 +6297,7 @@ mod tests {
         Ok(())
     }
 
-    /// Ensures for ordered input, `OrderedPartialAggregateStream` is used.
+    /// Ensures for ordered input, `ClusteredPartialAggregateStream` is used.
     #[tokio::test]
     async fn ordered_partial_aggregate_planning() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
@@ -6222,13 +6351,13 @@ mod tests {
             Arc::clone(&schema),
         )?;
         assert!(matches!(
-            aggregate.input_order_mode(),
-            InputOrderMode::PartiallySorted(_)
+            aggregate.group_completion_mode(),
+            GroupCompletionMode::Partial(_)
         ));
 
         let task_ctx = new_migrated_hash_ctx(2);
         let stream = aggregate.execute_typed(0, &task_ctx)?;
-        assert!(matches!(stream, StreamType::OrderedPartialAggregate(_)));
+        assert!(matches!(stream, StreamType::ClusteredPartialAggregate(_)));
 
         let stream: SendableRecordBatchStream = stream.into();
         let output = collect(stream).await?;
@@ -6244,15 +6373,15 @@ mod tests {
 +----------+-----------+-------------------------+
 ");
 
-        // Ordered partial aggregation supports finite memory.
+        // Clustered partial aggregation supports finite memory.
         let finite_memory_task_ctx = new_finite_memory_migrated_hash_ctx(2, 1024 * 1024)?;
         let stream = aggregate.execute_typed(0, &finite_memory_task_ctx)?;
-        assert!(matches!(stream, StreamType::OrderedPartialAggregate(_)));
+        assert!(matches!(stream, StreamType::ClusteredPartialAggregate(_)));
 
         Ok(())
     }
 
-    /// Ensures for ordered input, `OrderedFinalAggregateStream` is used.
+    /// Ensures for ordered input, `ClusteredFinalAggregateStream` is used.
     #[tokio::test]
     async fn ordered_final_aggregate_planning() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
@@ -6303,11 +6432,14 @@ mod tests {
             final_input,
             Arc::clone(&schema),
         )?;
-        assert_eq!(final_aggregate.input_order_mode(), &InputOrderMode::Sorted);
+        assert_eq!(
+            final_aggregate.group_completion_mode(),
+            &GroupCompletionMode::Full
+        );
 
         let task_ctx = new_migrated_hash_ctx(2);
         let stream = final_aggregate.execute_typed(0, &task_ctx)?;
-        assert!(matches!(stream, StreamType::OrderedFinalAggregate(_)));
+        assert!(matches!(stream, StreamType::ClusteredFinalAggregate(_)));
 
         let stream: SendableRecordBatchStream = stream.into();
         let output = collect(stream).await?;
@@ -6322,10 +6454,10 @@ mod tests {
 +-----+--------------+
 ");
 
-        // Ordered final aggregation supports finite memory.
+        // Clustered final aggregation supports finite memory.
         let finite_memory_task_ctx = new_finite_memory_migrated_hash_ctx(2, 1024 * 1024)?;
         let stream = final_aggregate.execute_typed(0, &finite_memory_task_ctx)?;
-        assert!(matches!(stream, StreamType::OrderedFinalAggregate(_)));
+        assert!(matches!(stream, StreamType::ClusteredFinalAggregate(_)));
 
         Ok(())
     }
@@ -6377,8 +6509,8 @@ mod tests {
             Arc::clone(&schema),
         )?;
         assert!(matches!(
-            aggregate.input_order_mode(),
-            InputOrderMode::PartiallySorted(_)
+            aggregate.group_completion_mode(),
+            GroupCompletionMode::Partial(_)
         ));
 
         let runtime = RuntimeEnvBuilder::default()
@@ -6395,7 +6527,7 @@ mod tests {
         );
 
         let mut stream: SendableRecordBatchStream =
-            OrderedPartialAggregateStream::new(&aggregate, &task_ctx, 0)?.into_stream();
+            ClusteredPartialAggregateStream::new(&aggregate, &task_ctx, 0)?.into_stream();
 
         while let Some(result) = stream.next().await {
             if let Err(e) = result {
@@ -6676,7 +6808,7 @@ mod tests {
     //
     // "AggregateExec: mode=Final, gby=[a@0 as a], aggr=[FIRST_VALUE(b)]",
     // "  CoalescePartitionsExec",
-    // "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[FIRST_VALUE(b)], ordering_mode=None",
+    // "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[FIRST_VALUE(b)], group_completion_mode=None",
     // "      DataSourceExec: partitions=4, partition_sizes=[1, 1, 1, 1]",
     //
     // and checks whether the function `merge_batch` works correctly for

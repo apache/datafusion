@@ -27,7 +27,7 @@ use datafusion_expr::{EmitTo, GroupSelection};
 use super::{GroupColumn, GroupValuesColumn};
 use crate::aggregates::group_values::GroupValues;
 
-/// Columnar group keys for input fully ordered by all grouping expressions.
+/// Columnar group keys for input clustered by the complete grouping tuple.
 ///
 /// Equal keys must be contiguous across input batches. Within a batch Arrow's
 /// partition kernel finds those runs. Only the first run can continue the last
@@ -36,14 +36,15 @@ use crate::aggregates::group_values::GroupValues;
 ///
 /// This removes hashing and hash-table storage, but does not change the dense
 /// group-id or emission contracts. In particular, `First(n)` shifts the remaining
-/// keys and their ids together. Partially ordered inputs must use a hash table.
-pub(crate) struct GroupValuesOrdered {
+/// keys and their ids together. Inputs clustered by only a subset of the keys
+/// must use a hash table.
+pub(crate) struct GroupValuesClustered {
     schema: SchemaRef,
     columns: Vec<Box<dyn GroupColumn>>,
     new_groups: Vec<usize>,
 }
 
-impl GroupValuesOrdered {
+impl GroupValuesClustered {
     /// Types for which adjacent Arrow equality agrees with GROUP BY equality.
     /// Keep single-column specializations and floats/nested/encoded keys on the
     /// established path until their semantics and performance are validated.
@@ -74,7 +75,7 @@ impl GroupValuesOrdered {
     pub(crate) fn try_new(schema: SchemaRef) -> Result<Self> {
         if !Self::supports_schema(&schema) {
             return not_impl_err!(
-                "Unsupported schema for fully ordered group values: {schema}"
+                "Unsupported schema for fully clustered group values: {schema}"
             );
         }
         let columns = GroupValuesColumn::<true>::build_group_columns(&schema)?;
@@ -86,7 +87,7 @@ impl GroupValuesOrdered {
     }
 }
 
-impl GroupValues for GroupValuesOrdered {
+impl GroupValues for GroupValuesClustered {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
         groups.clear();
         let ranges = partition(cols)?.ranges();
@@ -170,7 +171,7 @@ impl GroupValues for GroupValuesOrdered {
 
     fn clear_shrink(&mut self, num_rows: usize) {
         self.columns = GroupValuesColumn::<true>::build_group_columns(&self.schema)
-            .expect("schema validated by GroupValuesOrdered::try_new");
+            .expect("schema validated by GroupValuesClustered::try_new");
         self.new_groups.clear();
         self.new_groups.shrink_to(num_rows);
     }
@@ -191,8 +192,12 @@ mod tests {
     // Compare with the existing hash implementation, changing actual input
     // boundaries and removing completed groups between batches. This checks the
     // semantic contract rather than duplicating the adjacent-run algorithm.
-    #[test]
-    fn ordered_keys_match_hash_grouping_across_batches_and_emits() -> Result<()> {
+    #[rstest::rstest]
+    #[case::sorted(false)]
+    #[case::unsorted(true)]
+    fn clustered_keys_match_hash_grouping_across_batches_and_emits(
+        #[case] unsorted: bool,
+    ) -> Result<()> {
         for key_type in [
             DataType::Boolean,
             DataType::Int8,
@@ -213,7 +218,9 @@ mod tests {
             let rows = 1025;
             let first: ArrayRef = Arc::new(Int32Array::from_iter((0..rows).map(|row| {
                 let group = row / 7;
-                (group >= 4).then_some(group / 4)
+                let key = group / 4;
+                // Swap neighboring key values while keeping each run contiguous.
+                (group >= 4).then_some(if unsorted { key ^ 1 } else { key })
             })));
             let second: ArrayRef = match key_type {
                 DataType::Boolean => {
@@ -262,8 +269,8 @@ mod tests {
                 ]));
                 for batch_size in [1, 2, 7, 8, 63, 1024] {
                     for emit_limit in [0, 1, 17, usize::MAX] {
-                        let mut ordered =
-                            GroupValuesOrdered::try_new(Arc::clone(&schema))?;
+                        let mut clustered =
+                            GroupValuesClustered::try_new(Arc::clone(&schema))?;
                         let mut hashed =
                             GroupValuesColumn::<true>::try_new(Arc::clone(&schema))?;
                         let mut actual = Vec::new();
@@ -274,16 +281,16 @@ mod tests {
                                 .iter()
                                 .map(|array| array.slice(offset, length))
                                 .collect::<Vec<_>>();
-                            ordered.intern(&batch, &mut actual)?;
+                            clustered.intern(&batch, &mut actual)?;
                             hashed.intern(&batch, &mut expected)?;
                             assert_eq!(
                                 actual, expected,
                                 "{key_type:?}, batch={batch_size}, offset={offset}, descending={descending}"
                             );
-                            assert_eq!(ordered.len(), hashed.len());
-                            let selection = GroupSelection::all(ordered.len());
+                            assert_eq!(clustered.len(), hashed.len());
+                            let selection = GroupSelection::all(clustered.len());
                             assert_eq!(
-                                ordered.values_preserving(selection)?,
+                                clustered.values_preserving(selection)?,
                                 hashed.values_preserving(selection)?
                             );
                             // A zero-row batch must neither forget the boundary
@@ -292,23 +299,29 @@ mod tests {
                                 .iter()
                                 .map(|array| array.slice(0, 0))
                                 .collect::<Vec<_>>();
-                            ordered.intern(&empty, &mut actual)?;
+                            clustered.intern(&empty, &mut actual)?;
                             assert!(actual.is_empty());
-                            let emit = emit_limit.min(ordered.len().saturating_sub(1));
+                            let emit = emit_limit.min(clustered.len().saturating_sub(1));
                             assert_eq!(
-                                ordered.emit(EmitTo::First(emit))?,
+                                clustered.emit(EmitTo::First(emit))?,
                                 hashed.emit(EmitTo::First(emit))?
                             );
                         }
-                        assert_eq!(ordered.emit(EmitTo::All)?, hashed.emit(EmitTo::All)?);
-                        assert!(ordered.is_empty());
+                        assert_eq!(
+                            clustered.emit(EmitTo::All)?,
+                            hashed.emit(EmitTo::All)?
+                        );
+                        assert!(clustered.is_empty());
                         // All and clear_shrink reset the cross-batch state.
-                        ordered.clear_shrink(0);
+                        clustered.clear_shrink(0);
                         hashed.clear_shrink(0);
-                        ordered.intern(&input, &mut actual)?;
+                        clustered.intern(&input, &mut actual)?;
                         hashed.intern(&input, &mut expected)?;
                         assert_eq!(actual, expected);
-                        assert_eq!(ordered.emit(EmitTo::All)?, hashed.emit(EmitTo::All)?);
+                        assert_eq!(
+                            clustered.emit(EmitTo::All)?,
+                            hashed.emit(EmitTo::All)?
+                        );
                     }
                 }
             }
@@ -317,7 +330,7 @@ mod tests {
     }
 
     #[test]
-    fn ordered_schema_gate_keeps_unvalidated_types_on_existing_paths() {
+    fn clustered_schema_gate_keeps_unvalidated_types_on_existing_paths() {
         for data_type in [
             DataType::Float32,
             DataType::Float64,
@@ -329,18 +342,20 @@ mod tests {
                 Field::new("a", DataType::Int32, false),
                 Field::new("b", data_type, true),
             ]);
-            assert!(!GroupValuesOrdered::supports_schema(&schema));
+            assert!(!GroupValuesClustered::supports_schema(&schema));
         }
-        assert!(!GroupValuesOrdered::supports_schema(&Schema::new(vec![
+        assert!(!GroupValuesClustered::supports_schema(&Schema::new(vec![
             Field::new("a", DataType::Int32, false)
         ])));
     }
 
     #[tokio::test]
     async fn ordered_single_and_partial_final_match_unordered_execution() -> Result<()> {
-        use crate::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
+        use crate::aggregates::{
+            AggregateExec, AggregateMode, GroupCompletionMode, PhysicalGroupBy,
+        };
         use crate::test::TestMemoryExec;
-        use crate::{ExecutionPlan, InputOrderMode, collect};
+        use crate::{ExecutionPlan, collect};
         use arrow::compute::{SortOptions, take_record_batch};
         use arrow::record_batch::RecordBatch;
         use arrow::row::{RowConverter, SortField};
@@ -437,7 +452,10 @@ mod tests {
                             Arc::clone(&schema),
                         )?;
                         if sorted {
-                            assert_eq!(plan.input_order_mode(), &InputOrderMode::Sorted);
+                            assert_eq!(
+                                plan.group_completion_mode(),
+                                &GroupCompletionMode::Full
+                            );
                         }
                         let plan: Arc<dyn ExecutionPlan> = if two_stage {
                             let plan = AggregateExec::try_new(
@@ -450,8 +468,8 @@ mod tests {
                             )?;
                             if sorted {
                                 assert_eq!(
-                                    plan.input_order_mode(),
-                                    &InputOrderMode::Sorted
+                                    plan.group_completion_mode(),
+                                    &GroupCompletionMode::Full
                                 );
                             }
                             Arc::new(plan)

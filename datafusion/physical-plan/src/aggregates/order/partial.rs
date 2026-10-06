@@ -27,12 +27,11 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
 
-/// Tracks grouping state when the data is ordered by some subset of
+/// Tracks group completion when rows are contiguous for a subset of
 /// the group keys.
 ///
-/// Once the next *sort key* value is seen, never see groups with that
-/// sort key again, so we can emit all groups with the previous sort
-/// key and earlier.
+/// Once those key values change, they will not appear again, so all groups
+/// in the previous run are complete and can be emitted.
 ///
 /// For example, given `SUM(amt) GROUP BY id, state` if the input is
 /// sorted by `state`, when a new value of `state` is seen, all groups
@@ -44,11 +43,11 @@ use datafusion_expr::EmitTo;
 ///                                            ┏━━━━━━━━━━━━━━━━━┓ ┏━━━━━━━┓
 ///     ┌─────┐    ┌───────────────────┐ ┌─────┃        9        ┃ ┃ "MD"  ┃
 ///     │┌───┐│    │ ┌──────────────┐  │ │     ┗━━━━━━━━━━━━━━━━━┛ ┗━━━━━━━┛
-///     ││ 0 ││    │ │  123, "MA"   │  │ │        current_sort      sort_key
+///     ││ 0 ││    │ │  123, "MA"   │  │ │      current_run_start   group_key
 ///     │└───┘│    │ └──────────────┘  │ │
-///     │ ... │    │    ...            │ │      current_sort tracks the
+///     │ ... │    │    ...            │ │      current_run_start tracks the
 ///     │┌───┐│    │ ┌──────────────┐  │ │      smallest group index that had
-///     ││ 8 ││    │ │  765, "MA"   │  │ │      the same sort_key as current
+///     ││ 8 ││    │ │  765, "MA"   │  │ │      the same group_key as current
 ///     │├───┤│    │ ├──────────────┤  │ │
 ///     ││ 9 ││    │ │  923, "MD"   │◀─┼─┘
 ///     │├───┤│    │ ├──────────────┤  │        ┏━━━━━━━━━━━━━━┓
@@ -63,22 +62,22 @@ use datafusion_expr::EmitTo;
 ///      order)                                    recent group index
 /// ```
 #[derive(Debug)]
-pub struct GroupOrderingPartial {
+pub struct GroupCompletionPartial {
     /// State machine
     state: State,
 
-    /// The indexes of the group by columns that form the sort key.
-    /// For example if grouping by `id, state` and ordered by `state`
+    /// The indexes of the group by columns whose values form contiguous runs.
+    /// For example if grouping by `id, state` and contiguous on `state`
     /// this would be `[1]`.
-    order_indices: Vec<usize>,
+    grouping_indices: Vec<usize>,
 }
 
 #[derive(Debug, Default, PartialEq)]
 enum State {
-    /// The ordering was temporarily taken.  `Self::Taken` is left
+    /// The state was temporarily taken. `Self::Taken` is left
     /// when state must be temporarily taken to satisfy the borrow
     /// checker. If an error happens before the state can be restored,
-    /// the ordering information is lost and execution can not
+    /// the completion information is lost and execution can not
     /// proceed, but there is no undefined behavior.
     #[default]
     Taken,
@@ -88,10 +87,10 @@ enum State {
 
     /// Data is in progress.
     InProgress {
-        /// Smallest group index with the sort_key
-        current_sort: usize,
-        /// The sort key of group_index `current_sort`
-        sort_key: Vec<ScalarValue>,
+        /// Smallest group index in the current run.
+        current_run_start: usize,
+        /// The key values of the current run.
+        group_key: Vec<ScalarValue>,
         /// index of the current group for which values are being
         /// generated
         current: usize,
@@ -106,7 +105,7 @@ impl State {
         match self {
             State::Taken => 0,
             State::Start => 0,
-            State::InProgress { sort_key, .. } => sort_key
+            State::InProgress { group_key, .. } => group_key
                 .iter()
                 .map(|scalar_value| scalar_value.size())
                 .sum(),
@@ -115,24 +114,23 @@ impl State {
     }
 }
 
-impl GroupOrderingPartial {
-    /// TODO: Remove unnecessary `input_schema` parameter.
-    pub fn try_new(order_indices: Vec<usize>) -> Result<Self> {
-        debug_assert!(!order_indices.is_empty());
+impl GroupCompletionPartial {
+    /// Creates a tracker for runs defined by the specified grouping columns.
+    pub fn try_new(grouping_indices: Vec<usize>) -> Result<Self> {
+        debug_assert!(!grouping_indices.is_empty());
         Ok(Self {
             state: State::Start,
-            order_indices,
+            grouping_indices,
         })
     }
 
-    /// Select sort keys from the group values
+    /// Select the keys that define contiguous runs from the group values.
     ///
-    /// For example, if group_values had `A, B, C` but the input was
-    /// only sorted on `B` and `C` this should return rows for (`B`,
-    /// `C`)
-    fn compute_sort_keys(&mut self, group_values: &[ArrayRef]) -> Vec<ArrayRef> {
-        // Take only the columns that are in the sort key
-        self.order_indices
+    /// For example, if `group_values` contains `A, B, C` but the input is
+    /// contiguous on `(B, C)`, this returns the arrays for `B` and `C`.
+    fn compute_group_keys(&mut self, group_values: &[ArrayRef]) -> Vec<ArrayRef> {
+        // Take only the columns that define contiguous runs.
+        self.grouping_indices
             .iter()
             .map(|&idx| Arc::clone(&group_values[idx]))
             .collect()
@@ -143,14 +141,14 @@ impl GroupOrderingPartial {
         match &self.state {
             State::Taken => unreachable!("State previously taken"),
             State::Start => None,
-            State::InProgress { current_sort, .. } => {
-                // Can not emit if we are still on the first row sort
-                // row otherwise we can emit all groups that had earlier sort keys
-                //
-                if *current_sort == 0 {
+            State::InProgress {
+                current_run_start, ..
+            } => {
+                // The current run is incomplete; only groups from earlier runs can be emitted.
+                if *current_run_start == 0 {
                     None
                 } else {
-                    Some(EmitTo::First(*current_sort))
+                    Some(EmitTo::First(*current_run_start))
                 }
             }
             State::Complete => Some(EmitTo::All),
@@ -164,15 +162,15 @@ impl GroupOrderingPartial {
             State::Taken => unreachable!("State previously taken"),
             State::Start => panic!("invalid state: start"),
             State::InProgress {
-                current_sort,
+                current_run_start,
                 current,
-                sort_key: _,
+                group_key: _,
             } => {
                 // shift indexes down by n
                 assert!(*current >= n);
                 *current -= n;
-                assert!(*current_sort >= n);
-                *current_sort -= n;
+                assert!(*current_run_start >= n);
+                *current_run_start -= n;
             }
             State::Complete => panic!("invalid state: complete"),
         }
@@ -186,31 +184,31 @@ impl GroupOrderingPartial {
         };
     }
 
-    /// Starts tracking a new ordered input segment with the same sort-key
+    /// Starts tracking a new input segment with the same contiguous-key
     /// columns.
     pub fn reset(&mut self) {
         self.state = State::Start;
     }
 
-    fn updated_sort_key(
-        current_sort: usize,
-        sort_key: Option<Vec<ScalarValue>>,
-        range_current_sort: usize,
-        range_sort_key: Vec<ScalarValue>,
+    fn updated_group_key(
+        current_run_start: usize,
+        group_key: Option<Vec<ScalarValue>>,
+        range_current_run_start: usize,
+        range_group_key: Vec<ScalarValue>,
     ) -> Result<(usize, Vec<ScalarValue>)> {
-        if let Some(sort_key) = sort_key {
-            let sort_options = vec![SortOptions::new(false, false); sort_key.len()];
-            let ordering = compare_rows(&sort_key, &range_sort_key, &sort_options)?;
+        if let Some(group_key) = group_key {
+            let sort_options = vec![SortOptions::new(false, false); group_key.len()];
+            let ordering = compare_rows(&group_key, &range_group_key, &sort_options)?;
             if ordering == Ordering::Equal {
-                return Ok((current_sort, sort_key));
+                return Ok((current_run_start, group_key));
             }
         }
 
-        Ok((range_current_sort, range_sort_key))
+        Ok((range_current_run_start, range_group_key))
     }
 
     /// Called when new groups are added in a batch. See documentation
-    /// on [`super::GroupOrdering::new_groups`]
+    /// on [`super::GroupCompletion::new_groups`]
     pub fn new_groups(
         &mut self,
         batch_group_values: &[ArrayRef],
@@ -222,46 +220,46 @@ impl GroupOrderingPartial {
 
         let max_group_index = total_num_groups - 1;
 
-        let (current_sort, sort_key) = match std::mem::take(&mut self.state) {
+        let (current_run_start, group_key) = match std::mem::take(&mut self.state) {
             State::Taken => unreachable!("State previously taken"),
             State::Start => (0, None),
             State::InProgress {
-                current_sort,
-                sort_key,
+                current_run_start,
+                group_key,
                 ..
-            } => (current_sort, Some(sort_key)),
+            } => (current_run_start, Some(group_key)),
             State::Complete => {
                 panic!("Saw new group after the end of input");
             }
         };
 
-        // Select the sort key columns
-        let sort_keys = self.compute_sort_keys(batch_group_values);
+        // Select the columns that define contiguous runs.
+        let group_keys = self.compute_group_keys(batch_group_values);
 
-        // Check if the sort keys indicate a boundary inside the batch
-        let ranges = partition(&sort_keys)?.ranges();
+        // Check if the key values indicate a boundary inside the batch.
+        let ranges = partition(&group_keys)?.ranges();
         let last_range = ranges.last().unwrap();
 
-        let range_current_sort = group_indices[last_range.start];
-        let range_sort_key = get_row_at_idx(&sort_keys, last_range.start)?;
+        let range_current_run_start = group_indices[last_range.start];
+        let range_group_key = get_row_at_idx(&group_keys, last_range.start)?;
 
-        let (current_sort, sort_key) = if last_range.start == 0 {
-            // There was no boundary in the batch. Compare with the previous sort_key (if present)
+        let (current_run_start, group_key) = if last_range.start == 0 {
+            // There was no boundary in the batch. Compare with the previous group_key (if present)
             // to check if there was a boundary between the current batch and the previous one.
-            Self::updated_sort_key(
-                current_sort,
-                sort_key,
-                range_current_sort,
-                range_sort_key,
+            Self::updated_group_key(
+                current_run_start,
+                group_key,
+                range_current_run_start,
+                range_group_key,
             )?
         } else {
-            (range_current_sort, range_sort_key)
+            (range_current_run_start, range_group_key)
         };
 
         self.state = State::InProgress {
-            current_sort,
+            current_run_start,
             current: max_group_index,
-            sort_key,
+            group_key,
         };
 
         Ok(())
@@ -269,7 +267,7 @@ impl GroupOrderingPartial {
 
     /// Return the size of memory allocated by this structure
     pub(crate) fn size(&self) -> usize {
-        size_of::<Self>() + self.order_indices.allocated_size() + self.state.size()
+        size_of::<Self>() + self.grouping_indices.allocated_size() + self.state.size()
     }
 }
 
@@ -279,79 +277,85 @@ mod tests {
 
     use arrow::array::Int32Array;
 
-    #[test]
-    fn test_group_ordering_partial() -> Result<()> {
-        // Ordered on column a
-        let order_indices = vec![0];
-        let mut group_ordering = GroupOrderingPartial::try_new(order_indices)?;
+    #[rstest::rstest]
+    #[case::sorted([1, 2, 3, 4])]
+    #[case::clustered([3, 1, 4, 2])]
+    fn test_group_completion_partial(#[case] keys: [i32; 4]) -> Result<()> {
+        let [first, second, third, fourth] = keys;
+        // Contiguous on column a.
+        let grouping_indices = vec![0];
+        let mut group_completion = GroupCompletionPartial::try_new(grouping_indices)?;
 
         let batch_group_values: Vec<ArrayRef> = vec![
-            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(Int32Array::from(vec![first, second, third])),
             Arc::new(Int32Array::from(vec![2, 1, 3])),
         ];
 
         let group_indices = vec![0, 1, 2];
         let total_num_groups = 3;
 
-        group_ordering.new_groups(
+        group_completion.new_groups(
             &batch_group_values,
             &group_indices,
             total_num_groups,
         )?;
 
         assert_eq!(
-            group_ordering.state,
+            group_completion.state,
             State::InProgress {
-                current_sort: 2,
-                sort_key: vec![ScalarValue::Int32(Some(3))],
+                current_run_start: 2,
+                group_key: vec![ScalarValue::Int32(Some(third))],
                 current: 2
             }
         );
+        assert_eq!(group_completion.emit_to(), Some(EmitTo::First(2)));
 
         // push without a boundary
         let batch_group_values: Vec<ArrayRef> = vec![
-            Arc::new(Int32Array::from(vec![3, 3, 3])),
+            Arc::new(Int32Array::from(vec![third, third, third])),
             Arc::new(Int32Array::from(vec![2, 1, 7])),
         ];
         let group_indices = vec![3, 4, 5];
         let total_num_groups = 6;
 
-        group_ordering.new_groups(
+        group_completion.new_groups(
             &batch_group_values,
             &group_indices,
             total_num_groups,
         )?;
 
         assert_eq!(
-            group_ordering.state,
+            group_completion.state,
             State::InProgress {
-                current_sort: 2,
-                sort_key: vec![ScalarValue::Int32(Some(3))],
+                current_run_start: 2,
+                group_key: vec![ScalarValue::Int32(Some(third))],
                 current: 5
             }
         );
+        assert_eq!(group_completion.emit_to(), Some(EmitTo::First(2)));
 
         // push with only a boundary to previous batch
         let batch_group_values: Vec<ArrayRef> = vec![
-            Arc::new(Int32Array::from(vec![4, 4, 4])),
-            Arc::new(Int32Array::from(vec![1, 1, 1])),
+            Arc::new(Int32Array::from(vec![fourth, fourth, fourth])),
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
         ];
         let group_indices = vec![6, 7, 8];
         let total_num_groups = 9;
 
-        group_ordering.new_groups(
+        group_completion.new_groups(
             &batch_group_values,
             &group_indices,
             total_num_groups,
         )?;
         assert_eq!(
-            group_ordering.state,
+            group_completion.state,
             State::InProgress {
-                current_sort: 6,
-                sort_key: vec![ScalarValue::Int32(Some(4))],
+                current_run_start: 6,
+                group_key: vec![ScalarValue::Int32(Some(fourth))],
                 current: 8
             }
         );
+        assert_eq!(group_completion.emit_to(), Some(EmitTo::First(6)));
 
         Ok(())
     }
