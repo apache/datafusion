@@ -823,13 +823,13 @@ query error
 SELECT DATE_BIN(INTERVAL '0 second', 25, TIMESTAMP '1970-01-01T00:00:00Z')
 
 # not support interval 0
-statement error Execution error: DATE_BIN stride must be non-zero
+statement error Execution error: DATE_BIN stride must be greater than zero
 SELECT DATE_BIN(INTERVAL '0 second', TIMESTAMP '2022-08-03 14:38:50.000000006Z', TIMESTAMP '1970-01-01T00:00:00Z')
 
-statement error Execution error: DATE_BIN stride must be non-zero
+statement error Execution error: DATE_BIN stride must be greater than zero
 SELECT DATE_BIN(INTERVAL '0 month', TIMESTAMP '2022-08-03 14:38:50.000000006Z')
 
-statement error Execution error: DATE_BIN stride must be non-zero
+statement error Execution error: DATE_BIN stride must be greater than zero
 SELECT
   DATE_BIN(INTERVAL '0' minute, time) AS time,
   count(val)
@@ -1820,68 +1820,6 @@ ORDER BY b ASC NULLS LAST
 1653-02-10T06:13:20
 1970-01-01T00:00:00
 2286-11-20T17:46:40
-
-# A negative month stride does not shift every bin by the same amount: here
-# 2023-01-01 bins forward to 2023-02-28, while 2023-01-31 bins to itself. The
-# output is not sorted, so date_bin keeps the final sort for it.
-query TT
-EXPLAIN SELECT date_bin(INTERVAL '-1 month', ts, TIMESTAMP '2023-01-31 00:00:00') AS b
-FROM (
-  SELECT arrow_cast(column1, 'Timestamp(Second)') AS ts
-  FROM (VALUES
-    (TIMESTAMP '2023-01-01 00:00:00'),
-    (TIMESTAMP '2023-01-31 00:00:00')
-  )
-  ORDER BY ts
-  LIMIT 2
-)
-ORDER BY b
-----
-logical_plan
-01)Sort: b ASC NULLS LAST
-02)--Projection: date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: -1, days: 0, nanoseconds: 0 }"), ts, TimestampNanosecond(1675123200000000000, None)) AS b
-03)----Sort: ts ASC NULLS LAST, fetch=2
-04)------Projection: CAST(column1 AS Timestamp(s)) AS ts
-05)--------Values: (TimestampNanosecond(1672531200000000000, None) AS Utf8("2023-01-01 00:00:00")), (TimestampNanosecond(1675123200000000000, None) AS Utf8("2023-01-31 00:00:00"))
-physical_plan
-01)SortExec: expr=[b@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--ProjectionExec: expr=[date_bin(IntervalMonthDayNano { months: -1, days: 0, nanoseconds: 0 }, ts@0, 1675123200000000000) as b]
-03)----SortExec: TopK(fetch=2), expr=[ts@0 ASC NULLS LAST], preserve_partitioning=[false]
-04)------ProjectionExec: expr=[CAST(column1@0 AS Timestamp(s)) as ts]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
-
-query P
-SELECT date_bin(INTERVAL '-1 month', ts, TIMESTAMP '2023-01-31 00:00:00') AS b
-FROM (
-  SELECT arrow_cast(column1, 'Timestamp(Second)') AS ts
-  FROM (VALUES
-    (TIMESTAMP '2023-01-01 00:00:00'),
-    (TIMESTAMP '2023-01-31 00:00:00')
-  )
-  ORDER BY ts
-  LIMIT 2
-)
-ORDER BY b
-----
-2023-01-31T00:00:00
-2023-02-28T00:00:00
-
-# Same for nanosecond timestamps.
-query P
-SELECT date_bin(INTERVAL '-1 month', ts, TIMESTAMP '2023-01-31 00:00:00') AS b
-FROM (
-  SELECT column1 AS ts
-  FROM (VALUES
-    (TIMESTAMP '2023-01-01 00:00:00'),
-    (TIMESTAMP '2023-01-31 00:00:00')
-  )
-  ORDER BY ts
-  LIMIT 2
-)
-ORDER BY b
-----
-2023-01-31T00:00:00
-2023-02-28T00:00:00
 
 # A positive month stride is monotonic, so the final sort is removed.
 query TT
