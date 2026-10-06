@@ -403,7 +403,7 @@ impl BuiltinExprBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::arg_list_to_binary_op_tree;
+    use super::{arg_list_to_binary_op_tree, case_insensitive_option};
     use crate::extensions::Extensions;
     use crate::logical_plan::consumer::tests::TEST_SESSION_STATE;
     use crate::logical_plan::consumer::{DefaultSubstraitConsumer, SubstraitConsumer};
@@ -609,6 +609,85 @@ mod tests {
         } else {
             panic!("Expected Expr::Like (negated), got {result:?}");
         }
+
+        Ok(())
+    }
+
+    fn scalar_function_with_case_sensitivity_preference(
+        preference: &[&str],
+    ) -> ScalarFunction {
+        ScalarFunction {
+            options: vec![substrait::proto::FunctionOption {
+                name: "case_sensitivity".to_string(),
+                preference: preference.iter().map(|s| s.to_string()).collect(),
+            }],
+            ..Default::default()
+        }
+    }
+
+    /// Substrait says a consumer must use the first value it supports in the
+    /// `case_sensitivity` option's preference list, and must reject the call
+    /// when it supports none of them.
+    #[test]
+    fn case_insensitive_option_cases() -> Result<()> {
+        // No `case_sensitivity` option at all defaults to case-sensitive.
+        assert!(!case_insensitive_option(&ScalarFunction::default())?);
+
+        // A single supported preference, in either sensitivity.
+        assert!(!case_insensitive_option(
+            &scalar_function_with_case_sensitivity_preference(&["CASE_SENSITIVE"])
+        )?);
+        assert!(case_insensitive_option(
+            &scalar_function_with_case_sensitivity_preference(&["CASE_INSENSITIVE"])
+        )?);
+
+        // The option name and its preference values are matched
+        // case-insensitively (ASCII).
+        assert!(case_insensitive_option(&ScalarFunction {
+            options: vec![substrait::proto::FunctionOption {
+                name: "Case_Sensitivity".to_string(),
+                preference: vec!["case_insensitive".to_string()],
+            }],
+            ..Default::default()
+        })?);
+
+        // Preference ordering: a consumer must use the first value it
+        // supports, not necessarily the first value in the list.
+        // `CASE_INSENSITIVE_ASCII` is not a value this consumer supports, so
+        // it is skipped in favor of the next, supported preference.
+        assert!(case_insensitive_option(
+            &scalar_function_with_case_sensitivity_preference(&[
+                "CASE_INSENSITIVE_ASCII",
+                "CASE_INSENSITIVE"
+            ])
+        )?);
+        assert!(!case_insensitive_option(
+            &scalar_function_with_case_sensitivity_preference(&[
+                "CASE_INSENSITIVE_ASCII",
+                "CASE_SENSITIVE"
+            ])
+        )?);
+
+        // Rejection: every preference is unsupported.
+        let err =
+            case_insensitive_option(&scalar_function_with_case_sensitivity_preference(
+                &["CASE_INSENSITIVE_ASCII"],
+            ))
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Unsupported case_sensitivity"),
+            "unexpected error: {err}"
+        );
+
+        // Rejection: an empty preference list supports nothing.
+        let err = case_insensitive_option(
+            &scalar_function_with_case_sensitivity_preference(&[]),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("Unsupported case_sensitivity"),
+            "unexpected error: {err}"
+        );
 
         Ok(())
     }

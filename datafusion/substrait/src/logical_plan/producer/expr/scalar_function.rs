@@ -251,37 +251,6 @@ pub fn from_like(
         escape_char,
         case_insensitive,
     } = like;
-    // Substrait documents `output_type` as "Must be set to the return type of
-    // the function, exactly as derived using the declaration in the extension",
-    // and a consumer that reads it rejects the call when it is unset. The type
-    // comes from the expression itself so that it matches what DataFusion
-    // derives, rather than being restated here.
-    let (_, output_field) = Expr::Like(like.clone()).to_field(schema)?;
-    let output_type = to_substrait_type_from_field(producer, &output_field)?;
-
-    make_substrait_like_expr(
-        producer,
-        *case_insensitive,
-        *negated,
-        expr,
-        pattern,
-        *escape_char,
-        schema,
-        output_type,
-    )
-}
-
-#[expect(clippy::too_many_arguments)]
-fn make_substrait_like_expr(
-    producer: &mut impl SubstraitProducer,
-    ignore_case: bool,
-    negated: bool,
-    expr: &Expr,
-    pattern: &Expr,
-    escape_char: Option<char>,
-    schema: &DFSchemaRef,
-    output_type: Type,
-) -> datafusion::common::Result<Expression> {
     // `like` takes two arguments and carries case sensitivity as an option;
     // the extensions define no `ilike` and no escape character, so an escape
     // has no encoding here and is rejected rather than emitted as a third
@@ -290,19 +259,27 @@ fn make_substrait_like_expr(
     if escape_char.is_some() {
         return not_impl_err!("Substrait does not define an escape character for `like`");
     }
+    // Substrait documents `output_type` as "Must be set to the return type of
+    // the function, exactly as derived using the declaration in the extension",
+    // and a consumer that reads it rejects the call when it is unset. The type
+    // comes from the expression itself so that it matches what DataFusion
+    // derives, rather than being restated here.
+    let (_, output_field) = Expr::Like(like.clone()).to_field(schema)?;
+    let output_type = to_substrait_type_from_field(producer, &output_field)?;
+
     let function_anchor = producer.register_function("like".to_string());
-    let expr = producer.handle_expr(expr, schema)?;
-    let pattern = producer.handle_expr(pattern, schema)?;
+    let substrait_expr = producer.handle_expr(expr, schema)?;
+    let substrait_pattern = producer.handle_expr(pattern, schema)?;
     let arguments = vec![
         FunctionArgument {
-            arg_type: Some(ArgType::Value(expr)),
+            arg_type: Some(ArgType::Value(substrait_expr)),
         },
         FunctionArgument {
-            arg_type: Some(ArgType::Value(pattern)),
+            arg_type: Some(ArgType::Value(substrait_pattern)),
         },
     ];
     // An unset option leaves the default, which is `CASE_SENSITIVE`.
-    let options = if ignore_case {
+    let options = if *case_insensitive {
         vec![FunctionOption {
             name: CASE_SENSITIVITY_OPTION.to_string(),
             preference: vec![CASE_INSENSITIVE.to_string()],
@@ -322,7 +299,7 @@ fn make_substrait_like_expr(
         })),
     };
 
-    if negated {
+    if *negated {
         let function_anchor = producer.register_function("not".to_string());
 
         #[expect(deprecated)]
