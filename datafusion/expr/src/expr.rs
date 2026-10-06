@@ -2282,11 +2282,11 @@ impl Expr {
                             .is_some();
                     match expr.as_mut() {
                         Expr::ScalarFunction(func) if is_tuple => {
-                            for (arg, field) in
-                                func.args.iter_mut().zip(subquery_schema.fields())
-                            {
-                                let column = Expr::Column(Column::new_unqualified(
-                                    field.name().clone(),
+                            for (i, arg) in func.args.iter_mut().enumerate() {
+                                // Qualified, since two subquery columns can
+                                // share a name under different qualifiers.
+                                let column = Expr::Column(Column::from(
+                                    subquery_schema.qualified_field(i),
                                 ));
                                 rewrite_placeholder(arg, &column, subquery_schema)?;
                             }

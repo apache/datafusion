@@ -325,6 +325,145 @@ WHERE a NOT IN (SELECT x FROM mc_ree_inner i WHERE i.k = o.k);
 5 4 2
 
 #############
+## Nullability of a tuple IN
+#############
+
+# The tuple `IN` is NULL whenever an element or a subquery column is NULL and
+# no element pair is a definite mismatch, so `IS [NOT] NULL` over it must not
+# be folded away even though both subquery columns here are NOT NULL.
+# (NULL, 8) vs (5, 8) and (NULL, NULL) vs (5, 8) are UNKNOWN; the other rows
+# have a definite mismatch.
+query TBB rowsort
+SELECT
+  value,
+  ((a, b) IN (SELECT 5, 8)) IS NULL AS unk,
+  ((a, b) NOT IN (SELECT 5, 8)) IS NOT NULL AS known
+FROM mc_outer;
+----
+u true false
+v false true
+w true false
+x false true
+y false true
+z false true
+
+# The examples in docs/source/user-guide/sql/subqueries.md. A tuple compared
+# with a subquery follows SQL row comparison, unlike the list form
+# `(1, NULL) IN ((1, NULL))`, which is true.
+query BB
+SELECT (1, NULL) IN (SELECT 1, NULL) AS in_null, (NULL, 1) NOT IN (SELECT 2, 3) AS not_in;
+----
+NULL true
+
+#############
+## Subqueries whose top is not a projection
+#############
+
+statement ok
+CREATE TABLE mc_top_inner(x INT, y INT, k INT) AS VALUES
+(1, 2, 1),
+(1, 2, 2),
+(NULL, 4, 1),
+(9, 9, 3);
+
+# DISTINCT: {(1, 2), (NULL, 4), (9, 9)}. (1, 2) matches; (3, 4), (3, NULL)
+# and (NULL, NULL) are UNKNOWN against (NULL, 4) or (1, 2).
+query IIT rowsort
+SELECT * FROM mc_outer
+WHERE (a, b) NOT IN (SELECT DISTINCT x, y FROM mc_top_inner);
+----
+5 6 z
+NULL 8 w
+
+# GROUP BY k: {(1, 4), (1, 2), (9, 9)}, with no NULL. Only (1, 2) matches and
+# only (NULL, NULL) has no definite mismatch.
+query IIT rowsort
+SELECT * FROM mc_outer
+WHERE (a, b) NOT IN (SELECT max(x), max(y) FROM mc_top_inner GROUP BY k);
+----
+3 4 y
+3 NULL v
+5 6 z
+NULL 8 w
+
+# ORDER BY ... LIMIT: the two k = 1 rows, {(1, 2), (NULL, 4)}.
+query IIT rowsort
+SELECT * FROM mc_outer
+WHERE (a, b) NOT IN (SELECT x, y FROM mc_top_inner ORDER BY k LIMIT 2);
+----
+5 6 z
+NULL 8 w
+
+#############
+## Utf8 elements
+#############
+
+statement ok
+CREATE TABLE mc_str_outer(a TEXT, b TEXT) AS VALUES
+(NULL, 'x'),
+('p', 'x'),
+('q', 'y'),
+('r', NULL),
+('s', 'z');
+
+statement ok
+CREATE TABLE mc_str_inner(x TEXT, y TEXT) AS VALUES
+('p', 'x'),
+(NULL, 'y');
+
+# ('p', 'x') matches; (NULL, 'x') vs ('p', 'x'), ('q', 'y') vs (NULL, 'y') and
+# ('r', NULL) vs (NULL, 'y') are UNKNOWN; ('s', 'z') mismatches both.
+query TT rowsort
+SELECT * FROM mc_str_outer
+WHERE (a, b) NOT IN (SELECT x, y FROM mc_str_inner);
+----
+s z
+
+#############
+## Mark join with a non-equality correlation
+#############
+
+# The join filter decides the scope of each row: k=1 has an empty scope, k=2
+# matches (1, 2), (NULL, 5) and (7, 7) mismatch every row in scope, and
+# (4, 2) vs (NULL, 2) at k=3 is UNKNOWN.
+query IB rowsort
+SELECT k, (a, b) NOT IN (SELECT x, y FROM mc_lt_inner i WHERE i.k < o.k) AS r
+FROM mc_lt_outer o;
+----
+1 true
+2 false
+3 true
+4 true
+5 NULL
+
+#############
+## Session time zone
+#############
+
+# A naive timestamp is compared with a time zone aware one in the session time
+# zone, for every tuple element as for a scalar `IN`. In +08 the naive
+# 2024-11-01 00:00 is not the aware 2024-11-01 00:00-04:00 (it would be if the
+# naive value were read in the aware value's own time zone).
+statement ok
+SET TIME ZONE = '+08'
+
+query II
+WITH timestamps(ts_tz, ts) AS (
+  VALUES (
+    arrow_cast('2024-11-01T00:00:00-04:00', 'Timestamp(Nanosecond, Some("America/New_York"))'),
+    '2024-11-01T00:00:00'::timestamp
+  )
+)
+SELECT
+  (SELECT count(*) FROM timestamps WHERE (ts_tz, 1) IN (SELECT ts, 1 FROM timestamps)) AS in_count,
+  (SELECT count(*) FROM timestamps WHERE (ts_tz, 1) NOT IN (SELECT ts, 1 FROM timestamps)) AS not_in_count;
+----
+0 1
+
+statement ok
+RESET datafusion.execution.time_zone
+
+#############
 ## Tuple and subquery column counts
 #############
 
@@ -363,6 +502,30 @@ z
 
 statement ok
 DEALLOCATE mc_tuple_not_in;
+
+statement ok
+CREATE TABLE mc_p1(id INT) AS VALUES (1), (3);
+
+statement ok
+CREATE TABLE mc_p2(id INT) AS VALUES (1), (3);
+
+# Two subquery columns named `id` under different qualifiers.
+statement ok
+PREPARE mc_tuple_qualified AS SELECT value FROM mc_outer
+WHERE ($1, b) NOT IN (SELECT p1.id, p2.id FROM mc_p1 p1 JOIN mc_p2 p2 ON p1.id = p2.id);
+
+# ($1 = 1) vs {(1, 1), (3, 3)}: a NULL b is UNKNOWN against (1, 1), every
+# other b mismatches both rows.
+query T rowsort
+EXECUTE mc_tuple_qualified(1);
+----
+w
+x
+y
+z
+
+statement ok
+DEALLOCATE mc_tuple_qualified;
 
 #############
 ## Cleanup
@@ -415,3 +578,18 @@ DROP TABLE mc_ree_outer;
 
 statement ok
 DROP TABLE mc_ree_inner;
+
+statement ok
+DROP TABLE mc_top_inner;
+
+statement ok
+DROP TABLE mc_str_outer;
+
+statement ok
+DROP TABLE mc_str_inner;
+
+statement ok
+DROP TABLE mc_p1;
+
+statement ok
+DROP TABLE mc_p2;

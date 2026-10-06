@@ -1021,7 +1021,9 @@ pub struct HashJoinExec {
     /// scalar `NOT IN`, which has two costs the uncorrelated scalar join does
     /// not: the outer side stays the build side, since only a single-key join
     /// is swapped, and without correlation keys every NULL-valued row is paired
-    /// with every row on the other side to check its other elements.
+    /// with every row on the other side to check its other elements. See
+    /// <https://github.com/apache/datafusion/issues/26088> and
+    /// <https://github.com/apache/datafusion/issues/26089> for the follow-ups.
     pub null_aware_value_keys: usize,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: Arc<PlanProperties>,
@@ -1953,7 +1955,7 @@ impl ExecutionPlan for HashJoinExec {
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.metrics.clone_inner())
+        Some(self.metrics.clone_inner().with_output_rows_skew())
     }
 
     fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {

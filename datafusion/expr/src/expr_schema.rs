@@ -20,7 +20,7 @@ use crate::ValueOrLambda;
 use crate::expr::{
     AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Cast, InList,
     InSubquery, Lambda, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
-    WindowFunctionParams,
+    WindowFunctionParams, in_subquery_tuple_values,
 };
 use crate::expr::{FieldMetadata, LambdaVariable};
 use crate::higher_order_function::HigherOrderReturnFieldArgs;
@@ -408,6 +408,23 @@ impl ExprSchemable for Expr {
             | Expr::Exists { .. } => Ok(false),
             Expr::SetComparison(_) => Ok(true),
             Expr::InSubquery(InSubquery { expr, subquery, .. }) => {
+                // A multi-column `(a, b) IN (SELECT x, y ...)` is UNKNOWN when
+                // any element or subquery column is NULL. The tuple is a
+                // `struct` call, which itself is never NULL, so its elements
+                // and every subquery column count.
+                if let Some(values) = in_subquery_tuple_values(expr, &subquery.subquery)?
+                {
+                    let mut nullable = subquery
+                        .subquery
+                        .schema()
+                        .fields()
+                        .iter()
+                        .any(|field| field.is_nullable());
+                    for value in values.iter() {
+                        nullable |= value.nullable(input_schema)?;
+                    }
+                    return Ok(nullable);
+                }
                 let expr_nullable = expr.nullable(input_schema)?;
                 let subquery_nullable = subquery.subquery.schema().fields().first().ok_or_else(|| {
                     plan_datafusion_err!("subquery must return exactly one column of data to compare against")

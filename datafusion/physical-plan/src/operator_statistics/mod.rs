@@ -37,17 +37,12 @@
 //! - [`StatisticsRegistry`]: Chains providers, lives in SessionState
 //! - [`ExtendedStatistics`]: Statistics with type-safe custom extensions
 //!
-//! # Built-in Providers
+//! # Bundled Providers
 //!
-//! The following providers are included and can be registered in this order:
-//!
-//! 1. [`FilterStatisticsProvider`] - selectivity-based filter estimation
-//! 2. [`ProjectionStatisticsProvider`] - column mapping through projections
-//! 3. [`PassthroughStatisticsProvider`] - passthrough for cardinality-preserving operators
-//! 4. [`AggregateStatisticsProvider`] - NDV-based GROUP BY cardinality estimation
-//! 5. [`JoinStatisticsProvider`] - NDV-based join output estimation (hash, sort-merge, cross)
-//! 6. [`LimitStatisticsProvider`] - caps output at the fetch limit (local and global)
-//! 7. [`UnionStatisticsProvider`] - sums input row counts
+//! The providers bundled in this module are deprecated: the default statistics
+//! estimation is each operator's [`ExecutionPlan::statistics_from_inputs`], and
+//! estimation improvements belong there. Register user-defined providers to
+//! plug in other estimation.
 //!
 //! # Statistics walk
 //!
@@ -392,7 +387,7 @@ impl StatisticsRegistry {
         Self { providers }
     }
 
-    /// Create a registry pre-loaded with the standard built-in providers.
+    /// Create a registry with the deprecated bundled providers.
     ///
     /// Provider order (first match wins):
     /// 1. [`FilterStatisticsProvider`]
@@ -402,6 +397,11 @@ impl StatisticsRegistry {
     /// 5. [`JoinStatisticsProvider`]
     /// 6. [`LimitStatisticsProvider`]
     /// 7. [`UnionStatisticsProvider`]
+    #[deprecated(
+        since = "56.0.0",
+        note = "the bundled providers are deprecated; the statistics walk uses each operator's `statistics_from_inputs` when no provider matches"
+    )]
+    #[expect(deprecated)]
     pub fn default_with_builtin_providers() -> Self {
         Self::with_providers(vec![
             Arc::new(FilterStatisticsProvider),
@@ -590,9 +590,14 @@ fn computed_with_row_count(
 /// estimation logic as `FilterExec::statistics_helper`, then additionally
 /// adjusts each column's `distinct_count` using [`ndv_after_selectivity`] based
 /// on the computed selectivity ratio.
+#[deprecated(
+    since = "56.0.0",
+    note = "duplicates `FilterExec::statistics_from_inputs` and adds a distinct count adjustment that belongs in the operator, see https://github.com/apache/datafusion/issues/26052; without a matching provider the statistics walk uses the operator's own estimate"
+)]
 #[derive(Debug, Default)]
 pub struct FilterStatisticsProvider;
 
+#[expect(deprecated)]
 impl StatisticsProvider for FilterStatisticsProvider {
     fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
         plan.downcast_ref::<FilterExec>().is_some()
@@ -649,9 +654,14 @@ impl StatisticsProvider for FilterStatisticsProvider {
 /// Maps enhanced child column statistics to output columns based on the
 /// projection expressions, preserving NDV and other statistics through
 /// column references.
+#[deprecated(
+    since = "56.0.0",
+    note = "duplicates the `statistics_from_inputs` of `ProjectionExec`; without a matching provider the statistics walk uses the operator's own estimate"
+)]
 #[derive(Debug, Default)]
 pub struct ProjectionStatisticsProvider;
 
+#[expect(deprecated)]
 impl StatisticsProvider for ProjectionStatisticsProvider {
     fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
         plan.downcast_ref::<ProjectionExec>().is_some()
@@ -691,9 +701,14 @@ impl StatisticsProvider for ProjectionStatisticsProvider {
 /// transform statistics, so we pass through the enhanced child stats directly.
 /// This avoids the fallback calling `statistics_from_inputs` (overall) which would
 /// trigger a redundant internal recursion with raw (non-enhanced) stats.
+#[deprecated(
+    since = "56.0.0",
+    note = "duplicates the `statistics_from_inputs` of the cardinality-preserving operators; without a matching provider the statistics walk uses the operator's own estimate"
+)]
 #[derive(Debug, Default)]
 pub struct PassthroughStatisticsProvider;
 
+#[expect(deprecated)]
 impl StatisticsProvider for PassthroughStatisticsProvider {
     fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
         plan.children().len() == 1
@@ -742,9 +757,14 @@ impl StatisticsProvider for PassthroughStatisticsProvider {
 /// - GROUP BY is empty (scalar aggregate)
 /// - Any GROUP BY expression is not a simple column reference
 /// - Any GROUP BY column lacks NDV information
+#[deprecated(
+    since = "56.0.0",
+    note = "duplicates the `statistics_from_inputs` of `AggregateExec`; without a matching provider the statistics walk uses the operator's own estimate"
+)]
 #[derive(Debug, Default)]
 pub struct AggregateStatisticsProvider;
 
+#[expect(deprecated)]
 impl StatisticsProvider for AggregateStatisticsProvider {
     fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
         plan.downcast_ref::<AggregateExec>().is_some()
@@ -835,9 +855,14 @@ impl StatisticsProvider for AggregateStatisticsProvider {
 /// Delegates when:
 /// - The plan is not a supported join type
 /// - Either input lacks row count information
+#[deprecated(
+    since = "56.0.0",
+    note = "replaces the estimates of `HashJoinExec`, `SortMergeJoinExec` and `CrossJoinExec` with separate estimation logic; without a matching provider the statistics walk uses the operator's own estimate"
+)]
 #[derive(Debug, Default)]
 pub struct JoinStatisticsProvider;
 
+#[expect(deprecated)]
 impl StatisticsProvider for JoinStatisticsProvider {
     fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
         plan.downcast_ref::<HashJoinExec>().is_some()
@@ -960,9 +985,14 @@ impl StatisticsProvider for JoinStatisticsProvider {
 ///
 /// Caps output row count at the limit value, accounting for any leading skip offset
 /// in `GlobalLimitExec`.
+#[deprecated(
+    since = "56.0.0",
+    note = "duplicates the `statistics_from_inputs` of the limit operators; without a matching provider the statistics walk uses the operator's own estimate"
+)]
 #[derive(Debug, Default)]
 pub struct LimitStatisticsProvider;
 
+#[expect(deprecated)]
 impl StatisticsProvider for LimitStatisticsProvider {
     fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
         plan.downcast_ref::<LocalLimitExec>().is_some()
@@ -1011,9 +1041,14 @@ impl StatisticsProvider for LimitStatisticsProvider {
 /// Statistics provider for [`UnionExec`].
 ///
 /// Sums row counts across all inputs.
+#[deprecated(
+    since = "56.0.0",
+    note = "duplicates the `statistics_from_inputs` of `UnionExec`; without a matching provider the statistics walk uses the operator's own estimate"
+)]
 #[derive(Debug, Default)]
 pub struct UnionStatisticsProvider;
 
+#[expect(deprecated)]
 impl StatisticsProvider for UnionStatisticsProvider {
     fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
         plan.downcast_ref::<UnionExec>().is_some()
@@ -1134,6 +1169,7 @@ impl StatisticsProvider for ClosureStatisticsProvider {
 }
 
 #[cfg(test)]
+#[expect(deprecated)]
 mod tests {
     use super::*;
     use crate::filter::FilterExec;

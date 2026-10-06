@@ -716,7 +716,7 @@ impl From<StreamType> for SendableRecordBatchStream {
         match stream {
             StreamType::AggregateStream(stream) => Box::pin(stream),
             StreamType::PartialHash(stream) => stream.into_stream(),
-            StreamType::PartialReduceHash(stream) => Box::pin(stream),
+            StreamType::PartialReduceHash(stream) => stream.into_stream(),
             StreamType::FinalHash(stream) => stream.into_stream(),
             StreamType::SingleHash(stream) => stream.into_stream(),
             StreamType::OrderedPartialAggregate(stream) => stream.into_stream(),
@@ -2520,11 +2520,38 @@ impl ExecutionPlan for AggregateExec {
                     Arc::clone(&self.input_schema),
                     Arc::clone(&self.schema),
                 )?;
-                // Reapply a DISTINCT limit only if the new input remains eligible.
-                if let AggregateKind::DistinctLimit { limit, .. } = &self.kind
-                    && let Some(optimized) =
+                // Reapply a limit only if the new input remains eligible.
+                let optimized = match &self.kind {
+                    AggregateKind::General { .. } => None,
+                    AggregateKind::DistinctLimit { limit, .. } => {
                         me.clone().try_optimize_distinct_soft_limit(*limit)
-                {
+                    }
+                    AggregateKind::TopKMinMax {
+                        aggr_expr,
+                        limit,
+                        descending,
+                        nulls_first,
+                        ..
+                    } => me.clone().try_optimize_topk(
+                        *limit,
+                        aggr_expr.name(),
+                        SortOptions::new(*descending, *nulls_first),
+                    ),
+                    // TopK DISTINCT orders by its single grouping key and
+                    // ignores `nulls_first`.
+                    AggregateKind::TopKDistinct {
+                        group_by,
+                        limit,
+                        descending,
+                    } => group_by.expr().first().and_then(|(_, alias)| {
+                        me.clone().try_optimize_topk(
+                            *limit,
+                            alias,
+                            SortOptions::new(*descending, false),
+                        )
+                    }),
+                };
+                if let Some(optimized) = optimized {
                     me = optimized.data;
                 }
                 me.dynamic_filter.clone_from(&self.dynamic_filter);
@@ -2600,7 +2627,7 @@ impl ExecutionPlan for AggregateExec {
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.metrics.clone_inner())
+        Some(self.metrics.clone_inner().with_output_rows_skew())
     }
 
     fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
@@ -6042,9 +6069,11 @@ mod tests {
         let stream: SendableRecordBatchStream = stream.into();
         let output = collect(stream).await?;
 
-        // Same flush cadence as the column-backed test: one flush per input
-        // batch, each sliced into batches of 2 and 1 rows.
-        assert_eq!(output.len(), 2 * num_input_batches);
+        // One flush per input batch. The memory limit only fits the table, so
+        // holding the materialized flush while slicing it does not fit and each
+        // flush is emitted whole instead of in `batch_size` slices.
+        assert_eq!(output.len(), num_input_batches);
+        assert!(output.iter().all(|batch| batch.num_rows() == 3));
         assert_snapshot!(batches_to_string(&output), @r"
         +---+---+-------------+
         | a | n | SUM(b)[sum] |

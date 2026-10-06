@@ -1022,3 +1022,175 @@ DROP TABLE nai_res_outer;
 
 statement ok
 DROP TABLE nai_res_inner;
+
+#############
+## Regression: a NULL `NOT IN` value over a `NOT NULL` subquery column
+##
+## `NULL NOT IN (non-empty set)` is UNKNOWN, so a `WHERE` clause must remove
+## every row, even when no column in the comparison is nullable. The join must
+## be null-aware when the value *expression* can be NULL: a NULL constant
+## (https://github.com/apache/datafusion/issues/25473) or a nullable expression
+## over `NOT NULL` columns (https://github.com/apache/datafusion/issues/25474).
+#############
+
+statement ok
+CREATE TABLE nanull_o(x INT NOT NULL) AS VALUES (1), (2);
+
+statement ok
+CREATE TABLE nanull_on(x INT) AS VALUES (1), (2);
+
+statement ok
+CREATE TABLE nanull_i(id INT NOT NULL) AS VALUES (1), (3);
+
+statement ok
+CREATE TABLE nanull_ie(id INT NOT NULL) AS SELECT * FROM (VALUES (1)) WHERE false;
+
+# NULL constants: UNKNOWN for every row, so no rows.
+query I
+SELECT x FROM nanull_o WHERE CAST(NULL AS INT) NOT IN (SELECT id FROM nanull_i);
+----
+
+query I
+SELECT x FROM nanull_o WHERE NULL NOT IN (SELECT id FROM nanull_i);
+----
+
+query I
+SELECT x FROM nanull_o WHERE NULLIF(1, 1) NOT IN (SELECT id FROM nanull_i);
+----
+
+# `x + NULL` is simplified to a NULL constant before decorrelation.
+query I
+SELECT x FROM nanull_o WHERE x + CAST(NULL AS INT) NOT IN (SELECT id FROM nanull_i);
+----
+
+query I
+SELECT x FROM nanull_o WHERE NOT (CAST(NULL AS INT) NOT IN (SELECT id FROM nanull_i));
+----
+
+# The nullability of the outer column does not matter.
+query I
+SELECT x FROM nanull_on WHERE CAST(NULL AS INT) NOT IN (SELECT id FROM nanull_i);
+----
+
+# Control: against an empty subquery, a NULL value gives TRUE.
+query I rowsort
+SELECT x FROM nanull_o WHERE CAST(NULL AS INT) NOT IN (SELECT id FROM nanull_ie);
+----
+1
+2
+
+# Control: a non-NULL constant absent from the subquery gives TRUE.
+query I rowsort
+SELECT x FROM nanull_o WHERE 5 NOT IN (SELECT id FROM nanull_i);
+----
+1
+2
+
+# Assert decorrelation and null-awareness, not physical join choices.
+statement ok
+SET datafusion.explain.logical_plan_only = true;
+
+# The NULL constant is projected as the key of a null-aware anti join, and no
+# filter is pushed into the subquery.
+query TT
+EXPLAIN SELECT x FROM nanull_o WHERE CAST(NULL AS INT) NOT IN (SELECT id FROM nanull_i);
+----
+logical_plan
+01)Projection: nanull_o.x
+02)--LeftAnti Join: __correlated_sq_1_value = __correlated_sq_1.id null_aware
+03)----Projection: nanull_o.x, Int32(NULL) AS __correlated_sq_1_value
+04)------TableScan: nanull_o projection=[x]
+05)----SubqueryAlias: __correlated_sq_1
+06)------TableScan: nanull_i projection=[id]
+
+# Nullable expressions over `NOT NULL` columns: NULL for every row, so no rows.
+query I
+SELECT x FROM nanull_o WHERE (CASE WHEN x > 100 THEN 1 END) NOT IN (SELECT id FROM nanull_i);
+----
+
+# Not folded: the key keeps its column reference, so null-awareness comes from
+# the nullability of the whole expression.
+query I
+SELECT x FROM nanull_o WHERE x + (CASE WHEN x > 100 THEN 1 END) NOT IN (SELECT id FROM nanull_i);
+----
+
+# Control: the same expression over a nullable column.
+query I
+SELECT x FROM nanull_on WHERE (CASE WHEN x > 100 THEN 1 END) NOT IN (SELECT id FROM nanull_i);
+----
+
+# Control: against an empty subquery, a NULL value gives TRUE.
+query I rowsort
+SELECT x FROM nanull_o WHERE (CASE WHEN x > 100 THEN 1 END) NOT IN (SELECT id FROM nanull_ie);
+----
+1
+2
+
+# Nullable expression on the subquery side: every inner value is NULL, so no
+# rows.
+query I
+SELECT x FROM nanull_o WHERE x NOT IN (SELECT CASE WHEN id > 100 THEN id END FROM nanull_i);
+----
+
+query TT
+EXPLAIN SELECT x FROM nanull_o WHERE (CASE WHEN x > 100 THEN 1 END) NOT IN (SELECT id FROM nanull_i);
+----
+logical_plan
+01)LeftAnti Join: CASE WHEN nanull_o.x > Int32(100) THEN Int64(1) END = __correlated_sq_1.nanull_i.id null_aware
+02)--TableScan: nanull_o projection=[x]
+03)--SubqueryAlias: __correlated_sq_1
+04)----Projection: CAST(nanull_i.id AS Int64)
+05)------TableScan: nanull_i projection=[id]
+
+# `x + 1` over `NOT NULL x` cannot be NULL, so the anti join stays plain.
+query I
+SELECT x FROM nanull_o WHERE x + 1 NOT IN (SELECT id FROM nanull_i);
+----
+1
+
+query TT
+EXPLAIN SELECT x FROM nanull_o WHERE x + 1 NOT IN (SELECT id FROM nanull_i);
+----
+logical_plan
+01)LeftAnti Join: CAST(nanull_o.x AS Int64) + Int64(1) = __correlated_sq_1.nanull_i.id
+02)--TableScan: nanull_o projection=[x]
+03)--SubqueryAlias: __correlated_sq_1
+04)----Projection: CAST(nanull_i.id AS Int64)
+05)------TableScan: nanull_i projection=[id]
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
+
+# The same results with a single partition.
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+query I
+SELECT x FROM nanull_o WHERE CAST(NULL AS INT) NOT IN (SELECT id FROM nanull_i);
+----
+
+query I
+SELECT x FROM nanull_o WHERE (CASE WHEN x > 100 THEN 1 END) NOT IN (SELECT id FROM nanull_i);
+----
+
+query I rowsort
+SELECT x FROM nanull_o WHERE CAST(NULL AS INT) NOT IN (SELECT id FROM nanull_ie);
+----
+1
+2
+
+# The SLT runner sets target_partitions to 4, so restore that value explicitly.
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+statement ok
+DROP TABLE nanull_o;
+
+statement ok
+DROP TABLE nanull_on;
+
+statement ok
+DROP TABLE nanull_i;
+
+statement ok
+DROP TABLE nanull_ie;
