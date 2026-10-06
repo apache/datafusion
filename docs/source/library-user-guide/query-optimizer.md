@@ -164,9 +164,9 @@ the actual optimization. This approach is used in projection push down and filte
 
 ### Rule Precedence
 
-Two rules can want the opposite order for the same pair of adjacent plan nodes. Each rule then undoes the work of the other one on every optimizer pass. The loop stops at `datafusion.optimizer.max_passes`, and the position of the two rules in the rule list decides the plan. This wastes a pass and makes the plan depend on the rule list.
+Two rules can want the opposite order for the same pair of adjacent plan nodes. Each rule then undoes the work of the other one on every optimizer pass. The plan does not reach a fixed point, so the optimizer runs more passes than necessary, and the position of the two rules in the rule list decides the plan. The optimizer can stop early when the plan at the end of a pass is the same as the plan at the end of an earlier pass, but that does not make the result independent of the rule order.
 
-Do not let two rules compete. Give one rule precedence, make that rule yield, and record the decision in the module documentation of both rules.
+Do not let two rules compete. Give one rule precedence, make the competing rule yield, and record the decision in the module documentation of both rules.
 
 There is one such decision today:
 

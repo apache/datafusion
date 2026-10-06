@@ -4627,6 +4627,65 @@ mod tests {
         )
     }
 
+    /// Runs the default optimizer and returns, for each pass, the names of the
+    /// rules that changed the plan in that pass.
+    fn rules_that_changed_plan_per_pass(plan: LogicalPlan) -> Result<Vec<Vec<String>>> {
+        let optimizer = Optimizer::new();
+        let rules_per_pass = optimizer.rules.len();
+        let mut previous = plan.display_indent().to_string();
+        let mut calls = 0;
+        let mut passes: Vec<Vec<String>> = vec![];
+        optimizer.optimize(plan, &OptimizerContext::new(), |plan, rule| {
+            if calls % rules_per_pass == 0 {
+                passes.push(vec![]);
+            }
+            calls += 1;
+            let current = plan.display_indent().to_string();
+            if current != previous {
+                passes.last_mut().unwrap().push(rule.name().to_string());
+                previous = current;
+            }
+        })?;
+        Ok(passes)
+    }
+
+    /// `PushDownFilter` and `PushDownLeafProjections` must not undo each other
+    /// for a filter next to a pure extraction projection
+    /// (<https://github.com/apache/datafusion/issues/14540>). Neither rule may
+    /// change the plan in the last optimizer pass. The source does not absorb
+    /// filters, so the `Filter` node stays in the plan.
+    #[test]
+    fn filter_and_extraction_projection_reach_fixed_point() -> Result<()> {
+        let scan = || {
+            table_scan_with_pushdown_provider_builder(
+                TableProviderFilterPushDown::Unsupported,
+                vec![],
+                None,
+            )
+        };
+        let simple = scan()?
+            .filter(col("b").gt(lit(5)))?
+            .project(vec![leaf_udf_expr(col("a"))])?
+            .build()?;
+        // Two filters, one of them on an extracted leaf.
+        let two_filters = scan()?
+            .filter(col("b").gt(lit(5)))?
+            .filter(leaf_udf_expr(col("a")).eq(lit(1)))?
+            .project(vec![leaf_udf_expr(col("a")), col("b")])?
+            .build()?;
+
+        for plan in [simple, two_filters] {
+            let passes = rules_that_changed_plan_per_pass(plan)?;
+            let last = passes.last().unwrap();
+            assert!(
+                !last.iter().any(|rule| rule == "push_down_filter"
+                    || rule == "push_down_leaf_projections"),
+                "pushdown rules changed the plan in the last pass: {passes:?}"
+            );
+        }
+        Ok(())
+    }
+
     /// A projection that mixes an extraction alias with a computed expression is
     /// not a pure extraction projection, so the filter still moves below it.
     #[test]
