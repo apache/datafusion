@@ -821,6 +821,7 @@ async fn leaf_pushdown_parquet_schema_evolution() {
         register_parquet(&ctx, &dir, NARROW, &[narrow_batch()], None).await;
         contexts.push(ctx);
     }
+    check_evolved_filters(&contexts[0], &contexts[1], &wide).await;
     run(
         &contexts[0],
         &contexts[1],
@@ -830,4 +831,51 @@ async fn leaf_pushdown_parquet_schema_evolution() {
         seed(),
     )
     .await;
+}
+
+/// Filters on the evolved column `b` of `t1`. The fuzz cases mostly carry `b`
+/// through projections, where pruning can remove it. These read `b` and filter
+/// on it, so the pushed filter must be adapted from Int64 to the Int32 file.
+/// The oracle is an in memory `t1` that holds the same rows, all as Int64.
+async fn check_evolved_filters(on: &SessionContext, off: &SessionContext, wide: &Schema) {
+    let narrow = table_batch(0);
+    let mut columns = narrow.columns().to_vec();
+    columns[1] = arrow::compute::cast(&columns[1], &DataType::Int64).unwrap();
+    let widened = RecordBatch::try_new(Arc::new(wide.clone()), columns).unwrap();
+    let oracle = SessionContext::new_with_config(config(true, false));
+    oracle
+        .register_batch(
+            "t1",
+            arrow::compute::concat_batches(&widened.schema(), [&widened, &widened])
+                .unwrap(),
+        )
+        .unwrap();
+    for sql in [
+        "SELECT b, s['a'] FROM t1 WHERE b > 0",
+        "SELECT s['a'] FROM t1 WHERE b > 0",
+        "SELECT a, b FROM t1 WHERE b = 1 OR b IS NULL",
+        "SELECT b, s['b'] FROM t1 WHERE b < 0 AND s['a'] IS NOT NULL",
+        "SELECT b FROM t1 WHERE b + 1 > 1",
+    ] {
+        let expected = collect(&oracle, sql).await.unwrap();
+        let rows: usize = expected.iter().map(RecordBatch::num_rows).sum();
+        assert!(
+            rows > 0 && rows < 2 * ROWS as usize,
+            "{sql}: the filter must keep some rows and drop some, keeps {rows}"
+        );
+        let plan = collect(on, &format!("EXPLAIN {sql}")).await.unwrap();
+        let plan = pretty_format_batches(&plan).unwrap().to_string();
+        assert!(
+            plan.contains("predicate=") && !plan.contains("FilterExec"),
+            "{sql}: the filter is not pushed into the Parquet scan:\n{plan}"
+        );
+        let expected = normalize(&expected);
+        for (name, ctx) in [("parquet pushdown on", on), ("parquet pushdown off", off)] {
+            let actual = normalize(&collect(ctx, sql).await.unwrap());
+            assert_eq!(
+                actual, expected,
+                "{sql}: {name} differs from the in memory oracle"
+            );
+        }
+    }
 }
