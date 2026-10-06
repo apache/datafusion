@@ -8272,22 +8272,28 @@ mod tests {
 
         let mut builder = StringViewBuilder::new();
         builder.append_value("this is a long string that exceeds inline size 12");
+        builder.append_value("short_inline");
+        builder.append_null();
         builder.append_value("another long string that exceeds inline size 12");
         let base_array: StringViewArray = builder.finish();
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8View, true)]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("s", DataType::Utf8View, true),
+            Field::new("id", DataType::Int32, false),
+        ]));
+
+        let id_array = Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as ArrayRef;
 
         let batch1 = RecordBatch::try_new(
             Arc::clone(&schema),
-            vec![Arc::new(base_array.clone())],
+            vec![Arc::new(base_array.clone()), Arc::clone(&id_array)],
         )?;
         let batch2 = RecordBatch::try_new(
             Arc::clone(&schema),
-            vec![Arc::new(base_array.clone())],
+            vec![Arc::new(base_array.clone()), Arc::clone(&id_array)],
         )?;
         let batch3 = RecordBatch::try_new(
             Arc::clone(&schema),
-            vec![Arc::new(base_array.clone())],
+            vec![Arc::new(base_array.clone()), Arc::clone(&id_array)],
         )?;
 
         // Before deduplication, concat_batches puts 3 duplicate buffer references in data_buffers
@@ -8321,7 +8327,28 @@ mod tests {
             .downcast_ref::<StringViewArray>()
             .unwrap();
         assert_eq!(view_arr.data_buffers().len(), 1);
-        assert_eq!(batch.num_rows(), 6);
+        assert_eq!(batch.num_rows(), 12);
+        assert_eq!(
+            view_arr.value(0),
+            "this is a long string that exceeds inline size 12"
+        );
+        assert_eq!(view_arr.value(1), "short_inline");
+        assert!(view_arr.is_null(2));
+        assert_eq!(
+            view_arr.value(3),
+            "another long string that exceeds inline size 12"
+        );
+
+        let id_col = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(id_col.value(0), 1);
+        assert_eq!(id_col.value(1), 2);
+        assert_eq!(id_col.value(2), 3);
+        assert_eq!(id_col.value(3), 4);
+        assert_eq!(id_col.value(4), 1);
         Ok(())
     }
 
@@ -8331,25 +8358,28 @@ mod tests {
 
         let mut builder = BinaryViewBuilder::new();
         builder.append_value(b"this is a long binary that exceeds inline size 12");
+        builder.append_value(b"short");
+        builder.append_null();
         builder.append_value(b"another long binary that exceeds inline size 12");
         let base_array: BinaryViewArray = builder.finish();
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "b",
-            DataType::BinaryView,
-            true,
-        )]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("b", DataType::BinaryView, true),
+            Field::new("id", DataType::Int64, false),
+        ]));
+
+        let id_array = Arc::new(Int64Array::from(vec![10, 20, 30, 40])) as ArrayRef;
 
         let batch1 = RecordBatch::try_new(
             Arc::clone(&schema),
-            vec![Arc::new(base_array.clone())],
+            vec![Arc::new(base_array.clone()), Arc::clone(&id_array)],
         )?;
         let batch2 = RecordBatch::try_new(
             Arc::clone(&schema),
-            vec![Arc::new(base_array.clone())],
+            vec![Arc::new(base_array.clone()), Arc::clone(&id_array)],
         )?;
         let batch3 = RecordBatch::try_new(
             Arc::clone(&schema),
-            vec![Arc::new(base_array.clone())],
+            vec![Arc::new(base_array.clone()), Arc::clone(&id_array)],
         )?;
 
         let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
@@ -8372,7 +8402,25 @@ mod tests {
             .downcast_ref::<BinaryViewArray>()
             .unwrap();
         assert_eq!(view_arr.data_buffers().len(), 1);
-        assert_eq!(batch.num_rows(), 6);
+        assert_eq!(batch.num_rows(), 12);
+        assert_eq!(
+            view_arr.value(0),
+            b"this is a long binary that exceeds inline size 12"
+        );
+        assert_eq!(view_arr.value(1), b"short");
+        assert!(view_arr.is_null(2));
+        assert_eq!(
+            view_arr.value(3),
+            b"another long binary that exceeds inline size 12"
+        );
+
+        let id_col = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(id_col.value(0), 10);
+        assert_eq!(id_col.value(4), 10);
         Ok(())
     }
 
@@ -8468,9 +8516,28 @@ mod tests {
         let batch1 = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(arr1)])?;
         let batch2 = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(arr2)])?;
 
+        // Before deduplication, 4 input batches with duplicate references to short_buf and long_buf
+        // result in 4 data buffer references in the concatenated raw batch.
+        let concatenated_raw = concat_batches(
+            &schema,
+            &[
+                batch1.clone(),
+                batch2.clone(),
+                batch1.clone(),
+                batch2.clone(),
+            ],
+        )?;
+        let raw_view_arr = concatenated_raw
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .unwrap();
+        assert_eq!(raw_view_arr.data_buffers().len(), 4);
+
         let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
         let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
-        let batches = vec![batch1, batch2];
+        // Provide 4 batches with duplicate handles to both short_buf and long_buf
+        let batches = vec![batch1.clone(), batch2.clone(), batch1, batch2];
         let (mut reservation, inputs_reserved) = reserve_inputs(&batches, &pool)?;
 
         let batch = concat_build_batches(
@@ -8488,19 +8555,33 @@ mod tests {
             .downcast_ref::<StringViewArray>()
             .unwrap();
 
-        // Both rows must be readable after deduplication — the value that lives
-        // exclusively in the longer buffer must not have been dropped.
+        // 4 buffer references before deduplication are collapsed to 2 unique buffers:
+        // short_buf and long_buf are kept separate despite sharing the same pointer address.
+        assert_eq!(view_arr.data_buffers().len(), 2);
+        assert_eq!(batch.num_rows(), 4);
+
+        // Both rows from both batches must be readable after deduplication — the value that lives
+        // exclusively in the longer buffer must not have been dropped or truncated.
         assert_eq!(
             view_arr.value(0),
             "this is a long string that exceeds inline size 12",
-            "value from the shorter-declared-length buffer should survive"
+            "value from the shorter-declared-length buffer should survive (row 0)"
         );
         assert_eq!(
             view_arr.value(1),
             "another long string that exceeds inline size 12",
-            "value from the longer-declared-length buffer should survive"
+            "value from the longer-declared-length buffer should survive (row 1)"
         );
-        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(
+            view_arr.value(2),
+            "this is a long string that exceeds inline size 12",
+            "value from duplicate shorter-declared-length buffer should survive (row 2)"
+        );
+        assert_eq!(
+            view_arr.value(3),
+            "another long string that exceeds inline size 12",
+            "value from duplicate longer-declared-length buffer should survive (row 3)"
+        );
         Ok(())
     }
 
@@ -11400,6 +11481,16 @@ mod tests {
         assert_eq!(result.data_buffers().len(), array.data_buffers().len());
     }
 
+    /// Fast path: an array with zero data buffers (all inline values) must be returned as-is.
+    #[test]
+    fn test_dedup_view_array_zero_buffers_is_noop() {
+        let array = StringViewArray::from(vec!["inline_only"]);
+        assert_eq!(array.data_buffers().len(), 0);
+        let result = deduplicate_view_array_buffers(&array);
+        assert_eq!(result.data_buffers().len(), 0);
+        assert_eq!(result.value(0), "inline_only");
+    }
+
     /// Fast path: multiple distinct buffers (no duplicates) → returned as-is.
     #[test]
     fn test_dedup_view_array_no_duplicates_is_noop() {
@@ -11447,6 +11538,56 @@ mod tests {
         assert_eq!(deduped.value(3), "short");
     }
 
+    /// Mixed inline, long strings, and nulls: ensures the view rewriting loop handles
+    /// non-inline view remapping, skips inline views (length <= 12), and preserves the null buffer.
+    #[test]
+    fn test_dedup_view_array_mixed_inline_long_and_nulls() {
+        let array = StringViewArray::from(vec![
+            Some("this is a long string that exceeds inline size 12"),
+            Some("inline"),
+            None,
+        ]);
+        let doubled = arrow::compute::concat(&[&array as _, &array as _]).unwrap();
+        let doubled = doubled.as_any().downcast_ref::<StringViewArray>().unwrap();
+        assert_eq!(doubled.data_buffers().len(), 2);
+        let deduped = deduplicate_view_array_buffers(doubled);
+        assert_eq!(deduped.data_buffers().len(), 1);
+        assert_eq!(
+            deduped.value(0),
+            "this is a long string that exceeds inline size 12"
+        );
+        assert_eq!(deduped.value(1), "inline");
+        assert!(deduped.is_null(2));
+        assert_eq!(
+            deduped.value(3),
+            "this is a long string that exceeds inline size 12"
+        );
+        assert_eq!(deduped.value(4), "inline");
+        assert!(deduped.is_null(5));
+    }
+
+    /// Direct BinaryView path: exercises deduplicate_view_array_buffers directly on BinaryViewArray
+    /// with mixed long values, inline values, and nulls.
+    #[test]
+    fn test_dedup_view_array_binary_view_direct() {
+        let base = BinaryViewArray::from_iter(vec![
+            Some(&b"this is definitely longer than 12 bytes"[..]),
+            Some(&b"short"[..]),
+            None,
+        ]);
+        let doubled = arrow::compute::concat(&[&base as _, &base as _]).unwrap();
+        let doubled = doubled.as_any().downcast_ref::<BinaryViewArray>().unwrap();
+        assert_eq!(doubled.data_buffers().len(), 2);
+        let deduped = deduplicate_view_array_buffers(doubled);
+        assert_eq!(deduped.data_buffers().len(), 1);
+        assert_eq!(deduped.value(0), b"this is definitely longer than 12 bytes");
+        assert_eq!(deduped.value(1), b"short");
+        assert!(deduped.is_null(2));
+        assert_eq!(deduped.value(3), b"this is definitely longer than 12 bytes");
+        assert_eq!(deduped.value(4), b"short");
+        assert!(deduped.is_null(5));
+    }
+
     /// BinaryView path: `deduplicate_record_batch_view_buffers` must also
     /// deduplicate `BinaryView` columns (exercises the BinaryView arm).
     #[test]
@@ -11480,6 +11621,56 @@ mod tests {
         assert_eq!(result.data_buffers().len(), 1);
     }
 
+    /// Mixed columns path: `deduplicate_record_batch_view_buffers` must deduplicate
+    /// both Utf8View and BinaryView columns while passing through non-view columns (Int32, Utf8).
+    #[test]
+    fn test_dedup_record_batch_mixed_view_and_non_view_columns() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("s", DataType::Utf8View, true),
+            Field::new("b", DataType::BinaryView, true),
+            Field::new("n", DataType::Int32, false),
+            Field::new("str", DataType::Utf8, false),
+        ]));
+        let str_base = StringViewArray::from(vec!["long string value here abc"]);
+        let bin_base =
+            BinaryViewArray::from_iter_values(vec![b"long binary value here abc"]);
+        let str_doubled =
+            arrow::compute::concat(&[&str_base as _, &str_base as _]).unwrap();
+        let bin_doubled =
+            arrow::compute::concat(&[&bin_base as _, &bin_base as _]).unwrap();
+        let int_col: ArrayRef = Arc::new(Int32Array::from(vec![42, 43]));
+        let utf8_col: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar"]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                str_doubled,
+                bin_doubled,
+                Arc::clone(&int_col),
+                Arc::clone(&utf8_col),
+            ],
+        )
+        .unwrap();
+
+        let deduped = deduplicate_record_batch_view_buffers(&batch).unwrap();
+        let deduped_str = deduped
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .unwrap();
+        let deduped_bin = deduped
+            .column(1)
+            .as_any()
+            .downcast_ref::<BinaryViewArray>()
+            .unwrap();
+
+        assert_eq!(deduped_str.data_buffers().len(), 1);
+        assert_eq!(deduped_bin.data_buffers().len(), 1);
+        // Non-view columns passed through unmodified
+        assert!(Arc::ptr_eq(deduped.column(2), &int_col));
+        assert!(Arc::ptr_eq(deduped.column(3), &utf8_col));
+    }
+
     /// Fast path: a batch with no Utf8View or BinaryView columns must be
     /// returned as a cheap clone with no allocations.
     #[test]
@@ -11493,5 +11684,70 @@ mod tests {
         // Should succeed without error and return the same data.
         let result = deduplicate_record_batch_view_buffers(&batch).unwrap();
         assert_eq!(result.num_rows(), 3);
+    }
+
+    /// Reverse concatenation order: exercises concat_build_batches with reverse=true
+    /// on view columns to verify both reverse order and buffer deduplication work together.
+    #[test]
+    fn test_concat_build_batches_reverse_order_deduplication() -> Result<()> {
+        use arrow::array::StringViewBuilder;
+
+        let mut builder = StringViewBuilder::new();
+        builder.append_value("batch1: long string value exceeding twelve bytes");
+        let arr1 = builder.finish();
+
+        let mut builder = StringViewBuilder::new();
+        builder.append_value("batch2: long string value exceeding twelve bytes");
+        let arr2 = builder.finish();
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            DataType::Utf8View,
+            false,
+        )]));
+        let batch1 = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(arr1)])?;
+        let batch2 = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(arr2)])?;
+
+        let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        // 4 batches total with duplicate handles to both batch1 and batch2
+        let batches = vec![batch1.clone(), batch2.clone(), batch1, batch2];
+        let (mut reservation, inputs_reserved) = reserve_inputs(&batches, &pool)?;
+
+        let batch = concat_build_batches(
+            &schema,
+            batches,
+            true,
+            inputs_reserved,
+            &mut reservation,
+            &metrics,
+        )?;
+
+        let view_arr = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .unwrap();
+
+        assert_eq!(view_arr.data_buffers().len(), 2);
+        assert_eq!(batch.num_rows(), 4);
+        // Reverse order: batch2, batch1, batch2, batch1
+        assert_eq!(
+            view_arr.value(0),
+            "batch2: long string value exceeding twelve bytes"
+        );
+        assert_eq!(
+            view_arr.value(1),
+            "batch1: long string value exceeding twelve bytes"
+        );
+        assert_eq!(
+            view_arr.value(2),
+            "batch2: long string value exceeding twelve bytes"
+        );
+        assert_eq!(
+            view_arr.value(3),
+            "batch1: long string value exceeding twelve bytes"
+        );
+        Ok(())
     }
 }
