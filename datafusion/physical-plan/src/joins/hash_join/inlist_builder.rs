@@ -17,10 +17,13 @@
 
 //! Utilities for building InList expressions from hash join build side data
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, StructArray};
+use arrow::array::{ArrayRef, StructArray, UInt64Array};
+use arrow::compute::take;
 use arrow::datatypes::{Field, FieldRef, Fields};
+use arrow::row::{Row, RowConverter, SortField};
 use arrow_schema::DataType;
 use datafusion_common::Result;
 
@@ -75,6 +78,48 @@ pub(super) fn build_struct_inlist_values(
     };
 
     Ok(Some(source_array))
+}
+
+/// Removes duplicate entries from an `IN` list value array and sorts the
+/// remaining entries.
+///
+/// Equality and order are those of the arrow row format produced by
+/// [`RowConverter`] with default [`SortField`] options (ascending, NULLs
+/// first). This works for single values, for the struct values of
+/// multi-column keys and for dictionaries. NULLs compare equal to each other,
+/// so many NULLs collapse into one NULL. That does not change the result of
+/// `IN`: one NULL in the list gives the same three-valued result as many.
+///
+/// Sorting makes the list independent of the order in which build rows
+/// arrive, so the displayed filter is deterministic.
+///
+/// Returns the input unchanged when it has fewer than two entries, or when
+/// its type cannot be row-encoded (deduplication is an optimization, not a
+/// requirement).
+pub(super) fn sorted_distinct_inlist_values(values: ArrayRef) -> Result<ArrayRef> {
+    if values.len() < 2 {
+        return Ok(values);
+    }
+
+    let sort_field = SortField::new(values.data_type().clone());
+    if !RowConverter::supports_fields(std::slice::from_ref(&sort_field)) {
+        return Ok(values);
+    }
+
+    let converter = RowConverter::new(vec![sort_field])?;
+    let rows = converter.convert_columns(std::slice::from_ref(&values))?;
+
+    // Select the first entry of each distinct value by index. The entries are
+    // taken from the input instead of decoded from the rows, so that the type
+    // of the input (for example a dictionary) is kept.
+    let mut seen: HashSet<Row> = HashSet::with_capacity(values.len());
+    let mut indices: Vec<usize> = (0..rows.num_rows())
+        .filter(|&idx| seen.insert(rows.row(idx)))
+        .collect();
+    indices.sort_unstable_by(|&a, &b| rows.row(a).cmp(&rows.row(b)));
+
+    let indices = UInt64Array::from_iter_values(indices.into_iter().map(|i| i as u64));
+    Ok(take(values.as_ref(), &indices, None)?)
 }
 
 #[cfg(test)]
@@ -154,5 +199,26 @@ mod tests {
 
         assert_eq!(result.len(), 3);
         assert_eq!(result.data_type(), dict_array.data_type());
+    }
+
+    #[test]
+    fn test_sorted_distinct_inlist_values_keeps_dictionary_type() {
+        let keys = Int8Array::from(vec![1i8, 0, 1, 1, 0]);
+        let values = Arc::new(StringArray::from(vec!["foo", "bar"]));
+        let dict_array = Arc::new(DictionaryArray::new(keys, values)) as ArrayRef;
+
+        let result = sorted_distinct_inlist_values(Arc::clone(&dict_array)).unwrap();
+
+        assert_eq!(result.data_type(), dict_array.data_type());
+        assert_eq!(result.len(), 2);
+        // "bar" sorts before "foo".
+        assert_eq!(
+            arrow::util::display::array_value_to_string(&result, 0).unwrap(),
+            "bar"
+        );
+        assert_eq!(
+            arrow::util::display::array_value_to_string(&result, 1).unwrap(),
+            "foo"
+        );
     }
 }
