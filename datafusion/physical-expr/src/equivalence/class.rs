@@ -22,13 +22,10 @@ use std::sync::Arc;
 use std::vec::IntoIter;
 
 use super::ProjectionMapping;
-use crate::expressions::Literal;
+use crate::expressions::{Column, Literal};
 use crate::physical_expr::add_offset_to_expr;
 use crate::projection::ProjectionTargets;
 use crate::{PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement};
-use arrow::array::new_null_array;
-use arrow::datatypes::{Field, Schema, SchemaRef};
-use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{JoinType, Result, ScalarValue};
@@ -813,6 +810,10 @@ impl EquivalenceGroup {
     }
 
     /// Combine equivalence groups of the given join children.
+    ///
+    /// For outer joins, equivalences are conservatively reduced to direct
+    /// columns on the null-extended side and expressions independent of that
+    /// side. This avoids evaluating arbitrary expressions during planning.
     pub fn join(
         &self,
         right_equivalences: &Self,
@@ -820,33 +821,14 @@ impl EquivalenceGroup {
         left_size: usize,
         on: &[(PhysicalExprRef, PhysicalExprRef)],
     ) -> Result<Self> {
-        self.join_with_optional_schema(right_equivalences, join_type, left_size, None, on)
+        self.join_equivalences(right_equivalences, join_type, left_size, on)
     }
 
-    /// Combine equivalence groups for a join with its output schema available.
-    pub(crate) fn join_with_schema(
+    fn join_equivalences(
         &self,
         right_equivalences: &Self,
         join_type: &JoinType,
         left_size: usize,
-        join_schema: &SchemaRef,
-        on: &[(PhysicalExprRef, PhysicalExprRef)],
-    ) -> Result<Self> {
-        self.join_with_optional_schema(
-            right_equivalences,
-            join_type,
-            left_size,
-            Some(join_schema),
-            on,
-        )
-    }
-
-    fn join_with_optional_schema(
-        &self,
-        right_equivalences: &Self,
-        join_type: &JoinType,
-        left_size: usize,
-        join_schema: Option<&SchemaRef>,
         on: &[(PhysicalExprRef, PhysicalExprRef)],
     ) -> Result<Self> {
         let group = match join_type {
@@ -859,30 +841,19 @@ impl EquivalenceGroup {
                         .collect::<Result<Vec<_>>>()?,
                 );
 
-                // Outer joins introduce rows where one side's columns are all
-                // NULL. Keep only equivalences that remain true for that
-                // null-extended row; expressions such as coalesce(a, 0) do
-                // not, even when they were equivalent to a column before the
-                // join.
-                if let Some(join_schema) = join_schema {
-                    match join_type {
-                        JoinType::Left => {
-                            right = right.with_null_preserving_expressions(&null_batch(
-                                join_schema,
-                            )?);
-                        }
-                        JoinType::Right => {
-                            left = left.with_null_preserving_expressions(&null_batch(
-                                join_schema,
-                            )?);
-                        }
-                        JoinType::Full => {
-                            let batch = null_batch(join_schema)?;
-                            left = left.with_null_preserving_expressions(&batch);
-                            right = right.with_null_preserving_expressions(&batch);
-                        }
-                        _ => {}
+                // Outer joins add rows where the nullable side is NULL. Keep
+                // direct columns (which all become NULL together) and
+                // expressions independent of that side. Drop other expressions
+                // conservatively; evaluating arbitrary ScalarUDFs during
+                // planning can panic or have side effects.
+                match join_type {
+                    JoinType::Left => right = right.with_null_extended_side(),
+                    JoinType::Right => left = left.with_null_extended_side(),
+                    JoinType::Full => {
+                        left = left.with_null_extended_side();
+                        right = right.with_null_extended_side();
                     }
+                    _ => {}
                 }
 
                 let mut result =
@@ -908,20 +879,38 @@ impl EquivalenceGroup {
         Ok(group)
     }
 
-    /// Retain only expressions that evaluate to NULL when the joined row is
-    /// null-extended. Rebuilding the classes also drops constant information
-    /// that may no longer hold after an outer join.
-    fn with_null_preserving_expressions(self, null_batch: &RecordBatch) -> Self {
-        let classes = self.classes.into_iter().filter_map(|class| {
-            let expressions = class.into_iter().filter(|expr| {
-                !is_volatile(expr)
-                    && expr
-                        .evaluate(null_batch)
-                        .and_then(|value| value.into_array(1))
-                        .is_ok_and(|array| array.null_count() == 1)
-            });
-            let class = EquivalenceClass::new(expressions);
-            (!class.is_trivial()).then_some(class)
+    /// Conservatively retain equivalences valid when this side is null-extended.
+    fn with_null_extended_side(self) -> Self {
+        let classes = self.classes.into_iter().flat_map(|class| {
+            let mut null_equivalences: Vec<(PhysicalExprRef, Vec<PhysicalExprRef>)> =
+                vec![];
+            let mut unchanged = Vec::new();
+            for expr in class {
+                if is_volatile(&expr) {
+                    continue;
+                }
+                if contains_column_reference(&expr) {
+                    if let Some(null_expr) = null_extended_expr(&expr) {
+                        if let Some((_, equivalent_exprs)) =
+                            null_equivalences.iter_mut().find(|(existing, _)| {
+                                existing.as_ref().eq(null_expr.as_ref())
+                            })
+                        {
+                            equivalent_exprs.push(expr);
+                        } else {
+                            null_equivalences.push((null_expr, vec![expr]));
+                        }
+                    }
+                } else {
+                    unchanged.push(expr);
+                }
+            }
+            null_equivalences
+                .into_iter()
+                .map(|(_, exprs)| exprs)
+                .chain(std::iter::once(unchanged))
+                .map(EquivalenceClass::new)
+                .filter(|class| !class.is_trivial())
         });
         Self::new(classes)
     }
@@ -981,27 +970,32 @@ impl EquivalenceGroup {
     }
 }
 
-/// Build a one-row batch with every field NULL so expressions can be checked
-/// for their behavior on an outer join's null-extended rows.
-fn null_batch(schema: &SchemaRef) -> Result<RecordBatch> {
-    let schema = Arc::new(Schema::new(
-        schema
-            .fields()
-            .iter()
-            .map(|field| Field::new(field.name(), field.data_type().clone(), true))
-            .collect::<Vec<_>>(),
-    ));
-    let columns = schema
-        .fields()
-        .iter()
-        .map(|field| new_null_array(field.data_type(), 1))
-        .collect();
-    // A cross join can have no output columns. Preserve the synthetic row count
-    // in that case so evaluating constant expressions still sees one row.
-    let options = RecordBatchOptions::new().with_row_count(Some(1));
-    Ok(RecordBatch::try_new_with_options(
-        schema, columns, &options,
-    )?)
+/// Whether an expression tree references any input column.
+fn contains_column_reference(expr: &PhysicalExprRef) -> bool {
+    if expr.downcast_ref::<Column>().is_some() {
+        return true;
+    }
+    let children = expr.children();
+    if children.is_empty() {
+        return expr.downcast_ref::<Literal>().is_none();
+    }
+    children.into_iter().any(contains_column_reference)
+}
+
+/// Replace input columns with NULL without evaluating the expression.
+fn null_extended_expr(expr: &PhysicalExprRef) -> Option<PhysicalExprRef> {
+    if expr.downcast_ref::<Column>().is_some() {
+        return Some(Arc::new(Literal::new(ScalarValue::Null)));
+    }
+    let children = expr.children();
+    if children.is_empty() {
+        return expr.downcast_ref::<Literal>().map(|_| Arc::clone(expr));
+    }
+    let children = children
+        .into_iter()
+        .map(null_extended_expr)
+        .collect::<Option<Vec<_>>>()?;
+    Arc::clone(expr).with_new_children(children).ok()
 }
 
 impl Deref for EquivalenceGroup {
@@ -1058,20 +1052,58 @@ mod tests {
     use crate::equivalence::tests::create_test_params;
     use crate::expressions::{BinaryExpr, Column, binary, col, lit};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use datafusion_expr::Operator;
 
     #[test]
-    fn full_join_equivalences_support_empty_schema() -> Result<()> {
-        let schema = Arc::new(Schema::empty());
-        let left = EquivalenceGroup::new(vec![]);
-        let right = EquivalenceGroup::new(vec![]);
+    fn outer_joins_preserve_column_equivalences_on_both_sides() -> Result<()> {
+        let schema = abc_schema();
+        let left = group_of(&schema, &[("a", "b")])?;
+        let right = group_of(&schema, &[("a", "b")])?;
 
-        let result = left.join_with_schema(&right, &JoinType::Full, 0, &schema, &[])?;
+        let joined = left.join(&right, &JoinType::Right, 4, &[])?;
 
-        assert_eq!(result.iter().count(), 0);
+        assert_eq!(joined.len(), 2);
+        assert!(joined.exprs_equal(&col("a", &schema)?, &col("b", &schema)?));
+        assert!(joined.exprs_equal(
+            &(Arc::new(Column::new("a", 4)) as _),
+            &(Arc::new(Column::new("b", 5)) as _),
+        ));
         Ok(())
     }
 
-    use datafusion_expr::Operator;
+    #[test]
+    fn null_extension_keeps_expressions_with_matching_null_inputs() -> Result<()> {
+        let schema = abc_schema();
+        let expr_a = binary(col("a", &schema)?, Operator::Plus, lit(1), &schema)?;
+        let expr_b = binary(col("b", &schema)?, Operator::Plus, lit(1), &schema)?;
+        let group = EquivalenceGroup::new(vec![EquivalenceClass::new([
+            Arc::clone(&expr_a),
+            Arc::clone(&expr_b),
+        ])]);
+
+        let joined = group.with_null_extended_side();
+
+        assert!(joined.exprs_equal(&expr_a, &expr_b));
+        Ok(())
+    }
+
+    #[test]
+    fn cross_join_path_preserves_both_inputs() -> Result<()> {
+        let schema = abc_schema();
+        let left = group_of(&schema, &[("a", "b")])?;
+        let right = group_of(&schema, &[("a", "b")])?;
+
+        // A cross join uses the inner-join equivalence path with no join keys.
+        let joined = left.join(&right, &JoinType::Inner, 4, &[])?;
+
+        assert_eq!(joined.len(), 2);
+        assert!(joined.exprs_equal(&col("a", &schema)?, &col("b", &schema)?));
+        assert!(joined.exprs_equal(
+            &(Arc::new(Column::new("a", 4)) as _),
+            &(Arc::new(Column::new("b", 5)) as _),
+        ));
+        Ok(())
+    }
 
     #[test]
     fn test_bridge_groups() -> Result<()> {
