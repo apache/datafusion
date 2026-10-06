@@ -4702,9 +4702,7 @@ mod tests {
         // so it is unhandled and default selectivity is applied.
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let predicate: Arc<dyn PhysicalExpr> =
-            Arc::new(IsNotNullExpr::new(
-                col("a", &schema).unwrap(),
-            ));
+            Arc::new(IsNotNullExpr::new(col("a", &schema).unwrap()));
         let col_stats = vec![ColumnStatistics {
             distinct_count: Precision::Inexact(100),
             ..Default::default()
