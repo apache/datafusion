@@ -398,9 +398,11 @@ fn build_join(
     // itself be NULL) otherwise.
     let mut compensation_exprs = HashMap::new();
     if let Some(expr_map) = collected_count_expr_map {
-        let mut expr_rewrite = TypeCoercionRewriter {
-            schema: new_plan.schema(),
-        };
+        // No session timezone: this builds a *searched* `CASE WHEN`, so the
+        // `CASE expr WHEN` comparison rule never applies, and the only type
+        // introduced is the untyped `Null` of the HAVING arm. The expressions
+        // themselves come from a plan `TypeCoercion` has already coerced.
+        let mut expr_rewrite = TypeCoercionRewriter::new(new_plan.schema());
         let having_arm = pull_up
             .pull_up_having_expr
             .as_ref()
