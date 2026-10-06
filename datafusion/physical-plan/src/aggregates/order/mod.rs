@@ -148,12 +148,14 @@ impl GroupOrdering {
     }
 
     /// Returns the size of memory used by the ordering state, in bytes.
+    ///
+    /// Includes the enum descriptor once (covering the inline active variant)
+    /// and any heap allocations retained by that variant.
     pub fn size(&self) -> usize {
         size_of::<Self>()
             + match self {
-                GroupOrdering::None => 0,
-                GroupOrdering::Partial(partial) => partial.size(),
-                GroupOrdering::Full(full) => full.size(),
+                GroupOrdering::None | GroupOrdering::Full(_) => 0,
+                GroupOrdering::Partial(partial) => partial.heap_size(),
             }
     }
 }
@@ -164,7 +166,65 @@ mod tests {
 
     use std::sync::Arc;
 
-    use arrow::array::Int32Array;
+    use arrow::array::{Int32Array, StringArray};
+    use datafusion_common::ScalarValue;
+
+    #[test]
+    fn test_size_none() {
+        assert_eq!(GroupOrdering::None.size(), size_of::<GroupOrdering>());
+    }
+
+    #[test]
+    fn test_size_full() -> Result<()> {
+        let mut ordering = GroupOrdering::try_new(&InputOrderMode::Sorted)?;
+        let expected = size_of::<GroupOrdering>();
+        assert_eq!(ordering.size(), expected);
+
+        ordering.new_groups(&[], &[0, 1, 2], 3)?;
+        assert_eq!(ordering.size(), expected);
+        ordering.remove_groups(2);
+        assert_eq!(ordering.size(), expected);
+        ordering.input_done();
+        assert_eq!(ordering.size(), expected);
+        ordering.reset();
+        assert_eq!(ordering.size(), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_size_partial_retained_allocations() -> Result<()> {
+        // Grow then truncate: unused order-index capacity must remain charged.
+        let mut order_indices = vec![0];
+        order_indices.extend(1..32);
+        order_indices.truncate(1);
+        assert!(order_indices.capacity() > order_indices.len());
+        let expected =
+            size_of::<GroupOrdering>() + order_indices.capacity() * size_of::<usize>();
+        let mut ordering =
+            GroupOrdering::Partial(GroupOrderingPartial::try_new(order_indices)?);
+        assert_eq!(ordering.size(), expected);
+
+        // A variable-width key checks both the scalar descriptor and its payload.
+        let key = "retained sort key";
+        let batch_group_values: Vec<ArrayRef> =
+            vec![Arc::new(StringArray::from(vec!["a", key]))];
+        ordering.new_groups(&batch_group_values, &[0, 1], 2)?;
+        let in_progress = expected + ScalarValue::Utf8(Some(key.to_owned())).size();
+        assert_eq!(ordering.size(), in_progress);
+        ordering.remove_groups(1);
+        assert_eq!(ordering.size(), in_progress);
+
+        // Completing or resetting drops the key, but retains order-index capacity.
+        ordering.input_done();
+        assert_eq!(ordering.size(), expected);
+        ordering.reset();
+        assert_eq!(ordering.size(), expected);
+        ordering.new_groups(&batch_group_values, &[0, 1], 2)?;
+        assert_eq!(ordering.size(), in_progress);
+        ordering.reset();
+        assert_eq!(ordering.size(), expected);
+        Ok(())
+    }
 
     #[test]
     fn test_oom_emit_to_none_ordering() {
