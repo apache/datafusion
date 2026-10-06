@@ -64,6 +64,67 @@ use datafusion_physical_expr_common::physical_expr::{PhysicalExprRef, fmt_sql};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 use futures::StreamExt;
 
+
+/// Null-aware (`NOT IN`) semantics of a soft merge join, derived from
+/// [`SortMergeJoinExec::null_aware`] and the join type.
+///
+/// Only these combinations are legal (see [`Self::try_new`]), so the
+/// stream matches on this instead of re-checking `null_aware && join_type == ..`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum NullAwareMode {
+    /// `left.key NOT IN (right.key)`: emits left rows.
+    LeftAnti
+}
+
+impl NullAwareMode {
+    /// Validates that `null_aware` may be set for this join and returns its mode.
+    pub(super) fn try_new(
+        join_type: JoinType,
+        num_keys: usize,
+        has_filter: bool,
+        null_equality: NullEquality,
+        sort_options: &[SortOptions],
+    ) -> Result<Self> {
+        if num_keys != 1 || has_filter {
+            return plan_err!(
+                "null-aware SortMergeJoin requires one key and no filter"
+            );
+        }
+
+        // NULL keys must not match each other.
+        // The null-aware execution path handles UNKNOWN results separately.
+        // UNKNOWN happens when `WHERE x NOT IN (NULL)`
+        if null_equality != NullEquality::NullEqualsNothing {
+            return plan_err!(
+                "null-aware SortMergeJoin requires NullEqualsNothing"
+            );
+        }
+
+        let mode = match join_type {
+            JoinType::LeftAnti => Self::LeftAnti,
+            _ => {
+                return plan_err!(
+                    "null-aware SortMergeJoin only supports LeftAnti, got {join_type}"
+                );
+            }
+        };
+
+        match mode {
+            Self::LeftAnti => {
+                // With a single right-side partition and NULLS FIRST,
+                // the first row reveals whether the subquery contains NULL.
+                if sort_options.len() != 1 || !sort_options[0].nulls_first {
+                    return plan_err!(
+                        "null-aware {join_type} SortMergeJoin requires NULLS FIRST ordering"
+                    );
+                }
+                Ok(mode)
+            }
+        }
+    }
+}
+
+
 /// Join execution plan that executes equi-join predicates on multiple partitions using Sort-Merge
 /// join algorithm and applies an optional filter post join. Can be used to join arbitrarily large
 /// inputs where one or both of the inputs don't fit in the available memory.
