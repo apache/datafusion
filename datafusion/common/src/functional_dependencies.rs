@@ -458,71 +458,76 @@ pub fn aggregate_functional_dependencies(
     aggr_schema: &DFSchema,
 ) -> FunctionalDependencies {
     let mut aggregate_func_dependencies = vec![];
-    let aggr_input_fields = aggr_input_schema.field_names();
     let aggr_fields = aggr_schema.fields();
     // Association covers the whole table:
     let target_indices = (0..aggr_schema.fields().len()).collect::<Vec<_>>();
     // Get functional dependencies of the schema:
     let func_dependencies = aggr_input_schema.functional_dependencies();
-    for FunctionalDependence {
-        source_indices,
-        nullable,
-        null_equality,
-        mode,
-        ..
-    } in &func_dependencies.deps
-    {
-        // Keep source indices in a `HashSet` to prevent duplicate entries:
-        let mut new_source_indices = vec![];
-        let mut new_source_field_names = vec![];
-        let source_field_names = source_indices
-            .iter()
-            .map(|&idx| &aggr_input_fields[idx])
-            .collect::<Vec<_>>();
-
-        for (idx, group_by_expr_name) in group_by_expr_names.iter().enumerate() {
-            // When one of the input determinant expressions matches with
-            // the GROUP BY expression, add the index of the GROUP BY
-            // expression as a new determinant key:
-            if source_field_names.contains(&group_by_expr_name) {
-                new_source_indices.push(idx);
-                new_source_field_names.push(group_by_expr_name.clone());
-            }
-        }
+    // The loop below only re-expresses input dependencies. Skip it when the
+    // input has none. The GROUP BY-key dependency below always runs.
+    if !func_dependencies.is_empty() {
+        let aggr_input_fields = aggr_input_schema.field_names();
+        // Compute once: this does not change in the loop.
         let existing_target_indices =
             get_target_functional_dependencies(aggr_input_schema, group_by_expr_names);
-        let new_target_indices = get_target_functional_dependencies(
-            aggr_input_schema,
-            &new_source_field_names,
-        );
-        let mode = if existing_target_indices == new_target_indices
-            && new_target_indices.is_some()
+        for FunctionalDependence {
+            source_indices,
+            nullable,
+            null_equality,
+            mode,
+            ..
+        } in &func_dependencies.deps
         {
-            // If dependency covers all GROUP BY expressions, mode will be `Single`:
-            Dependency::Single
-        } else {
-            // Otherwise, existing mode is preserved:
-            *mode
-        };
-        // All of the composite indices occur in the GROUP BY expression:
-        if new_source_indices.len() == source_indices.len() {
-            // GROUP BY treats NULLs as equal: a determinant covering the
-            // complete grouping key gets at most one output row per NULL too.
-            let output_null_equality =
-                if new_source_indices.len() == group_by_expr_names.len() {
-                    NullEquality::NullEqualsNull
-                } else {
-                    *null_equality
-                };
-            aggregate_func_dependencies.push(
-                FunctionalDependence::new(
-                    new_source_indices,
-                    target_indices.clone(),
-                    *nullable,
-                )
-                .with_mode(mode)
-                .with_null_equality(output_null_equality),
+            // Indices into the GROUP BY list for this determinant:
+            let mut new_source_indices = vec![];
+            let mut new_source_field_names = vec![];
+            let source_field_names = source_indices
+                .iter()
+                .map(|&idx| &aggr_input_fields[idx])
+                .collect::<Vec<_>>();
+
+            for (idx, group_by_expr_name) in group_by_expr_names.iter().enumerate() {
+                // When one of the input determinant expressions matches with
+                // the GROUP BY expression, add the index of the GROUP BY
+                // expression as a new determinant key:
+                if source_field_names.contains(&group_by_expr_name) {
+                    new_source_indices.push(idx);
+                    new_source_field_names.push(group_by_expr_name.clone());
+                }
+            }
+            let new_target_indices = get_target_functional_dependencies(
+                aggr_input_schema,
+                &new_source_field_names,
             );
+            let mode = if existing_target_indices == new_target_indices
+                && new_target_indices.is_some()
+            {
+                // If dependency covers all GROUP BY expressions, mode will be `Single`:
+                Dependency::Single
+            } else {
+                // Otherwise, existing mode is preserved:
+                *mode
+            };
+            // All of the composite indices occur in the GROUP BY expression:
+            if new_source_indices.len() == source_indices.len() {
+                // GROUP BY treats NULLs as equal: a determinant covering the
+                // complete grouping key gets at most one output row per NULL too.
+                let output_null_equality =
+                    if new_source_indices.len() == group_by_expr_names.len() {
+                        NullEquality::NullEqualsNull
+                    } else {
+                        *null_equality
+                    };
+                aggregate_func_dependencies.push(
+                    FunctionalDependence::new(
+                        new_source_indices,
+                        target_indices.clone(),
+                        *nullable,
+                    )
+                    .with_mode(mode)
+                    .with_null_equality(output_null_equality),
+                );
+            }
         }
     }
 
@@ -565,8 +570,11 @@ pub fn get_target_functional_dependencies(
     schema: &DFSchema,
     group_by_expr_names: &[String],
 ) -> Option<Vec<usize>> {
-    let mut combined_target_indices = HashSet::new();
     let dependencies = schema.functional_dependencies();
+    if dependencies.is_empty() {
+        return None;
+    }
+    let mut combined_target_indices = HashSet::new();
     let field_names = schema.field_names();
     for FunctionalDependence {
         source_indices,

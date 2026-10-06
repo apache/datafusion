@@ -184,11 +184,12 @@ impl PhysicalExpr for NegativeExpr {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
         use datafusion_proto_models::protobuf;
 
+        let Self { arg } = self;
         Ok(Some(protobuf::PhysicalExprNode {
             expr_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::Negative(Box::new(
                 protobuf::PhysicalNegativeNode {
-                    expr: Some(Box::new(ctx.encode_child(&self.arg)?)),
+                    expr: Some(Box::new(ctx.encode_child(arg)?)),
                 },
             ))),
         }))
@@ -210,8 +211,9 @@ impl NegativeExpr {
             protobuf::physical_expr_node::ExprType::Negative,
             "Negative",
         );
+        let protobuf::PhysicalNegativeNode { expr } = n.as_ref();
         let expr =
-            ctx.decode_required_expression(n.expr.as_deref(), "NegativeExpr", "expr")?;
+            ctx.decode_required_expression(expr.as_deref(), "NegativeExpr", "expr")?;
 
         Ok(Arc::new(NegativeExpr::new(expr)))
     }

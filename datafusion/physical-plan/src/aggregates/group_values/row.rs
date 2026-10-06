@@ -75,6 +75,9 @@ pub struct GroupValuesRows {
     /// reused buffer to store rows
     rows_buffer: Rows,
 
+    /// The initial `rows_buffer` size, used to determine if it should be recreated in `clear_shrink`.
+    initial_rows_buffer_size: usize,
+
     /// Random state for creating hashes
     random_state: RandomState,
 }
@@ -94,11 +97,8 @@ impl GroupValuesRows {
 
         let map = HashTable::with_capacity(0);
 
-        let starting_rows_capacity = 1000;
-
-        let starting_data_capacity = 64 * starting_rows_capacity;
-        let rows_buffer =
-            row_converter.empty_rows(starting_rows_capacity, starting_data_capacity);
+        let rows_buffer = Self::new_rows_buffer(&row_converter);
+        let initial_rows_buffer_size = rows_buffer.size();
         Ok(Self {
             schema,
             row_converter,
@@ -106,8 +106,17 @@ impl GroupValuesRows {
             group_values: None,
             hashes_buffer: Default::default(),
             rows_buffer,
+            initial_rows_buffer_size,
             random_state: crate::aggregates::AGGREGATION_HASH_SEED,
         })
+    }
+
+    /// Create the reused `rows_buffer` with its initial capacities
+    fn new_rows_buffer(row_converter: &RowConverter) -> Rows {
+        let starting_rows_capacity = 1000;
+
+        let starting_data_capacity = 64 * starting_rows_capacity;
+        row_converter.empty_rows(starting_rows_capacity, starting_data_capacity)
     }
 }
 
@@ -280,14 +289,25 @@ impl GroupValues for GroupValuesRows {
     }
 
     fn clear_shrink(&mut self, num_rows: usize) {
-        self.group_values = self.group_values.take().map(|mut rows| {
-            rows.clear();
-            rows
-        });
+        self.group_values = if num_rows == 0 {
+            None
+        } else {
+            self.group_values.take().map(|mut rows| {
+                // This only clear and do not shrink the capacity
+                rows.clear();
+                rows
+            })
+        };
         self.map.clear();
         self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
         self.hashes_buffer.clear();
         self.hashes_buffer.shrink_to(num_rows);
+
+        if num_rows == 0 && self.rows_buffer.size() > self.initial_rows_buffer_size {
+            // `rows_buffer` only gets cleared between batches, so it keeps any
+            // capacity it grew to; recreate it to release that memory
+            self.rows_buffer = Self::new_rows_buffer(&self.row_converter);
+        }
     }
 }
 
@@ -316,10 +336,12 @@ pub(crate) fn encode_array_if_necessary(
                 })
                 .collect::<Result<Vec<_>>>()?;
 
-            Ok(Arc::new(StructArray::try_new(
+            // A zero-field struct has no child to infer the length from.
+            Ok(Arc::new(StructArray::try_new_with_length(
                 expected_fields.clone(),
                 arrays,
                 struct_array.nulls().cloned(),
+                struct_array.len(),
             )?))
         }
         (DataType::List(expected_field), &DataType::List(_)) => {
@@ -652,5 +674,39 @@ mod tests {
         assert_eq!(group_values.map.allocation_size(), 0);
 
         Ok(())
+    }
+
+    #[test]
+    fn clear_shrink_0_after_intern_should_return_to_original_size() {
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "group",
+            DataType::List(field),
+            true,
+        )]));
+        let mut group_values = GroupValuesRows::try_new(schema).unwrap();
+        let initial_size = group_values.size();
+        let input = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3)]),
+            Some(vec![Some(1), Some(2)]),
+        ])) as ArrayRef;
+        let mut groups = vec![];
+        group_values.intern(&[input], &mut groups).unwrap();
+        assert_ne!(group_values.size(), initial_size, "should save some data");
+
+        // A large batch so any reused buffers grow as well
+        let input = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(
+            (0..10_000).map(|i| Some((0..20).map(move |j| Some(i * 20 + j)))),
+        )) as ArrayRef;
+        group_values.intern(&[input], &mut groups).unwrap();
+
+        group_values.clear_shrink(0);
+        assert_eq!(
+            group_values.size(),
+            initial_size,
+            "should release memory back to original size"
+        );
     }
 }
