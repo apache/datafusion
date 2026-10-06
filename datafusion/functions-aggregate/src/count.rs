@@ -35,9 +35,10 @@ use datafusion_common::{
     stats::Precision, utils::expr::COUNT_STAR_EXPANSION,
 };
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, EmitTo, Expr, GroupSelection,
-    GroupsAccumulator, ReversedUDAF, SetMonotonicity, Signature, StatisticsArgs,
-    TypeSignature, Volatility, WindowFunctionDefinition,
+    Accumulator, AggregateUDFImpl, BlockedEmitTo, BlockedGroupsAccumulator, BlocksIndex,
+    Documentation, EmitTo, Expr, GroupSelection, GroupsAccumulator, ReversedUDAF,
+    SetMonotonicity, Signature, StatisticsArgs, TypeSignature, Volatility,
+    WindowFunctionDefinition,
     expr::WindowFunction,
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::{AggregateOrderSensitivity, format_state_name},
@@ -54,6 +55,7 @@ use datafusion_functions_aggregate_common::aggregate::{
     count_distinct::FloatDistinctCountAccumulator,
     count_distinct::PrimitiveDistinctCountAccumulator,
     groups_accumulator::accumulate::accumulate_indices,
+    groups_accumulator::blocked_vec::BlockedVec,
 };
 use datafusion_macros::user_doc;
 use datafusion_physical_expr::expressions;
@@ -390,6 +392,18 @@ impl AggregateUDFImpl for Count {
             return Ok(Box::new(CountGroupsAccumulator::new()));
         }
         create_distinct_count_groups_accumulator(&args)
+    }
+
+    fn blocked_groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
+        !args.is_distinct && self.groups_accumulator_supported(args)
+    }
+
+    fn create_blocked_groups_accumulator(
+        &self,
+        _args: AccumulatorArgs,
+        block_size: usize,
+    ) -> Result<Box<dyn BlockedGroupsAccumulator>> {
+        Ok(Box::new(BlockedCountGroupsAccumulator::new(block_size)))
     }
 
     fn reverse_expr(&self) -> ReversedUDAF {
@@ -828,6 +842,125 @@ impl GroupsAccumulator for CountGroupsAccumulator {
     }
 }
 
+/// [`CountGroupsAccumulator`] with the counts stored in blocks of
+/// `block_size` groups, so growing past a block never reallocates and
+/// copies the existing counts.
+#[derive(Debug)]
+struct BlockedCountGroupsAccumulator {
+    /// Count per group, see [`CountGroupsAccumulator::counts`].
+    counts: BlockedVec<i64>,
+}
+
+impl BlockedCountGroupsAccumulator {
+    fn new(block_size: usize) -> Self {
+        Self {
+            counts: BlockedVec::new(block_size),
+        }
+    }
+
+    fn counts_to_array(counts: Vec<i64>) -> ArrayRef {
+        // zero copy, count is never null
+        Arc::new(Int64Array::new(counts.into(), None))
+    }
+
+    fn blocks_to_arrays(blocks: impl IntoIterator<Item = Vec<i64>>) -> Vec<ArrayRef> {
+        blocks.into_iter().map(Self::counts_to_array).collect()
+    }
+
+    fn take(&mut self, emit_to: BlockedEmitTo) -> Vec<ArrayRef> {
+        match emit_to {
+            BlockedEmitTo::All => Self::blocks_to_arrays(self.counts.take_all()),
+            BlockedEmitTo::NextBlock => {
+                Self::blocks_to_arrays(self.counts.take_next_block())
+            }
+            BlockedEmitTo::First(n) => {
+                Self::blocks_to_arrays([self.counts.take_first(n)])
+            }
+        }
+    }
+}
+
+impl BlockedGroupsAccumulator for BlockedCountGroupsAccumulator {
+    fn block_size(&self) -> usize {
+        self.counts.block_size()
+    }
+
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[BlocksIndex],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 1, "single argument to update_batch");
+        let values = &values[0];
+        let nulls = values.logical_nulls().filter(|n| n.null_count() > 0);
+
+        self.counts.grow_to(total_num_groups, 0);
+
+        // Add one to each group's counter for each non null, non filtered value
+        // SAFETY: group_index is guaranteed to be in bounds and less than total_num_groups
+        unsafe {
+            self.counts.update_unchecked(
+                group_indices,
+                nulls.as_ref(),
+                opt_filter,
+                |count| *count += 1,
+            );
+        }
+        Ok(())
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[BlocksIndex],
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 1, "one argument to merge_batch");
+        let partial_counts = values[0].as_primitive::<Int64Type>();
+
+        // intermediate counts are always created as non null
+        assert_eq!(partial_counts.null_count(), 0);
+        let partial_counts = partial_counts.values();
+
+        // Adds the counts with the partial counts
+        self.counts.update_with(
+            total_num_groups,
+            0,
+            group_indices,
+            partial_counts,
+            |count, partial_count| *count += partial_count,
+        );
+
+        Ok(())
+    }
+
+    fn evaluate(&mut self, emit_to: BlockedEmitTo) -> Result<Vec<ArrayRef>> {
+        Ok(self.take(emit_to))
+    }
+
+    fn state(&mut self, emit_to: BlockedEmitTo) -> Result<Vec<Vec<ArrayRef>>> {
+        Ok(self
+            .take(emit_to)
+            .into_iter()
+            .map(|counts| vec![counts])
+            .collect())
+    }
+
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        CountGroupsAccumulator::new().convert_to_state(values, opt_filter)
+    }
+
+    fn size(&self) -> usize {
+        self.counts.allocated_size()
+    }
+}
+
 /// count null values for multiple columns
 /// for each row if one column value is null, then null_count + 1
 fn null_count_for_multiple_cols(values: &[ArrayRef]) -> usize {
@@ -996,6 +1129,181 @@ mod tests {
         assert_eq!(acc.size(), allocated_size);
         assert!(acc.size() > empty_size);
 
+        Ok(())
+    }
+
+    #[test]
+    fn blocked_count_update_merge_emit_across_blocks() -> Result<()> {
+        let mut acc = BlockedCountGroupsAccumulator::new(4);
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(1),
+            None,
+            Some(3),
+            Some(4),
+            Some(5),
+            Some(6),
+        ]));
+        let groups = blocks_index(&[0, 0, 5, 5, 1, 9], 4);
+        acc.update_batch(&[values], &groups, None, 10)?;
+
+        let partial: ArrayRef = Arc::new(Int64Array::from(vec![10, 20]));
+        acc.merge_batch(&[partial], &blocks_index(&[1, 9], 4), 10)?;
+
+        let first = acc.evaluate(BlockedEmitTo::NextBlock)?;
+        assert_eq!(first.len(), 1);
+        assert_eq!(
+            first[0].as_primitive::<Int64Type>().values(),
+            &[1, 11, 0, 0]
+        );
+        let rest = acc.evaluate(BlockedEmitTo::All)?;
+        assert_eq!(rest.len(), 2);
+        assert_eq!(rest[0].as_primitive::<Int64Type>().values(), &[0, 2, 0, 0]);
+        assert_eq!(rest[1].as_primitive::<Int64Type>().values(), &[0, 21]);
+        assert!(acc.evaluate(BlockedEmitTo::NextBlock)?.is_empty());
+        Ok(())
+    }
+
+    fn blocks_index(groups: &[usize], block_size: usize) -> Vec<BlocksIndex> {
+        groups
+            .iter()
+            .map(|&flat| BlocksIndex::from_flat(flat, block_size))
+            .collect()
+    }
+
+    fn blocked_values(arrays: &[ArrayRef]) -> Vec<Vec<i64>> {
+        arrays
+            .iter()
+            .map(|a| a.as_primitive::<Int64Type>().values().to_vec())
+            .collect()
+    }
+
+    #[test]
+    fn blocked_count_nulls_and_filter_across_blocks() -> Result<()> {
+        let mut acc = BlockedCountGroupsAccumulator::new(4);
+        let groups = blocks_index(&[0, 5, 9, 9, 5, 0, 6], 4);
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(1),
+            None,
+            Some(3),
+            Some(4),
+            Some(5),
+            Some(6),
+            Some(7),
+        ]));
+
+        // nulls only
+        acc.update_batch(&[Arc::clone(&values)], &groups, None, 10)?;
+        // filter (with a null filter entry) and nulls
+        let filter = BooleanArray::from(vec![
+            Some(true),
+            Some(true),
+            Some(false),
+            None,
+            Some(true),
+            Some(true),
+            Some(false),
+        ]);
+        acc.update_batch(&[Arc::clone(&values)], &groups, Some(&filter), 10)?;
+        // filter only
+        let no_nulls: ArrayRef = Arc::new(Int32Array::from(vec![0; 7]));
+        acc.update_batch(&[no_nulls], &groups, Some(&filter), 10)?;
+
+        assert_eq!(
+            blocked_values(&acc.evaluate(BlockedEmitTo::All)?),
+            vec![vec![6, 0, 0, 0], vec![0, 4, 1, 0], vec![0, 2]]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn blocked_count_multi_block_chunks() -> Result<()> {
+        // more rows than one address-resolve chunk, spread over 3 blocks
+        let mut acc = BlockedCountGroupsAccumulator::new(4);
+        let rows = 256 * 2 + 7;
+        let groups: Vec<usize> = (0..rows).map(|i| (i * 7) % 11).collect();
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![1; rows]));
+        acc.update_batch(&[values], &blocks_index(&groups, 4), None, 11)?;
+
+        let mut expected = vec![0i64; 11];
+        for &g in &groups {
+            expected[g] += 1;
+        }
+        let actual: Vec<i64> = blocked_values(&acc.evaluate(BlockedEmitTo::All)?)
+            .into_iter()
+            .flatten()
+            .collect();
+        assert_eq!(actual, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn blocked_count_single_block() -> Result<()> {
+        let mut acc = BlockedCountGroupsAccumulator::new(8);
+        let values: ArrayRef =
+            Arc::new(Int32Array::from(vec![Some(1), None, Some(3), Some(4)]));
+        acc.update_batch(&[values], &blocks_index(&[2, 2, 0, 2], 8), None, 3)?;
+        assert!(acc.counts.as_single_block_mut().is_some());
+        let partial: ArrayRef = Arc::new(Int64Array::from(vec![5]));
+        acc.merge_batch(&[partial], &blocks_index(&[1], 8), 3)?;
+        assert_eq!(
+            blocked_values(&acc.evaluate(BlockedEmitTo::All)?),
+            vec![vec![1, 5, 2]]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn blocked_count_emit_first() -> Result<()> {
+        let mut acc = BlockedCountGroupsAccumulator::new(4);
+        let groups: Vec<usize> = (0..10).collect();
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![1; 10]));
+        acc.update_batch(&[values], &blocks_index(&groups, 4), None, 10)?;
+        let partial: ArrayRef = Arc::new(Int64Array::from((0..10).collect::<Vec<_>>()));
+        acc.merge_batch(&[partial], &blocks_index(&groups, 4), 10)?;
+
+        assert_eq!(
+            blocked_values(&acc.evaluate(BlockedEmitTo::First(3))?),
+            vec![vec![1, 2, 3]]
+        );
+        // remaining groups shift down by 3
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![1]));
+        acc.update_batch(&[values], &blocks_index(&[0], 4), None, 7)?;
+        assert_eq!(
+            blocked_values(&acc.evaluate(BlockedEmitTo::All)?),
+            vec![vec![5, 5, 6, 7], vec![8, 9, 10]]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn blocked_count_state_is_one_column_per_block() -> Result<()> {
+        let mut acc = BlockedCountGroupsAccumulator::new(4);
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        acc.update_batch(&[values], &blocks_index(&[0, 4, 8], 4), None, 9)?;
+
+        let state = acc.state(BlockedEmitTo::All)?;
+        assert_eq!(state.len(), 3);
+        assert!(state.iter().all(|columns| columns.len() == 1));
+        let columns: Vec<ArrayRef> = state.into_iter().flatten().collect();
+        assert_eq!(
+            blocked_values(&columns),
+            vec![vec![1, 0, 0, 0], vec![1, 0, 0, 0], vec![1]]
+        );
+        assert!(acc.state(BlockedEmitTo::NextBlock)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn blocked_count_size_tracks_blocks() -> Result<()> {
+        let mut acc = BlockedCountGroupsAccumulator::new(4);
+        assert_eq!(acc.size(), 0);
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![1; 9]));
+        let groups: Vec<usize> = (0..9).collect();
+        acc.update_batch(&[values], &blocks_index(&groups, 4), None, 9)?;
+        assert_eq!(acc.size(), acc.counts.allocated_size());
+        assert!(acc.size() >= 9 * size_of::<i64>());
+        acc.evaluate(BlockedEmitTo::All)?;
+        assert_eq!(acc.size(), 0);
         Ok(())
     }
 

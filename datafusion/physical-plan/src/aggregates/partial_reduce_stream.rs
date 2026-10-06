@@ -17,6 +17,7 @@
 
 //! Partial-reduce hash aggregation stream implementation.
 
+use std::collections::VecDeque;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -29,7 +30,9 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
-use super::aggregate_hash_table::{AggregateHashTable, PartialReduceMarker};
+use super::aggregate_hash_table::{
+    AggregateHashTable, MaterializedBatch, PartialReduceMarker,
+};
 use crate::metrics::{BaselineMetrics, Count, MetricBuilder, RecordOutput, SpillMetrics};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream};
@@ -103,13 +106,14 @@ enum PartialReduceHashAggregateState {
     ReadingInput {
         hash_table: AggregateHashTable<PartialReduceMarker>,
     },
-    /// A fully materialized partial-state batch being emitted incrementally
-    /// because the table ran out of memory while reading input.
+    /// Fully materialized partial-state batches (one per block for blocked
+    /// storage) being emitted incrementally because the table ran out of
+    /// memory while reading input.
     EmittingOnMemoryPressure {
         hash_table: AggregateHashTable<PartialReduceMarker>,
-        // After each incremental emitting step, `remaining_groups` is updated
-        // with batch slicing.
-        remaining_groups: RecordBatch,
+        // After each incremental emitting step, the front of `remaining_groups`
+        // is updated with batch slicing, and removed once fully emitted.
+        remaining_groups: VecDeque<MaterializedBatch>,
     },
     ProducingOutput {
         hash_table: AggregateHashTable<PartialReduceMarker>,
@@ -296,8 +300,8 @@ impl PartialReduceHashAggregateStream {
     ///
     /// The reservation is left at its pre-emission size while the states are being
     /// emitted, because the cleared states are still held in memory as
-    /// `remaining_groups`. The reservation will be reset after exiting the
-    /// `EmittingOnMemoryPressure` state.
+    /// `remaining_groups`. It shrinks as each batch is fully emitted, and is
+    /// reset after exiting the `EmittingOnMemoryPressure` state.
     ///
     /// # Implementation Note
     /// All accumulated states are materialized at once, and then sliced into
@@ -321,21 +325,23 @@ impl PartialReduceHashAggregateStream {
             Err(e) => return Self::break_with_err(e),
         };
 
-        let state_batch_result = original_state.hash_table_mut().take_state_batch();
+        let state_batch_result = original_state.hash_table_mut().take_state_batches();
 
         match state_batch_result {
-            Ok(Some(remaining_groups)) => {
+            // No accumulated group to emit, so early emission cannot release any
+            // memory: report the original error.
+            Ok(remaining_groups) if remaining_groups.is_empty() => {
+                Self::break_with_err(oom)
+            }
+            Ok(remaining_groups) => {
                 self.early_emit_count.add(1);
                 ControlFlow::Continue(
                     PartialReduceHashAggregateState::EmittingOnMemoryPressure {
                         hash_table: original_state.into_hash_table(),
-                        remaining_groups,
+                        remaining_groups: remaining_groups.into(),
                     },
                 )
             }
-            // No accumulated group to emit, so early emission cannot release any
-            // memory: report the original error.
-            Ok(None) => Self::break_with_err(oom),
             Err(e) => Self::break_with_err(e),
         }
     }
@@ -353,30 +359,45 @@ impl PartialReduceHashAggregateStream {
     ) -> PartialReduceHashAggregateStateTransition {
         let PartialReduceHashAggregateState::EmittingOnMemoryPressure {
             hash_table,
-            remaining_groups: batch,
+            mut remaining_groups,
         } = original_state
         else {
             unreachable!("expected the EmittingOnMemoryPressure state")
         };
+        let Some(MaterializedBatch { batch, memory_size }) = remaining_groups.pop_front()
+        else {
+            unreachable!("EmittingOnMemoryPressure always holds a batch")
+        };
 
-        let (output_batch, next_state) = if batch.num_rows() <= self.batch_size {
+        let output_batch = if batch.num_rows() <= self.batch_size {
+            // Last slice of this batch, release its memory. Never grow here:
+            // the pre-emission reservation may be smaller than what is held.
+            let held = hash_table.memory_size()
+                + remaining_groups
+                    .iter()
+                    .map(|b| b.memory_size)
+                    .sum::<usize>();
+            if held < self.reservation.size() {
+                self.reservation.shrink(self.reservation.size() - held);
+            }
+            batch
+        } else {
+            // More rows in this batch, keep the rest at the front.
+            remaining_groups.push_front(MaterializedBatch {
+                batch: batch.slice(self.batch_size, batch.num_rows() - self.batch_size),
+                memory_size,
+            });
+            batch.slice(0, self.batch_size)
+        };
+        let next_state = if remaining_groups.is_empty() {
             // Go back to `ReadingInput`
-            (
-                batch,
-                PartialReduceHashAggregateState::ReadingInput { hash_table },
-            )
+            PartialReduceHashAggregateState::ReadingInput { hash_table }
         } else {
             // More batches to output, continue in the current state.
-            let remaining =
-                batch.slice(self.batch_size, batch.num_rows() - self.batch_size);
-            let output = batch.slice(0, self.batch_size);
-            (
-                output,
-                PartialReduceHashAggregateState::EmittingOnMemoryPressure {
-                    hash_table,
-                    remaining_groups: remaining,
-                },
-            )
+            PartialReduceHashAggregateState::EmittingOnMemoryPressure {
+                hash_table,
+                remaining_groups,
+            }
         };
 
         debug_assert!(output_batch.num_rows() > 0);

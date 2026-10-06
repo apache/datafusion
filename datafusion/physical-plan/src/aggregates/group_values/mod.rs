@@ -23,6 +23,7 @@ use datafusion_common::{Result, not_impl_err};
 
 use datafusion_expr::{EmitTo, GroupSelection};
 
+pub(crate) mod blocked;
 pub mod multi_group_by;
 
 mod row;
