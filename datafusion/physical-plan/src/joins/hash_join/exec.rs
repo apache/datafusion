@@ -11689,30 +11689,37 @@ mod tests {
     /// Reverse concatenation order: exercises concat_build_batches with reverse=true
     /// on view columns to verify both reverse order and buffer deduplication work together.
     #[test]
-    fn test_concat_build_batches_reverse_order_deduplication() -> Result<()> {
+    fn test_concat_build_batches_reverse_order_deduplication() {
         use arrow::array::StringViewBuilder;
-
-        let mut builder = StringViewBuilder::new();
-        builder.append_value("batch1: long string value exceeding twelve bytes");
-        let arr1 = builder.finish();
-
-        let mut builder = StringViewBuilder::new();
-        builder.append_value("batch2: long string value exceeding twelve bytes");
-        let arr2 = builder.finish();
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "s",
             DataType::Utf8View,
             false,
         )]));
-        let batch1 = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(arr1)])?;
-        let batch2 = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(arr2)])?;
+
+        let mut builder = StringViewBuilder::new();
+        builder.append_value("batch1: long string value exceeding twelve bytes");
+        let batch1 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(builder.finish()) as ArrayRef],
+        )
+        .expect("valid batch");
+
+        let mut builder = StringViewBuilder::new();
+        builder.append_value("batch2: long string value exceeding twelve bytes");
+        let batch2 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(builder.finish()) as ArrayRef],
+        )
+        .expect("valid batch");
 
         let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
         let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
-        // 4 batches total with duplicate handles to both batch1 and batch2
+        // 4 batches with two duplicate references each — raw concat yields 4 buffer handles
         let batches = vec![batch1.clone(), batch2.clone(), batch1, batch2];
-        let (mut reservation, inputs_reserved) = reserve_inputs(&batches, &pool)?;
+        let (mut reservation, inputs_reserved) =
+            reserve_inputs(&batches, &pool).expect("reserve");
 
         let batch = concat_build_batches(
             &schema,
@@ -11721,7 +11728,8 @@ mod tests {
             inputs_reserved,
             &mut reservation,
             &metrics,
-        )?;
+        )
+        .expect("concat");
 
         let view_arr = batch
             .column(0)
@@ -11729,9 +11737,10 @@ mod tests {
             .downcast_ref::<StringViewArray>()
             .unwrap();
 
+        // After deduplication 4 handles collapse to 2 unique buffers.
         assert_eq!(view_arr.data_buffers().len(), 2);
         assert_eq!(batch.num_rows(), 4);
-        // Reverse order: batch2, batch1, batch2, batch1
+        // reverse=true: batch2, batch1, batch2, batch1
         assert_eq!(
             view_arr.value(0),
             "batch2: long string value exceeding twelve bytes"
@@ -11748,6 +11757,60 @@ mod tests {
             view_arr.value(3),
             "batch1: long string value exceeding twelve bytes"
         );
-        Ok(())
+    }
+
+    /// Exercises the `retained > held` growth path in concat_build_batches.
+    ///
+    /// When a single batch is provided `copy_size` is 0, so we only pre-reserve the
+    /// input size. If the returned batch happens to occupy more memory than what we
+    /// reserved (e.g., due to deduplication creating new buffers or tracking overhead
+    /// differences), the function must call `reservation.try_grow(retained - held)`.
+    /// We trigger this by passing `inputs_reserved = 0` directly so that `held == 0`
+    /// and any non-empty batch forces the grow branch.
+    #[test]
+    fn test_concat_build_batches_grow_branch() {
+        use arrow::array::StringViewBuilder;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            DataType::Utf8View,
+            false,
+        )]));
+
+        let mut builder = StringViewBuilder::new();
+        builder.append_value("long string that exceeds the twelve byte inline threshold");
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(builder.finish()) as ArrayRef],
+        )
+        .expect("valid batch");
+
+        let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let mut reservation = MemoryConsumer::new("test").register(&pool);
+
+        // Pass inputs_reserved = 0 so that held == 0 + copy_size == 0 == 0,
+        // while retained == get_record_batch_memory_size(&batch) > 0 — forcing
+        // the `retained > held` branch to call reservation.try_grow.
+        let result = concat_build_batches(
+            &schema,
+            vec![batch],
+            false,
+            0, // inputs_reserved deliberately zero
+            &mut reservation,
+            &metrics,
+        )
+        .expect("concat");
+
+        let view_arr = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .unwrap();
+        assert_eq!(result.num_rows(), 1);
+        assert_eq!(
+            view_arr.value(0),
+            "long string that exceeds the twelve byte inline threshold"
+        );
     }
 }
