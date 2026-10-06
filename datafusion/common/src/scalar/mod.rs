@@ -482,6 +482,19 @@ impl Hash for Fl<f16> {
 }
 
 // manual implementation of `PartialEq`
+/// Equality of the arrays inside nested scalars.
+///
+/// Arrow's array equality converts both arrays to `ArrayData` before it
+/// compares anything, which is costly for wide nested types. Values of
+/// different lengths or types are unequal without that, and an array is
+/// equal to itself.
+fn nested_eq<T: Array + PartialEq>(a: &Arc<T>, b: &Arc<T>) -> bool {
+    Arc::ptr_eq(a, b)
+        || (a.len() == b.len()
+            && a.data_type() == b.data_type()
+            && a.as_ref() == b.as_ref())
+}
+
 impl PartialEq for ScalarValue {
     fn eq(&self, other: &Self) -> bool {
         use ScalarValue::*;
@@ -552,19 +565,19 @@ impl PartialEq for ScalarValue {
             (FixedSizeBinary(_, _), _) => false,
             (LargeBinary(v1), LargeBinary(v2)) => v1.eq(v2),
             (LargeBinary(_), _) => false,
-            (FixedSizeList(v1), FixedSizeList(v2)) => v1.eq(v2),
+            (FixedSizeList(v1), FixedSizeList(v2)) => nested_eq(v1, v2),
             (FixedSizeList(_), _) => false,
-            (List(v1), List(v2)) => v1.eq(v2),
+            (List(v1), List(v2)) => nested_eq(v1, v2),
             (List(_), _) => false,
-            (LargeList(v1), LargeList(v2)) => v1.eq(v2),
+            (LargeList(v1), LargeList(v2)) => nested_eq(v1, v2),
             (LargeList(_), _) => false,
-            (ListView(v1), ListView(v2)) => v1.eq(v2),
+            (ListView(v1), ListView(v2)) => nested_eq(v1, v2),
             (ListView(_), _) => false,
-            (LargeListView(v1), LargeListView(v2)) => v1.eq(v2),
+            (LargeListView(v1), LargeListView(v2)) => nested_eq(v1, v2),
             (LargeListView(_), _) => false,
-            (Struct(v1), Struct(v2)) => v1.eq(v2),
+            (Struct(v1), Struct(v2)) => nested_eq(v1, v2),
             (Struct(_), _) => false,
-            (Map(v1), Map(v2)) => v1.eq(v2),
+            (Map(v1), Map(v2)) => nested_eq(v1, v2),
             (Map(_), _) => false,
             (Date32(v1), Date32(v2)) => v1.eq(v2),
             (Date32(_), _) => false,
@@ -9927,6 +9940,49 @@ mod tests {
                 assert_eq!(ts1, &back);
             }
         }
+    }
+
+    #[test]
+    fn test_nested_scalar_eq() {
+        let struct_type = |name: &str| {
+            DataType::Struct(Fields::from(vec![
+                Field::new(format!("{name}_a"), DataType::Int32, true),
+                Field::new(format!("{name}_b"), DataType::Utf8, true),
+            ]))
+        };
+        let null_x = ScalarValue::try_from(&struct_type("x")).unwrap();
+        let null_x_again = ScalarValue::try_from(&struct_type("x")).unwrap();
+        let null_y = ScalarValue::try_from(&struct_type("y")).unwrap();
+        assert_eq!(null_x, null_x.clone());
+        assert_eq!(null_x, null_x_again);
+        assert_ne!(null_x, null_y);
+
+        let value = |a: i32| {
+            ScalarValue::Struct(Arc::new(StructArray::from(vec![
+                (
+                    Arc::new(Field::new("x_a", DataType::Int32, true)),
+                    Arc::new(Int32Array::from(vec![Some(a)])) as ArrayRef,
+                ),
+                (
+                    Arc::new(Field::new("x_b", DataType::Utf8, true)),
+                    Arc::new(StringArray::from(vec![Some("b")])) as ArrayRef,
+                ),
+            ])))
+        };
+        assert_eq!(value(1), value(1));
+        assert_ne!(value(1), value(2));
+        assert_ne!(value(1), null_x);
+
+        let list_i32 = ScalarValue::List(ScalarValue::new_list_nullable(
+            &[ScalarValue::Int32(Some(1))],
+            &DataType::Int32,
+        ));
+        let list_i64 = ScalarValue::List(ScalarValue::new_list_nullable(
+            &[ScalarValue::Int64(Some(1))],
+            &DataType::Int64,
+        ));
+        assert_eq!(list_i32, list_i32.clone());
+        assert_ne!(list_i32, list_i64);
     }
 
     #[test]
