@@ -273,6 +273,9 @@ where
         self.values.shrink_to(num_rows);
         self.map.clear();
         self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
+
+        // Reset the null group index
+        self.null_group = None;
     }
 }
 
@@ -319,6 +322,34 @@ mod tests {
             gv.values.capacity(),
             capacity_before,
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn clear_shrink_reset_null_group() -> Result<()> {
+        let mut gv = GroupValuesPrimitive::<Int32Type>::new(DataType::Int32);
+
+        // Intern some values including a null
+        let arr: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(2)]));
+        let mut groups = vec![];
+        gv.intern(&[arr], &mut groups)?;
+
+        assert_eq!(groups.len(), 3);
+
+        let null_group = groups[1];
+        assert_eq!(null_group, 1);
+
+        // Clear and shrink
+        gv.clear_shrink(0);
+
+        let arr: ArrayRef = Arc::new(Int32Array::from(vec![None::<i32>]));
+        let mut groups = vec![];
+        gv.intern(&[arr], &mut groups)?;
+        assert_eq!(groups.len(), 1);
+
+        let new_null_group = groups[0];
+        assert_eq!(new_null_group, 0);
 
         Ok(())
     }
