@@ -24,6 +24,7 @@ use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
+use datafusion_physical_plan::statistics::StatisticsContext;
 
 /// Context available to physical optimizer rules.
 ///
@@ -38,6 +39,19 @@ pub trait PhysicalOptimizerContext: Send + Sync {
     /// Returns `None` if no registry is configured, in which case rules
     /// should fall back to using [`ExecutionPlan::partition_statistics`].
     fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
+        None
+    }
+
+    /// Returns a [`StatisticsContext`] shared by every rule of one optimizer
+    /// run, so statistics computed by one rule are reused by later rules.
+    ///
+    /// The context must be built from [`Self::statistics_registry`]. Its cache
+    /// entries hold the plan nodes they were computed for, so it is safe to
+    /// share across plan rewrites (see [`StatisticsContext`]).
+    ///
+    /// Returns `None` if no shared context is available, in which case rules
+    /// create their own context.
+    fn statistics_context(&self) -> Option<&StatisticsContext> {
         None
     }
 }

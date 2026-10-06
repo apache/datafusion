@@ -106,6 +106,7 @@ use datafusion_physical_plan::joins::PiecewiseMergeJoinExec;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion_physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
+use datafusion_physical_plan::statistics::StatisticsContext;
 use datafusion_physical_plan::unnest::ListUnnest;
 use datafusion_session::{PhysicalOptimizerContext, PhysicalOptimizerRule, Session};
 
@@ -123,6 +124,20 @@ pub use datafusion_session::{ExtensionPlanner, PhysicalPlanner};
 
 struct SessionOptimizerContext<'a> {
     session: &'a dyn Session,
+    statistics_context: StatisticsContext,
+}
+
+impl<'a> SessionOptimizerContext<'a> {
+    fn new(session: &'a dyn Session) -> Self {
+        let statistics_context = match session.statistics_registry() {
+            Some(registry) => StatisticsContext::new_with_registry(registry.clone()),
+            None => StatisticsContext::new(),
+        };
+        Self {
+            session,
+            statistics_context,
+        }
+    }
 }
 
 impl PhysicalOptimizerContext for SessionOptimizerContext<'_> {
@@ -134,6 +149,10 @@ impl PhysicalOptimizerContext for SessionOptimizerContext<'_> {
         &self,
     ) -> Option<&datafusion_physical_plan::operator_statistics::StatisticsRegistry> {
         self.session.statistics_registry()
+    }
+
+    fn statistics_context(&self) -> Option<&StatisticsContext> {
+        Some(&self.statistics_context)
     }
 }
 
@@ -3119,9 +3138,7 @@ impl DefaultPhysicalPlanner {
         InvariantChecker(InvariantLevel::Always).check(&plan)?;
 
         let mut new_plan = Arc::clone(&plan);
-        let optimizer_context = SessionOptimizerContext {
-            session: session_state,
-        };
+        let optimizer_context = SessionOptimizerContext::new(session_state);
         for optimizer in optimizers {
             let before_schema = new_plan.schema();
             new_plan = optimizer
@@ -3532,6 +3549,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Int32Type};
     use arrow_schema::{FieldRef, SchemaRef};
     use datafusion_catalog::CatalogProviderList;
+    use datafusion_common::Statistics;
     use datafusion_common::config::{ConfigOptions, TableOptions};
     use datafusion_common::{
         DFSchemaRef, ScalarValue, SplitPoint, TableReference, ToDFSchema as _,
@@ -3554,8 +3572,10 @@ mod tests {
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_physical_expr::EquivalenceProperties;
     use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+    use datafusion_physical_plan::statistics::StatisticsArgs;
     use datafusion_physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
     use datafusion_session::QueryPlanner;
+    use parking_lot::Mutex as SyncMutex;
 
     #[derive(Debug)]
     struct ContextCheckingRule {
@@ -3583,6 +3603,44 @@ mod tests {
 
         fn name(&self) -> &str {
             "context_checking_rule"
+        }
+
+        fn schema_check(&self) -> bool {
+            true
+        }
+    }
+
+    /// Records the root statistics computed with the shared statistics context
+    #[derive(Debug)]
+    struct StatisticsRecordingRule {
+        recorded: Arc<SyncMutex<Vec<Arc<Statistics>>>>,
+    }
+
+    impl PhysicalOptimizerRule for StatisticsRecordingRule {
+        fn optimize(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+            _config: &ConfigOptions,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(plan)
+        }
+
+        fn optimize_with_context(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+            context: &dyn PhysicalOptimizerContext,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            let statistics_context = context
+                .statistics_context()
+                .expect("the planner shares a statistics context");
+            let statistics =
+                statistics_context.compute_arc(&plan, &StatisticsArgs::new())?;
+            self.recorded.lock().push(statistics);
+            Ok(plan)
+        }
+
+        fn name(&self) -> &str {
+            "statistics_recording_rule"
         }
 
         fn schema_check(&self) -> bool {
@@ -3836,6 +3894,29 @@ mod tests {
         assert!(physical_plan.is::<EmptyExec>());
         assert!(query_planner_invoked.load(AtomicOrdering::Relaxed));
         assert!(invoked.load(AtomicOrdering::Relaxed));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn optimizer_rules_share_statistics_context() -> Result<()> {
+        let recorded = Arc::new(SyncMutex::new(vec![]));
+        let rule = || -> Arc<dyn PhysicalOptimizerRule + Send + Sync> {
+            Arc::new(StatisticsRecordingRule {
+                recorded: Arc::clone(&recorded),
+            })
+        };
+        let session_state = SessionStateBuilder::new()
+            .with_default_features()
+            .with_physical_optimizer_rules(vec![rule(), rule()])
+            .build();
+
+        let logical_plan = LogicalPlanBuilder::empty(false).build()?;
+        session_state.create_physical_plan(&logical_plan).await?;
+
+        // The second rule reads the statistics the first rule cached
+        let recorded = recorded.lock();
+        assert_eq!(recorded.len(), 2);
+        assert!(Arc::ptr_eq(&recorded[0], &recorded[1]));
         Ok(())
     }
 

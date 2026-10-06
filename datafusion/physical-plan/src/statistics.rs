@@ -31,10 +31,9 @@ use datafusion_common::{
     Result, Statistics, assert_eq_or_internal_err, assert_or_internal_err,
 };
 use log::debug;
-use std::cell::RefCell;
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::ptr::from_ref;
-use std::rc::Rc;
 use std::sync::Arc;
 
 type CacheKey = (usize, Option<usize>);
@@ -173,7 +172,7 @@ pub enum ChildStats {
 /// [`Self::compute_extended`] observes extensions; [`Self::compute`] returns core
 /// [`Statistics`] only.
 pub struct StatisticsContext {
-    cache: Rc<RefCell<StatsCache>>,
+    cache: Mutex<StatsCache>,
     registry: StatisticsRegistry,
 }
 
@@ -192,7 +191,7 @@ impl StatisticsContext {
     /// Creates a context whose walk consults `registry`'s provider chain.
     pub fn new_with_registry(registry: StatisticsRegistry) -> Self {
         Self {
-            cache: Rc::new(RefCell::new(StatsCache::default())),
+            cache: Mutex::new(StatsCache::default()),
             registry,
         }
     }
@@ -203,7 +202,7 @@ impl StatisticsContext {
     /// node that supplied its pointer key. Use it to bound memory at a logical
     /// lifecycle boundary, such as after an optimizer pass.
     pub fn reset_cache(&self) {
-        let mut cache = self.cache.borrow_mut();
+        let mut cache = self.cache.lock();
         cache.statistics.clear();
         cache.extensions.clear();
     }
@@ -569,7 +568,7 @@ impl StatisticsContext {
         partition: Option<usize>,
     ) -> Option<Arc<Statistics>> {
         self.cache
-            .borrow()
+            .lock()
             .statistics
             .get(&cache_key(plan, partition))
             .map(|entry| Arc::clone(&entry.value))
@@ -599,7 +598,7 @@ impl StatisticsContext {
         statistics: Arc<Statistics>,
     ) {
         Self::store_cache_entry(
-            &mut self.cache.borrow_mut().statistics,
+            &mut self.cache.lock().statistics,
             owner,
             partition,
             statistics,
@@ -612,7 +611,7 @@ impl StatisticsContext {
         partition: Option<usize>,
     ) -> Option<Extensions> {
         self.cache
-            .borrow()
+            .lock()
             .extensions
             .get(&cache_key(plan, partition))
             .map(|entry| entry.value.clone())
@@ -625,7 +624,7 @@ impl StatisticsContext {
         extensions: Extensions,
     ) {
         Self::store_cache_entry(
-            &mut self.cache.borrow_mut().extensions,
+            &mut self.cache.lock().extensions,
             owner,
             partition,
             extensions,
@@ -773,7 +772,7 @@ mod tests {
         let args = StatisticsArgs::new();
 
         let s1 = ctx.compute_arc(&leaf, &args).unwrap();
-        assert!(!ctx.cache.borrow().statistics.is_empty());
+        assert!(!ctx.cache.lock().statistics.is_empty());
 
         let s2 = ctx.compute_arc(&leaf, &args).unwrap();
         assert!(Arc::ptr_eq(&s1, &s2));
@@ -847,7 +846,7 @@ mod tests {
             .compute(parent.as_ref(), &StatisticsArgs::new())
             .unwrap();
         assert!(
-            !ctx.cache.borrow().statistics.contains_key(&parent_key),
+            !ctx.cache.lock().statistics.contains_key(&parent_key),
             "borrowed roots must not be memoized"
         );
 
@@ -879,7 +878,7 @@ mod tests {
         let _ = ctx
             .compute_extended_arc(&leaf, &StatisticsArgs::new())
             .unwrap();
-        ctx.cache.borrow_mut().statistics.clear();
+        ctx.cache.lock().statistics.clear();
         drop(leaf);
         assert!(weak.upgrade().is_some());
 
@@ -892,9 +891,9 @@ mod tests {
         let leaf = make_stats_leaf(10);
         let ctx = StatisticsContext::new();
         let _ = ctx.compute_arc(&leaf, &StatisticsArgs::new()).unwrap();
-        assert!(!ctx.cache.borrow().statistics.is_empty());
+        assert!(!ctx.cache.lock().statistics.is_empty());
         ctx.reset_cache();
-        assert!(ctx.cache.borrow().statistics.is_empty());
+        assert!(ctx.cache.lock().statistics.is_empty());
     }
 
     #[test]
@@ -969,7 +968,7 @@ mod tests {
         assert_eq!(extensions.unwrap().get::<Tag>(), Some(&Tag(7)));
         assert!(
             ctx.cache
-                .borrow()
+                .lock()
                 .extensions
                 .contains_key(&cache_key(leaf.as_ref(), None))
         );

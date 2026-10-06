@@ -1063,10 +1063,8 @@ struct PlanSize {
 }
 
 impl PlanSize {
-    fn from_plan(plan: &dyn ExecutionPlan) -> Self {
-        let stats = StatisticsContext::new()
-            .compute(plan, &StatisticsArgs::new())
-            .ok();
+    fn from_plan(plan: &Arc<dyn ExecutionPlan>, stats_ctx: &StatisticsContext) -> Self {
+        let stats = stats_ctx.compute_arc(plan, &StatisticsArgs::new()).ok();
         Self {
             byte_size: stats
                 .as_ref()
@@ -1124,6 +1122,7 @@ fn enforce_distribution_relationships(
     input_distributions: &InputDistributionRequirements,
     children: &mut [DistributionChildState],
     target_partitions: usize,
+    stats_ctx: &StatisticsContext,
 ) -> Result<()> {
     let mut repartitioned_for_relationship = vec![false; children.len()];
 
@@ -1162,53 +1161,52 @@ fn enforce_distribution_relationships(
             }
         }
 
-        let best_satisfied_child: Option<(usize, Partitioning)> = match satisfied_children
-            .len()
-        {
-            0 => None,
-            1 => satisfied_children
-                .into_iter()
-                .next()
-                .map(|(i, p, _)| (i, p)),
-            _ => {
-                // Prefer native partitioned children over newly repartitioned ones
-                let native_children: Vec<_> = satisfied_children
-                    .iter()
-                    .filter(|(_, _, is_native)| *is_native)
-                    .collect();
-                if native_children.len() == 1 {
-                    let (i, p, _) = native_children[0];
-                    Some((*i, p.clone()))
-                } else {
-                    let pool = if !native_children.is_empty() {
-                        native_children
-                    } else {
-                        satisfied_children.iter().collect()
-                    };
-                    let candidates: Vec<_> = pool
-                        .into_iter()
-                        .map(|(idx, part, _)| {
-                            let size =
-                                PlanSize::from_plan(children[*idx].context.plan.as_ref());
-                            (size, *idx, part.clone())
-                        })
-                        .collect();
-
-                    // Prefer a unique, strictly larger winner (`size_a > size_b`).
-                    // Otherwise, fall back to standard distribution rather
-                    // than choosing an arbitrary reference.
-                    candidates
+        let best_satisfied_child: Option<(usize, Partitioning)> =
+            match satisfied_children.len() {
+                0 => None,
+                1 => satisfied_children
+                    .into_iter()
+                    .next()
+                    .map(|(i, p, _)| (i, p)),
+                _ => {
+                    // Prefer native partitioned children over newly repartitioned ones
+                    let native_children: Vec<_> = satisfied_children
                         .iter()
-                        .find(|(size_a, idx_a, _)| {
-                            size_a.is_known()
-                                && candidates.iter().all(|(size_b, idx_b, _)| {
-                                    idx_a == idx_b || size_a > size_b
-                                })
-                        })
-                        .map(|(_, idx, part)| (*idx, part.clone()))
+                        .filter(|(_, _, is_native)| *is_native)
+                        .collect();
+                    if native_children.len() == 1 {
+                        let (i, p, _) = native_children[0];
+                        Some((*i, p.clone()))
+                    } else {
+                        let pool = if !native_children.is_empty() {
+                            native_children
+                        } else {
+                            satisfied_children.iter().collect()
+                        };
+                        let candidates: Vec<_> = pool
+                            .into_iter()
+                            .map(|(idx, part, _)| {
+                                let plan = &children[*idx].context.plan;
+                                let size = PlanSize::from_plan(plan, stats_ctx);
+                                (size, *idx, part.clone())
+                            })
+                            .collect();
+
+                        // Prefer a unique, strictly larger winner (`size_a > size_b`).
+                        // Otherwise, fall back to standard distribution rather
+                        // than choosing an arbitrary reference.
+                        candidates
+                            .iter()
+                            .find(|(size_a, idx_a, _)| {
+                                size_a.is_known()
+                                    && candidates.iter().all(|(size_b, idx_b, _)| {
+                                        idx_a == idx_b || size_a > size_b
+                                    })
+                            })
+                            .map(|(_, idx, part)| (*idx, part.clone()))
+                    }
                 }
-            }
-        };
+            };
 
         // Validate that best_satisfied_child can be adapted across all unsatisfied children in the group
         let best_satisfied_child =
@@ -1666,6 +1664,7 @@ pub fn ensure_distribution_with_stats(
         &input_distributions,
         &mut children,
         target_partitions,
+        stats_ctx,
     )?;
 
     let children = children
