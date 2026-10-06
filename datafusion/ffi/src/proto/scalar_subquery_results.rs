@@ -19,10 +19,11 @@ use std::ffi::c_void;
 use std::sync::Arc;
 
 use datafusion_common::error::Result;
-use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_common::{DataFusionError, ScalarValue, internal_datafusion_err};
 use datafusion_expr::physical_planning_context::{
     ScalarSubqueryResults, ScalarSubqueryResultsBackend, SubqueryIndex,
 };
+use datafusion_proto::protobuf::ArrowType;
 use prost::Message;
 
 use stabby::vec::Vec as SVec;
@@ -92,16 +93,56 @@ impl FFI_ScalarSubqueryResults {
     }
 }
 
+/// The wire form a [`ScalarValue`] crosses the FFI boundary in.
+///
+/// `datafusion_proto::protobuf::ScalarValue` alone is not a type-preserving
+/// transport: it has no dedicated variant for every `DataType` (`Float16`,
+/// for example, is encoded as `Float32Value`), so decoding it back can yield
+/// a `ScalarValue` of a different, widened type. Carrying the original
+/// `DataType` alongside the encoded value lets [`decode_scalar_value`] cast
+/// back down to it, so a foreign `ScalarSubqueryExpr` observes the same type
+/// it was declared with.
+#[derive(Clone, PartialEq, Message)]
+struct ScalarValueEnvelope {
+    #[prost(message, optional, tag = "1")]
+    data_type: Option<ArrowType>,
+    #[prost(bytes, tag = "2")]
+    value: Vec<u8>,
+}
+
 fn encode_scalar_value(value: &ScalarValue) -> Result<SVec<u8>> {
+    let data_type: ArrowType = (&value.data_type())
+        .try_into()
+        .map_err(DataFusionError::from)?;
     let proto: datafusion_proto::protobuf::ScalarValue =
         value.try_into().map_err(DataFusionError::from)?;
-    Ok(proto.encode_to_vec().into_iter().collect())
+    let envelope = ScalarValueEnvelope {
+        data_type: Some(data_type),
+        value: proto.encode_to_vec(),
+    };
+    Ok(envelope.encode_to_vec().into_iter().collect())
 }
 
 fn decode_scalar_value(bytes: &[u8]) -> Result<ScalarValue> {
-    let proto = datafusion_proto::protobuf::ScalarValue::decode(bytes)
+    let envelope = ScalarValueEnvelope::decode(bytes)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    ScalarValue::try_from(&proto).map_err(DataFusionError::from)
+    let data_type_proto = envelope.data_type.ok_or_else(|| {
+        internal_datafusion_err!("ScalarValueEnvelope is missing its data_type")
+    })?;
+    let data_type = (&data_type_proto)
+        .try_into()
+        .map_err(DataFusionError::from)?;
+
+    let proto =
+        datafusion_proto::protobuf::ScalarValue::decode(envelope.value.as_slice())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let value = ScalarValue::try_from(&proto).map_err(DataFusionError::from)?;
+
+    if value.data_type() == data_type {
+        Ok(value)
+    } else {
+        value.cast_to(&data_type)
+    }
 }
 
 unsafe extern "C" fn get_fn_wrapper(
@@ -231,6 +272,46 @@ mod tests {
             results.get(SubqueryIndex::new(0)),
             Some(ScalarValue::Int64(Some(7)))
         );
+
+        Ok(())
+    }
+
+    /// `datafusion_proto::protobuf::ScalarValue` has no dedicated variant for
+    /// every `DataType`: a non-null `Float16` is encoded as `Float32Value`,
+    /// so decoding it back without the original type yields a `Float32`
+    /// instead. A value crossing a forced-foreign `FFI_ScalarSubqueryResults`
+    /// handle, in either direction, must still be a `Float16`, matching what
+    /// a `ScalarSubqueryExpr` declared it would return.
+    #[test]
+    fn ffi_scalar_subquery_results_preserves_non_null_float16() -> Result<()> {
+        use datafusion_common::arrow::datatypes::DataType;
+
+        let float16 = ScalarValue::Float32(Some(1.5)).cast_to(&DataType::Float16)?;
+
+        // get: the host sets a Float16, a forced-foreign reader must read a
+        // Float16 back, not the Float32 the wire format would otherwise widen
+        // it to.
+        let results = ScalarSubqueryResults::new(1);
+        let mut ffi_results = FFI_ScalarSubqueryResults::new(results.clone());
+        ffi_results.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign: ScalarSubqueryResults = ffi_results.into();
+
+        results.set(SubqueryIndex::new(0), float16.clone())?;
+        let read_back = foreign.get(SubqueryIndex::new(0));
+        assert_eq!(read_back, Some(float16.clone()));
+        assert_eq!(read_back.unwrap().data_type(), DataType::Float16);
+
+        // set: a forced-foreign writer sets a Float16, the host must read a
+        // Float16 back too.
+        let results = ScalarSubqueryResults::new(1);
+        let mut ffi_results = FFI_ScalarSubqueryResults::new(results.clone());
+        ffi_results.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign: ScalarSubqueryResults = ffi_results.into();
+
+        foreign.set(SubqueryIndex::new(0), float16.clone())?;
+        let read_back = results.get(SubqueryIndex::new(0));
+        assert_eq!(read_back, Some(float16.clone()));
+        assert_eq!(read_back.unwrap().data_type(), DataType::Float16);
 
         Ok(())
     }
