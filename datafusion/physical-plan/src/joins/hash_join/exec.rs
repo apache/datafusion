@@ -36,6 +36,9 @@ use crate::joins::hash_join::probe_completion::{ProbeCompletion, ProbeSideSummar
 use crate::joins::hash_join::shared_bounds::{
     ColumnBounds, PartitionBounds, PushdownStrategy, SharedBuildAccumulator,
 };
+use crate::joins::hash_join::sort_merge_fallback::{
+    BuildSideOutcome, SortMergeFallbackContext, is_resources_exhausted, sort_build_side,
+};
 use crate::joins::hash_join::stream::{
     BuildSide, BuildSideInitialState, HashJoinStream, HashJoinStreamState,
 };
@@ -46,7 +49,7 @@ use crate::joins::utils::{
     is_existence_join, reorder_output_after_swap, swap_join_projection, update_hash,
 };
 use crate::joins::{JoinOn, JoinOnRef, PartitionMode, SharedBitmapBuilder};
-use crate::metrics::{Count, MetricBuilder, MetricCategory};
+use crate::metrics::{Count, MetricBuilder, MetricCategory, SpillMetrics};
 use crate::projection::{
     EmbeddedProjection, JoinData, ProjectionExec, try_embed_projection,
     try_pushdown_through_join_with_column_indices,
@@ -71,9 +74,10 @@ use crate::{
 };
 
 use arrow::array::{Array, ArrayRef, BooleanBufferBuilder, UInt64Array};
-use arrow::compute::concat_batches;
+use arrow::compute::{SortOptions, concat_batches};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use arrow::row::{RowConverter, SortField};
 use arrow::util::bit_util;
 use arrow_schema::{DataType, Schema};
 use datafusion_common::config::ConfigOptions;
@@ -114,6 +118,8 @@ pub(crate) const HASH_JOIN_SEED: SeededRandomState =
     SeededRandomState::with_seed(12210250226015887276);
 
 const ARRAY_MAP_CREATED_COUNT_METRIC_NAME: &str = "array_map_created_count";
+/// Number of partitions that fell back to a sort-merge join under memory pressure
+const SORT_MERGE_FALLBACK_COUNT_METRIC_NAME: &str = "sort_merge_fallback_count";
 
 /// Decides whether the build side should be joined with an [`ArrayMap`]
 /// (perfect hash join), returning the `(min, max)` key range to build it over.
@@ -915,7 +921,7 @@ pub struct HashJoinExec {
     ///
     /// Each output stream waits on the `OnceAsync` to signal the completion of
     /// the hash table creation.
-    left_fut: Arc<OnceAsync<JoinLeftData>>,
+    left_fut: Arc<OnceAsync<BuildSideOutcome>>,
     /// Immutable build attached by an embedding executor.
     prepared_build: Option<Arc<PreparedHashJoinBuild>>,
     /// Shared the `SeededRandomState` for the hashing algorithm (seeds preserved for serialization)
@@ -1029,6 +1035,66 @@ impl HashJoinExec {
     ///
     pub fn builder(&self) -> HashJoinExecBuilder {
         self.into()
+    }
+
+    /// Returns what a partition needs to fall back to a sort-merge join when
+    /// its build side does not fit in memory, or `None` when this join cannot
+    /// fall back (see the `sort_merge_fallback` module). `compute_bounds`
+    /// says whether a dynamic filter is pushed down, in which case a sorted
+    /// build side must report its join key bounds.
+    fn sort_merge_fallback_context(
+        &self,
+        partition: usize,
+        context: &Arc<TaskContext>,
+        compute_bounds: bool,
+    ) -> Result<Option<SortMergeFallbackContext>> {
+        let options = context.session_config().options();
+        if !context.runtime_env().disk_manager.tmp_files_enabled()
+            // Only `Partitioned` joins are self-contained per partition. A
+            // `CollectLeft` build side is shared by every probe partition and
+            // the join types that emit unmatched build rows need all of them
+            // to agree on what was matched.
+            || self.mode != PartitionMode::Partitioned
+            // The sort-merge join streams do not implement `NOT IN` semantics.
+            || self.null_aware
+            // The sort-merge output is ordered by the join keys, not by the
+            // probe side; a promised probe-side ordering must be honored.
+            || self.cache.output_ordering().is_some()
+        {
+            return Ok(None);
+        }
+
+        // Both sides are sorted with the row format, which does not support
+        // every type a hash join can hash.
+        let left_schema = self.left.schema();
+        for (left_key, _) in &self.on {
+            let data_type = left_key.data_type(&left_schema)?;
+            if !RowConverter::supports_fields(&[SortField::new(data_type)]) {
+                return Ok(None);
+            }
+        }
+
+        let (on_left, on_right): (Vec<_>, Vec<_>) = self.on.iter().cloned().unzip();
+        Ok(Some(SortMergeFallbackContext {
+            context: Arc::clone(context),
+            partition,
+            metrics: self.metrics.clone(),
+            spill_metrics: SpillMetrics::new(&self.metrics, partition),
+            fallback_count: MetricBuilder::new(&self.metrics)
+                .counter(SORT_MERGE_FALLBACK_COUNT_METRIC_NAME, partition),
+            sort_options: vec![SortOptions::default(); on_left.len()],
+            on_left,
+            on_right,
+            join_type: self.join_type,
+            filter: self.filter.clone(),
+            null_equality: self.null_equality,
+            join_schema: Arc::clone(&self.join_schema),
+            output_schema: self.schema(),
+            projection: self.projection.as_deref().map(|p| p.to_vec()),
+            fetch: self.fetch,
+            max_build_size: options.execution.hash_join_max_build_size,
+            compute_bounds,
+        }))
     }
 
     fn create_dynamic_filter(on: &JoinOn) -> Arc<DynamicFilterPhysicalExpr> {
@@ -1756,6 +1822,11 @@ impl ExecutionPlan for HashJoinExec {
             .flatten();
 
         let null_aware = self.null_aware_mode()?;
+        let sort_merge_fallback = self.sort_merge_fallback_context(
+            partition,
+            &context,
+            enable_dynamic_filter_pushdown,
+        )?;
 
         let left_fut = match (&self.prepared_build, self.mode) {
             (Some(prepared), _) => {
@@ -1763,7 +1834,11 @@ impl ExecutionPlan for HashJoinExec {
                 prepared.validate(self)?;
                 let prepared = Arc::clone(prepared);
                 self.left_fut.try_once(|| {
-                    Ok(async move { Ok(prepared.probe_data(right_partitions)) })
+                    Ok(async move {
+                        Ok(BuildSideOutcome::InMemory(Arc::new(
+                            prepared.probe_data(right_partitions),
+                        )))
+                    })
                 })?
             }
             (None, PartitionMode::CollectLeft) => self.left_fut.try_once(|| {
@@ -1786,6 +1861,7 @@ impl ExecutionPlan for HashJoinExec {
                     null_aware,
                     array_map_created_count,
                     BuildMode::Ordinary,
+                    None,
                 ))
             })?,
             (None, PartitionMode::Partitioned) => {
@@ -1808,6 +1884,7 @@ impl ExecutionPlan for HashJoinExec {
                     null_aware,
                     array_map_created_count,
                     BuildMode::Ordinary,
+                    sort_merge_fallback.clone(),
                 ))
             }
             (None, PartitionMode::Auto) => {
@@ -1859,6 +1936,7 @@ impl ExecutionPlan for HashJoinExec {
             self.mode,
             null_aware,
             self.fetch,
+            sort_merge_fallback,
         )))
     }
 
@@ -2758,7 +2836,7 @@ fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
 /// The bounds are used for dynamic filter pushdown optimization, where filters
 /// based on the actual data ranges can be pushed down to the probe side to
 /// eliminate unnecessary data early.
-struct CollectLeftAccumulator {
+pub(super) struct CollectLeftAccumulator {
     /// The physical expression to evaluate for each batch
     expr: Arc<dyn PhysicalExpr>,
     /// Accumulator for tracking the minimum value across all batches
@@ -2776,7 +2854,10 @@ impl CollectLeftAccumulator {
     ///
     /// # Returns
     /// A new `CollectLeftAccumulator` instance configured for the expression's data type
-    fn try_new(expr: Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> Result<Self> {
+    pub(super) fn try_new(
+        expr: Arc<dyn PhysicalExpr>,
+        schema: &SchemaRef,
+    ) -> Result<Self> {
         /// Recursively unwraps dictionary types to get the underlying value type.
         fn dictionary_value_type(data_type: &DataType) -> DataType {
             match data_type {
@@ -2808,7 +2889,7 @@ impl CollectLeftAccumulator {
     ///
     /// # Returns
     /// Ok(()) if the update succeeds, or an error if expression evaluation fails
-    fn update_batch(&mut self, batch: &RecordBatch) -> Result<()> {
+    pub(super) fn update_batch(&mut self, batch: &RecordBatch) -> Result<()> {
         let array = self.expr.evaluate(batch)?.into_array(batch.num_rows())?;
         self.min.update_batch(std::slice::from_ref(&array))?;
         self.max.update_batch(std::slice::from_ref(&array))?;
@@ -2821,7 +2902,7 @@ impl CollectLeftAccumulator {
     ///
     /// # Returns
     /// The `ColumnBounds` containing the minimum and maximum values observed
-    fn evaluate(mut self) -> Result<ColumnBounds> {
+    pub(super) fn evaluate(mut self) -> Result<ColumnBounds> {
         Ok(ColumnBounds::new(
             self.min.evaluate()?,
             self.max.evaluate()?,
@@ -2953,10 +3034,12 @@ fn estimate_concat_allocation(array: &dyn Array) -> Result<usize> {
 ///
 /// `inputs_reserved` is the memory `reservation` already holds for `batches`.
 /// The copy is reserved before it is made, and once `batches` are dropped the
-/// reservation is trimmed to the memory retained by the returned batch.
+/// reservation is trimmed to the memory retained by the returned batch. On
+/// success `batches` is left holding only the returned batch, which shares its
+/// buffers, so the build rows stay available to the sort-merge fallback.
 fn concat_build_batches(
     schema: &SchemaRef,
-    batches: Vec<RecordBatch>,
+    batches: &mut Vec<RecordBatch>,
     reverse: bool,
     inputs_reserved: usize,
     reservation: &mut MemoryReservation,
@@ -2965,7 +3048,7 @@ fn concat_build_batches(
     // Concatenating a single batch is zero-copy
     let copy_size = if batches.len() > 1 {
         let mut copy_size = 0;
-        for batch in &batches {
+        for batch in batches.iter() {
             for array in batch.columns() {
                 copy_size += estimate_concat_allocation(array.as_ref())?;
             }
@@ -2982,7 +3065,7 @@ fn concat_build_batches(
     } else {
         concat_batches(schema, batches.iter())?
     };
-    drop(batches);
+    *batches = vec![batch.clone()];
 
     // The inputs are gone: only hold on to what the concatenated batch retains,
     // which includes any buffers it still shares with the inputs.
@@ -3051,13 +3134,10 @@ async fn collect_left_input(
     null_aware: Option<NullAwareMode>,
     array_map_created_count: Count,
     mode: BuildMode,
-) -> Result<JoinLeftData> {
+    mut sort_merge_fallback: Option<SortMergeFallbackContext>,
+) -> Result<BuildSideOutcome> {
     let schema = left_stream.schema();
     let prepared = mode == BuildMode::Prepared;
-
-    // The extra scope maps + null bitmap are only built for correlated
-    // null-aware joins (see `NullAwareMode`).
-    let with_null_aware_row_state = null_aware.is_some_and(NullAwareMode::is_correlated);
 
     let is_phj_candidate = is_perfect_hash_join_candidate(&on_left, &schema)?;
 
@@ -3078,7 +3158,39 @@ async fn collect_left_input(
             }
         }
         let batch_size = state.memory_counter.count_batch(&batch);
-        state.reservation.try_grow(batch_size)?;
+        // Reserve memory for incoming batch, taking the fallback instead when
+        // the build side should be sorted from here on
+        let fallback = match state.reservation.try_grow(batch_size) {
+            // The build side grew past the configured size
+            Ok(()) => sort_merge_fallback.take_if(|fallback| {
+                fallback
+                    .max_build_size
+                    .is_some_and(|max| state.reservation.size() > max)
+            }),
+            // Only the join's own exhausted reservation can be recovered from
+            // by sorting; anything else (including errors of the input) is
+            // reported as is.
+            Err(error)
+                if sort_merge_fallback.is_some() && is_resources_exhausted(&error) =>
+            {
+                sort_merge_fallback.take()
+            }
+            Err(error) => return Err(error),
+        };
+        if let Some(fallback) = fallback {
+            let BuildSideState {
+                mut batches,
+                reservation,
+                ..
+            } = state;
+            batches.push(batch);
+            // Release what the collected batches reserved: the external sort
+            // accounts for what it keeps in memory itself.
+            drop(reservation);
+            let sorted =
+                sort_build_side(fallback, schema, batches, Some(left_stream)).await?;
+            return Ok(BuildSideOutcome::SortMerge(sorted));
+        }
         state.metrics.build_mem_used.add(batch_size);
         state.metrics.build_input_batches.add(1);
         state.metrics.build_input_rows.add(batch.num_rows());
@@ -3098,7 +3210,7 @@ async fn collect_left_input(
 
     // Bind the reservation first so error paths release allocations before their charge.
     let BuildSideState {
-        mut reservation,
+        reservation,
         mut batches,
         num_rows,
         metrics,
@@ -3117,7 +3229,7 @@ async fn collect_left_input(
     };
 
     // Compute bounds
-    let mut bounds = match bounds_accumulators {
+    let bounds = match bounds_accumulators {
         Some(accumulators) if num_rows > 0 => {
             let bounds = accumulators
                 .into_iter()
@@ -3128,30 +3240,102 @@ async fn collect_left_input(
         _ => None,
     };
 
+    let in_memory = build_in_memory(
+        &random_state,
+        &schema,
+        &mut batches,
+        num_rows,
+        max_batch_rows,
+        input_bytes,
+        copy_bytes,
+        &on_left,
+        &metrics,
+        reservation,
+        bounds.clone(),
+        with_visited_indices_bitmap,
+        probe_threads_count,
+        should_compute_dynamic_filters,
+        &config,
+        null_equality,
+        null_aware,
+        &array_map_created_count,
+        prepared,
+    );
+    match in_memory {
+        Ok(data) => Ok(BuildSideOutcome::InMemory(Arc::new(data))),
+        Err(error) => {
+            // The batches fit, but the hash table (or a bitmap) on top of them
+            // did not. The reservation was released with the failed build.
+            let Some(fallback) =
+                sort_merge_fallback.filter(|_| is_resources_exhausted(&error))
+            else {
+                return Err(error);
+            };
+            let sorted = sort_build_side(fallback, schema, batches, None).await?;
+            Ok(BuildSideOutcome::SortMerge(sorted))
+        }
+    }
+}
+
+/// Builds the hash table (or perfect-hash [`ArrayMap`]) and the bitmaps over
+/// the fully collected build `batches`.
+///
+/// `reservation` already covers `batches`; the structures built here grow it
+/// further. On error the reservation is dropped, releasing everything, and
+/// `batches` still holds every build row (possibly concatenated into one
+/// batch).
+#[expect(clippy::too_many_arguments)]
+fn build_in_memory(
+    random_state: &RandomState,
+    schema: &SchemaRef,
+    batches: &mut Vec<RecordBatch>,
+    num_rows: usize,
+    max_batch_rows: usize,
+    input_bytes: usize,
+    copy_bytes: usize,
+    on_left: &[PhysicalExprRef],
+    metrics: &BuildProbeJoinMetrics,
+    mut reservation: MemoryReservation,
+    mut bounds: Option<PartitionBounds>,
+    with_visited_indices_bitmap: bool,
+    probe_threads_count: usize,
+    should_compute_dynamic_filters: bool,
+    config: &ConfigOptions,
+    null_equality: NullEquality,
+    null_aware: Option<NullAwareMode>,
+    array_map_created_count: &Count,
+    prepared: bool,
+) -> Result<JoinLeftData> {
+    // The extra scope maps + null bitmap are only built for correlated
+    // null-aware joins (see `NullAwareMode`).
+    let with_null_aware_row_state = null_aware.is_some_and(NullAwareMode::is_correlated);
+
+    let is_phj_candidate = is_perfect_hash_join_candidate(on_left, schema)?;
+
     let (join_hash_map, batch, left_values) = if let Some((min_val, max_val)) =
         array_map_key_range(
             bounds.as_ref(),
-            &schema,
-            &batches,
-            &on_left,
+            schema,
+            batches,
+            on_left,
             &mut reservation,
             config.execution.perfect_hash_join_small_build_threshold,
             config.execution.perfect_hash_join_min_key_density,
             null_equality,
         )? {
         let batch = if prepared {
-            concat_batches(&schema, batches.iter())?
+            concat_batches(schema, batches.iter())?
         } else {
             concat_build_batches(
-                &schema,
-                std::mem::take(&mut batches),
+                schema,
+                batches,
                 false,
                 input_bytes,
                 &mut reservation,
-                &metrics,
+                metrics,
             )?
         };
-        let left_values = evaluate_expressions_to_arrays(&on_left, &batch)?;
+        let left_values = evaluate_expressions_to_arrays(on_left, &batch)?;
         let array_map = ArrayMap::try_new(&left_values[0], min_val, max_val)?;
 
         array_map_created_count.add(1);
@@ -3164,7 +3348,7 @@ async fn collect_left_input(
         // Use `u32` indices for the JoinHashMap when num_rows ≤ u32::MAX, otherwise use the
         // `u64` indice variant
         // Arc is used instead of Box to allow sharing with SharedBuildAccumulator for hash map pushdown
-        let mut hashmap = new_join_hashmap(num_rows, &mut reservation, &metrics)?;
+        let mut hashmap = new_join_hashmap(num_rows, &mut reservation, metrics)?;
 
         let scratch_reservation = reservation.new_empty();
         if prepared {
@@ -3183,11 +3367,11 @@ async fn collect_left_input(
             hashes_buffer.clear();
             hashes_buffer.resize(batch.num_rows(), 0);
             update_hash(
-                &on_left,
+                on_left,
                 batch,
                 &mut *hashmap,
                 offset,
-                &random_state,
+                random_state,
                 &mut hashes_buffer,
                 0,
                 true,
@@ -3198,19 +3382,19 @@ async fn collect_left_input(
 
         // Merge all batches into a single batch, so we can directly index into the arrays
         let batch = if prepared {
-            concat_batches(&schema, batches.iter().rev())?
+            concat_batches(schema, batches.iter().rev())?
         } else {
             concat_build_batches(
-                &schema,
-                std::mem::take(&mut batches),
+                schema,
+                batches,
                 true,
                 input_bytes,
                 &mut reservation,
-                &metrics,
+                metrics,
             )?
         };
 
-        let left_values = evaluate_expressions_to_arrays(&on_left, &batch)?;
+        let left_values = evaluate_expressions_to_arrays(on_left, &batch)?;
 
         (Map::HashMap(hashmap), batch, left_values)
     };
@@ -3267,7 +3451,7 @@ async fn collect_left_input(
             // Scope-only NULL marking uses a HashMap (the primary join map may
             // use ArrayMap for full-key matches, but scope keys have arbitrary
             // shape).
-            let mut scope_map = new_join_hashmap(num_rows, &mut reservation, &metrics)?;
+            let mut scope_map = new_join_hashmap(num_rows, &mut reservation, metrics)?;
 
             let mut hashes_buffer = vec![0; batch.num_rows()];
             update_hash(
@@ -3275,7 +3459,7 @@ async fn collect_left_input(
                 &batch,
                 &mut *scope_map,
                 0,
-                &random_state,
+                random_state,
                 &mut hashes_buffer,
                 0,
                 true,
@@ -3311,9 +3495,9 @@ async fn collect_left_input(
                 None
             } else {
                 let null_rows = build_indices.len();
-                let mut map = new_join_hashmap(null_rows, &mut reservation, &metrics)?;
+                let mut map = new_join_hashmap(null_rows, &mut reservation, metrics)?;
                 let mut hashes_buffer = vec![0; null_rows];
-                create_hashes(&scope_values, &random_state, &mut hashes_buffer)?;
+                create_hashes(&scope_values, random_state, &mut hashes_buffer)?;
                 map.update_from_iter(Box::new(hashes_buffer.iter().enumerate().rev()), 0);
                 Some(map)
             };
@@ -3398,7 +3582,7 @@ async fn collect_left_input(
         && left_values[0].logical_null_count() > 0;
 
     if prepared {
-        drop(batches);
+        batches.clear();
         // Prepared keys are direct columns. IN-list arrays share these batch
         // buffers, including through multi-key StructArray children.
         let retained = RecordBatchMemoryCounter::new().count_batch(&batch);
@@ -3502,9 +3686,9 @@ mod tests {
     };
 
     use arrow::array::{
-        Array, ArrayRef, AsArray, BinaryViewArray, Date32Array, DictionaryArray,
-        Float32Array, Float64Array, Int32Array, Int64Array, StringArray, StringViewArray,
-        StructArray, UInt32Array, UInt64Array,
+        Array, ArrayRef, AsArray, BinaryViewArray, BooleanArray, Date32Array,
+        DictionaryArray, Float32Array, Float64Array, Int32Array, Int64Array, StringArray,
+        StringViewArray, StructArray, UInt32Array, UInt64Array,
     };
     use arrow::buffer::NullBuffer;
     use arrow::datatypes::{DataType, Field, Float32Type, Float64Type, Int32Type};
@@ -3516,6 +3700,7 @@ mod tests {
         exec_err, internal_err,
     };
     use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
     use datafusion_execution::memory_pool::{
         GreedyMemoryPool, MemoryPool, UnboundedMemoryPool,
     };
@@ -4275,7 +4460,7 @@ mod tests {
     /// Collects a single-column build side keyed on that column.
     async fn collect_float_build(
         keys: ArrayRef,
-    ) -> Result<(JoinLeftData, BuildProbeJoinMetrics)> {
+    ) -> Result<(Arc<JoinLeftData>, BuildProbeJoinMetrics)> {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "f",
             keys.data_type().clone(),
@@ -4287,7 +4472,7 @@ mod tests {
         let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
         let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
         let on_left: Vec<PhysicalExprRef> = vec![Arc::new(Column::new("f", 0))];
-        let left_data = collect_left_input(
+        let BuildSideOutcome::InMemory(left_data) = collect_left_input(
             RandomState::with_seed(0),
             stream,
             on_left,
@@ -4301,8 +4486,12 @@ mod tests {
             None,
             Count::new(),
             BuildMode::Ordinary,
+            None,
         )
-        .await?;
+        .await?
+        else {
+            return internal_err!("the build side cannot fall back without a context");
+        };
         Ok((left_data, metrics))
     }
 
@@ -5292,7 +5481,7 @@ mod tests {
             expected_final_build_rows(join_type, num_build_rows, &matched_keys);
         assert_eq!(build_rows_with_match_flag(&batches), expected);
 
-        for batch in &batches {
+        for batch in batches.iter() {
             assert!(
                 batch.num_rows() <= batch_size,
                 "{join_type} join emitted a batch of {} rows with batch_size {batch_size}",
@@ -5332,7 +5521,7 @@ mod tests {
 
         let num_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(num_rows, fetch);
-        for batch in &batches {
+        for batch in batches.iter() {
             assert!(batch.num_rows() <= batch_size);
         }
         // Every emitted row is a genuine join result row.
@@ -7933,6 +8122,10 @@ mod tests {
         for join_type in join_types {
             let runtime = RuntimeEnvBuilder::new()
                 .with_memory_limit(100, 1.0)
+                // The join would otherwise finish as a sort-merge join
+                .with_disk_manager_builder(
+                    DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
+                )
                 .build_arc()?;
             let session_config = SessionConfig::default().with_batch_size(50);
             let task_ctx = TaskContext::default()
@@ -8039,7 +8232,7 @@ mod tests {
             };
             let batch = concat_build_batches(
                 &schema,
-                batches.clone(),
+                &mut batches.clone(),
                 reverse,
                 inputs_reserved,
                 &mut reservation,
@@ -8061,9 +8254,10 @@ mod tests {
         let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(inputs * 5 / 4));
         let (mut reservation, inputs_reserved) = reserve_inputs(&batches, &pool)?;
         assert_eq!(inputs_reserved, inputs);
+        let mut inputs_left = batches.clone();
         let err = concat_build_batches(
             &schema,
-            batches.clone(),
+            &mut inputs_left,
             false,
             inputs_reserved,
             &mut reservation,
@@ -8071,14 +8265,17 @@ mod tests {
         )
         .unwrap_err();
         assert_contains!(err.to_string(), "Resources exhausted");
+        // The rows stay available to the sort-merge fallback
+        assert_eq!(inputs_left, batches);
         drop(reservation);
 
         // With room for the copy, the reservation ends up at what is retained
         let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(inputs * 2));
         let (mut reservation, inputs_reserved) = reserve_inputs(&batches, &pool)?;
+        let mut batches = batches;
         let batch = concat_build_batches(
             &schema,
-            batches,
+            &mut batches,
             false,
             inputs_reserved,
             &mut reservation,
@@ -8086,13 +8283,14 @@ mod tests {
         )?;
         assert_eq!(reservation.size(), get_record_batch_memory_size(&batch));
         assert_eq!(pool.reserved(), reservation.size());
+        assert_eq!(batches, vec![batch]);
         Ok(())
     }
 
     /// Concatenating a single batch is zero-copy, so nothing more is reserved.
     #[test]
     fn concat_build_batches_single_batch_not_reserved_twice() -> Result<()> {
-        let batches = concat_test_batches(1, 1000);
+        let mut batches = concat_test_batches(1, 1000);
         let schema = batches[0].schema();
         let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
         let inputs = get_record_batch_memory_size(&batches[0]);
@@ -8101,7 +8299,7 @@ mod tests {
         let (mut reservation, inputs_reserved) = reserve_inputs(&batches, &pool)?;
         let batch = concat_build_batches(
             &schema,
-            batches,
+            &mut batches,
             true,
             inputs_reserved,
             &mut reservation,
@@ -8119,7 +8317,7 @@ mod tests {
     ) -> Result<()> {
         let batches = concat_test_batches(4, 1000);
         let column = batches[0].schema().index_of(column)?;
-        let batches = batches
+        let mut batches = batches
             .into_iter()
             .map(|batch| batch.project(&[column]))
             .collect::<Result<Vec<_>, _>>()?;
@@ -8134,7 +8332,7 @@ mod tests {
         let (mut reservation, inputs_reserved) = reserve_inputs(&batches, &pool)?;
         let batch = concat_build_batches(
             &schema,
-            batches,
+            &mut batches,
             false,
             inputs_reserved,
             &mut reservation,
@@ -8199,6 +8397,10 @@ mod tests {
 
             let runtime = RuntimeEnvBuilder::new()
                 .with_memory_limit(limit, 1.0)
+                // The join would otherwise finish as a sort-merge join
+                .with_disk_manager_builder(
+                    DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
+                )
                 .build_arc()?;
             let task_ctx = prepare_task_ctx(8192, use_perfect_hash_join_as_possible);
             let task_ctx = Arc::new(
@@ -11019,6 +11221,513 @@ mod tests {
             lit(true),
         ));
         assert!(join.set_dynamic_filter(df).is_err());
+        Ok(())
+    }
+
+    /// Two sides of `batches` batches each, with duplicate keys, keys that
+    /// only exist on one side, and a non-key column to filter on.
+    fn sort_merge_fallback_batches(
+        batches: usize,
+    ) -> (Vec<RecordBatch>, Vec<RecordBatch>) {
+        let rows_per_batch = 16;
+        let side = |modulus: i32, offset: i32, a: &str, b: &str, c: &str| {
+            (0..batches as i32)
+                .map(|batch| {
+                    let start = batch * rows_per_batch;
+                    // ids ascend within and across batches
+                    let ids: Vec<i32> = (start..start + rows_per_batch).collect();
+                    // keys repeat within and across batches, and each side
+                    // has keys the other side lacks
+                    let keys: Vec<i32> =
+                        ids.iter().map(|id| (id * 7) % modulus + offset).collect();
+                    let values: Vec<i32> = ids.iter().map(|id| (id * 13) % 17).collect();
+                    build_table_i32((a, &ids), (b, &keys), (c, &values))
+                })
+                .collect::<Vec<RecordBatch>>()
+        };
+        // left keys are 0..47, right keys 5..58
+        (side(47, 0, "a1", "b1", "c1"), side(53, 5, "a2", "b2", "c2"))
+    }
+
+    fn sort_merge_fallback_inputs(
+        batches: usize,
+    ) -> (Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>) {
+        let (left, right) = sort_merge_fallback_batches(batches);
+        let exec = |batches: Vec<RecordBatch>| {
+            let schema = batches[0].schema();
+            TestMemoryExec::try_new_exec(&[batches], schema, None).unwrap()
+                as Arc<dyn ExecutionPlan>
+        };
+        (exec(left), exec(right))
+    }
+
+    /// `c1 < c2`, so it references both sides
+    fn sort_merge_fallback_filter(
+        left: &Arc<dyn ExecutionPlan>,
+        right: &Arc<dyn ExecutionPlan>,
+    ) -> JoinFilter {
+        let column_indices = vec![
+            ColumnIndex {
+                index: 2,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 2,
+                side: JoinSide::Right,
+            },
+        ];
+        // Outer joins evaluate the filter over null-padded rows
+        let intermediate_schema = Schema::new(vec![
+            left.schema().field(2).clone().with_nullable(true),
+            right.schema().field(2).clone().with_nullable(true),
+        ]);
+        let expression = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("c1", 0)),
+            Operator::Lt,
+            Arc::new(Column::new("c2", 1)),
+        )) as Arc<dyn PhysicalExpr>;
+        JoinFilter::new(expression, column_indices, Arc::new(intermediate_schema))
+    }
+
+    /// A task context with `memory_limit` bytes and spilling enabled, sized
+    /// so a sort can still run (no pre-reserved merge memory)
+    fn sort_merge_fallback_task_ctx(
+        memory_limit: Option<usize>,
+        disk_manager_builder: DiskManagerBuilder,
+    ) -> Arc<TaskContext> {
+        let mut runtime =
+            RuntimeEnvBuilder::new().with_disk_manager_builder(disk_manager_builder);
+        if let Some(memory_limit) = memory_limit {
+            runtime = runtime.with_memory_limit(memory_limit, 1.0);
+        }
+        let mut session_config = SessionConfig::default().with_batch_size(16);
+        session_config
+            .options_mut()
+            .execution
+            .sort_spill_reservation_bytes = 0;
+        Arc::new(
+            TaskContext::default()
+                .with_session_config(session_config)
+                .with_runtime(runtime.build_arc().unwrap()),
+        )
+    }
+
+    /// An unbounded pool with `hash_join_max_build_size` set, so that only the
+    /// cap, or a reason to decline, decides whether a partition falls back.
+    fn sort_merge_fallback_capped_ctx(max_build_size: Option<usize>) -> Arc<TaskContext> {
+        let unlimited = sort_merge_fallback_task_ctx(None, DiskManagerBuilder::default());
+        let mut session_config = unlimited.session_config().clone();
+        session_config
+            .options_mut()
+            .execution
+            .hash_join_max_build_size = max_build_size;
+        Arc::new(
+            TaskContext::default()
+                .with_session_config(session_config)
+                .with_runtime(unlimited.runtime_env()),
+        )
+    }
+
+    fn sorted_rows(batches: &[RecordBatch]) -> Vec<String> {
+        batches_to_sort_string(batches)
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    const ALL_JOIN_TYPES: [JoinType; 10] = [
+        JoinType::Inner,
+        JoinType::Left,
+        JoinType::Right,
+        JoinType::Full,
+        JoinType::LeftSemi,
+        JoinType::LeftAnti,
+        JoinType::RightSemi,
+        JoinType::RightAnti,
+        JoinType::LeftMark,
+        JoinType::RightMark,
+    ];
+
+    /// Under memory pressure a partitioned hash join finishes as a sort-merge
+    /// join and produces the same rows as the in-memory join, for every join
+    /// type, with and without a join filter.
+    #[tokio::test]
+    async fn partitioned_join_sort_merge_fallback_matches_in_memory_join() -> Result<()> {
+        let (left, right) = sort_merge_fallback_inputs(32);
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+        )];
+
+        for join_type in ALL_JOIN_TYPES {
+            for filtered in [false, true] {
+                let filter = filtered.then(|| sort_merge_fallback_filter(&left, &right));
+                let join = || {
+                    HashJoinExec::try_new(
+                        Arc::clone(&left),
+                        Arc::clone(&right),
+                        on.clone(),
+                        filter.clone(),
+                        &join_type,
+                        None,
+                        PartitionMode::Partitioned,
+                        NullEquality::NullEqualsNothing,
+                        false,
+                    )
+                };
+
+                let in_memory = join()?;
+                let expected = common::collect(in_memory.execute(
+                    0,
+                    sort_merge_fallback_task_ctx(None, DiskManagerBuilder::default()),
+                )?)
+                .await?;
+                assert_eq!(
+                    in_memory
+                        .metrics()
+                        .unwrap()
+                        .sum_by_name(SORT_MERGE_FALLBACK_COUNT_METRIC_NAME)
+                        .map(|v| v.as_usize()),
+                    Some(0),
+                    "{join_type} filtered={filtered}: no fallback without memory pressure"
+                );
+
+                let fallback = join()?;
+                let actual = common::collect(fallback.execute(
+                    0,
+                    sort_merge_fallback_task_ctx(
+                        Some(6 * 1024),
+                        DiskManagerBuilder::default(),
+                    ),
+                )?)
+                .await?;
+                let metrics = fallback.metrics().unwrap();
+                assert_eq!(
+                    metrics
+                        .sum_by_name(SORT_MERGE_FALLBACK_COUNT_METRIC_NAME)
+                        .map(|v| v.as_usize()),
+                    Some(1),
+                    "{join_type} filtered={filtered}: the join must have fallen back"
+                );
+                assert!(
+                    metrics.spill_count().unwrap() > 0,
+                    "{join_type} filtered={filtered}: the fallback sorts must have spilled"
+                );
+                assert_eq!(
+                    metrics.output_rows().unwrap(),
+                    actual.iter().map(|b| b.num_rows()).sum::<usize>(),
+                    "{join_type} filtered={filtered}: output rows are recorded once"
+                );
+
+                assert!(
+                    !expected.is_empty(),
+                    "{join_type} filtered={filtered}: the test data must produce rows"
+                );
+                assert_eq!(fallback.schema(), actual[0].schema());
+                assert_eq!(
+                    sorted_rows(&actual),
+                    sorted_rows(&expected),
+                    "{join_type} filtered={filtered}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// The fallback output is projected and limited like the hash join's
+    #[tokio::test]
+    async fn sort_merge_fallback_applies_projection_and_fetch() -> Result<()> {
+        let (left, right) = sort_merge_fallback_inputs(32);
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+        )];
+        let join = || {
+            HashJoinExecBuilder::new(
+                Arc::clone(&left),
+                Arc::clone(&right),
+                on.clone(),
+                JoinType::Inner,
+            )
+            .with_partition_mode(PartitionMode::Partitioned)
+            .with_projection(Some(vec![4, 1]))
+            .with_fetch(Some(7))
+            .build()
+        };
+
+        let in_memory = join()?;
+        let expected = common::collect(in_memory.execute(
+            0,
+            sort_merge_fallback_task_ctx(None, DiskManagerBuilder::default()),
+        )?)
+        .await?;
+        let fallback = join()?;
+        let actual = common::collect(fallback.execute(
+            0,
+            sort_merge_fallback_task_ctx(Some(6 * 1024), DiskManagerBuilder::default()),
+        )?)
+        .await?;
+        assert_eq!(
+            fallback
+                .metrics()
+                .unwrap()
+                .sum_by_name(SORT_MERGE_FALLBACK_COUNT_METRIC_NAME)
+                .map(|v| v.as_usize()),
+            Some(1)
+        );
+
+        assert_eq!(actual[0].schema(), fallback.schema());
+        assert_eq!(columns(&actual[0].schema()), vec!["b2", "b1"]);
+        // The fetched rows differ (a hash join keeps probe order, a sort-merge
+        // join key order), but their count and shape do not
+        assert_eq!(actual.iter().map(|b| b.num_rows()).sum::<usize>(), 7);
+        assert_eq!(expected.iter().map(|b| b.num_rows()).sum::<usize>(), 7);
+        let rows = sorted_rows(&actual);
+        // skip the table header and the closing border
+        for row in &rows[3..rows.len() - 1] {
+            // every row is an actual match: b2 == b1
+            let cells: Vec<&str> = row.split('|').map(str::trim).collect();
+            assert_eq!(cells[1], cells[2], "{row}");
+        }
+        Ok(())
+    }
+
+    /// A falling-back partition has no hash table left to test membership
+    /// against, so the dynamic filter it pushes to the probe side must stay
+    /// permissive.
+    ///
+    /// This is the guard for [`PushdownStrategy::Unknown`]. Reporting `Empty`
+    /// instead would claim the partition holds no rows at all, and the probe
+    /// side would then discard every row routed to it, losing matches. The
+    /// pruning semantics of the two reports are covered by
+    /// `partitioned_unknown_membership_keeps_its_probe_rows` in `shared_bounds`.
+    #[tokio::test]
+    async fn sort_merge_fallback_keeps_the_dynamic_filter_permissive() -> Result<()> {
+        let (left, right) = sort_merge_fallback_inputs(32);
+        let on: JoinOn = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+        )];
+        let probe_schema = right.schema();
+
+        let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
+        let join = HashJoinExecBuilder::new(left, right, on, JoinType::Inner)
+            .with_partition_mode(PartitionMode::Partitioned)
+            .build()?
+            .set_dynamic_filter(Arc::clone(&dynamic_filter))?;
+
+        let batches = common::collect(join.execute(
+            0,
+            sort_merge_fallback_task_ctx(Some(6 * 1024), DiskManagerBuilder::default()),
+        )?)
+        .await?;
+        assert_eq!(
+            join.metrics()
+                .unwrap()
+                .sum_by_name(SORT_MERGE_FALLBACK_COUNT_METRIC_NAME)
+                .map(|v| v.as_usize()),
+            Some(1),
+            "the partition must have fallen back for this to test anything"
+        );
+        assert!(!batches.is_empty(), "the join should have produced rows");
+
+        // Every probe row within the build side's key range (0..47) must
+        // survive the filter the fallback reported; the bounds it reported
+        // still prune a key outside that range.
+        let probe = RecordBatch::try_new(
+            Arc::clone(&probe_schema),
+            vec![
+                Arc::new(Int32Array::from(vec![0, 1, 2, 3, 4])),
+                Arc::new(Int32Array::from(vec![5, 6, 7, 8, 100])),
+                Arc::new(Int32Array::from(vec![0, 1, 2, 3, 4])),
+            ],
+        )?;
+        let filter = dynamic_filter.current()?;
+        let kept = filter.evaluate(&probe)?.into_array(probe.num_rows())?;
+        let kept = kept
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .expect("a filter evaluates to a BooleanArray");
+        let kept: Vec<bool> = (0..kept.len()).map(|i| kept.value(i)).collect();
+        assert_eq!(
+            kept,
+            [true, true, true, true, false],
+            "a fallen-back partition prunes by bounds only, filter was {filter}"
+        );
+
+        Ok(())
+    }
+
+    /// The fallback is declined whenever the join promises its probe side's
+    /// ordering, because a merge emits join-key order instead. The promise is
+    /// what matters, not the input: `maintains_input_order` makes it only for
+    /// the join types that emit every row while scanning the probe side, and
+    /// only an ordered probe input turns it into an advertised output ordering.
+    #[tokio::test]
+    async fn sort_merge_fallback_honors_a_promised_probe_ordering() -> Result<()> {
+        let (left, _) = sort_merge_fallback_inputs(32);
+        let (_, right) = sort_merge_fallback_batches(32);
+        let schema = right[0].schema();
+        // `a2` is the probe side's id column, ascending across batches
+        let ordering = datafusion_physical_expr_common::sort_expr::LexOrdering::new([
+            PhysicalSortExpr::new_default(Arc::new(Column::new_with_schema(
+                "a2", &schema,
+            )?)),
+        ])
+        .unwrap();
+        let right = TestMemoryExec::try_new(&[right], schema, None)?
+            .try_with_sort_information(vec![ordering])?;
+        let right: Arc<dyn ExecutionPlan> =
+            Arc::new(TestMemoryExec::update_cache(&Arc::new(right)));
+        let on: JoinOn = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+        )];
+        let join = |join_type: JoinType| {
+            HashJoinExec::try_new(
+                Arc::clone(&left),
+                Arc::clone(&right),
+                on.clone(),
+                None,
+                &join_type,
+                None,
+                PartitionMode::Partitioned,
+                NullEquality::NullEqualsNothing,
+                false,
+            )
+        };
+        // A join that declined up front never registers the counter at all.
+        let fallbacks = |join: &HashJoinExec| {
+            join.metrics()
+                .unwrap()
+                .sum_by_name(SORT_MERGE_FALLBACK_COUNT_METRIC_NAME)
+                .map_or(0, |v| v.as_usize())
+        };
+
+        // An inner join promises the probe order, so under a cap that would
+        // otherwise switch it, it stays a hash join and keeps that order.
+        let inner = join(JoinType::Inner)?;
+        assert!(inner.properties().output_ordering().is_some());
+        let batches = common::collect(
+            inner.execute(0, sort_merge_fallback_capped_ctx(Some(1024)))?,
+        )
+        .await?;
+        let output = concat_batches(&inner.schema(), &batches)?;
+        let ids = output
+            .column_by_name("a2")
+            .unwrap()
+            .as_primitive::<Int32Type>();
+        assert!(
+            ids.values().is_sorted(),
+            "the output must stay in probe order"
+        );
+        assert_eq!(
+            fallbacks(&inner),
+            0,
+            "a promised ordering must stop the fallback"
+        );
+
+        // A left join never promises it, so the same ordered input does not
+        // stop the fallback.
+        let left_join = join(JoinType::Left)?;
+        assert!(left_join.properties().output_ordering().is_none());
+        common::collect(
+            left_join.execute(0, sort_merge_fallback_capped_ctx(Some(1024)))?,
+        )
+        .await?;
+        assert_eq!(fallbacks(&left_join), 1);
+
+        Ok(())
+    }
+
+    /// Without disk the join fails as before
+    #[tokio::test]
+    async fn sort_merge_fallback_needs_disk() -> Result<()> {
+        let (left, right) = sort_merge_fallback_inputs(32);
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+        )];
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+
+        let without_disk = sort_merge_fallback_task_ctx(
+            Some(6 * 1024),
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
+        );
+        let err = common::collect(join.execute(0, without_disk)?)
+            .await
+            .unwrap_err();
+        assert_contains!(err.to_string(), "Failed to allocate additional");
+        assert_contains!(err.to_string(), "HashJoinInput[0]");
+        assert_eq!(
+            join.metrics()
+                .unwrap()
+                .sum_by_name(SORT_MERGE_FALLBACK_COUNT_METRIC_NAME)
+                .map(|v| v.as_usize()),
+            None
+        );
+        Ok(())
+    }
+
+    /// `hash_join_max_build_size` triggers the fallback without any memory
+    /// limit, once the build side of the partition grows past it
+    #[tokio::test]
+    async fn sort_merge_fallback_on_max_build_size() -> Result<()> {
+        let (left, right) = sort_merge_fallback_inputs(32);
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+        )];
+        let join = || {
+            HashJoinExec::try_new(
+                Arc::clone(&left),
+                Arc::clone(&right),
+                on.clone(),
+                None,
+                &JoinType::Left,
+                None,
+                PartitionMode::Partitioned,
+                NullEquality::NullEqualsNothing,
+                false,
+            )
+        };
+        let in_memory = join()?;
+        let expected =
+            common::collect(in_memory.execute(0, sort_merge_fallback_capped_ctx(None))?)
+                .await?;
+        assert_eq!(
+            in_memory
+                .metrics()
+                .unwrap()
+                .sum_by_name(SORT_MERGE_FALLBACK_COUNT_METRIC_NAME)
+                .map(|v| v.as_usize()),
+            Some(0)
+        );
+
+        let fallback = join()?;
+        let actual = common::collect(
+            fallback.execute(0, sort_merge_fallback_capped_ctx(Some(1024)))?,
+        )
+        .await?;
+        assert_eq!(
+            fallback
+                .metrics()
+                .unwrap()
+                .sum_by_name(SORT_MERGE_FALLBACK_COUNT_METRIC_NAME)
+                .map(|v| v.as_usize()),
+            Some(1)
+        );
+        assert_eq!(sorted_rows(&actual), sorted_rows(&expected));
         Ok(())
     }
 }
