@@ -63,6 +63,7 @@ pub mod filter_null_join_keys;
 pub mod optimize_projections;
 pub mod optimize_unions;
 pub mod optimizer;
+mod projection_inliner;
 pub mod propagate_empty_relation;
 pub mod push_down_filter;
 pub mod push_down_limit;
