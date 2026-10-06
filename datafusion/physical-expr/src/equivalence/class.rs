@@ -1050,7 +1050,7 @@ impl From<Vec<EquivalenceClass>> for EquivalenceGroup {
 mod tests {
     use super::*;
     use crate::equivalence::tests::create_test_params;
-    use crate::expressions::{BinaryExpr, Column, binary, col, lit};
+    use crate::expressions::{BinaryExpr, Column, binary, col, is_null, lit};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_expr::Operator;
 
@@ -1072,10 +1072,10 @@ mod tests {
     }
 
     #[test]
-    fn null_extension_keeps_expressions_with_matching_null_inputs() -> Result<()> {
+    fn null_extension_keeps_expressions_with_matching_non_null_results() -> Result<()> {
         let schema = abc_schema();
-        let expr_a = binary(col("a", &schema)?, Operator::Plus, lit(1), &schema)?;
-        let expr_b = binary(col("b", &schema)?, Operator::Plus, lit(1), &schema)?;
+        let expr_a = is_null(col("a", &schema)?)?;
+        let expr_b = is_null(col("b", &schema)?)?;
         let group = EquivalenceGroup::new(vec![EquivalenceClass::new([
             Arc::clone(&expr_a),
             Arc::clone(&expr_b),
