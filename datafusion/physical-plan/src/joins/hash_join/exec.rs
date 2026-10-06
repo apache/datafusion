@@ -1863,7 +1863,7 @@ impl ExecutionPlan for HashJoinExec {
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.metrics.clone_inner())
+        Some(self.metrics.clone_inner().with_output_rows_skew())
     }
 
     fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
