@@ -2988,7 +2988,7 @@ fn concat_build_batches(
     };
     drop(batches);
 
-    let batch = deduplicate_record_batch_view_buffers(&batch)?;
+    let batch = deduplicate_record_batch_view_buffers(&batch);
 
     // The inputs are gone: only hold on to what the concatenated batch retains,
     // which includes any buffers it still shares with the inputs.
@@ -3086,14 +3086,20 @@ fn deduplicate_view_array_buffers<T: ByteViewType>(
 ///
 /// Columns of other types are passed through unchanged. If the batch contains no view
 /// columns this function returns a cheap clone of the batch reference.
-fn deduplicate_record_batch_view_buffers(batch: &RecordBatch) -> Result<RecordBatch> {
+/// Returns a new [`RecordBatch`] with deduplicated view buffer references.
+///
+/// This function is infallible: we reconstruct the batch using the original
+/// schema and the same set of columns (same lengths, same types). `RecordBatch::try_new`
+/// only fails when column lengths or schema mismatches occur — neither can happen here
+/// since we only replace view columns with logically equivalent deduplicated versions.
+fn deduplicate_record_batch_view_buffers(batch: &RecordBatch) -> RecordBatch {
     let has_view_columns = batch
         .columns()
         .iter()
         .any(|col| matches!(col.data_type(), DataType::Utf8View | DataType::BinaryView));
 
     if !has_view_columns {
-        return Ok(batch.clone());
+        return batch.clone();
     }
 
     let new_columns: Vec<ArrayRef> = batch
@@ -3118,7 +3124,12 @@ fn deduplicate_record_batch_view_buffers(batch: &RecordBatch) -> Result<RecordBa
         })
         .collect();
 
-    RecordBatch::try_new(batch.schema(), new_columns).map_err(Into::into)
+    // SAFETY: schema is taken from the original batch unchanged, and every column
+    // in new_columns has the same length as in the original (deduplication only
+    // rewrites buffer indices, not the view count). This call cannot fail.
+    RecordBatch::try_new(batch.schema(), new_columns).expect(
+        "schema and column-length invariants are preserved by buffer deduplication",
+    )
 }
 
 /// Collects all batches from the left (build) side stream and creates a hash map for joining.
@@ -8267,7 +8278,7 @@ mod tests {
     }
 
     #[test]
-    fn concat_build_batches_deduplicates_view_buffers() -> Result<()> {
+    fn concat_build_batches_deduplicates_view_buffers() {
         use arrow::array::StringViewBuilder;
 
         let mut builder = StringViewBuilder::new();
@@ -8286,19 +8297,23 @@ mod tests {
         let batch1 = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![Arc::new(base_array.clone()), Arc::clone(&id_array)],
-        )?;
+        )
+        .expect("valid batch");
         let batch2 = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![Arc::new(base_array.clone()), Arc::clone(&id_array)],
-        )?;
+        )
+        .expect("valid batch");
         let batch3 = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![Arc::new(base_array.clone()), Arc::clone(&id_array)],
-        )?;
+        )
+        .expect("valid batch");
 
         // Before deduplication, concat_batches puts 3 duplicate buffer references in data_buffers
         let concatenated_raw =
-            concat_batches(&schema, &[batch1.clone(), batch2.clone(), batch3.clone()])?;
+            concat_batches(&schema, &[batch1.clone(), batch2.clone(), batch3.clone()])
+                .expect("concat");
         let raw_view_arr = concatenated_raw
             .column(0)
             .as_any()
@@ -8310,7 +8325,8 @@ mod tests {
         let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
         let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
         let batches = vec![batch1, batch2, batch3];
-        let (mut reservation, inputs_reserved) = reserve_inputs(&batches, &pool)?;
+        let (mut reservation, inputs_reserved) =
+            reserve_inputs(&batches, &pool).expect("reserve");
 
         let batch = concat_build_batches(
             &schema,
@@ -8319,7 +8335,8 @@ mod tests {
             inputs_reserved,
             &mut reservation,
             &metrics,
-        )?;
+        )
+        .expect("concat_build");
 
         let view_arr = batch
             .column(0)
@@ -8349,11 +8366,10 @@ mod tests {
         assert_eq!(id_col.value(2), 3);
         assert_eq!(id_col.value(3), 4);
         assert_eq!(id_col.value(4), 1);
-        Ok(())
     }
 
     #[test]
-    fn concat_build_batches_deduplicates_binary_view_buffers() -> Result<()> {
+    fn concat_build_batches_deduplicates_binary_view_buffers() {
         use arrow::array::BinaryViewBuilder;
 
         let mut builder = BinaryViewBuilder::new();
@@ -8372,20 +8388,24 @@ mod tests {
         let batch1 = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![Arc::new(base_array.clone()), Arc::clone(&id_array)],
-        )?;
+        )
+        .expect("valid batch");
         let batch2 = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![Arc::new(base_array.clone()), Arc::clone(&id_array)],
-        )?;
+        )
+        .expect("valid batch");
         let batch3 = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![Arc::new(base_array.clone()), Arc::clone(&id_array)],
-        )?;
+        )
+        .expect("valid batch");
 
         let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
         let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
         let batches = vec![batch1, batch2, batch3];
-        let (mut reservation, inputs_reserved) = reserve_inputs(&batches, &pool)?;
+        let (mut reservation, inputs_reserved) =
+            reserve_inputs(&batches, &pool).expect("reserve");
 
         let batch = concat_build_batches(
             &schema,
@@ -8394,7 +8414,8 @@ mod tests {
             inputs_reserved,
             &mut reservation,
             &metrics,
-        )?;
+        )
+        .expect("concat_build");
 
         let view_arr = batch
             .column(0)
@@ -8421,7 +8442,6 @@ mod tests {
             .unwrap();
         assert_eq!(id_col.value(0), 10);
         assert_eq!(id_col.value(4), 10);
-        Ok(())
     }
 
     /// Regression test: two arrays backed by Buffer objects that share the same
@@ -8430,7 +8450,7 @@ mod tests {
     /// because the longer one covers bytes beyond the shorter one's range.
     /// Values that live in the longer buffer must survive concatenation intact.
     #[test]
-    fn concat_build_batches_deduplicates_slices_regression() -> Result<()> {
+    fn concat_build_batches_deduplicates_slices_regression() {
         use arrow::array::StringViewBuilder;
         use arrow::buffer::Buffer;
 
@@ -8513,8 +8533,10 @@ mod tests {
             "another long string that exceeds inline size 12"
         );
 
-        let batch1 = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(arr1)])?;
-        let batch2 = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(arr2)])?;
+        let batch1 = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(arr1)])
+            .expect("valid batch");
+        let batch2 = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(arr2)])
+            .expect("valid batch");
 
         // Before deduplication, 4 input batches with duplicate references to short_buf and long_buf
         // result in 4 data buffer references in the concatenated raw batch.
@@ -8526,7 +8548,8 @@ mod tests {
                 batch1.clone(),
                 batch2.clone(),
             ],
-        )?;
+        )
+        .expect("concat");
         let raw_view_arr = concatenated_raw
             .column(0)
             .as_any()
@@ -8538,7 +8561,8 @@ mod tests {
         let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
         // Provide 4 batches with duplicate handles to both short_buf and long_buf
         let batches = vec![batch1.clone(), batch2.clone(), batch1, batch2];
-        let (mut reservation, inputs_reserved) = reserve_inputs(&batches, &pool)?;
+        let (mut reservation, inputs_reserved) =
+            reserve_inputs(&batches, &pool).expect("reserve");
 
         let batch = concat_build_batches(
             &schema,
@@ -8547,7 +8571,8 @@ mod tests {
             inputs_reserved,
             &mut reservation,
             &metrics,
-        )?;
+        )
+        .expect("concat_build");
 
         let view_arr = batch
             .column(0)
@@ -8582,7 +8607,6 @@ mod tests {
             "another long string that exceeds inline size 12",
             "value from duplicate longer-declared-length buffer should survive (row 3)"
         );
-        Ok(())
     }
 
     /// The build side is concatenated into a single batch, and that copy must
@@ -11612,7 +11636,7 @@ mod tests {
                 .len(),
             2
         );
-        let deduped = deduplicate_record_batch_view_buffers(&batch).unwrap();
+        let deduped = deduplicate_record_batch_view_buffers(&batch);
         let result = deduped
             .column(0)
             .as_any()
@@ -11652,7 +11676,7 @@ mod tests {
         )
         .unwrap();
 
-        let deduped = deduplicate_record_batch_view_buffers(&batch).unwrap();
+        let deduped = deduplicate_record_batch_view_buffers(&batch);
         let deduped_str = deduped
             .column(0)
             .as_any()
@@ -11682,7 +11706,7 @@ mod tests {
         )
         .unwrap();
         // Should succeed without error and return the same data.
-        let result = deduplicate_record_batch_view_buffers(&batch).unwrap();
+        let result = deduplicate_record_batch_view_buffers(&batch);
         assert_eq!(result.num_rows(), 3);
     }
 
