@@ -372,6 +372,7 @@ impl StatisticsContext {
     ///
     /// let correlation = extended.get_extension::<ColumnCorrelation>().unwrap();
     /// assert_eq!(correlation.columns, (0, 1));
+    /// assert_eq!(correlation.coefficient, 0.92);
     /// # Ok::<(), datafusion_common::DataFusionError>(())
     /// ```
     pub fn compute_extended(
