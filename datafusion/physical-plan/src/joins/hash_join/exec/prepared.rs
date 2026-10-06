@@ -91,9 +91,14 @@ impl PreparedHashJoinBuild {
                 "Prepared hash-join build does not match schema, keys or null equality"
             );
         }
-        if let Some(filter) = &join.dynamic_filter {
-            let probe_keys = join.on.iter().map(|(_, right)| right);
-            if !filter.filter.children().into_iter().eq(probe_keys) {
+        if let Some(dynamic_filter) = &join.dynamic_filter {
+            // Each dynamic filter of the join (membership and bounds) is on
+            // the probe keys.
+            let keys_match = dynamic_filter.filters().all(|filter| {
+                let probe_keys = join.on.iter().map(|(_, right)| right);
+                filter.children().into_iter().eq(probe_keys)
+            });
+            if !keys_match {
                 return plan_err!(
                     "Prepared hash-join dynamic filter keys do not match probe keys"
                 );

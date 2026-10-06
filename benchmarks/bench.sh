@@ -119,6 +119,10 @@ spill_views:            Sort and GROUP BY queries that spill StringView/BinaryVi
 null_aware_join:        Null-aware (NOT IN) hash join micro-benchmarks: uncorrelated, non-equality-correlated and equality-correlated
                           NOT IN across NULL fractions, to measure the per-pair join-filter work the correlated cases do
                           (data generated inline by the suite's load SQL from range(); knobs: NAJ_ROWS, NAJ_LARGE_ROWS)
+hj_ordered_subset:      Hash join dynamic filter on a probe table sorted by the join key, where the build side matches an ordered subset
+                          (1 day, 10 days) of the key range, so the filter bounds can prune probe row groups; plus a scattered 1% control
+                          (subgroups via BENCH_SUBGROUP: partitioned, collect_left)
+                          (data generated inline by the suite's load SQL; knobs: HJOS_DAYS, HJOS_ROWS_PER_DAY, HJOS_RG_SIZE)
 projection_subquery:    IN / NOT IN / EXISTS subqueries in the SELECT list (see https://github.com/apache/datafusion/issues/25341); each query projects the
                           boolean subquery result and aggregates it, so the cost is the decorrelation plan and not the output size
                           (q07 correlates on '<' instead of '=', so it keeps the nested-loop plan and acts as the control)
@@ -294,6 +298,10 @@ main() {
                 projection_subquery)
                     # Data is generated inline by the suite's load SQL.
                     echo "projection_subquery: no external data to generate"
+                    ;;
+                hj_ordered_subset)
+                    # Data is generated inline by the suite's load SQL (COPY).
+                    echo "hj_ordered_subset: no external data to generate"
                     ;;
                 asof_join)
                     data_asof_join
@@ -551,6 +559,9 @@ main() {
                     ;;
                 projection_subquery)
                     run_projection_subquery
+                    ;;
+                hj_ordered_subset)
+                    run_hj_ordered_subset
                     ;;
                 asof_join)
                     run_asof_join
@@ -1005,6 +1016,29 @@ run_null_aware_join() {
       BENCH_RESULTS_FILE="$(sql_results_file null_aware_join)" \
       NAJ_ROWS="${NAJ_ROWS:-10000}" \
       NAJ_LARGE_ROWS="${NAJ_LARGE_ROWS:-1000000}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
+}
+
+# Runs the hj_ordered_subset suite: a hash join whose probe table is sorted by
+# the join key and whose build side matches an ordered subset of the key range,
+# so the bounds of the join's dynamic filter can prune probe row groups. Data is
+# generated inline by the load SQL (COPY), so there is no data step. Set
+# DATAFUSION_EXECUTION_PARQUET_PUSHDOWN_FILTERS to vary how the scan uses the
+# filter.
+# Knobs (string-substituted into the load SQL, not engine config):
+#   BENCH_SUBGROUP     run one subgroup (partitioned, collect_left)
+#   HJOS_DAYS          days in the events table      (default 100, at least 50)
+#   HJOS_ROWS_PER_DAY  events per day                (default 200_000)
+#   HJOS_RG_SIZE       parquet row-group size        (default 100_000)
+run_hj_ordered_subset() {
+    echo "Running hj_ordered_subset benchmark (subgroup=${BENCH_SUBGROUP:-all}, days=${HJOS_DAYS:-100}, rows_per_day=${HJOS_ROWS_PER_DAY:-200000}, rg_size=${HJOS_RG_SIZE:-100000})..."
+    debug_run env BENCH_NAME=hj_ordered_subset \
+      BENCH_RESULTS_FILE="$(sql_results_file hj_ordered_subset)" \
+      ${BENCH_SUBGROUP:+BENCH_SUBGROUP="${BENCH_SUBGROUP}"} \
+      HJOS_DAYS="${HJOS_DAYS:-100}" \
+      HJOS_ROWS_PER_DAY="${HJOS_ROWS_PER_DAY:-200000}" \
+      HJOS_RG_SIZE="${HJOS_RG_SIZE:-100000}" \
       ${QUERY:+BENCH_QUERY="${QUERY}"}  \
       bash -c "$SQL_CARGO_COMMAND"
 }
