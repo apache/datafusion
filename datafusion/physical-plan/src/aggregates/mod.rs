@@ -6069,9 +6069,11 @@ mod tests {
         let stream: SendableRecordBatchStream = stream.into();
         let output = collect(stream).await?;
 
-        // Same flush cadence as the column-backed test: one flush per input
-        // batch, each sliced into batches of 2 and 1 rows.
-        assert_eq!(output.len(), 2 * num_input_batches);
+        // One flush per input batch. The memory limit only fits the table, so
+        // holding the materialized flush while slicing it does not fit and each
+        // flush is emitted whole instead of in `batch_size` slices.
+        assert_eq!(output.len(), num_input_batches);
+        assert!(output.iter().all(|batch| batch.num_rows() == 3));
         assert_snapshot!(batches_to_string(&output), @r"
         +---+---+-------------+
         | a | n | SUM(b)[sum] |

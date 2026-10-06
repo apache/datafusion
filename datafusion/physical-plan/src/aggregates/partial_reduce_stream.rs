@@ -290,7 +290,10 @@ impl PartialReduceHashAggregateStream {
         debug_assert!(last_batch.num_rows() <= self.batch_size);
 
         // We are no longer holding on the batch while slicing, so release the memory.
-        // The memory will now equal to the hash table size
+        // The memory will now equal to the hash table size.
+        // Drop our reference first so the generator does not keep the
+        // allocation alive (unaccounted) until it is polled again
+        drop(remaining_groups);
         self.reservation.try_shrink(remaining_groups_memory)?;
 
         emitter
@@ -628,6 +631,17 @@ mod tests {
                     reserved < held_size,
                     "after the last slice nothing is held anymore but {reserved} \
                      bytes are still reserved (held batch was {held_size} bytes)"
+                );
+
+                // The stream must not keep its own reference to the state batch
+                // after handing out the last slice, otherwise the allocation stays
+                // alive (but unaccounted) until the stream is polled again
+                let buffer = slice.column(0).as_primitive::<Int32Type>().values().inner();
+                assert_eq!(
+                    buffer.strong_count(),
+                    1,
+                    "the stream still holds a reference to the state batch after \
+                     emitting the last slice"
                 );
             }
         }
