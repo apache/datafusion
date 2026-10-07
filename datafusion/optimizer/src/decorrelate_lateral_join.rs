@@ -19,7 +19,9 @@
 
 use std::sync::Arc;
 
-use crate::decorrelate::{PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR};
+use crate::decorrelate::{
+    PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR, alias_output_column,
+};
 use crate::optimizer::ApplyOrder;
 use crate::utils::evaluates_to_null;
 use crate::{OptimizerConfig, OptimizerRule};
@@ -137,16 +139,19 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
     // rewrite column references in both the correlation and ON-clause filters.
     let (right_plan, correlation_filter, original_join_filter) =
         if let Some(ref alias) = alias {
-            let inner_schema = Arc::clone(rewritten_subquery.schema());
+            let input_schema = Arc::clone(rewritten_subquery.schema());
             let right = LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
                 Arc::new(rewritten_subquery),
                 alias.clone(),
             )?);
+            // `try_new` may suffix a duplicate (`id`, then `id:1`). Map from
+            // the schema it consumed to the schema it produced.
+            let output_schema = Arc::clone(right.schema());
             let corr = correlation_filter
-                .map(|f| requalify_filter(f, &inner_schema, alias))
+                .map(|f| requalify_filter(f, &input_schema, &output_schema))
                 .transpose()?;
             let on = original_join_filter
-                .map(|f| requalify_filter(f, &inner_schema, alias))
+                .map(|f| requalify_filter(f, &input_schema, &output_schema))
                 .transpose()?;
             (right, corr, on)
         } else {
@@ -347,24 +352,31 @@ fn extract_lateral_subquery(
 }
 
 /// Rewrite column references in a join filter expression so that columns
-/// belonging to the inner (right) side use the SubqueryAlias qualifier.
+/// belonging to the inner (right) side use the `SubqueryAlias` output column
+/// at the same position.
 ///
 /// The `PullUpCorrelatedExpr` pass extracts join filters with the inner
 /// columns qualified by their original table names (e.g., `t2.t1_id`).
 /// When the inner plan is wrapped in a `SubqueryAlias("sub")`, those
-/// columns are re-qualified as `sub.t1_id`. This function applies the
-/// same requalification to the filter so it matches the aliased schema.
+/// columns are re-qualified from `input_schema` (the schema passed to
+/// `SubqueryAlias::try_new`) to `output_schema` (the schema it built).
+/// A duplicate name is suffixed there (`id`, then `id:1`), so keeping
+/// `col.name` would point at the earlier column.
+///
+/// Columns that are not in `input_schema` are outer references and stay as
+/// they are. A column that is in `input_schema` but has no output field is
+/// an error: skipping it would drop that predicate.
 fn requalify_filter(
     filter: Expr,
-    inner_schema: &DFSchema,
-    alias: &TableReference,
+    input_schema: &DFSchema,
+    output_schema: &DFSchema,
 ) -> Result<Expr> {
     filter
         .transform(|expr| {
             if let Expr::Column(col) = &expr
-                && inner_schema.has_column(col)
+                && input_schema.has_column(col)
             {
-                let new_col = Column::new(Some(alias.clone()), col.name.clone());
+                let new_col = alias_output_column(col, input_schema, output_schema)?;
                 return Ok(Transformed::yes(Expr::Column(new_col)));
             }
             Ok(Transformed::no(expr))

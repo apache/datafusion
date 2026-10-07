@@ -1004,6 +1004,9 @@ ORDER BY o.k;
 statement ok
 CREATE TABLE decoy(id INT) AS VALUES (100);
 
+statement ok
+CREATE TABLE other(id INT) AS VALUES (7);
+
 query II
 SELECT o.k, s.v
 FROM o, LATERAL (
@@ -1019,8 +1022,67 @@ ORDER BY o.k;
 1 10
 2 20
 
+# The lateral alias itself is what SubqueryAlias suffixes. There is no
+# inner alias. decoy.id keeps `id`; the pulled-up l.id becomes `id:1`.
+query II
+SELECT o.k, s.v
+FROM o, LATERAL (
+  SELECT decoy.id, l.v
+  FROM l, decoy
+  WHERE l.id = o.k
+) s
+ORDER BY o.k;
+----
+1 10
+2 20
+
+# Same collision on a LEFT JOIN. A filter on decoy.id matches nothing,
+# so the outer rows would come back with NULL v.
+query II
+SELECT o.k, s.v
+FROM o
+LEFT JOIN LATERAL (
+  SELECT decoy.id, l.v
+  FROM l, decoy
+  WHERE l.id = o.k
+) s ON true
+ORDER BY o.k;
+----
+1 10
+2 20
+
+# decoy.id, other.id, then pulled-up l.id. The filter has to use id:2.
+query II
+SELECT o.k, s.v
+FROM o, LATERAL (
+  SELECT decoy.id, other.id, l.v
+  FROM l, decoy, other
+  WHERE l.id = o.k
+) s
+ORDER BY o.k;
+----
+1 10
+2 20
+
+# l.v is already named id:1, so the pulled-up l.id becomes id:2.
+# s."id:1" is l.v.
+query II
+SELECT o.k, s."id:1"
+FROM o, LATERAL (
+  SELECT decoy.id, l.v AS "id:1"
+  FROM l, decoy
+  WHERE l.id = o.k
+) s
+ORDER BY o.k;
+----
+1 10
+2 20
+
 statement ok
 DROP TABLE decoy;
+
+statement ok
+DROP TABLE other;
 
 statement ok
 DROP TABLE o;

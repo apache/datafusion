@@ -3379,3 +3379,31 @@ DROP TABLE unnest_outer;
 
 statement ok
 DROP TABLE unnest_inner;
+
+# EXISTS pull-up adds l.id beside decoy.id. The subquery alias suffixes
+# the duplicate to id:1. Filtering on the unsuffixed id matches nothing.
+statement ok
+CREATE TABLE o(k INT) AS VALUES (1), (2);
+
+statement ok
+CREATE TABLE l(id INT, v INT) AS VALUES (1, 10), (2, 20);
+
+statement ok
+CREATE TABLE decoy(id INT) AS VALUES (100);
+
+query I
+SELECT o.k FROM o WHERE EXISTS (
+  SELECT decoy.id, l.v FROM l, decoy WHERE l.id = o.k
+) ORDER BY o.k;
+----
+1
+2
+
+statement ok
+DROP TABLE o;
+
+statement ok
+DROP TABLE l;
+
+statement ok
+DROP TABLE decoy;

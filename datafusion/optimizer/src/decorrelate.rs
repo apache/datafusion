@@ -553,8 +553,10 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         "SubqueryAlias f_down pushes alias_filter_base"
                     );
                 };
-                // Schema `try_new` qualifies. Read it before rebuilding: the
-                // projection `try_new` inserts already uses the suffixed names.
+                // The projection and the duplicate-name suffixes come from
+                // `SubqueryAlias::try_new`. Read this schema before rebuilding:
+                // the projection that constructor inserts already uses the
+                // suffixed names.
                 let input_schema = Arc::clone(alias.input.schema());
                 let new_plan =
                     if input_schema.fields().len() != alias.schema.fields().len() {
@@ -911,7 +913,11 @@ fn requalify_join_filter_columns(
 ///
 /// `SubqueryAlias::try_new` keeps field order. When two input fields share a
 /// name, the later one's output name is suffixed (`id`, then `id:1`).
-fn alias_output_column(
+///
+/// Returns an error if `col` is not in `input_schema`, or if that position
+/// is past the end of `output_schema`. Callers must not skip the column:
+/// leaving it out drops the predicate that referenced it.
+pub(crate) fn alias_output_column(
     col: &Column,
     input_schema: &DFSchema,
     output_schema: &DFSchema,
