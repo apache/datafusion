@@ -101,7 +101,7 @@ enum State {
 }
 
 impl State {
-    fn size(&self) -> usize {
+    fn heap_size(&self) -> usize {
         match self {
             State::Taken => 0,
             State::Start => 0,
@@ -269,7 +269,7 @@ impl GroupOrderingPartial {
     /// Returns retained heap allocations, excluding the inline descriptor
     /// already counted by [`super::GroupOrdering::size`].
     pub(crate) fn heap_size(&self) -> usize {
-        self.order_indices.allocated_size() + self.state.size()
+        self.order_indices.allocated_size() + self.state.heap_size()
     }
 }
 

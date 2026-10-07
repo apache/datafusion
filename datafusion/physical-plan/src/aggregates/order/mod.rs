@@ -154,6 +154,7 @@ impl GroupOrdering {
     pub fn size(&self) -> usize {
         size_of::<Self>()
             + match self {
+                // These variants hold only inline state, already counted above.
                 GroupOrdering::None | GroupOrdering::Full(_) => 0,
                 GroupOrdering::Partial(partial) => partial.heap_size(),
             }
@@ -193,11 +194,9 @@ mod tests {
 
     #[test]
     fn test_size_partial_retained_allocations() -> Result<()> {
-        // Grow then truncate: unused order-index capacity must remain charged.
-        let mut order_indices = vec![0];
-        order_indices.extend(1..32);
-        order_indices.truncate(1);
-        assert!(order_indices.capacity() > order_indices.len());
+        // The direct partial constructor retains spare order-index capacity.
+        let mut order_indices = Vec::with_capacity(32);
+        order_indices.push(0);
         let expected =
             size_of::<GroupOrdering>() + order_indices.capacity() * size_of::<usize>();
         let mut ordering =
