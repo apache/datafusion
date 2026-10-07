@@ -135,8 +135,15 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
         .cloned();
 
     // Re-wrap in SubqueryAlias if the original had one, preserving the alias name.
-    // The SubqueryAlias re-qualifies all columns with the alias, so we must also
-    // rewrite column references in both the correlation and ON-clause filters.
+    // The correlation filter still names the inner tables. `try_new` may suffix
+    // a duplicate, so those columns are mapped by position.
+    //
+    // The user's ON clause already names the alias output. Pull-up only appends
+    // columns, and `unique_field_aliases` only suffixes those new columns, so
+    // the names ON uses do not change. Mapping ON through the pre-alias schema
+    // is wrong when an inner column shares the alias qualifier (`l AS s` inside
+    // `LATERAL (...) s`): `s.id` would move from the first output `id` to a
+    // later `id:1`.
     let (right_plan, correlation_filter, original_join_filter) =
         if let Some(ref alias) = alias {
             let input_schema = Arc::clone(rewritten_subquery.schema());
@@ -144,16 +151,11 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
                 Arc::new(rewritten_subquery),
                 alias.clone(),
             )?);
-            // `try_new` may suffix a duplicate (`id`, then `id:1`). Map from
-            // the schema it consumed to the schema it produced.
             let output_schema = Arc::clone(right.schema());
             let corr = correlation_filter
                 .map(|f| requalify_filter(f, &input_schema, &output_schema))
                 .transpose()?;
-            let on = original_join_filter
-                .map(|f| requalify_filter(f, &input_schema, &output_schema))
-                .transpose()?;
-            (right, corr, on)
+            (right, corr, original_join_filter)
         } else {
             (rewritten_subquery, correlation_filter, original_join_filter)
         };

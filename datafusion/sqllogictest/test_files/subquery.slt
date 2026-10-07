@@ -3407,3 +3407,67 @@ DROP TABLE l;
 
 statement ok
 DROP TABLE decoy;
+
+# The IN value is decoy_hit.id (1). The correlation is l_miss.id (99),
+# which matches none of 1, 2, 3, so IN is empty and NOT IN / NOT EXISTS
+# keep every outer row.
+statement ok
+CREATE TABLE o(k INT) AS VALUES (1), (2), (3);
+
+statement ok
+CREATE TABLE l_miss(id INT) AS VALUES (99);
+
+statement ok
+CREATE TABLE decoy_hit(id INT) AS VALUES (1);
+
+query I
+SELECT o.k FROM o WHERE o.k IN (
+  SELECT decoy_hit.id FROM l_miss, decoy_hit WHERE l_miss.id = o.k
+) ORDER BY o.k;
+----
+
+query I
+SELECT o.k FROM o WHERE o.k NOT IN (
+  SELECT decoy_hit.id FROM l_miss, decoy_hit WHERE l_miss.id = o.k
+) ORDER BY o.k;
+----
+1
+2
+3
+
+query I
+SELECT o.k FROM o WHERE NOT EXISTS (
+  SELECT decoy_hit.id FROM l_miss, decoy_hit WHERE l_miss.id = o.k
+) ORDER BY o.k;
+----
+1
+2
+3
+
+statement ok
+DROP TABLE l_miss;
+
+statement ok
+DROP TABLE decoy_hit;
+
+statement ok
+CREATE TABLE l(id INT, v INT) AS VALUES (1, 10), (2, 20);
+
+statement ok
+CREATE TABLE decoy(id INT) AS VALUES (100);
+
+query I
+SELECT o.k FROM o WHERE NOT EXISTS (
+  SELECT decoy.id, l.v FROM l, decoy WHERE l.id = o.k
+) ORDER BY o.k;
+----
+3
+
+statement ok
+DROP TABLE o;
+
+statement ok
+DROP TABLE l;
+
+statement ok
+DROP TABLE decoy;

@@ -1093,6 +1093,57 @@ DROP TABLE l;
 statement ok
 DROP TABLE m;
 
+# The user's ON clause names the alias output (`s.id` is decoy.id, the
+# first id). The inner table is also `s`, so a positional map of that
+# ON predicate follows the later field and filters `l` instead.
+statement ok
+CREATE TABLE o(k INT) AS VALUES (1), (100);
+
+statement ok
+CREATE TABLE l(id INT, v INT) AS VALUES (1, 10), (100, 99);
+
+statement ok
+CREATE TABLE decoy(id INT) AS VALUES (100);
+
+query IIII
+SELECT o.k, s.id, s."id:1", s.v
+FROM o
+JOIN LATERAL (
+  SELECT decoy.id, s.id, s.v
+  FROM l AS s, decoy
+  WHERE s.id = o.k
+) s
+ON s.id = 100
+ORDER BY o.k, s.v;
+----
+1 100 1 10
+100 100 100 99
+
+# `s.id` in ON is decoy.id, which is 100, so both correlated rows pass.
+# Remapping that ON onto l.id turns the k=1 row into NULLs.
+query IIII
+SELECT o.k, s.id, s."id:1", s.v
+FROM o
+LEFT JOIN LATERAL (
+  SELECT decoy.id, s.id, s.v
+  FROM l AS s, decoy
+  WHERE s.id = o.k
+) s
+ON s.id = 100
+ORDER BY o.k, s.v;
+----
+1 100 1 10
+100 100 100 99
+
+statement ok
+DROP TABLE o;
+
+statement ok
+DROP TABLE l;
+
+statement ok
+DROP TABLE decoy;
+
 ###########################################################
 # Cleanup
 ###########################################################
