@@ -25,3 +25,12 @@ body:
       label: Additional context
       placeholder: >
         Add any other context or screenshots about the feature request here.
+  - type: dropdown
+    attributes:
+      label: Willingness to contribute
+      description: >
+        The Apache DataFusion community encourages feature contributions. Would you or another member of your organization be willing to contribute to this feature for the Apache DataFusion codebase?
+      options:
+        - I can contribute to this feature independently
+        - I would be willing to contribute to this feature with guidance from the DataFusion community
+        - I cannot contribute to this feature at this time
