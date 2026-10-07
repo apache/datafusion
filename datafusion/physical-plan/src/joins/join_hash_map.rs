@@ -656,4 +656,43 @@ mod tests {
         assert_eq!(input_indices, vec![0, 0]);
         assert_eq!(match_indices, vec![1, 0]);
     }
+
+    #[test]
+    fn test_chain_created_by_later_update_disables_fast_path() {
+        assert_chain_created_by_later_update(JoinHashMapU32::with_capacity(3));
+        assert_chain_created_by_later_update(JoinHashMapU64::with_capacity(3));
+    }
+
+    /// Rows 0 and 2 share a hash value but arrive in separate updates, and row
+    /// 1 is left out as a NULL key would be. The first update alone is unique;
+    /// the second creates the chain. Probing with `limit = 1` must resume
+    /// through the chain and return each build row exactly once.
+    fn assert_chain_created_by_later_update(mut hash_map: impl JoinHashMapType) {
+        hash_map.update_from_iter(Box::new([(0, &10u64)].into_iter()), 0);
+        hash_map.update_from_iter(Box::new([(2, &10u64)].into_iter()), 0);
+
+        let mut input_indices = vec![];
+        let mut match_indices = vec![];
+        let mut matched = vec![];
+        let mut offset = (0, None);
+        for _ in 0..3 {
+            let next_offset = hash_map.get_matched_indices_with_limit_offset(
+                &[10],
+                None,
+                1,
+                offset,
+                &mut input_indices,
+                &mut match_indices,
+            );
+            assert_eq!(input_indices, vec![0]);
+            matched.extend_from_slice(&match_indices);
+            match next_offset {
+                Some(next) => offset = next,
+                None => break,
+            }
+        }
+
+        matched.sort_unstable();
+        assert_eq!(matched, vec![0, 2]);
+    }
 }
