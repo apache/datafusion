@@ -359,7 +359,7 @@ impl RecordOutput for RecordBatch {
 impl RecordOutput for &RecordBatch {
     fn record_output(self, bm: &BaselineMetrics) -> Self {
         bm.record_output(self.num_rows());
-        bm.output_bytes.add(output_bytes(&self));
+        bm.output_bytes.add(output_bytes(self));
         bm.output_batches.add(1);
         self
     }
