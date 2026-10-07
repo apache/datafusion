@@ -98,6 +98,25 @@ impl AnalyzerRule for TypeCoercion {
     fn analyze(&self, plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan> {
         static EMPTY_SCHEMA: LazyLock<DFSchema> = LazyLock::new(DFSchema::empty);
 
+        // Record bare row-count parameter types before coercion makes them indistinguishable
+        // from explicit casts. A type inferred elsewhere takes precedence over the default.
+        let parameter_fields = plan.get_parameter_fields()?;
+        let plan = plan
+            .transform_up_with_subqueries(|plan| {
+                if !matches!(plan, LogicalPlan::Limit(_)) {
+                    return Ok(Transformed::no(plan));
+                }
+                plan.map_expressions(|expr| match expr {
+                    Expr::Placeholder(mut placeholder) if placeholder.field.is_none() => {
+                        placeholder.field =
+                            parameter_fields.get(&placeholder.id).cloned().flatten();
+                        Ok(Transformed::yes(Expr::Placeholder(placeholder)))
+                    }
+                    expr => Ok(Transformed::no(expr)),
+                })
+            })?
+            .data;
+
         // recurse
         let transformed_plan = plan
             .transform_up_with_subqueries(|plan| {
@@ -1743,10 +1762,10 @@ mod test {
     use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, TimeUnit};
     use insta::assert_snapshot;
 
-    use crate::analyzer::Analyzer;
     use crate::analyzer::type_coercion::{
         TypeCoercion, TypeCoercionRewriter, coerce_case_expression,
     };
+    use crate::analyzer::{Analyzer, AnalyzerRule};
     use crate::assert_analyzed_plan_with_config_eq_snapshot;
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
@@ -1760,9 +1779,9 @@ mod test {
     use datafusion_expr::test::function_stub::avg_udaf;
     use datafusion_expr::{
         AccumulatorFactoryFunction, AggregateUDF, BinaryExpr, Case, ColumnarValue, Expr,
-        ExprSchemable, Filter, LogicalPlan, Operator, ScalarFunctionArgs, ScalarUDF,
-        ScalarUDFImpl, Signature, SimpleAggregateUDF, Subquery, Union, Volatility, cast,
-        col, create_udaf, is_true, lit,
+        ExprSchemable, Filter, Limit, LogicalPlan, Operator, ScalarFunctionArgs,
+        ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF, Subquery, Union,
+        Volatility, cast, col, create_udaf, is_true, lit, placeholder,
     };
     use datafusion_functions_aggregate::average::AvgAccumulator;
 
@@ -1844,6 +1863,19 @@ mod test {
             }
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn untyped_limit_parameter_remains_inferable_after_coercion() -> Result<()> {
+        let plan = LogicalPlan::Limit(Limit {
+            input: empty(),
+            fetch: Some(Box::new(placeholder("$1"))),
+            skip: None,
+        });
+        let analyzed = TypeCoercion::new().analyze(plan, &ConfigOptions::default())?;
+
+        assert_eq!(analyzed.get_parameter_types()?["$1"], Some(DataType::Int64));
         Ok(())
     }
 
