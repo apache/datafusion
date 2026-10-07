@@ -47,6 +47,54 @@ use std::sync::Arc;
 use std::vec;
 
 #[test]
+fn roundtrip_literal_metadata() -> Result<()> {
+    use datafusion_common::metadata::FieldMetadata;
+    use datafusion_proto::bytes::{physical_plan_from_bytes, physical_plan_to_bytes};
+
+    let schema = Arc::new(Schema::empty());
+    let metadata = FieldMetadata::from(std::collections::HashMap::from([
+        ("ARROW:extension:name".to_string(), "example.id".to_string()),
+        ("ARROW:extension:metadata".to_string(), "{}".to_string()),
+        ("description".to_string(), "identifier".to_string()),
+    ]));
+    let ctx = SessionContext::new();
+    for value in [ScalarValue::Int32(Some(42)), ScalarValue::Int32(None)] {
+        let literal: Arc<dyn PhysicalExpr> = Arc::new(Literal::new_with_metadata(
+            value.clone(),
+            Some(metadata.clone()),
+        ));
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+            vec![ProjectionExpr::new(Arc::clone(&literal), "result")],
+            Arc::new(EmptyExec::new(Arc::clone(&schema))),
+        )?);
+        let bytes = physical_plan_to_bytes(Arc::clone(&plan))?;
+        let decoded = physical_plan_from_bytes(&bytes, ctx.task_ctx().as_ref())?;
+        assert_eq!(decoded.schema(), plan.schema());
+        let projection = decoded.downcast_ref::<ProjectionExec>().unwrap();
+        let decoded_literal = &projection.expr()[0].expr;
+        assert_eq!(
+            decoded_literal.return_field(&schema)?,
+            literal.return_field(&schema)?
+        );
+        assert_eq!(
+            decoded_literal.downcast_ref::<Literal>().unwrap().value(),
+            &value
+        );
+
+        #[cfg(feature = "json")]
+        {
+            use datafusion_proto::bytes::{
+                physical_plan_from_json, physical_plan_to_json,
+            };
+            let json = physical_plan_to_json(Arc::clone(&plan))?;
+            let decoded = physical_plan_from_json(&json, ctx.task_ctx().as_ref())?;
+            assert_eq!(decoded.schema(), plan.schema());
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn roundtrip_date_time_interval() -> Result<()> {
     let schema = Schema::new(vec![
         Field::new("some_date", DataType::Date32, false),

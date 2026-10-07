@@ -189,13 +189,18 @@ impl GroupValues for GroupValuesRows {
     }
 
     fn size(&self) -> usize {
-        let group_values_size = self.group_values.as_ref().map(|v| v.size()).unwrap_or(0);
-        // `HashTable::allocation_size` reports the complete hashbrown allocation,
-        // which includes the entry array, control bytes, and trailing group layout.
-        self.row_converter.size()
+        let group_values_size = self
+            .group_values
+            .as_ref()
+            .map(|values| values.size() - size_of::<Rows>())
+            .unwrap_or_default();
+        // `size_of::<Self>()` already accounts for inline row descriptors.
+        // `HashTable::allocation_size` includes entries, control bytes, and group layout.
+        size_of::<Self>() + self.row_converter.size() - size_of::<RowConverter>()
             + group_values_size
             + self.map.allocation_size()
             + self.rows_buffer.size()
+            - size_of::<Rows>()
             + self.hashes_buffer.allocated_size()
     }
 
@@ -465,6 +470,65 @@ mod tests {
     use arrow::datatypes::{Field, Int32Type, Schema};
     use std::mem::size_of;
 
+    fn expected_size(group_values: &GroupValuesRows) -> usize {
+        size_of::<GroupValuesRows>() + group_values.row_converter.size()
+            - size_of::<RowConverter>()
+            + group_values
+                .group_values
+                .as_ref()
+                .map(|values| values.size() - size_of::<Rows>())
+                .unwrap_or_default()
+            + group_values.map.allocation_size()
+            + group_values.rows_buffer.size()
+            - size_of::<Rows>()
+            + group_values.hashes_buffer.allocated_size()
+    }
+
+    fn int32_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![Field::new(
+            "group",
+            DataType::Int32,
+            true,
+        )]))
+    }
+
+    #[test]
+    fn size_retains_reusable_buffers_after_emit() -> Result<()> {
+        let mut group_values = GroupValuesRows::try_new(int32_schema())?;
+        let input: ArrayRef = Arc::new(Int32Array::from_iter_values(0..256));
+        group_values.intern(&[input], &mut vec![])?;
+
+        let rows_buffer_size = group_values.rows_buffer.size() - size_of::<Rows>();
+        let hashes_buffer_size = group_values.hashes_buffer.allocated_size();
+
+        let output = group_values.emit(EmitTo::First(1))?;
+        assert_eq!(output[0].len(), 1);
+        assert_eq!(group_values.len(), 255);
+        let size_after_emit = group_values.size();
+        assert_eq!(
+            group_values.rows_buffer.size() - size_of::<Rows>(),
+            rows_buffer_size
+        );
+        assert_eq!(
+            group_values.hashes_buffer.allocated_size(),
+            hashes_buffer_size
+        );
+
+        let input: ArrayRef = Arc::new(Int32Array::from_iter_values([256]));
+        group_values.intern(&[input], &mut vec![])?;
+        assert_eq!(group_values.len(), 256);
+        assert!(group_values.size() >= size_after_emit);
+        assert_eq!(
+            group_values.rows_buffer.size() - size_of::<Rows>(),
+            rows_buffer_size
+        );
+        assert_eq!(
+            group_values.hashes_buffer.allocated_size(),
+            hashes_buffer_size
+        );
+        Ok(())
+    }
+
     #[test]
     fn preserving_nested_row_values() -> Result<()> {
         let field = Arc::new(Field::new_list_field(DataType::Int32, true));
@@ -515,12 +579,7 @@ mod tests {
         // 1. Initial state: map is unallocated
         assert_eq!(group_values.map.capacity(), 0);
         assert_eq!(group_values.map.allocation_size(), 0);
-        assert_eq!(
-            group_values.size(),
-            group_values.row_converter.size()
-                + group_values.rows_buffer.size()
-                + group_values.hashes_buffer.allocated_size()
-        );
+        assert_eq!(group_values.size(), expected_size(&group_values));
 
         // 2. Insert multi-column keys and observe table allocation growth
         let num_distinct = 500;
@@ -546,16 +605,7 @@ mod tests {
         );
 
         // GroupValuesRows::size() should accurately account for the map's allocation_size
-        let expected_size = group_values.row_converter.size()
-            + group_values
-                .group_values
-                .as_ref()
-                .map(|v| v.size())
-                .unwrap_or(0)
-            + table_bytes
-            + group_values.rows_buffer.size()
-            + group_values.hashes_buffer.allocated_size();
-        assert_eq!(group_values.size(), expected_size);
+        assert_eq!(group_values.size(), expected_size(&group_values));
 
         // 3. Partial emit (EmitTo::First) - table retains entries and capacity
         let emit_count = 200;
@@ -563,20 +613,9 @@ mod tests {
         assert_eq!(emitted[0].len(), emit_count);
         assert_eq!(group_values.len(), (num_distinct as usize) - emit_count);
 
-        // Retained capacity is still charged until the table releases it
+        // Retained capacity is still charged until the table releases it.
         assert_eq!(group_values.map.allocation_size(), table_bytes);
-        assert_eq!(
-            group_values.size(),
-            group_values.row_converter.size()
-                + group_values
-                    .group_values
-                    .as_ref()
-                    .map(|v| v.size())
-                    .unwrap_or(0)
-                + table_bytes
-                + group_values.rows_buffer.size()
-                + group_values.hashes_buffer.allocated_size()
-        );
+        assert_eq!(group_values.size(), expected_size(&group_values));
 
         // 4. Emit all (EmitTo::All) - map is cleared but capacity remains allocated for reuse
         let remaining_count = group_values.len();
@@ -594,18 +633,7 @@ mod tests {
             shrunken_table_bytes < table_bytes,
             "clear_shrink should shrink table from {table_bytes} to {shrunken_table_bytes}"
         );
-        assert_eq!(
-            group_values.size(),
-            group_values.row_converter.size()
-                + group_values
-                    .group_values
-                    .as_ref()
-                    .map(|v| v.size())
-                    .unwrap_or(0)
-                + shrunken_table_bytes
-                + group_values.rows_buffer.size()
-                + group_values.hashes_buffer.allocated_size()
-        );
+        assert_eq!(group_values.size(), expected_size(&group_values));
 
         // 6. Reinsert new distinct values into the shrunken table
         let new_col_a =
@@ -617,18 +645,7 @@ mod tests {
         group_values.intern(&[new_col_a, new_col_b], &mut groups)?;
         assert_eq!(groups.len(), num_distinct as usize);
         assert!(group_values.map.allocation_size() > shrunken_table_bytes);
-        assert_eq!(
-            group_values.size(),
-            group_values.row_converter.size()
-                + group_values
-                    .group_values
-                    .as_ref()
-                    .map(|v| v.size())
-                    .unwrap_or(0)
-                + group_values.map.allocation_size()
-                + group_values.rows_buffer.size()
-                + group_values.hashes_buffer.allocated_size()
-        );
+        assert_eq!(group_values.size(), expected_size(&group_values));
 
         Ok(())
     }
@@ -655,18 +672,7 @@ mod tests {
 
         let table_bytes = group_values.map.allocation_size();
         assert!(table_bytes > 0);
-        assert_eq!(
-            group_values.size(),
-            group_values.row_converter.size()
-                + group_values
-                    .group_values
-                    .as_ref()
-                    .map(|v| v.size())
-                    .unwrap_or(0)
-                + table_bytes
-                + group_values.rows_buffer.size()
-                + group_values.hashes_buffer.allocated_size()
-        );
+        assert_eq!(group_values.size(), expected_size(&group_values));
 
         // Shrink to 0: table should completely deallocate
         group_values.clear_shrink(0);
