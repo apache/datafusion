@@ -147,7 +147,14 @@ where
 
 impl From<protobuf::ColumnRelation> for TableReference {
     fn from(rel: protobuf::ColumnRelation) -> Self {
-        Self::parse_str_normalized(rel.relation.as_str(), true)
+        match rel.parts.as_slice() {
+            [table] => Self::bare(table.as_str()),
+            [schema, table] => Self::partial(schema.as_str(), table.as_str()),
+            [catalog, schema, table] => {
+                Self::full(catalog.as_str(), schema.as_str(), table.as_str())
+            }
+            _ => Self::parse_str_normalized(rel.relation.as_str(), true),
+        }
     }
 }
 
@@ -1440,6 +1447,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use datafusion_common::TableReference;
     use datafusion_common::config::{
         MaxRowGroupBytes, ParquetCdcOptions, ParquetOptions, TableParquetOptions,
     };
@@ -1459,6 +1467,121 @@ mod tests {
             err.to_string()
                 .contains("Constraint: missing required field 'constraint_mode'")
         );
+    }
+
+    #[test]
+    fn column_relation_round_trip_preserves_dotted_bare_table() {
+        let column = datafusion_common::Column::new(
+            Some(TableReference::bare("has.dot")),
+            "column",
+        );
+
+        let proto: crate::protobuf_common::Column = (&column).into();
+        let relation = proto.relation.expect("relation should be present");
+
+        assert_eq!(relation.relation, "has.dot");
+        assert_eq!(relation.parts, vec!["has.dot".to_string()]);
+
+        let recovered = TableReference::from(relation);
+        assert_eq!(recovered, TableReference::bare("has.dot"));
+    }
+
+    #[test]
+    fn column_relation_round_trip_preserves_dotted_partial_reference() {
+        let column = datafusion_common::Column::new(
+            Some(TableReference::partial("my.schema", "table")),
+            "column",
+        );
+
+        let proto: crate::protobuf_common::Column = (&column).into();
+        let relation = proto.relation.expect("relation should be present");
+
+        assert_eq!(relation.relation, "my.schema.table");
+        assert_eq!(
+            relation.parts,
+            vec!["my.schema".to_string(), "table".to_string()]
+        );
+
+        let recovered = TableReference::from(relation);
+        assert_eq!(recovered, TableReference::partial("my.schema", "table"));
+    }
+
+    #[test]
+    fn column_relation_round_trip_preserves_dotted_full_reference() {
+        let column = datafusion_common::Column::new(
+            Some(TableReference::full("catalog", "my.schema", "table")),
+            "column",
+        );
+
+        let proto: crate::protobuf_common::Column = (&column).into();
+        let relation = proto.relation.expect("relation should be present");
+
+        assert_eq!(relation.relation, "catalog.my.schema.table");
+        assert_eq!(
+            relation.parts,
+            vec![
+                "catalog".to_string(),
+                "my.schema".to_string(),
+                "table".to_string()
+            ]
+        );
+
+        let recovered = TableReference::from(relation);
+        assert_eq!(
+            recovered,
+            TableReference::full("catalog", "my.schema", "table")
+        );
+    }
+
+    #[test]
+    fn df_schema_round_trip_preserves_dotted_qualifiers() {
+        use std::sync::Arc;
+
+        use datafusion_common::DFSchema;
+        use datafusion_common::arrow::datatypes::{DataType, Field};
+
+        let schema = DFSchema::new_with_metadata(
+            vec![
+                (
+                    Some(TableReference::partial("my.schema", "table")),
+                    Arc::new(Field::new("partial_col", DataType::Utf8, true)),
+                ),
+                (
+                    Some(TableReference::full("catalog", "my.schema", "table")),
+                    Arc::new(Field::new("full_col", DataType::Utf8, true)),
+                ),
+            ],
+            std::collections::HashMap::<String, String>::new(),
+        )
+        .unwrap();
+
+        let proto: crate::protobuf_common::DfSchema = (&schema).try_into().unwrap();
+        let recovered = DFSchema::try_from(&proto).unwrap();
+
+        let qualifiers = recovered
+            .iter()
+            .map(|(qualifier, _)| qualifier.cloned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            qualifiers,
+            vec![
+                Some(TableReference::partial("my.schema", "table")),
+                Some(TableReference::full("catalog", "my.schema", "table")),
+            ]
+        );
+    }
+
+    #[test]
+    fn column_relation_decodes_legacy_relation() {
+        let proto = crate::protobuf_common::ColumnRelation {
+            relation: "schema.table".to_string(),
+            parts: vec![],
+        };
+
+        let recovered = TableReference::from(proto);
+
+        assert_eq!(recovered, TableReference::partial("schema", "table"));
     }
 
     #[test]

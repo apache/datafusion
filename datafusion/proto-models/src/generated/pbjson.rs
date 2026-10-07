@@ -9796,6 +9796,9 @@ impl serde::Serialize for HashJoinExecNode {
         if self.fetch.is_some() {
             len += 1;
         }
+        if self.null_aware_value_keys != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.HashJoinExecNode", len)?;
         if let Some(v) = self.left.as_ref() {
             struct_ser.serialize_field("left", v)?;
@@ -9838,6 +9841,9 @@ impl serde::Serialize for HashJoinExecNode {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("fetch", ToString::to_string(&v).as_str())?;
         }
+        if self.null_aware_value_keys != 0 {
+            struct_ser.serialize_field("nullAwareValueKeys", &self.null_aware_value_keys)?;
+        }
         struct_ser.end()
     }
 }
@@ -9864,6 +9870,8 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
             "dynamic_filter",
             "dynamicFilter",
             "fetch",
+            "null_aware_value_keys",
+            "nullAwareValueKeys",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -9879,6 +9887,7 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
             NullAware,
             DynamicFilter,
             Fetch,
+            NullAwareValueKeys,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -9911,6 +9920,7 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
                             "nullAware" | "null_aware" => Ok(GeneratedField::NullAware),
                             "dynamicFilter" | "dynamic_filter" => Ok(GeneratedField::DynamicFilter),
                             "fetch" => Ok(GeneratedField::Fetch),
+                            "nullAwareValueKeys" | "null_aware_value_keys" => Ok(GeneratedField::NullAwareValueKeys),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -9941,6 +9951,7 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
                 let mut null_aware__ = None;
                 let mut dynamic_filter__ = None;
                 let mut fetch__ = None;
+                let mut null_aware_value_keys__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Left => {
@@ -10014,6 +10025,14 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
                                 map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
+                        GeneratedField::NullAwareValueKeys => {
+                            if null_aware_value_keys__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nullAwareValueKeys"));
+                            }
+                            null_aware_value_keys__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
                     }
                 }
                 Ok(HashJoinExecNode {
@@ -10028,6 +10047,7 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
                     null_aware: null_aware__.unwrap_or_default(),
                     dynamic_filter: dynamic_filter__,
                     fetch: fetch__,
+                    null_aware_value_keys: null_aware_value_keys__.unwrap_or_default(),
                 })
             }
         }
@@ -11601,6 +11621,9 @@ impl serde::Serialize for JoinNode {
         if self.null_aware {
             len += 1;
         }
+        if self.null_aware_value_keys != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.JoinNode", len)?;
         if let Some(v) = self.left.as_ref() {
             struct_ser.serialize_field("left", v)?;
@@ -11635,6 +11658,9 @@ impl serde::Serialize for JoinNode {
         if self.null_aware {
             struct_ser.serialize_field("nullAware", &self.null_aware)?;
         }
+        if self.null_aware_value_keys != 0 {
+            struct_ser.serialize_field("nullAwareValueKeys", &self.null_aware_value_keys)?;
+        }
         struct_ser.end()
     }
 }
@@ -11660,6 +11686,8 @@ impl<'de> serde::Deserialize<'de> for JoinNode {
             "filter",
             "null_aware",
             "nullAware",
+            "null_aware_value_keys",
+            "nullAwareValueKeys",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -11673,6 +11701,7 @@ impl<'de> serde::Deserialize<'de> for JoinNode {
             NullEquality,
             Filter,
             NullAware,
+            NullAwareValueKeys,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -11703,6 +11732,7 @@ impl<'de> serde::Deserialize<'de> for JoinNode {
                             "nullEquality" | "null_equality" => Ok(GeneratedField::NullEquality),
                             "filter" => Ok(GeneratedField::Filter),
                             "nullAware" | "null_aware" => Ok(GeneratedField::NullAware),
+                            "nullAwareValueKeys" | "null_aware_value_keys" => Ok(GeneratedField::NullAwareValueKeys),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -11731,6 +11761,7 @@ impl<'de> serde::Deserialize<'de> for JoinNode {
                 let mut null_equality__ = None;
                 let mut filter__ = None;
                 let mut null_aware__ = None;
+                let mut null_aware_value_keys__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Left => {
@@ -11787,6 +11818,14 @@ impl<'de> serde::Deserialize<'de> for JoinNode {
                             }
                             null_aware__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::NullAwareValueKeys => {
+                            if null_aware_value_keys__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nullAwareValueKeys"));
+                            }
+                            null_aware_value_keys__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
                     }
                 }
                 Ok(JoinNode {
@@ -11799,6 +11838,7 @@ impl<'de> serde::Deserialize<'de> for JoinNode {
                     null_equality: null_equality__.unwrap_or_default(),
                     filter: filter__,
                     null_aware: null_aware__.unwrap_or_default(),
+                    null_aware_value_keys: null_aware_value_keys__.unwrap_or_default(),
                 })
             }
         }
