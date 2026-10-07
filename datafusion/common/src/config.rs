@@ -1133,11 +1133,12 @@ config_namespace! {
         /// aggregation ratio check and trying to switch to skipping aggregation mode
         pub skip_partial_aggregation_probe_rows_threshold: usize, default = 100_000
 
-        /// (experimental) Number of groups above which a hash aggregation
+        /// (experimental) Number of groups above which a final hash aggregation
         /// stops growing a single hash table, so that its tables stay small
-        /// enough to be cache friendly. A partial aggregation then emits the
-        /// state of its table and starts over, as long as the emitted groups
-        /// do not come back. A final aggregation splits the groups seen so
+        /// enough to be cache friendly. When nonzero, also enables partial
+        /// aggregation to emit its table and start over at 2 MiB of allocated
+        /// memory, as long as repeated-group detection permits flushing.
+        /// A final aggregation splits the groups seen so
         /// far and all further input into hash buckets, which are aggregated
         /// one after another and can be spilled and released independently;
         /// it does so at a quarter of this number when its input holds about
@@ -1156,7 +1157,7 @@ config_namespace! {
 
         /// (experimental) Detect recurring groups and stop Partial threshold
         /// flushing when they recur. Set to false to skip detection and keep
-        /// flushing at the group-count or allocated-byte threshold.
+        /// flushing at the allocated-byte threshold.
         pub hash_aggregate_detect_repeated_groups: bool, default = true
 
         /// (experimental) Enable Final aggregate buckets when

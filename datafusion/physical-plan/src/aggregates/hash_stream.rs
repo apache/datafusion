@@ -216,7 +216,7 @@ enum HandleInputResult {
     ReachedLimit,
     #[expect(clippy::upper_case_acronyms)]
     OOM,
-    /// The table reached the bucket threshold, see [`PartialTableFlush`]
+    /// The table reached the allocated-byte threshold, see [`PartialTableFlush`]
     TableFull,
     SwitchToSkipAggregation,
 }
@@ -246,7 +246,7 @@ fn starts_buckets(groups: usize, rows: usize, threshold: usize) -> bool {
             && groups as f64 >= BARELY_REDUCING * rows as f64)
 }
 
-/// Additional Partial flush trigger in allocated bytes, checked after a batch.
+/// Partial flush threshold in allocated bytes, checked after a batch.
 const PARTIAL_FLUSH_BYTES: usize = 2 * 1024 * 1024;
 
 /// Number of flushed groups whose hashes are kept to detect recurring groups.
@@ -264,8 +264,8 @@ const MAX_RECURRING_GROUPS: f64 = 0.2;
 /// Seed for the hashes of sampled groups, only compared with each other.
 const FLUSH_SAMPLE_SEED: RandomState = RandomState::with_seed(8122871950429871369);
 
-/// Keeps the table of a partial hash aggregation small: once it holds
-/// `hash_aggregate_bucket_threshold` groups, its state is emitted downstream
+/// Keeps the table of a partial hash aggregation small: once its allocated
+/// size reaches `PARTIAL_FLUSH_BYTES`, its state is emitted downstream
 /// and the table starts over, the same way it does under memory pressure.
 ///
 /// A table that has outgrown the CPU caches pays a cache miss for every probe
@@ -280,7 +280,6 @@ const FLUSH_SAMPLE_SEED: RandomState = RandomState::with_seed(812287195042987136
 /// flushed; keys that recur turn flushing off for the rest of the stream,
 /// which then grows one table as before.
 struct PartialTableFlush {
-    threshold: usize,
     /// Whether recurring groups can disable threshold flushing.
     detect_repeated_groups: bool,
     /// Number of leading columns of the state batch that are the group keys
@@ -301,9 +300,8 @@ struct PartialTableFlush {
 }
 
 impl PartialTableFlush {
-    fn should_flush(&self, num_groups: usize, allocated_bytes: usize) -> bool {
-        !self.disabled
-            && (num_groups >= self.threshold || allocated_bytes >= PARTIAL_FLUSH_BYTES)
+    fn should_flush(&self, allocated_bytes: usize) -> bool {
+        !self.disabled && allocated_bytes >= PARTIAL_FLUSH_BYTES
     }
 
     /// Records the flush of `state`, the emitted groups and their states.
@@ -403,7 +401,6 @@ impl PartialHashAggregateStream {
             && group_values_soft_limit.is_none()
             && !has_nested_state)
             .then(|| PartialTableFlush {
-                threshold: bucket_threshold,
                 detect_repeated_groups: context
                     .session_config()
                     .options()
@@ -635,9 +632,10 @@ impl PartialHashAggregateStream {
         // Step 5: Keep the table small while that is free (see
         // `PartialTableFlush`)
         // -----------------------------------------------------------
-        let table_full = self.table_flush.as_ref().is_some_and(|table_flush| {
-            table_flush.should_flush(hash_table.building_group_count(), allocated_bytes)
-        });
+        let table_full = self
+            .table_flush
+            .as_ref()
+            .is_some_and(|table_flush| table_flush.should_flush(allocated_bytes));
         if table_full {
             return Ok(HandleInputResult::TableFull);
         }
