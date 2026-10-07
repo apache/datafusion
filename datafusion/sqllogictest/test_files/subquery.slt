@@ -3014,6 +3014,202 @@ DROP TABLE gs_outer;
 statement ok
 DROP TABLE gs_inner;
 
+#############
+## Multi-column IN (LeftSemi) Tests
+#############
+## These tests verify that multi-column IN subqueries work correctly
+## Multi-column IN uses LeftSemi join (not null-aware)
+
+#############
+## Test 1: Basic two-column IN
+#############
+
+statement ok
+CREATE TABLE multi_in_left(a INT, b INT, value TEXT) AS VALUES
+(1, 2, 'match'),
+(3, 4, 'no_match'),
+(5, 6, 'match');
+
+statement ok
+CREATE TABLE multi_in_right(x INT, y INT) AS VALUES
+(1, 2),
+(5, 6);
+
+# Should return rows where (a, b) matches (x, y)
+query IIT rowsort
+SELECT * FROM multi_in_left
+WHERE (a, b) IN (SELECT x, y FROM multi_in_right);
+----
+1 2 match
+5 6 match
+
+#############
+## Test 2: Multi-column IN with no matches
+#############
+
+statement ok
+CREATE TABLE multi_in_right_no_match(x INT, y INT) AS VALUES
+(10, 20),
+(30, 40);
+
+# Should return empty result
+query IIT rowsort
+SELECT * FROM multi_in_left
+WHERE (a, b) IN (SELECT x, y FROM multi_in_right_no_match);
+----
+
+#############
+## Test 3: Multi-column IN with NULL values
+#############
+## Note: Unlike NOT IN, regular IN does NOT use null-aware semantics
+## NULL = NULL is always FALSE (not unknown) in regular semi joins
+
+statement ok
+CREATE TABLE multi_in_left_null(a INT, b INT, value TEXT) AS VALUES
+(1, 2, 'x'),
+(3, NULL, 'y'),
+(NULL, 6, 'z');
+
+statement ok
+CREATE TABLE multi_in_right_null(x INT, y INT) AS VALUES
+(1, 2),
+(NULL, 4);
+
+# Should return only (1, 2, 'x')
+# (3, NULL, 'y') doesn't match because NULL doesn't equal anything
+# (NULL, 6, 'z') doesn't match because NULL doesn't equal anything
+query IIT rowsort
+SELECT * FROM multi_in_left_null
+WHERE (a, b) IN (SELECT x, y FROM multi_in_right_null);
+----
+1 2 x
+
+#############
+## Test 4: Three-column IN
+#############
+
+statement ok
+CREATE TABLE three_col_left(a INT, b INT, c INT, value TEXT) AS VALUES
+(1, 2, 3, 'match1'),
+(4, 5, 6, 'no_match'),
+(7, 8, 9, 'match2');
+
+statement ok
+CREATE TABLE three_col_right(x INT, y INT, z INT) AS VALUES
+(1, 2, 3),
+(7, 8, 9);
+
+# Should return rows with matching three-column tuples
+query IIIT rowsort
+SELECT * FROM three_col_left
+WHERE (a, b, c) IN (SELECT x, y, z FROM three_col_right);
+----
+1 2 3 match1
+7 8 9 match2
+
+#############
+## Test 5: Correlated multi-column IN
+#############
+
+statement ok
+CREATE TABLE correlated_outer(id INT, a INT, b INT) AS VALUES
+(1, 10, 20),
+(2, 30, 40),
+(3, 10, 20);
+
+statement ok
+CREATE TABLE correlated_inner(id INT, x INT, y INT) AS VALUES
+(1, 10, 20),
+(1, 30, 40),
+(2, 50, 60),
+(3, 10, 20);
+
+# Should return outer rows where (a, b) matches (x, y) for the same id
+query III rowsort
+SELECT * FROM correlated_outer o
+WHERE (a, b) IN (
+    SELECT x, y FROM correlated_inner i WHERE i.id = o.id
+);
+----
+1 10 20
+3 10 20
+
+#############
+## Test 6: Verify logical plan shows LeftSemi join with multiple conditions
+#############
+
+query TT
+EXPLAIN SELECT * FROM multi_in_left
+WHERE (a, b) IN (SELECT x, y FROM multi_in_right);
+----
+logical_plan
+01)LeftSemi Join: multi_in_left.a = __correlated_sq_1.x, multi_in_left.b = __correlated_sq_1.y
+02)--TableScan: multi_in_left projection=[a, b, value]
+03)--SubqueryAlias: __correlated_sq_1
+04)----TableScan: multi_in_right projection=[x, y]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(x@0, a@0), (y@1, b@1)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+#############
+## Test 7: Multi-column IN with empty subquery
+#############
+
+statement ok
+CREATE TABLE multi_in_right_empty(x INT, y INT);
+
+# Should return empty result (empty subquery)
+query IIT rowsort
+SELECT * FROM multi_in_left
+WHERE (a, b) IN (SELECT x, y FROM multi_in_right_empty);
+----
+
+#############
+## Test 8: Multi-column IN with WHERE clause in subquery
+#############
+
+# The filter drops (1, 2) from the subquery, so only (5, 6) matches
+query IIT rowsort
+SELECT * FROM multi_in_left
+WHERE (a, b) IN (SELECT x, y FROM multi_in_right WHERE x > 1);
+----
+5 6 match
+
+#############
+## Cleanup
+#############
+
+statement ok
+DROP TABLE multi_in_left;
+
+statement ok
+DROP TABLE multi_in_right;
+
+statement ok
+DROP TABLE multi_in_right_no_match;
+
+statement ok
+DROP TABLE multi_in_left_null;
+
+statement ok
+DROP TABLE multi_in_right_null;
+
+statement ok
+DROP TABLE three_col_left;
+
+statement ok
+DROP TABLE three_col_right;
+
+statement ok
+DROP TABLE correlated_outer;
+
+statement ok
+DROP TABLE correlated_inner;
+
+statement ok
+DROP TABLE multi_in_right_empty;
+
 # Regression test for #25507: a correlated filter below the side of an outer
 # join that the join fills with NULLs must not be pulled above the join. The
 # filter decides which rows of the other side are unmatched, so once it is
@@ -3187,38 +3383,6 @@ DROP TABLE oj_a;
 
 statement ok
 DROP TABLE oj_b;
-
-#############
-## Scalar subquery equality: NDV-based row estimate
-## When a filter contains `col = (SELECT ...)`, the interval solver
-## cannot resolve the subquery, but the fallback heuristic uses
-## `1 / NDV(col)` instead of the flat 20% default.
-#############
-
-statement ok
-CREATE TABLE ndv_main AS
-  SELECT column1 AS id, column2 AS val
-  FROM (VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e'),
-               (6, 'f'), (7, 'g'), (8, 'h'), (9, 'i'), (10, 'j'));
-
-statement ok
-CREATE TABLE ndv_lookup AS SELECT 5 AS v;
-
-# The filter `id = (SELECT v FROM ndv_lookup)` should use the NDV of `id`
-# (10 distinct values) to estimate ~1 row instead of the 20% default (~2 rows).
-query TT
-EXPLAIN SELECT * FROM ndv_main WHERE id = (SELECT v FROM ndv_lookup);
-----
-logical_plan
-<slt:ignore>
-physical_plan
-<slt:ignore>
-
-statement ok
-DROP TABLE ndv_main;
-
-statement ok
-DROP TABLE ndv_lookup;
 
 # Regression test for #25792: a correlated filter below a window function must
 # not be pulled above the window. The filter selects the rows the window
@@ -3411,43 +3575,3 @@ DROP TABLE unnest_outer;
 
 statement ok
 DROP TABLE unnest_inner;
-
-# ---------------------------------------------------------
-# Test Scalar Subquery Selectivity Fallback (PR #25719)
-# ---------------------------------------------------------
-
-statement ok
-CREATE TABLE sq_fallback_table(name TEXT) AS VALUES
-('a'), ('b'), ('c'), ('d');
-
-statement ok
-set datafusion.explain.logical_plan_only = false;
-
-statement ok
-set datafusion.explain.show_statistics = true;
-
-# The physical plan for the Filter should use the NDV estimate for the scalar subquery
-query TT
-EXPLAIN SELECT * FROM sq_fallback_table WHERE name = (SELECT 'a');
-----
-logical_plan
-01)Filter: sq_fallback_table.name = (<subquery>)
-02)--Subquery:
-03)----Projection: Utf8View("a") AS Utf8("a")
-04)------EmptyRelation: rows=1
-05)--TableScan: sq_fallback_table projection=[name]
-physical_plan
-01)ScalarSubqueryExec: subqueries=1, statistics=[Rows=Inexact(1), Bytes=Inexact(36), [(Col[0]: Null=Exact(0))]]
-02)--FilterExec: name@0 = scalar_subquery(<pending>), statistics=[Rows=Inexact(1), Bytes=Inexact(36), [(Col[0]: Null=Exact(0))]]
-03)----DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(4), Bytes=Exact(176), [(Col[0]: Null=Exact(0))]]
-04)--ProjectionExec: expr=[a as Utf8("a")], statistics=[Rows=Exact(1), Bytes=Inexact(0), [(Col[0]: Min=Exact(Utf8View("a")) Max=Exact(Utf8View("a")) Null=Exact(0) Distinct=Exact(1))]]
-05)----PlaceholderRowExec, statistics=[Rows=Exact(1), Bytes=Exact(0), []]
-
-statement ok
-RESET datafusion.explain.show_statistics;
-
-statement ok
-RESET datafusion.explain.logical_plan_only;
-
-statement ok
-DROP TABLE sq_fallback_table;

@@ -4747,47 +4747,98 @@ mod tests {
         assert_eq!(stats.num_rows, Precision::Inexact(5));
     }
 
-    /// Verify that a `CAST(a AS Int64) = <ScalarSubquery>` predicate — which
-    /// `check_support` cannot resolve — still falls back gracefully to the
-    /// default selectivity (20%) rather than panicking or silently using 100%.
+    /// Verify that `FilterExec` uses NDV-based fallback selectivity for a scalar
+    /// subquery equality predicate `a = <ScalarSubqueryExpr>`.
     ///
-    /// In this case the left-hand side is a `CastExpr`, so `column_ndv` returns
-    /// `None` and no NDV estimate is available. The single unhandled conjunct
-    /// receives the flat default.
+    /// The scalar subquery is unresolved during planning and fails interval
+    /// analysis (`check_support`), but the fallback heuristic estimates
+    /// selectivity as `1.0 / NDV` rather than the flat 20% default.
     #[tokio::test]
-    async fn test_filter_statistics_fallback_cast_expr_uses_default_selectivity() {
+    async fn test_filter_statistics_fallback_scalar_subquery_uses_ndv() {
+        use datafusion_expr::physical_planning_context::{
+            ScalarSubqueryResults, SubqueryIndex,
+        };
+        use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
+
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-        // 1000 rows, NDV = 500.
+        // 1000 rows, NDV = 200 for column `a`.
         let input = Arc::new(StatisticsExec::new(
             Statistics {
                 num_rows: Precision::Inexact(1000),
                 total_byte_size: Precision::Absent,
                 column_statistics: vec![ColumnStatistics {
-                    distinct_count: Precision::Inexact(500),
+                    distinct_count: Precision::Inexact(200),
                     ..Default::default()
                 }],
             },
             schema.clone(),
         ));
 
-        // CAST(a AS Int64) = 42: the CastExpr wraps the column, so
-        // `column_ndv` cannot resolve it. The predicate also passes
-        // `check_support` (CastExpr + Int64 literal are both supported),
-        // so the interval-analysis path runs. This test documents the
-        // current boundary: once `check_support` accepts the predicate
-        // the fallback is not reached.
-        //
-        // We therefore use a plain Utf8 column compared to a literal,
-        // which is the concrete unsupported form this PR improves.
-        let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
-            Arc::new(CastExpr::new(
-                col("a", &schema).unwrap(),
-                DataType::Int64,
-                None,
-            )),
-            Operator::Eq,
-            Arc::new(Literal::new(ScalarValue::Int64(Some(42)))),
+        let subquery_expr = Arc::new(ScalarSubqueryExpr::new(
+            DataType::Int32,
+            false,
+            SubqueryIndex::new(0),
+            ScalarSubqueryResults::new(1),
         ));
+
+        // a = <ScalarSubqueryExpr>
+        let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            col("a", &schema).unwrap(),
+            Operator::Eq,
+            subquery_expr,
+        ));
+
+        let filter = Arc::new(FilterExec::try_new(predicate, input).unwrap());
+        let stats = StatisticsContext::new()
+            .compute(filter.as_ref(), &StatisticsArgs::new())
+            .unwrap();
+
+        // Expected selectivity = 1 / 200 = 0.005 -> 1000 * 0.005 = 5 rows
+        // (rather than 20% default = 200 rows).
+        assert_eq!(stats.num_rows, Precision::Inexact(5));
+    }
+
+    /// Verify that a `CAST(a AS Int64) = <ScalarSubqueryExpr>` predicate — where
+    /// the column is wrapped in a `CastExpr` and the subquery is unresolved —
+    /// falls back to the default selectivity (20%) because `column_ndv` does
+    /// not unwrap casts.
+    #[tokio::test]
+    async fn test_filter_statistics_fallback_cast_scalar_subquery_uses_default() {
+        use datafusion_expr::physical_planning_context::{
+            ScalarSubqueryResults, SubqueryIndex,
+        };
+        use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        // 1000 rows, NDV = 200 for column `a`.
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(1000),
+                total_byte_size: Precision::Absent,
+                column_statistics: vec![ColumnStatistics {
+                    distinct_count: Precision::Inexact(200),
+                    ..Default::default()
+                }],
+            },
+            schema.clone(),
+        ));
+
+        let subquery_expr = Arc::new(ScalarSubqueryExpr::new(
+            DataType::Int64,
+            false,
+            SubqueryIndex::new(0),
+            ScalarSubqueryResults::new(1),
+        ));
+
+        // CAST(a AS Int64) = <ScalarSubqueryExpr>
+        let cast_col: Arc<dyn PhysicalExpr> = Arc::new(CastExpr::new(
+            col("a", &schema).unwrap(),
+            DataType::Int64,
+            None,
+        ));
+        let predicate: Arc<dyn PhysicalExpr> =
+            Arc::new(BinaryExpr::new(cast_col, Operator::Eq, subquery_expr));
+
         let filter = Arc::new(
             FilterExec::try_new(predicate, input)
                 .unwrap()
@@ -4797,20 +4848,41 @@ mod tests {
         let stats = StatisticsContext::new()
             .compute(filter.as_ref(), &StatisticsArgs::new())
             .unwrap();
-        // check_support accepts CAST + Int64 literal, so interval analysis
-        // runs and produces a result — num_rows will not be the full 1000.
-        assert_ne!(
-            stats.num_rows,
-            Precision::Inexact(1000),
-            "expected interval analysis to filter some rows"
-        );
+
+        // CAST wraps the column, so column_ndv returns None.
+        // Falls back to default selectivity 20% -> 1000 * 0.20 = 200 rows.
+        assert_eq!(stats.num_rows, Precision::Inexact(200));
+    }
+
+    #[test]
+    fn test_fallback_selectivity_cast_expr_not_handled() {
+        // CAST(a AS Int64) = 42: the left side is a CastExpr, not a bare Column,
+        // so column_ndv returns None. The conjunct is unhandled and falls through
+        // to default_selectivity.
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let cast_expr: Arc<dyn PhysicalExpr> = Arc::new(CastExpr::new(
+            col("a", &schema).unwrap(),
+            DataType::Int64,
+            None,
+        ));
+        let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            cast_expr,
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Int64(Some(42)))),
+        ));
+        let col_stats = vec![ColumnStatistics {
+            distinct_count: Precision::Inexact(100),
+            ..Default::default()
+        }];
+        let result = compute_fallback_selectivity(&predicate, &col_stats, 20);
+        assert!((result - 0.2).abs() < 1e-12, "expected 0.2, got {result}");
     }
 
     #[test]
     fn test_fallback_selectivity_utf8_equality_uses_ndv() {
         // name = 'alice' on a Utf8 column with NDV=60.
-        // Utf8 equality fails `check_support`, so our fallback runs and
-        // returns 1/60 instead of the flat 20% default.
+        // Utf8 equality fails `check_support`, so fallback selectivity runs and
+        // returns 1/60 rather than the default 20% selectivity.
         let schema = Schema::new(vec![Field::new("name", DataType::Utf8, false)]);
         let predicate: Arc<dyn PhysicalExpr> = binary(
             col("name", &schema).unwrap(),
