@@ -997,6 +997,31 @@ ORDER BY o.k;
 1 10
 2 20
 
+# Pull-up appends l.id next to another projected id. SubqueryAlias
+# keeps the first id and suffixes the pulled-up column to id:1. The
+# join has to follow that output name; decoy.id is 100, so using the
+# unsuffixed id matches nothing.
+statement ok
+CREATE TABLE decoy(id INT) AS VALUES (100);
+
+query II
+SELECT o.k, s.v
+FROM o, LATERAL (
+  SELECT l2.v
+  FROM (
+    SELECT decoy.id, l.v
+    FROM l, decoy
+    WHERE l.id = o.k
+  ) AS l2
+) AS s
+ORDER BY o.k;
+----
+1 10
+2 20
+
+statement ok
+DROP TABLE decoy;
+
 statement ok
 DROP TABLE o;
 

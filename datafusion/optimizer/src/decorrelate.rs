@@ -27,8 +27,8 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{
-    Column, DFSchemaRef, HashMap, Result, ScalarValue, TableReference,
-    assert_or_internal_err, plan_err,
+    Column, DFSchema, DFSchemaRef, HashMap, Result, ScalarValue, assert_or_internal_err,
+    internal_err, plan_err,
 };
 use datafusion_expr::expr::{Alias, GroupingSet};
 use datafusion_expr::logical_plan::{Join, JoinType};
@@ -543,30 +543,42 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 // inner table (`l.id`). The alias's output names that column
                 // `l2.id`, and the join condition has to match.
                 // https://github.com/apache/datafusion/issues/25837
-                let base = self
-                    .alias_filter_base
-                    .pop()
-                    .expect("SubqueryAlias f_down pushes alias_filter_base");
+                //
+                // Pull-up can add a column whose name another projected
+                // column already has. `SubqueryAlias::try_new` suffixes that
+                // duplicate (`id` becomes `id:1`), so the output name is the
+                // field at the same position, not the inner name.
+                let Some(base) = self.alias_filter_base.pop() else {
+                    return internal_err!(
+                        "SubqueryAlias f_down pushes alias_filter_base"
+                    );
+                };
+                // Schema `try_new` qualifies. Read it before rebuilding: the
+                // projection `try_new` inserts already uses the suffixed names.
+                let input_schema = Arc::clone(alias.input.schema());
+                let new_plan =
+                    if input_schema.fields().len() != alias.schema.fields().len() {
+                        LogicalPlanBuilder::from((*alias.input).clone())
+                            .alias(alias.alias.clone())?
+                            .build()?
+                    } else {
+                        plan.clone()
+                    };
+                let output_schema = Arc::clone(new_plan.schema());
                 requalify_join_filter_columns(
                     &mut self.join_filters[base..],
                     &local_correlated_cols,
-                    &alias.alias,
+                    &input_schema,
+                    &output_schema,
                 )?;
                 let mut new_correlated_cols = BTreeSet::new();
-                for col in local_correlated_cols.iter() {
-                    new_correlated_cols
-                        .insert(Column::new(Some(alias.alias.clone()), col.name.clone()));
+                for col in &local_correlated_cols {
+                    new_correlated_cols.insert(alias_output_column(
+                        col,
+                        &input_schema,
+                        &output_schema,
+                    )?);
                 }
-
-                let new_plan = if alias.input.schema().fields().len()
-                    != alias.schema.fields().len()
-                {
-                    LogicalPlanBuilder::from((*alias.input).clone())
-                        .alias(alias.alias.clone())?
-                        .build()?
-                } else {
-                    plan.clone()
-                };
 
                 self.correlated_subquery_cols_map
                     .insert(new_plan.clone(), new_correlated_cols);
@@ -859,15 +871,21 @@ fn can_pullup_over_aggregation(expr: &Expr) -> bool {
     }
 }
 
-/// Rewrite columns in `filters` that are listed in `cols` so they use `alias`.
+/// Rewrite columns in `filters` that are listed in `cols` so they use the
+/// alias's output column at the same position.
 ///
 /// `cols` are the correlated columns as named below the alias. Outer
 /// references are not in that set, so they stay as they are. The caller
 /// passes only the filters added under this alias.
+///
+/// `input_schema` is the schema passed to `SubqueryAlias::try_new`.
+/// `output_schema` is the schema it built. Fields line up by position,
+/// including the dedup suffixes `try_new` applies.
 fn requalify_join_filter_columns(
     filters: &mut [Expr],
     cols: &BTreeSet<Column>,
-    alias: &TableReference,
+    input_schema: &DFSchema,
+    output_schema: &DFSchema,
 ) -> Result<()> {
     if cols.is_empty() || filters.is_empty() {
         return Ok(());
@@ -879,7 +897,7 @@ fn requalify_join_filter_columns(
                 if let Expr::Column(col) = &expr
                     && cols.contains(col)
                 {
-                    let new_col = Column::new(Some(alias.clone()), col.name.clone());
+                    let new_col = alias_output_column(col, input_schema, output_schema)?;
                     return Ok(Transformed::yes(Expr::Column(new_col)));
                 }
                 Ok(Transformed::no(expr))
@@ -887,6 +905,25 @@ fn requalify_join_filter_columns(
             .data()?;
     }
     Ok(())
+}
+
+/// The alias output column that corresponds to `col` in `input_schema`.
+///
+/// `SubqueryAlias::try_new` keeps field order. When two input fields share a
+/// name, the later one's output name is suffixed (`id`, then `id:1`).
+fn alias_output_column(
+    col: &Column,
+    input_schema: &DFSchema,
+    output_schema: &DFSchema,
+) -> Result<Column> {
+    let idx = input_schema.index_of_column(col)?;
+    assert_or_internal_err!(
+        idx < output_schema.fields().len(),
+        "SubqueryAlias output schema has {} fields, input column {col} is at {idx}",
+        output_schema.fields().len(),
+    );
+    let (qualifier, field) = output_schema.qualified_field(idx);
+    Ok(Column::new(qualifier.cloned(), field.name()))
 }
 
 fn collect_local_correlated_cols(
