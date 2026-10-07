@@ -32,7 +32,7 @@ use futures::stream::StreamExt;
 use super::aggregate_hash_table::{
     AggregateHashTable, ClusteredAggregateTableMetrics, SingleMarker,
 };
-use super::order::GroupCompletionMode;
+use super::order::GroupClusteringMode;
 use super::spill::AggregateSpill;
 use super::{AggregateExec, create_schema};
 use crate::SendableRecordBatchStream;
@@ -163,7 +163,7 @@ impl SingleHashAggregateStream {
             agg.mode,
             AggregateMode::Single | AggregateMode::SinglePartitioned
         ));
-        debug_assert_eq!(agg.group_completion_mode, GroupCompletionMode::None);
+        debug_assert_eq!(agg.group_clustering_mode, GroupClusteringMode::None);
 
         let schema = Arc::clone(&agg.schema);
         let input = agg.input.execute(partition, Arc::clone(context))?;
@@ -194,7 +194,7 @@ impl SingleHashAggregateStream {
                 context,
                 partition,
                 batch_size,
-                &GroupCompletionMode::None,
+                &GroupClusteringMode::None,
                 &state_schema,
                 spill_metrics,
             )?))

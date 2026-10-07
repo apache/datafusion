@@ -27,7 +27,7 @@ use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
 use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
-use super::GroupCompletionMode;
+use super::GroupClusteringMode;
 use super::aggregate_hash_table::{AggregateHashTable, PartialReduceMarker};
 use crate::SendableRecordBatchStream;
 use crate::metrics::{BaselineMetrics, Count, MetricBuilder, RecordOutput, SpillMetrics};
@@ -110,7 +110,7 @@ impl PartialReduceHashAggregateStream {
         partition: usize,
     ) -> Result<Self> {
         debug_assert_eq!(agg.mode, super::AggregateMode::PartialReduce);
-        debug_assert_eq!(agg.group_completion_mode, GroupCompletionMode::None);
+        debug_assert_eq!(agg.group_clustering_mode, GroupClusteringMode::None);
 
         let schema = Arc::clone(&agg.schema);
         let input = agg.input.execute(partition, Arc::clone(context))?;

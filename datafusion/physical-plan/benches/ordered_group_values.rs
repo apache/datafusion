@@ -38,9 +38,9 @@ use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_plan::aggregates::group_values::multi_group_by::GroupValuesColumn;
 use datafusion_physical_plan::aggregates::group_values::{GroupValues, new_group_values};
-use datafusion_physical_plan::aggregates::order::GroupCompletion;
+use datafusion_physical_plan::aggregates::order::GroupClustering;
 use datafusion_physical_plan::aggregates::{
-    AggregateExec, AggregateMode, GroupCompletionMode, PhysicalGroupBy,
+    AggregateExec, AggregateMode, GroupClusteringMode, PhysicalGroupBy,
 };
 use datafusion_physical_plan::test::TestMemoryExec;
 use datafusion_physical_plan::{ExecutionPlan, collect};
@@ -112,8 +112,8 @@ fn grouping(c: &mut Criterion) {
                                 let values: Box<dyn GroupValues> = if selected {
                                     new_group_values(
                                         Arc::clone(&schema),
-                                        &GroupCompletion::try_new(
-                                            &GroupCompletionMode::Full,
+                                        &GroupClustering::try_new(
+                                            &GroupClusteringMode::Full,
                                         )
                                         .unwrap(),
                                     )
@@ -160,7 +160,7 @@ fn check_case(schema: &SchemaRef, batches: &[Vec<ArrayRef>]) -> (usize, usize) {
     let mut hashed = GroupValuesColumn::<true>::try_new(Arc::clone(schema)).unwrap();
     let mut selected = new_group_values(
         Arc::clone(schema),
-        &GroupCompletion::try_new(&GroupCompletionMode::Full).unwrap(),
+        &GroupClustering::try_new(&GroupClusteringMode::Full).unwrap(),
     )
     .unwrap();
     let mut expected = Vec::new();
@@ -190,7 +190,7 @@ fn aggregate_plan(
     schema: &SchemaRef,
     keys: Vec<Vec<ArrayRef>>,
     sort_columns: &[&str],
-    group_completion_mode: &GroupCompletionMode,
+    group_clustering_mode: &GroupClusteringMode,
 ) -> Arc<dyn ExecutionPlan> {
     let mut fields = schema.fields().to_vec();
     fields.push(Arc::new(Field::new("v", DataType::Int64, false)));
@@ -234,7 +234,7 @@ fn aggregate_plan(
         schema,
     )
     .unwrap();
-    assert_eq!(plan.group_completion_mode(), group_completion_mode);
+    assert_eq!(plan.group_clustering_mode(), group_clustering_mode);
     Arc::new(plan)
 }
 
@@ -248,7 +248,7 @@ fn aggregation(c: &mut Criterion) {
         for run_length in [1, 8, 128, 8192] {
             let (schema, keys) = inputs(run_length, 8192, strings);
             let plan =
-                aggregate_plan(&schema, keys, &["a", "b"], &GroupCompletionMode::Full);
+                aggregate_plan(&schema, keys, &["a", "b"], &GroupClusteringMode::Full);
             let name =
                 format!("{}_run{run_length}", if strings { "string" } else { "int" });
             group.bench_function(name, |b| {
@@ -293,7 +293,7 @@ fn partially_ordered_aggregation(c: &mut Criterion) {
         &schema,
         keys,
         &["a"],
-        &GroupCompletionMode::Partial(vec![0]),
+        &GroupClusteringMode::Partial(vec![0]),
     );
     let runtime = Runtime::new().unwrap();
     let mut group = c.benchmark_group("partially_ordered_aggregate_exec");

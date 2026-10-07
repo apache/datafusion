@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Partial aggregate stream for input with group-completion guarantees.
+//! Partial aggregate stream for input with group-clustering guarantees.
 
 use std::sync::Arc;
 
@@ -29,13 +29,13 @@ use futures::stream::StreamExt;
 use super::AggregateExec;
 use super::aggregate_hash_table::{ClusteredAggregateTable, PartialMarker};
 use crate::aggregates::AggregateMode;
-use crate::aggregates::order::{GroupCompletion, GroupCompletionMode};
+use crate::aggregates::order::{GroupClustering, GroupClusteringMode};
 use crate::metrics::{BaselineMetrics, MetricBuilder, SpillMetrics};
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 use crate::{SendableRecordBatchStream, metrics};
 
-/// Partial aggregate stream for [`GroupCompletionMode::Partial`] and
-/// [`GroupCompletionMode::Full`].
+/// Partial aggregate stream for [`GroupClusteringMode::Partial`] and
+/// [`GroupClusteringMode::Full`].
 ///
 /// # Example
 ///
@@ -59,11 +59,11 @@ use crate::{SendableRecordBatchStream, metrics};
 /// Output: results for all groups (for example, `AVG(x)` calculated from the
 /// state)
 ///
-/// # Group Completion Optimization
+/// # Group Clustering Optimization
 ///
 /// For the aggregation work, the hash aggregation implementation is reused.
 ///
-/// After each input batch, the group-completion mode determines whether any
+/// After each input batch, the group-clustering mode determines whether any
 /// groups can be emitted eagerly to improve memory efficiency. For example, if
 /// the input is ordered by `k` and the last group key seen is `k = 100`, all
 /// groups with keys less than 100 are complete. Materialize that entire completed
@@ -73,7 +73,7 @@ use crate::{SendableRecordBatchStream, metrics};
 ///
 /// # Memory Pressure and Spilling
 ///
-/// ## Full group completion
+/// ## Full group clustering
 ///
 /// Every complete grouping tuple is contiguous. Ordering by every group key is
 /// one way to establish this mode, for example:
@@ -88,7 +88,7 @@ use crate::{SendableRecordBatchStream, metrics};
 /// If a memory reservation nevertheless fails, the stream returns the error
 /// directly, indicating an unexpected behavior.
 ///
-/// ## Partial group completion
+/// ## Partial group clustering
 ///
 /// Rows are contiguous for a subset of the group keys. Ordering by that subset
 /// is one way to establish this mode, for example:
@@ -147,7 +147,7 @@ impl ClusteredPartialAggregateStream {
         partition: usize,
     ) -> Result<Self> {
         debug_assert_eq!(agg.mode, AggregateMode::Partial);
-        debug_assert_ne!(agg.group_completion_mode, GroupCompletionMode::None);
+        debug_assert_ne!(agg.group_clustering_mode, GroupClusteringMode::None);
 
         let schema = Arc::clone(&agg.schema);
         let input = agg.input.execute(partition, Arc::clone(context))?;
@@ -168,8 +168,8 @@ impl ClusteredPartialAggregateStream {
         let reservation =
             MemoryConsumer::new(format!("ClusteredPartialAggregateStream[{partition}]"))
                 .with_can_spill(matches!(
-                    table.group_completion(),
-                    GroupCompletion::Partial(_)
+                    table.group_clustering(),
+                    GroupClustering::Partial(_)
                 ))
                 .register(context.memory_pool());
 
@@ -261,7 +261,7 @@ impl ClusteredPartialAggregateStream {
     /// 3. Prepare output:
     ///    - A prefix of groups is complete: materialize the entire prefix once,
     ///      retaining the input and active groups to resume aggregation.
-    ///    - On memory pressure with partial group completion, materialize all
+    ///    - On memory pressure with partial group clustering, materialize all
     ///      current states, including incomplete groups, and reset the table.
     ///    - At EOF, materialize all remaining states and prepare to output.
     /// 4. Input was exhausted with no remaining groups, directly end.
@@ -318,9 +318,9 @@ impl Aggregating {
             let output = match reservation.try_resize(self.table.memory_size()) {
                 Ok(()) => self.table.take_completed_state_batch()?,
                 Err(oom @ DataFusionError::ResourcesExhausted(_)) => {
-                    // Partial group completion may have an unbounded active key range.
+                    // Partial group clustering may have an unbounded active key range.
                     // The final stage can merge incomplete states emitted here.
-                    if matches!(self.table.group_completion(), GroupCompletion::Full(_)) {
+                    if matches!(self.table.group_clustering(), GroupClustering::Full(_)) {
                         return Err(oom);
                     }
                     let Some(batch) = self.table.take_state_batch()? else {

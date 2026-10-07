@@ -54,7 +54,7 @@ use datafusion_expr::EmitTo;
 /// `0..12` can be emitted. Note that `13` can not yet be emitted as
 /// there may be more values in the next batch with the same group_id.
 #[derive(Debug)]
-pub struct GroupCompletionFull {
+pub struct GroupClusteringFull {
     state: State,
 }
 
@@ -71,7 +71,7 @@ enum State {
     Complete,
 }
 
-impl GroupCompletionFull {
+impl GroupClusteringFull {
     pub fn new() -> Self {
         Self {
             state: State::Start,
@@ -120,7 +120,7 @@ impl GroupCompletionFull {
     }
 
     /// Called when new groups are added in a batch. See documentation
-    /// on [`super::GroupCompletion::new_groups`]
+    /// on [`super::GroupClustering::new_groups`]
     pub fn new_groups(&mut self, total_num_groups: usize) {
         assert_ne!(total_num_groups, 0);
 
@@ -144,7 +144,7 @@ impl GroupCompletionFull {
     }
 }
 
-impl Default for GroupCompletionFull {
+impl Default for GroupClusteringFull {
     fn default() -> Self {
         Self::new()
     }

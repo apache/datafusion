@@ -19,7 +19,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use crate::aggregates::group_values::{AccumulatorPhase, new_group_values};
-use crate::aggregates::order::GroupCompletion;
+use crate::aggregates::order::GroupClustering;
 use crate::aggregates::{AggregateExec, evaluate_group_by};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -77,7 +77,7 @@ impl AggregateHashTable<PartialMarker> {
     ) -> Result<AggregateHashTable<PartialSkipMarker>> {
         let state = self.state.building();
         let group_schema = state.group_by.group_schema(&self.input_schema)?;
-        let group_values = new_group_values(group_schema, &GroupCompletion::None)?;
+        let group_values = new_group_values(group_schema, &GroupClustering::None)?;
         let accumulators = state
             .accumulators
             .iter()
