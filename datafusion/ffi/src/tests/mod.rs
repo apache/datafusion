@@ -273,6 +273,91 @@ pub extern "C" fn datafusion_ffi_test_create_exec_with_byte_metrics() -> FFI_Exe
     FFI_ExecutionPlan::new(plan, None)
 }
 
+/// Decodes a [`crate::proto::physical_extension_codec::fixtures::ScalarSubqueryExprExec`]
+/// from `bytes` using
+/// [`crate::proto::physical_extension_codec::fixtures::ScalarSubqueryExprExecCodec`]
+/// *inside this image*, forwarding `scalar_subquery_results` (if present)
+/// into the decode context exactly the way a real
+/// `FFI_PhysicalExtensionCodec::try_decode_with_ctx` call would, then reads
+/// back the embedded `ScalarSubqueryExpr`'s `Int64` result at `index`.
+///
+/// There is no generic `FFI_PhysicalExpr` wrapper in this crate to carry an
+/// arbitrary decoded expression back across the boundary, so the decoded
+/// `ScalarSubqueryExprExec`/`ScalarSubqueryExpr` never leave this image as
+/// Rust values - only the `i64` their results container reports does. That
+/// is still the assertion that matters: when `scalar_subquery_results` is
+/// built in a genuinely different image (see the integration test in
+/// `datafusion/ffi/tests/ffi_physical_extension_codec.rs`), reading it back
+/// here only succeeds if `get`/`set` actually round-tripped through
+/// `ForeignScalarSubqueryResultsBackend` into the caller's own results
+/// container - the cross-library coverage gap the in-process, marker-mocked
+/// unit test in `datafusion/ffi/src/proto/physical_extension_codec.rs`
+/// cannot close on its own.
+///
+/// Exported as its own top-level symbol rather than a new field on
+/// [`ForeignLibraryModule`] for the same reason as
+/// [`datafusion_ffi_test_create_exec_with_byte_metrics`]: that struct is
+/// public, `#[repr(C)]`, and has no private/gated constructor, so adding a
+/// field changes its exhaustive-construction ABI surface even for this
+/// test-only, `integration-tests`-gated struct.
+#[unsafe(no_mangle)]
+pub extern "C" fn datafusion_ffi_test_decode_scalar_subquery_expr_exec_result(
+    task_ctx_provider: crate::execution::FFI_TaskContextProvider,
+    bytes: stabby::slice::Slice<u8>,
+    scalar_subquery_results: FFI_Option<
+        crate::proto::scalar_subquery_results::FFI_ScalarSubqueryResults,
+    >,
+    index: u64,
+) -> crate::util::FFI_Result<FFI_Option<i64>> {
+    use datafusion_common::ScalarValue;
+    use datafusion_execution::TaskContext;
+    use datafusion_expr::physical_planning_context::SubqueryIndex;
+    use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
+    use datafusion_proto::physical_plan::{
+        DefaultPhysicalProtoConverter, PhysicalExtensionCodec, PhysicalPlanDecodeContext,
+    };
+
+    use crate::proto::physical_extension_codec::fixtures::{
+        ScalarSubqueryExprExec, ScalarSubqueryExprExecCodec,
+    };
+    use crate::sresult_return;
+    use crate::util::FFI_Result;
+
+    let task_ctx: Arc<TaskContext> = sresult_return!((&task_ctx_provider).try_into());
+
+    let codec = ScalarSubqueryExprExecCodec;
+    let decode_ctx = PhysicalPlanDecodeContext::new(task_ctx.as_ref(), &codec);
+    let decode_ctx = match scalar_subquery_results.into_option() {
+        Some(results) => decode_ctx.with_scalar_subquery_results(results.into()),
+        None => decode_ctx,
+    };
+
+    // `ScalarSubqueryExprExecCodec::try_decode_with_ctx` only uses this to
+    // read a schema; `ScalarSubqueryExpr` carries no column references.
+    let dummy_input: Arc<dyn ExecutionPlan> =
+        Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
+
+    let plan = sresult_return!(codec.try_decode_with_ctx(
+        bytes.as_ref(),
+        &[dummy_input],
+        &decode_ctx,
+        &DefaultPhysicalProtoConverter {},
+    ));
+
+    let Some(exec) = plan.downcast_ref::<ScalarSubqueryExprExec>() else {
+        return FFI_Result::Err("expected ScalarSubqueryExprExec".into());
+    };
+    let Some(sq_expr) = exec.expr.downcast_ref::<ScalarSubqueryExpr>() else {
+        return FFI_Result::Err("expected ScalarSubqueryExpr".into());
+    };
+
+    match sq_expr.results().get(SubqueryIndex::new(index as usize)) {
+        None => FFI_Result::Ok(FFI_Option::None),
+        Some(ScalarValue::Int64(v)) => FFI_Result::Ok(v.into()),
+        Some(_) => FFI_Result::Err("expected an Int64 ScalarValue".into()),
+    }
+}
+
 /// Thin wrapper that attaches a fixed [`Statistics`] snapshot to any inner
 /// [`TableProvider`] without changing its scan behaviour.
 #[derive(Debug)]
