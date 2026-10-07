@@ -7863,24 +7863,55 @@ async fn test_dataframe_api_select_semantics() -> Result<()> {
     );
 
     // ----------------------------------------------------------------------
-    // Alias deduplication
+    // Empty input (global aggregate still returns exactly one row)
     // ----------------------------------------------------------------------
     // SQL:
-    // SELECT COUNT(c9) AS count_c9, COUNT(c9) AS count_c9 FROM t
-    let res = df.clone().select(vec![
-        count(col("c9")).alias("count_c9"),
-        count(col("c9")).alias("count_c9"),
+    // SELECT COUNT(c9) AS cnt, SUM(c9) AS sum_c9, 1 AS one FROM t WHERE false
+    let res = df.clone().filter(lit(false))?.select(vec![
+        count(col("c9")).alias("cnt"),
+        sum(col("c9")).alias("sum_c9"),
+        lit(1).alias("one"),
     ])?;
 
     assert_batches_eq!(
         &[
-            "+----------+------------+",
-            "| count_c9 | count_c9_1 |",
-            "+----------+------------+",
-            "| 100      | 100        |",
-            "+----------+------------+",
+            "+-----+--------+-----+",
+            "| cnt | sum_c9 | one |",
+            "+-----+--------+-----+",
+            "| 0   |        | 1   |",
+            "+-----+--------+-----+",
         ],
         &res.collect().await?
+    );
+
+    // ----------------------------------------------------------------------
+    // Duplicate output names are rejected, like any other projection
+    // ----------------------------------------------------------------------
+    // SQL:
+    // SELECT COUNT(c9) AS count_c9, COUNT(c9) AS count_c9 FROM t
+    let err = df
+        .clone()
+        .select(vec![
+            count(col("c9")).alias("count_c9"),
+            count(col("c9")).alias("count_c9"),
+        ])
+        .unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("require unique expression names"),
+        "duplicate aliases must be rejected at planning time, got: {msg}"
+    );
+
+    // SQL:
+    // SELECT COUNT(c9), COUNT(c9) FROM t
+    let err = df
+        .clone()
+        .select(vec![count(col("c9")), count(col("c9"))])
+        .unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("require unique expression names"),
+        "duplicate unaliased aggregates must be rejected at planning time, got: {msg}"
     );
 
     // ----------------------------------------------------------------------
@@ -7918,7 +7949,7 @@ async fn test_dataframe_api_select_semantics() -> Result<()> {
     assert!(batches.iter().all(|b| b.num_columns() == 14));
 
     // SQL:
-    // SELECT aggregate_test_100.*, 42 FROM aggregate_test_100
+    // SELECT aggregate_test_100.*, 42 FROM t
     let res = df.clone().select(vec![
         SelectExpr::QualifiedWildcard(
             "aggregate_test_100".into(),
@@ -7985,7 +8016,6 @@ async fn test_dataframe_api_select_semantics() -> Result<()> {
             avg_window_function.alias("avg_c9"),
         ])?
         .sort(vec![col("c1").sort(true, true)])?;
-
     let batches = res.collect().await?;
     assert!(!batches.is_empty());
     assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 100);
@@ -8177,7 +8207,6 @@ async fn test_dataframe_api_select_semantics() -> Result<()> {
         .clone()
         .select(vec![col("c1"), cnt_plus_expr.alias("cnt_plus")])?
         .sort(vec![col("c1").sort(true, true)])?;
-
     let batches = res.collect().await?;
     assert!(!batches.is_empty());
     assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 100);

@@ -252,10 +252,10 @@ pub struct DataFrame {
     projection_requires_validation: bool,
 }
 
-/// True when `select()` should insert a global `Aggregate` before projecting.
+/// True when select() should insert a global Aggregate before projecting.
 ///
 /// Requires a pure aggregate list (no wildcards or input columns outside
-/// aggregate calls). Aggregates that already columnize onto `plan` (for
+/// aggregate calls). Aggregates that already columnize onto plan (for
 /// example after [`DataFrame::aggregate`]) stay on the projection path.
 fn should_apply_global_aggregate(
     expr_list: &[SelectExpr],
@@ -279,11 +279,16 @@ fn should_apply_global_aggregate(
             }
         }
     }
-    // False when every aggregate already columnizes onto `plan`.
+    // False when every aggregate already columnizes onto plan.
     Ok(remaining_aggs)
 }
 
 /// Alias each aggregate uniquely so the Aggregate schema has distinct names.
+///
+/// The aliases are internal: the projection built on top of the Aggregate
+/// re-aliases its outputs, so user-facing names are unaffected. Identical
+/// aggregates are already deduplicated by find_aggregate_exprs; the suffix
+/// loop only guards against distinct aggregates whose names collide.
 ///
 /// Returns the aliased aggregates and a map from the normalized original
 /// expression to the output column.
@@ -332,31 +337,6 @@ fn rewrite_select_aggs(
                     })?
                     .data;
                 Ok(SelectExpr::Expression(expr))
-            }
-            other => Ok(other),
-        })
-        .collect()
-}
-
-/// Give colliding select names a _1, _2, ... suffix so the projection is valid.
-fn uniquify_select_expr_names(expr_list: Vec<SelectExpr>) -> Result<Vec<SelectExpr>> {
-    let mut used = HashSet::new();
-    expr_list
-        .into_iter()
-        .map(|select_expr| match select_expr {
-            SelectExpr::Expression(expr) => {
-                let base = expr.name_for_alias()?;
-                let mut name = base.clone();
-                let mut i = 1;
-                while !used.insert(name.clone()) {
-                    name = format!("{base}_{i}");
-                    i += 1;
-                }
-                Ok(SelectExpr::Expression(if name == base {
-                    expr
-                } else {
-                    expr.alias(name)
-                }))
             }
             other => Ok(other),
         })
@@ -516,7 +496,11 @@ impl DataFrame {
     ///
     /// A list of only aggregates is treated as a global aggregation
     /// ([`Self::aggregate`] with no group columns). To group, use
-    /// [`Self::aggregate`].
+    /// [`Self::aggregate`]. Mixing aggregates with non-aggregated columns is
+    /// not treated as an implicit GROUP BY.
+    ///
+    /// Output names must be unique, as with any projection; duplicate names
+    /// are rejected rather than renamed.
     ///
     /// # Example
     /// ```
@@ -584,6 +568,9 @@ impl DataFrame {
 
         // 2. Global aggregate only (no GROUP BY). Mixed lists and
         //    aggregate().select() reshapes stay on the projection path.
+        //    Aggregates get unique internal aliases here; the user-facing
+        //    output names are validated by project() below, like any
+        //    other projection.
         let aggr_exprs = find_aggregate_exprs(expressions.iter().copied());
         if !aggr_exprs.is_empty()
             && !has_windows
@@ -596,10 +583,10 @@ impl DataFrame {
                 .aggregate(Vec::<Expr>::new(), aggr_with_alias)?
                 .build()?;
             expr_list = rewrite_select_aggs(expr_list, &input, &rewrite_map)?;
-            expr_list = uniquify_select_expr_names(expr_list)?;
         }
 
         // 3. Project — columnize_expr maps window/aggregate exprs to columns
+        //    and duplicate output names are rejected
         let project_plan = LogicalPlanBuilder::from(plan).project(expr_list)?.build()?;
 
         Ok(DataFrame {
