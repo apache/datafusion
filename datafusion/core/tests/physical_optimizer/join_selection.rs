@@ -33,7 +33,9 @@ use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream, TaskCon
 use datafusion_expr::Operator;
 use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr::expressions::col;
-use datafusion_physical_expr::expressions::{BinaryExpr, Column, NegativeExpr};
+use datafusion_physical_expr::expressions::{
+    BinaryExpr, Column, DynamicFilterPhysicalExpr, NegativeExpr, lit,
+};
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
@@ -1967,5 +1969,58 @@ fn test_join_with_maybe_swap_unbounded_case(t: TestCase) -> Result<()> {
             )
         );
     }
+    Ok(())
+}
+
+#[rstest]
+#[case(PartitionMode::CollectLeft)]
+#[case(PartitionMode::Partitioned)]
+#[tokio::test]
+async fn test_join_selection_skips_hash_join_with_dynamic_filter(
+    #[case] partition_mode: PartitionMode,
+) -> Result<()> {
+    // Left has larger statistics than right, which would normally trigger swap
+    let (big, small) = create_big_and_small();
+    let on = vec![(
+        Arc::new(Column::new_with_schema("big_col", &big.schema())?) as PhysicalExprRef,
+        Arc::new(Column::new_with_schema("small_col", &small.schema())?) as PhysicalExprRef,
+    )];
+
+    let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
+        vec![Arc::clone(&on[0].1)],
+        lit(true),
+    ));
+
+    #[allow(deprecated)]
+    let join = Arc::new(
+        HashJoinExec::try_new(
+            Arc::clone(&big),
+            Arc::clone(&small),
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            partition_mode,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?
+        .with_dynamic_filter_expr(dynamic_filter)?,
+    );
+
+    let original_schema = join.schema();
+
+    // JoinSelection must not fail and must leave the join unchanged
+    let optimized = JoinSelection::new().optimize(join, &ConfigOptions::new())?;
+    let optimized_join = optimized
+        .downcast_ref::<HashJoinExec>()
+        .expect("join should remain HashJoinExec without wrapping projection");
+
+    assert_eq!(optimized_join.partition_mode(), partition_mode);
+    assert_eq!(*optimized_join.join_type(), JoinType::Inner);
+    assert!(Arc::ptr_eq(optimized_join.left(), &big));
+    assert!(Arc::ptr_eq(optimized_join.right(), &small));
+    assert_eq!(optimized_join.schema(), original_schema);
+    assert_eq!(optimized_join.dynamic_expressions_produced().len(), 1);
+
     Ok(())
 }
