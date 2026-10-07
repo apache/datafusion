@@ -373,6 +373,7 @@ impl DiskManager {
             parent_temp_dir: Arc::clone(&local_dirs[dir_index]),
             tempfile: Arc::new(
                 Builder::new()
+                    .prefix(&escape_for_temp_file_name_prefix(request_description))
                     .tempfile_in(local_dirs[dir_index].as_ref())
                     .map_err(DataFusionError::IoError)?,
             ),
@@ -585,6 +586,32 @@ impl SpillFile for RefCountedTempFile {
         }))
     }
 }
+
+/// Escape a string to be safe to use in a temp file name prefix.
+///
+/// All non-alphanumeric characters are replaced by `_` and characters are put in lowercase.
+/// A `.tmp.` is added at the beginning and a last `.` is set at the end.
+///
+/// For example "This kind.of /input" becomes ".tmp.this_kind_of_input."
+fn escape_for_temp_file_name_prefix(text: &str) -> String {
+    let mut output = String::with_capacity(text.len() + 6);
+    output.push_str(".tmp.");
+    let mut add_separator = false;
+    for c in text.chars() {
+        if c.is_alphanumeric() {
+            if add_separator && !output.is_empty() {
+                output.push('_');
+                add_separator = false;
+            }
+            output.extend(c.to_lowercase());
+        } else {
+            add_separator = true;
+        }
+    }
+    output.push('.');
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -622,7 +649,7 @@ mod tests {
     }
 
     #[test]
-    fn file_in_right_dir() -> Result<()> {
+    fn file_in_right_dir_and_with_description() -> Result<()> {
         let local_dir1 = TempDir::new()?;
         let local_dir2 = TempDir::new()?;
         let local_dir3 = TempDir::new()?;
@@ -636,10 +663,22 @@ mod tests {
         );
 
         assert!(dm.tmp_files_enabled());
-        let actual = dm.create_tmp_file("Testing")?;
+        let actual = dm.create_tmp_file("Testing with./spécial")?;
 
         // the file should be in one of the specified local directories
         assert_path_in_dirs(actual.path().unwrap(), local_dirs.into_iter());
+
+        let file_name = actual
+            .path()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(
+            file_name.starts_with(".tmp.testing_with_spécial."),
+            "{file_name}"
+        );
 
         Ok(())
     }
