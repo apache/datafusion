@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use datafusion_physical_plan::aggregates::{AggregateExec, AggregateMode};
+use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::{
     ChildrenPropertiesMode, ExecutionPlan, ExecutionPlanProperties,
@@ -60,23 +60,28 @@ use crate::PhysicalOptimizerRule;
 ///       Scan
 /// ```
 ///
-/// # Invariants before and after the rewrite
+/// # What this rule assumes
 ///
-/// ## Before this rule
-///
-/// The default physical planner produces two adjacent aggregate stages with
-/// compatible grouping expressions. This rule runs before other rules can combine
-/// them into a `Single` aggregate or insert operators between them.
+/// This rule assumes the logical aggregate only have one shape showed below, this
+/// is what the current physical planning produces.
 ///
 /// ```txt
-/// AggregateExec(mode=Final)
-///   AggregateExec(mode=Partial)
+/// Limit
+///   AggregateExec(mode=Final)
+///     AggregateExec(mode=Partial)
 /// ```
 ///
-/// ## After this rule
+/// If future changes or extensions produce a different shape, this rule skips the
+/// rewrite rather than reporting an error, potentially missing an optimization
+/// opportunity.
 ///
-/// For an eligible pair, both stages receive a soft-limit hint. Otherwise, both
-/// stages are left unchanged.
+/// # What this rule promises
+///
+/// Immediately after an eligible rewrite, both stages have a soft-limit hint.
+/// Otherwise, this rule leaves both stages unchanged.
+///
+/// If a later rule removes the limit, it won't affect correctness, but it may
+/// miss an optimization opportunity.
 #[derive(Debug)]
 pub struct LimitedDistinctAggregation {}
 
@@ -122,12 +127,8 @@ impl LimitedDistinctAggregation {
         };
 
         // Step 2: Verify partial/final aggregate is compatible, then apply optimization
-        match (final_agg.mode(), partial_agg.mode()) {
-            (
-                AggregateMode::Final | AggregateMode::FinalPartitioned,
-                AggregateMode::Partial,
-            ) if final_agg.group_expr() == &partial_agg.group_expr().as_final() => {}
-            _ => return Ok(Transformed::no(plan)),
+        if !final_agg.matches_partial(partial_agg) {
+            return Ok(Transformed::no(plan));
         }
 
         // Validate both stages before replacing either one.
