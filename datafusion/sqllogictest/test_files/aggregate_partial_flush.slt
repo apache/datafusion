@@ -257,3 +257,48 @@ reset datafusion.execution.partial_aggregation_flush_bytes;
 
 statement ok
 reset datafusion.execution.batch_size;
+
+# Fixed target batch group count overrides the byte and row thresholds.
+statement ok
+set datafusion.execution.batch_size = 1024;
+
+statement ok
+set datafusion.execution.partial_aggregation_flush_batch = true;
+
+statement ok
+set datafusion.execution.partial_aggregation_flush_bytes = 1;
+
+statement ok
+set datafusion.execution.partial_aggregation_flush_rows = 1;
+
+query IIIII
+select count(*), sum(c), sum(s), min(mn), max(mx) from (select v % 10007 as k, count(*) c, sum(v) s, min(v) mn, max(v) mx from t group by k);
+----
+10007 200000 20000100000 1 200000
+
+query II
+select count(*), sum(c) from (select arrow_cast(concat('a-long-enough-string-view-key-', cast(v % 9973 as varchar)), 'Utf8View') as k, count(*) c from t group by k);
+----
+9973 200000
+
+query III
+select count(*), sum(c), sum(s) from (select v % 101 as k1, concat('k', cast(v % 103 as varchar)) as k2, v % 7 = 0 as k3, count(*) c, sum(v) s from t group by k1, k2, k3);
+----
+20806 200000 20000100000
+
+query II
+select count(*), sum(c) from (select case when v % 11 = 0 then null else v % 5003 end as k, count(*) c from t group by k);
+----
+5004 200000
+
+statement ok
+reset datafusion.execution.partial_aggregation_flush_batch;
+
+statement ok
+reset datafusion.execution.partial_aggregation_flush_bytes;
+
+statement ok
+reset datafusion.execution.partial_aggregation_flush_rows;
+
+statement ok
+reset datafusion.execution.batch_size;

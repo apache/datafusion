@@ -255,6 +255,14 @@ where
         Ok(())
     }
 
+    fn reserve_groups(&mut self, capacity: usize) {
+        self.group_values
+            .reserve_exact(capacity.saturating_sub(self.group_values.len()));
+        if self.nulls.is_empty() {
+            self.nulls = NullBufferBuilder::new(capacity);
+        }
+    }
+
     fn len(&self) -> usize {
         self.group_values.len()
     }

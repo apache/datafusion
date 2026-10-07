@@ -626,6 +626,14 @@ impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
         self.vectorized_append_inner(array, rows)
     }
 
+    fn reserve_groups(&mut self, capacity: usize) {
+        self.views
+            .reserve_exact(capacity.saturating_sub(self.views.len()));
+        if self.nulls.is_empty() {
+            self.nulls = NullBufferBuilder::new(capacity);
+        }
+    }
+
     fn len(&self) -> usize {
         self.views.len()
     }

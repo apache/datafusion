@@ -197,6 +197,31 @@ where
         }
     }
 
+    /// Reserves group slots without preallocating variable-length string payloads.
+    pub fn reserve_groups(&mut self, capacity: usize) {
+        self.map
+            .reserve(capacity.saturating_sub(self.map.len()), |entry| entry.hash);
+        self.views
+            .reserve_exact(capacity.saturating_sub(self.views.len()));
+        self.hashes_buffer
+            .reserve_exact(capacity.saturating_sub(self.hashes_buffer.len()));
+    }
+
+    /// Emits keys, retains the hash table and scratch buffer, and reserves fixed
+    /// view capacity. Payload buffers keep their normal block size and growth.
+    pub fn take_with_capacity(&mut self, capacity: usize) -> ArrayRef {
+        let mut outgoing = Self::new(self.output_type);
+        std::mem::swap(self, &mut outgoing);
+        std::mem::swap(&mut self.map, &mut outgoing.map);
+        self.map.clear();
+        std::mem::swap(&mut self.hashes_buffer, &mut outgoing.hashes_buffer);
+        self.hashes_buffer.clear();
+        self.initial_map_capacity = outgoing.initial_map_capacity;
+        std::mem::swap(&mut self.random_state, &mut outgoing.random_state);
+        self.reserve_groups(capacity);
+        outgoing.into_state()
+    }
+
     /// Return the contents of this map and replace it with a new empty map with
     /// the same output type
     pub fn take(&mut self) -> Self {

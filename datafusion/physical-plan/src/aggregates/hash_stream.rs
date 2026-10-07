@@ -220,6 +220,8 @@ struct PartialTableFlush {
     byte_threshold: usize,
     /// Distinct group rows above which the current table is emitted; zero disables.
     group_threshold: usize,
+    /// Fixed group capacity reserved for batch-size flushing; zero disables.
+    reserve_capacity: usize,
     /// Previously emitted groups, included in the skip-partial reduction ratio.
     flushed_groups: usize,
     /// Number of emissions triggered by either size threshold.
@@ -249,8 +251,18 @@ impl PartialHashAggregateStream {
             MetricBuilder::new(&agg.metrics).counter("early_emit_count", partition);
 
         let execution_options = &context.session_config().options().execution;
-        let byte_threshold = execution_options.partial_aggregation_flush_bytes;
-        let group_threshold = execution_options.partial_aggregation_flush_rows;
+        let flush_batch = execution_options.partial_aggregation_flush_batch
+            && agg.group_by().is_single();
+        let byte_threshold = if flush_batch {
+            0
+        } else {
+            execution_options.partial_aggregation_flush_bytes
+        };
+        let group_threshold = if flush_batch {
+            batch_size
+        } else {
+            execution_options.partial_aggregation_flush_rows
+        };
         let group_values_soft_limit = agg.limit_options().map(|config| config.limit());
         let has_nested_state = schema
             .fields()
@@ -263,17 +275,27 @@ impl PartialHashAggregateStream {
             .then(|| PartialTableFlush {
                 byte_threshold,
                 group_threshold,
+                reserve_capacity: if flush_batch {
+                    batch_size.saturating_mul(2)
+                } else {
+                    0
+                },
                 flushed_groups: 0,
                 flush_count: MetricBuilder::new(&agg.metrics)
                     .counter("table_flush_count", partition),
             });
 
-        let hash_table = AggregateHashTable::<PartialMarker>::new(
+        let mut hash_table = AggregateHashTable::<PartialMarker>::new(
             agg,
             partition,
             Arc::clone(&schema),
             batch_size,
         )?;
+        if let Some(flush) = &table_flush
+            && flush.reserve_capacity > 0
+        {
+            hash_table.reserve_groups(flush.reserve_capacity);
+        }
         let skip_aggregation_probe = if agg.group_by().is_single() {
             let options = &context.session_config().options().execution;
             let probe_ratio_threshold =
@@ -353,8 +375,16 @@ impl PartialHashAggregateStream {
                         break;
                     }
                     HandleInputResult::OOM | HandleInputResult::FlushThresholdReached => {
-                        let materialized_group_states =
-                            hash_table.take_state_batch()?.ok_or_else(|| {
+                        let reserve_capacity = self
+                            .table_flush
+                            .as_ref()
+                            .filter(|_| {
+                                last_state == HandleInputResult::FlushThresholdReached
+                            })
+                            .map_or(0, |flush| flush.reserve_capacity);
+                        let materialized_group_states = hash_table
+                            .take_state_batch_with_capacity(reserve_capacity)?
+                            .ok_or_else(|| {
                                 internal_datafusion_err!(
                                     "Partial hash aggregate tried to flush an empty table"
                                 )

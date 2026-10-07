@@ -95,6 +95,9 @@ pub trait GroupColumn: Send + Sync {
     /// The vectorized version `append_val`
     fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize]) -> Result<()>;
 
+    /// Reserves row-addressed storage without changing the logical length.
+    fn reserve_groups(&mut self, _capacity: usize) {}
+
     /// Returns the number of rows stored in this builder
     fn len(&self) -> usize;
 
@@ -1081,6 +1084,44 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
         } else {
             self.scalarized_intern(cols, groups)
         }
+    }
+
+    fn emit_with_capacity(&mut self, capacity: usize) -> Result<Vec<ArrayRef>> {
+        let output = self.emit(EmitTo::All)?;
+        self.map.clear();
+        self.hashes_buffer.clear();
+        self.group_index_lists.clear();
+        self.emit_group_index_list_buffer.clear();
+        self.vectorized_operation_buffers.clear();
+        self.reserve_groups(capacity);
+        Ok(output)
+    }
+
+    fn reserve_groups(&mut self, capacity: usize) {
+        self.map
+            .reserve(capacity.saturating_sub(self.map.len()), |entry| entry.0);
+        self.map_size = self.map.capacity() * size_of::<(u64, usize)>();
+        self.hashes_buffer
+            .reserve_exact(capacity.saturating_sub(self.hashes_buffer.len()));
+        for column in &mut self.group_values {
+            column.reserve_groups(capacity);
+        }
+        let buffers = &mut self.vectorized_operation_buffers;
+        buffers
+            .append_row_indices
+            .reserve_exact(capacity.saturating_sub(buffers.append_row_indices.len()));
+        buffers
+            .equal_to_row_indices
+            .reserve_exact(capacity.saturating_sub(buffers.equal_to_row_indices.len()));
+        buffers
+            .equal_to_group_indices
+            .reserve_exact(capacity.saturating_sub(buffers.equal_to_group_indices.len()));
+        buffers
+            .remaining_row_indices
+            .reserve_exact(capacity.saturating_sub(buffers.remaining_row_indices.len()));
+        buffers
+            .equal_to_results
+            .reserve(capacity.saturating_sub(buffers.equal_to_results.len()));
     }
 
     fn size(&self) -> usize {

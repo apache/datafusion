@@ -1152,6 +1152,14 @@ config_namespace! {
         /// threshold. If both thresholds are enabled, reaching either triggers a flush.
         pub partial_aggregation_flush_rows: usize, default = 0
 
+        /// (experimental) Flush unordered partial aggregation after a complete input
+        /// batch when the group count reaches batch_size. Overrides both other flush
+        /// thresholds and reserves supported group-key and accumulator storage for
+        /// twice batch_size groups, initially and after each threshold flush.
+        /// Requires a single grouping set and the same eligibility as the other
+        /// flush thresholds. String payload buffers use their normal growth policy.
+        pub partial_aggregation_flush_batch: bool, default = false
+
         /// Should DataFusion use row number estimates at the input to decide
         /// whether increasing parallelism is beneficial or not. By default,
         /// only exact row numbers (not estimates) are used for this decision.
