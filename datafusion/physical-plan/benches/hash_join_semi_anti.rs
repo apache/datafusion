@@ -442,5 +442,71 @@ fn bench_hash_join_semi_anti(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_hash_join_semi_anti);
+/// String keys select the generic map. A single absent probe key keeps output
+/// materialization from hiding the cost of building and dropping the index.
+fn bench_generic_hash_join_build(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Utf8, false)]));
+    let rows = 200_000;
+    let probe = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(StringArray::from(vec!["absent"]))],
+    )
+    .unwrap();
+    let mut group = c.benchmark_group("generic_hash_join_build");
+    for batch_size in [8192, rows] {
+        for distribution in [
+            "low8",
+            "full112",
+            "periodic8192",
+            "unique",
+            "unique_prefix",
+            "duplicate_prefix",
+        ] {
+            // Generate separate batches outside timing, as an input stream would.
+            // The prefix cases have the same keys in opposite orders.
+            let batches: Vec<_> = (0..rows)
+                .step_by(batch_size)
+                .map(|start| {
+                    let keys = (start..(start + batch_size).min(rows)).map(|row| {
+                        let key = match distribution {
+                            "low8" => row % 8,
+                            "full112" => row % 112,
+                            "periodic8192" => row % 8192,
+                            "unique" => row,
+                            "unique_prefix" if row < rows / 2 => row + 8,
+                            "unique_prefix" => row % 8,
+                            "duplicate_prefix" if row < rows / 2 => row % 8,
+                            "duplicate_prefix" => row - rows / 2 + 8,
+                            _ => unreachable!(),
+                        };
+                        format!("k{key}")
+                    });
+                    RecordBatch::try_new(
+                        Arc::clone(&schema),
+                        vec![Arc::new(StringArray::from_iter_values(keys))],
+                    )
+                    .unwrap()
+                })
+                .collect();
+            group.bench_function(BenchmarkId::new(distribution, batch_size), |b| {
+                b.iter(|| {
+                    do_hash_join(
+                        make_exec(&batches, &schema),
+                        make_exec(std::slice::from_ref(&probe), &schema),
+                        JoinType::Inner,
+                        &rt,
+                    )
+                })
+            });
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_hash_join_semi_anti,
+    bench_generic_hash_join_build
+);
 criterion_main!(benches);
