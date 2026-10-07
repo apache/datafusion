@@ -151,19 +151,21 @@ pub(crate) fn lcm_signed_int(x: i64, y: i64) -> Result<i64, ArrowError> {
         })
 }
 
-/// Applies `op` to every value in `array`, like `unary`, but returns an error
-/// if `input_error` returns a message for any non-null value.
+/// An alternative to `try_unary` that lets the compiler vectorize both the
+/// input check and `op`, for functions that return an error for some argument
+/// values, such as `sqrt`, which returns an error for negative numbers.
 ///
-/// Use this for functions that return an error for some argument values, such
-/// as `sqrt`, which returns an error for negative numbers. `try_unary` can also
-/// return errors, but it can return early on any value, which keeps the
-/// compiler from vectorizing its loop. That makes cheap functions like `sqrt`
-/// several times slower.
+/// `try_unary` can return early on any value, which keeps the compiler from
+/// vectorizing its loop. Instead, this applies `op` to every value in `array`,
+/// like `unary`, and calls `input_error` on every value, including those in
+/// null slots, in the same loop. Only if some value fails is the array searched
+/// again, skipping null slots, for an error to report. `input_error` should
+/// therefore be a cheap check, such as a comparison.
 ///
-/// Instead, `input_error` is called on every value, including those in null
-/// slots, in the same loop as `op`; only if some value fails is the array
-/// searched again for an error to report. `input_error` should therefore be a
-/// cheap check, such as a comparison.
+/// For cheap functions like `sqrt`, this is several times faster than
+/// `try_unary`. But because it also does work for null slots, `try_unary` can
+/// be faster on arrays with many nulls, especially when `op` is expensive and
+/// can't be vectorized anyway.
 pub(crate) fn unary_with_input_check<T: ArrowPrimitiveType>(
     array: &PrimitiveArray<T>,
     op: impl Fn(T::Native) -> T::Native,
