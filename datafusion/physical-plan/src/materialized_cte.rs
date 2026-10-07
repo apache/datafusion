@@ -620,6 +620,11 @@ impl MaterializedCteScanExec {
     pub fn id(&self) -> u64 {
         self.id
     }
+
+    /// Whether [`Self::bind`] has been called on this scan.
+    pub fn is_bound(&self) -> bool {
+        self.buffer.is_some()
+    }
 }
 
 impl DisplayAs for MaterializedCteScanExec {

@@ -214,7 +214,7 @@ impl DefaultPhysicalPlanner {
         {
             return Ok(plan);
         }
-        let renumbered = renumber_duplicate_materialized_ctes(logical_plan)?;
+        let renumbered = renumber_materialized_ctes(logical_plan)?;
         let logical_plan = renumbered.as_ref().unwrap_or(logical_plan);
         let plan = self
             .create_initial_plan(logical_plan, session_state)
@@ -225,21 +225,25 @@ impl DefaultPhysicalPlanner {
     }
 }
 
-/// Give each occurrence of a [`MaterializedCte`] in `plan` its own id.
+/// Give each occurrence of a [`MaterializedCte`] in `plan` a new id, and
+/// update the scans in its continuation, including the scans in subqueries.
 ///
 /// The id is copied when a logical plan is cloned, so one CTE can occur more
-/// than once in a plan, for example when a view that declares it is referenced
-/// two times, or when a DataFrame is joined to itself. Each occurrence is a
-/// separate CTE, as in PostgreSQL. Thus every occurrence after the first gets a
-/// new id, and so do the scans in its continuation, including the scans in
-/// subqueries.
+/// than once, for example when a view that declares it is referenced two
+/// times, or when a DataFrame is joined to itself. Each occurrence is a
+/// separate CTE, as in PostgreSQL.
 ///
-/// Returns `None` when all ids are already unique.
+/// The ids must also be new for each planning run, not only unique within
+/// `plan`. A table provider can plan a saved logical plan in its `scan`, as a
+/// [`ViewTable`] that is not inlined does. Each such scan is a separate
+/// planning run of the same saved plan, and its CTEs end up in the same
+/// physical plan as the CTEs of the outer run.
+///
+/// Returns `None` when `plan` has no materialized CTE.
 ///
 /// [`MaterializedCte`]: datafusion_expr::MaterializedCte
-fn renumber_duplicate_materialized_ctes(
-    plan: &LogicalPlan,
-) -> Result<Option<LogicalPlan>> {
+/// [`ViewTable`]: crate::datasource::ViewTable
+fn renumber_materialized_ctes(plan: &LogicalPlan) -> Result<Option<LogicalPlan>> {
     fn as_cte(plan: &LogicalPlan) -> Option<&datafusion_expr::MaterializedCte> {
         match plan {
             LogicalPlan::Extension(Extension { node }) => node.as_any().downcast_ref(),
@@ -247,34 +251,38 @@ fn renumber_duplicate_materialized_ctes(
         }
     }
 
-    let mut ids = HashSet::new();
-    let mut has_duplicate = false;
+    let mut has_cte = false;
     plan.apply_with_subqueries(|node| {
-        if let Some(cte) = as_cte(node) {
-            has_duplicate |= !ids.insert(cte.id);
+        if as_cte(node).is_some() {
+            has_cte = true;
+            return Ok(TreeNodeRecursion::Stop);
         }
         Ok(TreeNodeRecursion::Continue)
     })?;
-    if !has_duplicate {
+    if !has_cte {
         return Ok(None);
     }
 
-    let mut ids = HashSet::new();
     plan.clone()
         .transform_down_with_subqueries(|node| {
             let Some(cte) = as_cte(&node) else {
                 return Ok(Transformed::no(node));
             };
-            if ids.insert(cte.id) {
-                return Ok(Transformed::no(node));
-            }
             let old_id = cte.id;
             let new_id = datafusion_expr::MaterializedCteId::next();
-            ids.insert(new_id);
             let continuation = cte
                 .continuation
                 .clone()
                 .transform_down_with_subqueries(|node| {
+                    // A nested occurrence of the same CTE owns the scans below
+                    // it, and is renumbered on its own.
+                    if as_cte(&node).is_some_and(|nested| nested.id == old_id) {
+                        return Ok(Transformed::new(
+                            node,
+                            false,
+                            TreeNodeRecursion::Jump,
+                        ));
+                    }
                     let LogicalPlan::Extension(Extension { node: scan }) = &node else {
                         return Ok(Transformed::no(node));
                     };
@@ -311,12 +319,18 @@ fn renumber_duplicate_materialized_ctes(
 /// Point every [`MaterializedCteScanExec`] at the buffer of the
 /// [`MaterializedCteExec`] with the same id.
 ///
-/// [`renumber_duplicate_materialized_ctes`] makes the ids unique before the
-/// physical plan is created.
+/// [`renumber_materialized_ctes`] makes the ids unique before the physical
+/// plan is created.
+///
+/// A scan that is already bound was planned and bound by a separate planning
+/// run, such as the `scan` of a [`ViewTable`], and is left as is. Binding it
+/// again would count its partitions twice in the buffer.
 ///
 /// Scans are planned before the node that owns their CTE, and a scan inside a
 /// scalar subquery is planned in a separate subtree, so the binding is done
 /// once on the whole initial plan.
+///
+/// [`ViewTable`]: crate::datasource::ViewTable
 fn bind_materialized_cte_scans(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -341,6 +355,9 @@ fn bind_materialized_cte_scans(
         let Some(scan) = node.downcast_ref::<MaterializedCteScanExec>() else {
             return Ok(Transformed::no(node));
         };
+        if scan.is_bound() {
+            return Ok(Transformed::no(node));
+        }
         let Some(buffer) = buffers.get(&scan.id()) else {
             return internal_err!("MaterializedCteScanExec {} has no CTE", scan.id());
         };
