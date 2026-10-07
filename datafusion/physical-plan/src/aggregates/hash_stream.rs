@@ -159,6 +159,9 @@ pub(crate) struct PartialHashAggregateStream {
     /// Number of times accumulated states were emitted due to memory pressure.
     early_emit_count: metrics::Count,
 
+    /// Optional thresholds for emitting partial states before memory pressure.
+    table_flush: Option<PartialTableFlush>,
+
     /// Tracks whether partial aggregation should switch to direct state conversion.
     skip_aggregation_probe: Option<SkipAggregationProbe>,
 
@@ -207,7 +210,20 @@ enum HandleInputResult {
     ReachedLimit,
     #[expect(clippy::upper_case_acronyms)]
     OOM,
+    FlushThresholdReached,
     SwitchToSkipAggregation,
+}
+
+/// Emits partial states at size thresholds while preserving skip-probe counts.
+struct PartialTableFlush {
+    /// Allocated bytes above which the current table is emitted.
+    byte_threshold: usize,
+    /// Distinct group rows above which the current table is emitted; zero disables.
+    group_threshold: usize,
+    /// Previously emitted groups, included in the skip-partial reduction ratio.
+    flushed_groups: usize,
+    /// Number of emissions triggered by either size threshold.
+    flush_count: metrics::Count,
 }
 
 impl PartialHashAggregateStream {
@@ -231,6 +247,26 @@ impl PartialHashAggregateStream {
             .ratio_metrics("reduction_factor", partition);
         let early_emit_count =
             MetricBuilder::new(&agg.metrics).counter("early_emit_count", partition);
+
+        let execution_options = &context.session_config().options().execution;
+        let byte_threshold = execution_options.partial_aggregation_flush_bytes;
+        let group_threshold = execution_options.partial_aggregation_flush_rows;
+        let group_values_soft_limit = agg.limit_options().map(|config| config.limit());
+        let has_nested_state = schema
+            .fields()
+            .iter()
+            .skip(agg.group_by().num_group_exprs())
+            .any(|field| field.data_type().is_nested());
+        let table_flush = ((byte_threshold > 0 || group_threshold > 0)
+            && group_values_soft_limit.is_none()
+            && !has_nested_state)
+            .then(|| PartialTableFlush {
+                byte_threshold,
+                group_threshold,
+                flushed_groups: 0,
+                flush_count: MetricBuilder::new(&agg.metrics)
+                    .counter("table_flush_count", partition),
+            });
 
         let hash_table = AggregateHashTable::<PartialMarker>::new(
             agg,
@@ -279,8 +315,9 @@ impl PartialHashAggregateStream {
             reservation,
             reduction_factor,
             early_emit_count,
+            table_flush,
             skip_aggregation_probe,
-            group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
+            group_values_soft_limit,
             hash_table: Some(hash_table),
         })
     }
@@ -315,14 +352,23 @@ impl PartialHashAggregateStream {
                     | HandleInputResult::SwitchToSkipAggregation => {
                         break;
                     }
-                    HandleInputResult::OOM => {
-                        let materialized_group_states = hash_table.take_state_batch()?.ok_or_else(|| {
-                            internal_datafusion_err!(
-                                "Partial hash aggregate ran out of memory with no aggregated groups"
-                            )
-                        })?;
+                    HandleInputResult::OOM | HandleInputResult::FlushThresholdReached => {
+                        let materialized_group_states =
+                            hash_table.take_state_batch()?.ok_or_else(|| {
+                                internal_datafusion_err!(
+                                    "Partial hash aggregate tried to flush an empty table"
+                                )
+                            })?;
 
-                        self.early_emit_count.add(1);
+                        if let Some(table_flush) = self.table_flush.as_mut()
+                            && last_state == HandleInputResult::FlushThresholdReached
+                        {
+                            table_flush.flushed_groups +=
+                                materialized_group_states.num_rows();
+                            table_flush.flush_count.add(1);
+                        } else {
+                            self.early_emit_count.add(1);
+                        }
                         timer.done();
                         self.emit_on_memory_pressure(
                             materialized_group_states,
@@ -410,7 +456,14 @@ impl PartialHashAggregateStream {
         // ----------------------------------------------
         // Step 3: Skip partial aggregation optimization
         // ----------------------------------------------
-        self.update_skip_aggregation_probe(input_rows, hash_table.building_group_count());
+        let flushed_groups = self
+            .table_flush
+            .as_ref()
+            .map_or(0, |table_flush| table_flush.flushed_groups);
+        self.update_skip_aggregation_probe(
+            input_rows,
+            flushed_groups + hash_table.building_group_count(),
+        );
 
         // True branch: a decision has been made to skip partial aggregation.
         if self.should_skip_aggregation() {
@@ -420,12 +473,26 @@ impl PartialHashAggregateStream {
         // -------------------------------------------------
         // Step 4: Larger-than-memory execution (early emit)
         // -------------------------------------------------
-        let resize_result = self.reservation.try_resize(hash_table.memory_size());
+        let allocated_bytes = hash_table.memory_size();
+        let resize_result = self.reservation.try_resize(allocated_bytes);
         match resize_result {
-            Ok(()) => Ok(HandleInputResult::ProcessNext),
-            Err(DataFusionError::ResourcesExhausted(_)) => Ok(HandleInputResult::OOM),
-            Err(e) => Err(e),
+            Ok(()) => {}
+            Err(DataFusionError::ResourcesExhausted(_)) => {
+                return Ok(HandleInputResult::OOM);
+            }
+            Err(e) => return Err(e),
         }
+
+        // Step 5: Emit partial states once either configured threshold is reached.
+        if self.table_flush.as_ref().is_some_and(|table_flush| {
+            (table_flush.byte_threshold > 0
+                && allocated_bytes >= table_flush.byte_threshold)
+                || (table_flush.group_threshold > 0
+                    && hash_table.building_group_count() >= table_flush.group_threshold)
+        }) {
+            return Ok(HandleInputResult::FlushThresholdReached);
+        }
+        Ok(HandleInputResult::ProcessNext)
     }
 
     /// Emit a materialized partial-state batch in `batch_size` slices.
@@ -1021,9 +1088,16 @@ mod tests {
         Ok(())
     }
 
+    #[rstest::rstest]
+    #[case(0, 0)]
+    #[case(1, 0)]
+    #[case(0, 1)]
+    #[case(1, 1)]
     #[tokio::test]
-    async fn test_partial_hash_stream_skip_aggregation_probe_not_locked_until_skip()
-    -> Result<()> {
+    async fn test_partial_hash_stream_skip_aggregation_probe_not_locked_until_skip(
+        #[case] flush_bytes: usize,
+        #[case] flush_rows: usize,
+    ) -> Result<()> {
         // Test that the probe is not locked until we actually decide to skip.
         // This allows us to continue evaluating the skip condition across multiple batches.
         //
@@ -1108,6 +1182,14 @@ mod tests {
 
         // Configure skip aggregation settings
         let mut session_config = task_ctx.session_config().clone();
+        session_config
+            .options_mut()
+            .execution
+            .partial_aggregation_flush_bytes = flush_bytes;
+        session_config
+            .options_mut()
+            .execution
+            .partial_aggregation_flush_rows = flush_rows;
         session_config = session_config.set(
             "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
             &datafusion_common::ScalarValue::UInt64(Some(probe_rows_threshold)),
@@ -1165,6 +1247,11 @@ mod tests {
             skipped_rows, batch3_rows,
             "Expected batch 3's rows ({batch3_rows}) to be skipped",
         );
+
+        let flushes = metrics
+            .sum_by_name("table_flush_count")
+            .map_or(0, |value| value.as_usize());
+        assert_eq!(flushes, usize::from(flush_bytes > 0 || flush_rows > 0));
 
         Ok(())
     }

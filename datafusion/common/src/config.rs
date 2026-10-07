@@ -1136,6 +1136,22 @@ config_namespace! {
         /// aggregation ratio check and trying to switch to skipping aggregation mode
         pub skip_partial_aggregation_probe_rows_threshold: usize, default = 100_000
 
+        /// (experimental) Allocated-byte threshold for flushing unordered partial
+        /// hash aggregation tables. Checked after each input batch; the table can
+        /// exceed this size by one batch. Flushed groups count toward the existing
+        /// skip-partial probe. Repeated keys do not disable flushing. Aggregations
+        /// with a soft group limit or nested aggregate state are excluded.
+        /// Set to 0 to disable this threshold. If both flush thresholds are
+        /// enabled, reaching either triggers a flush. Final aggregation is unchanged.
+        pub partial_aggregation_flush_bytes: usize, default = 0
+
+        /// (experimental) Number of distinct group rows above which an unordered
+        /// partial hash aggregation table is flushed. This counts groups held in
+        /// the table, not input rows. Uses the same eligibility and skip-partial
+        /// accounting as partial_aggregation_flush_bytes. Set to 0 to disable this
+        /// threshold. If both thresholds are enabled, reaching either triggers a flush.
+        pub partial_aggregation_flush_rows: usize, default = 0
+
         /// Should DataFusion use row number estimates at the input to decide
         /// whether increasing parallelism is beneficial or not. By default,
         /// only exact row numbers (not estimates) are used for this decision.
