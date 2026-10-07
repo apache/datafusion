@@ -357,6 +357,11 @@ struct RangePeerComparator {
     comparator: Arc<LexicographicalComparator>,
 }
 
+// The cached Arrow arrays and comparison closures are immutable. A comparison
+// that unwinds cannot leave this cache partially updated.
+impl std::panic::UnwindSafe for RangePeerComparator {}
+impl std::panic::RefUnwindSafe for RangePeerComparator {}
+
 impl std::fmt::Debug for RangePeerComparator {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RangePeerComparator")
@@ -812,6 +817,9 @@ mod tests {
     fn range_peer_comparator_reuses_arrays_and_invalidates_after_pruning() -> Result<()> {
         use arrow::array::ListArray;
         use arrow::datatypes::Int64Type;
+
+        fn assert_unwind_safe<T: std::panic::UnwindSafe + std::panic::RefUnwindSafe>() {}
+        assert_unwind_safe::<WindowFrameStateRange>();
 
         let frame = Arc::new(WindowFrame::new_bounds(
             WindowFrameUnits::Range,
