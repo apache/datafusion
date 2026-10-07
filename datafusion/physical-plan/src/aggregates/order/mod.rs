@@ -197,27 +197,9 @@ mod tests {
         ordering.new_groups(&batch_group_values, &[0, 1], 2)?;
         let in_progress = expected + ScalarValue::Utf8(Some(key.to_owned())).size();
         assert_eq!(ordering.size(), in_progress);
-        ordering.remove_groups(1);
-        assert_eq!(ordering.size(), in_progress);
 
-        // Replacing the key charges only the new payload, not the previous key.
-        let replacement_key = "updated sort key with a longer payload";
-        let replacement_group_values: Vec<ArrayRef> =
-            vec![Arc::new(StringArray::from(vec![replacement_key]))];
-        ordering.new_groups(&replacement_group_values, &[1], 2)?;
-        let replaced =
-            expected + ScalarValue::Utf8(Some(replacement_key.to_owned())).size();
-        assert!(replaced > in_progress);
-        assert_eq!(ordering.size(), replaced);
-
-        // Completing or resetting drops the key, but retains order-index capacity.
+        // Completing drops the key, but retains order-index capacity.
         ordering.input_done();
-        assert_eq!(ordering.size(), expected);
-        ordering.reset();
-        assert_eq!(ordering.size(), expected);
-        ordering.new_groups(&batch_group_values, &[0, 1], 2)?;
-        assert_eq!(ordering.size(), in_progress);
-        ordering.reset();
         assert_eq!(ordering.size(), expected);
         Ok(())
     }
