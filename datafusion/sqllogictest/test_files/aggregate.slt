@@ -407,21 +407,30 @@ GROUP BY g
 # A DISTINCT aggregate may take the distinct argument more than once.
 # Group 1 aggregates over the distinct values 1.0 and 2.0, group 2 over the
 # single distinct value 3.0, which leaves the sample covariance undefined.
+# Group 3 repeats a NULL row alongside the distinct value 2.0: DISTINCT
+# collapses the repeated NULLs into one, and the aggregate then excludes
+# that NULL the same way it would without the rewrite, leaving a single
+# distinct point - again an undefined sample covariance. Group 4 is all
+# NULL, so the aggregate has zero non-null distinct points to work with.
 query IR rowsort
 SELECT g, corr(DISTINCT x, x)
-FROM (VALUES (1, 1.0), (1, 1.0), (1, 2.0), (2, 3.0), (2, 3.0)) AS t(g, x)
+FROM (VALUES (1, 1.0), (1, 1.0), (1, 2.0), (2, 3.0), (2, 3.0), (3, NULL), (3, NULL), (3, 2.0), (4, NULL), (4, NULL)) AS t(g, x)
 GROUP BY g
 ----
 1 1
 2 NULL
+3 NULL
+4 NULL
 
 query IR rowsort
 SELECT g, covar_samp(DISTINCT x, x)
-FROM (VALUES (1, 1.0), (1, 1.0), (1, 2.0), (2, 3.0), (2, 3.0)) AS t(g, x)
+FROM (VALUES (1, 1.0), (1, 1.0), (1, 2.0), (2, 3.0), (2, 3.0), (3, NULL), (3, NULL), (3, 2.0), (4, NULL), (4, NULL)) AS t(g, x)
 GROUP BY g
 ----
 1 0.5
 2 NULL
+3 NULL
+4 NULL
 
 # all_nulls_query_correlation
 query R
