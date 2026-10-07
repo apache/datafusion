@@ -15,8 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
-statement ok
-SET datafusion.execution.target_partitions = 1;
+# configMatrix: datafusion.execution.batch_size=1,2,8192
+# configMatrix: datafusion.execution.target_partitions=1,4
 
 statement ok
 SET datafusion.optimizer.enable_piecewise_merge_join = true;
@@ -43,8 +43,516 @@ SELECT sl.p, sr.q FROM sl JOIN sr ON sl.a < sr.b ORDER BY 1, 2;
 ----
 l5 r7
 
-statement ok
-RESET datafusion.optimizer.enable_piecewise_merge_join;
 
 statement ok
-SET datafusion.execution.target_partitions = 4;
+CREATE TABLE list_left AS
+SELECT id, CASE WHEN id = 0 THEN NULL ELSE make_array(v) END AS k
+FROM (SELECT value AS id, CASE WHEN value < 2 THEN NULL WHEN value = 2 THEN 1 WHEN value < 5 THEN 5 ELSE 7 END AS v FROM range(0, 6)) AS t;
+
+statement ok
+CREATE TABLE list_right AS
+SELECT id, CASE WHEN id = 0 THEN NULL ELSE make_array(v) END AS k
+FROM (SELECT value AS id, CASE WHEN value < 2 THEN NULL WHEN value = 2 THEN 1 WHEN value < 5 THEN 5 ELSE 7 END AS v FROM range(0, 6)) AS t;
+
+# list keys, <: compare all join variants with NestedLoopJoin.
+statement ok
+SET datafusion.optimizer.enable_piecewise_merge_join = false;
+
+statement ok
+CREATE VIEW case_list_lt AS
+SELECT 'INNER' AS kind, l.id AS l_id, r.id AS r_id FROM list_left l INNER JOIN list_right r ON l.k < r.k
+UNION ALL
+SELECT 'LEFT' AS kind, l.id AS l_id, r.id AS r_id FROM list_left l LEFT JOIN list_right r ON l.k < r.k
+UNION ALL
+SELECT 'RIGHT' AS kind, l.id AS l_id, r.id AS r_id FROM list_left l RIGHT JOIN list_right r ON l.k < r.k
+UNION ALL
+SELECT 'FULL' AS kind, l.id AS l_id, r.id AS r_id FROM list_left l FULL JOIN list_right r ON l.k < r.k
+UNION ALL
+SELECT 'LEFT SEMI' AS kind, l.id AS l_id, NULL AS r_id FROM list_left l LEFT SEMI JOIN list_right r ON l.k < r.k
+UNION ALL
+SELECT 'LEFT ANTI' AS kind, l.id AS l_id, NULL AS r_id FROM list_left l LEFT ANTI JOIN list_right r ON l.k < r.k
+UNION ALL
+SELECT 'RIGHT SEMI' AS kind, NULL AS l_id, r.id AS r_id FROM list_left l RIGHT SEMI JOIN list_right r ON l.k < r.k
+UNION ALL
+SELECT 'RIGHT ANTI' AS kind, NULL AS l_id, r.id AS r_id FROM list_left l RIGHT ANTI JOIN list_right r ON l.k < r.k
+UNION ALL
+SELECT 'MARK' AS kind, l.id AS l_id, CAST(EXISTS (SELECT 1 FROM list_right r WHERE l.k < r.k) OR l.id = -1 AS INT) AS r_id FROM list_left l;
+
+statement ok
+CREATE TABLE ref_list_lt AS SELECT * FROM case_list_lt;
+
+statement ok
+SET datafusion.optimizer.enable_piecewise_merge_join = true;
+
+query I
+WITH actual AS (SELECT * FROM case_list_lt), differences AS (
+(SELECT * FROM actual EXCEPT ALL SELECT * FROM ref_list_lt)
+UNION ALL
+(SELECT * FROM ref_list_lt EXCEPT ALL SELECT * FROM actual)
+)
+SELECT COUNT(*) FROM differences;
+----
+0
+
+# list keys, <=: compare all join variants with NestedLoopJoin.
+statement ok
+SET datafusion.optimizer.enable_piecewise_merge_join = false;
+
+statement ok
+CREATE VIEW case_list_le AS
+SELECT 'INNER' AS kind, l.id AS l_id, r.id AS r_id FROM list_left l INNER JOIN list_right r ON l.k <= r.k
+UNION ALL
+SELECT 'LEFT' AS kind, l.id AS l_id, r.id AS r_id FROM list_left l LEFT JOIN list_right r ON l.k <= r.k
+UNION ALL
+SELECT 'RIGHT' AS kind, l.id AS l_id, r.id AS r_id FROM list_left l RIGHT JOIN list_right r ON l.k <= r.k
+UNION ALL
+SELECT 'FULL' AS kind, l.id AS l_id, r.id AS r_id FROM list_left l FULL JOIN list_right r ON l.k <= r.k
+UNION ALL
+SELECT 'LEFT SEMI' AS kind, l.id AS l_id, NULL AS r_id FROM list_left l LEFT SEMI JOIN list_right r ON l.k <= r.k
+UNION ALL
+SELECT 'LEFT ANTI' AS kind, l.id AS l_id, NULL AS r_id FROM list_left l LEFT ANTI JOIN list_right r ON l.k <= r.k
+UNION ALL
+SELECT 'RIGHT SEMI' AS kind, NULL AS l_id, r.id AS r_id FROM list_left l RIGHT SEMI JOIN list_right r ON l.k <= r.k
+UNION ALL
+SELECT 'RIGHT ANTI' AS kind, NULL AS l_id, r.id AS r_id FROM list_left l RIGHT ANTI JOIN list_right r ON l.k <= r.k
+UNION ALL
+SELECT 'MARK' AS kind, l.id AS l_id, CAST(EXISTS (SELECT 1 FROM list_right r WHERE l.k <= r.k) OR l.id = -1 AS INT) AS r_id FROM list_left l;
+
+statement ok
+CREATE TABLE ref_list_le AS SELECT * FROM case_list_le;
+
+statement ok
+SET datafusion.optimizer.enable_piecewise_merge_join = true;
+
+query I
+WITH actual AS (SELECT * FROM case_list_le), differences AS (
+(SELECT * FROM actual EXCEPT ALL SELECT * FROM ref_list_le)
+UNION ALL
+(SELECT * FROM ref_list_le EXCEPT ALL SELECT * FROM actual)
+)
+SELECT COUNT(*) FROM differences;
+----
+0
+
+# list keys, >: compare all join variants with NestedLoopJoin.
+statement ok
+SET datafusion.optimizer.enable_piecewise_merge_join = false;
+
+statement ok
+CREATE VIEW case_list_gt AS
+SELECT 'INNER' AS kind, l.id AS l_id, r.id AS r_id FROM list_left l INNER JOIN list_right r ON l.k > r.k
+UNION ALL
+SELECT 'LEFT' AS kind, l.id AS l_id, r.id AS r_id FROM list_left l LEFT JOIN list_right r ON l.k > r.k
+UNION ALL
+SELECT 'RIGHT' AS kind, l.id AS l_id, r.id AS r_id FROM list_left l RIGHT JOIN list_right r ON l.k > r.k
+UNION ALL
+SELECT 'FULL' AS kind, l.id AS l_id, r.id AS r_id FROM list_left l FULL JOIN list_right r ON l.k > r.k
+UNION ALL
+SELECT 'LEFT SEMI' AS kind, l.id AS l_id, NULL AS r_id FROM list_left l LEFT SEMI JOIN list_right r ON l.k > r.k
+UNION ALL
+SELECT 'LEFT ANTI' AS kind, l.id AS l_id, NULL AS r_id FROM list_left l LEFT ANTI JOIN list_right r ON l.k > r.k
+UNION ALL
+SELECT 'RIGHT SEMI' AS kind, NULL AS l_id, r.id AS r_id FROM list_left l RIGHT SEMI JOIN list_right r ON l.k > r.k
+UNION ALL
+SELECT 'RIGHT ANTI' AS kind, NULL AS l_id, r.id AS r_id FROM list_left l RIGHT ANTI JOIN list_right r ON l.k > r.k
+UNION ALL
+SELECT 'MARK' AS kind, l.id AS l_id, CAST(EXISTS (SELECT 1 FROM list_right r WHERE l.k > r.k) OR l.id = -1 AS INT) AS r_id FROM list_left l;
+
+statement ok
+CREATE TABLE ref_list_gt AS SELECT * FROM case_list_gt;
+
+statement ok
+SET datafusion.optimizer.enable_piecewise_merge_join = true;
+
+query I
+WITH actual AS (SELECT * FROM case_list_gt), differences AS (
+(SELECT * FROM actual EXCEPT ALL SELECT * FROM ref_list_gt)
+UNION ALL
+(SELECT * FROM ref_list_gt EXCEPT ALL SELECT * FROM actual)
+)
+SELECT COUNT(*) FROM differences;
+----
+0
+
+# list keys, >=: compare all join variants with NestedLoopJoin.
+statement ok
+SET datafusion.optimizer.enable_piecewise_merge_join = false;
+
+statement ok
+CREATE VIEW case_list_ge AS
+SELECT 'INNER' AS kind, l.id AS l_id, r.id AS r_id FROM list_left l INNER JOIN list_right r ON l.k >= r.k
+UNION ALL
+SELECT 'LEFT' AS kind, l.id AS l_id, r.id AS r_id FROM list_left l LEFT JOIN list_right r ON l.k >= r.k
+UNION ALL
+SELECT 'RIGHT' AS kind, l.id AS l_id, r.id AS r_id FROM list_left l RIGHT JOIN list_right r ON l.k >= r.k
+UNION ALL
+SELECT 'FULL' AS kind, l.id AS l_id, r.id AS r_id FROM list_left l FULL JOIN list_right r ON l.k >= r.k
+UNION ALL
+SELECT 'LEFT SEMI' AS kind, l.id AS l_id, NULL AS r_id FROM list_left l LEFT SEMI JOIN list_right r ON l.k >= r.k
+UNION ALL
+SELECT 'LEFT ANTI' AS kind, l.id AS l_id, NULL AS r_id FROM list_left l LEFT ANTI JOIN list_right r ON l.k >= r.k
+UNION ALL
+SELECT 'RIGHT SEMI' AS kind, NULL AS l_id, r.id AS r_id FROM list_left l RIGHT SEMI JOIN list_right r ON l.k >= r.k
+UNION ALL
+SELECT 'RIGHT ANTI' AS kind, NULL AS l_id, r.id AS r_id FROM list_left l RIGHT ANTI JOIN list_right r ON l.k >= r.k
+UNION ALL
+SELECT 'MARK' AS kind, l.id AS l_id, CAST(EXISTS (SELECT 1 FROM list_right r WHERE l.k >= r.k) OR l.id = -1 AS INT) AS r_id FROM list_left l;
+
+statement ok
+CREATE TABLE ref_list_ge AS SELECT * FROM case_list_ge;
+
+statement ok
+SET datafusion.optimizer.enable_piecewise_merge_join = true;
+
+query I
+WITH actual AS (SELECT * FROM case_list_ge), differences AS (
+(SELECT * FROM actual EXCEPT ALL SELECT * FROM ref_list_ge)
+UNION ALL
+(SELECT * FROM ref_list_ge EXCEPT ALL SELECT * FROM actual)
+)
+SELECT COUNT(*) FROM differences;
+----
+0
+
+statement ok
+CREATE TABLE struct_left AS
+SELECT id, CASE WHEN id = 0 THEN NULL ELSE named_struct('x', v) END AS k
+FROM (SELECT value AS id, CASE WHEN value < 2 THEN NULL WHEN value = 2 THEN 1 WHEN value < 5 THEN 5 ELSE 7 END AS v FROM range(0, 6)) AS t;
+
+statement ok
+CREATE TABLE struct_right AS
+SELECT id, CASE WHEN id = 0 THEN NULL ELSE named_struct('x', v) END AS k
+FROM (SELECT value AS id, CASE WHEN value < 2 THEN NULL WHEN value = 2 THEN 1 WHEN value < 5 THEN 5 ELSE 7 END AS v FROM range(0, 6)) AS t;
+
+# struct keys, <: compare all join variants with NestedLoopJoin.
+statement ok
+SET datafusion.optimizer.enable_piecewise_merge_join = false;
+
+statement ok
+CREATE VIEW case_struct_lt AS
+SELECT 'INNER' AS kind, l.id AS l_id, r.id AS r_id FROM struct_left l INNER JOIN struct_right r ON l.k < r.k
+UNION ALL
+SELECT 'LEFT' AS kind, l.id AS l_id, r.id AS r_id FROM struct_left l LEFT JOIN struct_right r ON l.k < r.k
+UNION ALL
+SELECT 'RIGHT' AS kind, l.id AS l_id, r.id AS r_id FROM struct_left l RIGHT JOIN struct_right r ON l.k < r.k
+UNION ALL
+SELECT 'FULL' AS kind, l.id AS l_id, r.id AS r_id FROM struct_left l FULL JOIN struct_right r ON l.k < r.k
+UNION ALL
+SELECT 'LEFT SEMI' AS kind, l.id AS l_id, NULL AS r_id FROM struct_left l LEFT SEMI JOIN struct_right r ON l.k < r.k
+UNION ALL
+SELECT 'LEFT ANTI' AS kind, l.id AS l_id, NULL AS r_id FROM struct_left l LEFT ANTI JOIN struct_right r ON l.k < r.k
+UNION ALL
+SELECT 'RIGHT SEMI' AS kind, NULL AS l_id, r.id AS r_id FROM struct_left l RIGHT SEMI JOIN struct_right r ON l.k < r.k
+UNION ALL
+SELECT 'RIGHT ANTI' AS kind, NULL AS l_id, r.id AS r_id FROM struct_left l RIGHT ANTI JOIN struct_right r ON l.k < r.k
+UNION ALL
+SELECT 'MARK' AS kind, l.id AS l_id, CAST(EXISTS (SELECT 1 FROM struct_right r WHERE l.k < r.k) OR l.id = -1 AS INT) AS r_id FROM struct_left l;
+
+statement ok
+CREATE TABLE ref_struct_lt AS SELECT * FROM case_struct_lt;
+
+statement ok
+SET datafusion.optimizer.enable_piecewise_merge_join = true;
+
+query I
+WITH actual AS (SELECT * FROM case_struct_lt), differences AS (
+(SELECT * FROM actual EXCEPT ALL SELECT * FROM ref_struct_lt)
+UNION ALL
+(SELECT * FROM ref_struct_lt EXCEPT ALL SELECT * FROM actual)
+)
+SELECT COUNT(*) FROM differences;
+----
+0
+
+# struct keys, <=: compare all join variants with NestedLoopJoin.
+statement ok
+SET datafusion.optimizer.enable_piecewise_merge_join = false;
+
+statement ok
+CREATE VIEW case_struct_le AS
+SELECT 'INNER' AS kind, l.id AS l_id, r.id AS r_id FROM struct_left l INNER JOIN struct_right r ON l.k <= r.k
+UNION ALL
+SELECT 'LEFT' AS kind, l.id AS l_id, r.id AS r_id FROM struct_left l LEFT JOIN struct_right r ON l.k <= r.k
+UNION ALL
+SELECT 'RIGHT' AS kind, l.id AS l_id, r.id AS r_id FROM struct_left l RIGHT JOIN struct_right r ON l.k <= r.k
+UNION ALL
+SELECT 'FULL' AS kind, l.id AS l_id, r.id AS r_id FROM struct_left l FULL JOIN struct_right r ON l.k <= r.k
+UNION ALL
+SELECT 'LEFT SEMI' AS kind, l.id AS l_id, NULL AS r_id FROM struct_left l LEFT SEMI JOIN struct_right r ON l.k <= r.k
+UNION ALL
+SELECT 'LEFT ANTI' AS kind, l.id AS l_id, NULL AS r_id FROM struct_left l LEFT ANTI JOIN struct_right r ON l.k <= r.k
+UNION ALL
+SELECT 'RIGHT SEMI' AS kind, NULL AS l_id, r.id AS r_id FROM struct_left l RIGHT SEMI JOIN struct_right r ON l.k <= r.k
+UNION ALL
+SELECT 'RIGHT ANTI' AS kind, NULL AS l_id, r.id AS r_id FROM struct_left l RIGHT ANTI JOIN struct_right r ON l.k <= r.k
+UNION ALL
+SELECT 'MARK' AS kind, l.id AS l_id, CAST(EXISTS (SELECT 1 FROM struct_right r WHERE l.k <= r.k) OR l.id = -1 AS INT) AS r_id FROM struct_left l;
+
+statement ok
+CREATE TABLE ref_struct_le AS SELECT * FROM case_struct_le;
+
+statement ok
+SET datafusion.optimizer.enable_piecewise_merge_join = true;
+
+query I
+WITH actual AS (SELECT * FROM case_struct_le), differences AS (
+(SELECT * FROM actual EXCEPT ALL SELECT * FROM ref_struct_le)
+UNION ALL
+(SELECT * FROM ref_struct_le EXCEPT ALL SELECT * FROM actual)
+)
+SELECT COUNT(*) FROM differences;
+----
+0
+
+# struct keys, >: compare all join variants with NestedLoopJoin.
+statement ok
+SET datafusion.optimizer.enable_piecewise_merge_join = false;
+
+statement ok
+CREATE VIEW case_struct_gt AS
+SELECT 'INNER' AS kind, l.id AS l_id, r.id AS r_id FROM struct_left l INNER JOIN struct_right r ON l.k > r.k
+UNION ALL
+SELECT 'LEFT' AS kind, l.id AS l_id, r.id AS r_id FROM struct_left l LEFT JOIN struct_right r ON l.k > r.k
+UNION ALL
+SELECT 'RIGHT' AS kind, l.id AS l_id, r.id AS r_id FROM struct_left l RIGHT JOIN struct_right r ON l.k > r.k
+UNION ALL
+SELECT 'FULL' AS kind, l.id AS l_id, r.id AS r_id FROM struct_left l FULL JOIN struct_right r ON l.k > r.k
+UNION ALL
+SELECT 'LEFT SEMI' AS kind, l.id AS l_id, NULL AS r_id FROM struct_left l LEFT SEMI JOIN struct_right r ON l.k > r.k
+UNION ALL
+SELECT 'LEFT ANTI' AS kind, l.id AS l_id, NULL AS r_id FROM struct_left l LEFT ANTI JOIN struct_right r ON l.k > r.k
+UNION ALL
+SELECT 'RIGHT SEMI' AS kind, NULL AS l_id, r.id AS r_id FROM struct_left l RIGHT SEMI JOIN struct_right r ON l.k > r.k
+UNION ALL
+SELECT 'RIGHT ANTI' AS kind, NULL AS l_id, r.id AS r_id FROM struct_left l RIGHT ANTI JOIN struct_right r ON l.k > r.k
+UNION ALL
+SELECT 'MARK' AS kind, l.id AS l_id, CAST(EXISTS (SELECT 1 FROM struct_right r WHERE l.k > r.k) OR l.id = -1 AS INT) AS r_id FROM struct_left l;
+
+statement ok
+CREATE TABLE ref_struct_gt AS SELECT * FROM case_struct_gt;
+
+statement ok
+SET datafusion.optimizer.enable_piecewise_merge_join = true;
+
+query I
+WITH actual AS (SELECT * FROM case_struct_gt), differences AS (
+(SELECT * FROM actual EXCEPT ALL SELECT * FROM ref_struct_gt)
+UNION ALL
+(SELECT * FROM ref_struct_gt EXCEPT ALL SELECT * FROM actual)
+)
+SELECT COUNT(*) FROM differences;
+----
+0
+
+# struct keys, >=: compare all join variants with NestedLoopJoin.
+statement ok
+SET datafusion.optimizer.enable_piecewise_merge_join = false;
+
+statement ok
+CREATE VIEW case_struct_ge AS
+SELECT 'INNER' AS kind, l.id AS l_id, r.id AS r_id FROM struct_left l INNER JOIN struct_right r ON l.k >= r.k
+UNION ALL
+SELECT 'LEFT' AS kind, l.id AS l_id, r.id AS r_id FROM struct_left l LEFT JOIN struct_right r ON l.k >= r.k
+UNION ALL
+SELECT 'RIGHT' AS kind, l.id AS l_id, r.id AS r_id FROM struct_left l RIGHT JOIN struct_right r ON l.k >= r.k
+UNION ALL
+SELECT 'FULL' AS kind, l.id AS l_id, r.id AS r_id FROM struct_left l FULL JOIN struct_right r ON l.k >= r.k
+UNION ALL
+SELECT 'LEFT SEMI' AS kind, l.id AS l_id, NULL AS r_id FROM struct_left l LEFT SEMI JOIN struct_right r ON l.k >= r.k
+UNION ALL
+SELECT 'LEFT ANTI' AS kind, l.id AS l_id, NULL AS r_id FROM struct_left l LEFT ANTI JOIN struct_right r ON l.k >= r.k
+UNION ALL
+SELECT 'RIGHT SEMI' AS kind, NULL AS l_id, r.id AS r_id FROM struct_left l RIGHT SEMI JOIN struct_right r ON l.k >= r.k
+UNION ALL
+SELECT 'RIGHT ANTI' AS kind, NULL AS l_id, r.id AS r_id FROM struct_left l RIGHT ANTI JOIN struct_right r ON l.k >= r.k
+UNION ALL
+SELECT 'MARK' AS kind, l.id AS l_id, CAST(EXISTS (SELECT 1 FROM struct_right r WHERE l.k >= r.k) OR l.id = -1 AS INT) AS r_id FROM struct_left l;
+
+statement ok
+CREATE TABLE ref_struct_ge AS SELECT * FROM case_struct_ge;
+
+statement ok
+SET datafusion.optimizer.enable_piecewise_merge_join = true;
+
+query I
+WITH actual AS (SELECT * FROM case_struct_ge), differences AS (
+(SELECT * FROM actual EXCEPT ALL SELECT * FROM ref_struct_ge)
+UNION ALL
+(SELECT * FROM ref_struct_ge EXCEPT ALL SELECT * FROM actual)
+)
+SELECT COUNT(*) FROM differences;
+----
+0
+
+statement ok
+CREATE TABLE nested_left AS
+SELECT id, CASE WHEN id = 0 THEN NULL ELSE make_array(make_array(v)) END AS k
+FROM (SELECT value AS id, CASE WHEN value < 2 THEN NULL WHEN value = 2 THEN 1 WHEN value < 5 THEN 5 ELSE 7 END AS v FROM range(0, 6)) AS t;
+
+statement ok
+CREATE TABLE nested_right AS
+SELECT id, CASE WHEN id = 0 THEN NULL ELSE make_array(make_array(v)) END AS k
+FROM (SELECT value AS id, CASE WHEN value < 2 THEN NULL WHEN value = 2 THEN 1 WHEN value < 5 THEN 5 ELSE 7 END AS v FROM range(0, 6)) AS t;
+
+# nested keys, <: compare all join variants with NestedLoopJoin.
+statement ok
+SET datafusion.optimizer.enable_piecewise_merge_join = false;
+
+statement ok
+CREATE VIEW case_nested_lt AS
+SELECT 'INNER' AS kind, l.id AS l_id, r.id AS r_id FROM nested_left l INNER JOIN nested_right r ON l.k < r.k
+UNION ALL
+SELECT 'LEFT' AS kind, l.id AS l_id, r.id AS r_id FROM nested_left l LEFT JOIN nested_right r ON l.k < r.k
+UNION ALL
+SELECT 'RIGHT' AS kind, l.id AS l_id, r.id AS r_id FROM nested_left l RIGHT JOIN nested_right r ON l.k < r.k
+UNION ALL
+SELECT 'FULL' AS kind, l.id AS l_id, r.id AS r_id FROM nested_left l FULL JOIN nested_right r ON l.k < r.k
+UNION ALL
+SELECT 'LEFT SEMI' AS kind, l.id AS l_id, NULL AS r_id FROM nested_left l LEFT SEMI JOIN nested_right r ON l.k < r.k
+UNION ALL
+SELECT 'LEFT ANTI' AS kind, l.id AS l_id, NULL AS r_id FROM nested_left l LEFT ANTI JOIN nested_right r ON l.k < r.k
+UNION ALL
+SELECT 'RIGHT SEMI' AS kind, NULL AS l_id, r.id AS r_id FROM nested_left l RIGHT SEMI JOIN nested_right r ON l.k < r.k
+UNION ALL
+SELECT 'RIGHT ANTI' AS kind, NULL AS l_id, r.id AS r_id FROM nested_left l RIGHT ANTI JOIN nested_right r ON l.k < r.k
+UNION ALL
+SELECT 'MARK' AS kind, l.id AS l_id, CAST(EXISTS (SELECT 1 FROM nested_right r WHERE l.k < r.k) OR l.id = -1 AS INT) AS r_id FROM nested_left l;
+
+statement ok
+CREATE TABLE ref_nested_lt AS SELECT * FROM case_nested_lt;
+
+statement ok
+SET datafusion.optimizer.enable_piecewise_merge_join = true;
+
+query I
+WITH actual AS (SELECT * FROM case_nested_lt), differences AS (
+(SELECT * FROM actual EXCEPT ALL SELECT * FROM ref_nested_lt)
+UNION ALL
+(SELECT * FROM ref_nested_lt EXCEPT ALL SELECT * FROM actual)
+)
+SELECT COUNT(*) FROM differences;
+----
+0
+
+# nested keys, <=: compare all join variants with NestedLoopJoin.
+statement ok
+SET datafusion.optimizer.enable_piecewise_merge_join = false;
+
+statement ok
+CREATE VIEW case_nested_le AS
+SELECT 'INNER' AS kind, l.id AS l_id, r.id AS r_id FROM nested_left l INNER JOIN nested_right r ON l.k <= r.k
+UNION ALL
+SELECT 'LEFT' AS kind, l.id AS l_id, r.id AS r_id FROM nested_left l LEFT JOIN nested_right r ON l.k <= r.k
+UNION ALL
+SELECT 'RIGHT' AS kind, l.id AS l_id, r.id AS r_id FROM nested_left l RIGHT JOIN nested_right r ON l.k <= r.k
+UNION ALL
+SELECT 'FULL' AS kind, l.id AS l_id, r.id AS r_id FROM nested_left l FULL JOIN nested_right r ON l.k <= r.k
+UNION ALL
+SELECT 'LEFT SEMI' AS kind, l.id AS l_id, NULL AS r_id FROM nested_left l LEFT SEMI JOIN nested_right r ON l.k <= r.k
+UNION ALL
+SELECT 'LEFT ANTI' AS kind, l.id AS l_id, NULL AS r_id FROM nested_left l LEFT ANTI JOIN nested_right r ON l.k <= r.k
+UNION ALL
+SELECT 'RIGHT SEMI' AS kind, NULL AS l_id, r.id AS r_id FROM nested_left l RIGHT SEMI JOIN nested_right r ON l.k <= r.k
+UNION ALL
+SELECT 'RIGHT ANTI' AS kind, NULL AS l_id, r.id AS r_id FROM nested_left l RIGHT ANTI JOIN nested_right r ON l.k <= r.k
+UNION ALL
+SELECT 'MARK' AS kind, l.id AS l_id, CAST(EXISTS (SELECT 1 FROM nested_right r WHERE l.k <= r.k) OR l.id = -1 AS INT) AS r_id FROM nested_left l;
+
+statement ok
+CREATE TABLE ref_nested_le AS SELECT * FROM case_nested_le;
+
+statement ok
+SET datafusion.optimizer.enable_piecewise_merge_join = true;
+
+query I
+WITH actual AS (SELECT * FROM case_nested_le), differences AS (
+(SELECT * FROM actual EXCEPT ALL SELECT * FROM ref_nested_le)
+UNION ALL
+(SELECT * FROM ref_nested_le EXCEPT ALL SELECT * FROM actual)
+)
+SELECT COUNT(*) FROM differences;
+----
+0
+
+# nested keys, >: compare all join variants with NestedLoopJoin.
+statement ok
+SET datafusion.optimizer.enable_piecewise_merge_join = false;
+
+statement ok
+CREATE VIEW case_nested_gt AS
+SELECT 'INNER' AS kind, l.id AS l_id, r.id AS r_id FROM nested_left l INNER JOIN nested_right r ON l.k > r.k
+UNION ALL
+SELECT 'LEFT' AS kind, l.id AS l_id, r.id AS r_id FROM nested_left l LEFT JOIN nested_right r ON l.k > r.k
+UNION ALL
+SELECT 'RIGHT' AS kind, l.id AS l_id, r.id AS r_id FROM nested_left l RIGHT JOIN nested_right r ON l.k > r.k
+UNION ALL
+SELECT 'FULL' AS kind, l.id AS l_id, r.id AS r_id FROM nested_left l FULL JOIN nested_right r ON l.k > r.k
+UNION ALL
+SELECT 'LEFT SEMI' AS kind, l.id AS l_id, NULL AS r_id FROM nested_left l LEFT SEMI JOIN nested_right r ON l.k > r.k
+UNION ALL
+SELECT 'LEFT ANTI' AS kind, l.id AS l_id, NULL AS r_id FROM nested_left l LEFT ANTI JOIN nested_right r ON l.k > r.k
+UNION ALL
+SELECT 'RIGHT SEMI' AS kind, NULL AS l_id, r.id AS r_id FROM nested_left l RIGHT SEMI JOIN nested_right r ON l.k > r.k
+UNION ALL
+SELECT 'RIGHT ANTI' AS kind, NULL AS l_id, r.id AS r_id FROM nested_left l RIGHT ANTI JOIN nested_right r ON l.k > r.k
+UNION ALL
+SELECT 'MARK' AS kind, l.id AS l_id, CAST(EXISTS (SELECT 1 FROM nested_right r WHERE l.k > r.k) OR l.id = -1 AS INT) AS r_id FROM nested_left l;
+
+statement ok
+CREATE TABLE ref_nested_gt AS SELECT * FROM case_nested_gt;
+
+statement ok
+SET datafusion.optimizer.enable_piecewise_merge_join = true;
+
+query I
+WITH actual AS (SELECT * FROM case_nested_gt), differences AS (
+(SELECT * FROM actual EXCEPT ALL SELECT * FROM ref_nested_gt)
+UNION ALL
+(SELECT * FROM ref_nested_gt EXCEPT ALL SELECT * FROM actual)
+)
+SELECT COUNT(*) FROM differences;
+----
+0
+
+# nested keys, >=: compare all join variants with NestedLoopJoin.
+statement ok
+SET datafusion.optimizer.enable_piecewise_merge_join = false;
+
+statement ok
+CREATE VIEW case_nested_ge AS
+SELECT 'INNER' AS kind, l.id AS l_id, r.id AS r_id FROM nested_left l INNER JOIN nested_right r ON l.k >= r.k
+UNION ALL
+SELECT 'LEFT' AS kind, l.id AS l_id, r.id AS r_id FROM nested_left l LEFT JOIN nested_right r ON l.k >= r.k
+UNION ALL
+SELECT 'RIGHT' AS kind, l.id AS l_id, r.id AS r_id FROM nested_left l RIGHT JOIN nested_right r ON l.k >= r.k
+UNION ALL
+SELECT 'FULL' AS kind, l.id AS l_id, r.id AS r_id FROM nested_left l FULL JOIN nested_right r ON l.k >= r.k
+UNION ALL
+SELECT 'LEFT SEMI' AS kind, l.id AS l_id, NULL AS r_id FROM nested_left l LEFT SEMI JOIN nested_right r ON l.k >= r.k
+UNION ALL
+SELECT 'LEFT ANTI' AS kind, l.id AS l_id, NULL AS r_id FROM nested_left l LEFT ANTI JOIN nested_right r ON l.k >= r.k
+UNION ALL
+SELECT 'RIGHT SEMI' AS kind, NULL AS l_id, r.id AS r_id FROM nested_left l RIGHT SEMI JOIN nested_right r ON l.k >= r.k
+UNION ALL
+SELECT 'RIGHT ANTI' AS kind, NULL AS l_id, r.id AS r_id FROM nested_left l RIGHT ANTI JOIN nested_right r ON l.k >= r.k
+UNION ALL
+SELECT 'MARK' AS kind, l.id AS l_id, CAST(EXISTS (SELECT 1 FROM nested_right r WHERE l.k >= r.k) OR l.id = -1 AS INT) AS r_id FROM nested_left l;
+
+statement ok
+CREATE TABLE ref_nested_ge AS SELECT * FROM case_nested_ge;
+
+statement ok
+SET datafusion.optimizer.enable_piecewise_merge_join = true;
+
+query I
+WITH actual AS (SELECT * FROM case_nested_ge), differences AS (
+(SELECT * FROM actual EXCEPT ALL SELECT * FROM ref_nested_ge)
+UNION ALL
+(SELECT * FROM ref_nested_ge EXCEPT ALL SELECT * FROM actual)
+)
+SELECT COUNT(*) FROM differences;
+----
+0
+
+statement ok
+RESET datafusion.optimizer.enable_piecewise_merge_join;
