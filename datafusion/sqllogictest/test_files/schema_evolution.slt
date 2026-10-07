@@ -282,3 +282,39 @@ query TIR rowsort
 select * from parquet_table where b = 100 AND c = 10.5;
 ----
 foo 100 10.5
+
+##########
+# Inferred schema: a column that some files lack must be nullable, because
+# reading those files yields nulls for it, even when every file that has the
+# column declares it required.
+##########
+
+statement ok
+COPY (SELECT 1 AS id, 10 AS c)
+TO 'test_files/scratch/schema_evolution/inferred_partial/a.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY (SELECT 2 AS id)
+TO 'test_files/scratch/schema_evolution/inferred_partial/b.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE inferred_partial STORED AS PARQUET
+LOCATION 'test_files/scratch/schema_evolution/inferred_partial/';
+
+# `id` is in every file and stays required; `c` is missing from b.parquet.
+query TTT
+DESCRIBE inferred_partial;
+----
+id Int64 NO
+c Int64 YES
+
+query II rowsort
+SELECT id, c FROM inferred_partial;
+----
+1 10
+2 NULL
+
+statement ok
+DROP TABLE inferred_partial;
