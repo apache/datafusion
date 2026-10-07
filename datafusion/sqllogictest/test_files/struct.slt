@@ -727,6 +727,22 @@ select get_field(s, 'inner', 'val') from nested_test;
 ----
 100
 
+# Snowflake-style colon access uses the structured JSON path before it is serialized.
+query III
+select
+  s:inner.val as unquoted,
+  s:"inner"."val" as quoted,
+  s:['inner']['val'] as bracketed
+from nested_test;
+----
+100 100 100
+
+# Quoted dots are part of the field name, not path separators.
+query I
+select named_struct('inner.val', 200):"inner.val";
+----
+200
+
 statement ok
 drop table nested_test;
 
@@ -1872,3 +1888,21 @@ select a, s['b'] from (select -a as a, s from leaf_same_name order by a);
 
 statement ok
 drop table leaf_same_name;
+
+# GROUP BY / DISTINCT over a zero-field struct key must not panic on emit
+query ?I
+select arrow_cast(null, 'Struct()') as s, count(*) from (values (1),(2),(3)) group by 1;
+----
+NULL 3
+
+query ?
+select distinct arrow_cast(null, 'Struct()') as s from (values (1),(2));
+----
+NULL
+
+query ?I rowsort
+select named_struct('a', column1, 'z', arrow_cast(null, 'Struct()')) as s, count(*)
+from (values (1),(2),(1)) group by 1;
+----
+{a: 1, z: NULL} 2
+{a: 2, z: NULL} 1

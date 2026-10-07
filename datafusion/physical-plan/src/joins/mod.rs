@@ -65,6 +65,7 @@ mod join_filter;
 /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
 #[doc(hidden)]
 pub mod join_hash_map;
+pub mod key_range_bitmap;
 
 use array_map::ArrayMap;
 use utils::JoinHashMapType;
