@@ -16,6 +16,7 @@
 // under the License.
 
 use arrow::array::{Array, ArrowNativeTypeOp, ArrowPrimitiveType, PrimitiveArray};
+use arrow::buffer::BooleanBuffer;
 use arrow::error::ArrowError;
 use datafusion_common::{Result, exec_err};
 use num_traits::{CheckedMul, CheckedNeg, Signed};
@@ -159,7 +160,7 @@ pub(crate) fn lcm_signed_int(x: i64, y: i64) -> Result<i64, ArrowError> {
 /// vectorizing its loop. Instead, this applies `op` to every value in `array`,
 /// like `unary`, and calls `input_error` on every value, including those in
 /// null slots, in the same loop. Only if some value fails is the array searched
-/// again, skipping null slots, for an error to report. `input_error` should
+/// again, ignoring null slots, for an error to report. `input_error` should
 /// therefore be a cheap check, such as a comparison.
 ///
 /// For cheap functions like `sqrt`, this is several times faster than
@@ -182,9 +183,19 @@ pub(crate) fn unary_with_input_check<T: ArrowPrimitiveType>(
         .collect();
 
     // The check above also ran on null slots, which can hold any value, so the
-    // failure may be spurious. Re-check just the non-null values.
-    if any_invalid && let Some(message) = array.iter().flatten().find_map(input_error) {
-        return exec_err!("{message}");
+    // failure may be spurious. Re-check every value into a bitmap and mask out
+    // the null slots, which is faster than checking only the non-null values one
+    // at a time.
+    if any_invalid {
+        let input = array.values();
+        let mut failed =
+            BooleanBuffer::collect_bool(input.len(), |i| input_error(input[i]).is_some());
+        if let Some(nulls) = array.nulls() {
+            failed = &failed & nulls.inner();
+        }
+        if let Some(message) = failed.set_indices().find_map(|i| input_error(input[i])) {
+            return exec_err!("{message}");
+        }
     }
 
     Ok(PrimitiveArray::new(values.into(), array.nulls().cloned()))
