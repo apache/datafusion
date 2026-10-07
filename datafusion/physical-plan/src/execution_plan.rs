@@ -233,6 +233,10 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// DataFusion uses this metadata to apply certain optimizations
     /// such as automatically repartitioning correctly.
     ///
+    /// This describes row sequence, not how input expressions map to outputs.
+    /// Custom nodes that support sort pushdown should implement
+    /// [`Self::try_pushdown_sort`]; returning `true` here alone does not opt in.
+    ///
     /// The default implementation returns `false`
     ///
     /// WARNING: if you override this default, you *MUST* ensure that
@@ -983,8 +987,16 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// - Return [`SortOrderPushdownResult::Unsupported`] if the node cannot optimize
     ///   for the ordering
     ///
-    /// For transparent nodes (that preserve ordering), implement this to delegate to
-    /// children and wrap the result with a new instance of this node.
+    /// Custom nodes opt into sort pushdown by implementing this method. Requested
+    /// expressions refer to this node's output schema; map them to input
+    /// expressions before delegating to a child. Decline pushdown when a correct
+    /// mapping is unavailable.
+    ///
+    /// Nodes that preserve the full input row sequence and column values can
+    /// delegate to their child and wrap the returned plan in a new instance of
+    /// the node. Delegation relies on the child supporting this method. If the
+    /// child returns [`SortOrderPushdownResult::Unsupported`], delegation alone
+    /// does not insert or move sorts to satisfy the requested ordering.
     ///
     /// Default implementation returns `Unsupported`.
     fn try_pushdown_sort(
