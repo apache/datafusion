@@ -248,6 +248,7 @@ impl From<Column> for protobuf::Column {
         Self {
             relation: c.relation.map(|relation| protobuf::ColumnRelation {
                 relation: relation.to_string(),
+                parts: relation.to_vec(),
             }),
             name: c.name,
         }
@@ -293,6 +294,7 @@ impl TryFrom<&DFSchema> for protobuf::DfSchema {
                     field: Some(field.as_ref().try_into()?),
                     qualifier: qualifier.map(|r| protobuf::ColumnRelation {
                         relation: r.to_string(),
+                        parts: r.to_vec(),
                     }),
                 })
             })
@@ -969,6 +971,7 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             max_predicate_cache_size_opt: value.max_predicate_cache_size.map(|v| protobuf::parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v as u64)),
             max_row_group_bytes_opt: value.max_row_group_bytes.map(|v| protobuf::parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(v.get() as u64)),
             content_defined_chunking: Some((&value.content_defined_chunking).into()),
+            enable_rle_to_dictionary: value.enable_rle_to_dictionary,
         })
     }
 }

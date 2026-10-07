@@ -37,10 +37,10 @@ use datafusion_common::{
 use datafusion_expr::expr::{
     self, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Exists,
     HigherOrderFunction, InList, InSubquery, Like, ScalarFunction, SetComparison, Sort,
-    WindowFunction,
+    WindowFunction, in_subquery_tuple_values,
 };
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
-use datafusion_expr::expr_schema::cast_subquery;
+use datafusion_expr::expr_schema::{cast_subquery, cast_subquery_columns};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
     comparison_coercion_with_session_timezone, like_coercion, regex_coercion,
@@ -97,6 +97,25 @@ impl AnalyzerRule for TypeCoercion {
 
     fn analyze(&self, plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan> {
         static EMPTY_SCHEMA: LazyLock<DFSchema> = LazyLock::new(DFSchema::empty);
+
+        // Record bare row-count parameter types before coercion makes them indistinguishable
+        // from explicit casts. A type inferred elsewhere takes precedence over the default.
+        let parameter_fields = plan.get_parameter_fields()?;
+        let plan = plan
+            .transform_up_with_subqueries(|plan| {
+                if !matches!(plan, LogicalPlan::Limit(_)) {
+                    return Ok(Transformed::no(plan));
+                }
+                plan.map_expressions(|expr| match expr {
+                    Expr::Placeholder(mut placeholder) if placeholder.field.is_none() => {
+                        placeholder.field =
+                            parameter_fields.get(&placeholder.id).cloned().flatten();
+                        Ok(Transformed::yes(Expr::Placeholder(placeholder)))
+                    }
+                    expr => Ok(Transformed::no(expr)),
+                })
+            })?
+            .data;
 
         // recurse
         let transformed_plan = plan
@@ -648,26 +667,49 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     self.session_time_zone,
                 )?
                 .data;
-                let expr_type = expr.get_type(self.schema)?;
-                let subquery_type = new_plan.schema().field(0).data_type();
-                let common_type = comparison_coercion_with_session_timezone(
-                    &expr_type,
-                    subquery_type,
-                    self.session_time_zone,
-                )
-                .ok_or(plan_datafusion_err!(
-                    "expr type {expr_type} can't cast to {subquery_type} in InSubquery"
-                ))?;
                 let new_subquery = Subquery {
                     subquery: Arc::new(new_plan),
                     outer_ref_columns: subquery.outer_ref_columns,
                     spans: subquery.spans,
                 };
-                Ok(Transformed::yes(Expr::InSubquery(InSubquery::new(
-                    Box::new(expr.cast_to(&common_type, self.schema)?),
-                    cast_subquery(new_subquery, &common_type)?,
-                    negated,
-                ))))
+                let is_tuple =
+                    in_subquery_tuple_values(&expr, &new_subquery.subquery)?.is_some();
+                match *expr {
+                    // Multi-column `(a, b) IN (SELECT x, y ...)`: the tuple is
+                    // planned as a `struct` call whose arguments are compared
+                    // pairwise with the subquery columns, so coerce each pair.
+                    Expr::ScalarFunction(func) if is_tuple => {
+                        let (expr, subquery) = coerce_multi_column_in_subquery(
+                            func,
+                            new_subquery,
+                            self.schema,
+                            self.session_time_zone,
+                        )?;
+                        Ok(Transformed::yes(Expr::InSubquery(InSubquery::new(
+                            Box::new(expr),
+                            subquery,
+                            negated,
+                        ))))
+                    }
+                    expr => {
+                        let expr_type = expr.get_type(self.schema)?;
+                        let subquery_type =
+                            new_subquery.subquery.schema().field(0).data_type();
+                        let common_type = comparison_coercion_with_session_timezone(
+                            &expr_type,
+                            subquery_type,
+                            self.session_time_zone,
+                        )
+                        .ok_or(plan_datafusion_err!(
+                            "expr type {expr_type} can't cast to {subquery_type} in InSubquery"
+                        ))?;
+                        Ok(Transformed::yes(Expr::InSubquery(InSubquery::new(
+                            Box::new(expr.cast_to(&common_type, self.schema)?),
+                            cast_subquery(new_subquery, &common_type)?,
+                            negated,
+                        ))))
+                    }
+                }
             }
             Expr::SetComparison(SetComparison {
                 expr,
@@ -1677,6 +1719,40 @@ fn project_with_column_index(
         .map(LogicalPlan::Projection)
 }
 
+/// Coerces a multi-column `(a, b, ...) IN (SELECT x, y, ...)`.
+///
+/// Each tuple element and the subquery column at the same position are cast
+/// to their common comparison type, like the single-column form does for its
+/// one pair.
+fn coerce_multi_column_in_subquery(
+    func: ScalarFunction,
+    subquery: Subquery,
+    schema: &DFSchema,
+    session_time_zone: Option<&str>,
+) -> Result<(Expr, Subquery)> {
+    let subquery_schema = Arc::clone(subquery.subquery.schema());
+    let mut common_types = Vec::with_capacity(func.args.len());
+    let mut args = Vec::with_capacity(func.args.len());
+    for (arg, field) in func.args.into_iter().zip(subquery_schema.fields()) {
+        let expr_type = arg.get_type(schema)?;
+        let subquery_type = field.data_type();
+        let common_type = comparison_coercion_with_session_timezone(
+            &expr_type,
+            subquery_type,
+            session_time_zone,
+        )
+        .ok_or(plan_datafusion_err!(
+            "expr type {expr_type} can't cast to {subquery_type} in InSubquery"
+        ))?;
+        args.push(arg.cast_to(&common_type, schema)?);
+        common_types.push(common_type);
+    }
+    Ok((
+        Expr::ScalarFunction(ScalarFunction::new_udf(func.func, args)),
+        cast_subquery_columns(subquery, &common_types)?,
+    ))
+}
+
 #[cfg(test)]
 mod test {
 
@@ -1686,10 +1762,10 @@ mod test {
     use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, TimeUnit};
     use insta::assert_snapshot;
 
-    use crate::analyzer::Analyzer;
     use crate::analyzer::type_coercion::{
         TypeCoercion, TypeCoercionRewriter, coerce_case_expression,
     };
+    use crate::analyzer::{Analyzer, AnalyzerRule};
     use crate::assert_analyzed_plan_with_config_eq_snapshot;
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
@@ -1703,9 +1779,9 @@ mod test {
     use datafusion_expr::test::function_stub::avg_udaf;
     use datafusion_expr::{
         AccumulatorFactoryFunction, AggregateUDF, BinaryExpr, Case, ColumnarValue, Expr,
-        ExprSchemable, Filter, LogicalPlan, Operator, ScalarFunctionArgs, ScalarUDF,
-        ScalarUDFImpl, Signature, SimpleAggregateUDF, Subquery, Union, Volatility, cast,
-        col, create_udaf, is_true, lit,
+        ExprSchemable, Filter, Limit, LogicalPlan, Operator, ScalarFunctionArgs,
+        ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF, Subquery, Union,
+        Volatility, cast, col, create_udaf, is_true, lit, placeholder,
     };
     use datafusion_functions_aggregate::average::AvgAccumulator;
 
@@ -1787,6 +1863,19 @@ mod test {
             }
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn untyped_limit_parameter_remains_inferable_after_coercion() -> Result<()> {
+        let plan = LogicalPlan::Limit(Limit {
+            input: empty(),
+            fetch: Some(Box::new(placeholder("$1"))),
+            skip: None,
+        });
+        let analyzed = TypeCoercion::new().analyze(plan, &ConfigOptions::default())?;
+
+        assert_eq!(analyzed.get_parameter_types()?["$1"], Some(DataType::Int64));
         Ok(())
     }
 

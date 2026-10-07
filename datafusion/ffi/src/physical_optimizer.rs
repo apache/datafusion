@@ -586,7 +586,7 @@ mod tests {
 
         let ctx = ContextWithRegistry {
             config: ConfigOptions::new(),
-            registry: StatisticsRegistry::default_with_builtin_providers(),
+            registry: StatisticsRegistry::new(),
         };
 
         let plan = create_test_plan();

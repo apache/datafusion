@@ -880,16 +880,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
                 if fields.is_empty() {
                     let map_types = plan.get_parameter_fields()?;
-                    let param_types: Vec<_> = (1..=map_types.len())
-                        .filter_map(|i| {
+                    let param_types: Option<Vec<FieldRef>> = (1..=map_types.len())
+                        .map(|i| {
                             let key = format!("${i}");
                             map_types.get(&key).and_then(|opt| opt.clone())
                         })
                         .collect();
-                    fields.extend(param_types.iter().cloned());
-                    planner_context.with_prepare_param_data_types(
-                        param_types.into_iter().map(Some).collect(),
-                    );
+                    if let Some(param_types) = param_types {
+                        fields.extend(param_types.iter().cloned());
+                        planner_context.with_prepare_param_data_types(
+                            param_types.into_iter().map(Some).collect(),
+                        );
+                    }
                 }
 
                 Ok(LogicalPlan::Statement(PlanStatement::Prepare(Prepare {
