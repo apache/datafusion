@@ -33,9 +33,7 @@ use datafusion_physical_plan::{ExecutionPlan, expressions};
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
-use crate::optimizer::{
-    ConfigOnlyContext, PhysicalOptimizerContext, with_statistics_context,
-};
+use crate::optimizer::{ConfigOnlyContext, PhysicalOptimizerContext};
 
 /// Optimizer that uses available statistics for aggregate functions
 #[derive(Default, Debug)]
@@ -67,9 +65,8 @@ impl PhysicalOptimizerRule for AggregateStatistics {
             let partial_agg_exec = partial_agg_exec
                 .downcast_ref::<AggregateExec>()
                 .expect("take_optimizable() ensures that this is a AggregateExec");
-            let stats = with_statistics_context(context, |stats_ctx| {
-                stats_ctx.compute_arc(partial_agg_exec.input(), &StatisticsArgs::new())
-            })?;
+            let stats = context
+                .compute_statistics(partial_agg_exec.input(), &StatisticsArgs::new())?;
             let mut projections = vec![];
             for expr in partial_agg_exec.aggr_expr() {
                 let field = expr.field();

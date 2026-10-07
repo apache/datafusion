@@ -43,6 +43,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_physical_plan::statistics::StatisticsContext;
 
 // Re-export from this module for backwards compatibility.
+pub use datafusion_session::with_statistics_context;
 pub use datafusion_session::{PhysicalOptimizerContext, PhysicalOptimizerRule};
 
 /// Simple context wrapping [`ConfigOptions`] for backward compatibility.
@@ -74,47 +75,6 @@ impl PhysicalOptimizerContext for ConfigOnlyContext<'_> {
     fn statistics_context(&self) -> Option<&StatisticsContext> {
         Some(&self.statistics_context)
     }
-}
-
-/// Calls `f` with the [`StatisticsContext`] shared through `context`, or, if
-/// `context` does not share one, with a new context built from its
-/// statistics registry.
-///
-/// Rules that compute statistics should use this, so they reuse the
-/// statistics computed by earlier rules and consult the same statistics
-/// providers as the built-in rules.
-///
-/// # Example
-///
-/// ```
-/// # use std::sync::Arc;
-/// # use arrow::datatypes::Schema;
-/// # use datafusion_common::config::ConfigOptions;
-/// # use datafusion_physical_optimizer::optimizer::{ConfigOnlyContext, with_statistics_context};
-/// # use datafusion_physical_plan::ExecutionPlan;
-/// # use datafusion_physical_plan::empty::EmptyExec;
-/// # use datafusion_physical_plan::statistics::StatisticsArgs;
-/// let config = ConfigOptions::new();
-/// let context = ConfigOnlyContext::new(&config);
-/// let plan: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
-///
-/// let statistics = with_statistics_context(&context, |stats_ctx| {
-///     stats_ctx.compute_arc(&plan, &StatisticsArgs::new())
-/// })?;
-/// # Ok::<(), datafusion_common::DataFusionError>(())
-/// ```
-pub fn with_statistics_context<R>(
-    context: &dyn PhysicalOptimizerContext,
-    f: impl FnOnce(&StatisticsContext) -> R,
-) -> R {
-    if let Some(shared) = context.statistics_context() {
-        return f(shared);
-    }
-    let local = match context.statistics_registry() {
-        Some(registry) => StatisticsContext::new_with_registry(registry.clone()),
-        None => StatisticsContext::new(),
-    };
-    f(&local)
 }
 
 /// A rule-based physical optimizer.

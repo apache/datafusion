@@ -24,9 +24,7 @@
 //! `PartitionMode` and the build side using the available statistics for hash joins.
 
 use crate::PhysicalOptimizerRule;
-use crate::optimizer::{
-    ConfigOnlyContext, PhysicalOptimizerContext, with_statistics_context,
-};
+use crate::optimizer::{ConfigOnlyContext, PhysicalOptimizerContext};
 use datafusion_common::Statistics;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
@@ -64,7 +62,7 @@ fn get_stats(
     plan: &Arc<dyn ExecutionPlan>,
     context: &dyn PhysicalOptimizerContext,
 ) -> Result<Arc<Statistics>> {
-    with_statistics_context(context, |ctx| ctx.compute_arc(plan, &StatisticsArgs::new()))
+    context.compute_statistics(plan, &StatisticsArgs::new())
 }
 
 // TODO: We need some performance test for Right Semi/Right Join swap to Left Semi/Left Join in case that the right side is smaller but not much smaller.
