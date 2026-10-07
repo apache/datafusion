@@ -49,7 +49,10 @@ use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::tree_node::PlanContext;
-use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use datafusion_physical_plan::{
+    ChildrenPropertiesMode, ExecutionPlan, ExecutionPlanProperties,
+    ReplaceChildrenOptions,
+};
 
 /// "Data class" used by sort pushdown (now driven from `EnsureRequirements`)
 /// to push down [`SortExec`] in the plan. In some cases the total
@@ -993,6 +996,7 @@ fn handle_custom_pushdown(
 
     // Collect all unique column indices used in the parent-required sorting
     // expression:
+    let output_requirement = parent_required.first().clone();
     let requirement = parent_required.into_single();
     let all_indices: HashSet<usize> = requirement
         .iter()
@@ -1056,7 +1060,10 @@ fn handle_custom_pushdown(
                     .data;
                 Ok(PhysicalSortRequirement::new(updated_columns, req.options))
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>>>();
+        let Ok(updated_parent_req) = updated_parent_req else {
+            return Ok(None);
+        };
 
         // Prepare the result, populating with the updated requirements for children that maintain order
         let result = maintains_input_order
@@ -1069,7 +1076,56 @@ fn handle_custom_pushdown(
                     None
                 }
             })
-            .collect();
+            .collect::<Vec<_>>();
+
+        // Row order preservation does not establish an output-to-input column
+        // mapping. Prove that this candidate ordering survives the operator's
+        // value transformations before removing the sort above it.
+        let mut sorted_children = Vec::with_capacity(plan_children.len());
+        for (child, required) in plan_children.into_iter().zip(&result) {
+            let sorted: Arc<dyn ExecutionPlan> = if let Some(required) = required {
+                let ordering = LexOrdering::from(required.first().clone());
+                let schema = child.schema();
+                if ordering.iter().any(|sort| {
+                    collect_columns(&sort.expr)
+                        .iter()
+                        .any(|column| column.index() >= schema.fields().len())
+                        || sort.expr.data_type(&schema).is_err()
+                }) {
+                    return Ok(None);
+                }
+                // SortExec::new assumes valid property derivation. Check its
+                // fallible steps first; invalid candidates leave the outer sort.
+                let mut properties = child.equivalence_properties().clone();
+                if properties
+                    .extract_common_sort_prefix(ordering.clone())
+                    .is_err()
+                    || properties.reorder(ordering.clone()).is_err()
+                {
+                    return Ok(None);
+                }
+                Arc::new(
+                    SortExec::new(ordering, Arc::clone(child))
+                        .with_preserve_partitioning(true),
+                )
+            } else {
+                Arc::clone(child)
+            };
+            sorted_children.push(sorted);
+        }
+        let Ok(candidate) = Arc::clone(plan).replace_children(
+            sorted_children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        ) else {
+            return Ok(None);
+        };
+        if !candidate
+            .equivalence_properties()
+            .ordering_satisfy_requirement(output_requirement)
+            .unwrap_or(false)
+        {
+            return Ok(None);
+        }
 
         Ok(Some(result))
     } else {
