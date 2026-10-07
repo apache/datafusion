@@ -69,18 +69,6 @@ Follow the instructions in the header of the KEYS file to append your key. Here 
 svn commit KEYS -m "Add key for John Doe"
 ```
 
-### Check SVN access
-
-Check that you can read the `dev` and `release` areas of the Apache distribution SVN server:
-
-```shell
-svn ls https://dist.apache.org/repos/dist/dev/datafusion
-svn ls https://dist.apache.org/repos/dist/release/datafusion
-```
-
-The commands list the existing release candidates and releases. The scripts used below commit
-to these areas and will ask for your ASF credentials.
-
 ## Release Process: Step by Step
 
 As part of the Apache governance model, official releases consist of signed
@@ -102,10 +90,8 @@ git push -u apache branch-55 # push branch to apache remote
 
 ### 2. Prepare PR to Update the Release Version
 
-Update the DataFusion version in the root `Cargo.toml` (the workspace version and the
-versions of the internal crates) and in `Cargo.lock` to reflect the new release version.
-Within the user documentation there are also references to the current version number.
-At the time of this writing we need to update the following files:
+Update the DataFusion version in the root `Cargo.toml`, in `Cargo.lock` and in the user
+documentation. At the time of this writing the documentation files are
 
 - `docs/source/download.md`
 - `docs/source/user-guide/configs.md`
@@ -119,17 +105,6 @@ For example, to update the version from `55.1.0` to `55.2.0`:
 sed -i '' 's/"55\.1\.0"/"55.2.0"/g' Cargo.toml
 sed -i '' 's/55\.1\.0/55.2.0/' docs/source/download.md docs/source/user-guide/{configs,crate-configuration,example-usage}.md
 cargo update --workspace
-```
-
-`sed -i ''` is the macOS (BSD) syntax, use `sed -i` with GNU `sed`. `cargo update --workspace`
-only refreshes the workspace crates in `Cargo.lock`, so it does not compile anything.
-
-Review the diff of `Cargo.toml`: only the workspace `version` and the internal `datafusion*`
-entries should change. Then check that no reference to the old version is left. The following
-command should print nothing:
-
-```shell
-git grep -nF '55.1.0' -- . ':!dev/changelog'
 ```
 
 Then commit the changes and create a PR targeting the release branch `branch-N`.
@@ -274,8 +249,6 @@ Check that the artifacts were uploaded to SVN:
 svn ls https://dist.apache.org/repos/dist/dev/datafusion/apache-datafusion-55.2.0-rc1/
 ```
 
-It should list `apache-datafusion-55.2.0.tar.gz` together with its `.asc`, `.sha256` and `.sha512` files.
-
 ### 7. Vote on Release Candidate Artifacts
 
 Send the email output from the script to `dev@datafusion.apache.org`.
@@ -293,17 +266,11 @@ review the release candidate.
 ./dev/release/verify-release-candidate.sh 55.2.0 1
 ```
 
-To download and inspect the artifacts of a release candidate yourself, export them from SVN,
-check the signature and the checksums, and unpack the tarball:
+To download and unpack the artifacts of a release candidate from SVN:
 
 ```shell
 svn export https://dist.apache.org/repos/dist/dev/datafusion/apache-datafusion-55.2.0-rc1
 cd apache-datafusion-55.2.0-rc1
-svn export https://dist.apache.org/repos/dist/dev/datafusion/KEYS
-gpg --import KEYS
-gpg --verify apache-datafusion-55.2.0.tar.gz.asc apache-datafusion-55.2.0.tar.gz
-shasum -a 256 -c apache-datafusion-55.2.0.tar.gz.sha256
-shasum -a 512 -c apache-datafusion-55.2.0.tar.gz.sha512
 tar xzf apache-datafusion-55.2.0.tar.gz
 ```
 
@@ -368,15 +335,11 @@ instructions](https://doc.rust-lang.org/cargo/reference/publishing.html) to
 create an account and login to crates.io before asking to be added as an owner
 to all DataFusion crates.
 
-Download the official release tarball from SVN, check its signature and checksum, and unpack it:
+Download and unpack the official release tarball:
 
 ```shell
 svn export https://dist.apache.org/repos/dist/release/datafusion/datafusion-55.2.0
 cd datafusion-55.2.0
-svn export https://dist.apache.org/repos/dist/release/datafusion/KEYS
-gpg --import KEYS
-gpg --verify apache-datafusion-55.2.0.tar.gz.asc apache-datafusion-55.2.0.tar.gz
-shasum -a 512 -c apache-datafusion-55.2.0.tar.gz.sha512
 tar xzf apache-datafusion-55.2.0.tar.gz
 cd apache-datafusion-55.2.0
 ```
