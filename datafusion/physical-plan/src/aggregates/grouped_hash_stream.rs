@@ -63,7 +63,9 @@ use datafusion_common::{
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::memory_pool::{
+    MemoryConsumer, MemoryPool, MemoryReservation, MergeMemoryPool,
+};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr::expressions::Column;
@@ -369,6 +371,9 @@ pub(crate) struct GroupedHashAggregateStream {
     // EXECUTION RESOURCES:
     // Fields related to managing execution resources and monitoring performance.
     // ========================================================================
+    /// The pool shared by aggregate state and spill replay workspace.
+    merge_pool: Arc<MergeMemoryPool>,
+
     /// The memory reservation for this grouping
     reservation: MemoryReservation,
 
@@ -551,12 +556,16 @@ impl GroupedHashAggregateStream {
         };
 
         let group_values = new_group_values(group_schema, &group_ordering)?;
-        let reservation = MemoryConsumer::new(name)
-            // We interpret 'can spill' as 'can handle memory back pressure'.
-            // This value needs to be set to true for the default memory pool implementations
-            // to ensure fair application of back pressure amongst the memory consumers.
-            .with_can_spill(oom_mode != OutOfMemoryMode::ReportError)
-            .register(context.memory_pool());
+        let merge_pool = Arc::new(MergeMemoryPool::new(
+            Arc::clone(context.memory_pool()),
+            MemoryConsumer::new(name)
+                // We interpret 'can spill' as 'can handle memory back pressure'.
+                // This value needs to be set to true for the default memory pool implementations
+                // to ensure fair application of back pressure amongst the memory consumers.
+                .with_can_spill(oom_mode != OutOfMemoryMode::ReportError),
+        ));
+        let reservation = MemoryConsumer::new("GroupedHashAggregateStream state")
+            .register(&(Arc::clone(&merge_pool) as Arc<dyn MemoryPool>));
         timer.done();
 
         let exec_state = ExecutionState::ReadingInput;
@@ -631,6 +640,7 @@ impl GroupedHashAggregateStream {
             aggregate_arguments,
             filter_expressions,
             group_by: agg_group_by,
+            merge_pool,
             reservation,
             oom_mode,
             group_values,
@@ -1352,6 +1362,7 @@ impl GroupedHashAggregateStream {
                 .with_metrics(self.baseline_metrics.clone())
                 .with_batch_size(self.batch_size)
                 .with_reservation(self.reservation.new_empty())
+                .with_merge_pool(Arc::clone(&self.merge_pool))
                 .with_replay_headroom()
                 .build()?;
             self.input_done = false;

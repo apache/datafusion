@@ -177,7 +177,7 @@ where
     }
 
     fn size(&self) -> usize {
-        self.map.allocation_size() + self.values.allocated_size()
+        size_of::<Self>() + self.map.allocation_size() + self.values.allocated_size()
     }
 
     fn is_empty(&self) -> bool {
@@ -272,6 +272,9 @@ where
         self.values.shrink_to(num_rows);
         self.map.clear();
         self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
+
+        // Reset the null group index
+        self.null_group = None;
     }
 }
 
@@ -326,6 +329,7 @@ mod tests {
     #[test]
     fn test_exact_hash_table_allocation_accounting() -> Result<()> {
         let mut group_values = GroupValuesPrimitive::<Int32Type>::new(DataType::Int32);
+        let self_size = size_of::<GroupValuesPrimitive<Int32Type>>();
 
         // 1. Initial state: the constructor calls HashTable::with_capacity(128),
         //    so the map already has a nonzero retained allocation. Capture it
@@ -342,14 +346,13 @@ mod tests {
         );
         assert_eq!(
             group_values.size(),
-            group_values.values.allocated_size() + initial_map_bytes,
+            self_size + group_values.values.allocated_size() + initial_map_bytes,
             "size() must include the pre-allocated map bytes",
         );
 
         // 2. Insert keys and observe table allocation growth
-        let num_distinct = 500;
-        let arr: ArrayRef =
-            Arc::new(Int32Array::from_iter_values(0..num_distinct as i32));
+        let num_distinct = 500_i32;
+        let arr: ArrayRef = Arc::new(Int32Array::from_iter_values(0..num_distinct));
         let mut groups = vec![];
         group_values.intern(&[arr], &mut groups)?;
         assert_eq!(groups.len(), num_distinct as usize);
@@ -368,7 +371,7 @@ mod tests {
 
         assert_eq!(
             group_values.size(),
-            group_values.values.allocated_size() + table_bytes
+            self_size + group_values.values.allocated_size() + table_bytes
         );
 
         // 3. Partial emit (EmitTo::First)
@@ -381,7 +384,7 @@ mod tests {
         assert_eq!(group_values.map.allocation_size(), table_bytes);
         assert_eq!(
             group_values.size(),
-            group_values.values.allocated_size() + table_bytes
+            self_size + group_values.values.allocated_size() + table_bytes
         );
 
         // 4. Emit all (EmitTo::All)
@@ -402,20 +405,50 @@ mod tests {
         );
         assert_eq!(
             group_values.size(),
-            group_values.values.allocated_size() + shrunken_table_bytes
+            self_size + group_values.values.allocated_size() + shrunken_table_bytes
         );
 
         // 6. Reinsert new distinct values into the shrunken table
         let new_arr: ArrayRef = Arc::new(Int32Array::from_iter_values(
-            (num_distinct as i32)..(num_distinct as i32 * 2),
+            num_distinct..(num_distinct * 2),
         ));
         group_values.intern(&[new_arr], &mut groups)?;
         assert_eq!(groups.len(), num_distinct as usize);
         assert!(group_values.map.allocation_size() > shrunken_table_bytes);
         assert_eq!(
             group_values.size(),
-            group_values.values.allocated_size() + group_values.map.allocation_size()
+            self_size
+                + group_values.values.allocated_size()
+                + group_values.map.allocation_size()
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn clear_shrink_reset_null_group() -> Result<()> {
+        let mut gv = GroupValuesPrimitive::<Int32Type>::new(DataType::Int32);
+
+        // Intern some values including a null
+        let arr: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(2)]));
+        let mut groups = vec![];
+        gv.intern(&[arr], &mut groups)?;
+
+        assert_eq!(groups.len(), 3);
+
+        let null_group = groups[1];
+        assert_eq!(null_group, 1);
+
+        // Clear and shrink
+        gv.clear_shrink(0);
+
+        let arr: ArrayRef = Arc::new(Int32Array::from(vec![None::<i32>]));
+        let mut groups = vec![];
+        gv.intern(&[arr], &mut groups)?;
+        assert_eq!(groups.len(), 1);
+
+        let new_null_group = groups[0];
+        assert_eq!(new_null_group, 0);
 
         Ok(())
     }

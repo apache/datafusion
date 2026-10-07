@@ -68,8 +68,8 @@ use datafusion_expr::{
     logical_plan::{
         Aggregate, AsOfJoin, AsOfMatch, CreateCatalog, CreateCatalogSchema,
         CreateExternalTable, CreateView, DdlStatement, Distinct, EmptyRelation,
-        Extension, Join, Prepare, Projection, Repartition, Sort, SubqueryAlias,
-        TableScan, TableScanBuilder, Values, Window, builder::project,
+        Extension, Filter, Join, Prepare, Projection, Repartition, Sort, SubqueryAlias,
+        TableScan, TableScanBuilder, Values, Window,
     },
 };
 use datafusion_proto_common::protobuf_common;
@@ -536,7 +536,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let expr: Vec<Expr> =
                     from_proto::parse_exprs(&projection.expr, ctx, extension_codec)?;
 
-                let new_proj = project(input, expr)?;
+                let new_proj =
+                    LogicalPlan::Projection(Projection::try_new(expr, Arc::new(input))?);
                 match projection.optional_alias.as_ref() {
                     Some(a) => match a {
                         protobuf::projection_node::OptionalAlias::Alias(alias) => {
@@ -558,14 +559,17 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .map(|expr| from_proto::parse_expr(expr, ctx, extension_codec))
                     .transpose()?
                     .ok_or_else(|| proto_error("expression required"))?;
-                LogicalPlanBuilder::from(input).filter(expr)?.build()
+                Ok(LogicalPlan::Filter(Filter::try_new(expr, Arc::new(input))?))
             }
             LogicalPlanType::Window(window) => {
                 let input: LogicalPlan =
                     into_logical_plan!(window.input, ctx, extension_codec)?;
                 let window_expr =
                     from_proto::parse_exprs(&window.window_expr, ctx, extension_codec)?;
-                LogicalPlanBuilder::from(input).window(window_expr)?.build()
+                Ok(LogicalPlan::Window(Window::try_new(
+                    window_expr,
+                    Arc::new(input),
+                )?))
             }
             LogicalPlanType::Aggregate(aggregate) => {
                 let input: LogicalPlan =
@@ -574,9 +578,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                     from_proto::parse_exprs(&aggregate.group_expr, ctx, extension_codec)?;
                 let aggr_expr =
                     from_proto::parse_exprs(&aggregate.aggr_expr, ctx, extension_codec)?;
-                LogicalPlanBuilder::from(input)
-                    .aggregate(group_expr, aggr_expr)?
-                    .build()
+                Ok(LogicalPlan::Aggregate(Aggregate::try_new(
+                    Arc::new(input),
+                    group_expr,
+                    aggr_expr,
+                )?))
             }
             LogicalPlanType::ListingScan(scan) => {
                 let schema: Schema = convert_required!(scan.schema)?;
@@ -750,9 +756,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let fetch = (sort.fetch >= 0)
                     .then(|| usize_from_wire(sort.fetch, "Sort", "fetch"))
                     .transpose()?;
-                LogicalPlanBuilder::from(input)
-                    .sort_with_limit(sort_expr, fetch)?
-                    .build()
+                Ok(LogicalPlan::Sort(Sort {
+                    expr: sort_expr,
+                    input: Arc::new(input),
+                    fetch,
+                }))
             }
             LogicalPlanType::Repartition(repartition) => {
                 use datafusion_expr::Partitioning;
@@ -1054,16 +1062,28 @@ impl AsLogicalPlan for LogicalPlanNode {
                 // them silently loses both fields. Both sides of the round
                 // trip should already have validated keys, so we don't need
                 // the builder's normalization / equijoin-pair checks.
-                Ok(LogicalPlan::Join(Join::try_new(
-                    Arc::new(left),
-                    Arc::new(right),
-                    on,
-                    filter,
-                    datafusion_expr::JoinType::from(join_type),
-                    JoinConstraint::from(join_constraint),
-                    NullEquality::from(null_equality),
-                    join.null_aware,
-                )?))
+                Ok(LogicalPlan::Join(
+                    Join::try_new(
+                        Arc::new(left),
+                        Arc::new(right),
+                        on,
+                        filter,
+                        datafusion_expr::JoinType::from(join_type),
+                        JoinConstraint::from(join_constraint),
+                        NullEquality::from(null_equality),
+                        join.null_aware,
+                    )?
+                    // Plans encoded before the field existed decode it as 0; they
+                    // could only hold scalar `NOT IN` joins.
+                    .with_null_aware_value_keys(
+                        usize_from_wire(
+                            join.null_aware_value_keys,
+                            "JoinNode",
+                            "null_aware_value_keys",
+                        )?
+                        .max(1),
+                    ),
+                ))
             }
             LogicalPlanType::AsOfJoin(join) => {
                 let left_keys =
@@ -1748,6 +1768,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 join_constraint,
                 null_equality,
                 null_aware,
+                null_aware_value_keys,
                 // Not encoded; recomputed by `Join::try_new` on decode.
                 schema: _,
             }) => {
@@ -1791,6 +1812,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                             null_equality: null_equality.into(),
                             filter,
                             null_aware: *null_aware,
+                            null_aware_value_keys: u32::try_from(
+                                *null_aware_value_keys,
+                            )
+                            .map_err(|_| {
+                                internal_datafusion_err!(
+                                    "JoinNode: null_aware_value_keys {null_aware_value_keys} does not fit in u32"
+                                )
+                            })?,
                         },
                     ))),
                 })
