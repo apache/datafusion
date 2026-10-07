@@ -29,10 +29,13 @@ DataFusion has the following policy for AI-assisted PRs:
 - **Call out unknowns and assumptions**. It's okay to not fully understand
   some bits of AI-generated code. Please point these cases out so we can work
   together to clear up any concerns.
-- **Respect ASF policy**. Make sure generated content does not introduce
-  incompatible licenses or undisclosed third-party code. See the
-  [ASF Generative Tooling Guidance](https://www.apache.org/legal/generative-tooling.html)
-  for the conditions contributors must meet.
+- **Follow [ASF Generative Tooling Guidance]**. Among other things, 
+  the author must ensure the PR does not include undisclosed third-party 
+  code or copyrighted material. 
+  
+
+
+[ASF Generative Tooling Guidance]: https://www.apache.org/legal/generative-tooling.html
 
 While "understand the core ideas" is partly subjective, it means more than being
 able to follow the diff textually. We expect the PR author to take an active
