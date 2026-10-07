@@ -327,7 +327,7 @@ mod tests {
     }
 
     #[test]
-    fn test_exact_hash_table_allocation_accounting() -> Result<()> {
+    fn test_exact_hash_table_allocation_accounting() {
         let mut group_values = GroupValuesPrimitive::<Int32Type>::new(DataType::Int32);
         let self_size = size_of::<GroupValuesPrimitive<Int32Type>>();
 
@@ -335,26 +335,18 @@ mod tests {
         //    so the map already has a nonzero retained allocation. Capture it
         //    and verify that size() accounts for it correctly.
         let initial_map_bytes = group_values.map.allocation_size();
-        assert!(
-            group_values.map.capacity() >= 128,
-            "expected initial capacity >= 128, got {}",
-            group_values.map.capacity(),
-        );
-        assert!(
-            initial_map_bytes > 0,
-            "expected nonzero initial allocation_size, got 0",
-        );
+        assert!(group_values.map.capacity() >= 128);
+        assert!(initial_map_bytes > 0);
         assert_eq!(
             group_values.size(),
             self_size + group_values.values.allocated_size() + initial_map_bytes,
-            "size() must include the pre-allocated map bytes",
         );
 
         // 2. Insert keys and observe table allocation growth
         let num_distinct = 500_i32;
         let arr: ArrayRef = Arc::new(Int32Array::from_iter_values(0..num_distinct));
         let mut groups = vec![];
-        group_values.intern(&[arr], &mut groups)?;
+        group_values.intern(&[arr], &mut groups).unwrap();
         assert_eq!(groups.len(), num_distinct as usize);
 
         let table_bytes = group_values.map.allocation_size();
@@ -364,19 +356,16 @@ mod tests {
         // Hashbrown's layout contains entry slots, control bytes, and trailing group bytes.
         // It must strictly exceed the naive entry-only size
         let entry_only_bytes = group_values.map.capacity() * size_of::<(usize, u64)>();
-        assert!(
-            table_bytes > entry_only_bytes,
-            "allocation_size ({table_bytes}) must exceed entry-only capacity ({entry_only_bytes})"
-        );
+        assert!(table_bytes > entry_only_bytes);
 
         assert_eq!(
             group_values.size(),
-            self_size + group_values.values.allocated_size() + table_bytes
+            self_size + group_values.values.allocated_size() + table_bytes,
         );
 
         // 3. Partial emit (EmitTo::First)
         let emit_count = 200;
-        let emitted = group_values.emit(EmitTo::First(emit_count))?;
+        let emitted = group_values.emit(EmitTo::First(emit_count)).unwrap();
         assert_eq!(emitted[0].len(), emit_count);
         assert_eq!(group_values.len(), (num_distinct as usize) - emit_count);
 
@@ -384,12 +373,12 @@ mod tests {
         assert_eq!(group_values.map.allocation_size(), table_bytes);
         assert_eq!(
             group_values.size(),
-            self_size + group_values.values.allocated_size() + table_bytes
+            self_size + group_values.values.allocated_size() + table_bytes,
         );
 
         // 4. Emit all (EmitTo::All)
         let remaining_count = group_values.len();
-        let emitted_all = group_values.emit(EmitTo::All)?;
+        let emitted_all = group_values.emit(EmitTo::All).unwrap();
         assert_eq!(emitted_all[0].len(), remaining_count);
         assert_eq!(group_values.len(), 0);
 
@@ -399,30 +388,25 @@ mod tests {
         // 5. clear_shrink: releases/shrinks map capacity
         group_values.clear_shrink(16);
         let shrunken_table_bytes = group_values.map.allocation_size();
-        assert!(
-            shrunken_table_bytes < table_bytes,
-            "clear_shrink should shrink table from {table_bytes} to {shrunken_table_bytes}"
-        );
+        assert!(shrunken_table_bytes < table_bytes);
         assert_eq!(
             group_values.size(),
-            self_size + group_values.values.allocated_size() + shrunken_table_bytes
+            self_size + group_values.values.allocated_size() + shrunken_table_bytes,
         );
 
         // 6. Reinsert new distinct values into the shrunken table
         let new_arr: ArrayRef = Arc::new(Int32Array::from_iter_values(
             num_distinct..(num_distinct * 2),
         ));
-        group_values.intern(&[new_arr], &mut groups)?;
+        group_values.intern(&[new_arr], &mut groups).unwrap();
         assert_eq!(groups.len(), num_distinct as usize);
         assert!(group_values.map.allocation_size() > shrunken_table_bytes);
         assert_eq!(
             group_values.size(),
             self_size
                 + group_values.values.allocated_size()
-                + group_values.map.allocation_size()
+                + group_values.map.allocation_size(),
         );
-
-        Ok(())
     }
 
     #[test]
