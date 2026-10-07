@@ -24,7 +24,7 @@ use datafusion_common::{Result, internal_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     Coercion, ColumnarValue, Expr, ExprSchemable, ReturnFieldArgs, ScalarFunctionArgs,
-    ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
+    ScalarUDFImpl, Signature, TypeSignatureClass, Volatility, lit,
 };
 
 /// Returns the number of days since epoch (1970-01-01) for the given date.
@@ -154,12 +154,38 @@ impl ScalarUDFImpl for SparkUnixTimestamp {
         info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         let [ts] = take_function_args(self.name(), args)?;
+        // Arrow casts to a coarser timestamp unit truncate toward zero, but Spark
+        // floors (`Math.floorDiv`). When downscaling, divide the raw ticks and
+        // subtract one for negative values with a remainder.
+        let divisor: i64 = match (ts.get_type(info.schema())?, self.time_unit) {
+            (DataType::Timestamp(TimeUnit::Millisecond, _), TimeUnit::Second)
+            | (DataType::Timestamp(TimeUnit::Microsecond, _), TimeUnit::Millisecond)
+            | (DataType::Timestamp(TimeUnit::Nanosecond, _), TimeUnit::Microsecond) => {
+                1_000
+            }
+            (DataType::Timestamp(TimeUnit::Microsecond, _), TimeUnit::Second)
+            | (DataType::Timestamp(TimeUnit::Nanosecond, _), TimeUnit::Millisecond) => {
+                1_000_000
+            }
+            (DataType::Timestamp(TimeUnit::Nanosecond, _), TimeUnit::Second) => {
+                1_000_000_000
+            }
+            _ => {
+                return Ok(ExprSimplifyResult::Simplified(
+                    ts.cast_to(
+                        &DataType::Timestamp(self.time_unit, Some("UTC".into())),
+                        info.schema(),
+                    )?
+                    .cast_to(&DataType::Int64, info.schema())?,
+                ));
+            }
+        };
+        let ticks = ts.cast_to(&DataType::Int64, info.schema())?;
+        let correction = (ticks.clone() % lit(divisor))
+            .lt(lit(0_i64))
+            .cast_to(&DataType::Int64, info.schema())?;
         Ok(ExprSimplifyResult::Simplified(
-            ts.cast_to(
-                &DataType::Timestamp(self.time_unit, Some("UTC".into())),
-                info.schema(),
-            )?
-            .cast_to(&DataType::Int64, info.schema())?,
+            ticks / lit(divisor) - correction,
         ))
     }
 }
