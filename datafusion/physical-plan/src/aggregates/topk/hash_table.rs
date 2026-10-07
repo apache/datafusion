@@ -36,11 +36,12 @@ use std::fmt::Debug;
 use std::hash::BuildHasher;
 use std::sync::Arc;
 
-/// `heap_idx` assigned to groups whose aggregate values are all NULL. Such
-/// groups are tracked in the hash table only (they never enter the heap), so
-/// they can be emitted with a NULL aggregate value at the end.
+/// `heap_idx` assigned to groups whose aggregate values are all NULL.
+/// Such groups are tracked in the hash table only, without entering heap,
+/// so they can be emitted with a NULL aggregate value at the end.
 const NULL_HEAP_IDX: usize = usize::MAX - 1;
 
+/// `heap_idx` needs to distinguish vacant slots from items that have a NULL key and value.
 const VACANT_HEAP_IDX: usize = usize::MAX;
 
 /// An entry in our hash table that:

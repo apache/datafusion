@@ -616,6 +616,31 @@ mod tests {
     }
 
     #[test]
+    fn should_emit_null_id_with_all_null_values() -> Result<()> {
+        let ids: ArrayRef = Arc::new(StringArray::from(vec![None, Some("1")]));
+        let vals: ArrayRef = Arc::new(Int64Array::from(vec![None, Some(5)]));
+        let mut agg = PriorityMap::new(DataType::Utf8, DataType::Int64, 2, true)?;
+        agg.set_batch(ids, vals);
+        agg.insert_null(0);
+        agg.insert_with_null_groups(1)?;
+
+        let cols = agg.emit()?;
+        let batch = RecordBatch::try_new(test_schema(), cols)?;
+        let actual = format!("{}", pretty_format_batches(&[batch])?);
+        assert_snapshot!(actual, @r"
+        +----------+--------------+
+        | trace_id | timestamp_ms |
+        +----------+--------------+
+        | 1        | 5            |
+        |          |              |
+        +----------+--------------+
+        "
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn should_cap_null_groups_at_limit() -> Result<()> {
         let ids: ArrayRef = Arc::new(StringArray::from(vec!["1", "2", "3", "4", "5"]));
         let vals: ArrayRef =
