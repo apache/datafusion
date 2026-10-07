@@ -5704,6 +5704,12 @@ impl serde::Serialize for CustomTableScanNode {
         if !self.custom_table_data.is_empty() {
             len += 1;
         }
+        if self.fetch.is_some() {
+            len += 1;
+        }
+        if self.skip.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.CustomTableScanNode", len)?;
         if let Some(v) = self.table_name.as_ref() {
             struct_ser.serialize_field("tableName", v)?;
@@ -5722,6 +5728,16 @@ impl serde::Serialize for CustomTableScanNode {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("customTableData", pbjson::private::base64::encode(&self.custom_table_data).as_str())?;
         }
+        if let Some(v) = self.fetch.as_ref() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("fetch", ToString::to_string(&v).as_str())?;
+        }
+        if let Some(v) = self.skip.as_ref() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("skip", ToString::to_string(&v).as_str())?;
+        }
         struct_ser.end()
     }
 }
@@ -5739,6 +5755,8 @@ impl<'de> serde::Deserialize<'de> for CustomTableScanNode {
             "filters",
             "custom_table_data",
             "customTableData",
+            "fetch",
+            "skip",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -5748,6 +5766,8 @@ impl<'de> serde::Deserialize<'de> for CustomTableScanNode {
             Schema,
             Filters,
             CustomTableData,
+            Fetch,
+            Skip,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -5774,6 +5794,8 @@ impl<'de> serde::Deserialize<'de> for CustomTableScanNode {
                             "schema" => Ok(GeneratedField::Schema),
                             "filters" => Ok(GeneratedField::Filters),
                             "customTableData" | "custom_table_data" => Ok(GeneratedField::CustomTableData),
+                            "fetch" => Ok(GeneratedField::Fetch),
+                            "skip" => Ok(GeneratedField::Skip),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -5798,6 +5820,8 @@ impl<'de> serde::Deserialize<'de> for CustomTableScanNode {
                 let mut schema__ = None;
                 let mut filters__ = None;
                 let mut custom_table_data__ = None;
+                let mut fetch__ = None;
+                let mut skip__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::TableName => {
@@ -5832,6 +5856,22 @@ impl<'de> serde::Deserialize<'de> for CustomTableScanNode {
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::Fetch => {
+                            if fetch__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("fetch"));
+                            }
+                            fetch__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
+                        GeneratedField::Skip => {
+                            if skip__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("skip"));
+                            }
+                            skip__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
                     }
                 }
                 Ok(CustomTableScanNode {
@@ -5840,6 +5880,8 @@ impl<'de> serde::Deserialize<'de> for CustomTableScanNode {
                     schema: schema__,
                     filters: filters__.unwrap_or_default(),
                     custom_table_data: custom_table_data__.unwrap_or_default(),
+                    fetch: fetch__,
+                    skip: skip__,
                 })
             }
         }
@@ -9754,6 +9796,9 @@ impl serde::Serialize for HashJoinExecNode {
         if self.fetch.is_some() {
             len += 1;
         }
+        if self.null_aware_value_keys != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.HashJoinExecNode", len)?;
         if let Some(v) = self.left.as_ref() {
             struct_ser.serialize_field("left", v)?;
@@ -9796,6 +9841,9 @@ impl serde::Serialize for HashJoinExecNode {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("fetch", ToString::to_string(&v).as_str())?;
         }
+        if self.null_aware_value_keys != 0 {
+            struct_ser.serialize_field("nullAwareValueKeys", &self.null_aware_value_keys)?;
+        }
         struct_ser.end()
     }
 }
@@ -9822,6 +9870,8 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
             "dynamic_filter",
             "dynamicFilter",
             "fetch",
+            "null_aware_value_keys",
+            "nullAwareValueKeys",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -9837,6 +9887,7 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
             NullAware,
             DynamicFilter,
             Fetch,
+            NullAwareValueKeys,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -9869,6 +9920,7 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
                             "nullAware" | "null_aware" => Ok(GeneratedField::NullAware),
                             "dynamicFilter" | "dynamic_filter" => Ok(GeneratedField::DynamicFilter),
                             "fetch" => Ok(GeneratedField::Fetch),
+                            "nullAwareValueKeys" | "null_aware_value_keys" => Ok(GeneratedField::NullAwareValueKeys),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -9899,6 +9951,7 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
                 let mut null_aware__ = None;
                 let mut dynamic_filter__ = None;
                 let mut fetch__ = None;
+                let mut null_aware_value_keys__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Left => {
@@ -9972,6 +10025,14 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
                                 map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
+                        GeneratedField::NullAwareValueKeys => {
+                            if null_aware_value_keys__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nullAwareValueKeys"));
+                            }
+                            null_aware_value_keys__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
                     }
                 }
                 Ok(HashJoinExecNode {
@@ -9986,6 +10047,7 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
                     null_aware: null_aware__.unwrap_or_default(),
                     dynamic_filter: dynamic_filter__,
                     fetch: fetch__,
+                    null_aware_value_keys: null_aware_value_keys__.unwrap_or_default(),
                 })
             }
         }
@@ -11559,6 +11621,9 @@ impl serde::Serialize for JoinNode {
         if self.null_aware {
             len += 1;
         }
+        if self.null_aware_value_keys != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.JoinNode", len)?;
         if let Some(v) = self.left.as_ref() {
             struct_ser.serialize_field("left", v)?;
@@ -11593,6 +11658,9 @@ impl serde::Serialize for JoinNode {
         if self.null_aware {
             struct_ser.serialize_field("nullAware", &self.null_aware)?;
         }
+        if self.null_aware_value_keys != 0 {
+            struct_ser.serialize_field("nullAwareValueKeys", &self.null_aware_value_keys)?;
+        }
         struct_ser.end()
     }
 }
@@ -11618,6 +11686,8 @@ impl<'de> serde::Deserialize<'de> for JoinNode {
             "filter",
             "null_aware",
             "nullAware",
+            "null_aware_value_keys",
+            "nullAwareValueKeys",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -11631,6 +11701,7 @@ impl<'de> serde::Deserialize<'de> for JoinNode {
             NullEquality,
             Filter,
             NullAware,
+            NullAwareValueKeys,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -11661,6 +11732,7 @@ impl<'de> serde::Deserialize<'de> for JoinNode {
                             "nullEquality" | "null_equality" => Ok(GeneratedField::NullEquality),
                             "filter" => Ok(GeneratedField::Filter),
                             "nullAware" | "null_aware" => Ok(GeneratedField::NullAware),
+                            "nullAwareValueKeys" | "null_aware_value_keys" => Ok(GeneratedField::NullAwareValueKeys),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -11689,6 +11761,7 @@ impl<'de> serde::Deserialize<'de> for JoinNode {
                 let mut null_equality__ = None;
                 let mut filter__ = None;
                 let mut null_aware__ = None;
+                let mut null_aware_value_keys__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Left => {
@@ -11745,6 +11818,14 @@ impl<'de> serde::Deserialize<'de> for JoinNode {
                             }
                             null_aware__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::NullAwareValueKeys => {
+                            if null_aware_value_keys__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nullAwareValueKeys"));
+                            }
+                            null_aware_value_keys__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
                     }
                 }
                 Ok(JoinNode {
@@ -11757,6 +11838,7 @@ impl<'de> serde::Deserialize<'de> for JoinNode {
                     null_equality: null_equality__.unwrap_or_default(),
                     filter: filter__,
                     null_aware: null_aware__.unwrap_or_default(),
+                    null_aware_value_keys: null_aware_value_keys__.unwrap_or_default(),
                 })
             }
         }
@@ -13087,6 +13169,12 @@ impl serde::Serialize for ListingTableScanNode {
         if !self.file_sort_order.is_empty() {
             len += 1;
         }
+        if self.fetch.is_some() {
+            len += 1;
+        }
+        if self.skip.is_some() {
+            len += 1;
+        }
         if self.file_format_type.is_some() {
             len += 1;
         }
@@ -13114,6 +13202,16 @@ impl serde::Serialize for ListingTableScanNode {
         }
         if !self.file_sort_order.is_empty() {
             struct_ser.serialize_field("fileSortOrder", &self.file_sort_order)?;
+        }
+        if let Some(v) = self.fetch.as_ref() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("fetch", ToString::to_string(&v).as_str())?;
+        }
+        if let Some(v) = self.skip.as_ref() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("skip", ToString::to_string(&v).as_str())?;
         }
         if let Some(v) = self.file_format_type.as_ref() {
             match v {
@@ -13156,6 +13254,8 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
             "tablePartitionCols",
             "file_sort_order",
             "fileSortOrder",
+            "fetch",
+            "skip",
             "csv",
             "parquet",
             "avro",
@@ -13173,6 +13273,8 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
             Filters,
             TablePartitionCols,
             FileSortOrder,
+            Fetch,
+            Skip,
             Csv,
             Parquet,
             Avro,
@@ -13207,6 +13309,8 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                             "filters" => Ok(GeneratedField::Filters),
                             "tablePartitionCols" | "table_partition_cols" => Ok(GeneratedField::TablePartitionCols),
                             "fileSortOrder" | "file_sort_order" => Ok(GeneratedField::FileSortOrder),
+                            "fetch" => Ok(GeneratedField::Fetch),
+                            "skip" => Ok(GeneratedField::Skip),
                             "csv" => Ok(GeneratedField::Csv),
                             "parquet" => Ok(GeneratedField::Parquet),
                             "avro" => Ok(GeneratedField::Avro),
@@ -13239,6 +13343,8 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                 let mut filters__ = None;
                 let mut table_partition_cols__ = None;
                 let mut file_sort_order__ = None;
+                let mut fetch__ = None;
+                let mut skip__ = None;
                 let mut file_format_type__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
@@ -13290,6 +13396,22 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                             }
                             file_sort_order__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Fetch => {
+                            if fetch__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("fetch"));
+                            }
+                            fetch__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
+                        GeneratedField::Skip => {
+                            if skip__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("skip"));
+                            }
+                            skip__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
                         GeneratedField::Csv => {
                             if file_format_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("csv"));
@@ -13336,6 +13458,8 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                     filters: filters__.unwrap_or_default(),
                     table_partition_cols: table_partition_cols__.unwrap_or_default(),
                     file_sort_order: file_sort_order__.unwrap_or_default(),
+                    fetch: fetch__,
+                    skip: skip__,
                     file_format_type: file_format_type__,
                 })
             }
@@ -19549,6 +19673,9 @@ impl serde::Serialize for PhysicalExprNode {
                 physical_expr_node::ExprType::SqlSimilarToPattern(v) => {
                     struct_ser.serialize_field("sqlSimilarToPattern", v)?;
                 }
+                physical_expr_node::ExprType::LiteralWithMetadata(v) => {
+                    struct_ser.serialize_field("literalWithMetadata", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -19608,6 +19735,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
             "rangeExpr",
             "sql_similar_to_pattern",
             "sqlSimilarToPattern",
+            "literal_with_metadata",
+            "literalWithMetadata",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -19639,6 +19768,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
             LambdaVariable,
             RangeExpr,
             SqlSimilarToPattern,
+            LiteralWithMetadata,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -19687,6 +19817,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
                             "lambdaVariable" | "lambda_variable" => Ok(GeneratedField::LambdaVariable),
                             "rangeExpr" | "range_expr" => Ok(GeneratedField::RangeExpr),
                             "sqlSimilarToPattern" | "sql_similar_to_pattern" => Ok(GeneratedField::SqlSimilarToPattern),
+                            "literalWithMetadata" | "literal_with_metadata" => Ok(GeneratedField::LiteralWithMetadata),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -19898,6 +20029,13 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
                                 return Err(serde::de::Error::duplicate_field("sqlSimilarToPattern"));
                             }
                             expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_expr_node::ExprType::SqlSimilarToPattern)
+;
+                        }
+                        GeneratedField::LiteralWithMetadata => {
+                            if expr_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("literalWithMetadata"));
+                            }
+                            expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_expr_node::ExprType::LiteralWithMetadata)
 ;
                         }
                     }
@@ -21177,6 +21315,116 @@ impl<'de> serde::Deserialize<'de> for PhysicalLikeExprNode {
         deserializer.deserialize_struct("datafusion.PhysicalLikeExprNode", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for PhysicalLiteralNode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.value.is_some() {
+            len += 1;
+        }
+        if !self.metadata.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalLiteralNode", len)?;
+        if let Some(v) = self.value.as_ref() {
+            struct_ser.serialize_field("value", v)?;
+        }
+        if !self.metadata.is_empty() {
+            struct_ser.serialize_field("metadata", &self.metadata)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for PhysicalLiteralNode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "value",
+            "metadata",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Value,
+            Metadata,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "value" => Ok(GeneratedField::Value),
+                            "metadata" => Ok(GeneratedField::Metadata),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = PhysicalLiteralNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.PhysicalLiteralNode")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<PhysicalLiteralNode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut value__ = None;
+                let mut metadata__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Value => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("value"));
+                            }
+                            value__ = map_.next_value()?;
+                        }
+                        GeneratedField::Metadata => {
+                            if metadata__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("metadata"));
+                            }
+                            metadata__ = Some(
+                                map_.next_value::<std::collections::HashMap<_, _>>()?
+                            );
+                        }
+                    }
+                }
+                Ok(PhysicalLiteralNode {
+                    value: value__,
+                    metadata: metadata__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.PhysicalLiteralNode", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for PhysicalNegativeNode {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -22110,12 +22358,26 @@ impl serde::Serialize for PhysicalRangePartitioning {
         if !self.split_point.is_empty() {
             len += 1;
         }
+        if !self.sample_point.is_empty() {
+            len += 1;
+        }
+        if self.partition_count != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalRangePartitioning", len)?;
         if !self.sort_expr.is_empty() {
             struct_ser.serialize_field("sortExpr", &self.sort_expr)?;
         }
         if !self.split_point.is_empty() {
             struct_ser.serialize_field("splitPoint", &self.split_point)?;
+        }
+        if !self.sample_point.is_empty() {
+            struct_ser.serialize_field("samplePoint", &self.sample_point)?;
+        }
+        if self.partition_count != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("partitionCount", ToString::to_string(&self.partition_count).as_str())?;
         }
         struct_ser.end()
     }
@@ -22131,12 +22393,18 @@ impl<'de> serde::Deserialize<'de> for PhysicalRangePartitioning {
             "sortExpr",
             "split_point",
             "splitPoint",
+            "sample_point",
+            "samplePoint",
+            "partition_count",
+            "partitionCount",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             SortExpr,
             SplitPoint,
+            SamplePoint,
+            PartitionCount,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -22160,6 +22428,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalRangePartitioning {
                         match value {
                             "sortExpr" | "sort_expr" => Ok(GeneratedField::SortExpr),
                             "splitPoint" | "split_point" => Ok(GeneratedField::SplitPoint),
+                            "samplePoint" | "sample_point" => Ok(GeneratedField::SamplePoint),
+                            "partitionCount" | "partition_count" => Ok(GeneratedField::PartitionCount),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -22181,6 +22451,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalRangePartitioning {
             {
                 let mut sort_expr__ = None;
                 let mut split_point__ = None;
+                let mut sample_point__ = None;
+                let mut partition_count__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::SortExpr => {
@@ -22195,11 +22467,27 @@ impl<'de> serde::Deserialize<'de> for PhysicalRangePartitioning {
                             }
                             split_point__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::SamplePoint => {
+                            if sample_point__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("samplePoint"));
+                            }
+                            sample_point__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::PartitionCount => {
+                            if partition_count__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("partitionCount"));
+                            }
+                            partition_count__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
                     }
                 }
                 Ok(PhysicalRangePartitioning {
                     sort_expr: sort_expr__.unwrap_or_default(),
                     split_point: split_point__.unwrap_or_default(),
+                    sample_point: sample_point__.unwrap_or_default(),
+                    partition_count: partition_count__.unwrap_or_default(),
                 })
             }
         }
@@ -29238,6 +29526,12 @@ impl serde::Serialize for ViewTableScanNode {
         if !self.definition.is_empty() {
             len += 1;
         }
+        if self.fetch.is_some() {
+            len += 1;
+        }
+        if self.skip.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.ViewTableScanNode", len)?;
         if let Some(v) = self.table_name.as_ref() {
             struct_ser.serialize_field("tableName", v)?;
@@ -29253,6 +29547,16 @@ impl serde::Serialize for ViewTableScanNode {
         }
         if !self.definition.is_empty() {
             struct_ser.serialize_field("definition", &self.definition)?;
+        }
+        if let Some(v) = self.fetch.as_ref() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("fetch", ToString::to_string(&v).as_str())?;
+        }
+        if let Some(v) = self.skip.as_ref() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("skip", ToString::to_string(&v).as_str())?;
         }
         struct_ser.end()
     }
@@ -29270,6 +29574,8 @@ impl<'de> serde::Deserialize<'de> for ViewTableScanNode {
             "schema",
             "projection",
             "definition",
+            "fetch",
+            "skip",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -29279,6 +29585,8 @@ impl<'de> serde::Deserialize<'de> for ViewTableScanNode {
             Schema,
             Projection,
             Definition,
+            Fetch,
+            Skip,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -29305,6 +29613,8 @@ impl<'de> serde::Deserialize<'de> for ViewTableScanNode {
                             "schema" => Ok(GeneratedField::Schema),
                             "projection" => Ok(GeneratedField::Projection),
                             "definition" => Ok(GeneratedField::Definition),
+                            "fetch" => Ok(GeneratedField::Fetch),
+                            "skip" => Ok(GeneratedField::Skip),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -29329,6 +29639,8 @@ impl<'de> serde::Deserialize<'de> for ViewTableScanNode {
                 let mut schema__ = None;
                 let mut projection__ = None;
                 let mut definition__ = None;
+                let mut fetch__ = None;
+                let mut skip__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::TableName => {
@@ -29361,6 +29673,22 @@ impl<'de> serde::Deserialize<'de> for ViewTableScanNode {
                             }
                             definition__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Fetch => {
+                            if fetch__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("fetch"));
+                            }
+                            fetch__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
+                        GeneratedField::Skip => {
+                            if skip__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("skip"));
+                            }
+                            skip__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
                     }
                 }
                 Ok(ViewTableScanNode {
@@ -29369,6 +29697,8 @@ impl<'de> serde::Deserialize<'de> for ViewTableScanNode {
                     schema: schema__,
                     projection: projection__,
                     definition: definition__.unwrap_or_default(),
+                    fetch: fetch__,
+                    skip: skip__,
                 })
             }
         }

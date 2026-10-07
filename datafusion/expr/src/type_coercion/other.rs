@@ -38,6 +38,32 @@ fn fold_coerce(
 ///
 /// Uses comparison coercion because `x IN (a, b)` is semantically equivalent
 /// to `x = a OR x = b`.
+///
+/// # Deprecated
+///
+/// This no longer matches how the planner coerces `IN`: `=` reads a
+/// timezone-naive timestamp in `datafusion.execution.time_zone` when it is
+/// compared against a timezone-aware one, and this function cannot, because it
+/// has nowhere to take that setting from. Fold
+/// [`comparison_coercion_with_session_timezone`] over the values instead:
+///
+/// ```
+/// # use arrow::datatypes::DataType;
+/// # use datafusion_expr::type_coercion::binary::comparison_coercion_with_session_timezone;
+/// # let expr_type = DataType::Int32;
+/// # let list_types = [DataType::Int64];
+/// # let session_time_zone = Some("+08:00");
+/// let coerced = list_types.iter().try_fold(expr_type, |left, right| {
+///     comparison_coercion_with_session_timezone(&left, right, session_time_zone)
+/// });
+/// # assert_eq!(coerced, Some(DataType::Int64));
+/// ```
+///
+/// [`comparison_coercion_with_session_timezone`]: super::binary::comparison_coercion_with_session_timezone
+#[deprecated(
+    since = "56.0.0",
+    note = "Fold `comparison_coercion_with_session_timezone` over the values instead, so `IN` coerces exactly as `=` does"
+)]
 pub fn get_coerce_type_for_list(
     expr_type: &DataType,
     list_types: &[DataType],
@@ -50,6 +76,18 @@ pub fn get_coerce_type_for_list(
 ///
 /// Uses comparison coercion because `CASE expr WHEN val` is semantically
 /// equivalent to `expr = val`.
+///
+/// # Deprecated
+///
+/// Deprecated for the same reason as [`get_coerce_type_for_list`]: it cannot
+/// apply the `datafusion.execution.time_zone` rule that `=` applies. Fold
+/// [`comparison_coercion_with_session_timezone`] over `when_types` instead.
+///
+/// [`comparison_coercion_with_session_timezone`]: super::binary::comparison_coercion_with_session_timezone
+#[deprecated(
+    since = "56.0.0",
+    note = "Fold `comparison_coercion_with_session_timezone` over the values instead, so `CASE expr WHEN` coerces exactly as `=` does"
+)]
 pub fn get_coerce_type_for_case_when(
     when_types: &[DataType],
     case_type: &DataType,
