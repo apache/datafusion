@@ -31,6 +31,7 @@ use arrow::datatypes::{
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, ScalarType, ScalarValue, exec_datafusion_err, exec_err};
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
     Signature, Volatility,
@@ -719,6 +720,16 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
         }
     }
 
+    fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        if let [value] = input
+            && value.range.data_type().is_integer()
+        {
+            Ok(value.sort_properties)
+        } else {
+            Ok(SortProperties::Unordered)
+        }
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
@@ -851,6 +862,96 @@ mod tests {
     use datafusion_expr::ScalarFunctionImplementation;
 
     use super::*;
+
+    #[test]
+    fn micros_integer_ordering_matches_runtime_conversion() -> Result<()> {
+        use arrow::compute::{SortOptions, sort};
+        use datafusion_expr::interval_arithmetic::Interval;
+
+        let function = ToTimestampMicrosFunc::new_with_config(&ConfigOptions::default());
+        for descending in [false, true] {
+            for nulls_first in [false, true] {
+                let ordering = SortProperties::Ordered(SortOptions {
+                    descending,
+                    nulls_first,
+                });
+                for data_type in [
+                    Int8,
+                    Int16,
+                    Int32,
+                    Int64,
+                    UInt8,
+                    UInt16,
+                    UInt32,
+                    UInt64,
+                    Float64,
+                    Decimal128(20, 0),
+                    Date32,
+                    Date64,
+                    Utf8,
+                    Null,
+                    Timestamp(Microsecond, None),
+                ] {
+                    let input = ExprProperties::new_unknown()
+                        .with_order(ordering)
+                        .with_range(Interval::make_unbounded(&data_type)?);
+                    let expected = if data_type.is_integer() {
+                        ordering
+                    } else {
+                        SortProperties::Unordered
+                    };
+                    assert_eq!(
+                        function.output_ordering(std::slice::from_ref(&input))?,
+                        expected
+                    );
+                    if data_type.is_integer() {
+                        let values = if data_type.is_signed_integer() {
+                            Int64Array::from(vec![Some(-1), Some(0), Some(1), None])
+                        } else {
+                            Int64Array::from(vec![Some(0), Some(1), Some(2), None])
+                        };
+                        let options = SortOptions {
+                            descending,
+                            nulls_first,
+                        };
+                        let sorted = sort(&values, Some(options))?;
+                        let argument = ColumnarValue::Array(Arc::clone(&sorted))
+                            .cast_to(&data_type, None)?;
+                        let result = function.invoke_with_args(ScalarFunctionArgs {
+                            args: vec![argument],
+                            arg_fields: vec![Arc::new(Field::new(
+                                "micros",
+                                data_type.clone(),
+                                true,
+                            ))],
+                            number_rows: values.len(),
+                            return_field: Arc::new(Field::new(
+                                "ts",
+                                Timestamp(Microsecond, None),
+                                true,
+                            )),
+                            config_options: Arc::new(ConfigOptions::default()),
+                        })?;
+                        let ColumnarValue::Array(result) =
+                            result.cast_to(&Int64, None)?
+                        else {
+                            panic!("expected array")
+                        };
+                        assert_eq!(
+                            result.as_any().downcast_ref::<Int64Array>().unwrap(),
+                            sorted.as_any().downcast_ref::<Int64Array>().unwrap()
+                        );
+                    }
+                    assert_eq!(
+                        function.output_ordering(&[input.clone(), input])?,
+                        SortProperties::Unordered
+                    );
+                }
+            }
+        }
+        assert_eq!(function.output_ordering(&[])?, SortProperties::Unordered);
+        Ok(())
+    }
 
     fn to_timestamp(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let timezone: Option<Arc<str>> = Some("UTC".into());

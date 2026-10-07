@@ -19,6 +19,7 @@ use super::to_timestamp::ToTimestampSecondsFunc;
 use crate::datetime::common::*;
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{Result, exec_err};
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
@@ -143,7 +144,169 @@ impl ScalarUDFImpl for ToUnixtimeFunc {
         }
     }
 
+    fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        if let [value] = input
+            && (value.range.data_type().is_integer()
+                || matches!(
+                    value.range.data_type(),
+                    DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
+                ))
+        {
+            // Conversions preserve epoch order and report overflow instead of adding NULLs.
+            Ok(value.sort_properties)
+        } else {
+            Ok(SortProperties::Unordered)
+        }
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow::array::{Array, Int64Array};
+    use arrow::compute::{SortOptions, sort};
+    use arrow::datatypes::Field;
+    use datafusion_common::config::ConfigOptions;
+    use datafusion_expr::interval_arithmetic::Interval;
+
+    use super::*;
+
+    #[test]
+    fn supported_ordering_matches_runtime_conversion() -> Result<()> {
+        let function = ToUnixtimeFunc::new();
+        let values = Int64Array::from(vec![
+            Some(i64::MIN),
+            Some(-1000001),
+            Some(-1),
+            Some(0),
+            Some(1),
+            Some(1000001),
+            Some(i64::MAX),
+            None,
+        ]);
+        let mut inputs = vec![
+            (DataType::Int8, i8::MIN as i64, i8::MAX as i64),
+            (DataType::Int16, i16::MIN as i64, i16::MAX as i64),
+            (DataType::Int32, i32::MIN as i64, i32::MAX as i64),
+            (DataType::Int64, i64::MIN, i64::MAX),
+            (DataType::UInt8, 0, u8::MAX as i64),
+            (DataType::UInt16, 0, u16::MAX as i64),
+            (DataType::UInt32, 0, u32::MAX as i64),
+            (DataType::UInt64, 0, i64::MAX),
+            (DataType::Date32, i32::MIN as i64, i32::MAX as i64),
+            (DataType::Date64, i64::MIN, i64::MAX),
+        ]
+        .into_iter()
+        .map(|(data_type, min, max)| {
+            (
+                data_type,
+                Int64Array::from(vec![Some(min), Some(0), Some(max), None]),
+            )
+        })
+        .collect::<Vec<_>>();
+        inputs.push((DataType::Date64, values.clone()));
+        for unit in [
+            TimeUnit::Second,
+            TimeUnit::Millisecond,
+            TimeUnit::Microsecond,
+            TimeUnit::Nanosecond,
+        ] {
+            for timezone in [
+                None,
+                Some("UTC".into()),
+                Some("+05:30".into()),
+                Some("America/New_York".into()),
+            ] {
+                inputs.push((DataType::Timestamp(unit, timezone), values.clone()));
+            }
+        }
+        for (data_type, values) in inputs {
+            for descending in [false, true] {
+                for nulls_first in [false, true] {
+                    let options = SortOptions {
+                        descending,
+                        nulls_first,
+                    };
+                    let ordering = SortProperties::Ordered(options);
+                    let input = ExprProperties::new_unknown()
+                        .with_order(ordering)
+                        .with_range(Interval::make_unbounded(&data_type)?);
+                    assert_eq!(
+                        function.output_ordering(std::slice::from_ref(&input))?,
+                        ordering
+                    );
+                    assert!(
+                        !function
+                            .strictly_order_preserving(std::slice::from_ref(&input))?
+                    );
+                    assert!(!function.preserves_lex_ordering(&[input])?);
+
+                    let sorted = sort(&values, Some(options))?;
+                    let argument =
+                        ColumnarValue::Array(sorted).cast_to(&data_type, None)?;
+                    let result = function.invoke_with_args(ScalarFunctionArgs {
+                        args: vec![argument],
+                        arg_fields: vec![Arc::new(Field::new(
+                            "ts",
+                            data_type.clone(),
+                            true,
+                        ))],
+                        number_rows: values.len(),
+                        return_field: Arc::new(Field::new(
+                            "seconds",
+                            DataType::Int64,
+                            true,
+                        )),
+                        config_options: Arc::new(ConfigOptions::default()),
+                    })?;
+                    let ColumnarValue::Array(result) = result else {
+                        panic!("expected array")
+                    };
+                    let expected = sort(result.as_ref(), Some(options))?;
+                    assert_eq!(
+                        result.as_any().downcast_ref::<Int64Array>().unwrap(),
+                        expected.as_any().downcast_ref::<Int64Array>().unwrap()
+                    );
+                    assert_eq!(result.null_count(), values.null_count());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ordering_rejects_unsupported_types_and_multiple_arguments() -> Result<()> {
+        let function = ToUnixtimeFunc::new();
+        for data_type in [
+            DataType::Float64,
+            DataType::Decimal128(20, 0),
+            DataType::Utf8,
+            DataType::Null,
+        ] {
+            let input = ExprProperties::new_unknown()
+                .with_order(SortProperties::Ordered(SortOptions::default()))
+                .with_range(Interval::make_unbounded(&data_type)?);
+            assert_eq!(
+                function.output_ordering(&[input])?,
+                SortProperties::Unordered
+            );
+        }
+        let timestamp = ExprProperties::new_unknown()
+            .with_order(SortProperties::Ordered(SortOptions::default()))
+            .with_range(Interval::make_unbounded(&DataType::Timestamp(
+                TimeUnit::Microsecond,
+                None,
+            ))?);
+        assert_eq!(
+            function.output_ordering(&[timestamp.clone(), timestamp])?,
+            SortProperties::Unordered
+        );
+        assert_eq!(function.output_ordering(&[])?, SortProperties::Unordered);
+        Ok(())
     }
 }
