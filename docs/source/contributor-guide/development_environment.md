@@ -52,6 +52,16 @@ Notes:
 - `protoc` is required to compile DataFusion from source.
 - Some tests and examples rely on git submodule data being present locally.
 
+## Nix and direnv
+
+The repository's `flake.nix` provides a Nix development shell. Enter it directly
+with `nix develop`, or install and configure [direnv](https://direnv.net/) and run
+`direnv allow` from the repository root to load it automatically.
+
+Put machine-specific direnv settings in `.envrc.local`. This file is ignored by
+Git and loaded after the shared Nix environment so that local settings take
+precedence.
+
 ## Windows Setup
 
 ```shell
