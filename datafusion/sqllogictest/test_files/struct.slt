@@ -727,6 +727,22 @@ select get_field(s, 'inner', 'val') from nested_test;
 ----
 100
 
+# Snowflake-style colon access uses the structured JSON path before it is serialized.
+query III
+select
+  s:inner.val as unquoted,
+  s:"inner"."val" as quoted,
+  s:['inner']['val'] as bracketed
+from nested_test;
+----
+100 100 100
+
+# Quoted dots are part of the field name, not path separators.
+query I
+select named_struct('inner.val', 200):"inner.val";
+----
+200
+
 statement ok
 drop table nested_test;
 
