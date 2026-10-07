@@ -400,12 +400,24 @@ impl PartialHashAggregateStream {
                             self.early_emit_count.add(1);
                         }
                         timer.done();
-                        self.emit_on_memory_pressure(
-                            materialized_group_states,
-                            &mut emitter,
-                            hash_table.memory_size(),
-                        )
-                        .await?;
+                        if last_state == HandleInputResult::FlushThresholdReached {
+                            self.reduction_factor
+                                .add_part(materialized_group_states.num_rows());
+                            self.reservation.try_resize(hash_table.memory_size())?;
+                            emitter
+                                .emit(
+                                    materialized_group_states
+                                        .record_output(&self.baseline_metrics),
+                                )
+                                .await;
+                        } else {
+                            self.emit_on_memory_pressure(
+                                materialized_group_states,
+                                &mut emitter,
+                                hash_table.memory_size(),
+                            )
+                            .await?;
+                        }
                     }
                 }
             }
