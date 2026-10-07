@@ -18,6 +18,28 @@
 //! Checks that the intermediate state produced by an aggregate's
 //! [`Accumulator`] and its [`GroupsAccumulator`] are interchangeable.
 //!
+//! # Built-in aggregate invariant
+//!
+//! DataFusion's own execution never mixes the two kinds of accumulator when
+//! merging state, so this is not a requirement of the `AggregateUDFImpl` API.
+//! It is, however, an invariant that every built-in aggregate function with a
+//! native [`GroupsAccumulator`] maintains, so that systems built on DataFusion
+//! can merge state produced by either kind with the other:
+//!
+//! * Each row of the state returned by `GroupsAccumulator::state` or
+//!   `GroupsAccumulator::convert_to_state` is accepted by
+//!   `Accumulator::merge_batch`.
+//! * `GroupsAccumulator::merge_batch` accepts state returned by
+//!   `Accumulator::state`.
+//! * Merging state from the other kind produces the same result as merging
+//!   the equivalent state from the same kind.
+//!
+//! The `builtin_accumulator_and_groups_accumulator_states_are_compatible` test
+//! below enforces this for every function in
+//! [`all_default_aggregate_functions`]. A new built-in function that the test
+//! cannot exercise must be added to its `NOT_EXERCISED` list with the reason.
+//!
+//! [`all_default_aggregate_functions`]: crate::all_default_aggregate_functions
 //! [`Accumulator`]: datafusion_expr::Accumulator
 //! [`GroupsAccumulator`]: datafusion_expr::GroupsAccumulator
 
@@ -40,8 +62,11 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 /// Checks that `udaf`'s [`Accumulator`] and [`GroupsAccumulator`] can each
 /// merge the intermediate state produced by the other.
 ///
-/// See the [State Compatibility] section of [`GroupsAccumulator`] for the
-/// requirement this checks.
+/// DataFusion itself does not require this of user defined aggregates, since
+/// it never merges state produced by one kind of accumulator with the other.
+/// All built-in aggregate functions do maintain it, and this function can be
+/// used to check the same of an aggregate that is used in a system that
+/// relies on it.
 ///
 /// # What is checked
 ///
@@ -89,7 +114,6 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 ///
 /// [`Accumulator`]: datafusion_expr::Accumulator
 /// [`GroupsAccumulator`]: datafusion_expr::GroupsAccumulator
-/// [State Compatibility]: datafusion_expr::GroupsAccumulator#state-compatibility-with-accumulator
 pub fn check_state_compatibility(udaf: &Arc<AggregateUDF>) -> Result<()> {
     let name = udaf.name();
     let (coverage, failures) = check_udaf(udaf);
