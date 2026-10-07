@@ -62,7 +62,7 @@ use datafusion_expr::EmitTo;
 ///      order)                                    recent group index
 /// ```
 #[derive(Debug)]
-pub struct GroupCompletionPartial {
+pub struct GroupClusteringPartial {
     /// State machine
     state: State,
 
@@ -114,7 +114,7 @@ impl State {
     }
 }
 
-impl GroupCompletionPartial {
+impl GroupClusteringPartial {
     /// Creates a tracker for runs defined by the specified grouping columns.
     pub fn try_new(grouping_indices: Vec<usize>) -> Result<Self> {
         debug_assert!(!grouping_indices.is_empty());
@@ -208,7 +208,7 @@ impl GroupCompletionPartial {
     }
 
     /// Called when new groups are added in a batch. See documentation
-    /// on [`super::GroupCompletion::new_groups`]
+    /// on [`super::GroupClustering::new_groups`]
     pub fn new_groups(
         &mut self,
         batch_group_values: &[ArrayRef],
@@ -280,11 +280,11 @@ mod tests {
     #[rstest::rstest]
     #[case::sorted([1, 2, 3, 4])]
     #[case::clustered([3, 1, 4, 2])]
-    fn test_group_completion_partial(#[case] keys: [i32; 4]) -> Result<()> {
+    fn test_group_clustering_partial(#[case] keys: [i32; 4]) -> Result<()> {
         let [first, second, third, fourth] = keys;
         // Contiguous on column a.
         let grouping_indices = vec![0];
-        let mut group_completion = GroupCompletionPartial::try_new(grouping_indices)?;
+        let mut group_clustering = GroupClusteringPartial::try_new(grouping_indices)?;
 
         let batch_group_values: Vec<ArrayRef> = vec![
             Arc::new(Int32Array::from(vec![first, second, third])),
@@ -294,21 +294,21 @@ mod tests {
         let group_indices = vec![0, 1, 2];
         let total_num_groups = 3;
 
-        group_completion.new_groups(
+        group_clustering.new_groups(
             &batch_group_values,
             &group_indices,
             total_num_groups,
         )?;
 
         assert_eq!(
-            group_completion.state,
+            group_clustering.state,
             State::InProgress {
                 current_run_start: 2,
                 group_key: vec![ScalarValue::Int32(Some(third))],
                 current: 2
             }
         );
-        assert_eq!(group_completion.emit_to(), Some(EmitTo::First(2)));
+        assert_eq!(group_clustering.emit_to(), Some(EmitTo::First(2)));
 
         // push without a boundary
         let batch_group_values: Vec<ArrayRef> = vec![
@@ -318,21 +318,21 @@ mod tests {
         let group_indices = vec![3, 4, 5];
         let total_num_groups = 6;
 
-        group_completion.new_groups(
+        group_clustering.new_groups(
             &batch_group_values,
             &group_indices,
             total_num_groups,
         )?;
 
         assert_eq!(
-            group_completion.state,
+            group_clustering.state,
             State::InProgress {
                 current_run_start: 2,
                 group_key: vec![ScalarValue::Int32(Some(third))],
                 current: 5
             }
         );
-        assert_eq!(group_completion.emit_to(), Some(EmitTo::First(2)));
+        assert_eq!(group_clustering.emit_to(), Some(EmitTo::First(2)));
 
         // push with only a boundary to previous batch
         let batch_group_values: Vec<ArrayRef> = vec![
@@ -342,20 +342,20 @@ mod tests {
         let group_indices = vec![6, 7, 8];
         let total_num_groups = 9;
 
-        group_completion.new_groups(
+        group_clustering.new_groups(
             &batch_group_values,
             &group_indices,
             total_num_groups,
         )?;
         assert_eq!(
-            group_completion.state,
+            group_clustering.state,
             State::InProgress {
                 current_run_start: 6,
                 group_key: vec![ScalarValue::Int32(Some(fourth))],
                 current: 8
             }
         );
-        assert_eq!(group_completion.emit_to(), Some(EmitTo::First(6)));
+        assert_eq!(group_clustering.emit_to(), Some(EmitTo::First(6)));
 
         Ok(())
     }

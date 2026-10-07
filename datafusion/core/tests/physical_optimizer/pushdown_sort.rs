@@ -731,13 +731,13 @@ fn test_pushdown_through_blocking_node() {
     OptimizationTest:
       input:
         - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
-        -   AggregateExec: mode=Final, gby=[a@0 as a], aggr=[COUNT(b)], group_completion_mode=Full
+        -   AggregateExec: mode=Final, gby=[a@0 as a], aggr=[COUNT(b)], group_clustering_mode=Full
         -     SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
         -       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
       output:
         Ok:
           - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
-          -   AggregateExec: mode=Final, gby=[a@0 as a], aggr=[COUNT(b)], group_completion_mode=Full
+          -   AggregateExec: mode=Final, gby=[a@0 as a], aggr=[COUNT(b)], group_clustering_mode=Full
           -     SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
           -       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, sort_order_for_reorder=[a@0 DESC NULLS LAST], reverse_row_groups=true
     "

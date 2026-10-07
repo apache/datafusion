@@ -57,7 +57,7 @@ impl ClusteredAggregateTable<SingleMarker> {
             &input_schema,
             output_schema,
             state_schema,
-            &agg.group_completion_mode,
+            &agg.group_clustering_mode,
             &agg.mode,
             agg.filter_expr().to_vec(),
             metrics,
@@ -88,7 +88,7 @@ impl ClusteredAggregateTable<SingleMarker> {
         if self.is_empty() {
             return Ok(None);
         }
-        let Some(emit_to) = self.group_completion().emit_to() else {
+        let Some(emit_to) = self.group_clustering().emit_to() else {
             return Ok(None);
         };
         self.materialize_groups(

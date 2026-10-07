@@ -24,14 +24,15 @@ use datafusion_expr::EmitTo;
 mod full;
 mod partial;
 
-pub use full::GroupCompletionFull;
-pub use partial::GroupCompletionPartial;
+pub use full::GroupClusteringFull;
+pub use partial::GroupClusteringPartial;
 
-/// Describes how an aggregate can determine that groups are complete.
+/// Describes how rows are clustered by grouping expressions within each input
+/// partition.
 ///
-/// Input ordering is one way to establish a group-completion mode, but the
-/// execution machinery only needs to know when it can safely emit completed
-/// groups. This mode does not describe the sort order of the input or output.
+/// Input ordering is one way to establish clustering. Aggregate execution uses
+/// these guarantees to determine when groups are complete and can be emitted.
+/// This mode does not describe the sort order of the input or output.
 ///
 /// For example, when grouping by `key`, both inputs have fully contiguous
 /// groups within the input partition:
@@ -44,8 +45,8 @@ pub use partial::GroupCompletionPartial;
 /// In both cases, once the key changes, the previous key will not appear again,
 /// so its group is complete and can be emitted.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum GroupCompletionMode {
-    /// No group can be known complete before the input ends.
+pub enum GroupClusteringMode {
+    /// No clustering guarantee is available to complete groups before the input ends.
     None,
     /// Rows with the same values at these grouping-expression indices form one
     /// contiguous range. When those values change, every group in the previous
@@ -62,29 +63,29 @@ pub enum GroupCompletionMode {
 
 /// Tracks when groups in the hash table are complete and can be emitted.
 #[derive(Debug)]
-pub enum GroupCompletion {
+pub enum GroupClustering {
     /// No group can be known complete before the input ends.
     None,
     /// Rows are contiguous for a subset of the grouping keys.
     /// When those key values change, all groups in the previous run
     /// are complete and can be emitted.
-    Partial(GroupCompletionPartial),
+    Partial(GroupClusteringPartial),
     /// Rows are contiguous for the complete grouping tuple.
     /// When the tuple changes, the previous group can be emitted.
-    Full(GroupCompletionFull),
+    Full(GroupClusteringFull),
 }
 
-impl GroupCompletion {
-    /// Create a `GroupCompletion` for the specified group-completion mode.
-    pub fn try_new(mode: &GroupCompletionMode) -> Result<Self> {
+impl GroupClustering {
+    /// Create a `GroupClustering` for the specified group-clustering mode.
+    pub fn try_new(mode: &GroupClusteringMode) -> Result<Self> {
         match mode {
-            GroupCompletionMode::None => Ok(GroupCompletion::None),
-            GroupCompletionMode::Partial(grouping_indices) => {
-                GroupCompletionPartial::try_new(grouping_indices.clone())
-                    .map(GroupCompletion::Partial)
+            GroupClusteringMode::None => Ok(GroupClustering::None),
+            GroupClusteringMode::Partial(grouping_indices) => {
+                GroupClusteringPartial::try_new(grouping_indices.clone())
+                    .map(GroupClustering::Partial)
             }
-            GroupCompletionMode::Full => {
-                Ok(GroupCompletion::Full(GroupCompletionFull::new()))
+            GroupClusteringMode::Full => {
+                Ok(GroupClustering::Full(GroupClusteringFull::new()))
             }
         }
     }
@@ -93,16 +94,16 @@ impl GroupCompletion {
     /// can be emitted.
     pub fn emit_to(&self) -> Option<EmitTo> {
         match self {
-            GroupCompletion::None => None,
-            GroupCompletion::Partial(partial) => partial.emit_to(),
-            GroupCompletion::Full(full) => full.emit_to(),
+            GroupClustering::None => None,
+            GroupClustering::Partial(partial) => partial.emit_to(),
+            GroupClustering::Full(full) => full.emit_to(),
         }
     }
 
     /// Returns the emit strategy to use under memory pressure (OOM).
     ///
     /// Returns the strategy that must be used when emitting up to `n` groups
-    /// while respecting the configured group-completion mode.
+    /// while respecting the configured group-clustering mode.
     ///
     /// Returns `None` if no data can be emitted.
     pub fn oom_emit_to(&self, n: usize) -> Option<EmitTo> {
@@ -111,8 +112,8 @@ impl GroupCompletion {
         }
 
         match self {
-            GroupCompletion::None => Some(EmitTo::First(n)),
-            GroupCompletion::Partial(_) | GroupCompletion::Full(_) => {
+            GroupClustering::None => Some(EmitTo::First(n)),
+            GroupClustering::Partial(_) | GroupClustering::Full(_) => {
                 self.emit_to().map(|emit_to| match emit_to {
                     EmitTo::First(max) => EmitTo::First(n.min(max)),
                     EmitTo::All => EmitTo::First(n),
@@ -124,9 +125,9 @@ impl GroupCompletion {
     /// Updates the state to indicate that the input is complete.
     pub fn input_done(&mut self) {
         match self {
-            GroupCompletion::None => {}
-            GroupCompletion::Partial(partial) => partial.input_done(),
-            GroupCompletion::Full(full) => full.input_done(),
+            GroupClustering::None => {}
+            GroupClustering::Partial(partial) => partial.input_done(),
+            GroupClustering::Full(full) => full.input_done(),
         }
     }
 
@@ -138,9 +139,9 @@ impl GroupCompletion {
     /// input batch from a fresh completion state.
     pub fn reset(&mut self) {
         match self {
-            GroupCompletion::None => {}
-            GroupCompletion::Partial(partial) => partial.reset(),
-            GroupCompletion::Full(full) => full.reset(),
+            GroupClustering::None => {}
+            GroupClustering::Partial(partial) => partial.reset(),
+            GroupClustering::Full(full) => full.reset(),
         }
     }
 
@@ -148,9 +149,9 @@ impl GroupCompletion {
     /// existing indexes down by `n`.
     pub fn remove_groups(&mut self, n: usize) {
         match self {
-            GroupCompletion::None => {}
-            GroupCompletion::Partial(partial) => partial.remove_groups(n),
-            GroupCompletion::Full(full) => full.remove_groups(n),
+            GroupClustering::None => {}
+            GroupClustering::Partial(partial) => partial.remove_groups(n),
+            GroupClustering::Full(full) => full.remove_groups(n),
         }
     }
 
@@ -169,15 +170,15 @@ impl GroupCompletion {
         total_num_groups: usize,
     ) -> Result<()> {
         match self {
-            GroupCompletion::None => {}
-            GroupCompletion::Partial(partial) => {
+            GroupClustering::None => {}
+            GroupClustering::Partial(partial) => {
                 partial.new_groups(
                     batch_group_values,
                     group_indices,
                     total_num_groups,
                 )?;
             }
-            GroupCompletion::Full(full) => {
+            GroupClustering::Full(full) => {
                 full.new_groups(total_num_groups);
             }
         }
@@ -188,9 +189,9 @@ impl GroupCompletion {
     pub fn size(&self) -> usize {
         size_of::<Self>()
             + match self {
-                GroupCompletion::None => 0,
-                GroupCompletion::Partial(partial) => partial.size(),
-                GroupCompletion::Full(full) => full.size(),
+                GroupClustering::None => 0,
+                GroupClustering::Partial(partial) => partial.size(),
+                GroupClustering::Full(full) => full.size(),
             }
     }
 }
@@ -204,21 +205,21 @@ mod tests {
     use arrow::array::Int32Array;
 
     #[test]
-    fn test_oom_emit_to_none_completion() {
-        let group_completion = GroupCompletion::None;
+    fn test_oom_emit_to_none_clustering() {
+        let group_clustering = GroupClustering::None;
 
-        assert_eq!(group_completion.oom_emit_to(0), None);
-        assert_eq!(group_completion.oom_emit_to(5), Some(EmitTo::First(5)));
+        assert_eq!(group_clustering.oom_emit_to(0), None);
+        assert_eq!(group_clustering.oom_emit_to(5), Some(EmitTo::First(5)));
     }
 
-    /// Creates a partial group-completion tracker with three groups.
+    /// Creates a partial group-clustering tracker with three groups.
     ///
     /// `group_key_values` controls whether a run boundary exists in the batch:
     /// distinct values such as `[1, 2, 3]` create boundaries, while repeated
     /// values such as `[1, 1, 1]` do not.
-    fn partial_completion(group_key_values: Vec<i32>) -> Result<GroupCompletion> {
-        let mut group_completion =
-            GroupCompletion::Partial(GroupCompletionPartial::try_new(vec![0])?);
+    fn partial_clustering(group_key_values: Vec<i32>) -> Result<GroupClustering> {
+        let mut group_clustering =
+            GroupClustering::Partial(GroupClusteringPartial::try_new(vec![0])?);
 
         let batch_group_values: Vec<ArrayRef> = vec![
             Arc::new(Int32Array::from(group_key_values)),
@@ -226,30 +227,30 @@ mod tests {
         ];
         let group_indices = vec![0, 1, 2];
 
-        group_completion.new_groups(&batch_group_values, &group_indices, 3)?;
+        group_clustering.new_groups(&batch_group_values, &group_indices, 3)?;
 
-        Ok(group_completion)
+        Ok(group_clustering)
     }
 
     #[test]
     fn test_oom_emit_to_partial_clamps_to_boundary() -> Result<()> {
-        let group_completion = partial_completion(vec![1, 2, 3])?;
+        let group_clustering = partial_clustering(vec![1, 2, 3])?;
 
         // Can emit both `1` and `2` groups because we have seen `3`
-        assert_eq!(group_completion.emit_to(), Some(EmitTo::First(2)));
-        assert_eq!(group_completion.oom_emit_to(1), Some(EmitTo::First(1)));
-        assert_eq!(group_completion.oom_emit_to(3), Some(EmitTo::First(2)));
+        assert_eq!(group_clustering.emit_to(), Some(EmitTo::First(2)));
+        assert_eq!(group_clustering.oom_emit_to(1), Some(EmitTo::First(1)));
+        assert_eq!(group_clustering.oom_emit_to(3), Some(EmitTo::First(2)));
 
         Ok(())
     }
 
     #[test]
     fn test_oom_emit_to_partial_without_boundary() -> Result<()> {
-        let group_completion = partial_completion(vec![1, 1, 1])?;
+        let group_clustering = partial_clustering(vec![1, 1, 1])?;
 
         // Can't emit the last `1` group as it may have more values
-        assert_eq!(group_completion.emit_to(), None);
-        assert_eq!(group_completion.oom_emit_to(3), None);
+        assert_eq!(group_clustering.emit_to(), None);
+        assert_eq!(group_clustering.oom_emit_to(3), None);
 
         Ok(())
     }

@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int32Array};
-use datafusion_physical_plan::aggregates::order::GroupCompletionPartial;
+use datafusion_physical_plan::aggregates::order::GroupClusteringPartial;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 
@@ -34,7 +34,7 @@ fn create_test_arrays(num_columns: usize) -> Vec<ArrayRef> {
         .collect()
 }
 fn bench_new_groups(c: &mut Criterion) {
-    let mut group = c.benchmark_group("group_completion_partial");
+    let mut group = c.benchmark_group("group_clustering_partial");
 
     // Test with 1, 2, 4, and 8 grouping indices
     for num_columns in [1, 2, 4, 8] {
@@ -45,9 +45,9 @@ fn bench_new_groups(c: &mut Criterion) {
             let group_indices: Vec<usize> = (0..BATCH_SIZE).collect();
 
             b.iter(|| {
-                let mut completion =
-                    GroupCompletionPartial::try_new(grouping_indices.clone()).unwrap();
-                completion
+                let mut clustering =
+                    GroupClusteringPartial::try_new(grouping_indices.clone()).unwrap();
+                clustering
                     .new_groups(&batch_group_values, &group_indices, BATCH_SIZE)
                     .unwrap();
             });

@@ -26,7 +26,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 
 use crate::aggregates::aggregate_hash_table::FinalMarker;
-use crate::aggregates::order::GroupCompletionMode;
+use crate::aggregates::order::GroupClusteringMode;
 use crate::aggregates::{AggregateExec, AggregateMode, group_values::AccumulatorPhase};
 
 use super::common::HashAggregateAccumulator;
@@ -42,11 +42,11 @@ use super::common_clustered::{ClusteredAggregateTable, ClusteredAggregateTableMe
 ///
 /// See comments at [`ClusteredAggregateTable`] for details.
 impl ClusteredAggregateTable<FinalMarker> {
-    pub(in crate::aggregates) fn new_with_group_completion(
+    pub(in crate::aggregates) fn new_with_group_clustering(
         agg: &AggregateExec,
         input_schema: &SchemaRef,
         output_schema: SchemaRef,
-        group_completion_mode: &GroupCompletionMode,
+        group_clustering_mode: &GroupClusteringMode,
         metrics: ClusteredAggregateTableMetrics,
     ) -> Result<Self> {
         Self::new_for_mode(
@@ -54,7 +54,7 @@ impl ClusteredAggregateTable<FinalMarker> {
             input_schema,
             output_schema,
             Arc::clone(input_schema),
-            group_completion_mode,
+            group_clustering_mode,
             &AggregateMode::Final,
             vec![None; agg.aggr_expr().len()],
             metrics,
@@ -88,7 +88,7 @@ impl ClusteredAggregateTable<FinalMarker> {
         if self.is_empty() {
             return Ok(None);
         }
-        let Some(emit_to) = self.group_completion().emit_to() else {
+        let Some(emit_to) = self.group_clustering().emit_to() else {
             return Ok(None);
         };
         self.materialize_groups(

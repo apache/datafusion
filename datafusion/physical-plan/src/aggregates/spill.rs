@@ -30,7 +30,7 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 use super::aggregate_hash_table::ClusteredAggregateTableMetrics;
 use super::clustered_final_stream::ClusteredFinalAggregateStream;
-use super::order::GroupCompletionMode;
+use super::order::GroupClusteringMode;
 use super::{AggregateExec, AggregateMode};
 use crate::SendableRecordBatchStream;
 use crate::metrics::{BaselineMetrics, SpillMetrics};
@@ -127,11 +127,11 @@ impl AggregateSpill {
     /// Creates the spill context of a stream, whose spill requests are described
     /// as `label`.
     ///
-    /// `group_completion_mode` determines which group columns are already
+    /// `group_clustering_mode` determines which group columns are already
     /// contiguous. Spill files are sorted by those columns first, followed by
     /// the remaining ones. Existing output sort options are retained so replay
-    /// preserves any advertised ordering as well as group completion.
-    /// Full group completion aggregates in bounded memory and never spills.
+    /// preserves any advertised ordering as well as group clustering.
+    /// Full group clustering aggregates in bounded memory and never spills.
     ///
     /// `spill_schema` is the schema of the intermediate state batches.
     #[expect(clippy::too_many_arguments)]
@@ -141,12 +141,12 @@ impl AggregateSpill {
         context: &Arc<TaskContext>,
         partition: usize,
         batch_size: usize,
-        group_completion_mode: &GroupCompletionMode,
+        group_clustering_mode: &GroupClusteringMode,
         spill_schema: &SchemaRef,
         spill_metrics: SpillMetrics,
     ) -> Result<Self> {
         let mut replay_agg = agg.clone();
-        replay_agg.group_completion_mode = GroupCompletionMode::Full;
+        replay_agg.group_clustering_mode = GroupClusteringMode::Full;
         let group_schema = match agg.mode {
             AggregateMode::Final | AggregateMode::FinalPartitioned => {
                 agg.group_by().group_schema(spill_schema)?
@@ -166,10 +166,10 @@ impl AggregateSpill {
         };
 
         let num_group_columns = group_schema.fields().len();
-        let contiguous_indices: &[usize] = match group_completion_mode {
-            GroupCompletionMode::None => &[],
-            GroupCompletionMode::Partial(contiguous_indices) => contiguous_indices,
-            GroupCompletionMode::Full => {
+        let contiguous_indices: &[usize] = match group_clustering_mode {
+            GroupClusteringMode::None => &[],
+            GroupClusteringMode::Partial(contiguous_indices) => contiguous_indices,
+            GroupClusteringMode::Full => {
                 return internal_err!("{label}: fully contiguous groups do not spill");
             }
         };
@@ -290,7 +290,7 @@ impl AggregateSpill {
             &context,
             partition,
             merged,
-            &GroupCompletionMode::Full,
+            &GroupClusteringMode::Full,
             baseline_metrics.clone(),
             metrics,
             None,

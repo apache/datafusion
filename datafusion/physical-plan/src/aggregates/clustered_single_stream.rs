@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Single-stage aggregate stream for raw input with group-completion guarantees.
+//! Single-stage aggregate stream for raw input with group-clustering guarantees.
 
 use std::ops::ControlFlow;
 use std::sync::Arc;
@@ -29,7 +29,7 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
 
 use super::aggregate_hash_table::{ClusteredAggregateTable, SingleMarker};
-use super::order::GroupCompletionMode;
+use super::order::GroupClusteringMode;
 use super::spill::AggregateSpill;
 use super::{AggregateExec, create_schema};
 use crate::aggregates::AggregateMode;
@@ -37,8 +37,8 @@ use crate::metrics::{BaselineMetrics, RecordOutput, SpillMetrics};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
-/// Single aggregate stream for [`GroupCompletionMode::Partial`] and
-/// [`GroupCompletionMode::Full`].
+/// Single aggregate stream for [`GroupClusteringMode::Partial`] and
+/// [`GroupClusteringMode::Full`].
 ///
 /// # Example
 ///
@@ -55,11 +55,11 @@ use crate::{RecordBatchStream, SendableRecordBatchStream};
 /// Input: raw rows
 /// Output: final results for all groups (for example, `AVG(x)`)
 ///
-/// # Group Completion Optimization
+/// # Group Clustering Optimization
 ///
 /// For the aggregation work, the hash aggregation implementation is reused.
 ///
-/// After each input batch, the group-completion mode determines whether any
+/// After each input batch, the group-clustering mode determines whether any
 /// groups can be emitted eagerly to improve memory efficiency. Materialize
 /// that entire completed prefix once, then emit slices of it before reading
 /// more input. See
@@ -70,7 +70,7 @@ use crate::{RecordBatchStream, SendableRecordBatchStream};
 ///
 /// # Memory Pressure and Spilling
 ///
-/// ## Full group completion
+/// ## Full group clustering
 ///
 /// Every complete grouping tuple is contiguous. Ordering by every group key is
 /// one way to establish this mode, for example:
@@ -85,7 +85,7 @@ use crate::{RecordBatchStream, SendableRecordBatchStream};
 /// If a memory reservation nevertheless fails, the stream returns the error
 /// directly, indicating an unexpected behavior.
 ///
-/// ## Partial group completion
+/// ## Partial group clustering
 ///
 /// Rows are contiguous for a subset of the group keys. Ordering by that subset
 /// is one way to establish this mode, for example:
@@ -115,7 +115,7 @@ enum ClusteredSingleAggregateState {
         table: ClusteredAggregateTable<SingleMarker>,
         /// None if either
         /// - Disk Manager doesn't enable temporary file creation
-        /// - Full group completion is used, so completed groups can be released
+        /// - Full group clustering is used, so completed groups can be released
         spill_context: Option<Box<AggregateSpill>>,
     },
     Spilling {
@@ -160,7 +160,7 @@ impl ClusteredSingleAggregateStream {
             agg.mode,
             AggregateMode::Single | AggregateMode::SinglePartitioned
         ));
-        debug_assert_ne!(agg.group_completion_mode, GroupCompletionMode::None);
+        debug_assert_ne!(agg.group_clustering_mode, GroupClusteringMode::None);
 
         let schema = Arc::clone(&agg.schema);
         let input = agg.input.execute(partition, Arc::clone(context))?;
@@ -183,7 +183,7 @@ impl ClusteredSingleAggregateStream {
         )?;
 
         let can_spill =
-            matches!(agg.group_completion_mode, GroupCompletionMode::Partial(_))
+            matches!(agg.group_clustering_mode, GroupClusteringMode::Partial(_))
                 && context.runtime_env().disk_manager.tmp_files_enabled();
         let spill_context = if can_spill {
             Some(Box::new(AggregateSpill::try_new(
@@ -192,7 +192,7 @@ impl ClusteredSingleAggregateStream {
                 context,
                 partition,
                 batch_size,
-                &agg.group_completion_mode,
+                &agg.group_clustering_mode,
                 &state_schema,
                 spill_metrics,
             )?))

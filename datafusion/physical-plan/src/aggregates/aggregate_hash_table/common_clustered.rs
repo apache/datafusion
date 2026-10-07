@@ -31,7 +31,7 @@ use crate::aggregates::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
     GroupByMetrics, GroupValues, new_group_values,
 };
-use crate::aggregates::order::{GroupCompletion, GroupCompletionMode};
+use crate::aggregates::order::{GroupClustering, GroupClusteringMode};
 use crate::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy, aggregate_expressions,
     evaluate_group_by,
@@ -76,9 +76,9 @@ impl ClusteredAggregateTableMetrics {
 
 /// Aggregate table shared by the clustered single, partial and final paths.
 ///
-/// # Group completion optimization
+/// # Group clustering optimization
 ///
-/// The table consumes input batches while [`GroupCompletion`] tracks which groups
+/// The table consumes input batches while [`GroupClustering`] tracks which groups
 /// are proven complete. Completed groups can be emitted before the input stream
 /// ends, so completed groups no longer occupy the table.
 ///
@@ -112,7 +112,7 @@ impl ClusteredAggregateTableMetrics {
 /// `AggrMode` selects the aggregate semantics. For example,
 /// `ClusteredAggregateTable::<PartialMarker>::new(...)` consumes raw rows
 /// and emits partial states, while
-/// `ClusteredAggregateTable::<FinalMarker>::new_with_group_completion(...)`
+/// `ClusteredAggregateTable::<FinalMarker>::new_with_group_clustering(...)`
 /// consumes partial states and emits final values.
 ///
 /// Shared methods live on `impl<T>`; single/partial/final behavior lives on
@@ -148,7 +148,7 @@ pub(in crate::aggregates) struct ClusteredAggregateTable<AggrMode> {
 /// It accumulates input during aggregation and emits output rows as soon as
 /// groups are known to be complete.
 ///
-/// [`GroupCompletion`] tracks when and how to do early emit.
+/// [`GroupClustering`] tracks when and how to do early emit.
 /// [`GroupValues`] stores the physical group-key layout, while
 /// [`datafusion_expr::GroupsAccumulator`] stores per-group aggregate state.
 pub(super) struct ClusteredAggregateTableBuffer {
@@ -156,7 +156,7 @@ pub(super) struct ClusteredAggregateTableBuffer {
     pub(super) group_by: Arc<PhysicalGroupBy>,
 
     /// Tracks which groups are complete and can be emitted safely.
-    pub(super) group_completion: GroupCompletion,
+    pub(super) group_clustering: GroupClustering,
 
     /// Interned group keys, in the same group-id order used by accumulators.
     pub(super) group_values: Box<dyn GroupValues>,
@@ -182,14 +182,14 @@ impl<AggrMode> ClusteredAggregateTable<AggrMode> {
         input_schema: &SchemaRef,
         output_schema: SchemaRef,
         state_schema: SchemaRef,
-        group_completion_mode: &GroupCompletionMode,
+        group_clustering_mode: &GroupClusteringMode,
         aggregate_mode: &AggregateMode,
         filters: Vec<Option<Arc<dyn PhysicalExpr>>>,
         metrics: ClusteredAggregateTableMetrics,
     ) -> Result<Self> {
-        let group_completion = GroupCompletion::try_new(group_completion_mode)?;
+        let group_clustering = GroupClustering::try_new(group_clustering_mode)?;
         let group_schema = agg.group_by().group_schema(input_schema)?;
-        let group_values = new_group_values(group_schema, &group_completion)?;
+        let group_values = new_group_values(group_schema, &group_clustering)?;
         let aggregate_arguments = aggregate_expressions(
             agg.aggr_expr(),
             aggregate_mode,
@@ -223,7 +223,7 @@ impl<AggrMode> ClusteredAggregateTable<AggrMode> {
             aggregate_submetrics: metrics.submetrics,
             buffer: ClusteredAggregateTableBuffer {
                 group_by: Arc::clone(agg.group_by()),
-                group_completion,
+                group_clustering,
                 group_values,
                 group_indices: vec![],
                 accumulators,
@@ -266,15 +266,15 @@ impl<AggrMode> ClusteredAggregateTable<AggrMode> {
     /// Called after the input stream is exhausted and the last batch has been
     /// aggregated.
     ///
-    /// Updates the internal [`GroupCompletion`] so it can continue emitting until
+    /// Updates the internal [`GroupClustering`] so it can continue emitting until
     /// the buffer is empty.
     pub(in crate::aggregates) fn input_done(&mut self) {
-        self.buffer.group_completion.input_done();
+        self.buffer.group_clustering.input_done();
     }
 
     /// Returns the completion state used to decide how memory pressure is handled.
-    pub(in crate::aggregates) fn group_completion(&self) -> &GroupCompletion {
-        &self.buffer.group_completion
+    pub(in crate::aggregates) fn group_clustering(&self) -> &GroupClustering {
+        &self.buffer.group_clustering
     }
 
     /// Number of groups currently buffered.
@@ -295,7 +295,7 @@ impl<AggrMode> ClusteredAggregateTable<AggrMode> {
             .map(|acc| acc.size())
             .sum::<usize>()
             + self.buffer.group_values.size()
-            + self.buffer.group_completion.size()
+            + self.buffer.group_clustering.size()
             + self.buffer.group_indices.allocated_size()
     }
 
@@ -344,7 +344,7 @@ impl<AggrMode> ClusteredAggregateTable<AggrMode> {
         self.buffer.group_values.clear_shrink(0);
         self.buffer.group_indices.clear();
         self.buffer.group_indices.shrink_to_fit();
-        self.buffer.group_completion.reset();
+        self.buffer.group_clustering.reset();
 
         Ok(Some(batch))
     }
@@ -372,7 +372,7 @@ impl<AggrMode> ClusteredAggregateTable<AggrMode> {
                     .intern(group_values, &mut self.buffer.group_indices)?;
                 let total_num_groups = self.buffer.group_values.len();
                 if total_num_groups > starting_num_groups {
-                    self.buffer.group_completion.new_groups(
+                    self.buffer.group_clustering.new_groups(
                         group_values,
                         &self.buffer.group_indices,
                         total_num_groups,
@@ -419,7 +419,7 @@ impl<AggrMode> ClusteredAggregateTable<AggrMode> {
             // `EmitTo::All` is only used after `input_done`, when the completion
             // state no longer tracks group indexes.
             if let EmitTo::First(n) = emit_to {
-                self.buffer.group_completion.remove_groups(n);
+                self.buffer.group_clustering.remove_groups(n);
             }
 
             for (idx, acc) in self.buffer.accumulators.iter_mut().enumerate() {

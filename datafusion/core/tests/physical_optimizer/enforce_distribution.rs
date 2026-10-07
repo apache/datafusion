@@ -4867,9 +4867,9 @@ fn preserve_ordering_for_streaming_sorted_aggregate() -> Result<()> {
 
     let plan_distrib = test_config.to_plan(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(plan_distrib, @r"
-    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[COUNT(b)], group_completion_mode=Full
+    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[COUNT(b)], group_clustering_mode=Full
       RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2, preserve_order=true, sort_exprs=a@0 ASC
-        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[COUNT(b)], group_completion_mode=Full
+        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[COUNT(b)], group_clustering_mode=Full
           DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
     ");
 
@@ -4901,9 +4901,9 @@ fn preserve_ordering_for_streaming_partially_sorted_aggregate() -> Result<()> {
 
     let plan_distrib = test_config.to_plan(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(plan_distrib, @r"
-    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b], aggr=[COUNT(c)], group_completion_mode=Partial([0])
+    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b], aggr=[COUNT(c)], group_clustering_mode=Partial([0])
       RepartitionExec: partitioning=Hash([a@0, b@1], 2), input_partitions=2, preserve_order=true, sort_exprs=a@0 ASC
-        AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b], aggr=[COUNT(c)], group_completion_mode=Partial([0])
+        AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b], aggr=[COUNT(c)], group_clustering_mode=Partial([0])
           DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
     ");
 

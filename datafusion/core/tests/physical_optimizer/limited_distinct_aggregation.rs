@@ -520,7 +520,7 @@ fn test_has_order_by() -> Result<()> {
         actual,
         @r"
     LocalLimitExec: fetch=10
-      AggregateExec: mode=Single, gby=[a@0 as a], aggr=[], group_completion_mode=Full
+      AggregateExec: mode=Single, gby=[a@0 as a], aggr=[], group_clustering_mode=Full
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
     "
     );

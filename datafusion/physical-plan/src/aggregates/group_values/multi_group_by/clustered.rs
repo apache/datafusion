@@ -352,7 +352,7 @@ mod tests {
     #[tokio::test]
     async fn ordered_single_and_partial_final_match_unordered_execution() -> Result<()> {
         use crate::aggregates::{
-            AggregateExec, AggregateMode, GroupCompletionMode, PhysicalGroupBy,
+            AggregateExec, AggregateMode, GroupClusteringMode, PhysicalGroupBy,
         };
         use crate::test::TestMemoryExec;
         use crate::{ExecutionPlan, collect};
@@ -453,8 +453,8 @@ mod tests {
                         )?;
                         if sorted {
                             assert_eq!(
-                                plan.group_completion_mode(),
-                                &GroupCompletionMode::Full
+                                plan.group_clustering_mode(),
+                                &GroupClusteringMode::Full
                             );
                         }
                         let plan: Arc<dyn ExecutionPlan> = if two_stage {
@@ -468,8 +468,8 @@ mod tests {
                             )?;
                             if sorted {
                                 assert_eq!(
-                                    plan.group_completion_mode(),
-                                    &GroupCompletionMode::Full
+                                    plan.group_clustering_mode(),
+                                    &GroupClusteringMode::Full
                                 );
                             }
                             Arc::new(plan)

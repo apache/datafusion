@@ -37,7 +37,7 @@ use super::aggregate_hash_table::{
     AggregateHashTable, ClusteredAggregateTableMetrics, FinalMarker, PartialMarker,
     PartialSkipMarker,
 };
-use super::order::GroupCompletionMode;
+use super::order::GroupClusteringMode;
 use super::skip_partial::SkipAggregationProbe;
 use super::spill::AggregateSpill;
 use crate::metrics::{
@@ -218,7 +218,7 @@ impl PartialHashAggregateStream {
         partition: usize,
     ) -> Result<Self> {
         debug_assert_eq!(agg.mode, super::AggregateMode::Partial);
-        debug_assert_eq!(agg.group_completion_mode, GroupCompletionMode::None);
+        debug_assert_eq!(agg.group_clustering_mode, GroupClusteringMode::None);
 
         let schema = Arc::clone(&agg.schema);
         let input = agg.input.execute(partition, Arc::clone(context))?;
@@ -574,7 +574,7 @@ impl FinalHashAggregateStream {
             agg.mode,
             super::AggregateMode::Final | super::AggregateMode::FinalPartitioned
         ));
-        debug_assert_eq!(agg.group_completion_mode, GroupCompletionMode::None);
+        debug_assert_eq!(agg.group_clustering_mode, GroupClusteringMode::None);
 
         let input = agg.input.execute(partition, Arc::clone(context))?;
         Self::new_with_input(agg, context, partition, input)
@@ -608,7 +608,7 @@ impl FinalHashAggregateStream {
                 context,
                 partition,
                 batch_size,
-                &GroupCompletionMode::None,
+                &GroupClusteringMode::None,
                 &input_schema,
                 spill_metrics,
             )?))
@@ -880,7 +880,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::aggregates::GroupCompletionMode;
+    use crate::aggregates::GroupClusteringMode;
     use crate::aggregates::{AggregateMode, PhysicalGroupBy};
     use crate::common::collect;
     use crate::execution_plan::ExecutionPlan;
@@ -1570,8 +1570,8 @@ mod tests {
             schema,
         )?;
         assert_eq!(
-            aggregate.group_completion_mode(),
-            &GroupCompletionMode::None
+            aggregate.group_clustering_mode(),
+            &GroupClusteringMode::None
         );
 
         let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(limit));

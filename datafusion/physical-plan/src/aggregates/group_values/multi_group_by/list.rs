@@ -445,7 +445,7 @@ mod tests {
         // List/Struct together correctly and that intern/emit round-trips
         // through `GroupValuesColumn` rather than `GroupValuesRows`.
         use crate::aggregates::group_values::new_group_values;
-        use crate::aggregates::order::GroupCompletion;
+        use crate::aggregates::order::GroupClustering;
         use arrow::array::{
             Int32Array, LargeListArray, StringArray, StructArray, builder::Int32Builder,
             builder::LargeListBuilder, builder::StringBuilder, builder::StructBuilder,
@@ -507,7 +507,7 @@ mod tests {
             Arc::new(list_builder.finish())
         };
 
-        let mut gv = new_group_values(schema, &GroupCompletion::None).unwrap();
+        let mut gv = new_group_values(schema, &GroupClustering::None).unwrap();
 
         // Batch 1: a mix of duplicate / distinct / null lists.
         let batch1 = notes_v(&[
@@ -584,7 +584,7 @@ mod tests {
     #[test]
     fn list_dispatcher_round_trip_through_new_group_values() {
         use crate::aggregates::group_values::new_group_values;
-        use crate::aggregates::order::GroupCompletion;
+        use crate::aggregates::order::GroupClustering;
         use arrow::datatypes::Schema;
         use datafusion_expr::EmitTo;
 
@@ -593,7 +593,7 @@ mod tests {
             DataType::List(child_field()),
             true,
         )]));
-        let mut gv = new_group_values(schema, &GroupCompletion::None).unwrap();
+        let mut gv = new_group_values(schema, &GroupClustering::None).unwrap();
 
         // Batch 1.
         let batch1: ArrayRef = list_array(&[
@@ -869,7 +869,7 @@ mod tests {
         // ints. Exercises a recursive child GroupColumn built via the
         // dispatcher.
         use crate::aggregates::group_values::new_group_values;
-        use crate::aggregates::order::GroupCompletion;
+        use crate::aggregates::order::GroupClustering;
         use arrow::array::{ListArray, builder::Int32Builder, builder::ListBuilder};
         use arrow::datatypes::Schema;
         use datafusion_expr::EmitTo;
@@ -917,7 +917,7 @@ mod tests {
             Arc::new(outer.finish())
         };
 
-        let mut gv = new_group_values(schema, &GroupCompletion::None).unwrap();
+        let mut gv = new_group_values(schema, &GroupClustering::None).unwrap();
 
         // Three groups: [[1,2],[3]], its duplicate, a distinct value, and a null.
         let batch = mk(&[

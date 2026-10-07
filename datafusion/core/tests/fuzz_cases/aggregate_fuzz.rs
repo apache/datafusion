@@ -48,7 +48,7 @@ use datafusion_execution::memory_pool::FairSpillPool;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_physical_expr::aggregate::AggregateExprBuilder;
 use datafusion_physical_plan::aggregates::{
-    AggregateExec, AggregateMode, GroupCompletionMode, PhysicalGroupBy,
+    AggregateExec, AggregateMode, GroupClusteringMode, PhysicalGroupBy,
 };
 use datafusion_physical_plan::metrics::MetricValue;
 use datafusion_physical_plan::{ExecutionPlan, collect, displayable};
@@ -353,8 +353,8 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
         .unwrap(),
     );
     assert_ne!(
-        aggregate_exec_running.group_completion_mode(),
-        &GroupCompletionMode::None,
+        aggregate_exec_running.group_clustering_mode(),
+        &GroupClusteringMode::None,
         "running aggregate should observe ordered input for group_by: {group_by:?}"
     );
 
@@ -560,11 +560,11 @@ async fn verify_ordered_aggregate(frame: &DataFrame, expected_sort: bool) {
                 );
                 if self.expected_sort {
                     assert!(matches!(
-                        exec.group_completion_mode(),
-                        GroupCompletionMode::Partial(_) | GroupCompletionMode::Full
+                        exec.group_clustering_mode(),
+                        GroupClusteringMode::Partial(_) | GroupClusteringMode::Full
                     ));
                 } else {
-                    assert_eq!(*exec.group_completion_mode(), GroupCompletionMode::None);
+                    assert_eq!(*exec.group_clustering_mode(), GroupClusteringMode::None);
                 }
             }
             Ok(TreeNodeRecursion::Continue)

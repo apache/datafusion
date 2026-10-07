@@ -48,7 +48,7 @@
 //!
 //! See [`PartialHashAggregateStream`] and [`FinalHashAggregateStream`] for details.
 //!
-//! ### Group completion optimization
+//! ### Group clustering optimization
 //!
 //! When the input is ordered by group keys, rows are clustered by those keys.
 //! The clustered paths use this guarantee to emit completed groups early.
@@ -207,7 +207,7 @@ use datafusion_physical_expr_common::sort_expr::{
 use datafusion_expr::utils::AggregateOrderSensitivity;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use itertools::Itertools;
-pub use order::GroupCompletionMode;
+pub use order::GroupClusteringMode;
 use topk::hash_table::is_supported_hash_key_type;
 use topk::heap::is_supported_heap_type;
 
@@ -911,12 +911,12 @@ pub struct AggregateExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     required_input_ordering: Option<OrderingRequirements>,
-    /// Describes when the executor can determine that groups are complete.
+    /// Describes how input rows are clustered by grouping expressions.
     ///
     /// Input ordering describes a subset of the cases in which groups can be
-    /// safely emitted before the input ends. Full group completion requires only
+    /// safely emitted before the input ends. Full group clustering requires only
     /// that rows for each complete grouping tuple are contiguous.
-    group_completion_mode: GroupCompletionMode,
+    group_clustering_mode: GroupClusteringMode,
     cache: Arc<PlanProperties>,
     /// During initialization, if the plan supports dynamic filtering (see [`AggrDynFilter`]),
     /// it is set to `Some(..)` regardless of whether it can be pushed down to a child node.
@@ -1107,7 +1107,7 @@ impl AggregateExec {
 
         // Commit the kind and properties together: heap output is unordered and final.
         self.kind = kind;
-        self.group_completion_mode = GroupCompletionMode::None;
+        self.group_clustering_mode = GroupClusteringMode::None;
         self.required_input_ordering = None;
         // Keep unchanged properties so parent aggregates do not need rebuilding.
         if !self.cache.eq_properties.oeq_class().is_empty()
@@ -1332,21 +1332,21 @@ impl AggregateExec {
             .iter()
             .filter(|expr| input_eq_properties.is_expr_constant(expr).is_none())
             .count();
-        let mut group_completion_mode = if indices.len() == num_non_constant_groupby_exprs
+        let mut group_clustering_mode = if indices.len() == num_non_constant_groupby_exprs
             && !indices.is_empty()
             && group_by.groups.len() == 1
         {
-            GroupCompletionMode::Full
+            GroupClusteringMode::Full
         } else if !indices.is_empty() {
-            GroupCompletionMode::Partial(indices)
+            GroupClusteringMode::Partial(indices)
         } else {
-            GroupCompletionMode::None
+            GroupClusteringMode::None
         };
 
         // Grouping sets can change group keys. PartialReduce combines intermediate
         // states without using group boundaries to recognize completed groups.
         if group_by.has_grouping_set() || mode == AggregateMode::PartialReduce {
-            group_completion_mode = GroupCompletionMode::None;
+            group_clustering_mode = GroupClusteringMode::None;
         }
 
         // construct a map from the input expression to the output expression of the Aggregation group by
@@ -1362,7 +1362,7 @@ impl AggregateExec {
                 &group_expr_mapping,
                 group_by.is_true_no_grouping(),
                 &mode,
-                &group_completion_mode,
+                &group_clustering_mode,
                 aggr_expr.as_ref(),
             )?
         };
@@ -1379,7 +1379,7 @@ impl AggregateExec {
             input_schema,
             metrics: ExecutionPlanMetricsSet::new(),
             required_input_ordering,
-            group_completion_mode,
+            group_clustering_mode,
             cache: Arc::new(cache),
             dynamic_filter: None,
         };
@@ -1687,45 +1687,45 @@ impl AggregateExec {
         // Choose the execution path based on aggregation mode and when groups
         // are known to be complete.
         use AggregateMode::*;
-        let stream = match (self.mode, &self.group_completion_mode) {
-            (Partial, GroupCompletionMode::None) => StreamType::PartialHash(
+        let stream = match (self.mode, &self.group_clustering_mode) {
+            (Partial, GroupClusteringMode::None) => StreamType::PartialHash(
                 PartialHashAggregateStream::new(self, context, partition)?,
             ),
-            (Partial, GroupCompletionMode::Partial(_) | GroupCompletionMode::Full) => {
+            (Partial, GroupClusteringMode::Partial(_) | GroupClusteringMode::Full) => {
                 StreamType::ClusteredPartialAggregate(
                     ClusteredPartialAggregateStream::new(self, context, partition)?,
                 )
             }
-            (PartialReduce, GroupCompletionMode::None) => StreamType::PartialReduceHash(
+            (PartialReduce, GroupClusteringMode::None) => StreamType::PartialReduceHash(
                 PartialReduceHashAggregateStream::new(self, context, partition)?,
             ),
             (
                 PartialReduce,
-                GroupCompletionMode::Partial(_) | GroupCompletionMode::Full,
+                GroupClusteringMode::Partial(_) | GroupClusteringMode::Full,
             ) => {
                 return internal_err!(
-                    "PartialReduce aggregation must use GroupCompletionMode::None"
+                    "PartialReduce aggregation must use GroupClusteringMode::None"
                 );
             }
-            (Final | FinalPartitioned, GroupCompletionMode::None) => {
+            (Final | FinalPartitioned, GroupClusteringMode::None) => {
                 StreamType::FinalHash(FinalHashAggregateStream::new(
                     self, context, partition,
                 )?)
             }
             (
                 Final | FinalPartitioned,
-                GroupCompletionMode::Partial(_) | GroupCompletionMode::Full,
+                GroupClusteringMode::Partial(_) | GroupClusteringMode::Full,
             ) => StreamType::ClusteredFinalAggregate(ClusteredFinalAggregateStream::new(
                 self, context, partition,
             )?),
-            (Single | SinglePartitioned, GroupCompletionMode::None) => {
+            (Single | SinglePartitioned, GroupClusteringMode::None) => {
                 StreamType::SingleHash(SingleHashAggregateStream::new(
                     self, context, partition,
                 )?)
             }
             (
                 Single | SinglePartitioned,
-                GroupCompletionMode::Partial(_) | GroupCompletionMode::Full,
+                GroupClusteringMode::Partial(_) | GroupClusteringMode::Full,
             ) => StreamType::ClusteredSingleAggregate(
                 ClusteredSingleAggregateStream::new(self, context, partition)?,
             ),
@@ -1786,7 +1786,7 @@ impl AggregateExec {
         group_expr_mapping: &ProjectionMapping,
         is_true_no_grouping: bool,
         mode: &AggregateMode,
-        group_completion_mode: &GroupCompletionMode,
+        group_clustering_mode: &GroupClusteringMode,
         aggr_exprs: &[Arc<AggregateFunctionExpr>],
     ) -> Result<PlanProperties> {
         // Construct equivalence properties:
@@ -1795,10 +1795,10 @@ impl AggregateExec {
             .project(group_expr_mapping, schema);
 
         // Only the clustered paths preserve existing ordering on group keys.
-        // Project the input's actual sort expressions; completion alone does
+        // Project the input's actual sort expressions; clustering alone does
         // not establish an output ordering. Keep this consistent with
         // `maintains_input_order`.
-        if *group_completion_mode == GroupCompletionMode::None {
+        if *group_clustering_mode == GroupClusteringMode::None {
             eq_properties.clear_orderings();
         }
 
@@ -1846,7 +1846,7 @@ impl AggregateExec {
         };
 
         // TODO: Emission type and boundedness information can be enhanced here
-        let emission_type = if *group_completion_mode == GroupCompletionMode::None {
+        let emission_type = if *group_clustering_mode == GroupClusteringMode::None {
             EmissionType::Final
         } else {
             input.pipeline_behavior()
@@ -1876,12 +1876,12 @@ impl AggregateExec {
         )
     }
 
-    /// Describes when groups can be completed before the input ends.
+    /// Describes how input rows are clustered by grouping expressions.
     ///
     /// This does not imply a sort order. See [`ExecutionPlanProperties::output_ordering`]
     /// for the ordering of the aggregate's output.
-    pub fn group_completion_mode(&self) -> &GroupCompletionMode {
-        &self.group_completion_mode
+    pub fn group_clustering_mode(&self) -> &GroupClusteringMode {
+        &self.group_clustering_mode
     }
 
     /// Estimates output statistics for this aggregate node.
@@ -2365,11 +2365,11 @@ impl DisplayAs for AggregateExec {
                     write!(f, ", lim=[{}]", config.limit)?;
                 }
 
-                if self.group_completion_mode != GroupCompletionMode::None {
+                if self.group_clustering_mode != GroupClusteringMode::None {
                     write!(
                         f,
-                        ", group_completion_mode={:?}",
-                        self.group_completion_mode
+                        ", group_clustering_mode={:?}",
+                        self.group_clustering_mode
                     )?;
                 }
             }
@@ -2499,7 +2499,7 @@ impl ExecutionPlan for AggregateExec {
     /// Clustered aggregation preserves existing ordering on the group-by
     /// columns. Aggregate result columns do not inherit input ordering.
     fn maintains_input_order(&self) -> Vec<bool> {
-        vec![self.group_completion_mode != GroupCompletionMode::None]
+        vec![self.group_clustering_mode != GroupClusteringMode::None]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -2761,7 +2761,7 @@ impl ExecutionPlan for AggregateExec {
             // Derived at construction from the input ordering and `group_by`.
             required_input_ordering: _,
             // Derived at construction from the input ordering and `group_by`.
-            group_completion_mode: _,
+            group_clustering_mode: _,
             // Derived at construction by `Self::compute_properties`.
             cache: _,
             dynamic_filter,
@@ -4174,8 +4174,8 @@ mod tests {
             (AggregateMode::Final, true, StreamType::ClusteredFinalAggregate(_))
             | (AggregateMode::Single, true, StreamType::ClusteredSingleAggregate(_)) => {
                 assert_eq!(
-                    aggregate.group_completion_mode(),
-                    &GroupCompletionMode::Partial(vec![0])
+                    aggregate.group_clustering_mode(),
+                    &GroupClusteringMode::Partial(vec![0])
                 );
             }
             _ => panic!("unexpected stream for {mode:?}, ordered={ordered}"),
@@ -5613,7 +5613,7 @@ mod tests {
     #[rstest::rstest]
     #[case::full(true)]
     #[case::partial(false)]
-    fn group_completion_preserves_sort_options(
+    fn group_clustering_preserves_sort_options(
         #[case] full: bool,
         #[values(AggregateMode::Partial, AggregateMode::Single)] mode: AggregateMode,
         #[values(false, true)] descending: bool,
@@ -5658,11 +5658,11 @@ mod tests {
         )?;
 
         let expected_mode = if full {
-            GroupCompletionMode::Full
+            GroupClusteringMode::Full
         } else {
-            GroupCompletionMode::Partial(vec![1])
+            GroupClusteringMode::Partial(vec![1])
         };
-        assert_eq!(aggregate.group_completion_mode(), &expected_mode);
+        assert_eq!(aggregate.group_clustering_mode(), &expected_mode);
         assert_eq!(aggregate.maintains_input_order(), vec![true]);
         assert_eq!(
             aggregate.properties().emission_type,
@@ -5680,7 +5680,7 @@ mod tests {
     }
 
     #[test]
-    fn group_completion_is_recomputed_with_new_children() -> Result<()> {
+    fn group_clustering_is_recomputed_with_new_children() -> Result<()> {
         let aggregate = Arc::new(single_test_aggregate()?);
         let original_input = Arc::clone(aggregate.input());
         let schema = original_input.schema();
@@ -5698,8 +5698,8 @@ mod tests {
         )?;
         let sorted_aggregate = sorted.downcast_ref::<AggregateExec>().unwrap();
         assert_eq!(
-            sorted_aggregate.group_completion_mode(),
-            &GroupCompletionMode::Full
+            sorted_aggregate.group_clustering_mode(),
+            &GroupClusteringMode::Full
         );
         assert_eq!(sorted.output_ordering(), Some(&ordering));
         assert_eq!(sorted.pipeline_behavior(), EmissionType::Incremental);
@@ -5710,8 +5710,8 @@ mod tests {
         )?;
         let unordered_aggregate = unordered.downcast_ref::<AggregateExec>().unwrap();
         assert_eq!(
-            unordered_aggregate.group_completion_mode(),
-            &GroupCompletionMode::None
+            unordered_aggregate.group_clustering_mode(),
+            &GroupClusteringMode::None
         );
         assert_eq!(unordered.maintains_input_order(), vec![false]);
         assert!(unordered.output_ordering().is_none());
@@ -5769,8 +5769,8 @@ mod tests {
             Arc::clone(&schema),
         )?;
         assert_eq!(
-            aggregate.group_completion_mode(),
-            &GroupCompletionMode::Partial(vec![0])
+            aggregate.group_clustering_mode(),
+            &GroupClusteringMode::Partial(vec![0])
         );
 
         let task_ctx = new_migrated_hash_ctx(2);
@@ -5829,8 +5829,8 @@ mod tests {
         )?;
 
         assert_eq!(
-            partial_reduce.group_completion_mode(),
-            &GroupCompletionMode::None
+            partial_reduce.group_clustering_mode(),
+            &GroupClusteringMode::None
         );
         assert_eq!(partial_reduce.maintains_input_order(), vec![false]);
         assert!(
@@ -5887,8 +5887,8 @@ mod tests {
         )?;
         let aggregate = build_aggregate(unordered_input)?;
         assert_eq!(
-            aggregate.group_completion_mode(),
-            &GroupCompletionMode::None
+            aggregate.group_clustering_mode(),
+            &GroupClusteringMode::None
         );
         assert_eq!(
             aggregate.schema().as_ref(),
@@ -5922,8 +5922,8 @@ mod tests {
             Arc::new(TestMemoryExec::update_cache(&Arc::new(ordered_input)));
         let aggregate = build_aggregate(ordered_input)?;
         assert_eq!(
-            aggregate.group_completion_mode(),
-            &GroupCompletionMode::Full
+            aggregate.group_clustering_mode(),
+            &GroupClusteringMode::Full
         );
 
         Ok(())
@@ -6243,8 +6243,8 @@ mod tests {
         )?;
 
         assert_eq!(
-            aggregate.group_completion_mode(),
-            &GroupCompletionMode::None
+            aggregate.group_clustering_mode(),
+            &GroupClusteringMode::None
         );
         // This captures the behavior before #24438. When the source can declare
         // `(key, time_bin)` group-contiguous, the corresponding case can use
@@ -6324,8 +6324,8 @@ mod tests {
             Arc::clone(&schema),
         )?;
         assert!(matches!(
-            aggregate.group_completion_mode(),
-            GroupCompletionMode::Partial(_)
+            aggregate.group_clustering_mode(),
+            GroupClusteringMode::Partial(_)
         ));
 
         let task_ctx = new_migrated_hash_ctx(2);
@@ -6406,8 +6406,8 @@ mod tests {
             Arc::clone(&schema),
         )?;
         assert_eq!(
-            final_aggregate.group_completion_mode(),
-            &GroupCompletionMode::Full
+            final_aggregate.group_clustering_mode(),
+            &GroupClusteringMode::Full
         );
 
         let task_ctx = new_migrated_hash_ctx(2);
@@ -6482,8 +6482,8 @@ mod tests {
             Arc::clone(&schema),
         )?;
         assert!(matches!(
-            aggregate.group_completion_mode(),
-            GroupCompletionMode::Partial(_)
+            aggregate.group_clustering_mode(),
+            GroupClusteringMode::Partial(_)
         ));
 
         let runtime = RuntimeEnvBuilder::default()
@@ -6781,7 +6781,7 @@ mod tests {
     //
     // "AggregateExec: mode=Final, gby=[a@0 as a], aggr=[FIRST_VALUE(b)]",
     // "  CoalescePartitionsExec",
-    // "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[FIRST_VALUE(b)], group_completion_mode=None",
+    // "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[FIRST_VALUE(b)], group_clustering_mode=None",
     // "      DataSourceExec: partitions=4, partition_sizes=[1, 1, 1, 1]",
     //
     // and checks whether the function `merge_batch` works correctly for

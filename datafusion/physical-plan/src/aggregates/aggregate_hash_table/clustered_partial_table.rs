@@ -19,7 +19,7 @@
 //!
 //! See the [`super::common_clustered`] comments for the high-level ideas.
 //!
-//! Ordering can establish either group-completion mode:
+//! Ordering can establish either group-clustering mode:
 //! - Full: `GROUP BY a, b`, input is `ORDER BY a, b`
 //! - Partial: `GROUP BY a, b`, input is `ORDER BY a`
 //!
@@ -66,7 +66,7 @@ impl ClusteredAggregateTable<PartialMarker> {
             &input_schema,
             output_schema,
             state_schema,
-            &agg.group_completion_mode,
+            &agg.group_clustering_mode,
             &AggregateMode::Partial,
             agg.filter_expr().to_vec(),
             metrics,
@@ -95,7 +95,7 @@ impl ClusteredAggregateTable<PartialMarker> {
         if self.is_empty() {
             return Ok(None);
         }
-        let Some(emit_to) = self.group_completion().emit_to() else {
+        let Some(emit_to) = self.group_clustering().emit_to() else {
             return Ok(None);
         };
         self.materialize_groups(
