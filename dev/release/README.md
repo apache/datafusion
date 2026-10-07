@@ -266,14 +266,6 @@ review the release candidate.
 ./dev/release/verify-release-candidate.sh 55.2.0 1
 ```
 
-To download and unpack the artifacts of a release candidate from SVN:
-
-```shell
-svn export https://dist.apache.org/repos/dist/dev/datafusion/apache-datafusion-55.2.0-rc1
-cd apache-datafusion-55.2.0-rc1
-tar xzf apache-datafusion-55.2.0.tar.gz
-```
-
 #### If Changes Are Requested
 
 If the release is not approved or urgent backports requested, please start over from [here](#4-backporting-urgent-changes)
