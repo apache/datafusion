@@ -158,9 +158,10 @@ struct LimitInfo {
 ///
 /// If a limit is encountered, a [`TreeNodeRecursion::Stop`] is returned. Otherwise,
 /// return a [`TreeNodeRecursion::Continue`].
-///
-/// Computes statistics with a new [`StatisticsContext`]; see
-/// [`pushdown_limit_helper_with_stats`] to share one.
+#[deprecated(
+    since = "56.0.0",
+    note = "use `pushdown_limit_helper_with_stats` and share one `StatisticsContext` across calls"
+)]
 pub fn pushdown_limit_helper(
     pushdown_plan: Arc<dyn ExecutionPlan>,
     global_state: GlobalRequirements,

@@ -64,6 +64,7 @@ use arrow_schema::Field;
 use datafusion_catalog::ScanArgs;
 use datafusion_common::Column;
 use datafusion_common::HashMap as DFHashMap;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::format::ExplainAnalyzeCategories;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
@@ -103,6 +104,7 @@ use datafusion_physical_expr::{
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_plan::joins::PiecewiseMergeJoinExec;
+use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion_physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
@@ -141,13 +143,11 @@ impl<'a> SessionOptimizerContext<'a> {
 }
 
 impl PhysicalOptimizerContext for SessionOptimizerContext<'_> {
-    fn config_options(&self) -> &datafusion_common::config::ConfigOptions {
+    fn config_options(&self) -> &ConfigOptions {
         self.session.config_options()
     }
 
-    fn statistics_registry(
-        &self,
-    ) -> Option<&datafusion_physical_plan::operator_statistics::StatisticsRegistry> {
+    fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
         self.session.statistics_registry()
     }
 
