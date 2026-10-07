@@ -31,14 +31,45 @@
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{
-    Column, ScalarValue, internal_datafusion_err, internal_err, not_impl_err,
+    Column, DFSchema, ScalarValue, internal_datafusion_err, internal_err, not_impl_err,
 };
 use datafusion::logical_expr::utils::grouping_set_to_exprlist;
 use datafusion::logical_expr::{Aggregate, Case, Expr, GroupingSet, lit};
 
-/// The name the grouping set index is given, which Substrait leaves to the
-/// plan's root names.
-pub(crate) const GROUPING_SET_INDEX: &str = "grouping_set_index";
+/// The preferred name for the grouping set index, which Substrait leaves to
+/// the plan's root names. Both the consumer and the producer only use this
+/// literal name as the base candidate passed to
+/// [`unique_grouping_set_index_name`]; neither hard-codes it as the name a
+/// real schema is guaranteed to accept.
+const GROUPING_SET_INDEX: &str = "grouping_set_index";
+
+/// A name for the grouping set index column that is not already taken in
+/// `schema`.
+///
+/// `schema` is a real aggregate's output (the consumer) or that aggregate's
+/// `DFSchema` sans `__grouping_id` (the producer), so it can legitimately
+/// already contain a column named [`GROUPING_SET_INDEX`] - either a user
+/// column with that literal name, or (on the producer side specifically) two
+/// joined columns that only collide once reduced to this bare, unqualified
+/// name. Falling back to the fixed name regardless would make the synthetic
+/// column indistinguishable from that real one, or fail schema construction
+/// outright with a duplicate-field error.
+pub(crate) fn unique_grouping_set_index_name(schema: &DFSchema) -> String {
+    if schema
+        .index_of_column_by_name(None, GROUPING_SET_INDEX)
+        .is_none()
+    {
+        return GROUPING_SET_INDEX.to_string();
+    }
+    let mut suffix = 0u32;
+    loop {
+        let candidate = format!("{GROUPING_SET_INDEX}_{suffix}");
+        if schema.index_of_column_by_name(None, &candidate).is_none() {
+            return candidate;
+        }
+        suffix += 1;
+    }
+}
 
 /// The `__grouping_id` value DataFusion gives each grouping set, in the order
 /// the sets are listed.
@@ -47,6 +78,12 @@ pub(crate) const GROUPING_SET_INDEX: &str = "grouping_set_index";
 /// every grouping column the set leaves out, counting from the last column, and
 /// `ordinal` counts the sets before this one holding the same columns. Both
 /// parts follow from the set alone, so no two sets share a value.
+///
+/// At `group_count == 64` the mask alone already fills every bit of the `u64`,
+/// leaving no room for an ordinal: `ordinal << 64` panics on the shift amount
+/// even when `ordinal` is `0`, and any `ordinal != 0` cannot be represented at
+/// all. The first set at that width is still representable - its ordinal is
+/// always `0` - so only a repeated set at exactly 64 columns is rejected.
 pub(crate) fn grouping_set_ids(
     columns: &[&Expr],
     sets: &[Vec<Expr>],
@@ -69,7 +106,17 @@ pub(crate) fn grouping_set_ids(
         }
         let ordinal = masks.iter().filter(|seen| **seen == mask).count() as u64;
         masks.push(mask);
-        ids.push((ordinal << group_count) | mask);
+        let id = if group_count == 64 {
+            if ordinal != 0 {
+                return not_impl_err!(
+                    "A grouping set with 64 columns cannot be repeated: there are no bits left for a duplicate ordinal"
+                );
+            }
+            mask
+        } else {
+            (ordinal << group_count) | mask
+        };
+        ids.push(id);
     }
     Ok(ids)
 }
@@ -190,7 +237,7 @@ fn grouping_id_literal(
 
 /// The column DataFusion's aggregate schema holds `__grouping_id` in.
 pub(crate) fn grouping_id_column(
-    schema: &datafusion::common::DFSchema,
+    schema: &DFSchema,
 ) -> datafusion::common::Result<(usize, Column)> {
     let Some(index) =
         schema.index_of_column_by_name(None, Aggregate::INTERNAL_GROUPING_ID)
@@ -201,4 +248,61 @@ pub(crate) fn grouping_id_column(
         );
     };
     Ok((index, Column::from(schema.qualified_field(index))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion::logical_expr::col;
+
+    fn distinct_columns(count: usize) -> Vec<Expr> {
+        (0..count).map(|i| col(format!("c{i}"))).collect()
+    }
+
+    /// A single grouping set naming every one of 64 columns has mask `0` and
+    /// is always the first (ordinal `0`) occurrence of that mask, so the
+    /// `u64` id is representable without shifting by the full 64-bit width.
+    #[test]
+    fn grouping_set_ids_at_64_columns_zero_ordinal() -> datafusion::common::Result<()> {
+        let exprs = distinct_columns(64);
+        let columns: Vec<&Expr> = exprs.iter().collect();
+        let sets = vec![exprs.clone()];
+
+        let ids = grouping_set_ids(&columns, &sets)?;
+
+        assert_eq!(ids, vec![0u64]);
+        Ok(())
+    }
+
+    /// The same 64-column set repeated needs ordinal `1`, which does not fit
+    /// in a `u64` alongside a full 64-bit mask. This must be a clean error,
+    /// not a shift-overflow panic.
+    #[test]
+    fn grouping_set_ids_rejects_repeated_set_at_64_columns() {
+        let exprs = distinct_columns(64);
+        let columns: Vec<&Expr> = exprs.iter().collect();
+        let sets = vec![exprs.clone(), exprs.clone()];
+
+        let err = grouping_set_ids(&columns, &sets).unwrap_err();
+
+        assert!(
+            err.to_string().contains("cannot be repeated"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// 65 columns is rejected on its own, independent of any repeated set.
+    #[test]
+    fn grouping_set_ids_rejects_more_than_64_columns() {
+        let exprs = distinct_columns(65);
+        let columns: Vec<&Expr> = exprs.iter().collect();
+        let sets = vec![exprs.clone()];
+
+        let err = grouping_set_ids(&columns, &sets).unwrap_err();
+
+        assert!(
+            err.to_string().contains("more than 64 columns"),
+            "unexpected error: {err}"
+        );
+    }
 }

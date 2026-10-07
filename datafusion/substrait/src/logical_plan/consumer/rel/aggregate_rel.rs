@@ -18,8 +18,8 @@
 use crate::logical_plan::consumer::{NameTracker, SubstraitConsumer};
 use crate::logical_plan::consumer::{from_substrait_agg_func, from_substrait_sorts};
 use crate::logical_plan::grouping_set::{
-    GROUPING_SET_INDEX, grouping_id_column, grouping_set_columns, grouping_set_ids,
-    grouping_sets_of, index_from_grouping_id,
+    grouping_id_column, grouping_set_columns, grouping_set_ids, grouping_sets_of,
+    index_from_grouping_id, unique_grouping_set_index_name,
 };
 use datafusion::common::{Column, DFSchemaRef, internal_err, not_impl_err};
 use datafusion::logical_expr::builder::project;
@@ -177,8 +177,12 @@ fn grouping_set_output(
         }
         let grouping_id = Expr::Column(grouping_id);
         let grouping_id_type = grouping_id.get_type(schema)?;
+        // A real column already named like the preferred alias - most likely
+        // a user column literally called `grouping_set_index` - would
+        // otherwise collide with it as a duplicate unqualified field.
+        let index_name = unique_grouping_set_index_name(schema);
         let set_index = index_from_grouping_id(&grouping_id, &grouping_id_type, set_ids)?
-            .alias(GROUPING_SET_INDEX);
+            .alias(index_name);
 
         (0..grouping_id_index)
             .chain(grouping_id_index + 1..schema.fields().len())

@@ -16,8 +16,8 @@
 // under the License.
 
 use crate::logical_plan::grouping_set::{
-    GROUPING_SET_INDEX, grouping_id_column, grouping_id_from_index, grouping_set_columns,
-    grouping_set_ids,
+    grouping_id_column, grouping_id_from_index, grouping_set_columns, grouping_set_ids,
+    unique_grouping_set_index_name,
 };
 use crate::logical_plan::producer::{
     SubstraitProducer, from_aggregate_function, substrait_field_ref,
@@ -97,17 +97,24 @@ fn grouping_set_projection(
     )?;
 
     // The aggregate's output as Substrait orders it, which is what the
-    // expression below is written against.
-    let index_field = Field::new(GROUPING_SET_INDEX, DataType::Int32, false);
-    let substrait_output = DFSchema::from_unqualified_fields(
-        (0..grouping_id_index)
-            .chain(grouping_id_index + 1..schema.fields().len())
-            .map(|index| Arc::clone(schema.field(index)))
-            .chain(std::iter::once(Arc::new(index_field)))
-            .collect(),
-        schema.metadata().clone(),
-    )?;
-    let index = Expr::Column(Column::from_name(GROUPING_SET_INDEX));
+    // expression below is written against. Built from qualified field specs,
+    // not `DFSchema::from_unqualified_fields`, because dropping the original
+    // qualifiers here would make two joined columns that only share a bare
+    // name (e.g. `a.x` and `b.x`) collide as duplicate unqualified fields,
+    // even though `schema` itself keeps them distinct.
+    let index_name = unique_grouping_set_index_name(schema);
+    let index_field = Field::new(index_name.as_str(), DataType::Int32, false);
+    let qualified_fields = (0..grouping_id_index)
+        .chain(grouping_id_index + 1..schema.fields().len())
+        .map(|index| {
+            let (qualifier, field) = schema.qualified_field(index);
+            (qualifier.cloned(), Arc::clone(field))
+        })
+        .chain(std::iter::once((None, Arc::new(index_field))))
+        .collect();
+    let substrait_output =
+        DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?;
+    let index = Expr::Column(Column::from_name(index_name.as_str()));
     let expression = producer.handle_expr(
         &grouping_id_from_index(&index, grouping_id_type, &ids)?,
         &Arc::new(substrait_output),
