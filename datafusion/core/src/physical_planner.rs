@@ -3572,14 +3572,16 @@ mod tests {
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_physical_expr::EquivalenceProperties;
     use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+    use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
     use datafusion_physical_plan::statistics::StatisticsArgs;
     use datafusion_physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
     use datafusion_session::QueryPlanner;
     use parking_lot::Mutex as SyncMutex;
 
+    /// Records the root statistics computed with the shared statistics context
     #[derive(Debug)]
     struct ContextCheckingRule {
-        invoked: Arc<AtomicBool>,
+        recorded: Arc<SyncMutex<Vec<Arc<Statistics>>>>,
     }
 
     impl PhysicalOptimizerRule for ContextCheckingRule {
@@ -3597,39 +3599,6 @@ mod tests {
             context: &dyn PhysicalOptimizerContext,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             assert!(context.statistics_registry().is_some());
-            self.invoked.store(true, AtomicOrdering::Relaxed);
-            Ok(plan)
-        }
-
-        fn name(&self) -> &str {
-            "context_checking_rule"
-        }
-
-        fn schema_check(&self) -> bool {
-            true
-        }
-    }
-
-    /// Records the root statistics computed with the shared statistics context
-    #[derive(Debug)]
-    struct StatisticsRecordingRule {
-        recorded: Arc<SyncMutex<Vec<Arc<Statistics>>>>,
-    }
-
-    impl PhysicalOptimizerRule for StatisticsRecordingRule {
-        fn optimize(
-            &self,
-            plan: Arc<dyn ExecutionPlan>,
-            _config: &ConfigOptions,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            Ok(plan)
-        }
-
-        fn optimize_with_context(
-            &self,
-            plan: Arc<dyn ExecutionPlan>,
-            context: &dyn PhysicalOptimizerContext,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
             let statistics_context = context
                 .statistics_context()
                 .expect("the planner shares a statistics context");
@@ -3640,7 +3609,7 @@ mod tests {
         }
 
         fn name(&self) -> &str {
-            "statistics_recording_rule"
+            "context_checking_rule"
         }
 
         fn schema_check(&self) -> bool {
@@ -3698,10 +3667,7 @@ mod tests {
             self.inner.physical_optimizers()
         }
 
-        fn statistics_registry(
-            &self,
-        ) -> Option<&datafusion_physical_plan::operator_statistics::StatisticsRegistry>
-        {
+        fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
             self.inner.statistics_registry()
         }
 
@@ -3870,15 +3836,13 @@ mod tests {
 
     #[tokio::test]
     async fn plans_with_non_session_state_implementation() -> Result<()> {
-        let invoked = Arc::new(AtomicBool::new(false));
+        let recorded = Arc::new(SyncMutex::new(vec![]));
         let inner = SessionStateBuilder::new()
             .with_default_features()
             .with_physical_optimizer_rules(vec![Arc::new(ContextCheckingRule {
-                invoked: Arc::clone(&invoked),
+                recorded: Arc::clone(&recorded),
             })])
-            .with_statistics_registry(
-                datafusion_physical_plan::operator_statistics::StatisticsRegistry::new(),
-            )
+            .with_statistics_registry(StatisticsRegistry::new())
             .build();
         let query_planner_invoked = Arc::new(AtomicBool::new(false));
         let session = TestSession {
@@ -3893,7 +3857,7 @@ mod tests {
         let physical_plan = session.create_physical_plan(&logical_plan).await?;
         assert!(physical_plan.is::<EmptyExec>());
         assert!(query_planner_invoked.load(AtomicOrdering::Relaxed));
-        assert!(invoked.load(AtomicOrdering::Relaxed));
+        assert_eq!(recorded.lock().len(), 1);
         Ok(())
     }
 
@@ -3901,13 +3865,14 @@ mod tests {
     async fn optimizer_rules_share_statistics_context() -> Result<()> {
         let recorded = Arc::new(SyncMutex::new(vec![]));
         let rule = || -> Arc<dyn PhysicalOptimizerRule + Send + Sync> {
-            Arc::new(StatisticsRecordingRule {
+            Arc::new(ContextCheckingRule {
                 recorded: Arc::clone(&recorded),
             })
         };
         let session_state = SessionStateBuilder::new()
             .with_default_features()
             .with_physical_optimizer_rules(vec![rule(), rule()])
+            .with_statistics_registry(StatisticsRegistry::new())
             .build();
 
         let logical_plan = LogicalPlanBuilder::empty(false).build()?;
