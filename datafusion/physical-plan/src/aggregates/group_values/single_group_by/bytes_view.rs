@@ -126,6 +126,12 @@ impl GroupValues for GroupValuesBytesView {
         Ok(vec![group_values])
     }
 
+    fn emit_for_partial_flush(&mut self) -> datafusion_common::Result<Vec<ArrayRef>> {
+        let values = self.map.take_state_reusing_allocation();
+        self.num_groups = 0;
+        Ok(vec![values])
+    }
+
     fn values_preserving(
         &mut self,
         selection: GroupSelection<'_>,

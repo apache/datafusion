@@ -145,6 +145,8 @@ where
     views: Vec<u128>,
     /// In-progress buffer for out-of-line string data
     in_progress: Vec<u8>,
+    /// Maximum payload block size; extended after a reusable Partial flush.
+    payload_block_limit: usize,
     /// Completed buffers containing string data
     completed: Vec<Buffer>,
 
@@ -190,6 +192,7 @@ where
             initial_map_capacity: map_capacity,
             views: Vec::new(),
             in_progress: Vec::new(),
+            payload_block_limit: BYTE_VIEW_MAX_BLOCK_SIZE,
             completed: Vec::new(),
             random_state: RandomState::default(),
             hashes_buffer: vec![],
@@ -204,6 +207,29 @@ where
             Self::with_capacity(self.output_type, self.initial_map_capacity);
         std::mem::swap(self, &mut new_self);
         new_self
+    }
+
+    /// Emits all keys while retaining the hash allocation for a Partial flush.
+    /// The returned array owns the emitted strings. The empty map uses one payload
+    /// buffer, reserved from the previous payload length, up to the u32 offset
+    /// limit. Normal output and memory-pressure emission should use [`Self::take`].
+    pub fn take_state_reusing_allocation(&mut self) -> ArrayRef {
+        let payload_bytes = self
+            .completed
+            .iter()
+            .fold(self.in_progress.len(), |total, buffer| {
+                total.saturating_add(buffer.len())
+            });
+        let mut outgoing = Self::with_capacity(self.output_type, 0);
+        std::mem::swap(self, &mut outgoing);
+        std::mem::swap(&mut self.map, &mut outgoing.map);
+        self.map.clear();
+        self.initial_map_capacity = outgoing.initial_map_capacity;
+        std::mem::swap(&mut self.random_state, &mut outgoing.random_state);
+        self.payload_block_limit = u32::MAX as usize;
+        self.in_progress
+            .reserve_exact(payload_bytes.min(self.payload_block_limit));
+        outgoing.into_state()
     }
 
     /// Empties this map and releases every allocation it holds, so
@@ -538,7 +564,7 @@ where
             make_view(value, 0, 0)
         } else {
             // Ensure buffer is big enough
-            if self.in_progress.len() + len > BYTE_VIEW_MAX_BLOCK_SIZE {
+            if self.in_progress.len() + len > self.payload_block_limit {
                 let flushed = std::mem::replace(
                     &mut self.in_progress,
                     Vec::with_capacity(BYTE_VIEW_MAX_BLOCK_SIZE),
@@ -888,6 +914,48 @@ mod tests {
         let mut lazy = ArrowBytesViewMap::<()>::new(OutputType::Utf8View);
         lazy.take();
         assert_eq!(lazy.map.capacity(), 0);
+    }
+
+    #[test]
+    fn partial_flush_reuses_table_and_preserves_emitted_strings() {
+        let mut map = ArrowBytesViewMap::<usize>::new(OutputType::Utf8View);
+        let long_value = "x".repeat(BYTE_VIEW_MAX_BLOCK_SIZE / 2 + 1);
+        let other_value = "y".repeat(BYTE_VIEW_MAX_BLOCK_SIZE / 2 + 1);
+        let expected = vec![
+            Some("inline"),
+            None,
+            Some(long_value.as_str()),
+            Some(other_value.as_str()),
+        ];
+        let values: ArrayRef = Arc::new(StringViewArray::from(expected.clone()));
+        let mut emitted = Vec::new();
+        for _ in 0..3 {
+            let mut next_group = 0;
+            let mut groups = Vec::new();
+            map.insert_if_new(
+                &values,
+                |_| {
+                    let group = next_group;
+                    next_group += 1;
+                    group
+                },
+                |group| groups.push(group),
+            );
+            assert_eq!(groups, vec![0, 1, 2, 3]);
+            let capacity = map.map.capacity();
+            emitted.push(map.take_state_reusing_allocation());
+            assert!(map.is_empty());
+            assert_eq!(map.map.capacity(), capacity);
+            assert!(map.in_progress.capacity() >= long_value.len() + other_value.len());
+        }
+        for (index, array) in emitted.into_iter().enumerate() {
+            let array = array.as_string_view();
+            assert_eq!(array.iter().collect::<Vec<_>>(), expected);
+            assert_eq!(array.data_buffers().len(), if index == 0 { 2 } else { 1 });
+        }
+        map.clear_and_release();
+        assert_eq!(map.map.allocation_size(), 0);
+        assert_eq!(map.in_progress.capacity(), 0);
     }
 
     #[test]

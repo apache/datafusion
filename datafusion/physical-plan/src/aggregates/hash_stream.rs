@@ -354,7 +354,12 @@ impl PartialHashAggregateStream {
                     }
                     HandleInputResult::OOM | HandleInputResult::FlushThresholdReached => {
                         let materialized_group_states =
-                            hash_table.take_state_batch()?.ok_or_else(|| {
+                            if last_state == HandleInputResult::FlushThresholdReached {
+                                hash_table.take_state_batch_for_partial_flush()?
+                            } else {
+                                hash_table.take_state_batch()?
+                            }
+                            .ok_or_else(|| {
                                 internal_datafusion_err!(
                                     "Partial hash aggregate tried to flush an empty table"
                                 )
