@@ -1061,6 +1061,10 @@ impl ExecutionPlan for TestScan {
         Ok(Arc::new(Statistics::new_unknown(&self.schema)))
     }
 
+    fn supports_limit_pushdown(&self) -> bool {
+        self.supports_fetch
+    }
+
     fn with_fetch(&self, fetch: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
         if self.supports_fetch {
             let mut new_scan = self.clone();

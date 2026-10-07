@@ -2735,9 +2735,9 @@ async fn test_push_with_required_input_ordering_prohibited() -> Result<()> {
     Ok(())
 }
 
-// test when the required input ordering is satisfied so could push through
+// Compatible input requirements do not opt a custom node into sort pushdown.
 #[tokio::test]
-async fn test_push_with_required_input_ordering_allowed() -> Result<()> {
+async fn test_custom_node_keeps_sort_with_compatible_input_ordering() -> Result<()> {
     let schema = create_test_schema3()?;
     let ordering_a: LexOrdering = [sort_expr("a", &schema)].into();
     let ordering_ab = [sort_expr("a", &schema), sort_expr("b", &schema)].into();
@@ -2749,29 +2749,15 @@ async fn test_push_with_required_input_ordering_allowed() -> Result<()> {
         .into_arc();
     let plan = sort_exec(ordering_ab, plan);
 
-    /*
-    let expected_input = [
-        "SortExec: expr=[a@0 ASC, b@1 ASC], preserve_partitioning=[false]", // <-- can push this down (as it is compatible with the required input ordering)
-        "  RequiredInputOrderingExec", // <-- this requires input sorted by a, and preserves the input order
-        "    SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
-        "      DataSourceExec: partitions=1, partition_sizes=[0]",
-    ];
-    */
     let test = EnforceSortingTest::new(plan.clone()).with_repartition_sorts(true);
 
     assert_snapshot!(test.run(), @r"
-    Input Plan:
+    Input / Optimized Plan:
     SortExec: expr=[a@0 ASC, b@1 ASC], preserve_partitioning=[false]
       RequiredInputOrderingExec
         SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
           DataSourceExec: partitions=1, partition_sizes=[0]
-
-    Optimized Plan:
-    RequiredInputOrderingExec
-      SortExec: expr=[a@0 ASC, b@1 ASC], preserve_partitioning=[false]
-        DataSourceExec: partitions=1, partition_sizes=[0]
     ");
-    // Should be able to push down
     Ok(())
 }
 
