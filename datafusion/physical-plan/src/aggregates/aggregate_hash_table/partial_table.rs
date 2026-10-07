@@ -18,13 +18,12 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
-use datafusion_common::{Result, assert_eq_or_internal_err};
-
 use crate::aggregates::group_values::{AccumulatorPhase, new_group_values};
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{AggregateExec, evaluate_group_by};
+use arrow::datatypes::SchemaRef;
+use arrow::record_batch::RecordBatch;
+use datafusion_common::{Result, assert_eq_or_internal_err};
 
 use super::common::{
     AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState,

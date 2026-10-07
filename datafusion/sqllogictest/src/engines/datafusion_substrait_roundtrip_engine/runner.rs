@@ -21,6 +21,7 @@ use std::{path::PathBuf, time::Duration};
 use crate::engines::currently_executed_sql::CurrentlyExecutingSqlTracker;
 use crate::engines::datafusion_engine::Result;
 use crate::engines::output::{DFColumnType, DFOutput};
+use crate::memory_drift::rewrap_replaced_pool;
 use crate::{DFSqlLogicTestError, convert_batches, convert_schema_to_types};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
@@ -41,6 +42,7 @@ pub struct DataFusionSubstraitRoundTrip {
     relative_path: PathBuf,
     pb: ProgressBar,
     currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
+    optimize_before_round_trip: bool,
 }
 
 impl DataFusionSubstraitRoundTrip {
@@ -50,7 +52,14 @@ impl DataFusionSubstraitRoundTrip {
             relative_path,
             pb,
             currently_executing_sql_tracker: CurrentlyExecutingSqlTracker::default(),
+            optimize_before_round_trip: false,
         }
+    }
+
+    /// Optimize the logical plan before serializing it to Substrait.
+    pub fn with_optimization(mut self, optimize: bool) -> Self {
+        self.optimize_before_round_trip = optimize;
+        self
     }
 
     /// Add a tracker that will track the currently executed SQL statement.
@@ -100,8 +109,14 @@ impl sqllogictest::AsyncDB for DataFusionSubstraitRoundTrip {
         let tracked_sql = self.currently_executing_sql_tracker.set_sql(sql);
 
         let start = Instant::now();
-        let result = run_query_substrait_round_trip(&self.ctx, sql).await;
+        let result = run_query_substrait_round_trip(
+            &self.ctx,
+            sql,
+            self.optimize_before_round_trip,
+        )
+        .await;
         let duration = start.elapsed();
+        rewrap_replaced_pool(&self.ctx, &self.relative_path.display().to_string());
 
         self.currently_executing_sql_tracker.remove_sql(tracked_sql);
 
@@ -141,19 +156,25 @@ impl sqllogictest::AsyncDB for DataFusionSubstraitRoundTrip {
 async fn run_query_substrait_round_trip(
     ctx: &SessionContext,
     sql: impl Into<String>,
+    optimize: bool,
 ) -> Result<DFOutput> {
     let df = ctx.sql(sql.into().as_str()).await?;
     let task_ctx = Arc::new(df.task_ctx());
 
     let state = ctx.state();
-    let round_tripped_plan = match df.logical_plan() {
+    let logical_plan = if optimize {
+        df.into_optimized_plan()?
+    } else {
+        df.into_unoptimized_plan()
+    };
+    let round_tripped_plan = match &logical_plan {
         // Substrait does not handle these plans
         LogicalPlan::Ddl(_)
         | LogicalPlan::Explain(_)
         | LogicalPlan::Dml(_)
         | LogicalPlan::Copy(_)
         | LogicalPlan::DescribeTable(_)
-        | LogicalPlan::Statement(_) => df.logical_plan().clone(),
+        | LogicalPlan::Statement(_) => logical_plan,
         // For any other plan, convert to Substrait
         logical_plan => {
             let plan = to_substrait_plan(logical_plan, &state)?;

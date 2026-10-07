@@ -138,6 +138,7 @@ impl TreeNode for LogicalPlan {
                 schema,
                 null_equality,
                 null_aware,
+                null_aware_value_keys,
             }) => (left, right).map_elements(f)?.update_data(|(left, right)| {
                 LogicalPlan::Join(Join {
                     left,
@@ -149,6 +150,7 @@ impl TreeNode for LogicalPlan {
                     schema,
                     null_equality,
                     null_aware,
+                    null_aware_value_keys,
                 })
             }),
             LogicalPlan::AsOfJoin(AsOfJoin {
@@ -628,6 +630,7 @@ impl LogicalPlan {
                 schema,
                 null_equality,
                 null_aware,
+                null_aware_value_keys,
             }) => (on, filter).map_elements(f)?.update_data(|(on, filter)| {
                 LogicalPlan::Join(Join {
                     left,
@@ -639,6 +642,7 @@ impl LogicalPlan {
                     schema,
                     null_equality,
                     null_aware,
+                    null_aware_value_keys,
                 })
             }),
             LogicalPlan::AsOfJoin(AsOfJoin {
@@ -699,6 +703,7 @@ impl LogicalPlan {
                 projected_schema,
                 filters,
                 fetch,
+                skip: offset,
                 statistics_requests,
             }) => filters.map_elements(f)?.update_data(|filters| {
                 LogicalPlan::TableScan(TableScan {
@@ -708,6 +713,7 @@ impl LogicalPlan {
                     projected_schema,
                     filters,
                     fetch,
+                    skip: offset,
                     statistics_requests,
                 })
             }),

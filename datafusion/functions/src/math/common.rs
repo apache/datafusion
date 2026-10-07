@@ -24,9 +24,9 @@ use std::ops::RemAssign;
 
 /// A gcd helper to compute GCD using Euclidean GCD algorithm
 /// on non-negative numbers (scalars and decimals)
-fn gcd_helper<T>(a: T, b: T) -> Result<T, ArrowError>
+fn gcd_helper<T>(a: T, b: T) -> T
 where
-    T: ArrowNativeTypeOp + RemAssign + CheckedNeg,
+    T: ArrowNativeTypeOp + RemAssign,
 {
     debug_assert!(a >= T::ZERO);
     debug_assert!(b >= T::ZERO);
@@ -37,7 +37,7 @@ where
         b %= a;
     }
 
-    Ok(a)
+    a
 }
 
 /// Computes gcd of two unsigned integers using Binary GCD algorithm
@@ -84,7 +84,7 @@ where
             .ok_or_else(|| ArrowError::ComputeError("Signed integer overflow".into()))?
     };
     // Call with signed numbers
-    gcd_helper(a, b)
+    Ok(gcd_helper(a, b))
 }
 
 /// Computes gcd of two signed integers
@@ -123,7 +123,7 @@ where
             .ok_or_else(|| ArrowError::ComputeError("Signed integer overflow".into()))?
     };
     // Call with signed numbers
-    let gcd = gcd_helper(a, b)?;
+    let gcd = gcd_helper(a, b);
     // gcd is not zero since both a and b are not zero, so the division is safe.
     (a / gcd).checked_mul(&b).ok_or_else(|| {
         ArrowError::ComputeError(format!("Signed integer overflow in LCM({x}, {y})"))
@@ -140,7 +140,7 @@ pub(crate) fn lcm_signed_int(x: i64, y: i64) -> Result<i64, ArrowError> {
     let a = x.unsigned_abs();
     let b = y.unsigned_abs();
 
-    let gcd = gcd_helper::<u64>(a, b)?;
+    let gcd = unsigned_gcd(a, b);
     // gcd is not zero since both a and b are not zero, so the division is safe.
     (a / gcd)
         .checked_mul(b)
