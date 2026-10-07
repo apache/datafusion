@@ -864,7 +864,9 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Int32Type, Schema};
     use datafusion_common::Result;
     use datafusion_execution::config::SessionConfig;
-    use datafusion_execution::memory_pool::{GreedyMemoryPool, MemoryPool};
+    use datafusion_execution::memory_pool::{
+        GreedyMemoryPool, MemoryPool, UnboundedMemoryPool,
+    };
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::{min_max::min_udaf, sum::sum_udaf};
@@ -1370,20 +1372,21 @@ mod tests {
     #[tokio::test]
     async fn final_hash_spill_replay_with_other_partitions_holding_state() -> Result<()> {
         for spills in [1, 2, 3] {
-            run_shared_pool_case(spills, 1024 * 1024, Finish::Collect).await?;
+            run_shared_pool_case(spills, Some(1024 * 1024), Finish::Collect).await?;
         }
-        // An unlimited pool produces the reference results without spilling.
-        run_shared_pool_case(0, 10 * 1024 * 1024, Finish::Collect).await
+        // Collision-mode scratch can exceed a fixed reference budget. Use an
+        // unbounded pool so this case always exercises output without spilling.
+        run_shared_pool_case(0, None, Finish::Collect).await
     }
 
     #[tokio::test]
     async fn final_hash_spill_replay_releases_memory_on_drop() -> Result<()> {
-        run_shared_pool_case(1, 1024 * 1024, Finish::DropDuringReplay).await
+        run_shared_pool_case(1, Some(1024 * 1024), Finish::DropDuringReplay).await
     }
 
     #[tokio::test]
     async fn final_hash_spill_releases_memory_on_input_error() -> Result<()> {
-        run_shared_pool_case(1, 1024 * 1024, Finish::InputError).await
+        run_shared_pool_case(1, Some(1024 * 1024), Finish::InputError).await
     }
 
     /// Partition 0 spills `spills` times and replays while partitions 1..3
@@ -1399,7 +1402,7 @@ mod tests {
     /// issue #25423.
     async fn run_shared_pool_case(
         spills: usize,
-        limit: usize,
+        limit: Option<usize>,
         finish: Finish,
     ) -> Result<()> {
         const PARTITIONS: usize = 4;
@@ -1457,7 +1460,10 @@ mod tests {
         )?;
         assert_eq!(aggregate.input_order_mode(), &InputOrderMode::Linear);
 
-        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(limit));
+        let pool: Arc<dyn MemoryPool> = match limit {
+            Some(limit) => Arc::new(GreedyMemoryPool::new(limit)),
+            None => Arc::new(UnboundedMemoryPool::default()),
+        };
         let context = Arc::new(
             TaskContext::default()
                 .with_session_config(SessionConfig::new().with_batch_size(128))
