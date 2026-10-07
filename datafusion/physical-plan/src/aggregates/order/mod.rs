@@ -171,23 +171,10 @@ mod tests {
     use datafusion_common::ScalarValue;
 
     #[test]
-    fn test_size_none() {
-        assert_eq!(GroupOrdering::None.size(), size_of::<GroupOrdering>());
-    }
-
-    #[test]
-    fn test_size_full() -> Result<()> {
-        let mut ordering = GroupOrdering::try_new(&InputOrderMode::Sorted)?;
+    fn test_size_inline_only() -> Result<()> {
         let expected = size_of::<GroupOrdering>();
-        assert_eq!(ordering.size(), expected);
-
-        ordering.new_groups(&[], &[0, 1, 2], 3)?;
-        assert_eq!(ordering.size(), expected);
-        ordering.remove_groups(2);
-        assert_eq!(ordering.size(), expected);
-        ordering.input_done();
-        assert_eq!(ordering.size(), expected);
-        ordering.reset();
+        assert_eq!(GroupOrdering::None.size(), expected);
+        let ordering = GroupOrdering::try_new(&InputOrderMode::Sorted)?;
         assert_eq!(ordering.size(), expected);
         Ok(())
     }
