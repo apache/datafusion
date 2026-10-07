@@ -64,6 +64,16 @@ This limits memory used by DataFusion's query execution memory pool; use
 process- or container-level resource limits as well when a hard bound on total
 application memory is required.
 
+## Bound spill storage
+
+When an execution operator supports spilling, DataFusion may write intermediate
+query data to temporary files under memory pressure. A query memory limit does
+not limit this disk usage. Set `datafusion.runtime.temp_directory` to a
+controlled location and `datafusion.runtime.max_temp_directory_size` to cap
+DataFusion's temporary-file directory size (the default is `100G`). For
+untrusted SQL workloads, apply appropriate filesystem permissions and storage
+limits to that location as well.
+
 Also review the capabilities of custom table providers, functions, and other
 extensions registered by the application: they determine which external data
 and operations queries can reach.
