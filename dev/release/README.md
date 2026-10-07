@@ -447,9 +447,9 @@ svn delete -m "delete old DataFusion RC" https://dist.apache.org/repos/dist/dev/
 
 #### Delete old releases from `release` SVN
 
-Keep the latest release and the last major release (`X.0.0`). Delete all other old releases
-after publishing the new release. For example, after publishing 55.2.0 keep `datafusion-55.2.0`
-and `datafusion-55.0.0`, and delete everything else, such as 55.1.0 and every 54.x release.
+Keep the last major release (`X.0.0`) and the releases after it. Delete older releases
+after publishing the new release. For example, after publishing 55.2.0 keep `datafusion-55.0.0`,
+`datafusion-55.1.0` and `datafusion-55.2.0`, and delete every 54.x release.
 
 To get a list of DataFusion releases:
 
@@ -462,6 +462,5 @@ To delete releases:
 ```shell
 svn delete -m "delete old DataFusion release" \
   https://dist.apache.org/repos/dist/release/datafusion/datafusion-54.0.0 \
-  https://dist.apache.org/repos/dist/release/datafusion/datafusion-54.1.0 \
-  https://dist.apache.org/repos/dist/release/datafusion/datafusion-55.1.0
+  https://dist.apache.org/repos/dist/release/datafusion/datafusion-54.1.0
 ```
