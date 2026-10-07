@@ -161,7 +161,6 @@ impl OrderedPartialAggregateStream {
             agg,
             partition,
             Arc::clone(&schema),
-            batch_size,
         )?;
         let reservation =
             MemoryConsumer::new(format!("OrderedPartialAggregateStream[{partition}]"))
@@ -170,6 +169,9 @@ impl OrderedPartialAggregateStream {
                     GroupOrdering::Partial(_)
                 ))
                 .register(context.memory_pool());
+
+        // Reserve memory for the initial hash table. that we hold for the lifetime of the stream.
+        reservation.try_grow(table.memory_size())?;
 
         Ok(Self {
             reservation,

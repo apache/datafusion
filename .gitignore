@@ -69,6 +69,10 @@ datafusion/core/*.parquet
 # Generated core benchmark data
 datafusion/core/benches/data/*
 
+# Generated Nix environment hooks
+
+.direnv/
+
 # rat
 filtered_rat.txt
 rat.txt
