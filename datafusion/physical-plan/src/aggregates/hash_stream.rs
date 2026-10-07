@@ -246,6 +246,9 @@ fn starts_buckets(groups: usize, rows: usize, threshold: usize) -> bool {
             && groups as f64 >= BARELY_REDUCING * rows as f64)
 }
 
+/// Additional Partial flush trigger in allocated bytes, checked after a batch.
+const PARTIAL_FLUSH_BYTES: usize = 2 * 1024 * 1024;
+
 /// Number of flushed groups whose hashes are kept to detect recurring groups.
 const FLUSH_SAMPLE_SIZE: usize = 1024;
 
@@ -296,8 +299,9 @@ struct PartialTableFlush {
 }
 
 impl PartialTableFlush {
-    fn should_flush(&self, num_groups: usize) -> bool {
-        !self.disabled && num_groups >= self.threshold
+    fn should_flush(&self, num_groups: usize, allocated_bytes: usize) -> bool {
+        !self.disabled
+            && (num_groups >= self.threshold || allocated_bytes >= PARTIAL_FLUSH_BYTES)
     }
 
     /// Records the flush of `state`, the emitted groups and their states.
@@ -602,7 +606,8 @@ impl PartialHashAggregateStream {
         // -------------------------------------------------
         // Step 4: Larger-than-memory execution (early emit)
         // -------------------------------------------------
-        let resize_result = self.reservation.try_resize(hash_table.memory_size());
+        let allocated_bytes = hash_table.memory_size();
+        let resize_result = self.reservation.try_resize(allocated_bytes);
         match resize_result {
             Ok(()) => {}
             Err(DataFusionError::ResourcesExhausted(_)) => {
@@ -616,7 +621,7 @@ impl PartialHashAggregateStream {
         // `PartialTableFlush`)
         // -----------------------------------------------------------
         let table_full = self.table_flush.as_ref().is_some_and(|table_flush| {
-            table_flush.should_flush(hash_table.building_group_count())
+            table_flush.should_flush(hash_table.building_group_count(), allocated_bytes)
         });
         if table_full {
             return Ok(HandleInputResult::TableFull);
@@ -1707,6 +1712,20 @@ mod tests {
         assert!(flushes >= 9, "the table was flushed throughout: {flushes}");
         // A group is only emitted twice when a flush falls between its rows
         assert!(state_rows <= 20_000 + flushes);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn partial_hash_aggregate_flushes_at_byte_threshold() -> Result<()> {
+        // Stay below the group threshold so only the byte threshold can flush.
+        let keys: Vec<i32> = (0..300_000).map(|row| row / 3).collect();
+        let (expected, _, _) = run_partial_hash_aggregate(keys.clone(), 0).await?;
+        let (counts, _, flushes) = run_partial_hash_aggregate(keys, 262_144).await?;
+
+        assert_eq!(counts, expected);
+        assert_eq!(counts.len(), 100_000);
+        assert!(counts.values().all(|&count| count == 3));
+        assert!(flushes > 0, "the byte threshold triggered a flush");
         Ok(())
     }
 
