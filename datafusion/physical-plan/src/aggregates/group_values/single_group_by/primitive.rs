@@ -241,6 +241,13 @@ where
         Ok(vec![Arc::new(array.with_data_type(self.data_type.clone()))])
     }
 
+    fn emit_for_partial_flush(&mut self) -> Result<Vec<ArrayRef>> {
+        let num_values = self.values.len();
+        let output = self.emit(EmitTo::All)?;
+        self.values.reserve_exact(num_values);
+        Ok(output)
+    }
+
     fn values_preserving(
         &mut self,
         selection: GroupSelection<'_>,

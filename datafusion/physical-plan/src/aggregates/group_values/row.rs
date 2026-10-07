@@ -266,6 +266,10 @@ impl GroupValues for GroupValuesRows {
         Ok(output)
     }
 
+    fn emit_for_partial_flush(&mut self) -> Result<Vec<ArrayRef>> {
+        self.emit(EmitTo::All)
+    }
+
     fn values_preserving(
         &mut self,
         selection: GroupSelection<'_>,

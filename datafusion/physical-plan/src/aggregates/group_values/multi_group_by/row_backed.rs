@@ -304,6 +304,12 @@ impl GroupColumn for RowsGroupColumn {
         Ok(self.rows_to_array(rows))
     }
 
+    fn take_for_partial_flush(&mut self) -> ArrayRef {
+        let output = self.rows_to_array(&self.group_values);
+        self.group_values.clear();
+        output
+    }
+
     fn take_n(&mut self, n: usize) -> ArrayRef {
         debug_assert!(n <= self.group_values.num_rows());
 

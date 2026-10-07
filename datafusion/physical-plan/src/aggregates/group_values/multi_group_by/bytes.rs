@@ -419,6 +419,15 @@ where
         })
     }
 
+    fn take_for_partial_flush(&mut self) -> ArrayRef {
+        let num_values = self.len();
+        let payload_bytes = self.buffer.len();
+        let output = self.take_n(num_values);
+        self.offsets.reserve_exact(num_values);
+        self.buffer.reserve(payload_bytes);
+        output
+    }
+
     fn take_n(&mut self, n: usize) -> ArrayRef {
         debug_assert!(self.len() >= n);
         let null_buffer = self.nulls.take_n(n);

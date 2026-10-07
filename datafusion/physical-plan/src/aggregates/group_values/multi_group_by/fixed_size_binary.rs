@@ -244,6 +244,13 @@ impl GroupColumn for FixedSizeBinaryGroupValueBuilder {
         ))
     }
 
+    fn take_for_partial_flush(&mut self) -> ArrayRef {
+        let payload_bytes = self.buffer.len();
+        let output = self.take_n(self.len);
+        self.buffer.reserve_exact(payload_bytes);
+        output
+    }
+
     fn take_n(&mut self, n: usize) -> ArrayRef {
         debug_assert!(self.len >= n);
 

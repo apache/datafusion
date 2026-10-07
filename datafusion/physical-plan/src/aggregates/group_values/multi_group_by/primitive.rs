@@ -299,6 +299,13 @@ where
         ))
     }
 
+    fn take_for_partial_flush(&mut self) -> ArrayRef {
+        let num_values = self.group_values.len();
+        let output = self.take_n(num_values);
+        self.group_values.reserve_exact(num_values);
+        output
+    }
+
     fn take_n(&mut self, n: usize) -> ArrayRef {
         let first_n = split_vec_min_alloc(&mut self.group_values, n);
         let first_n_nulls = if NULLABLE { self.nulls.take_n(n) } else { None };

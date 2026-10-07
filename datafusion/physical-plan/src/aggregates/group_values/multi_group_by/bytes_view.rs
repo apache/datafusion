@@ -652,6 +652,23 @@ impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
         self.values_preserving_inner(selection)
     }
 
+    fn take_for_partial_flush(&mut self) -> ArrayRef {
+        let num_views = self.views.len();
+        let payload_bytes = self
+            .completed
+            .iter()
+            .fold(self.in_progress.len(), |total, buffer| {
+                total.saturating_add(buffer.len())
+            });
+        let mut fresh = Self::new().with_max_block_size(u32::MAX as usize);
+        fresh.views.reserve_exact(num_views);
+        fresh
+            .in_progress
+            .reserve_exact(payload_bytes.min(u32::MAX as usize));
+        fresh.nulls = NullBufferBuilder::new(num_views);
+        replace(self, fresh).build_inner()
+    }
+
     fn take_n(&mut self, n: usize) -> ArrayRef {
         self.take_n_inner(n)
     }

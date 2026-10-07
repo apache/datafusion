@@ -223,13 +223,109 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::{
-        ArrayRef, AsArray, BooleanArray, Int32Array, StringArray, StringViewArray,
+        Array, ArrayRef, AsArray, BooleanArray, FixedSizeBinaryArray, Int32Array,
+        ListArray, StringArray, StringViewArray, StructArray, UInt32Array,
     };
+    use arrow::compute;
     use arrow::datatypes::{DataType, Field, Int32Type, Schema};
     use datafusion_expr::{EmitTo, GroupSelection};
 
     use super::new_group_values;
     use crate::aggregates::order::GroupOrdering;
+
+    #[test]
+    fn partial_flush_preserves_output_and_resets_all_key_types() {
+        let strings: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("first long string value"),
+            None,
+            Some("second long string value"),
+        ]));
+        let mut arrays: Vec<ArrayRef> = vec![
+            Arc::new(Int32Array::from(vec![Some(11), None, Some(22)])),
+            Arc::new(BooleanArray::from(vec![Some(true), None, Some(false)])),
+            Arc::clone(&strings),
+            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                Some(vec![Some(1), None]),
+                None,
+                Some(vec![Some(2), Some(3)]),
+            ])),
+            Arc::new(
+                FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+                    vec![Some(b"abc".as_slice()), None, Some(b"def".as_slice())]
+                        .into_iter(),
+                    3,
+                )
+                .unwrap(),
+            ),
+        ];
+        arrays.push(Arc::new(StructArray::from(vec![(
+            Arc::new(Field::new("nested", DataType::Int32, true)),
+            Arc::clone(&arrays[0]),
+        )])));
+        for data_type in [
+            DataType::LargeUtf8,
+            DataType::Binary,
+            DataType::LargeBinary,
+            DataType::Utf8View,
+            DataType::BinaryView,
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        ] {
+            arrays.push(compute::cast(&strings, &data_type).unwrap());
+        }
+        let mut cases: Vec<Vec<ArrayRef>> =
+            arrays.iter().map(|a| vec![Arc::clone(a)]).collect();
+        cases.push(arrays);
+        for columns in cases {
+            let schema = Arc::new(Schema::new(
+                columns
+                    .iter()
+                    .enumerate()
+                    .map(|(i, a)| {
+                        Field::new(format!("key{i}"), a.data_type().clone(), true)
+                    })
+                    .collect::<Vec<_>>(),
+            ));
+            let mut values = new_group_values(schema, &GroupOrdering::None).unwrap();
+            let mut retained_outputs = vec![];
+            let mut groups = vec![];
+            for indices in [[0, 1, 2, 0], [2, 0, 1, 2], [1, 2, 0, 1]] {
+                let input = columns
+                    .iter()
+                    .map(|a| {
+                        compute::take(
+                            a.as_ref(),
+                            &UInt32Array::from(indices.to_vec()),
+                            None,
+                        )
+                        .unwrap()
+                    })
+                    .collect::<Vec<_>>();
+                values.intern(&input, &mut groups).unwrap();
+                assert_eq!(groups, vec![0, 1, 2, 0]);
+                let output = values.emit_for_partial_flush().unwrap();
+                assert!(values.is_empty());
+                let expected = input.iter().map(|a| a.slice(0, 3)).collect::<Vec<_>>();
+                retained_outputs.push((output, expected));
+            }
+            // Earlier batches stay alive while the same builders are refilled.
+            for (output, expected) in retained_outputs {
+                for (actual, expected) in output.iter().zip(expected.iter()) {
+                    // Dictionary output may compact or reorder its dictionary values.
+                    let data_type = match expected.data_type() {
+                        DataType::Dictionary(_, value_type) => value_type.as_ref(),
+                        data_type => data_type,
+                    };
+                    let actual = compute::cast(actual, data_type).unwrap();
+                    let expected = compute::cast(expected, data_type).unwrap();
+                    assert_eq!(actual.as_ref(), expected.as_ref());
+                }
+            }
+            values.clear_shrink(0);
+            assert!(values.is_empty());
+            values.intern(&columns, &mut groups).unwrap();
+            assert_eq!(groups, vec![0, 1, 2]);
+        }
+    }
 
     #[test]
     fn preserving_values_keep_group_indices_valid() {

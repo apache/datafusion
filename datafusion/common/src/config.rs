@@ -1141,9 +1141,12 @@ config_namespace! {
         /// exceed this size by one batch. Flushed groups count toward the existing
         /// skip-partial probe. Repeated keys do not disable flushing. Aggregations
         /// with a soft group limit or nested aggregate state are excluded.
-        /// After a threshold flush, single StringView keys retain hash-table
-        /// capacity and reserve a contiguous payload buffer using the previous
-        /// payload length. Memory-pressure emission still releases allocations.
+        /// Threshold flushes retain group-key hash tables and scratch buffers.
+        /// Key buffers transferred to output are reserved again using the previous
+        /// lengths, including primitive, string, and multi-column keys. StringView
+        /// payloads use contiguous buffers up to the view offset limit. Retained
+        /// capacity counts toward this threshold and memory reservations.
+        /// Memory-pressure emission still releases allocations.
         /// Set to 0 to disable this threshold. If both flush thresholds are
         /// enabled, reaching either triggers a flush. Final aggregation is unchanged.
         pub partial_aggregation_flush_bytes: usize, default = 0

@@ -421,7 +421,9 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             state.group_values.clear_shrink(0);
         }
         state.batch_group_indices.clear();
-        state.batch_group_indices.shrink_to_fit();
+        if !is_partial_flush {
+            state.batch_group_indices.shrink_to_fit();
+        }
 
         Ok(Some(batch))
     }

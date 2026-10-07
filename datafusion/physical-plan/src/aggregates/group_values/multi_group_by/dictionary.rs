@@ -549,6 +549,18 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
         Ok(Self::into_dict(values, &selected_groups, null_inner_slot))
     }
 
+    fn take_for_partial_flush(&mut self) -> ArrayRef {
+        let values = self.inner.take_for_partial_flush();
+        let output = Self::into_dict(values, &self.group_to_inner, self.null_inner_slot);
+        self.group_to_inner.clear();
+        self.value_dedup.clear();
+        self.null_inner_slot = None;
+        self.val_to_inner.clear();
+        self.val_hashes.clear();
+        self.cached_values = None;
+        output
+    }
+
     fn take_n(&mut self, n: usize) -> ArrayRef {
         let old_inner_len = self.inner.len();
         let all_inner_values = self.inner.take_n(old_inner_len);

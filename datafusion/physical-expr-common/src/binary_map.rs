@@ -336,6 +336,25 @@ where
         new_self
     }
 
+    /// Emits keys while retaining the hash table and reserving replacement key buffers.
+    /// Output arrays own the previous key buffers, so subsequent input cannot change them.
+    pub fn take_state_reusing_allocation(&mut self) -> ArrayRef {
+        let payload_bytes = self.buffer.len();
+        let num_offsets = self.offsets.len();
+        let mut outgoing = Self::new_inner(self.output_type, 0, 0);
+        swap(self, &mut outgoing);
+        swap(&mut self.map, &mut outgoing.map);
+        self.map.clear();
+        swap(&mut self.hashes_buffer, &mut outgoing.hashes_buffer);
+        self.hashes_buffer.clear();
+        swap(&mut self.random_state, &mut outgoing.random_state);
+        self.initial_map_capacity = outgoing.initial_map_capacity;
+        self.initial_buffer_capacity = outgoing.initial_buffer_capacity;
+        self.buffer.reserve_exact(payload_bytes);
+        self.offsets.reserve_exact(num_offsets.saturating_sub(1));
+        outgoing.into_state()
+    }
+
     /// Empties this map and releases every allocation it holds, so
     /// [`Self::size`] drops to approximately zero.
     ///

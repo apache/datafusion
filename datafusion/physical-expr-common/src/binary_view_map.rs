@@ -220,10 +220,14 @@ where
             .fold(self.in_progress.len(), |total, buffer| {
                 total.saturating_add(buffer.len())
             });
+        let num_views = self.views.len();
         let mut outgoing = Self::with_capacity(self.output_type, 0);
         std::mem::swap(self, &mut outgoing);
         std::mem::swap(&mut self.map, &mut outgoing.map);
         self.map.clear();
+        std::mem::swap(&mut self.hashes_buffer, &mut outgoing.hashes_buffer);
+        self.hashes_buffer.clear();
+        self.views.reserve_exact(num_views);
         self.initial_map_capacity = outgoing.initial_map_capacity;
         std::mem::swap(&mut self.random_state, &mut outgoing.random_state);
         self.payload_block_limit = u32::MAX as usize;

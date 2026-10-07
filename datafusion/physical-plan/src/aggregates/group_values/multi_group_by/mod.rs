@@ -116,6 +116,12 @@ pub trait GroupColumn: Send + Sync {
     /// Builds a new array from the first `n` stored rows, shifting the
     /// remaining rows to the start of the builder
     fn take_n(&mut self, n: usize) -> ArrayRef;
+
+    /// Emits all rows and prepares reusable storage for the next Partial flush cycle.
+    /// Buffers transferred to the result must not be modified by subsequent input.
+    fn take_for_partial_flush(&mut self) -> ArrayRef {
+        self.take_n(self.len())
+    }
 }
 
 /// Determines if the nullability of the existing and new input array can be used
@@ -1208,6 +1214,23 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
             }
         };
 
+        Ok(output)
+    }
+
+    fn emit_for_partial_flush(&mut self) -> Result<Vec<ArrayRef>> {
+        let output = self
+            .group_values
+            .iter_mut()
+            .map(|column| column.take_for_partial_flush())
+            .collect();
+        self.map.clear();
+        self.hashes_buffer.clear();
+        self.group_index_lists.clear();
+        self.emit_group_index_list_buffer.clear();
+        self.vectorized_operation_buffers.clear();
+        self.vectorized_operation_buffers
+            .equal_to_results
+            .truncate(0);
         Ok(output)
     }
 

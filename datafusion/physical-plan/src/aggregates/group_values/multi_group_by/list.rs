@@ -261,6 +261,26 @@ impl<O: OffsetSizeTrait> GroupColumn for ListGroupValueBuilder<O> {
         )))
     }
 
+    fn take_for_partial_flush(&mut self) -> ArrayRef {
+        let num_offsets = self.offsets.len();
+        let offsets =
+            std::mem::replace(&mut self.offsets, Vec::with_capacity(num_offsets));
+        self.offsets.push(O::usize_as(0));
+        let nulls = std::mem::replace(
+            &mut self.outer_nulls,
+            NullBufferBuilder::new(self.outer_len),
+        )
+        .build();
+        self.outer_len = 0;
+        let child = self.child.take_for_partial_flush();
+        Arc::new(GenericListArray::<O>::new(
+            Arc::clone(&self.field),
+            OffsetBuffer::new(ScalarBuffer::from(offsets)),
+            child,
+            nulls,
+        ))
+    }
+
     fn take_n(&mut self, n: usize) -> ArrayRef {
         // Number of child elements consumed by the first n outer rows.
         let cut_offset = self.offsets[n];
