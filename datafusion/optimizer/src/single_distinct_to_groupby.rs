@@ -125,7 +125,7 @@ fn is_single_distinct_agg(
     aggr_expr: &[Expr],
     input_schema: &DFSchema,
     count_rollup: Option<&CountRollup>,
-    has_group_by: bool,
+    use_native_grouped_distinct: bool,
 ) -> Result<bool> {
     let mut fields_set = HashSet::new();
     let mut aggregate_count = 0;
@@ -168,11 +168,13 @@ fn is_single_distinct_agg(
     if aggregate_count != aggr_expr.len() || fields_set.len() != 1 {
         return Ok(false);
     }
-    // Grouped DISTINCT aggregates with native GroupsAccumulators do not need
-    // the adapter this rewrite avoids. Keep them on the direct path instead of
-    // building an extra aggregate with a row per (group, distinct value) pair.
-    // Leave mixed aggregates and global DISTINCT aggregation unchanged.
-    if has_group_by
+    // With one target partition, a native GroupsAccumulator avoids building an
+    // extra aggregate with a row per (group, distinct value) pair. With multiple
+    // partitions, the rewrite also distributes deduplication by both keys;
+    // keeping DISTINCT instead repartitions lists of values by group and merges
+    // them in the final accumulator. That can concentrate work on a few groups.
+    // Native accumulator support alone does not establish that this is cheaper.
+    if use_native_grouped_distinct
         && distinct_aggs.len() == aggregate_count
         && all_have_groups_accumulators(&distinct_aggs, input_schema)?
     {
@@ -276,7 +278,8 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 &aggr_expr,
                 input.schema(),
                 count_rollup.as_ref(),
-                !group_expr.is_empty(),
+                !group_expr.is_empty()
+                    && config.options().execution.target_partitions == 1,
             )? && !contains_grouping_set(&group_expr) =>
             {
                 let group_size = group_expr.len();
@@ -592,8 +595,11 @@ mod tests {
             let mut registry = MemoryFunctionRegistry::new();
             registry.register_udaf(count_udaf()).unwrap();
             registry.register_udaf(sum_udaf()).unwrap();
+            // Keep logical-plan snapshots independent of the available CPUs.
+            let mut options = OptimizerContext::new().options();
+            Arc::make_mut(&mut options).execution.target_partitions = 4;
             Self {
-                inner: OptimizerContext::new(),
+                inner: OptimizerContext::new_with_config_options(options),
                 registry,
             }
         }
@@ -766,12 +772,14 @@ mod tests {
             .aggregate(vec![col("a")], vec![count_distinct(col("b"))])?
             .build()?;
 
-        // The integer DISTINCT count already has a GroupsAccumulator.
+        // Multiple target partitions keep deduplication distributed by both keys.
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Aggregate: groupBy=[[test.a]], aggr=[[count(DISTINCT test.b)]] [a:UInt32, count(DISTINCT test.b):Int64]
-          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        Projection: test.a, count(alias1) AS count(DISTINCT test.b) [a:UInt32, count(DISTINCT test.b):Int64]
+          Aggregate: groupBy=[[test.a]], aggr=[[count(alias1)]] [a:UInt32, count(alias1):Int64]
+            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -941,20 +949,20 @@ mod tests {
 
     #[test]
     fn group_by_with_expr() -> Result<()> {
-        let table_scan = test_table_scan_utf8_b()?;
+        let table_scan = test_table_scan().unwrap();
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(vec![col("a") + lit(1)], vec![count_distinct(col("b"))])?
+            .aggregate(vec![col("a") + lit(1)], vec![count_distinct(col("c"))])?
             .build()?;
 
         // Should work
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Projection: group_alias_0 AS test.a + Int32(1), count(alias1) AS count(DISTINCT test.b) [test.a + Int32(1):Int64, count(DISTINCT test.b):Int64]
+        Projection: group_alias_0 AS test.a + Int32(1), count(alias1) AS count(DISTINCT test.c) [test.a + Int32(1):Int64, count(DISTINCT test.c):Int64]
           Aggregate: groupBy=[[group_alias_0]], aggr=[[count(alias1)]] [group_alias_0:Int64, count(alias1):Int64]
-            Aggregate: groupBy=[[test.a + Int32(1) AS group_alias_0, test.b AS alias1]], aggr=[[]] [group_alias_0:Int64, alias1:Utf8]
-              TableScan: test [a:UInt32, b:Utf8, c:UInt32]
+            Aggregate: groupBy=[[test.a + Int32(1) AS group_alias_0, test.c AS alias1]], aggr=[[]] [group_alias_0:Int64, alias1:UInt32]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }

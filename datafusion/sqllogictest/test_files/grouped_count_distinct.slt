@@ -15,8 +15,12 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Grouped integer DISTINCT counts should keep their specialized accumulator.
-# String and floating-point keys still use the two-phase rewrite.
+# With one target partition, grouped integer DISTINCT counts keep their
+# specialized accumulator. Multiple partitions retain distributed deduplication.
+# String and floating-point DISTINCT arguments still use the two-phase rewrite.
+
+statement ok
+SET datafusion.execution.target_partitions = 1;
 
 statement ok
 CREATE TABLE numeric_counts(g INT, x INT, s VARCHAR, f DOUBLE);
@@ -171,6 +175,64 @@ SELECT count(DISTINCT x) FROM numeric_counts WHERE g = 42;
 query II
 SELECT g, count(DISTINCT x) FROM numeric_counts WHERE g = 42 GROUP BY g;
 ----
+
+# The same session must switch back to the rewrite when partitions increase.
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+statement ok
+SET datafusion.explain.logical_plan_only = true;
+
+query TT
+EXPLAIN SELECT g, count(DISTINCT x) FROM numeric_counts GROUP BY g;
+----
+logical_plan
+01)Projection: numeric_counts.g, count(alias1) AS count(DISTINCT numeric_counts.x)
+02)--Aggregate: groupBy=[[numeric_counts.g]], aggr=[[count(alias1)]]
+03)----Aggregate: groupBy=[[numeric_counts.g, numeric_counts.x AS alias1]], aggr=[[]]
+04)------TableScan: numeric_counts projection=[g, x]
+
+statement ok
+SET datafusion.explain.logical_plan_only = false;
+
+# Duplicates span source batches and partitions; one hot string group, a NULL
+# grouping key and an all-NULL DISTINCT group exercise the fallback's results.
+statement ok
+CREATE TABLE parallel_counts AS
+SELECT CASE WHEN value % 10 < 8 THEN 'hot'
+            WHEN value % 10 = 8 THEN 'null_values' END AS g,
+       CASE WHEN value % 10 = 8 THEN NULL ELSE value % 100 END AS x
+FROM range(100000);
+
+query TI rowsort
+SELECT g, count(DISTINCT x) FROM parallel_counts GROUP BY g;
+----
+NULL 10
+hot 80
+null_values 0
+
+query TII rowsort
+SELECT g, count(DISTINCT x), count(DISTINCT x) AS again
+FROM parallel_counts GROUP BY g;
+----
+NULL 10 10
+hot 80 80
+null_values 0 0
+
+# Composite grouping with the integer DISTINCT argument, as in ClickBench Q11.
+query ITI rowsort
+SELECT length(g), g, count(DISTINCT x) FROM parallel_counts GROUP BY length(g), g;
+----
+11 null_values 0
+3 hot 80
+NULL NULL 10
+
+query TI
+SELECT g, count(DISTINCT x) FROM parallel_counts WHERE x = 101 GROUP BY g;
+----
+
+statement ok
+DROP TABLE parallel_counts;
 
 statement ok
 DROP TABLE numeric_counts;

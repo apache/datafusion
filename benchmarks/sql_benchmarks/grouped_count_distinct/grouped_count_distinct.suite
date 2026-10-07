@@ -1,4 +1,4 @@
-description = "Grouped COUNT(DISTINCT) across integer, string and floating-point keys, group counts and distinct cardinalities"
+description = "Grouped COUNT(DISTINCT) across argument types, integer/string/composite grouping keys, distinct cardinalities and skew; compare --partitions 1, 4 and 12"
 
 [[options]]
 name = "rows"
@@ -9,3 +9,7 @@ help = "Input rows generated outside the timed query."
 [[examples]]
 command = "cargo run --release --bin benchmark_runner -- grouped_count_distinct --iterations 10 --partitions 1"
 description = "Compare grouped DISTINCT counts at the issue's four-million-row scale."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- grouped_count_distinct --iterations 10 --partitions 12"
+description = "Exercise parallel state merging, including hot integer, string and composite groups (Q07-Q09)."

@@ -1,0 +1,27 @@
+name Q09
+group grouped_count_distinct
+
+load sql_benchmarks/grouped_count_distinct/init/load.sql
+
+assert I
+WITH actual AS (
+  SELECT skew_g AS g, string_g AS s, count(DISTINCT x) AS n
+  FROM grouped_distinct GROUP BY skew_g, string_g
+), expected AS (
+  SELECT g, s, count(x) AS n
+  FROM (SELECT DISTINCT skew_g AS g, string_g AS s, x AS x FROM grouped_distinct)
+  GROUP BY g, s
+)
+SELECT NOT EXISTS (SELECT * FROM actual EXCEPT SELECT * FROM expected)
+   AND NOT EXISTS (SELECT * FROM expected EXCEPT SELECT * FROM actual);
+----
+true
+
+expect_plan AggregateExec
+
+run
+-- Int64 argument, hot composite integer/string grouping (ClickBench Q11 shape).
+SELECT skew_g, string_g, count(DISTINCT x)
+FROM grouped_distinct GROUP BY skew_g, string_g;
+
+cleanup sql_benchmarks/grouped_count_distinct/init/cleanup.sql
