@@ -1236,7 +1236,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
 
                 if limit.is_some() {
-                    return not_impl_err!("Delete-limit clause not supported");
+                    return plan_err!("Delete-limit clause is not supported");
                 }
 
                 if !optimizer_hints.is_empty() {

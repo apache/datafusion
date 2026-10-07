@@ -117,7 +117,7 @@ physical_plan_error This feature is not implemented: Physical plan does not supp
 
 # Delete with limit
 
-statement error This feature is not implemented: Delete-limit clause not supported
+statement error DataFusion error: Error during planning: Delete-limit clause is not supported
 delete from t1 limit 10;
 
 statement error This feature is not implemented: Delete-limit clause not supported

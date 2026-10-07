@@ -857,7 +857,7 @@ fn plan_delete_rejects_limit(#[case] sql: &str) {
     let err = logical_plan(sql).expect_err("DELETE LIMIT should be rejected");
     assert_eq!(
         err.strip_backtrace(),
-        "This feature is not implemented: Delete-limit clause not supported"
+        "DataFusion error: Error during planning: Delete-limit clause is not supported"
     );
 }
 
