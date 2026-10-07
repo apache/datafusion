@@ -431,14 +431,32 @@ The release information is used to generate a template for a board report (see e
 See the ASF documentation on [when to archive](https://www.apache.org/legal/release-policy.html#when-to-archive)
 for more information.
 
-Release candidates should be deleted once the release is published. In the `release` SVN keep the
-last major release (`X.0.0`) and the releases after it, and delete older releases. For example, after
-publishing 55.2.0 keep `datafusion-55.0.0`, `datafusion-55.1.0` and `datafusion-55.2.0`, and delete
-every 54.x release.
+Release candidates should be deleted once the release is published.
 
-The `print-svn-deletes.sh` script prints the `svn delete` commands for a released version. It does not
-run them, so check the printed commands and then run them:
+To get a list of DataFusion release candidates:
 
 ```shell
-./dev/release/print-svn-deletes.sh 55.2.0
+svn ls https://dist.apache.org/repos/dist/dev/datafusion
+```
+
+To delete a release candidate:
+
+```shell
+svn delete -m "delete old DataFusion RC" https://dist.apache.org/repos/dist/dev/datafusion/apache-datafusion-55.2.0-rc1/
+```
+
+#### Delete old releases from `release` SVN
+
+Keep the last major release (`X.0.0`) and the releases after it. Delete older releases after
+publishing the new release. For example, after publishing 55.2.0 keep `datafusion-55.0.0`,
+`datafusion-55.1.0` and `datafusion-55.2.0`, and delete every 54.x release.
+
+The following prints, but does not run, the `svn delete` commands for all releases that do not
+belong to the `major` version. Check the printed commands and then run them:
+
+```shell
+major=55
+for release in $(svn ls https://dist.apache.org/repos/dist/release/datafusion | grep -E "^datafusion-[0-9]+\." | grep -v "^datafusion-$major\."); do
+  echo "svn delete -m 'delete old DataFusion release' https://dist.apache.org/repos/dist/release/datafusion/$release"
+done
 ```
