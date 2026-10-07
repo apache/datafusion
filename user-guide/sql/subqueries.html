@@ -504,8 +504,11 @@ in the results of a <em><a class="reference internal" href="#correlated-subqueri
 <code class="docutils literal notranslate"><span class="pre">NOT</span> <span class="pre">IN</span></code> returns all rows where a given expression’s value cannot be found in
 the results of a subquery or list of values.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">expression</span><span class="w"> </span><span class="p">[</span><span class="k">NOT</span><span class="p">]</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(</span><span class="n">subquery</span><span class="o">|</span><span class="n">list</span><span class="o">-</span><span class="n">literal</span><span class="p">)</span>
+<span class="p">(</span><span class="n">expression</span><span class="p">[,</span><span class="w"> </span><span class="p">...])</span><span class="w"> </span><span class="p">[</span><span class="k">NOT</span><span class="p">]</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(</span><span class="n">subquery</span><span class="p">)</span>
 </pre></div>
 </div>
+<p>The tuple form compares each tuple element with the subquery column at the
+same position, so the subquery must return one column per element.</p>
 <section id="examples">
 <h4>Examples<a class="headerlink" href="#examples" title="Link to this heading">#</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">3</span><span class="p">);</span>
@@ -534,6 +537,18 @@ the results of a subquery or list of values.</p>
 <span class="c1">-- false</span>
 
 <span class="k">SELECT</span><span class="w"> </span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="k">NULL</span><span class="p">)</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">((</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="k">NULL</span><span class="p">));</span>
+<span class="c1">-- true</span>
+</pre></div>
+</div>
+<p>A tuple compared with a subquery instead follows SQL row comparison: two rows
+are equal when every element pair is equal, and the comparison is UNKNOWN
+(<code class="docutils literal notranslate"><span class="pre">NULL</span></code>) when no element pair differs but at least one involves a <code class="docutils literal notranslate"><span class="pre">NULL</span></code>. So
+the same values compared with a subquery give <code class="docutils literal notranslate"><span class="pre">NULL</span></code>, and <code class="docutils literal notranslate"><span class="pre">NOT</span> <span class="pre">IN</span></code> keeps a row
+only when every subquery row differs from it in some non-<code class="docutils literal notranslate"><span class="pre">NULL</span></code> element:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="k">NULL</span><span class="p">)</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(</span><span class="k">SELECT</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="k">NULL</span><span class="p">);</span>
+<span class="c1">-- NULL</span>
+
+<span class="k">SELECT</span><span class="w"> </span><span class="p">(</span><span class="k">NULL</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(</span><span class="k">SELECT</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">);</span>
 <span class="c1">-- true</span>
 </pre></div>
 </div>
@@ -659,7 +674,8 @@ of all <code class="docutils literal notranslate"><span class="pre">number</span
 <section id="where-clause-with-non-scalar-subquery">
 <h4><code class="docutils literal notranslate"><span class="pre">WHERE</span></code> clause with non-scalar subquery<a class="headerlink" href="#where-clause-with-non-scalar-subquery" title="Link to this heading">#</a></h4>
 <p>Non-scalar subqueries must use the <code class="docutils literal notranslate"><span class="pre">[NOT]</span> <span class="pre">IN</span></code> or <code class="docutils literal notranslate"><span class="pre">[NOT]</span> <span class="pre">EXISTS</span></code> operators and
-can only return a single column.
+can only return a single column, or one column per element of a tuple
+<code class="docutils literal notranslate"><span class="pre">(expression[,</span> <span class="pre">...])</span> <span class="pre">[NOT]</span> <span class="pre">IN</span> <span class="pre">(subquery)</span></code>.
 The values in the returned column are evaluated as a list.</p>
 <p>The following query returns all rows with <code class="docutils literal notranslate"><span class="pre">column_2</span></code> values in table <code class="docutils literal notranslate"><span class="pre">x</span></code> that
 are in the list of numbers with string lengths greater than three from table
@@ -770,7 +786,8 @@ in table <code class="docutils literal notranslate"><span class="pre">x</span></
 <section id="having-clause-with-a-non-scalar-subquery">
 <h4><code class="docutils literal notranslate"><span class="pre">HAVING</span></code> clause with a non-scalar subquery<a class="headerlink" href="#having-clause-with-a-non-scalar-subquery" title="Link to this heading">#</a></h4>
 <p>Non-scalar subqueries must use the <code class="docutils literal notranslate"><span class="pre">[NOT]</span> <span class="pre">IN</span></code> or <code class="docutils literal notranslate"><span class="pre">[NOT]</span> <span class="pre">EXISTS</span></code> operators and
-can only return a single column.
+can only return a single column, or one column per element of a tuple
+<code class="docutils literal notranslate"><span class="pre">(expression[,</span> <span class="pre">...])</span> <span class="pre">[NOT]</span> <span class="pre">IN</span> <span class="pre">(subquery)</span></code>.
 The values in the returned column are evaluated as a list.</p>
 <p>The following query calculates the averages of even and odd numbers in table <code class="docutils literal notranslate"><span class="pre">y</span></code>
 and returns the averages that are in <code class="docutils literal notranslate"><span class="pre">column_1</span></code> of table <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>

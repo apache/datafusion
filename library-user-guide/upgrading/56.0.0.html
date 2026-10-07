@@ -1154,6 +1154,36 @@ ignores the unknown field but cannot preserve the qualifier required by the
 expressions, which can cause resolution failure or incorrect rebinding.</p></li>
 </ul>
 </section>
+<section id="null-aware-joins-record-their-not-in-value-key-count">
+<h3>Null-aware joins record their <code class="docutils literal notranslate"><span class="pre">NOT</span> <span class="pre">IN</span></code> value key count<a class="headerlink" href="#null-aware-joins-record-their-not-in-value-key-count" title="Link to this heading">#</a></h3>
+<p>Multi-column <code class="docutils literal notranslate"><span class="pre">(a,</span> <span class="pre">b)</span> <span class="pre">NOT</span> <span class="pre">IN</span> <span class="pre">(SELECT</span> <span class="pre">x,</span> <span class="pre">y</span> <span class="pre">...)</span></code> is now planned as a null-aware
+join. Its first equi-join keys are the tuple elements, followed by any
+correlation keys, so a null-aware join now records how many of its leading keys
+are <code class="docutils literal notranslate"><span class="pre">NOT</span> <span class="pre">IN</span></code> value keys:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">datafusion_expr::logical_plan::Join</span></code> has a new <code class="docutils literal notranslate"><span class="pre">null_aware_value_keys:</span> <span class="pre">usize</span></code>
+field.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">HashJoinExec</span></code> has a new <code class="docutils literal notranslate"><span class="pre">null_aware_value_keys:</span> <span class="pre">usize</span></code> field, set with
+<code class="docutils literal notranslate"><span class="pre">HashJoinExecBuilder::with_null_aware_value_keys</span></code>.</p></li>
+</ul>
+<p>The count is only read when <code class="docutils literal notranslate"><span class="pre">null_aware</span></code> is set. <code class="docutils literal notranslate"><span class="pre">Join::try_new</span></code>, the
+<code class="docutils literal notranslate"><span class="pre">LogicalPlanBuilder</span></code> join methods and <code class="docutils literal notranslate"><span class="pre">HashJoinExec::try_new</span></code> set it to <code class="docutils literal notranslate"><span class="pre">1</span></code>,
+the scalar <code class="docutils literal notranslate"><span class="pre">NOT</span> <span class="pre">IN</span></code> of earlier releases. Code constructing <code class="docutils literal notranslate"><span class="pre">Join</span></code> with a struct
+literal must initialize the field:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">join</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Join</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="w">    </span><span class="n">null_aware</span><span class="p">,</span>
+<span class="w">    </span><span class="n">null_aware_value_keys</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>The generated protobuf <code class="docutils literal notranslate"><span class="pre">JoinNode</span></code> and <code class="docutils literal notranslate"><span class="pre">HashJoinExecNode</span></code> types have a new
+<code class="docutils literal notranslate"><span class="pre">null_aware_value_keys</span></code> field, which struct literals must provide too. A 56.0
+reader decodes a payload without the field (value <code class="docutils literal notranslate"><span class="pre">0</span></code>) as a scalar <code class="docutils literal notranslate"><span class="pre">NOT</span> <span class="pre">IN</span></code>. A
+55.0 reader must not consume a 56.0 plan holding a multi-column <code class="docutils literal notranslate"><span class="pre">NOT</span> <span class="pre">IN</span></code>: it
+ignores the unknown field and would read the extra tuple elements as
+correlation keys, returning wrong results.</p>
+</section>
 <section id="functionaldependence-has-a-new-null-equality-field">
 <h3><code class="docutils literal notranslate"><span class="pre">FunctionalDependence</span></code> has a new <code class="docutils literal notranslate"><span class="pre">null_equality</span></code> field<a class="headerlink" href="#functionaldependence-has-a-new-null-equality-field" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">FunctionalDependence</span></code> now records the NULL semantics its dependency holds under.
@@ -1354,6 +1384,7 @@ the API breaks.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ensure-distribution-is-deprecated-in-favour-of-ensure-distribution-with-stats"><code class="docutils literal notranslate"><span class="pre">ensure_distribution</span></code> is deprecated in favour of <code class="docutils literal notranslate"><span class="pre">ensure_distribution_with_stats</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#mergeintoop-requires-the-sql-visible-target-qualifier"><code class="docutils literal notranslate"><span class="pre">MergeIntoOp</span></code> requires the SQL-visible target qualifier</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#mergeintoopnode-protobuf-literals-require-target-qualifier"><code class="docutils literal notranslate"><span class="pre">MergeIntoOpNode</span></code> protobuf literals require <code class="docutils literal notranslate"><span class="pre">target_qualifier</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#null-aware-joins-record-their-not-in-value-key-count">Null-aware joins record their <code class="docutils literal notranslate"><span class="pre">NOT</span> <span class="pre">IN</span></code> value key count</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#functionaldependence-has-a-new-null-equality-field"><code class="docutils literal notranslate"><span class="pre">FunctionalDependence</span></code> has a new <code class="docutils literal notranslate"><span class="pre">null_equality</span></code> field</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filesource-exact-filter-controls-scan-equivalence-properties"><code class="docutils literal notranslate"><span class="pre">FileSource::exact_filter</span></code> controls scan equivalence properties</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#tableprovider-scan-with-args-supports-skip-pushdown"><code class="docutils literal notranslate"><span class="pre">TableProvider::scan_with_args</span></code> supports skip pushdown</a><ul class="nav section-nav flex-column">
