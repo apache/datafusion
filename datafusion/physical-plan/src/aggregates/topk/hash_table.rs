@@ -39,7 +39,9 @@ use std::sync::Arc;
 /// `heap_idx` assigned to groups whose aggregate values are all NULL. Such
 /// groups are tracked in the hash table only (they never enter the heap), so
 /// they can be emitted with a NULL aggregate value at the end.
-const NULL_HEAP_IDX: usize = usize::MAX;
+const NULL_HEAP_IDX: usize = usize::MAX - 1;
+
+const VACANT_HEAP_IDX: usize = usize::MAX;
 
 /// An entry in our hash table that:
 /// 1. memoizes the hash
@@ -101,8 +103,8 @@ pub trait ArrowHashTable {
     /// Remove the group at `row_idx` if it is registered as all-NULL. Returns
     /// true if a NULL registration was removed.
     fn remove_if_null(&mut self, row_idx: usize) -> bool;
-    /// Store indexes of all groups registered as all-NULL
-    fn null_map_idxs(&self) -> Vec<usize>;
+    /// Store indexes of all groups registered as all-NULL. Returns null count.
+    fn null_map_idxs(&self, out: &mut Vec<usize>) -> usize;
 }
 
 /// Returns true if the given data type can be used as a top-K aggregation hash key.
@@ -214,8 +216,8 @@ where
         self.map.remove_if_null(hash, Self::eq_fn(id))
     }
 
-    fn null_map_idxs(&self) -> Vec<usize> {
-        self.map.null_map_idxs()
+    fn null_map_idxs(&self, out: &mut Vec<usize>) -> usize {
+        self.map.null_map_idxs(out)
     }
 }
 
@@ -298,8 +300,8 @@ where
         self.map.remove_if_null(hash, Self::eq_fn(id))
     }
 
-    fn null_map_idxs(&self) -> Vec<usize> {
-        self.map.null_map_idxs()
+    fn null_map_idxs(&self, out: &mut Vec<usize>) -> usize {
+        self.map.null_map_idxs(out)
     }
 }
 
@@ -325,12 +327,15 @@ impl<ID: PartialEq> TopKHashTable<ID> {
         let hash = item_to_remove.hash;
         let id_to_remove = &item_to_remove.id;
 
-        let eq = |&idx: &usize| self.store[idx].id == *id_to_remove;
+        let eq = |idx: &usize| self.store[*idx].id == *id_to_remove;
         let hasher = |idx: &usize| self.store[*idx].hash;
         match self.map.entry(hash, eq, hasher) {
             Entry::Occupied(entry) => {
                 let (removed_idx, _) = entry.remove();
-                match self.store[removed_idx].id.take() {
+                let mi = &mut self.store[removed_idx];
+                debug_assert!(mi.is_occupied());
+                mi.heap_idx = VACANT_HEAP_IDX;
+                match mi.id.take() {
                     Some(slot) if Self::use_free_slots() => {
                         self.free_slots.push(slot);
                     }
@@ -424,7 +429,7 @@ impl<ID: PartialEq> TopKHashTable<ID> {
         };
         let mi = HashTableItem::new(hash, id, heap_idx);
         let store_idx = if let Some(idx) = self.free_indices.pop() {
-            debug_assert!(self.store[idx].id.is_none(), "slot should be empty");
+            debug_assert!(self.store[idx].is_vacant(), "slot should be empty");
             self.store[idx] = mi;
             idx
         } else {
@@ -493,14 +498,18 @@ impl<ID: PartialEq> TopKHashTable<ID> {
     }
 
     /// Store indexes of all groups registered as all-NULL
-    pub fn null_map_idxs(&self) -> Vec<usize> {
-        self.store
+    pub fn null_map_idxs(&self, out: &mut Vec<usize>) -> usize {
+        let iter = self
+            .store
             .iter()
             .enumerate()
-            .filter_map(|(idx, item)| {
-                (item.id.is_some() && item.is_null()).then_some(idx)
-            })
-            .collect()
+            .filter_map(|(idx, item)| item.is_null().then_some(idx));
+
+        let prev_len = out.len();
+        out.extend(iter);
+
+        debug_assert_eq!(out.len(), self.null_count + prev_len);
+        self.null_count
     }
 
     pub fn len(&self) -> usize {
@@ -515,6 +524,7 @@ impl<ID: PartialEq> TopKHashTable<ID> {
         self.map.clear();
         self.store.clear();
         self.free_indices.clear();
+        // No need to clear free_slots.
         self.null_count = 0;
         ids
     }
@@ -528,6 +538,16 @@ impl<ID> HashTableItem<ID> {
     #[inline]
     pub fn is_null(&self) -> bool {
         self.heap_idx == NULL_HEAP_IDX
+    }
+
+    #[inline]
+    pub fn is_vacant(&self) -> bool {
+        self.heap_idx == VACANT_HEAP_IDX
+    }
+
+    #[inline]
+    pub fn is_occupied(&self) -> bool {
+        self.heap_idx != VACANT_HEAP_IDX
     }
 }
 
@@ -604,6 +624,13 @@ mod tests {
     use arrow_schema::TimeUnit;
     use std::collections::BTreeMap;
 
+    fn assert_nulls<ID: PartialEq>(map: &TopKHashTable<ID>, expected: &[usize]) {
+        assert_eq!(map.null_count, expected.len());
+        let mut actual = Vec::new();
+        assert_eq!(map.null_map_idxs(&mut actual), expected.len());
+        assert_eq!(actual, expected);
+    }
+
     #[test]
     fn should_emit_correct_type() -> Result<()> {
         let ids =
@@ -667,26 +694,40 @@ mod tests {
         assert!(!map.insert_null(300, c.as_ref(), |v| *v == c));
         // re-registering an existing NULL group is a no-op
         assert!(!map.insert_null(100, a.as_ref(), |v| *v == a));
-        assert_eq!(map.null_count, 2);
-        assert_eq!(map.null_map_idxs(), vec![0, 1]);
+        assert_nulls(&map, &[0, 1]);
 
         // a valued insert for a NULL group converts it to a valued group
         let (map_idx, kind) = map.find_or_insert(200, b.as_ref(), 0, |v| *v == b);
         assert_eq!(kind, InsertKind::ReplacedNull, "NULL group should convert");
         assert_eq!(map.heap_idx_at(map_idx), 0, "Heap should append at 0");
-        assert_eq!(map.null_count, 1);
-        assert_eq!(map.null_map_idxs(), vec![0]);
+        assert_nulls(&map, &[0]);
 
         // remove the remaining NULL group; removing twice is a no-op
         map.remove_if_null(100, |v| *v == a);
-        assert_eq!(map.null_count, 0);
-        assert!(map.null_map_idxs().is_empty());
+        assert_nulls(&map, &[]);
         map.remove_if_null(100, |v| *v == a);
         // removing a valued group via remove_if_null is a no-op
         map.remove_if_null(200, |v| *v == b);
         assert_eq!(map.len(), 1);
 
         Ok(())
+    }
+
+    #[test]
+    fn should_track_null_id() {
+        let mut map = TopKHashTable::<String>::new(2, 10);
+
+        let hash = 0;
+        let none = Option::<&str>::None;
+
+        assert!(map.insert_null(hash, none, Option::is_none));
+        assert_nulls(&map, &[0]);
+
+        assert!(!map.insert_null(hash, none, Option::is_none));
+        assert_nulls(&map, &[0]);
+
+        assert!(map.remove_if_null(hash, Option::is_none));
+        assert_nulls(&map, &[]);
     }
 
     #[test]

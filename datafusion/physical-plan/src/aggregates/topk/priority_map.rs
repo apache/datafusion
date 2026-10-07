@@ -140,12 +140,11 @@ impl PriorityMap {
         let (vals, mut map_idxs) = self.heap.drain();
         // Groups whose values are all NULL are tracked in the map only;
         // append them with a NULL value so they are not lost from the output
-        let null_idxs = self.map.null_map_idxs();
-        let vals = if null_idxs.is_empty() {
+        let null_count = self.map.null_map_idxs(&mut map_idxs);
+        let vals = if null_count == 0 {
             vals
         } else {
-            map_idxs.extend(null_idxs.iter().copied());
-            let nulls = new_null_array(self.heap.value_type(), null_idxs.len());
+            let nulls = new_null_array(self.heap.value_type(), null_count);
             concat(&[vals.as_ref(), nulls.as_ref()])?
         };
         let ids = self.map.take_all(map_idxs);

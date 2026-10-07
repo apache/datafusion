@@ -760,5 +760,136 @@ mod tests {
         Ok(())
     }
 
-    // TODO: test TopKHeap of String?
+    #[test]
+    fn should_append_string() -> Result<()> {
+        let mut map = vec![];
+        let mut heap = TopKHeap::<String>::new(10, false);
+        heap.append_or_replace("A", 1, &mut map);
+
+        let actual = heap.to_string();
+        assert_snapshot!(actual, @r#"val="A" idx=0, bucket=1"#);
+
+        Ok(())
+    }
+
+    #[test]
+    fn should_heapify_up_string() -> Result<()> {
+        let mut map = vec![];
+        let mut heap = TopKHeap::<String>::new(10, false);
+
+        heap.append_or_replace("A", 1, &mut map);
+        assert_eq!(map, vec![]);
+
+        heap.append_or_replace("B", 2, &mut map);
+        assert_eq!(map, vec![(2, 0), (1, 1)]);
+
+        let actual = heap.to_string();
+        assert_snapshot!(actual, @r#"
+        val="B" idx=0, bucket=2
+        └── val="A" idx=1, bucket=1
+        "#);
+
+        Ok(())
+    }
+
+    #[test]
+    fn should_heapify_down_string() -> Result<()> {
+        let mut map = vec![];
+        let mut heap = TopKHeap::<String>::new(3, false);
+
+        heap.append_or_replace("B", 1, &mut map);
+        heap.append_or_replace("C", 2, &mut map);
+        heap.append_or_replace("D", 3, &mut map);
+        let actual = heap.to_string();
+        assert_snapshot!(actual, @r#"
+        val="D" idx=0, bucket=3
+        ├── val="B" idx=1, bucket=1
+        └── val="C" idx=2, bucket=2
+        "#);
+
+        let mut map = vec![];
+        heap.append_or_replace("A", 0, &mut map);
+        let actual = heap.to_string();
+        assert_snapshot!(actual, @r#"
+        val="C" idx=0, bucket=2
+        ├── val="B" idx=1, bucket=1
+        └── val="A" idx=2, bucket=0
+        "#);
+        assert_eq!(map, vec![(2, 0), (0, 2)]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn should_replace_string() -> Result<()> {
+        let mut map = vec![];
+        let mut heap = TopKHeap::<String>::new(4, false);
+
+        heap.append_or_replace("B", 1, &mut map);
+        heap.append_or_replace("C", 2, &mut map);
+        heap.append_or_replace("D", 3, &mut map);
+        heap.append_or_replace("E", 4, &mut map);
+        let actual = heap.to_string();
+        assert_snapshot!(actual, @r#"
+        val="E" idx=0, bucket=4
+        ├── val="D" idx=1, bucket=3
+        │   └── val="B" idx=3, bucket=1
+        └── val="C" idx=2, bucket=2
+        "#);
+
+        let mut map = vec![];
+        heap.replace_if_better("A", 1, &mut map);
+        let actual = heap.to_string();
+        assert_snapshot!(actual, @r#"
+        val="E" idx=0, bucket=4
+        ├── val="B" idx=1, bucket=1
+        │   └── val="A" idx=3, bucket=3
+        └── val="C" idx=2, bucket=2
+        "#);
+        assert_eq!(map, vec![(1, 1), (3, 3)]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn should_find_worst_string() -> Result<()> {
+        let mut map = vec![];
+        let mut heap = TopKHeap::<String>::new(10, false);
+
+        heap.append_or_replace("A", 1, &mut map);
+        heap.append_or_replace("B", 2, &mut map);
+
+        let actual = heap.to_string();
+        assert_snapshot!(actual, @r#"
+        val="B" idx=0, bucket=2
+        └── val="A" idx=1, bucket=1
+        "#);
+
+        assert_eq!(heap.worst_val().map(String::as_str), Some("B"));
+        assert_eq!(heap.worst_map_idx(), 2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn should_drain_string() -> Result<()> {
+        let mut map = vec![];
+        let mut heap = TopKHeap::<String>::new(10, false);
+
+        heap.append_or_replace("A", 1, &mut map);
+        heap.append_or_replace("B", 2, &mut map);
+
+        let actual = heap.to_string();
+        assert_snapshot!(actual, @r#"
+        val="B" idx=0, bucket=2
+        └── val="A" idx=1, bucket=1
+        "#);
+
+        let (vals, map_idxs) = heap.drain();
+        assert_eq!(vals, vec!["A", "B"]);
+        assert_eq!(map_idxs, vec![1, 2]);
+        assert_eq!(heap.len(), 0);
+
+        Ok(())
+    }
 }
