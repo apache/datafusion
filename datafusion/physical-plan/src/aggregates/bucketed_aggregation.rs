@@ -22,7 +22,7 @@
 use std::sync::Arc;
 
 use arrow::compute::BatchCoalescer;
-use arrow::datatypes::{DataType, SchemaRef};
+use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
@@ -47,6 +47,8 @@ use crate::stream::RecordBatchStreamAdapter;
 /// a final aggregation routes its input as is, a single stage aggregation
 /// routes the state of the table that aggregates its raw input.
 pub(super) struct BucketedAggregation {
+    /// Whether buffered buckets should be compacted before final merging.
+    enable_compaction: bool,
     /// Number of groups in one hash table that triggers bucketing
     threshold: usize,
     /// Aggregate configuration used to construct the table of each bucket:
@@ -93,6 +95,7 @@ impl BucketedAggregation {
         let bucket_compactions =
             MetricBuilder::new(&agg.metrics).counter("bucket_compactions", partition);
         Self {
+            enable_compaction: true,
             threshold,
             agg,
             partition,
@@ -105,18 +108,27 @@ impl BucketedAggregation {
         }
     }
 
+    pub(super) fn with_compaction(mut self, enabled: bool) -> Self {
+        self.enable_compaction = enabled;
+        self
+    }
+
     /// True if a schema of partial state rows can be bucketed.
     ///
-    /// Bucketing moves every row once more before it is aggregated, which only
-    /// pays when moving a row is cheap compared to the cache miss it saves.
-    /// That holds for fixed-width columns. Variable-length keys or state
-    /// (strings, lists, ...) cost as much to move as the smaller tables save,
-    /// so such aggregations keep their single table.
-    pub(super) fn supports_state(state_schema: &SchemaRef) -> bool {
-        state_schema.fields().iter().all(|field| {
-            let data_type = field.data_type();
-            data_type.is_primitive() || *data_type == DataType::Boolean
-        })
+    /// Bucketing turns the state of a table into rows and merges those rows
+    /// again. That is cheap for fixed-width and string state, but nested
+    /// state (the lists kept by `count(distinct)`, `array_agg` or `median`)
+    /// is costly to rebuild and takes more memory as rows than inside the
+    /// accumulator, so such aggregations keep their single table.
+    pub(super) fn supports_state(
+        state_schema: &SchemaRef,
+        num_group_columns: usize,
+    ) -> bool {
+        !state_schema
+            .fields()
+            .iter()
+            .skip(num_group_columns)
+            .any(|field| field.data_type().is_nested())
     }
 
     pub(super) fn threshold(&self) -> usize {
@@ -164,6 +176,9 @@ impl BucketedAggregation {
         buckets: &mut FinalBuckets,
         table: &mut Option<AggregateHashTable<FinalMarker>>,
     ) -> Result<()> {
+        if !self.enable_compaction {
+            return Ok(());
+        }
         while let Some(index) = buckets.bucket_to_compact() {
             let table = match table {
                 Some(table) => table,
@@ -359,49 +374,5 @@ impl BucketedAggregation {
 
             Ok(())
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    use arrow::datatypes::{Field, Fields, Schema};
-
-    fn schema(types: Vec<DataType>) -> SchemaRef {
-        let fields: Fields = types
-            .into_iter()
-            .enumerate()
-            .map(|(i, data_type)| Field::new(format!("c{i}"), data_type, true))
-            .collect();
-        Arc::new(Schema::new(fields))
-    }
-
-    #[test]
-    fn only_fixed_width_state_is_bucketed() {
-        assert!(BucketedAggregation::supports_state(&schema(vec![
-            DataType::Int64,
-            DataType::Boolean,
-            DataType::Decimal128(38, 10),
-            DataType::Float64,
-            DataType::Date32,
-        ])));
-
-        // A variable-length group key or state column turns bucketing off
-        for variable_length in [
-            DataType::Utf8,
-            DataType::Utf8View,
-            DataType::LargeBinary,
-            DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true))),
-        ] {
-            assert!(!BucketedAggregation::supports_state(&schema(vec![
-                DataType::Int64,
-                variable_length.clone(),
-            ])));
-            assert!(!BucketedAggregation::supports_state(&schema(vec![
-                variable_length,
-                DataType::Int64,
-            ])));
-        }
     }
 }

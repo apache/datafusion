@@ -281,6 +281,8 @@ const FLUSH_SAMPLE_SEED: RandomState = RandomState::with_seed(812287195042987136
 /// which then grows one table as before.
 struct PartialTableFlush {
     threshold: usize,
+    /// Whether recurring groups can disable threshold flushing.
+    detect_repeated_groups: bool,
     /// Number of leading columns of the state batch that are the group keys
     num_group_columns: usize,
     /// Set once flushed groups were seen to recur
@@ -309,6 +311,10 @@ impl PartialTableFlush {
         let num_groups = state.num_rows();
         self.flush_count.add(1);
         self.flushed_groups += num_groups;
+
+        if !self.detect_repeated_groups {
+            return Ok(());
+        }
 
         self.hashes.clear();
         self.hashes.resize(num_groups, 0);
@@ -388,12 +394,21 @@ impl PartialHashAggregateStream {
         let num_group_columns = agg.group_by().num_group_exprs();
         // Same conditions as for bucketing in the final aggregation, which
         // receives what is flushed here: see `FinalHashAggregateStream::new`.
-        let fixed_width_state = BucketedAggregation::supports_state(&schema);
+        let has_nested_state = schema
+            .fields()
+            .iter()
+            .skip(num_group_columns)
+            .any(|field| field.data_type().is_nested());
         let table_flush = (bucket_threshold > 0
             && group_values_soft_limit.is_none()
-            && fixed_width_state)
+            && !has_nested_state)
             .then(|| PartialTableFlush {
                 threshold: bucket_threshold,
+                detect_repeated_groups: context
+                    .session_config()
+                    .options()
+                    .execution
+                    .hash_aggregate_detect_repeated_groups,
                 num_group_columns,
                 disabled: false,
                 sampled_groups: HashMap::new(),
@@ -826,27 +841,31 @@ impl FinalHashAggregateStream {
 
         let group_values_soft_limit = agg.limit_options().map(|config| config.limit());
 
-        let bucket_threshold = context
-            .session_config()
-            .options()
-            .execution
-            .hash_aggregate_bucket_threshold;
+        let execution_options = &context.session_config().options().execution;
+        let bucket_threshold = execution_options.hash_aggregate_bucket_threshold;
         // A soft limit stops reading input early, which bucketing cannot do.
-        let bucketing = (bucket_threshold > 0
+        let bucketing = (execution_options.hash_aggregate_final_buckets
+            && bucket_threshold > 0
             && group_values_soft_limit.is_none()
-            && BucketedAggregation::supports_state(&input_schema))
-        .then(|| {
-            Arc::new(BucketedAggregation::new(
-                bucket_threshold,
-                agg.clone(),
-                partition,
-                batch_size,
-                Arc::clone(&input_schema),
-                Arc::clone(&schema),
-                spill_context
-                    .as_ref()
-                    .map(|context| context.spill_manager().clone()),
+            && BucketedAggregation::supports_state(
+                &input_schema,
+                agg.group_by().num_group_exprs(),
             ))
+        .then(|| {
+            Arc::new(
+                BucketedAggregation::new(
+                    bucket_threshold,
+                    agg.clone(),
+                    partition,
+                    batch_size,
+                    Arc::clone(&input_schema),
+                    Arc::clone(&schema),
+                    spill_context
+                        .as_ref()
+                        .map(|context| context.spill_manager().clone()),
+                )
+                .with_compaction(execution_options.hash_aggregate_bucket_compaction),
+            )
         });
 
         Ok(Self {
