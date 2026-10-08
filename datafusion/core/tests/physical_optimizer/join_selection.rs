@@ -1983,7 +1983,8 @@ async fn test_join_selection_skips_hash_join_with_dynamic_filter(
     let (big, small) = create_big_and_small();
     let on = vec![(
         Arc::new(Column::new_with_schema("big_col", &big.schema())?) as PhysicalExprRef,
-        Arc::new(Column::new_with_schema("small_col", &small.schema())?) as PhysicalExprRef,
+        Arc::new(Column::new_with_schema("small_col", &small.schema())?)
+            as PhysicalExprRef,
     )];
 
     let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
@@ -2015,7 +2016,7 @@ async fn test_join_selection_skips_hash_join_with_dynamic_filter(
         .downcast_ref::<HashJoinExec>()
         .expect("join should remain HashJoinExec without wrapping projection");
 
-    assert_eq!(optimized_join.partition_mode(), partition_mode);
+    assert_eq!(*optimized_join.partition_mode(), partition_mode);
     assert_eq!(*optimized_join.join_type(), JoinType::Inner);
     assert!(Arc::ptr_eq(optimized_join.left(), &big));
     assert!(Arc::ptr_eq(optimized_join.right(), &small));
