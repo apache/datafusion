@@ -7553,7 +7553,7 @@ physical_plan
 02)--GlobalLimitExec: skip=0, fetch=3
 03)----AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3, __grouping_id@2 as __grouping_id], aggr=[], lim=[3]
 04)------CoalescePartitionsExec
-05)--------AggregateExec: mode=Partial, gby=[(NULL as c2, NULL as c3), (c2@0 as c2, NULL as c3), (c2@0 as c2, c3@1 as c3)], aggr=[]
+05)--------AggregateExec: mode=Partial, gby=[(NULL as c2, NULL as c3), (c2@0 as c2, NULL as c3), (c2@0 as c2, c3@1 as c3)], aggr=[], lim=[3]
 06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
 
@@ -7639,9 +7639,8 @@ logical_plan
 03)----TableScan: distinct_limit_combine projection=[a, b]
 physical_plan
 01)GlobalLimitExec: skip=0, fetch=2
-02)--AggregateExec: mode=Final, gby=[b@0 as b, a@1 as a], aggr=[], lim=[2]
-03)----AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--AggregateExec: mode=Single, gby=[b@1 as b, a@0 as a], aggr=[], lim=[2]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 # LIMIT without ORDER BY may return any two groups
 query II
@@ -7659,9 +7658,8 @@ logical_plan
 03)----TableScan: distinct_limit_combine projection=[a]
 physical_plan
 01)GlobalLimitExec: skip=0, fetch=2
-02)--AggregateExec: mode=Final, gby=[distinct_limit_combine.a % Int64(3)@0 as distinct_limit_combine.a % Int64(3)], aggr=[], lim=[2]
-03)----AggregateExec: mode=Partial, gby=[a@0 % 3 as distinct_limit_combine.a % Int64(3)], aggr=[]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--AggregateExec: mode=Single, gby=[a@0 % 3 as distinct_limit_combine.a % Int64(3)], aggr=[], lim=[2]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 query II
 SELECT count(*), count(DISTINCT m)
