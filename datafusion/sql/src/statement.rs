@@ -21,8 +21,8 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::parser::{
-    CopyToSource, CopyToStatement, CreateExternalTable, DFParser, ExplainStatement,
-    LexOrdering, ResetStatement, Statement as DFStatement,
+    CopyToSource, CopyToStatement, CreateExternalCatalog, CreateExternalTable, DFParser,
+    ExplainStatement, LexOrdering, ResetStatement, Statement as DFStatement,
 };
 use crate::planner::{
     ContextProvider, PlannerContext, SqlToRel, object_name_to_qualifier,
@@ -48,11 +48,12 @@ use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     Analyze, Cast, CreateCatalog, CreateCatalogSchema,
+    CreateExternalCatalog as PlanCreateExternalCatalog,
     CreateExternalTable as PlanCreateExternalTable, CreateFunction, CreateFunctionBody,
     CreateIndex as PlanCreateIndex, CreateMemoryTable, CreateView, Deallocate,
-    DescribeTable, DmlStatement, DropCatalogSchema, DropFunction, DropTable, DropView,
-    EmptyRelation, Execute, Explain, ExplainFormat, Expr, ExprSchemable, Filter,
-    LogicalPlan, LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare,
+    DescribeTable, DmlStatement, DropCatalog, DropCatalogSchema, DropFunction, DropTable,
+    DropView, EmptyRelation, Execute, Explain, ExplainFormat, Expr, ExprSchemable,
+    Filter, LogicalPlan, LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare,
     ResetVariable, SetVariable, SortExpr, Statement as PlanStatement, ToStringifiedPlan,
     TransactionAccessMode, TransactionConclusion, TransactionEnd,
     TransactionIsolationLevel, TransactionStart, Volatility, WriteOp, cast,
@@ -234,6 +235,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     pub fn statement_to_plan(&self, statement: DFStatement) -> Result<LogicalPlan> {
         let plan = match statement {
             DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s)?,
+            DFStatement::CreateExternalCatalog(s) => self.external_catalog_to_plan(s)?,
             DFStatement::Statement(s) => self.sql_statement_to_plan(*s)?,
             DFStatement::CopyTo(s) => self.copy_to_plan(s)?,
             DFStatement::Explain(ExplainStatement { options, statement }) => {
@@ -788,31 +790,32 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // We don't support cascade and purge for now.
                 // nor do we support multiple object names
                 let name = match names.len() {
-                    0 => Err(ParserError("Missing table name.".to_string()).into()),
-                    1 => self.object_name_to_table_reference(names.pop().unwrap()),
-                    _ => {
-                        Err(ParserError("Multiple objects not supported".to_string())
-                            .into())
-                    }
+                    0 => Err::<_, DataFusionError>(
+                        ParserError("Missing table name.".to_string()).into(),
+                    ),
+                    1 => Ok(names.pop().unwrap()),
+                    _ => Err::<_, DataFusionError>(
+                        ParserError("Multiple objects not supported".to_string()).into(),
+                    ),
                 }?;
 
                 match object_type {
                     ObjectType::Table => {
                         Ok(LogicalPlan::Ddl(DdlStatement::DropTable(DropTable {
-                            name,
+                            name: self.object_name_to_table_reference(name)?,
                             if_exists,
                             schema: DFSchemaRef::new(DFSchema::empty()),
                         })))
                     }
                     ObjectType::View => {
                         Ok(LogicalPlan::Ddl(DdlStatement::DropView(DropView {
-                            name,
+                            name: self.object_name_to_table_reference(name)?,
                             if_exists,
                             schema: DFSchemaRef::new(DFSchema::empty()),
                         })))
                     }
                     ObjectType::Schema => {
-                        let name = match name {
+                        let name = match self.object_name_to_table_reference(name)? {
                             TableReference::Bare { table } => {
                                 Ok(SchemaReference::Bare { schema: table })
                             }
@@ -839,8 +842,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             },
                         )))
                     }
+                    ObjectType::Database => {
+                        Ok(LogicalPlan::Ddl(DdlStatement::DropCatalog(
+                            DropCatalog::builder(object_name_to_string(&name))
+                                .with_if_exists(if_exists)
+                                .with_cascade(cascade)
+                                .build(),
+                        )))
+                    }
                     _ => not_impl_err!(
-                        "Only `DROP TABLE/VIEW/SCHEMA  ...` statement is supported currently"
+                        "Only `DROP TABLE/VIEW/SCHEMA/CATALOG/DATABASE  ...` statement is supported currently"
                     ),
                 }
             }
@@ -869,16 +880,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
                 if fields.is_empty() {
                     let map_types = plan.get_parameter_fields()?;
-                    let param_types: Vec<_> = (1..=map_types.len())
-                        .filter_map(|i| {
+                    let param_types: Option<Vec<FieldRef>> = (1..=map_types.len())
+                        .map(|i| {
                             let key = format!("${i}");
                             map_types.get(&key).and_then(|opt| opt.clone())
                         })
                         .collect();
-                    fields.extend(param_types.iter().cloned());
-                    planner_context.with_prepare_param_data_types(
-                        param_types.into_iter().map(Some).collect(),
-                    );
+                    if let Some(param_types) = param_types {
+                        fields.extend(param_types.iter().cloned());
+                        planner_context.with_prepare_param_data_types(
+                            param_types.into_iter().map(Some).collect(),
+                        );
+                    }
                 }
 
                 Ok(LogicalPlan::Statement(PlanStatement::Prepare(Prepare {
@@ -1915,6 +1928,45 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .with_constraints(constraints)
                     .with_column_defaults(column_defaults)
                     .build(),
+            ),
+        )))
+    }
+
+    fn external_catalog_to_plan(
+        &self,
+        statement: CreateExternalCatalog,
+    ) -> Result<LogicalPlan> {
+        let CreateExternalCatalog {
+            catalog_name,
+            catalog_type,
+            location,
+            if_not_exists,
+            or_replace,
+            options,
+        } = statement;
+
+        let mut options_map = HashMap::with_capacity(options.len());
+        for (key, value) in options {
+            if options_map.contains_key(&key) {
+                return plan_err!("Option {key} is specified multiple times");
+            }
+            let Some(value_string) = crate::utils::value_to_string(&value) else {
+                return plan_err!("Unsupported Value {}", value);
+            };
+            options_map.insert(key, value_string);
+        }
+
+        Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalCatalog(
+            Box::new(
+                PlanCreateExternalCatalog::builder(
+                    object_name_to_string(&catalog_name),
+                    catalog_type,
+                )
+                .with_location(location)
+                .with_if_not_exists(if_not_exists)
+                .with_or_replace(or_replace)
+                .with_options(options_map)
+                .build(),
             ),
         )))
     }

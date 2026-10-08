@@ -44,7 +44,6 @@ impl OrderedAggregateTable<SingleMarker> {
         partition: usize,
         output_schema: SchemaRef,
         state_schema: SchemaRef,
-        batch_size: usize,
     ) -> Result<Self> {
         debug_assert!(matches!(
             agg.mode,
@@ -58,7 +57,6 @@ impl OrderedAggregateTable<SingleMarker> {
             &input_schema,
             output_schema,
             state_schema,
-            batch_size,
             &agg.input_order_mode,
             &agg.mode,
             agg.filter_expr().to_vec(),
@@ -80,14 +78,24 @@ impl OrderedAggregateTable<SingleMarker> {
         )
     }
 
-    /// Emits the next batch of final aggregate values for groups proven complete
-    /// by the input ordering.
-    pub(in crate::aggregates) fn next_output_batch(
+    /// Materializes final results for all groups proven complete by the input
+    /// ordering, leaving the active ordered-key range in the table.
+    ///
+    /// Returns None if there are no completed groups.
+    pub(in crate::aggregates) fn take_completed_result_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
-        self.next_output_batch_inner(
+        if self.is_empty() {
+            return Ok(None);
+        }
+        let Some(emit_to) = self.group_ordering().emit_to() else {
+            return Ok(None);
+        };
+        self.materialize_groups(
+            emit_to,
             HashAggregateAccumulator::evaluate_to_columns,
             AccumulatorPhase::Evaluate,
         )
+        .map(Some)
     }
 }

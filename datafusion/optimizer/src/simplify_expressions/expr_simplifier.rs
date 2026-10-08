@@ -243,7 +243,14 @@ impl ExprSimplifier {
     /// See the [type coercion module](datafusion_expr::type_coercion)
     /// documentation for more details on type coercion
     pub fn coerce(&self, expr: Expr, schema: &DFSchema) -> Result<Expr> {
-        let mut expr_rewrite = TypeCoercionRewriter { schema };
+        let mut expr_rewrite = TypeCoercionRewriter::new(schema).with_session_time_zone(
+            self.info
+                .config_options()
+                .execution
+                .time_zone
+                .as_ref()
+                .map(|tz| tz.as_str()),
+        );
         expr.rewrite(&mut expr_rewrite).data()
     }
 
@@ -828,6 +835,26 @@ impl<'a> Simplifier<'a> {
     }
 }
 
+/// Returns whether values of the given type are guaranteed to satisfy `value % 1 == 0`.
+fn modulo_one_is_zero_type(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64 => true,
+        // A non-positive scale makes every decimal value an integer.
+        DataType::Decimal32(_, scale)
+        | DataType::Decimal64(_, scale)
+        | DataType::Decimal128(_, scale)
+        | DataType::Decimal256(_, scale) => *scale <= 0,
+        _ => false,
+    }
+}
+
 impl TreeNodeRewriter for Simplifier<'_> {
     type Node = Expr;
 
@@ -1207,13 +1234,13 @@ impl TreeNodeRewriter for Simplifier<'_> {
             // Rules for Modulo
             //
 
-            // A % 1 --> 0 (if A is not nullable and not floating, since NAN % 1 --> NAN)
+            // A % 1 --> 0 (if A is non-null and its type guarantees an integer value)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Modulo,
                 right,
             }) if !info.nullable(&left)?
-                && !info.get_data_type(&left)?.is_floating()
+                && modulo_one_is_zero_type(&info.get_data_type(&left)?)
                 && is_one(&right) =>
             {
                 Transformed::yes(Expr::Literal(
@@ -1239,30 +1266,6 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 op: BitwiseAnd,
                 right,
             }) if !info.nullable(&right)? && is_zero(&left) => Transformed::yes(*left),
-
-            // !A & A -> 0 (if A not nullable)
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: BitwiseAnd,
-                right,
-            }) if is_negative_of(&left, &right) && !info.nullable(&right)? => {
-                Transformed::yes(Expr::Literal(
-                    ScalarValue::new_zero(&info.get_data_type(&left)?)?,
-                    None,
-                ))
-            }
-
-            // A & !A -> 0 (if A not nullable)
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: BitwiseAnd,
-                right,
-            }) if is_negative_of(&right, &left) && !info.nullable(&left)? => {
-                Transformed::yes(Expr::Literal(
-                    ScalarValue::new_zero(&info.get_data_type(&left)?)?,
-                    None,
-                ))
-            }
 
             // (..A..) & A --> (..A..)
             Expr::BinaryExpr(BinaryExpr {
@@ -1314,30 +1317,6 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 right,
             }) if is_zero(&left) => Transformed::yes(*right),
 
-            // !A | A -> -1 (if A not nullable)
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: BitwiseOr,
-                right,
-            }) if is_negative_of(&left, &right) && !info.nullable(&right)? => {
-                Transformed::yes(Expr::Literal(
-                    ScalarValue::new_negative_one(&info.get_data_type(&left)?)?,
-                    None,
-                ))
-            }
-
-            // A | !A -> -1 (if A not nullable)
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: BitwiseOr,
-                right,
-            }) if is_negative_of(&right, &left) && !info.nullable(&left)? => {
-                Transformed::yes(Expr::Literal(
-                    ScalarValue::new_negative_one(&info.get_data_type(&left)?)?,
-                    None,
-                ))
-            }
-
             // (..A..) | A --> (..A..)
             Expr::BinaryExpr(BinaryExpr {
                 left,
@@ -1387,30 +1366,6 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 op: BitwiseXor,
                 right,
             }) if !info.nullable(&right)? && is_zero(&left) => Transformed::yes(*right),
-
-            // !A ^ A -> -1 (if A not nullable)
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: BitwiseXor,
-                right,
-            }) if is_negative_of(&left, &right) && !info.nullable(&right)? => {
-                Transformed::yes(Expr::Literal(
-                    ScalarValue::new_negative_one(&info.get_data_type(&left)?)?,
-                    None,
-                ))
-            }
-
-            // A ^ !A -> -1 (if A not nullable)
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: BitwiseXor,
-                right,
-            }) if is_negative_of(&right, &left) && !info.nullable(&left)? => {
-                Transformed::yes(Expr::Literal(
-                    ScalarValue::new_negative_one(&info.get_data_type(&left)?)?,
-                    None,
-                ))
-            }
 
             // (..A..) ^ A --> (the expression without A, if number of A is odd, otherwise one A)
             Expr::BinaryExpr(BinaryExpr {
@@ -1476,7 +1431,12 @@ impl TreeNodeRewriter for Simplifier<'_> {
             //
             // Rules for Negative
             //
-            Expr::Negative(inner) => Transformed::yes(distribute_negation(*inner)),
+            // Preserve the existing double-negation simplification without
+            // applying bitwise-complement identities to arithmetic negation.
+            Expr::Negative(inner) => match *inner {
+                Expr::Negative(inner) => Transformed::yes(*inner),
+                inner => Transformed::no(Expr::Negative(Box::new(inner))),
+            },
 
             //
             // Rules for Case
@@ -3076,6 +3036,55 @@ mod tests {
     }
 
     #[test]
+    fn test_simplify_modulo_by_one_types() {
+        for (data_type, folds) in [
+            (DataType::Int8, true),
+            (DataType::Int16, true),
+            (DataType::Int32, true),
+            (DataType::Int64, true),
+            (DataType::UInt8, true),
+            (DataType::UInt16, true),
+            (DataType::UInt32, true),
+            (DataType::UInt64, true),
+            (DataType::Float32, false),
+            (DataType::Float64, false),
+            (DataType::Decimal32(9, -1), true),
+            (DataType::Decimal32(9, 0), true),
+            (DataType::Decimal32(9, 2), false),
+            (DataType::Decimal64(18, -1), true),
+            (DataType::Decimal64(18, 0), true),
+            (DataType::Decimal64(18, 2), false),
+            (DataType::Decimal128(38, -1), true),
+            (DataType::Decimal128(38, 0), true),
+            (DataType::Decimal128(38, 2), false),
+            (DataType::Decimal256(76, -1), true),
+            (DataType::Decimal256(76, 0), true),
+            (DataType::Decimal256(76, 2), false),
+        ] {
+            for nullable in [false, true] {
+                let schema =
+                    Schema::new(vec![Field::new("a", data_type.clone(), nullable)])
+                        .to_dfschema_ref()
+                        .unwrap();
+                let simplifier = ExprSimplifier::new(
+                    SimplifyContext::builder().with_schema(schema).build(),
+                );
+                let expr = col("a") % lit(1);
+                let expected = if folds && !nullable {
+                    lit(ScalarValue::new_zero(&data_type).unwrap())
+                } else {
+                    expr.clone()
+                };
+                assert_eq!(
+                    simplifier.simplify(expr).unwrap(),
+                    expected,
+                    "{data_type:?}, nullable={nullable}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_simplify_bitwise_xor_by_null() {
         let null = lit(ScalarValue::Int64(None));
         // A ^ null --> null
@@ -3373,47 +3382,25 @@ mod tests {
     }
 
     #[test]
-    fn test_simplify_negated_bitwise_and() {
-        // !c3 & c3 --> 0
-        let expr = (-col("c3_non_null")) & col("c3_non_null");
-        let expected = lit(0i64);
+    fn test_preserve_arithmetic_negation() {
+        let c3 = col("c3_non_null");
+        let expressions = [
+            (-c3.clone()) & c3.clone(),
+            c3.clone() & (-c3.clone()),
+            (-c3.clone()) | c3.clone(),
+            c3.clone() | (-c3.clone()),
+            (-c3.clone()) ^ c3.clone(),
+            c3.clone() ^ (-c3.clone()),
+            -bitwise_and(col("c3"), c3.clone()),
+            -bitwise_or(col("c3"), c3.clone()),
+        ];
 
-        assert_eq!(simplify(expr), expected);
-        // c3 & !c3 --> 0
-        let expr = col("c3_non_null") & (-col("c3_non_null"));
-        let expected = lit(0i64);
+        for expr in expressions {
+            assert_eq!(simplify(expr.clone()), expr);
+        }
 
-        assert_eq!(simplify(expr), expected);
-    }
-
-    #[test]
-    fn test_simplify_negated_bitwise_or() {
-        // !c3 | c3 --> -1
-        let expr = (-col("c3_non_null")) | col("c3_non_null");
-        let expected = lit(-1i64);
-
-        assert_eq!(simplify(expr), expected);
-
-        // c3 | !c3 --> -1
-        let expr = col("c3_non_null") | (-col("c3_non_null"));
-        let expected = lit(-1i64);
-
-        assert_eq!(simplify(expr), expected);
-    }
-
-    #[test]
-    fn test_simplify_negated_bitwise_xor() {
-        // !c3 ^ c3 --> -1
-        let expr = (-col("c3_non_null")) ^ col("c3_non_null");
-        let expected = lit(-1i64);
-
-        assert_eq!(simplify(expr), expected);
-
-        // c3 ^ !c3 --> -1
-        let expr = col("c3_non_null") ^ (-col("c3_non_null"));
-        let expected = lit(-1i64);
-
-        assert_eq!(simplify(expr), expected);
+        // Keep the pre-existing arithmetic double-negation simplification.
+        assert_eq!(simplify(-(-c3.clone())), c3);
     }
 
     #[test]
@@ -3596,20 +3583,6 @@ mod tests {
         assert_eq!(simplify(expr), expected);
         // !(!c3) --> c3
         let expr = col("c3").not().not();
-        let expected = col("c3");
-        assert_eq!(simplify(expr), expected);
-
-        // Laws with bitwise operations
-        // !(c3 & c4) --> !c3 | !c4
-        let expr = -bitwise_and(col("c3"), col("c4"));
-        let expected = bitwise_or(-col("c3"), -col("c4"));
-        assert_eq!(simplify(expr), expected);
-        // !(c3 | c4) --> !c3 & !c4
-        let expr = -bitwise_or(col("c3"), col("c4"));
-        let expected = bitwise_and(-col("c3"), -col("c4"));
-        assert_eq!(simplify(expr), expected);
-        // !(!c3) --> c3
-        let expr = -(-col("c3"));
         let expected = col("c3");
         assert_eq!(simplify(expr), expected);
     }

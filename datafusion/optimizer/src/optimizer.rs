@@ -251,7 +251,10 @@ impl OptimizerConfig for OptimizerContext {
     }
 }
 
-/// A rule-based optimizer.
+/// A rule-based logical optimizer.
+///
+/// Applies rules in order for up to `datafusion.optimizer.max_passes` passes,
+/// stopping early if the plan repeats.
 #[derive(Clone, Debug)]
 pub struct Optimizer {
     /// All optimizer rules to apply
@@ -478,10 +481,12 @@ fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
         | LogicalPlan::Ddl(DdlStatement::CreateExternalTable(_))
         | LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(_))
         | LogicalPlan::Ddl(DdlStatement::CreateCatalog(_))
+        | LogicalPlan::Ddl(DdlStatement::CreateExternalCatalog(_))
         | LogicalPlan::Ddl(DdlStatement::CreateIndex(_))
         | LogicalPlan::Ddl(DdlStatement::DropTable(_))
         | LogicalPlan::Ddl(DdlStatement::DropView(_))
         | LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(_))
+        | LogicalPlan::Ddl(DdlStatement::DropCatalog(_))
         | LogicalPlan::Ddl(DdlStatement::CreateFunction(_))
         | LogicalPlan::Ddl(DdlStatement::DropFunction(_))
         | LogicalPlan::Statement(_) => false,
