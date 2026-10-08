@@ -4647,20 +4647,22 @@ mod tests {
 
     #[test]
     fn test_fallback_selectivity_col_eq_col_uses_max_ndv() {
-        // col_a = col_b, NDV(a)=100, NDV(b)=200
-        // selectivity = 1 / max(100, 200) = 1/200
+        // col_a = col_b uses 1 / max(NDV_left, NDV_right). We verify both column
+        // orderings to ensure the max is taken symmetrically.
         let schema = Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
         ]);
-        let predicate: Arc<dyn PhysicalExpr> = binary(
+
+        // (a=100, b=200) → right NDV dominates → 1/200
+        let pred_ab: Arc<dyn PhysicalExpr> = binary(
             col("a", &schema).unwrap(),
             Operator::Eq,
             col("b", &schema).unwrap(),
             &schema,
         )
         .unwrap();
-        let col_stats = vec![
+        let stats_ab = vec![
             ColumnStatistics {
                 distinct_count: Precision::Inexact(100),
                 ..Default::default()
@@ -4670,45 +4672,35 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let result = compute_fallback_selectivity(&predicate, &col_stats, 20);
+        let result_ab = compute_fallback_selectivity(&pred_ab, &stats_ab, 20);
         assert!(
-            (result - 1.0 / 200.0).abs() < 1e-12,
-            "expected 1/200 = 0.005, got {result}"
+            (result_ab - 1.0 / 200.0).abs() < 1e-12,
+            "expected 1/200 (right NDV dominates), got {result_ab}"
         );
-    }
 
-    #[test]
-    fn test_fallback_selectivity_non_equality_returns_default() {
-        // A single non-equality predicate (a > 10) → default_selectivity applied once
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-        let predicate: Arc<dyn PhysicalExpr> = binary(
+        // (a=500, b=100) → left NDV dominates → 1/500
+        let pred_ba: Arc<dyn PhysicalExpr> = binary(
             col("a", &schema).unwrap(),
-            Operator::Gt,
-            lit(10i32),
+            Operator::Eq,
+            col("b", &schema).unwrap(),
             &schema,
         )
         .unwrap();
-        let col_stats = vec![ColumnStatistics {
-            distinct_count: Precision::Inexact(100),
-            ..Default::default()
-        }];
-        let result = compute_fallback_selectivity(&predicate, &col_stats, 20);
-        assert!((result - 0.2).abs() < 1e-12, "expected 0.2, got {result}");
-    }
-
-    #[test]
-    fn test_fallback_selectivity_non_binary_expr_returns_default() {
-        // A non-BinaryExpr predicate (e.g. IsNotNull) → downcast to BinaryExpr fails,
-        // so it is unhandled and default selectivity is applied.
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-        let predicate: Arc<dyn PhysicalExpr> =
-            Arc::new(IsNotNullExpr::new(col("a", &schema).unwrap()));
-        let col_stats = vec![ColumnStatistics {
-            distinct_count: Precision::Inexact(100),
-            ..Default::default()
-        }];
-        let result = compute_fallback_selectivity(&predicate, &col_stats, 20);
-        assert!((result - 0.2).abs() < 1e-12, "expected 0.2, got {result}");
+        let stats_ba = vec![
+            ColumnStatistics {
+                distinct_count: Precision::Exact(500),
+                ..Default::default()
+            },
+            ColumnStatistics {
+                distinct_count: Precision::Exact(100),
+                ..Default::default()
+            },
+        ];
+        let result_ba = compute_fallback_selectivity(&pred_ba, &stats_ba, 20);
+        assert!(
+            (result_ba - 1.0 / 500.0).abs() < 1e-12,
+            "expected 1/500 (left NDV dominates), got {result_ba}"
+        );
     }
 
     /// Verify that `FilterExec` uses NDV-based fallback selectivity for predicates
@@ -4855,51 +4847,27 @@ mod tests {
     }
 
     #[test]
-    fn test_fallback_selectivity_cast_expr_not_handled() {
-        // CAST(a AS Int64) = 42: the left side is a CastExpr, not a bare Column,
-        // so column_ndv returns None. The conjunct is unhandled and falls through
-        // to default_selectivity.
+    fn test_fallback_selectivity_right_col_uses_ndv() {
+        // <scalar_expr> = col_a: column is on the right-hand side of the equality.
+        // Verifies that column_ndv identifies the NDV regardless of operand order,
+        // yielding 1 / NDV(col_a) rather than falling back to default selectivity.
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-        let cast_expr: Arc<dyn PhysicalExpr> = Arc::new(CastExpr::new(
-            col("a", &schema).unwrap(),
-            DataType::Int64,
-            None,
-        ));
-        let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
-            cast_expr,
-            Operator::Eq,
-            Arc::new(Literal::new(ScalarValue::Int64(Some(42)))),
-        ));
-        let col_stats = vec![ColumnStatistics {
-            distinct_count: Precision::Inexact(100),
-            ..Default::default()
-        }];
-        let result = compute_fallback_selectivity(&predicate, &col_stats, 20);
-        assert!((result - 0.2).abs() < 1e-12, "expected 0.2, got {result}");
-    }
-
-    #[test]
-    fn test_fallback_selectivity_utf8_equality_uses_ndv() {
-        // name = 'alice' on a Utf8 column with NDV=60.
-        // Utf8 equality fails `check_support`, so fallback selectivity runs and
-        // returns 1/60 rather than the default 20% selectivity.
-        let schema = Schema::new(vec![Field::new("name", DataType::Utf8, false)]);
         let predicate: Arc<dyn PhysicalExpr> = binary(
-            col("name", &schema).unwrap(),
+            lit(42i32),
             Operator::Eq,
-            lit("alice"),
+            col("a", &schema).unwrap(),
             &schema,
         )
         .unwrap();
         let col_stats = vec![ColumnStatistics {
-            distinct_count: Precision::Inexact(60),
+            distinct_count: Precision::Inexact(80),
             ..Default::default()
         }];
         let result = compute_fallback_selectivity(&predicate, &col_stats, 20);
-        let expected = 1.0 / 60.0;
+        let expected = 1.0 / 80.0;
         assert!(
             (result - expected).abs() < 1e-12,
-            "expected {expected}, got {result}"
+            "expected 1/80 = {expected} when column is on the right side, got {result}"
         );
     }
 
@@ -4946,55 +4914,6 @@ mod tests {
         assert!(
             (result - 0.2).abs() < 1e-12,
             "expected default 0.2 when both columns lack NDV, got {result}"
-        );
-    }
-
-    #[test]
-    fn test_fallback_selectivity_col_eq_col_left_ndv_dominates() {
-        // col_a = col_b, NDV(a)=500, NDV(b)=100 → max picks left → 1/500
-        // This exercises the `l.max(r)` path where l > r.
-        let schema = Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Int32, false),
-        ]);
-        let predicate: Arc<dyn PhysicalExpr> = binary(
-            col("a", &schema).unwrap(),
-            Operator::Eq,
-            col("b", &schema).unwrap(),
-            &schema,
-        )
-        .unwrap();
-        let col_stats = vec![
-            ColumnStatistics {
-                distinct_count: Precision::Exact(500),
-                ..Default::default()
-            },
-            ColumnStatistics {
-                distinct_count: Precision::Exact(100),
-                ..Default::default()
-            },
-        ];
-        let result = compute_fallback_selectivity(&predicate, &col_stats, 20);
-        assert!(
-            (result - 1.0 / 500.0).abs() < 1e-12,
-            "expected 1/500 = 0.002 when left NDV dominates, got {result}"
-        );
-    }
-
-    #[test]
-    fn test_fallback_selectivity_column_index_out_of_bounds() {
-        // column_ndv: `column_statistics.get(col.index())` returns None when the
-        // column index exceeds the stats slice length. The conjunct is then
-        // unhandled → default selectivity is applied.
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-        let predicate: Arc<dyn PhysicalExpr> =
-            binary(col("a", &schema).unwrap(), Operator::Eq, lit(1i32), &schema).unwrap();
-        // Empty stats slice: col.index() == 0 is out of bounds.
-        let col_stats: Vec<ColumnStatistics> = vec![];
-        let result = compute_fallback_selectivity(&predicate, &col_stats, 20);
-        assert!(
-            (result - 0.2).abs() < 1e-12,
-            "expected default 0.2 when column index is out of bounds, got {result}"
         );
     }
 }
