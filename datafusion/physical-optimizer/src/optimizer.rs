@@ -25,7 +25,7 @@ use crate::combine_partial_final_agg::CombinePartialFinalAggregate;
 use crate::ensure_coop::EnsureCooperative;
 use crate::ensure_requirements::EnsureRequirements;
 use crate::filter_pushdown::FilterPushdown;
-use crate::invariants::HashJoinModesResolved;
+use crate::invariants::{HashJoinModesResolved, NoEmbeddedProjections};
 use crate::join_selection::JoinSelection;
 use crate::limit_pushdown::LimitPushdown;
 use crate::limited_distinct_aggregation::LimitedDistinctAggregation;
@@ -94,6 +94,9 @@ impl PhysicalOptimizer {
         //   queries, and will likely increase the optimization time. Please extend
         //   existing rules when possible, rather than adding a new rule.
         let steps = vec![
+            // Keep output projections explicit until the first ProjectionPushdown
+            // pass, so earlier rules can reason about unprojected operators.
+            PhysicalOptimizerStep::Begin(Arc::new(NoEmbeddedProjections)),
             // If there is a output requirement of the query, make sure that
             // this information is not lost across different rules during optimization.
             PhysicalOptimizerStep::Rule(Arc::new(OutputRequirements::new_add_mode())),
@@ -144,6 +147,7 @@ impl PhysicalOptimizer {
             PhysicalOptimizerStep::Rule(Arc::new(CombinePartialFinalAggregate::new())),
             // Run once after the local sorting requirement is changed
             PhysicalOptimizerStep::Rule(Arc::new(OptimizeAggregateOrder::new())),
+            PhysicalOptimizerStep::End(NoEmbeddedProjections.name()),
             // TODO: `try_embed_to_hash_join` in the ProjectionPushdown rule would be block by the CoalesceBatches, so add it before CoalesceBatches. Maybe optimize it in the future.
             PhysicalOptimizerStep::Rule(Arc::new(ProjectionPushdown::new())),
             // Remove the ancillary output requirement operator since we are done with the planning

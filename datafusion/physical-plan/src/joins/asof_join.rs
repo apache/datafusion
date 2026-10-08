@@ -251,6 +251,11 @@ impl AsOfJoinExec {
         })
     }
 
+    /// Returns the indices of the output columns, if an output projection is embedded.
+    pub fn projection(&self) -> &Option<ProjectionRef> {
+        &self.projection
+    }
+
     /// Returns this join emitting only the columns in `projection`, in that order.
     /// The indices address the join's own schema, before any projection.
     pub fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {

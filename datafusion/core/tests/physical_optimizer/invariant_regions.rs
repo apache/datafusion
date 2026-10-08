@@ -21,11 +21,14 @@ use arrow::array::{Int32Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion::physical_optimizer::invariants::HashJoinModesResolved;
+use datafusion::physical_optimizer::invariants::{
+    HashJoinModesResolved, NoEmbeddedProjections,
+};
 use datafusion::physical_optimizer::join_selection::JoinSelection;
 use datafusion::physical_optimizer::optimizer::{
     PhysicalOptimizer, PhysicalOptimizerStep as Step, PlanInvariant,
 };
+use datafusion::physical_optimizer::projection_pushdown::ProjectionPushdown;
 use datafusion::physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion::physical_optimizer::{PhysicalOptimizerContext, PhysicalOptimizerRule};
 use datafusion::physical_planner::DefaultPhysicalPlanner;
@@ -38,6 +41,7 @@ use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::joins::{HashJoinExec, HashJoinExecBuilder, PartitionMode};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
+use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::{ExecutionPlan, displayable};
 
 type Plan = Arc<dyn ExecutionPlan>;
@@ -182,6 +186,73 @@ fn runtime_option_controls_all_region_checks() -> Result<()> {
         assert!(Arc::ptr_eq(&plan, &output));
         let expected = if enabled { vec!["a", "a", "a"] } else { vec![] };
         assert_eq!(*checks.lock().unwrap(), expected);
+    }
+    Ok(())
+}
+
+#[test]
+fn embedded_projections_are_only_allowed_after_region_end() -> Result<()> {
+    let input = join(PartitionMode::CollectLeft)?;
+    // The right output column is also a join key, so it must remain available
+    // internally even when the result contains only the left column.
+    let plan: Plan = Arc::new(ProjectionExec::try_new(
+        vec![(col("a", &input.schema())?, "a".to_owned())],
+        input,
+    )?);
+    let error = optimize(
+        Arc::clone(&plan),
+        vec![
+            Step::Begin(Arc::new(NoEmbeddedProjections)),
+            rule(ProjectionPushdown::new()),
+            Step::End(NoEmbeddedProjections.name()),
+        ],
+    )
+    .unwrap_err();
+    assert_contains!(
+        error.to_string(),
+        "Rule ProjectionPushdown violated invariant no_embedded_projections"
+    );
+    assert_contains!(error.to_string(), "HashJoinExec");
+
+    let output = optimize(
+        plan,
+        vec![
+            Step::Begin(Arc::new(NoEmbeddedProjections)),
+            Step::End(NoEmbeddedProjections.name()),
+            rule(ProjectionPushdown::new()),
+        ],
+    )?;
+    assert!(NoEmbeddedProjections.check(&output).is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn default_pipeline_allows_nlj_embedding_after_region_end() -> Result<()> {
+    for enabled in [false, true] {
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new().set_bool(VALIDATE_INVARIANTS, enabled),
+        );
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int32Array::from(vec![1, 2, 3])) as _,
+        )])?;
+        ctx.register_batch("t", batch.clone())?;
+        ctx.register_batch("u", batch)?;
+        // Precomputing the left expression adds a temporary input column. The
+        // first ProjectionPushdown embeds an output projection to hide it,
+        // after the region has ended.
+        let output = ctx
+            .sql("SELECT t.id, u.id FROM t JOIN u ON t.id + 1 > u.id")
+            .await?
+            .create_physical_plan()
+            .await?;
+        assert_contains!(
+            NoEmbeddedProjections
+                .check(&output)
+                .unwrap_err()
+                .to_string(),
+            "NestedLoopJoinExec"
+        );
     }
     Ok(())
 }
