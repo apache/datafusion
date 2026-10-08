@@ -593,6 +593,8 @@ impl SpillFile for RefCountedTempFile {
 /// A `.tmp.` is added at the beginning and a last `.` is set at the end.
 ///
 /// For example "This kind.of /input" becomes ".tmp.this_kind_of_input."
+///
+/// The output is also truncated to fit in 128 bytes.
 fn escape_for_temp_file_name_prefix(text: &str) -> String {
     let mut output = String::with_capacity(text.len() + 6);
     output.push_str(".tmp.");
@@ -606,6 +608,9 @@ fn escape_for_temp_file_name_prefix(text: &str) -> String {
             output.extend(c.to_lowercase());
         } else {
             add_separator = true;
+        }
+        if output.len() >= 123 {
+            break; // We limit the output at 126 bytes and keep the space for an extra UTF-8 char and the final dot
         }
     }
     output.push('.');
@@ -1213,5 +1218,15 @@ mod tests {
         assert_eq!(dm.used_disk_space(), 0);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_escape_for_temp_file_name_prefix() {
+        assert_eq!(escape_for_temp_file_name_prefix("foo"), ".tmp.foo.");
+        assert_eq!(escape_for_temp_file_name_prefix("fooé \nt"), ".tmp.fooé_t.");
+        assert_eq!(
+            escape_for_temp_file_name_prefix(&"a".repeat(200)),
+            format!(".tmp.{}.", "a".repeat(118))
+        );
     }
 }
