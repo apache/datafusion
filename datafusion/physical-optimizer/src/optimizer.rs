@@ -55,8 +55,9 @@
 //!    2. DataFusion aims to make these assumptions easier to understand and
 //!       verify.
 //!
-//!    3. DataFusion does not aim to support arbitrary downstream pipelines
-//!       such as:
+//!    3. Extension rules should adapt to the built-in rules, not the other
+//!       way around. DataFusion does not aim to support arbitrary downstream
+//!       pipelines such as:
 //!
 //!       ```text
 //!       // Potential downstream usage:
@@ -70,7 +71,7 @@
 //!       ];
 //!       ```
 //!
-//!       Do not change built-in rules or add unit tests within DataFusion
+//!       Do not extend built-in rules or add unit tests within DataFusion
 //!       solely to support such downstream pipelines.
 
 use std::fmt::Debug;
