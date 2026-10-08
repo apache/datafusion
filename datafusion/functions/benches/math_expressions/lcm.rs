@@ -28,8 +28,7 @@ use rand::prelude::*;
 use std::hint::black_box;
 use std::sync::Arc;
 
-fn generate_i64_array(n_rows: usize) -> ArrayRef {
-    let mut rng = StdRng::seed_from_u64(0);
+fn generate_i64_array(rng: &mut StdRng, n_rows: usize) -> ArrayRef {
     let values = (0..n_rows)
         .map(|_| rng.random_range(0..1000))
         .collect::<Vec<_>>();
@@ -38,8 +37,9 @@ fn generate_i64_array(n_rows: usize) -> ArrayRef {
 
 fn criterion_benchmark(c: &mut Criterion) {
     let n_rows = 100000;
-    let array_a = ColumnarValue::Array(generate_i64_array(n_rows));
-    let array_b = ColumnarValue::Array(generate_i64_array(n_rows));
+    let mut rng = StdRng::seed_from_u64(0);
+    let array_a = ColumnarValue::Array(generate_i64_array(&mut rng, n_rows));
+    let array_b = ColumnarValue::Array(generate_i64_array(&mut rng, n_rows));
     let udf = lcm();
     let config_options = Arc::new(ConfigOptions::default());
 

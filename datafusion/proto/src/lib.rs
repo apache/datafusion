@@ -59,13 +59,21 @@
 //! [datafusion-substrait]: https://docs.rs/datafusion-substrait/latest/datafusion_substrait
 //! [substrait.io]: https://substrait.io
 //!
+//! # Security
+//!
+//! Serialized plans are treated as trusted input. The application must validate
+//! untrusted inputs as this crate does not validate that a plan is safe to
+//! execute. See the [DataFusion Security Model] for more details.
+//!
+//! [DataFusion Security Model]: https://github.com/apache/datafusion/blob/main/SECURITY.md#serialized-plans
+//!
 //! # Example: Serializing [`Expr`]s
 //! ```
 //! # use datafusion_common::Result;
 //! # use datafusion_expr::{col, lit, Expr};
 //! # use datafusion_proto::bytes::Serializeable;
 //! # fn main() -> Result<()>{
-//! // Create a new `Expr` a < 32
+//! // Create a new `Expr` a < 5
 //! let expr = col("a").lt(lit(5i32));
 //!
 //! // Convert it to bytes (for sending over the network, etc.)

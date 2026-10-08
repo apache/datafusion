@@ -17,13 +17,17 @@
 
 //! An ObjectStore wrapper that adds simulated S3-like latency to get and list operations.
 //!
-//! Cycles through a fixed latency distribution inspired by real S3 performance:
+//! Draws each request's latency at random from a fixed distribution inspired
+//! by real S3 performance:
 //! - P50: ~30ms
 //! - P75-P90: ~100-120ms
 //! - P99: ~150-200ms
+//!
+//! The draws are independent. A request's latency does not depend on how many
+//! requests came before it, so a change that adds or removes requests in one
+//! query does not change the latencies of the requests in the next query.
 
 use std::fmt;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -34,9 +38,10 @@ use object_store::{
     CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
     ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
 };
+use rand::Rng;
 
-/// GET latency distribution, inspired by S3 latencies.
-/// Deterministic but shuffled to avoid artificial patterns.
+/// GET latency distribution, inspired by S3 latencies. Each GET draws one
+/// value at random.
 /// 20 values: 11x P50 (~25-35ms), 5x P75-P90 (~70-110ms), 2x P95 (~120-150ms), 2x P99 (~180-200ms)
 /// Sorted: 25,25,28,28,30,30,30,30,32,32,35, 70,85,100,100,110, 130,150, 180,200
 /// P50≈32ms, P90≈110ms, P99≈200ms
@@ -57,30 +62,31 @@ const LIST_LATENCIES_MS: &[u64] = &[
 #[derive(Debug)]
 pub struct LatencyObjectStore<T: ObjectStore> {
     inner: T,
-    get_counter: AtomicUsize,
-    list_counter: AtomicUsize,
 }
 
 impl<T: ObjectStore> LatencyObjectStore<T> {
     pub fn new(inner: T) -> Self {
-        Self {
-            inner,
-            get_counter: AtomicUsize::new(0),
-            list_counter: AtomicUsize::new(0),
-        }
+        Self { inner }
     }
 
     fn next_get_latency(&self) -> Duration {
-        let idx =
-            self.get_counter.fetch_add(1, Ordering::Relaxed) % GET_LATENCIES_MS.len();
-        Duration::from_millis(GET_LATENCIES_MS[idx])
+        sample(GET_LATENCIES_MS)
     }
 
     fn next_list_latency(&self) -> Duration {
-        let idx =
-            self.list_counter.fetch_add(1, Ordering::Relaxed) % LIST_LATENCIES_MS.len();
-        Duration::from_millis(LIST_LATENCIES_MS[idx])
+        sample(LIST_LATENCIES_MS)
     }
+}
+
+/// One latency drawn at random from `distribution`.
+///
+/// Do not use a shared counter or a hash of the request instead. A counter
+/// makes a latency depend on the requests made before it. A hash gives a
+/// request shape the same latency in every iteration, so two builds that
+/// make differently shaped requests do not average out.
+fn sample(distribution: &[u64]) -> Duration {
+    let idx = rand::rng().random_range(0..distribution.len());
+    Duration::from_millis(distribution[idx])
 }
 
 impl<T: ObjectStore> fmt::Display for LatencyObjectStore<T> {

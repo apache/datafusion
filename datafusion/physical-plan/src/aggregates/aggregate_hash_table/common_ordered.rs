@@ -24,7 +24,6 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
-use datafusion_common::assert_or_internal_err;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::{AggregateMetrics, EmitTo};
 
@@ -128,9 +127,6 @@ pub(in crate::aggregates) struct OrderedAggregateTable<OrderedAggrMode> {
     /// to pass through or spill its current state.
     pub(super) state_schema: SchemaRef,
 
-    /// Maximum rows per emitted output batch, from config `batch_size`.
-    pub(super) batch_size: usize,
-
     /// Grouping and accumulator-specific timing metrics.
     pub(super) group_by_metrics: GroupByMetrics,
 
@@ -188,17 +184,11 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         input_schema: &SchemaRef,
         output_schema: SchemaRef,
         state_schema: SchemaRef,
-        batch_size: usize,
         input_order_mode: &InputOrderMode,
         aggregate_mode: &AggregateMode,
         filters: Vec<Option<Arc<dyn PhysicalExpr>>>,
         metrics: OrderedAggregateTableMetrics,
     ) -> Result<Self> {
-        assert_or_internal_err!(
-            batch_size > 0,
-            "OrderedAggregateTable requires config batch_size >= 1"
-        );
-
         let group_ordering = GroupOrdering::try_new(input_order_mode)?;
         let group_schema = agg.group_by().group_schema(input_schema)?;
         let group_values = new_group_values(group_schema, &group_ordering)?;
@@ -229,7 +219,6 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         Ok(Self {
             output_schema,
             state_schema,
-            batch_size,
             group_by_metrics: metrics.group_by,
             aggregate_argument_metrics: metrics.aggregate_arguments,
             aggregate_accumulator_metrics: metrics.accumulator,
@@ -418,38 +407,8 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         Ok(())
     }
 
-    /// Emits groups allowed by `GroupOrdering`, leaving only the current
-    /// unfinished ordered-key range buffered.
-    ///
-    /// Each aggregation mode chooses a different `materialize_accumulator_fn`
-    /// according to its semantics. For example, partial aggregation emits
-    /// partial states to feed the final stage, so it uses
-    /// [`datafusion_expr::GroupsAccumulator::state`].
-    pub(super) fn next_output_batch_inner(
-        &mut self,
-        materialize_accumulator_fn: MaterializeAccumulatorFn,
-        accumulator_phase: AccumulatorPhase,
-    ) -> Result<Option<RecordBatch>> {
-        if self.buffer.group_values.is_empty() {
-            return Ok(None);
-        }
-
-        let Some(emit_to) = self.buffer.group_ordering.emit_to() else {
-            return Ok(None);
-        };
-        let emit_to = match emit_to {
-            EmitTo::First(n) => EmitTo::First(n.min(self.batch_size)),
-            EmitTo::All if self.num_groups() > self.batch_size => {
-                EmitTo::First(self.batch_size)
-            }
-            EmitTo::All => EmitTo::All,
-        };
-        self.materialize_groups(emit_to, materialize_accumulator_fn, accumulator_phase)
-            .map(Some)
-    }
-
     /// Removes the selected groups once and materializes their output columns.
-    /// The caller chooses the completed prefix and any output-size limit.
+    /// The caller chooses the completed prefix.
     pub(super) fn materialize_groups(
         &mut self,
         emit_to: EmitTo,
@@ -459,11 +418,9 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
         let output = self.group_by_metrics.time_emitting(|| {
             let mut output = self.buffer.group_values.emit(emit_to)?;
-            // EOF can also emit a prefix when a caller limits its batch size,
-            // but the completed ordering state no longer tracks group indexes.
-            if let EmitTo::First(n) = emit_to
-                && matches!(self.buffer.group_ordering.emit_to(), Some(EmitTo::First(_)))
-            {
+            // `EmitTo::All` is only used after `input_done`, when the ordering
+            // state no longer tracks group indexes.
+            if let EmitTo::First(n) = emit_to {
                 self.buffer.group_ordering.remove_groups(n);
             }
 
