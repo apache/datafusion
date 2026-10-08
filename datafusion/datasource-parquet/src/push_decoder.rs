@@ -70,7 +70,9 @@ use datafusion_pruning::{PruningPredicate, PruningPredicateBuilder};
 
 use crate::ParquetFileMetrics;
 use crate::decoder_projection::DecoderProjection;
-use crate::metrics::{ByteProgress, RowFilterSkippedFullyMatchedMetric};
+use crate::metrics::{
+    ByteProgress, ReadAheadMetrics, RowFilterSkippedFullyMatchedMetric,
+};
 use crate::row_filter::{
     PrebuiltRowFilterCandidate, prebuild_row_filter_candidates, row_filter_from_prebuilt,
 };
@@ -843,10 +845,16 @@ pub(crate) struct ReadAhead {
     /// No fetch has been made yet.
     first_fetch: bool,
     memory: ReadAheadMemory,
+    metrics: ReadAheadMetrics,
 }
 
 impl ReadAhead {
-    pub(crate) fn new(window: u64, plan: ScanPlan, memory: ReadAheadMemory) -> Self {
+    pub(crate) fn new(
+        window: u64,
+        plan: ScanPlan,
+        memory: ReadAheadMemory,
+        metrics: ReadAheadMetrics,
+    ) -> Self {
         Self {
             window,
             plan,
@@ -856,6 +864,7 @@ impl ReadAhead {
             current_row_group: None,
             first_fetch: true,
             memory,
+            metrics,
         }
     }
 
@@ -1032,7 +1041,16 @@ impl PushDecoderStreamState {
                 Ok(DecodeResult::NeedsData(ranges)) => {
                     // I/O, not compute.
                     timer.stop();
+                    let wait_time = self
+                        .read_ahead
+                        .as_ref()
+                        .expect("streaming policy")
+                        .metrics
+                        .wait_time
+                        .clone();
+                    let wait_timer = wait_time.timer();
                     let result = self.fetch_needed(ranges).await;
+                    wait_timer.done();
                     timer.restart();
                     if let Err(e) = result {
                         return Some((Err(e), self));
@@ -1102,6 +1120,7 @@ impl PushDecoderStreamState {
         ranges.sort_by_key(|(range, _)| range.start);
         let fetch: Vec<Range<u64>> = ranges.iter().map(|(r, _)| r.clone()).collect();
         let bytes = fetch.iter().map(|r| r.end - r.start).sum();
+        read_ahead.metrics.bytes_fetched.add(to_usize(bytes));
         let mut reader = self.reader.take().expect("reader is idle");
         let task = SpawnedTask::spawn(async move {
             let data = reader.get_byte_ranges(fetch).await;
@@ -1159,10 +1178,13 @@ impl PushDecoderStreamState {
                 .window
                 .saturating_sub(held.saturating_add(needed_bytes));
             let current = read_ahead.current_row_group;
-            ranges.extend(read_ahead.take_ranges(
+            let ahead = read_ahead.take_ranges(
                 free,
                 keep_row_group(current, &self.rg_plan, self.row_group_pruner.as_mut()),
-            ));
+            );
+            let ahead_bytes: u64 = ahead.iter().map(|(r, _)| r.end - r.start).sum();
+            read_ahead.metrics.bytes_fetched.add(to_usize(ahead_bytes));
+            ranges.extend(ahead);
         }
         ranges.sort_by_key(|(range, _)| range.start);
         let fetch: Vec<Range<u64>> = ranges.iter().map(|(r, _)| r.clone()).collect();

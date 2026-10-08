@@ -189,6 +189,38 @@ impl Drop for ByteProgress {
     }
 }
 
+/// Metrics of a file that is read with read-ahead
+/// (`datafusion.execution.parquet.read_ahead_bytes`).
+///
+/// They are registered only for such a file, so a scan without read-ahead
+/// does not show them.
+#[derive(Debug, Clone)]
+pub(crate) struct ReadAheadMetrics {
+    /// Bytes fetched before the decoder asked for them.
+    pub bytes_fetched: Count,
+    /// Time the decoder waited for byte ranges that it needed. Read-ahead
+    /// that keeps ahead of the decoder keeps this near zero.
+    pub wait_time: Time,
+}
+
+impl ReadAheadMetrics {
+    pub(crate) fn new(
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
+        filename: &str,
+    ) -> Self {
+        let builder = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .with_type(MetricType::Summary);
+        Self {
+            bytes_fetched: builder
+                .clone()
+                .bytes_counter("read_ahead_bytes_fetched", partition),
+            wait_time: builder.subset_time("read_ahead_wait_time", partition),
+        }
+    }
+}
+
 impl ParquetFileMetrics {
     /// Create new metrics
     pub fn new(
