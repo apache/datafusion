@@ -38,8 +38,8 @@ const MAX_KEPT_LITERAL_ARRAY_BYTES: usize = 1024 * 1024;
 /// a single value must be expanded to an array for every batch. A literal
 /// argument, such as the `1` in `COUNT(1)` (which is how `COUNT(*)` is planned)
 /// or the `','` in `STRING_AGG(x, ',')`, has the same value for every batch of
-/// the query. Its array is built once, and later batches receive a zero-copy
-/// slice of it.
+/// the query. Its array is built on demand and reused for later batches, which
+/// receive a zero-copy slice of it.
 ///
 /// Only literals are treated this way. Other expressions are evaluated against
 /// every batch: a [`ColumnarValue::Scalar`] result holds one value for the rows
@@ -103,7 +103,7 @@ impl AggregateArgument {
     }
 }
 
-/// A literal value and the longest array built from it so far.
+/// A literal value and the largest reusable array retained so far.
 struct LiteralArray {
     value: ScalarValue,
     /// `None` until the first array is built, or while every array built has
