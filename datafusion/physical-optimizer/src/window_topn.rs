@@ -51,6 +51,7 @@
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
+use crate::analyzer::PhysicalAnalyzerRule;
 use arrow::datatypes::DataType;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -284,6 +285,27 @@ impl PhysicalOptimizerRule for WindowTopN {
 
     fn schema_check(&self) -> bool {
         true
+    }
+}
+
+/// The same rewrite as the [`PhysicalOptimizerRule`] impl. The default
+/// analyzer registers this rule in the position it held in the optimizer list
+/// before the analyzer phase existed, ahead of `EnsureRequirements`.
+impl PhysicalAnalyzerRule for WindowTopN {
+    fn analyze(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        config: &ConfigOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        PhysicalOptimizerRule::optimize(self, plan, config)
+    }
+
+    fn name(&self) -> &str {
+        PhysicalOptimizerRule::name(self)
+    }
+
+    fn schema_check(&self) -> bool {
+        PhysicalOptimizerRule::schema_check(self)
     }
 }
 

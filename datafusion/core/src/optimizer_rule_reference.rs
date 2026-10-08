@@ -17,6 +17,7 @@
 
 use datafusion_optimizer::analyzer::Analyzer;
 use datafusion_optimizer::optimizer::Optimizer;
+use datafusion_physical_optimizer::analyzer::PhysicalAnalyzer;
 use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 
 const OPTIMIZER_RULE_REFERENCE: &str = include_str!("optimizer_rule_reference.md");
@@ -71,6 +72,17 @@ fn logical_rules_match_documented_order() {
         .collect();
 
     assert_eq!(documented_rules("### Logical Optimizer Rules"), rules);
+}
+
+#[test]
+fn physical_analyzer_rules_match_documented_order() {
+    let rules: Vec<_> = PhysicalAnalyzer::new()
+        .rules
+        .iter()
+        .map(|rule| rule.name().to_string())
+        .collect();
+
+    assert_eq!(documented_rules("### Physical Analyzer Rules"), rules);
 }
 
 #[test]

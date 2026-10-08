@@ -20,14 +20,10 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::aggregate_statistics::AggregateStatistics;
 use crate::combine_partial_final_agg::CombinePartialFinalAggregate;
 use crate::ensure_coop::EnsureCooperative;
-use crate::ensure_requirements::EnsureRequirements;
 use crate::filter_pushdown::FilterPushdown;
-use crate::join_selection::JoinSelection;
 use crate::limit_pushdown::LimitPushdown;
-use crate::limited_distinct_aggregation::LimitedDistinctAggregation;
 use crate::output_requirements::OutputRequirements;
 use crate::projection_pushdown::ProjectionPushdown;
 use crate::sanity_checker::SanityCheckPlan;
@@ -38,7 +34,6 @@ use crate::update_aggr_exprs::OptimizeAggregateOrder;
 use crate::hash_join_buffering::HashJoinBuffering;
 use crate::limit_pushdown_past_window::LimitPushPastWindows;
 use crate::pushdown_sort::PushdownSort;
-use crate::window_topn::WindowTopN;
 use datafusion_common::config::ConfigOptions;
 
 // Re-export from this module for backwards compatibility.
@@ -89,51 +84,9 @@ impl PhysicalOptimizer {
         //   queries, and will likely increase the optimization time. Please extend
         //   existing rules when possible, rather than adding a new rule.
         let rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = vec![
-            // If there is a output requirement of the query, make sure that
-            // this information is not lost across different rules during optimization.
-            Arc::new(OutputRequirements::new_add_mode()),
-            Arc::new(AggregateStatistics::new()),
-            // Statistics-based join selection will change the Auto mode to a real join implementation,
-            // like collect left, or hash join, or future sort merge join, which will influence the
-            // EnsureRequirements rule as it decides whether to add additional repartitioning and
-            // local sorting steps to meet distribution and ordering requirements. Therefore, it
-            // should run before EnsureRequirements.
-            Arc::new(JoinSelection::new()),
-            // The LimitedDistinctAggregation rule should be applied before EnsureRequirements,
-            // as that rule may inject other operations in between the different AggregateExecs.
-            // Applying the rule early means only directly-connected AggregateExecs must be examined.
-            Arc::new(LimitedDistinctAggregation::new()),
-            // The FilterPushdown rule tries to push down filters as far as it can.
-            // For example, it will push down filtering from a `FilterExec` to `DataSourceExec`.
-            // Note that this does not push down dynamic filters (such as those created by a `SortExec` operator in TopK mode),
-            // those are handled by the later `FilterPushdown` rule.
-            // See `FilterPushdownPhase` for more details.
-            Arc::new(FilterPushdown::new()),
-            // WindowTopN: replaces Filter(rn<=K) → Window(ROW_NUMBER)
-            // with Window(ROW_NUMBER) → PartitionedTopKExec(fetch=K).
-            // Must run before EnsureRequirements (so it can rewrite against the
-            // window's declared ordering without pattern-matching a SortExec)
-            // and before ProjectionPushdown (which embeds projections into FilterExec).
-            Arc::new(WindowTopN::new()),
-            // Ensures each input plan satisfies the distribution and ordering
-            // requirements declared by `ExecutionPlan::required_input_distribution`
-            // and `ExecutionPlan::required_input_ordering`.
-            //
-            // If the requirements are already satisfied, this rule leaves the plan
-            // unchanged. For example, it does not add sorting when the input is a
-            // file scan whose existing order already satisfies the required ordering.
-            // Otherwise, this rule inserts the necessary repartitioning and sorting
-            // operators.
-            //
-            // This used to be implemented as two separate rules: `EnforceDistribution`
-            // and `EnforceSorting`. It is now a single idempotent rule that decides
-            // distribution and sorting together in one bottom-up pass, so the
-            // `pushdown_sorts` step no longer breaks distribution invariants set
-            // earlier in the pipeline. See the module-level doc on
-            // [`EnsureRequirements`](crate::ensure_requirements) for the per-phase
-            // breakdown, and <https://github.com/apache/datafusion/issues/21973>
-            // for the original failure mode.
-            Arc::new(EnsureRequirements::new()),
+            // The rules up to and including `EnsureRequirements` run in the
+            // analyzer phase (see `PhysicalAnalyzer`), so every rule here
+            // receives a plan whose requirements are already enforced.
             // The CombinePartialFinalAggregate rule should be applied after distribution enforcement
             Arc::new(CombinePartialFinalAggregate::new()),
             // Run once after the local sorting requirement is changed

@@ -261,10 +261,16 @@ impl ExecutionPlan for OutputRequirementExec {
 
     fn execute(
         &self,
-        _partition: usize,
-        _context: Arc<TaskContext>,
+        partition: usize,
+        context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        unreachable!();
+        // `OutputRequirementExec` is a planning-only marker that the matching
+        // `OutputRequirements` remove pass strips before execution. It can still
+        // reach execution when a caller replaces the physical optimizer rules
+        // (dropping the remove pass) while keeping the analyzer that adds it, so
+        // rather than panicking we behave transparently: the node carries its
+        // child's partitioning/ordering, so delegating to the child is correct.
+        self.input.execute(partition, context)
     }
 
     fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
@@ -368,6 +374,32 @@ impl PhysicalOptimizerRule for OutputRequirements {
                     }
                 })
                 .data(),
+        }
+    }
+
+    fn name(&self) -> &str {
+        "OutputRequirements"
+    }
+
+    fn schema_check(&self) -> bool {
+        true
+    }
+}
+
+impl crate::PhysicalAnalyzerRule for OutputRequirements {
+    /// `Add` mode establishes the top-level output-requirement boundary that
+    /// enforcement relies on (so distribution enforcement parallelizes below it
+    /// and ordering enforcement preserves the query's final ordering). It runs
+    /// in the analyzer phase, ahead of `EnsureRequirements`.
+    /// `Remove` mode only runs as an optimizer rule, so it is a no-op here.
+    fn analyze(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        _config: &ConfigOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        match self.mode {
+            RuleMode::Add => require_top_ordering(plan),
+            RuleMode::Remove => Ok(plan),
         }
     }
 
