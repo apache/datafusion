@@ -392,7 +392,7 @@ fn with_projection_between() -> Result<()> {
     let optimized = optimize(filter)?;
     assert_snapshot!(plan_str(optimized.as_ref()), @r#"
     ProjectionExec: expr=[pk@0 as pk, val@1 as val, row_number@2 as row_number]
-    PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@0], order=[val@1 ASC], emit=[row_number]
+      PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@0], order=[val@1 ASC], emit=[row_number]
         PlaceholderRowExec
     "#);
     Ok(())
