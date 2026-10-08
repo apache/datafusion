@@ -109,8 +109,10 @@ impl PhysicalOptimizer {
             // those are handled by the later `FilterPushdown` rule.
             // See `FilterPushdownPhase` for more details.
             Arc::new(FilterPushdown::new()),
-            // WindowTopN: replaces Filter(rn<=K) → Window(ROW_NUMBER)
-            // with Window(ROW_NUMBER) → PartitionedTopKExec(fetch=K).
+            // WindowTopN: replaces Filter(rn<=K) → Window(ROW_NUMBER) with
+            // PartitionedTopKExec(fetch=K), which emits `rn` itself; the
+            // window node is kept above it only when it has other window
+            // expressions to compute.
             // Must run before EnsureRequirements (so it can rewrite against the
             // window's declared ordering without pattern-matching a SortExec)
             // and before ProjectionPushdown (which embeds projections into FilterExec).
