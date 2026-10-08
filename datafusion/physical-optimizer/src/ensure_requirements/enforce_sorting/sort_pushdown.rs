@@ -1290,7 +1290,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_expr::Operator;
     use datafusion_physical_expr::PhysicalExpr;
-    use datafusion_physical_expr::expressions::{BinaryExpr, col};
+    use datafusion_physical_expr::expressions::{BinaryExpr, NegativeExpr, col, lit};
     use datafusion_physical_plan::empty::EmptyExec;
     use datafusion_physical_plan::limit::GlobalLimitExec;
 
@@ -1406,6 +1406,96 @@ mod tests {
 
     fn lex(reqs: impl IntoIterator<Item = PhysicalSortRequirement>) -> LexRequirement {
         LexRequirement::new(reqs).unwrap()
+    }
+
+    // Exercise the custom-operator fallback directly with ProjectionExec's
+    // property derivation. The SQL tests cover dispatch through a custom plan.
+    #[test]
+    fn custom_pushdown_accepts_renamed_columns() -> Result<()> {
+        let child = child_schema();
+        let input = Arc::new(EmptyExec::new(Arc::clone(&child)));
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+            [
+                (col("a", &child)?, "first".to_string()),
+                (col("b", &child)?, "second".to_string()),
+            ],
+            input,
+        )?);
+        let output = plan.schema();
+        let required = OrderingRequirements::new(lex([
+            req("first", &output, ASC),
+            req("second", &output, DESC),
+        ]));
+        let expected = OrderingRequirements::new(lex([
+            req("a", &child, ASC),
+            req("b", &child, DESC),
+        ]));
+
+        assert_eq!(
+            handle_custom_pushdown(&plan, required, &[true])?,
+            Some(vec![Some(expected)])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn custom_pushdown_rejects_reordered_columns() -> Result<()> {
+        let plan: Arc<dyn ExecutionPlan> = reordering_projection();
+        let required =
+            OrderingRequirements::new(lex([req("score", &plan.schema(), ASC)]));
+
+        assert!(handle_custom_pushdown(&plan, required, &[true])?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn custom_pushdown_rejects_changed_values_with_same_schema() -> Result<()> {
+        let schema = child_schema();
+        let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        let negative =
+            Arc::new(NegativeExpr::new(col("a", &schema)?)) as Arc<dyn PhysicalExpr>;
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+            [
+                (negative, "a".to_string()),
+                (col("b", &schema)?, "b".to_string()),
+                (col("c", &schema)?, "c".to_string()),
+            ],
+            input,
+        )?);
+        assert_eq!(plan.schema(), schema);
+        let required = OrderingRequirements::new(lex([req("a", &schema, ASC)]));
+
+        assert!(handle_custom_pushdown(&plan, required, &[true])?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn custom_pushdown_rejects_incompatible_child_expression() -> Result<()> {
+        let schema = child_schema();
+        let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        let flag = Arc::new(BinaryExpr::new(
+            col("a", &schema)?,
+            Operator::Gt,
+            lit(0_i32),
+        )) as Arc<dyn PhysicalExpr>;
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+            [(flag, "flag".to_string())],
+            input,
+        )?);
+        // Valid against Boolean output, but remapping flag@0 to a@0 would
+        // produce Int32 AND Boolean in the child schema.
+        let ordering = Arc::new(BinaryExpr::new(
+            col("flag", &plan.schema())?,
+            Operator::And,
+            lit(true),
+        ));
+        let required = OrderingRequirements::new(lex([PhysicalSortRequirement::new(
+            ordering,
+            Some(ASC),
+        )]));
+
+        assert!(handle_custom_pushdown(&plan, required, &[true])?.is_none());
+        Ok(())
     }
 
     #[test]
