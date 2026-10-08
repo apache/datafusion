@@ -19,18 +19,17 @@
 
 # Securing DataFusion
 
-DataFusion is an embedded query engine, not an authorization boundary. If an
-application accepts SQL from users, the application is responsible for deciding
-which data and operations each user may access. The settings below can reduce
-what a query can do, but they do not replace application authorization or
-operating-system isolation.
+As described in the [DataFusion security policy](../../../SECURITY.md), the end
+application is responsible for security decisions. The settings below can help
+control what a query can do.
 
 ## Restrict SQL statements
 
 [`SQLOptions`] allows an application to reject classes of SQL statements when
-creating a `DataFrame`. DDL, DML, and other statements are all allowed by
-default. Disable the classes that the application does not need and pass the
-options to `SessionContext::sql_with_options` for every user-provided query:
+creating a `DataFrame`. DDL (such as [`CREATE TABLE`](../user-guide/sql/ddl.md))
+and DML (such as [`INSERT`](../user-guide/sql/dml.md)) are allowed by default.
+Disable the classes that the application does not need and pass the options to
+[`SessionContext::sql_with_options`] for every user-provided query:
 
 ```rust
 use datafusion::prelude::*;
@@ -43,11 +42,6 @@ let options = SQLOptions::new()
 let dataframe = ctx.sql_with_options(sql, options).await?;
 ```
 
-These checks reject statement types such as `CREATE TABLE`, `INSERT`, and
-`SET`; they do not decide which tables or rows a user is authorized to read.
-Expose only the appropriate catalogs and tables to each user, and enforce
-application-specific access rules separately.
-
 ## Limit file access
 
 [`SessionContext::enable_url_table()`] is an opt-in feature that lets SQL query
@@ -57,8 +51,7 @@ permissions limited to the files the application intends to expose.
 
 ## Set query memory limits
 
-The `datafusion.runtime.memory_limit` setting defaults to `NULL` (no configured
-query memory limit). Set an appropriate limit for the workload using the
+Set an appropriate `datafusion.runtime.memory_limit` for the workload using the
 [runtime configuration settings](../user-guide/configs.md#runtime-configuration-settings).
 This limits memory used by DataFusion's query execution memory pool; use
 process- or container-level resource limits as well when a hard bound on total
@@ -67,16 +60,11 @@ application memory is required.
 ## Bound spill storage
 
 When an execution operator supports spilling, DataFusion may write intermediate
-query data to temporary files under memory pressure. A query memory limit does
-not limit this disk usage. Set `datafusion.runtime.temp_directory` to a
-controlled location and `datafusion.runtime.max_temp_directory_size` to cap
-DataFusion's temporary-file directory size (the default is `100G`). For
-untrusted SQL workloads, apply appropriate filesystem permissions and storage
-limits to that location as well.
-
-Also review the capabilities of custom table providers, functions, and other
-extensions registered by the application: they determine which external data
-and operations queries can reach.
+query data to temporary files under memory pressure. Use
+`datafusion.runtime.temp_directory` and
+`datafusion.runtime.max_temp_directory_size` to configure the location and size
+of that temporary storage; see the [runtime configuration settings](../user-guide/configs.md#runtime-configuration-settings).
 
 [sqloptions]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SQLOptions.html
+[sessioncontext::sql_with_options]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.sql_with_options
 [sessioncontext::enable_url_table()]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.enable_url_table
