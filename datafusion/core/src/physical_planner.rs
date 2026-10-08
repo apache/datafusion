@@ -67,6 +67,7 @@ use datafusion_common::HashMap as DFHashMap;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::format::ExplainAnalyzeCategories;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+use datafusion_common::utils::has_float_leaf;
 use datafusion_common::{
     DFSchema, DFSchemaRef, ScalarValue, exec_err, internal_datafusion_err, internal_err,
     not_impl_err, plan_err,
@@ -1744,6 +1745,22 @@ impl DefaultPhysicalPlanner {
                             planning_ctx,
                         )?;
 
+                        if join_key_blocks_sort_based_join(
+                            &on_left,
+                            &physical_left.schema(),
+                        )? || join_key_blocks_sort_based_join(
+                            &on_right,
+                            &physical_right.schema(),
+                        )? {
+                            return Ok(Arc::new(NestedLoopJoinExec::try_new(
+                                physical_left,
+                                physical_right,
+                                join_filter,
+                                join_type,
+                                None,
+                            )?));
+                        }
+
                         Arc::new(PiecewiseMergeJoinExec::try_new(
                             physical_left,
                             physical_right,
@@ -1766,6 +1783,11 @@ impl DefaultPhysicalPlanner {
                     && session_state.config().repartition_joins()
                     && !prefer_hash_join
                     && !*null_aware
+                    && !has_nested_float_join_keys(
+                        &join_on,
+                        &physical_left.schema(),
+                        &physical_right.schema(),
+                    )?
                 // Null-aware joins (e.g. `NOT IN` with a nullable subquery) must
                 // use the CollectLeft HashJoin below: SortMergeJoinExec does not
                 // implement null-aware anti-join semantics and would return wrong
@@ -2210,6 +2232,29 @@ fn get_null_physical_expr_pair(
 
     let null_value = Literal::new(null_value);
     Ok((Arc::new(null_value), physical_name))
+}
+
+fn join_key_blocks_sort_based_join(
+    expr: &Arc<dyn PhysicalExpr>,
+    schema: &Schema,
+) -> Result<bool> {
+    let key_type = expr.data_type(schema)?;
+    Ok(key_type.is_nested() && has_float_leaf(&key_type))
+}
+
+fn has_nested_float_join_keys(
+    join_on: &[(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)],
+    left_schema: &Schema,
+    right_schema: &Schema,
+) -> Result<bool> {
+    for (left_key, right_key) in join_on {
+        if join_key_blocks_sort_based_join(left_key, left_schema)?
+            || join_key_blocks_sort_based_join(right_key, right_schema)?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Qualifies the fields in a join schema with "left" and "right" qualifiers
