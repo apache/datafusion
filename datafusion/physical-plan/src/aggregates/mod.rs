@@ -1393,6 +1393,23 @@ impl AggregateExec {
         &self.mode
     }
 
+    /// Returns whether this is a compatible partial/final aggregation pair.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is made public for the physical optimizer to use, this is not part of
+    /// the public API.
+    #[doc(hidden)]
+    pub fn matches_partial(&self, partial: &Self) -> bool {
+        matches!(
+            (self.mode, partial.mode),
+            (
+                AggregateMode::Final | AggregateMode::FinalPartitioned,
+                AggregateMode::Partial,
+            )
+        ) && self.group_expr() == &partial.group_expr().as_final()
+    }
+
     /// Set a legacy limit hint. Unsupported requests leave ordinary aggregation.
     #[deprecated(
         since = "56.0.0",
