@@ -76,7 +76,7 @@ fn logical_rules_match_documented_order() {
 #[test]
 fn physical_rules_match_documented_order() {
     let rules: Vec<_> = PhysicalOptimizer::new()
-        .rules
+        .rules()
         .iter()
         .map(|rule| rule.name().to_string())
         .collect();

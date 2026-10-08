@@ -25,6 +25,7 @@ use crate::combine_partial_final_agg::CombinePartialFinalAggregate;
 use crate::ensure_coop::EnsureCooperative;
 use crate::ensure_requirements::EnsureRequirements;
 use crate::filter_pushdown::FilterPushdown;
+use crate::invariants::HashJoinModesResolved;
 use crate::join_selection::JoinSelection;
 use crate::limit_pushdown::LimitPushdown;
 use crate::limited_distinct_aggregation::LimitedDistinctAggregation;
@@ -42,7 +43,9 @@ use crate::window_topn::WindowTopN;
 use datafusion_common::config::ConfigOptions;
 
 // Re-export from this module for backwards compatibility.
-pub use datafusion_session::{PhysicalOptimizerContext, PhysicalOptimizerRule};
+pub use datafusion_session::{
+    PhysicalOptimizerContext, PhysicalOptimizerRule, PhysicalOptimizerStep, PlanInvariant,
+};
 
 /// Simple context wrapping [`ConfigOptions`] for backward compatibility.
 ///
@@ -69,8 +72,10 @@ impl PhysicalOptimizerContext for ConfigOnlyContext<'_> {
 /// A rule-based physical optimizer.
 #[derive(Clone, Debug)]
 pub struct PhysicalOptimizer {
-    /// All rules to apply
-    pub rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
+    steps: Vec<PhysicalOptimizerStep>,
+    // Derived rule-only view for APIs that expose a borrowed rule slice. Keep both
+    // fields private so callers cannot change one without updating the other.
+    rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
 }
 
 impl Default for PhysicalOptimizer {
@@ -88,33 +93,34 @@ impl PhysicalOptimizer {
         // - Adding a new rule here is expensive as it will be applied to all
         //   queries, and will likely increase the optimization time. Please extend
         //   existing rules when possible, rather than adding a new rule.
-        let rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = vec![
+        let steps = vec![
             // If there is a output requirement of the query, make sure that
             // this information is not lost across different rules during optimization.
-            Arc::new(OutputRequirements::new_add_mode()),
-            Arc::new(AggregateStatistics::new()),
+            PhysicalOptimizerStep::Rule(Arc::new(OutputRequirements::new_add_mode())),
+            PhysicalOptimizerStep::Rule(Arc::new(AggregateStatistics::new())),
             // Statistics-based join selection will change the Auto mode to a real join implementation,
             // like collect left, or hash join, or future sort merge join, which will influence the
             // EnsureRequirements rule as it decides whether to add additional repartitioning and
             // local sorting steps to meet distribution and ordering requirements. Therefore, it
             // should run before EnsureRequirements.
-            Arc::new(JoinSelection::new()),
+            PhysicalOptimizerStep::Rule(Arc::new(JoinSelection::new())),
+            PhysicalOptimizerStep::Begin(Arc::new(HashJoinModesResolved)),
             // The LimitedDistinctAggregation rule should be applied before EnsureRequirements,
             // as that rule may inject other operations in between the different AggregateExecs.
             // Applying the rule early means only directly-connected AggregateExecs must be examined.
-            Arc::new(LimitedDistinctAggregation::new()),
+            PhysicalOptimizerStep::Rule(Arc::new(LimitedDistinctAggregation::new())),
             // The FilterPushdown rule tries to push down filters as far as it can.
             // For example, it will push down filtering from a `FilterExec` to `DataSourceExec`.
             // Note that this does not push down dynamic filters (such as those created by a `SortExec` operator in TopK mode),
             // those are handled by the later `FilterPushdown` rule.
             // See `FilterPushdownPhase` for more details.
-            Arc::new(FilterPushdown::new()),
+            PhysicalOptimizerStep::Rule(Arc::new(FilterPushdown::new())),
             // WindowTopN: replaces Filter(rn<=K) → Window(ROW_NUMBER)
             // with Window(ROW_NUMBER) → PartitionedTopKExec(fetch=K).
             // Must run before EnsureRequirements (so it can rewrite against the
             // window's declared ordering without pattern-matching a SortExec)
             // and before ProjectionPushdown (which embeds projections into FilterExec).
-            Arc::new(WindowTopN::new()),
+            PhysicalOptimizerStep::Rule(Arc::new(WindowTopN::new())),
             // Ensures each input plan satisfies the distribution and ordering
             // requirements declared by `ExecutionPlan::required_input_distribution`
             // and `ExecutionPlan::required_input_ordering`.
@@ -133,52 +139,54 @@ impl PhysicalOptimizer {
             // [`EnsureRequirements`](crate::ensure_requirements) for the per-phase
             // breakdown, and <https://github.com/apache/datafusion/issues/21973>
             // for the original failure mode.
-            Arc::new(EnsureRequirements::new()),
+            PhysicalOptimizerStep::Rule(Arc::new(EnsureRequirements::new())),
             // The CombinePartialFinalAggregate rule should be applied after distribution enforcement
-            Arc::new(CombinePartialFinalAggregate::new()),
+            PhysicalOptimizerStep::Rule(Arc::new(CombinePartialFinalAggregate::new())),
             // Run once after the local sorting requirement is changed
-            Arc::new(OptimizeAggregateOrder::new()),
+            PhysicalOptimizerStep::Rule(Arc::new(OptimizeAggregateOrder::new())),
             // TODO: `try_embed_to_hash_join` in the ProjectionPushdown rule would be block by the CoalesceBatches, so add it before CoalesceBatches. Maybe optimize it in the future.
-            Arc::new(ProjectionPushdown::new()),
+            PhysicalOptimizerStep::Rule(Arc::new(ProjectionPushdown::new())),
             // Remove the ancillary output requirement operator since we are done with the planning
             // phase.
-            Arc::new(OutputRequirements::new_remove_mode()),
+            PhysicalOptimizerStep::Rule(Arc::new(OutputRequirements::new_remove_mode())),
             // The aggregation limiter will try to find situations where the accumulator count
             // is not tied to the cardinality, i.e. when the output of the aggregation is passed
             // into an `order by max(x) limit y`. In this case it will copy the limit value down
             // to the aggregation, allowing it to use only y number of accumulators.
-            Arc::new(TopKAggregation::new()),
+            PhysicalOptimizerStep::Rule(Arc::new(TopKAggregation::new())),
             // Tries to push limits down through window functions, growing as appropriate
             // This can possibly be combined with [LimitPushdown]
             // It needs to come after [EnsureRequirements] (which handles sort enforcement)
-            Arc::new(LimitPushPastWindows::new()),
+            PhysicalOptimizerStep::Rule(Arc::new(LimitPushPastWindows::new())),
             // The HashJoinBuffering rule adds a BufferExec node with the configured capacity
             // in the prob side of hash joins. That way, the probe side gets eagerly polled before
             // the build side is completely finished.
-            Arc::new(HashJoinBuffering::new()),
+            PhysicalOptimizerStep::Rule(Arc::new(HashJoinBuffering::new())),
             // The LimitPushdown rule tries to push limits down as far as possible,
             // replacing operators with fetching variants, or adding limits
             // past operators that support limit pushdown.
-            Arc::new(LimitPushdown::new()),
+            PhysicalOptimizerStep::Rule(Arc::new(LimitPushdown::new())),
             // TopKRepartition pushes TopK (Sort with fetch) below Hash
             // repartition when the partition key is a prefix of the sort key.
             // This reduces data volume before a hash shuffle. It must run
             // after LimitPushdown so that the TopK already exists on the SortExec.
-            Arc::new(TopKRepartition::new()),
+            PhysicalOptimizerStep::Rule(Arc::new(TopKRepartition::new())),
             // The ProjectionPushdown rule tries to push projections towards
             // the sources in the execution plan. As a result of this process,
             // a projection can disappear if it reaches the source providers, and
             // sequential projections can merge into one. Even if these two cases
             // are not present, the load of executors such as join or union will be
             // reduced by narrowing their input tables.
-            Arc::new(ProjectionPushdown::new()),
+            PhysicalOptimizerStep::Rule(Arc::new(ProjectionPushdown::new())),
             // PushdownSort: Detect sorts that can be pushed down to data sources.
-            Arc::new(PushdownSort::new()),
-            Arc::new(EnsureCooperative::new()),
+            PhysicalOptimizerStep::Rule(Arc::new(PushdownSort::new())),
+            PhysicalOptimizerStep::Rule(Arc::new(EnsureCooperative::new())),
             // This FilterPushdown handles dynamic filters that may have references to the source ExecutionPlan.
             // Therefore, it should be run at the end of the optimization process since any changes to the plan may break the dynamic filter's references.
             // See `FilterPushdownPhase` for more details.
-            Arc::new(FilterPushdown::new_post_optimization()),
+            PhysicalOptimizerStep::Rule(
+                Arc::new(FilterPushdown::new_post_optimization()),
+            ),
             // The SanityCheckPlan rule checks whether the order and
             // distribution requirements of each node in the plan
             // is satisfied. It will also reject non-runnable query
@@ -187,14 +195,48 @@ impl PhysicalOptimizer {
             // message for invalid plans. It makes no changes to the
             // given query plan; i.e. it only acts as a final
             // gatekeeping rule.
-            Arc::new(SanityCheckPlan::new()),
+            PhysicalOptimizerStep::Rule(Arc::new(SanityCheckPlan::new())),
+            PhysicalOptimizerStep::End(HashJoinModesResolved.name()),
         ];
 
-        Self::with_rules(rules)
+        Self::with_steps(steps)
     }
 
-    /// Create a new optimizer with the given rules
+    /// Create a rule-only pipeline, without invariant region markers.
+    /// Use [`Self::with_steps`] to declare regions explicitly.
     pub fn with_rules(rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>) -> Self {
-        Self { rules }
+        Self::with_steps(rules.into_iter().map(PhysicalOptimizerStep::Rule).collect())
+    }
+
+    /// Create an optimizer with explicit rules and invariant region boundaries.
+    ///
+    /// Region checks are controlled by `datafusion.optimizer.validate_optimizer_invariants`.
+    /// Invalid marker sequences are always rejected when the pipeline runs.
+    pub fn with_steps(steps: Vec<PhysicalOptimizerStep>) -> Self {
+        let rules = steps
+            .iter()
+            .filter_map(|step| match step {
+                PhysicalOptimizerStep::Rule(rule) => Some(Arc::clone(rule)),
+                _ => None,
+            })
+            .collect();
+        Self { steps, rules }
+    }
+
+    /// Return the complete optimizer pipeline.
+    pub fn steps(&self) -> &[PhysicalOptimizerStep] {
+        &self.steps
+    }
+
+    /// Return the ordinary rules, excluding invariant region boundaries.
+    pub fn rules(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
+        &self.rules
+    }
+
+    /// Append a rule after all existing steps, including any end markers.
+    pub fn add_rule(&mut self, rule: Arc<dyn PhysicalOptimizerRule + Send + Sync>) {
+        self.steps
+            .push(PhysicalOptimizerStep::Rule(Arc::clone(&rule)));
+        self.rules.push(rule);
     }
 }

@@ -34,6 +34,7 @@ pub mod ensure_requirements;
 // modules keep their public paths.
 pub use ensure_requirements::{enforce_distribution, enforce_sorting};
 pub mod filter_pushdown;
+pub mod invariants;
 pub mod join_selection;
 pub mod limit_pushdown;
 pub mod limit_pushdown_past_window;
@@ -51,4 +52,7 @@ pub mod update_aggr_exprs;
 pub mod utils;
 pub mod window_topn;
 
-pub use optimizer::{ConfigOnlyContext, PhysicalOptimizerContext, PhysicalOptimizerRule};
+pub use optimizer::{
+    ConfigOnlyContext, PhysicalOptimizerContext, PhysicalOptimizerRule,
+    PhysicalOptimizerStep, PlanInvariant,
+};

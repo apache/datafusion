@@ -35,7 +35,9 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 
-use crate::{PhysicalOptimizerRule, QueryPlanner, UnsupportedQueryPlanner};
+use crate::{
+    PhysicalOptimizerRule, PhysicalOptimizerStep, QueryPlanner, UnsupportedQueryPlanner,
+};
 
 /// Interface for accessing [`SessionState`] from the catalog and data source.
 ///
@@ -133,6 +135,19 @@ pub trait Session: Send + Sync {
     /// example by returning `SessionState::physical_optimizers`).
     fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
         &[]
+    }
+
+    /// Return the physical optimizer pipeline, including explicit invariant regions.
+    ///
+    /// The default adapts the ordinary rules returned by [`Self::physical_optimizers`].
+    /// Sessions must override this method to carry region markers; in particular,
+    /// the current FFI rule interface does not transport those markers.
+    fn physical_optimizer_steps(&self) -> Vec<PhysicalOptimizerStep> {
+        self.physical_optimizers()
+            .iter()
+            .cloned()
+            .map(PhysicalOptimizerStep::Rule)
+            .collect()
     }
 
     /// Return the optional statistics registry used during physical optimization.

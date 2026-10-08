@@ -227,11 +227,17 @@ impl StepContext {
             return Err(StepError::Usage);
         };
 
+        // Enable invariant checks by default for all test variants, including release
+        // profiles and libraries used by integration tests. Session settings can
+        // still explicitly disable validation.
+        let invariant_checks = "datafusion/optimizer_invariants_default_on";
         let mut command = self.cargo();
         match variant.as_str() {
             "workspace" => {
                 command.args([
                     "llvm-cov",
+                    "--features",
+                    invariant_checks,
                     "--profile",
                     "ci",
                     "--exclude",
@@ -255,6 +261,8 @@ impl StepContext {
                 command.args([
                     "test",
                     "--features",
+                    invariant_checks,
+                    "--features",
                     "backtrace",
                     "--profile",
                     "ci",
@@ -268,6 +276,8 @@ impl StepContext {
             "doctest" => {
                 command.args([
                     "test",
+                    "--features",
+                    invariant_checks,
                     "--profile",
                     "ci",
                     "--doc",
@@ -278,6 +288,8 @@ impl StepContext {
             "ffi" => {
                 command.args([
                     "test",
+                    "--features",
+                    invariant_checks,
                     "--profile",
                     "ci",
                     "-p",
@@ -293,6 +305,8 @@ impl StepContext {
                     .args([
                         "test",
                         "plan_q",
+                        "--features",
+                        invariant_checks,
                         "--package",
                         "datafusion-benchmarks",
                         "--profile",
@@ -308,6 +322,8 @@ impl StepContext {
                 command
                     .args([
                         "test",
+                        "--features",
+                        invariant_checks,
                         "--features",
                         "backtrace,parquet_encryption,substrait",
                         "--profile",
@@ -333,6 +349,8 @@ impl StepContext {
                     .args([
                         "test",
                         "--features",
+                        invariant_checks,
+                        "--features",
                         "backtrace",
                         "--profile",
                         "ci",
@@ -347,6 +365,8 @@ impl StepContext {
             "substrait" => {
                 command.args([
                     "test",
+                    "--features",
+                    invariant_checks,
                     "-p",
                     "datafusion-sqllogictest",
                     "--test",
@@ -362,6 +382,8 @@ impl StepContext {
                 command
                     .args([
                         "test",
+                        "--features",
+                        invariant_checks,
                         "--profile",
                         "ci",
                         "--exclude",
@@ -389,6 +411,8 @@ impl StepContext {
                 command
                     .args([
                         "test",
+                        "--features",
+                        invariant_checks,
                         "--profile",
                         "ci",
                         "--exclude",
@@ -412,6 +436,8 @@ impl StepContext {
                 // suite expensive, so `RUST_BACKTRACE` is deliberately not set.
                 command.args([
                     "test",
+                    "--features",
+                    invariant_checks,
                     "--features",
                     "backtrace,parquet_encryption",
                     "--profile",
@@ -737,6 +763,7 @@ cargo check \
                     insta::assert_snapshot!(actual, @r"
 cd /workspace && \
 cargo llvm-cov \
+--features datafusion/optimizer_invariants_default_on \
 --profile ci \
 --exclude datafusion-examples \
 --exclude ffi_example_table_provider \
@@ -757,6 +784,7 @@ cargo llvm-cov \
                     insta::assert_snapshot!(actual, @r"
 cd /workspace && \
 cargo test \
+--features datafusion/optimizer_invariants_default_on \
 --features backtrace \
 --profile ci \
 -p datafusion-cli \
@@ -772,6 +800,7 @@ cargo test \
                     insta::assert_snapshot!(actual, @r"
 cd /workspace && \
 cargo test \
+--features datafusion/optimizer_invariants_default_on \
 --profile ci \
 --doc \
 --features avro,json
@@ -784,6 +813,7 @@ cargo test \
                     insta::assert_snapshot!(actual, @r"
 cd /workspace && \
 cargo test \
+--features datafusion/optimizer_invariants_default_on \
 --profile ci \
 -p datafusion-ffi \
 --lib \
@@ -800,6 +830,7 @@ cd /workspace && \
 RUST_MIN_STACK=20971520 \
 TPCH_DATA=/workspace/datafusion/sqllogictest/test_files/tpch/data \
 cargo test plan_q \
+--features datafusion/optimizer_invariants_default_on \
 --package datafusion-benchmarks \
 --profile ci \
 --features=ci \
@@ -816,6 +847,7 @@ INCLUDE_TPCH=true \
 RUST_MIN_STACK=20971520 \
 TPCH_DATA=/workspace/datafusion/sqllogictest/test_files/tpch/data \
 cargo test \
+--features datafusion/optimizer_invariants_default_on \
 --features backtrace,parquet_encryption,substrait \
 --profile ci \
 --package datafusion-sqllogictest \
@@ -831,6 +863,7 @@ cd /workspace/datafusion/sqllogictest && \
 PG_COMPAT=true \
 PG_URI=postgresql://postgres:postgres@postgres.example:15432/db_test \
 cargo test \
+--features datafusion/optimizer_invariants_default_on \
 --features backtrace \
 --profile ci \
 --features=postgres \
@@ -844,6 +877,7 @@ cargo test \
                     insta::assert_snapshot!(actual, @r"
 cd /workspace && \
 cargo test \
+--features datafusion/optimizer_invariants_default_on \
 -p datafusion-sqllogictest \
 --test sqllogictests \
 --features substrait \
@@ -859,6 +893,7 @@ cd /workspace && \
 DATAFUSION_SPILL_POOL_FUZZ_ITERATIONS=1000 \
 RUST_BACKTRACE=1 \
 cargo test \
+--features datafusion/optimizer_invariants_default_on \
 --profile ci \
 --exclude datafusion-examples \
 --exclude datafusion-benchmarks \
@@ -878,6 +913,7 @@ cargo test \
 cd /workspace/datafusion && \
 RUST_BACKTRACE=1 \
 cargo test \
+--features datafusion/optimizer_invariants_default_on \
 --profile ci \
 --exclude datafusion-examples \
 --exclude datafusion-benchmarks \
@@ -896,6 +932,7 @@ cargo test \
                     insta::assert_snapshot!(actual, @r"
 cd /workspace && \
 cargo test \
+--features datafusion/optimizer_invariants_default_on \
 --features backtrace,parquet_encryption \
 --profile ci-optimized \
 --test sqllogictests \

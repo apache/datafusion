@@ -42,6 +42,9 @@ name = "datafusion_common"
 
 [features]
 backtrace = []
+# Enable optimizer region validation by default in tests. The runtime option can
+# still override this default, and the checker is available without this feature.
+optimizer_invariants_default_on = []
 parquet_encryption = [
     "parquet",
     "parquet/encryption",

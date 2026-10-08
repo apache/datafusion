@@ -25,6 +25,34 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
 
+/// A read-only assertion about a physical plan within an explicit optimizer region.
+///
+/// When `datafusion.optimizer.validate_optimizer_invariants` is enabled, beginning
+/// a region asserts the invariant immediately. The optimizer checks it after every
+/// rule until the matching end, which also checks it. Invariants do not repair
+/// plans or constrain rules outside their declared regions.
+pub trait PlanInvariant: Debug + Send + Sync {
+    /// Stable, unique identifier used to pair region markers and report failures.
+    fn name(&self) -> &'static str;
+
+    /// Check the entire plan without modifying it.
+    fn check(&self, plan: &Arc<dyn ExecutionPlan>) -> Result<()>;
+}
+
+/// An ordinary optimization rule or an invariant region boundary.
+///
+/// Regions are independent: `Begin(A), Begin(B), End(A), End(B)` is valid.
+/// Every begin must have an explicit end, and active names must be unique.
+#[derive(Clone, Debug)]
+pub enum PhysicalOptimizerStep {
+    /// Rewrite the plan, then check every active invariant when validation is enabled.
+    Rule(Arc<dyn PhysicalOptimizerRule + Send + Sync>),
+    /// Activate the invariant and check the current plan when validation is enabled.
+    Begin(Arc<dyn PlanInvariant>),
+    /// Check the invariant when validation is enabled, then deactivate it.
+    End(&'static str),
+}
+
 /// Context available to physical optimizer rules.
 ///
 /// This trait provides access to configuration options and an optional statistics

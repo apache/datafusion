@@ -1618,6 +1618,13 @@ config_namespace! {
     ///
     /// [`SessionConfig`]: https://docs.rs/datafusion/latest/datafusion/prelude/struct.SessionConfig.html
     pub struct OptimizerOptions {
+        /// Check physical optimizer invariants at Begin and End markers and after
+        /// every rule inside a declared region. Disabled by default, unless built
+        /// with the `optimizer_invariants_default_on` feature. Explicit settings
+        /// override that default. Marker pairing, schema checks, and final plan
+        /// validity checks remain enabled independently of this option.
+        pub validate_optimizer_invariants: bool, default = cfg!(feature = "optimizer_invariants_default_on")
+
         /// When set to true, the optimizer will push a limit operation into
         /// grouped aggregations which have no aggregate expressions, as a soft limit,
         /// emitting groups once the limit is reached, before all rows in the group are read.
@@ -4159,6 +4166,21 @@ mod tests {
     };
     use std::any::Any;
     use std::collections::HashMap;
+
+    #[test]
+    fn optimizer_invariant_validation_default_and_overrides() -> crate::Result<()> {
+        let mut config = super::ConfigOptions::new();
+        let key = "datafusion.optimizer.validate_optimizer_invariants";
+        let default = cfg!(feature = "optimizer_invariants_default_on");
+        assert_eq!(config.optimizer.validate_optimizer_invariants, default);
+        for enabled in [false, true] {
+            config.set(key, &enabled.to_string())?;
+            assert_eq!(config.optimizer.validate_optimizer_invariants, enabled);
+            config.reset(key)?;
+            assert_eq!(config.optimizer.validate_optimizer_invariants, default);
+        }
+        Ok(())
+    }
 
     #[derive(Default, Debug, Clone)]
     pub struct TestExtensionConfig {

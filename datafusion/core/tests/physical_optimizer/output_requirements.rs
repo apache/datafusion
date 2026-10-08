@@ -184,7 +184,7 @@ async fn scalar_subquery_root_preserves_global_ordering_end_to_end() {
     let mut config = ConfigOptions::new();
     config.execution.target_partitions = 4;
     let mut optimized = plan;
-    for rule in PhysicalOptimizer::new().rules {
+    for rule in PhysicalOptimizer::new().rules() {
         optimized = rule
             .optimize(optimized, &config)
             .unwrap_or_else(|e| panic!("optimizer rule {} failed: {e}", rule.name()));

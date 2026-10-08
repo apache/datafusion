@@ -78,7 +78,9 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
-use datafusion_session::{PhysicalOptimizerContext, PhysicalOptimizerRule, Session};
+use datafusion_session::{
+    PhysicalOptimizerContext, PhysicalOptimizerRule, PhysicalOptimizerStep, Session,
+};
 #[cfg(feature = "sql")]
 use datafusion_sql::{
     parser::{DFParserBuilder, Statement},
@@ -310,6 +312,10 @@ impl Session for SessionState {
 
     fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
         SessionState::physical_optimizers(self)
+    }
+
+    fn physical_optimizer_steps(&self) -> Vec<PhysicalOptimizerStep> {
+        self.inner.physical_optimizers.steps().to_vec()
     }
 
     fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
@@ -941,9 +947,9 @@ impl SessionState {
         &self.inner.optimizer.rules
     }
 
-    /// Return the physical optimizers
+    /// Return the ordinary physical optimizer rules, excluding region markers.
     pub fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
-        &self.inner.physical_optimizers.rules
+        self.inner.physical_optimizers.rules()
     }
 
     /// return the configuration options
@@ -1421,6 +1427,7 @@ impl SessionStateBuilder {
     }
 
     /// Set the [`PhysicalOptimizerRule`]s used to optimize plans.
+    /// This replaces the pipeline with ordinary rules and no invariant regions.
     pub fn with_physical_optimizer_rules(
         mut self,
         physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
@@ -1430,8 +1437,19 @@ impl SessionStateBuilder {
         self
     }
 
+    /// Set the physical optimizer pipeline, including explicit invariant regions.
+    pub fn with_physical_optimizer_steps(
+        mut self,
+        steps: Vec<PhysicalOptimizerStep>,
+    ) -> Self {
+        self.physical_optimizers = Some(PhysicalOptimizer::with_steps(steps));
+        self
+    }
+
     /// Add `physical_optimizer_rule` to the end of the list of
     /// [`PhysicalOptimizerRule`]s used to rewrite queries.
+    ///
+    /// This appends after all existing steps, including invariant end markers.
     pub fn with_physical_optimizer_rule(
         mut self,
         physical_optimizer_rule: Arc<dyn PhysicalOptimizerRule + Send + Sync>,
@@ -1875,7 +1893,7 @@ impl SessionStateBuilder {
             let physical_optimizers =
                 &mut Arc::make_mut(&mut state.inner).physical_optimizers;
             for physical_optimizer_rule in physical_optimizer_rules {
-                physical_optimizers.rules.push(physical_optimizer_rule);
+                physical_optimizers.add_rule(physical_optimizer_rule);
             }
         }
 

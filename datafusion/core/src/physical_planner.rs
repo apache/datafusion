@@ -18,7 +18,7 @@
 //! Planner for [`LogicalPlan`] to [`ExecutionPlan`]
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::datasource::file_format::file_type_to_format;
@@ -107,7 +107,10 @@ use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion_physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
 use datafusion_physical_plan::unnest::ListUnnest;
-use datafusion_session::{PhysicalOptimizerContext, PhysicalOptimizerRule, Session};
+use datafusion_session::{
+    PhysicalOptimizerContext, PhysicalOptimizerRule, PhysicalOptimizerStep,
+    PlanInvariant, Session,
+};
 
 use async_trait::async_trait;
 use datafusion_physical_plan::async_func::{AsyncFuncExec, AsyncMapper};
@@ -3108,7 +3111,7 @@ impl DefaultPhysicalPlanner {
     where
         F: FnMut(&dyn ExecutionPlan, &dyn PhysicalOptimizerRule),
     {
-        let optimizers = session_state.physical_optimizers();
+        let steps = session_state.physical_optimizer_steps();
         debug!(
             "Input physical plan:\n{}\n",
             displayable(plan.as_ref()).indent(false)
@@ -3126,7 +3129,40 @@ impl DefaultPhysicalPlanner {
         let optimizer_context = SessionOptimizerContext {
             session: session_state,
         };
-        for optimizer in optimizers {
+        let validate_invariants = optimizer_context
+            .config_options()
+            .optimizer
+            .validate_optimizer_invariants;
+        let mut active: BTreeMap<&'static str, Arc<dyn PlanInvariant>> = BTreeMap::new();
+        for step in &steps {
+            let optimizer = match step {
+                PhysicalOptimizerStep::Begin(invariant) => {
+                    let name = invariant.name();
+                    if active.contains_key(name) {
+                        return internal_err!("Invariant already active: {name}");
+                    }
+                    if validate_invariants {
+                        invariant.check(&new_plan).map_err(|e| {
+                            e.context(format!("Beginning invariant {name}"))
+                        })?;
+                    }
+                    active.insert(name, Arc::clone(invariant));
+                    continue;
+                }
+                PhysicalOptimizerStep::End(name) => {
+                    let invariant = active.get(name).ok_or_else(|| {
+                        internal_datafusion_err!("Invariant is not active: {name}")
+                    })?;
+                    if validate_invariants {
+                        invariant
+                            .check(&new_plan)
+                            .map_err(|e| e.context(format!("Ending invariant {name}")))?;
+                    }
+                    active.remove(name);
+                    continue;
+                }
+                PhysicalOptimizerStep::Rule(optimizer) => optimizer,
+            };
             let before_schema = new_plan.schema();
             new_plan = optimizer
                 .optimize_with_context(new_plan, &optimizer_context)
@@ -3143,7 +3179,28 @@ impl DefaultPhysicalPlanner {
                 optimizer.name(),
                 displayable(new_plan.as_ref()).indent(false)
             );
-            observer(new_plan.as_ref(), optimizer.as_ref())
+            observer(new_plan.as_ref(), optimizer.as_ref());
+
+            // Region validation is available in every build, including release.
+            if validate_invariants {
+                for invariant in active.values() {
+                    invariant.check(&new_plan).map_err(|e| {
+                        e.context(format!(
+                            "Rule {} violated invariant {}",
+                            optimizer.name(),
+                            invariant.name(),
+                        ))
+                        // EXPLAIN uses the outer context as the optimizer name.
+                        .context(optimizer.name())
+                    })?;
+                }
+            }
+        }
+        if !active.is_empty() {
+            return internal_err!(
+                "Unclosed invariant regions: {}",
+                active.keys().copied().collect::<Vec<_>>().join(", ")
+            );
         }
 
         // This runs once after all optimizer runs are complete,

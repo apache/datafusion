@@ -26,6 +26,7 @@ mod enforce_sorting;
 mod enforce_sorting_monotonicity;
 mod ensure_requirements;
 mod filter_pushdown;
+mod invariant_regions;
 mod join_selection;
 #[expect(clippy::needless_pass_by_value)]
 mod limit_pushdown;

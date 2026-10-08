@@ -52,6 +52,20 @@ cargo test -p datafusion-cli
 Some integration tests require optional external services such as Docker-backed
 containers and may skip when unavailable.
 
+Physical optimizer invariant regions can be checked at their boundaries and after
+every rule inside them. To enable these checks by default across existing test
+sessions, including release-profile tests, use:
+
+```shell
+cargo test --workspace --features datafusion/optimizer_invariants_default_on
+```
+
+The `cargo xtask ci step test` variants enable this feature automatically. It only
+changes the default of `datafusion.optimizer.validate_optimizer_invariants`;
+sessions can still explicitly enable or disable the checks in any build. Tests
+that invoke individual rules directly or use pipelines without region markers do
+not perform region checks.
+
 ## Testing Overview
 
 DataFusion has several levels of tests in its [Test Pyramid] and tries to follow
