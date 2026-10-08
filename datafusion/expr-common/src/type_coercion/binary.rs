@@ -79,6 +79,7 @@ pub struct BinaryTypeCoercer<'a> {
     lhs: &'a DataType,
     op: &'a Operator,
     rhs: &'a DataType,
+    session_time_zone: Option<&'a str>,
 
     lhs_spans: Spans,
     op_spans: Spans,
@@ -93,10 +94,18 @@ impl<'a> BinaryTypeCoercer<'a> {
             lhs,
             op,
             rhs,
+            session_time_zone: None,
             lhs_spans: Spans::new(),
             op_spans: Spans::new(),
             rhs_spans: Spans::new(),
         }
+    }
+
+    /// Sets the session timezone used to coerce mixed timezone-aware and
+    /// timezone-naive timestamps for comparisons and subtraction.
+    pub fn with_session_time_zone(mut self, session_time_zone: Option<&'a str>) -> Self {
+        self.session_time_zone = session_time_zone;
+        self
     }
 
     /// Sets the spans information for the left side of the binary expression,
@@ -197,7 +206,13 @@ impl<'a> BinaryTypeCoercer<'a> {
         GtEq |
         IsDistinctFrom |
         IsNotDistinctFrom => {
-            comparison_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
+            comparison_coercion_with_session_timezone_inner(
+                lhs,
+                rhs,
+                self.session_time_zone,
+            )
+            .map(Signature::comparison)
+            .ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common argument type for comparison operation {} {} {}",
                     self.lhs,
@@ -285,6 +300,34 @@ impl<'a> BinaryTypeCoercer<'a> {
             return Ok(Signature { lhs, rhs, ret });
         }
         Plus | Minus | Multiply | Divide | Modulo  =>  {
+            // Interpret the naive operand in the session timezone when set,
+            // or in the aware operand's timezone otherwise. Coerce before the
+            // Arrow probe so equal units follow the same rule as different units.
+            if self.op == &Minus
+                && matches!(
+                    (lhs, rhs),
+                    (Timestamp(_, Some(_)), Timestamp(_, None))
+                        | (Timestamp(_, None), Timestamp(_, Some(_)))
+                )
+                && let Some(coerced) = timestamp_types_with_session_timezone(
+                    lhs,
+                    rhs,
+                    self.session_time_zone,
+                )
+                .map(|(lhs, _)| lhs)
+                .or_else(|| temporal_coercion_strict_timezone(lhs, rhs))
+            {
+                let ret = self.get_result(&coerced, &coerced).map_err(|e| {
+                    plan_datafusion_err!(
+                        "Cannot get result type for temporal operation {coerced} {} {coerced}: {e}", self.op
+                    )
+                })?;
+                return Ok(Signature {
+                    lhs: coerced.clone(),
+                    rhs: coerced,
+                    ret,
+                });
+            }
             if let Ok(ret) = self.get_result(lhs, rhs) {
 
                 // Temporal arithmetic, e.g. Date32 + Interval
@@ -366,6 +409,33 @@ impl<'a> BinaryTypeCoercer<'a> {
     pub fn get_input_types(&'a self) -> Result<(DataType, DataType)> {
         self.signature().map(|sig| (sig.lhs, sig.rhs))
     }
+}
+
+/// Coerces a mixed timezone-aware and timezone-naive timestamp pair to the
+/// session timezone and widens both operands to the finer of the two units.
+///
+/// A timezone-naive timestamp does not identify an instant on its own, so
+/// comparing or subtracting it against a timezone-aware one has to read it in
+/// some zone. Postgres and DuckDB read it in the session timezone.
+fn timestamp_types_with_session_timezone(
+    lhs: &DataType,
+    rhs: &DataType,
+    session_time_zone: Option<&str>,
+) -> Option<(DataType, DataType)> {
+    use DataType::Timestamp;
+
+    let session_time_zone = session_time_zone?;
+    let ((Timestamp(lhs_unit, Some(_)), Timestamp(rhs_unit, None))
+    | (Timestamp(lhs_unit, None), Timestamp(rhs_unit, Some(_)))) = (lhs, rhs)
+    else {
+        return None;
+    };
+    let data_type = Timestamp(
+        timeunit_coercion(lhs_unit, rhs_unit),
+        Some(Arc::from(session_time_zone)),
+    );
+
+    Some((data_type.clone(), data_type))
 }
 
 // TODO Move the rest inside of BinaryTypeCoercer
@@ -951,23 +1021,73 @@ pub fn type_union_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
 /// For type unification contexts (UNION, CASE THEN/ELSE), use
 /// [`type_union_coercion`] instead.
 pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    comparison_coercion_inner(lhs_type, rhs_type, comparison_coercion)
+}
+
+fn comparison_coercion_inner<F>(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+    coerce_fn: F,
+) -> Option<DataType>
+where
+    F: Fn(&DataType, &DataType) -> Option<DataType> + Copy,
+{
     if lhs_type.equals_datatype(rhs_type) {
         // same type => equality is possible
         return Some(lhs_type.clone());
     }
     binary_numeric_coercion(lhs_type, rhs_type)
-        .or_else(|| dictionary_coercion(lhs_type, rhs_type, true, comparison_coercion))
-        .or_else(|| ree_coercion(lhs_type, rhs_type, true, comparison_coercion))
+        .or_else(|| dictionary_coercion(lhs_type, rhs_type, true, coerce_fn))
+        .or_else(|| ree_coercion(lhs_type, rhs_type, true, coerce_fn))
         .or_else(|| temporal_coercion_nonstrict_timezone(lhs_type, rhs_type))
         .or_else(|| string_coercion(lhs_type, rhs_type))
-        .or_else(|| list_coercion(lhs_type, rhs_type, comparison_coercion))
+        .or_else(|| list_coercion(lhs_type, rhs_type, coerce_fn))
         .or_else(|| null_coercion(lhs_type, rhs_type))
         .or_else(|| string_numeric_coercion(lhs_type, rhs_type))
         .or_else(|| string_temporal_coercion(lhs_type, rhs_type))
         .or_else(|| binary_coercion(lhs_type, rhs_type))
-        .or_else(|| struct_coercion(lhs_type, rhs_type, comparison_coercion))
-        .or_else(|| map_coercion(lhs_type, rhs_type, comparison_coercion))
+        .or_else(|| struct_coercion(lhs_type, rhs_type, coerce_fn))
+        .or_else(|| map_coercion(lhs_type, rhs_type, coerce_fn))
         .or_else(|| union_coercion(lhs_type, rhs_type))
+}
+
+fn comparison_coercion_with_session_timezone_inner(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+    session_time_zone: Option<&str>,
+) -> Option<DataType> {
+    timestamp_types_with_session_timezone(lhs_type, rhs_type, session_time_zone)
+        .map(|(lhs_type, _)| lhs_type)
+        .or_else(|| {
+            comparison_coercion_inner(lhs_type, rhs_type, |lhs_type, rhs_type| {
+                comparison_coercion_with_session_timezone_inner(
+                    lhs_type,
+                    rhs_type,
+                    session_time_zone,
+                )
+            })
+        })
+}
+
+/// Returns the common type for the non-binary comparison expressions
+/// (`IN`, `BETWEEN`, `CASE x WHEN`, `IN (<subquery>)`, `= ANY/ALL`), using the
+/// same rules as `=` itself so they cannot disagree with it.
+///
+/// `session_time_zone` is `datafusion.execution.time_zone`; see
+/// [`BinaryTypeCoercer::with_session_time_zone`].
+///
+/// The session timezone is applied recursively to timestamps inside dictionary,
+/// run-end encoded, list, struct, and map types.
+pub fn comparison_coercion_with_session_timezone(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+    session_time_zone: Option<&str>,
+) -> Option<DataType> {
+    BinaryTypeCoercer::new(lhs_type, &Operator::Eq, rhs_type)
+        .with_session_time_zone(session_time_zone)
+        .get_input_types()
+        .ok()
+        .map(|(lhs_type, _)| lhs_type)
 }
 
 /// Coerce a numeric/string pair to the numeric type.
@@ -1051,7 +1171,7 @@ pub fn binary_numeric_coercion(
 ) -> Option<DataType> {
     if !lhs_type.is_numeric() || !rhs_type.is_numeric() {
         return None;
-    };
+    }
 
     // same type => all good
     if lhs_type == rhs_type {
@@ -1124,8 +1244,7 @@ fn get_wider_decimal_type_cross_variant(
 
     // max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)
     let s = s1.max(s2);
-    let range = (p1 as i8 - s1).max(p2 as i8 - s2);
-    let required_precision = (range + s) as u8;
+    let required_precision = required_decimal_precision(p1, s1, p2, s2);
 
     // Choose the larger variant between the two input types, while making sure we don't overflow the precision.
     match (lhs_type, rhs_type) {
@@ -1193,31 +1312,50 @@ fn get_wider_decimal_type(
 ) -> Option<DataType> {
     match (lhs_decimal_type, rhs_type) {
         (DataType::Decimal32(p1, s1), DataType::Decimal32(p2, s2)) => {
-            // max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)
             let s = *s1.max(s2);
-            let range = (*p1 as i8 - s1).max(*p2 as i8 - s2);
-            Some(create_decimal32_type((range + s) as u8, s))
+            Some(create_decimal32_type(
+                required_decimal_precision(*p1, *s1, *p2, *s2),
+                s,
+            ))
         }
         (DataType::Decimal64(p1, s1), DataType::Decimal64(p2, s2)) => {
-            // max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)
             let s = *s1.max(s2);
-            let range = (*p1 as i8 - s1).max(*p2 as i8 - s2);
-            Some(create_decimal64_type((range + s) as u8, s))
+            Some(create_decimal64_type(
+                required_decimal_precision(*p1, *s1, *p2, *s2),
+                s,
+            ))
         }
         (DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)) => {
-            // max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)
             let s = *s1.max(s2);
-            let range = (*p1 as i8 - s1).max(*p2 as i8 - s2);
-            Some(create_decimal128_type((range + s) as u8, s))
+            Some(create_decimal128_type(
+                required_decimal_precision(*p1, *s1, *p2, *s2),
+                s,
+            ))
         }
         (DataType::Decimal256(p1, s1), DataType::Decimal256(p2, s2)) => {
-            // max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)
             let s = *s1.max(s2);
-            let range = (*p1 as i8 - s1).max(*p2 as i8 - s2);
-            Some(create_decimal256_type((range + s) as u8, s))
+            Some(create_decimal256_type(
+                required_decimal_precision(*p1, *s1, *p2, *s2),
+                s,
+            ))
         }
         (_, _) => None,
     }
+}
+
+/// Computes `max(s1, s2) + max(p1 - s1, p2 - s2)`: the precision needed to hold
+/// any value of either decimal type.
+///
+/// The intermediate values do not fit in `i8` (the type of a decimal scale):
+/// `Decimal256` allows a precision and a scale of up to 76, so `p1 - s1` can
+/// reach 152 and the sum can reach 228. Computing this in `i8` panics with
+/// "attempt to add with overflow" in debug builds, so widen to `i32` and
+/// saturate into `u8` instead. Callers then either clamp the result to the
+/// variant's maximum precision (`create_decimal*_type`) or reject it.
+fn required_decimal_precision(p1: u8, s1: i8, p2: u8, s2: i8) -> u8 {
+    let s = s1.max(s2) as i32;
+    let range = (p1 as i32 - s1 as i32).max(p2 as i32 - s2 as i32);
+    (range + s).clamp(0, u8::MAX as i32) as u8
 }
 
 /// Convert the numeric data type to the decimal data type.
@@ -1292,11 +1430,14 @@ fn coerce_numeric_type_to_decimal256(numeric_type: &DataType) -> Option<DataType
 
 /// Coerce two struct types by recursively coercing their fields using
 /// `coerce_fn` (either [`comparison_coercion`] or [`type_union_coercion`]).
-fn struct_coercion(
+fn struct_coercion<F>(
     lhs_type: &DataType,
     rhs_type: &DataType,
-    coerce_fn: fn(&DataType, &DataType) -> Option<DataType>,
-) -> Option<DataType> {
+    coerce_fn: F,
+) -> Option<DataType>
+where
+    F: Fn(&DataType, &DataType) -> Option<DataType> + Copy,
+{
     use arrow::datatypes::DataType::*;
 
     match (lhs_type, rhs_type) {
@@ -1368,11 +1509,14 @@ fn fields_have_same_names(lhs_fields: &Fields, rhs_fields: &Fields) -> bool {
 
 /// Coerce two structs by matching fields by name using `coerce_fn`.
 /// Assumes the name-sets match.
-fn coerce_struct_by_name(
+fn coerce_struct_by_name<F>(
     lhs_fields: &Fields,
     rhs_fields: &Fields,
-    coerce_fn: fn(&DataType, &DataType) -> Option<DataType>,
-) -> Option<DataType> {
+    coerce_fn: F,
+) -> Option<DataType>
+where
+    F: Fn(&DataType, &DataType) -> Option<DataType> + Copy,
+{
     use arrow::datatypes::DataType::*;
 
     let rhs_by_name: HashMap<&str, &FieldRef> =
@@ -1396,11 +1540,14 @@ fn coerce_struct_by_name(
 
 /// Coerce two structs positionally (left-to-right) using `coerce_fn`.
 /// Preserves field names from the left struct and uses combined nullability.
-fn coerce_struct_by_position(
+fn coerce_struct_by_position<F>(
     lhs_fields: &Fields,
     rhs_fields: &Fields,
-    coerce_fn: fn(&DataType, &DataType) -> Option<DataType>,
-) -> Option<DataType> {
+    coerce_fn: F,
+) -> Option<DataType>
+where
+    F: Fn(&DataType, &DataType) -> Option<DataType> + Copy,
+{
     use arrow::datatypes::DataType::*;
 
     // First coerce individual types; fail early if any pair cannot be coerced.
@@ -1430,11 +1577,14 @@ fn coerce_fields(common_type: DataType, lhs: &FieldRef, rhs: &FieldRef) -> Field
 
 /// Coerce two Map types by coercing their inner entry fields using
 /// `coerce_fn` (either [`comparison_coercion`] or [`type_union_coercion`]).
-fn map_coercion(
+fn map_coercion<F>(
     lhs_type: &DataType,
     rhs_type: &DataType,
-    coerce_fn: fn(&DataType, &DataType) -> Option<DataType>,
-) -> Option<DataType> {
+    coerce_fn: F,
+) -> Option<DataType>
+where
+    F: Fn(&DataType, &DataType) -> Option<DataType> + Copy,
+{
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
         (Map(lhs_field, lhs_ordered), Map(rhs_field, rhs_ordered)) => {
@@ -1484,7 +1634,7 @@ fn mathematics_numerical_coercion(
     // Error on any non-numeric type
     if !both_numeric_or_null_and_numeric(lhs_type, rhs_type) {
         return None;
-    };
+    }
 
     // These are ordered from most informative to least informative so
     // that the coercion removes the least amount of information
@@ -1604,12 +1754,15 @@ fn both_numeric_or_null_and_numeric(lhs_type: &DataType, rhs_type: &DataType) ->
 ///
 /// If `preserve_dictionaries` is true, dictionaries will be preserved
 /// when possible.
-fn dictionary_coercion(
+fn dictionary_coercion<F>(
     lhs_type: &DataType,
     rhs_type: &DataType,
     preserve_dictionaries: bool,
-    coerce_fn: fn(&DataType, &DataType) -> Option<DataType>,
-) -> Option<DataType> {
+    coerce_fn: F,
+) -> Option<DataType>
+where
+    F: Fn(&DataType, &DataType) -> Option<DataType> + Copy,
+{
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
         (
@@ -1632,12 +1785,15 @@ fn dictionary_coercion(
 /// (either [`comparison_coercion`] or [`type_union_coercion`]).
 ///
 /// If `preserve_ree` is true, REE will be preserved when possible.
-fn ree_coercion(
+fn ree_coercion<F>(
     lhs_type: &DataType,
     rhs_type: &DataType,
     preserve_ree: bool,
-    coerce_fn: fn(&DataType, &DataType) -> Option<DataType>,
-) -> Option<DataType> {
+    coerce_fn: F,
+) -> Option<DataType>
+where
+    F: Fn(&DataType, &DataType) -> Option<DataType> + Copy,
+{
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
         (RunEndEncoded(_, lhs_values_field), RunEndEncoded(_, rhs_values_field)) => {
@@ -1758,11 +1914,14 @@ pub fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataT
 
 /// Coerce two list element fields to a common type using the provided
 /// coercion function for element types.
-fn coerce_list_children(
+fn coerce_list_children<F>(
     lhs_field: &FieldRef,
     rhs_field: &FieldRef,
-    coerce_fn: fn(&DataType, &DataType) -> Option<DataType>,
-) -> Option<FieldRef> {
+    coerce_fn: F,
+) -> Option<FieldRef>
+where
+    F: Fn(&DataType, &DataType) -> Option<DataType> + Copy,
+{
     Some(Arc::new(
         (**lhs_field)
             .clone()
@@ -1773,11 +1932,14 @@ fn coerce_list_children(
 
 /// Coerce two list types by coercing their element types via `coerce_fn`
 /// (either [`comparison_coercion`] or [`type_union_coercion`]).
-fn list_coercion(
+fn list_coercion<F>(
     lhs_type: &DataType,
     rhs_type: &DataType,
-    coerce_fn: fn(&DataType, &DataType) -> Option<DataType>,
-) -> Option<DataType> {
+    coerce_fn: F,
+) -> Option<DataType>
+where
+    F: Fn(&DataType, &DataType) -> Option<DataType> + Copy,
+{
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
         // Coerce to the left side FixedSizeList type if the list lengths are the same,

@@ -1030,9 +1030,15 @@ impl serde::Serialize for ColumnRelation {
         if !self.relation.is_empty() {
             len += 1;
         }
+        if !self.parts.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.ColumnRelation", len)?;
         if !self.relation.is_empty() {
             struct_ser.serialize_field("relation", &self.relation)?;
+        }
+        if !self.parts.is_empty() {
+            struct_ser.serialize_field("parts", &self.parts)?;
         }
         struct_ser.end()
     }
@@ -1045,11 +1051,13 @@ impl<'de> serde::Deserialize<'de> for ColumnRelation {
     {
         const FIELDS: &[&str] = &[
             "relation",
+            "parts",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Relation,
+            Parts,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -1072,6 +1080,7 @@ impl<'de> serde::Deserialize<'de> for ColumnRelation {
                     {
                         match value {
                             "relation" => Ok(GeneratedField::Relation),
+                            "parts" => Ok(GeneratedField::Parts),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -1092,6 +1101,7 @@ impl<'de> serde::Deserialize<'de> for ColumnRelation {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut relation__ = None;
+                let mut parts__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Relation => {
@@ -1100,10 +1110,17 @@ impl<'de> serde::Deserialize<'de> for ColumnRelation {
                             }
                             relation__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Parts => {
+                            if parts__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("parts"));
+                            }
+                            parts__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(ColumnRelation {
                     relation: relation__.unwrap_or_default(),
+                    parts: parts__.unwrap_or_default(),
                 })
             }
         }
@@ -2276,16 +2293,16 @@ impl serde::Serialize for CsvWriterOptions {
         if self.has_header {
             len += 1;
         }
-        if !self.date_format.is_empty() {
+        if self.date_format.is_some() {
             len += 1;
         }
-        if !self.datetime_format.is_empty() {
+        if self.datetime_format.is_some() {
             len += 1;
         }
-        if !self.timestamp_format.is_empty() {
+        if self.timestamp_format.is_some() {
             len += 1;
         }
-        if !self.time_format.is_empty() {
+        if self.time_format.is_some() {
             len += 1;
         }
         if !self.null_value.is_empty() {
@@ -2309,6 +2326,15 @@ impl serde::Serialize for CsvWriterOptions {
         if self.ignore_trailing_whitespace {
             len += 1;
         }
+        if self.compression_level.is_some() {
+            len += 1;
+        }
+        if self.timestamp_tz_format.is_some() {
+            len += 1;
+        }
+        if !self.terminator.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.CsvWriterOptions", len)?;
         if self.compression != 0 {
             let v = CompressionTypeVariant::try_from(self.compression)
@@ -2321,17 +2347,17 @@ impl serde::Serialize for CsvWriterOptions {
         if self.has_header {
             struct_ser.serialize_field("hasHeader", &self.has_header)?;
         }
-        if !self.date_format.is_empty() {
-            struct_ser.serialize_field("dateFormat", &self.date_format)?;
+        if let Some(v) = self.date_format.as_ref() {
+            struct_ser.serialize_field("dateFormat", v)?;
         }
-        if !self.datetime_format.is_empty() {
-            struct_ser.serialize_field("datetimeFormat", &self.datetime_format)?;
+        if let Some(v) = self.datetime_format.as_ref() {
+            struct_ser.serialize_field("datetimeFormat", v)?;
         }
-        if !self.timestamp_format.is_empty() {
-            struct_ser.serialize_field("timestampFormat", &self.timestamp_format)?;
+        if let Some(v) = self.timestamp_format.as_ref() {
+            struct_ser.serialize_field("timestampFormat", v)?;
         }
-        if !self.time_format.is_empty() {
-            struct_ser.serialize_field("timeFormat", &self.time_format)?;
+        if let Some(v) = self.time_format.as_ref() {
+            struct_ser.serialize_field("timeFormat", v)?;
         }
         if !self.null_value.is_empty() {
             struct_ser.serialize_field("nullValue", &self.null_value)?;
@@ -2355,6 +2381,17 @@ impl serde::Serialize for CsvWriterOptions {
         }
         if self.ignore_trailing_whitespace {
             struct_ser.serialize_field("ignoreTrailingWhitespace", &self.ignore_trailing_whitespace)?;
+        }
+        if let Some(v) = self.compression_level.as_ref() {
+            struct_ser.serialize_field("compressionLevel", v)?;
+        }
+        if let Some(v) = self.timestamp_tz_format.as_ref() {
+            struct_ser.serialize_field("timestampTzFormat", v)?;
+        }
+        if !self.terminator.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("terminator", pbjson::private::base64::encode(&self.terminator).as_str())?;
         }
         struct_ser.end()
     }
@@ -2390,6 +2427,11 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
             "ignoreLeadingWhitespace",
             "ignore_trailing_whitespace",
             "ignoreTrailingWhitespace",
+            "compression_level",
+            "compressionLevel",
+            "timestamp_tz_format",
+            "timestampTzFormat",
+            "terminator",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -2408,6 +2450,9 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
             QuoteStyle,
             IgnoreLeadingWhitespace,
             IgnoreTrailingWhitespace,
+            CompressionLevel,
+            TimestampTzFormat,
+            Terminator,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -2443,6 +2488,9 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                             "quoteStyle" | "quote_style" => Ok(GeneratedField::QuoteStyle),
                             "ignoreLeadingWhitespace" | "ignore_leading_whitespace" => Ok(GeneratedField::IgnoreLeadingWhitespace),
                             "ignoreTrailingWhitespace" | "ignore_trailing_whitespace" => Ok(GeneratedField::IgnoreTrailingWhitespace),
+                            "compressionLevel" | "compression_level" => Ok(GeneratedField::CompressionLevel),
+                            "timestampTzFormat" | "timestamp_tz_format" => Ok(GeneratedField::TimestampTzFormat),
+                            "terminator" => Ok(GeneratedField::Terminator),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -2476,6 +2524,9 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                 let mut quote_style__ = None;
                 let mut ignore_leading_whitespace__ = None;
                 let mut ignore_trailing_whitespace__ = None;
+                let mut compression_level__ = None;
+                let mut timestamp_tz_format__ = None;
+                let mut terminator__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Compression => {
@@ -2500,25 +2551,25 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                             if date_format__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("dateFormat"));
                             }
-                            date_format__ = Some(map_.next_value()?);
+                            date_format__ = map_.next_value()?;
                         }
                         GeneratedField::DatetimeFormat => {
                             if datetime_format__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("datetimeFormat"));
                             }
-                            datetime_format__ = Some(map_.next_value()?);
+                            datetime_format__ = map_.next_value()?;
                         }
                         GeneratedField::TimestampFormat => {
                             if timestamp_format__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("timestampFormat"));
                             }
-                            timestamp_format__ = Some(map_.next_value()?);
+                            timestamp_format__ = map_.next_value()?;
                         }
                         GeneratedField::TimeFormat => {
                             if time_format__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("timeFormat"));
                             }
-                            time_format__ = Some(map_.next_value()?);
+                            time_format__ = map_.next_value()?;
                         }
                         GeneratedField::NullValue => {
                             if null_value__.is_some() {
@@ -2562,16 +2613,38 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                             }
                             ignore_trailing_whitespace__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::CompressionLevel => {
+                            if compression_level__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("compressionLevel"));
+                            }
+                            compression_level__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
+                        GeneratedField::TimestampTzFormat => {
+                            if timestamp_tz_format__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("timestampTzFormat"));
+                            }
+                            timestamp_tz_format__ = map_.next_value()?;
+                        }
+                        GeneratedField::Terminator => {
+                            if terminator__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("terminator"));
+                            }
+                            terminator__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
                     }
                 }
                 Ok(CsvWriterOptions {
                     compression: compression__.unwrap_or_default(),
                     delimiter: delimiter__.unwrap_or_default(),
                     has_header: has_header__.unwrap_or_default(),
-                    date_format: date_format__.unwrap_or_default(),
-                    datetime_format: datetime_format__.unwrap_or_default(),
-                    timestamp_format: timestamp_format__.unwrap_or_default(),
-                    time_format: time_format__.unwrap_or_default(),
+                    date_format: date_format__,
+                    datetime_format: datetime_format__,
+                    timestamp_format: timestamp_format__,
+                    time_format: time_format__,
                     null_value: null_value__.unwrap_or_default(),
                     quote: quote__.unwrap_or_default(),
                     escape: escape__.unwrap_or_default(),
@@ -2579,6 +2652,9 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                     quote_style: quote_style__.unwrap_or_default(),
                     ignore_leading_whitespace: ignore_leading_whitespace__.unwrap_or_default(),
                     ignore_trailing_whitespace: ignore_trailing_whitespace__.unwrap_or_default(),
+                    compression_level: compression_level__,
+                    timestamp_tz_format: timestamp_tz_format__,
+                    terminator: terminator__.unwrap_or_default(),
                 })
             }
         }
@@ -5164,11 +5240,17 @@ impl serde::Serialize for JsonWriterOptions {
         if self.compression != 0 {
             len += 1;
         }
+        if self.compression_level.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.JsonWriterOptions", len)?;
         if self.compression != 0 {
             let v = CompressionTypeVariant::try_from(self.compression)
                 .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.compression)))?;
             struct_ser.serialize_field("compression", &v)?;
+        }
+        if let Some(v) = self.compression_level.as_ref() {
+            struct_ser.serialize_field("compressionLevel", v)?;
         }
         struct_ser.end()
     }
@@ -5181,11 +5263,14 @@ impl<'de> serde::Deserialize<'de> for JsonWriterOptions {
     {
         const FIELDS: &[&str] = &[
             "compression",
+            "compression_level",
+            "compressionLevel",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Compression,
+            CompressionLevel,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -5208,6 +5293,7 @@ impl<'de> serde::Deserialize<'de> for JsonWriterOptions {
                     {
                         match value {
                             "compression" => Ok(GeneratedField::Compression),
+                            "compressionLevel" | "compression_level" => Ok(GeneratedField::CompressionLevel),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -5228,6 +5314,7 @@ impl<'de> serde::Deserialize<'de> for JsonWriterOptions {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut compression__ = None;
+                let mut compression_level__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Compression => {
@@ -5236,10 +5323,19 @@ impl<'de> serde::Deserialize<'de> for JsonWriterOptions {
                             }
                             compression__ = Some(map_.next_value::<CompressionTypeVariant>()? as i32);
                         }
+                        GeneratedField::CompressionLevel => {
+                            if compression_level__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("compressionLevel"));
+                            }
+                            compression_level__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
                     }
                 }
                 Ok(JsonWriterOptions {
                     compression: compression__.unwrap_or_default(),
+                    compression_level: compression_level__,
                 })
             }
         }
@@ -6412,6 +6508,12 @@ impl serde::Serialize for ParquetOptions {
         if self.max_in_list_size != 0 {
             len += 1;
         }
+        if !self.row_group_range_assignment.is_empty() {
+            len += 1;
+        }
+        if self.enable_rle_to_dictionary {
+            len += 1;
+        }
         if !self.created_by.is_empty() {
             len += 1;
         }
@@ -6536,6 +6638,12 @@ impl serde::Serialize for ParquetOptions {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("maxInListSize", ToString::to_string(&self.max_in_list_size).as_str())?;
+        }
+        if !self.row_group_range_assignment.is_empty() {
+            struct_ser.serialize_field("rowGroupRangeAssignment", &self.row_group_range_assignment)?;
+        }
+        if self.enable_rle_to_dictionary {
+            struct_ser.serialize_field("enableRleToDictionary", &self.enable_rle_to_dictionary)?;
         }
         if !self.created_by.is_empty() {
             struct_ser.serialize_field("createdBy", &self.created_by)?;
@@ -6697,6 +6805,10 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "maxRowGroupSize",
             "max_in_list_size",
             "maxInListSize",
+            "row_group_range_assignment",
+            "rowGroupRangeAssignment",
+            "enable_rle_to_dictionary",
+            "enableRleToDictionary",
             "created_by",
             "createdBy",
             "content_defined_chunking",
@@ -6750,6 +6862,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             DataPageRowCountLimit,
             MaxRowGroupSize,
             MaxInListSize,
+            RowGroupRangeAssignment,
+            EnableRleToDictionary,
             CreatedBy,
             ContentDefinedChunking,
             MetadataSizeHint,
@@ -6807,6 +6921,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "dataPageRowCountLimit" | "data_page_row_count_limit" => Ok(GeneratedField::DataPageRowCountLimit),
                             "maxRowGroupSize" | "max_row_group_size" => Ok(GeneratedField::MaxRowGroupSize),
                             "maxInListSize" | "max_in_list_size" => Ok(GeneratedField::MaxInListSize),
+                            "rowGroupRangeAssignment" | "row_group_range_assignment" => Ok(GeneratedField::RowGroupRangeAssignment),
+                            "enableRleToDictionary" | "enable_rle_to_dictionary" => Ok(GeneratedField::EnableRleToDictionary),
                             "createdBy" | "created_by" => Ok(GeneratedField::CreatedBy),
                             "contentDefinedChunking" | "content_defined_chunking" => Ok(GeneratedField::ContentDefinedChunking),
                             "metadataSizeHint" | "metadata_size_hint" => Ok(GeneratedField::MetadataSizeHint),
@@ -6862,6 +6978,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut data_page_row_count_limit__ = None;
                 let mut max_row_group_size__ = None;
                 let mut max_in_list_size__ = None;
+                let mut row_group_range_assignment__ = None;
+                let mut enable_rle_to_dictionary__ = None;
                 let mut created_by__ = None;
                 let mut content_defined_chunking__ = None;
                 let mut metadata_size_hint_opt__ = None;
@@ -7021,6 +7139,18 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::RowGroupRangeAssignment => {
+                            if row_group_range_assignment__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("rowGroupRangeAssignment"));
+                            }
+                            row_group_range_assignment__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::EnableRleToDictionary => {
+                            if enable_rle_to_dictionary__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("enableRleToDictionary"));
+                            }
+                            enable_rle_to_dictionary__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::CreatedBy => {
                             if created_by__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("createdBy"));
@@ -7135,6 +7265,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     data_page_row_count_limit: data_page_row_count_limit__.unwrap_or_default(),
                     max_row_group_size: max_row_group_size__.unwrap_or_default(),
                     max_in_list_size: max_in_list_size__.unwrap_or_default(),
+                    row_group_range_assignment: row_group_range_assignment__.unwrap_or_default(),
+                    enable_rle_to_dictionary: enable_rle_to_dictionary__.unwrap_or_default(),
                     created_by: created_by__.unwrap_or_default(),
                     content_defined_chunking: content_defined_chunking__,
                     metadata_size_hint_opt: metadata_size_hint_opt__,

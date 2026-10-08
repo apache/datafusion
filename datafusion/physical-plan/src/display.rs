@@ -21,7 +21,10 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::fmt::Formatter;
+use std::sync::Arc;
 use std::time::Duration;
+
+use serde::Serialize;
 
 use arrow::datatypes::SchemaRef;
 
@@ -29,7 +32,7 @@ use datafusion_common::display::GraphvizBuilder;
 use datafusion_expr::display_schema;
 use datafusion_physical_expr::LexOrdering;
 
-use crate::metrics::{MetricCategory, MetricType, MetricValue};
+use crate::metrics::{MetricCategory, MetricType, MetricValue, MetricsSet};
 use crate::render_tree::RenderTree;
 
 use crate::operator_statistics::StatisticsRegistry;
@@ -448,17 +451,14 @@ impl<'a> DisplayableExecutionPlan<'a> {
                 };
                 accept(self.plan, &mut visitor).map_err(|_| fmt::Error)?;
                 let root = visitor.root.ok_or(fmt::Error)?;
-                let mut root_entry = serde_json::json!({ "Plan": root });
-                if let Some(summary) = self.summary {
-                    if let Some(total_rows) = summary.total_rows {
-                        root_entry["Total Rows"] = serde_json::Value::from(total_rows);
-                    }
-                    if let Some(duration) = summary.duration {
-                        root_entry["Duration"] =
-                            serde_json::Value::from(format!("{duration:?}"));
-                    }
-                }
-                let doc = serde_json::Value::Array(vec![root_entry]);
+                let doc = [PgJsonRoot {
+                    plan: root,
+                    total_rows: self.summary.and_then(|s| s.total_rows),
+                    duration: self
+                        .summary
+                        .and_then(|s| s.duration)
+                        .map(|d| format!("{d:?}")),
+                }];
                 write!(
                     f,
                     "{}",
@@ -538,6 +538,30 @@ enum ShowMetrics {
     Full,
 }
 
+const BLOOM_FILTER_PRUNING_METRIC_NAME: &str = "row_groups_pruned_bloom_filter";
+
+/// Omits an idle Bloom pruning metric from physical-plan display while
+/// preserving it in the underlying [`MetricsSet`].
+fn omit_idle_bloom_filter_pruning_metric(metrics: &MetricsSet) -> MetricsSet {
+    let mut filtered = MetricsSet::new();
+    for metric in metrics.iter() {
+        let is_idle_bloom_metric = matches!(
+            metric.value(),
+            MetricValue::PruningMetrics {
+                name,
+                pruning_metrics,
+            } if name == BLOOM_FILTER_PRUNING_METRIC_NAME
+                && pruning_metrics.pruned() == 0
+                && pruning_metrics.matched() == 0
+                && pruning_metrics.fully_matched() == 0
+        );
+        if !is_idle_bloom_metric {
+            filtered.push(Arc::clone(metric));
+        }
+    }
+    filtered
+}
+
 /// Formats plans with a single line per node.
 ///
 /// # Example
@@ -578,9 +602,10 @@ impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
             ShowMetrics::None => {}
             ShowMetrics::Aggregated => {
                 if let Some(metrics) = plan.metrics() {
-                    let mut metrics = metrics
+                    let metrics = metrics
                         .filter_by_metric_types(self.metric_types)
-                        .aggregate_by_name()
+                        .aggregate_by_name();
+                    let mut metrics = omit_idle_bloom_filter_pruning_metric(&metrics)
                         .sorted_for_display()
                         .timestamps_removed();
                     if let Some(cats) = self.metric_categories {
@@ -596,7 +621,8 @@ impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
             }
             ShowMetrics::Full => {
                 if let Some(metrics) = plan.metrics() {
-                    let mut metrics = metrics.filter_by_metric_types(self.metric_types);
+                    let metrics = metrics.filter_by_metric_types(self.metric_types);
+                    let mut metrics = omit_idle_bloom_filter_pruning_metric(&metrics);
                     if let Some(cats) = self.metric_categories {
                         metrics = metrics.filter_by_categories(cats);
                     }
@@ -684,9 +710,10 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
             ShowMetrics::None => "".to_string(),
             ShowMetrics::Aggregated => {
                 if let Some(metrics) = plan.metrics() {
-                    let mut metrics = metrics
+                    let metrics = metrics
                         .filter_by_metric_types(self.metric_types)
-                        .aggregate_by_name()
+                        .aggregate_by_name();
+                    let mut metrics = omit_idle_bloom_filter_pruning_metric(&metrics)
                         .sorted_for_display()
                         .timestamps_removed();
                     if let Some(cats) = self.metric_categories {
@@ -702,7 +729,8 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
             }
             ShowMetrics::Full => {
                 if let Some(metrics) = plan.metrics() {
-                    let mut metrics = metrics.filter_by_metric_types(self.metric_types);
+                    let metrics = metrics.filter_by_metric_types(self.metric_types);
+                    let mut metrics = omit_idle_bloom_filter_pruning_metric(&metrics);
                     if let Some(cats) = self.metric_categories {
                         metrics = metrics.filter_by_categories(cats);
                     }
@@ -768,10 +796,67 @@ struct PgJsonExecutionPlanVisitor<'a> {
     metric_types: &'a [MetricType],
     metric_categories: Option<&'a [MetricCategory]>,
     metric_names: Option<&'a [String]>,
-    objects: HashMap<u32, serde_json::Value>,
+    objects: HashMap<u32, PgJsonNode>,
     parent_ids: Vec<u32>,
     next_id: u32,
-    root: Option<serde_json::Value>,
+    root: Option<PgJsonNode>,
+}
+
+/// Top-level entry of the `pgjson` output. Field order is the output order.
+#[derive(Serialize)]
+struct PgJsonRoot {
+    #[serde(rename = "Plan")]
+    plan: PgJsonNode,
+    #[serde(rename = "Total Rows", skip_serializing_if = "Option::is_none")]
+    total_rows: Option<usize>,
+    #[serde(rename = "Duration", skip_serializing_if = "Option::is_none")]
+    duration: Option<String>,
+}
+
+/// One node of the `pgjson` output. Field order is the output order, so the
+/// JSON reads top-down like a PostgreSQL plan, with `"Plans"` last.
+#[derive(Serialize)]
+struct PgJsonNode {
+    #[serde(rename = "Node Type")]
+    node_type: String,
+    #[serde(rename = "Details")]
+    details: String,
+    #[serde(rename = "Output", skip_serializing_if = "Option::is_none")]
+    output: Option<Vec<String>>,
+    #[serde(rename = "Actual Rows", skip_serializing_if = "Option::is_none")]
+    actual_rows: Option<usize>,
+    #[serde(rename = "Actual Total Time", skip_serializing_if = "Option::is_none")]
+    actual_total_time: Option<f64>,
+    #[serde(rename = "Extras", skip_serializing_if = "PgJsonExtras::is_empty")]
+    extras: PgJsonExtras,
+    #[serde(rename = "Plans")]
+    plans: Vec<PgJsonNode>,
+}
+
+/// Non-canonical metrics of a node, serialized as a JSON object whose keys
+/// keep their insertion order (independent of `serde_json`'s
+/// `preserve_order` feature).
+#[derive(Default)]
+struct PgJsonExtras(Vec<(String, serde_json::Value)>);
+
+impl PgJsonExtras {
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Insert or replace `key`. A replaced key keeps its original position.
+    fn insert(&mut self, key: &str, value: serde_json::Value) {
+        match self.0.iter_mut().find(|(k, _)| k == key) {
+            Some((_, v)) => *v = value,
+            None => self.0.push((key.to_string(), value)),
+        }
+    }
+}
+
+impl Serialize for PgJsonExtras {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_map(self.0.iter().map(|(k, v)| (k, v)))
+    }
 }
 
 impl PgJsonExecutionPlanVisitor<'_> {
@@ -813,8 +898,8 @@ impl PgJsonExecutionPlanVisitor<'_> {
                 serde_json::Value::from(ms)
             }
             MetricValue::Count { count, .. } => serde_json::Value::from(count.value()),
-            MetricValue::Gauge { gauge, .. } => serde_json::Value::from(gauge.value()),
-            MetricValue::PeakMemoryUsage { gauge, .. } => {
+            MetricValue::Gauge { gauge, .. }
+            | MetricValue::PeakMemoryUsage { gauge, .. } => {
                 serde_json::Value::from(gauge.value())
             }
             MetricValue::Time { time, .. } => {
@@ -829,7 +914,7 @@ impl PgJsonExecutionPlanVisitor<'_> {
     /// Populate `"Actual Rows"`, `"Actual Total Time"`, and `"Extras"` for
     /// the given node from its aggregated `MetricsSet`, honoring the same
     /// filtering pipeline used by `IndentVisitor`.
-    fn attach_metrics(&self, plan: &dyn ExecutionPlan, object: &mut serde_json::Value) {
+    fn attach_metrics(&self, plan: &dyn ExecutionPlan, object: &mut PgJsonNode) {
         if matches!(self.show_metrics, ShowMetrics::None) {
             return;
         }
@@ -839,12 +924,18 @@ impl PgJsonExecutionPlanVisitor<'_> {
 
         let metrics = match self.show_metrics {
             ShowMetrics::None => return,
-            ShowMetrics::Aggregated => metrics
-                .filter_by_metric_types(self.metric_types)
-                .aggregate_by_name()
-                .sorted_for_display()
-                .timestamps_removed(),
-            ShowMetrics::Full => metrics.filter_by_metric_types(self.metric_types),
+            ShowMetrics::Aggregated => {
+                let metrics = metrics
+                    .filter_by_metric_types(self.metric_types)
+                    .aggregate_by_name();
+                omit_idle_bloom_filter_pruning_metric(&metrics)
+                    .sorted_for_display()
+                    .timestamps_removed()
+            }
+            ShowMetrics::Full => {
+                let metrics = metrics.filter_by_metric_types(self.metric_types);
+                omit_idle_bloom_filter_pruning_metric(&metrics)
+            }
         };
         let metrics = if let Some(cats) = self.metric_categories {
             metrics.filter_by_categories(cats)
@@ -860,27 +951,22 @@ impl PgJsonExecutionPlanVisitor<'_> {
 
         // Build the Extras bucket, while extracting PG-canonical keys to the
         // top level.
-        let mut extras = serde_json::Map::new();
         for metric in metrics.iter() {
             let value = metric.value();
             match value {
                 MetricValue::OutputRows(c) => {
-                    object["Actual Rows"] = serde_json::Value::from(c.value());
+                    object.actual_rows = Some(c.value());
                 }
                 MetricValue::ElapsedCompute(t) => {
                     let ms = (t.value() as f64) / 1_000_000.0;
-                    object["Actual Total Time"] = serde_json::Value::from(ms);
+                    object.actual_total_time = Some(ms);
                 }
                 _ => {
-                    extras.insert(
-                        value.name().to_string(),
-                        Self::metric_value_to_json(value),
-                    );
+                    object
+                        .extras
+                        .insert(value.name(), Self::metric_value_to_json(value));
                 }
             }
-        }
-        if !extras.is_empty() {
-            object["Extras"] = serde_json::Value::Object(extras);
         }
     }
 }
@@ -895,27 +981,30 @@ impl ExecutionPlanVisitor for PgJsonExecutionPlanVisitor<'_> {
         // Build fields in reading order: Node Type, Details, (schema),
         // (metrics), Plans last — so the JSON output reads top-down like a
         // PostgreSQL plan.
-        let mut object = serde_json::json!({
-            "Node Type": plan.name(),
-            "Details": Self::one_line_details(plan),
-        });
+        let mut object = PgJsonNode {
+            node_type: plan.name().to_string(),
+            details: Self::one_line_details(plan),
+            output: None,
+            actual_rows: None,
+            actual_total_time: None,
+            extras: PgJsonExtras::default(),
+            plans: vec![],
+        };
 
         if self.show_schema || self.verbose {
             // Always include output columns when a caller asked for schema;
             // also include them in verbose mode so the pgjson output mirrors
             // the extra context shown by indent's verbose flag.
-            let columns: Vec<serde_json::Value> = plan
-                .schema()
-                .fields()
-                .iter()
-                .map(|f| serde_json::Value::String(f.name().to_string()))
-                .collect();
-            object["Output"] = serde_json::Value::Array(columns);
+            object.output = Some(
+                plan.schema()
+                    .fields()
+                    .iter()
+                    .map(|f| f.name().to_string())
+                    .collect(),
+            );
         }
 
         self.attach_metrics(plan, &mut object);
-
-        object["Plans"] = serde_json::Value::Array(vec![]);
 
         self.objects.insert(id, object);
         self.parent_ids.push(id);
@@ -928,11 +1017,7 @@ impl ExecutionPlanVisitor for PgJsonExecutionPlanVisitor<'_> {
 
         if let Some(parent_id) = self.parent_ids.last() {
             let parent = self.objects.get_mut(parent_id).ok_or(fmt::Error)?;
-            let plans = parent
-                .get_mut("Plans")
-                .and_then(|p| p.as_array_mut())
-                .ok_or(fmt::Error)?;
-            plans.push(current);
+            parent.plans.push(current);
         } else {
             self.root = Some(current);
         }
@@ -1339,7 +1424,10 @@ impl TreeRenderVisitor<'_, '_> {
     fn adjust_text_for_rendering(source: &str, max_render_width: usize) -> String {
         let render_width = source.chars().count();
         if render_width > max_render_width {
-            let truncated = &source[..max_render_width - 3];
+            let truncated = source
+                .chars()
+                .take(max_render_width - 3)
+                .collect::<String>();
             format!("{truncated}...")
         } else {
             let total_spaces = max_render_width - render_width;
@@ -1401,7 +1489,7 @@ impl TreeRenderVisitor<'_, '_> {
                     last_possible_split = character_pos;
                 }
 
-                result.push(source[start_pos..last_possible_split].to_string());
+                result.push(chars[start_pos..last_possible_split].iter().collect());
                 render_width = character_pos - last_possible_split;
                 start_pos = last_possible_split;
                 character_pos = last_possible_split;
@@ -1416,9 +1504,9 @@ impl TreeRenderVisitor<'_, '_> {
             render_width += char_width;
         }
 
-        if source.len() > start_pos {
+        if chars.len() > start_pos {
             // append the remainder of the input
-            result.push(source[start_pos..].to_string());
+            result.push(chars[start_pos..].iter().collect());
         }
     }
 
@@ -1508,7 +1596,30 @@ mod tests {
         ReplaceChildrenOptions,
     };
 
-    use super::DisplayableExecutionPlan;
+    use super::{DisplayableExecutionPlan, TreeRenderVisitor};
+
+    #[test]
+    fn test_tree_renderer_splits_multibyte_characters() {
+        let source = "weather_code_emoji🌤weather_code_text🌧conditions";
+        let mut lines = Vec::new();
+        TreeRenderVisitor::split_string_buffer(source, &mut lines);
+
+        assert_eq!(lines.concat(), source);
+        assert!(
+            lines
+                .iter()
+                .all(|line| line.chars().count()
+                    <= TreeRenderVisitor::NODE_RENDER_WIDTH - 2)
+        );
+    }
+
+    #[test]
+    fn test_tree_renderer_truncates_multibyte_characters() {
+        assert_eq!(
+            TreeRenderVisitor::adjust_text_for_rendering("weather🌤conditions", 12,),
+            "weather🌤c..."
+        );
+    }
 
     #[derive(Debug, Clone, Copy)]
     enum TestStatsExecPlan {
@@ -1632,17 +1743,26 @@ mod tests {
     }
 
     mod pgjson {
+        use std::borrow::Cow;
         use std::sync::Arc;
         use std::time::Duration;
 
         use arrow::datatypes::{DataType, Field, Schema};
         use insta::assert_snapshot;
 
-        use super::super::DisplayableExecutionPlan;
+        use super::super::{BLOOM_FILTER_PRUNING_METRIC_NAME, DisplayableExecutionPlan};
         use crate::empty::EmptyExec;
         use crate::filter::FilterExec;
+        use crate::metrics::{
+            Count, Metric, MetricValue, MetricsSet, PruningMetrics, Time,
+        };
         use crate::projection::ProjectionExec;
-        use crate::{ChildrenPropertiesMode, ExecutionPlan, ReplaceChildrenOptions};
+        use crate::{
+            ChildrenPropertiesMode, DisplayFormatType, ExecutionPlan, PlanProperties,
+            ReplaceChildrenOptions,
+        };
+        use datafusion_common::Result;
+        use datafusion_execution::{SendableRecordBatchStream, TaskContext};
         use datafusion_physical_expr::expressions::{binary, col, lit};
         use datafusion_physical_expr::{Partitioning, PhysicalExpr};
 
@@ -1664,6 +1784,142 @@ mod tests {
                 vec![(col("a", &schema).unwrap(), "a".to_string())];
             let _ = Partitioning::UnknownPartitioning(1);
             Arc::new(ProjectionExec::try_new(proj_expr, filter).unwrap())
+        }
+
+        /// Wraps a plan with a hand-crafted metric set so display behavior can
+        /// be tested without executing the plan.
+        #[derive(Debug)]
+        struct WithMetrics {
+            inner: Arc<dyn ExecutionPlan>,
+            metrics: MetricsSet,
+        }
+
+        impl crate::DisplayAs for WithMetrics {
+            fn fmt_as(
+                &self,
+                _t: DisplayFormatType,
+                f: &mut std::fmt::Formatter,
+            ) -> std::fmt::Result {
+                write!(f, "WithMetrics")
+            }
+        }
+
+        impl ExecutionPlan for WithMetrics {
+            fn name(&self) -> &'static str {
+                "WithMetrics"
+            }
+
+            fn properties(&self) -> &Arc<PlanProperties> {
+                self.inner.properties()
+            }
+
+            fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+                vec![&self.inner]
+            }
+
+            fn apply_expressions(
+                &self,
+                _f: &mut dyn FnMut(
+                    &Arc<dyn PhysicalExpr>,
+                ) -> Result<
+                    datafusion_common::tree_node::TreeNodeRecursion,
+                >,
+            ) -> Result<datafusion_common::tree_node::TreeNodeRecursion> {
+                Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
+            }
+
+            fn replace_children(
+                self: Arc<Self>,
+                _: Vec<Arc<dyn ExecutionPlan>>,
+                _: ReplaceChildrenOptions,
+            ) -> Result<Arc<dyn ExecutionPlan>> {
+                unimplemented!()
+            }
+
+            fn with_new_children(
+                self: Arc<Self>,
+                children: Vec<Arc<dyn ExecutionPlan>>,
+            ) -> Result<Arc<dyn ExecutionPlan>> {
+                self.replace_children(
+                    children,
+                    ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+                )
+            }
+
+            fn execute(
+                &self,
+                _: usize,
+                _: Arc<TaskContext>,
+            ) -> Result<SendableRecordBatchStream> {
+                unimplemented!()
+            }
+
+            fn metrics(&self) -> Option<MetricsSet> {
+                Some(self.metrics.clone())
+            }
+        }
+
+        fn plan_with_metrics(metrics: MetricsSet) -> Arc<dyn ExecutionPlan> {
+            Arc::new(WithMetrics {
+                inner: sample_plan(),
+                metrics,
+            })
+        }
+
+        fn pruning_metric(
+            name: &'static str,
+            pruned: usize,
+            matched: usize,
+        ) -> Arc<Metric> {
+            pruning_metric_parts(name, pruned, matched, 0, None)
+        }
+
+        fn pruning_metric_parts(
+            name: &'static str,
+            pruned: usize,
+            matched: usize,
+            fully_matched: usize,
+            partition: Option<usize>,
+        ) -> Arc<Metric> {
+            let pruning_metrics = PruningMetrics::new();
+            pruning_metrics.add_pruned(pruned);
+            pruning_metrics.add_matched(matched);
+            pruning_metrics.add_fully_matched(fully_matched);
+            Arc::new(Metric::new(
+                MetricValue::PruningMetrics {
+                    name: Cow::Borrowed(name),
+                    pruning_metrics,
+                },
+                partition,
+            ))
+        }
+
+        fn indent_and_graphviz_metric_displays(plan: &dyn ExecutionPlan) -> [String; 4] {
+            [
+                DisplayableExecutionPlan::with_metrics(plan)
+                    .indent(false)
+                    .to_string(),
+                DisplayableExecutionPlan::with_full_metrics(plan)
+                    .indent(false)
+                    .to_string(),
+                DisplayableExecutionPlan::with_metrics(plan)
+                    .graphviz()
+                    .to_string(),
+                DisplayableExecutionPlan::with_full_metrics(plan)
+                    .graphviz()
+                    .to_string(),
+            ]
+        }
+
+        fn pgjson_extras(plan: &dyn ExecutionPlan, full: bool) -> serde_json::Value {
+            let display = if full {
+                DisplayableExecutionPlan::with_full_metrics(plan)
+            } else {
+                DisplayableExecutionPlan::with_metrics(plan)
+            };
+            let out = display.pgjson(false).to_string();
+            let value: serde_json::Value = serde_json::from_str(&out).unwrap();
+            value[0]["Plan"]["Extras"].clone()
         }
 
         #[test]
@@ -1691,78 +1947,6 @@ mod tests {
 
         #[test]
         fn pgjson_emits_pg_canonical_metric_keys() {
-            use crate::metrics::{Count, Metric, MetricValue, MetricsSet, Time};
-            use crate::{DisplayFormatType, ExecutionPlan, PlanProperties};
-            use datafusion_common::Result;
-            use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-
-            // Wrap `sample_plan()` with an adapter node that exposes a
-            // hand-crafted `MetricsSet` so we can assert the PG key mapping
-            // without running anything.
-            #[derive(Debug)]
-            struct WithMetrics {
-                inner: Arc<dyn ExecutionPlan>,
-                metrics: MetricsSet,
-            }
-            impl crate::DisplayAs for WithMetrics {
-                fn fmt_as(
-                    &self,
-                    _t: DisplayFormatType,
-                    f: &mut std::fmt::Formatter,
-                ) -> std::fmt::Result {
-                    write!(f, "WithMetrics")
-                }
-            }
-            impl ExecutionPlan for WithMetrics {
-                fn name(&self) -> &'static str {
-                    "WithMetrics"
-                }
-                fn properties(&self) -> &Arc<PlanProperties> {
-                    self.inner.properties()
-                }
-                fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-                    vec![&self.inner]
-                }
-                fn apply_expressions(
-                    &self,
-                    _f: &mut dyn FnMut(
-                        &Arc<dyn PhysicalExpr>,
-                    ) -> Result<
-                        datafusion_common::tree_node::TreeNodeRecursion,
-                    >,
-                ) -> Result<datafusion_common::tree_node::TreeNodeRecursion>
-                {
-                    Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
-                }
-
-                fn replace_children(
-                    self: Arc<Self>,
-                    _: Vec<Arc<dyn ExecutionPlan>>,
-                    _: ReplaceChildrenOptions,
-                ) -> Result<Arc<dyn ExecutionPlan>> {
-                    unimplemented!()
-                }
-                fn with_new_children(
-                    self: Arc<Self>,
-                    children: Vec<Arc<dyn ExecutionPlan>>,
-                ) -> Result<Arc<dyn ExecutionPlan>> {
-                    self.replace_children(
-                        children,
-                        ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
-                    )
-                }
-                fn execute(
-                    &self,
-                    _: usize,
-                    _: Arc<TaskContext>,
-                ) -> Result<SendableRecordBatchStream> {
-                    unimplemented!()
-                }
-                fn metrics(&self) -> Option<MetricsSet> {
-                    Some(self.metrics.clone())
-                }
-            }
-
             let mut metrics = MetricsSet::new();
             let rows = Count::new();
             rows.add(42);
@@ -1780,10 +1964,7 @@ mod tests {
                 None,
             )));
 
-            let plan: Arc<dyn ExecutionPlan> = Arc::new(WithMetrics {
-                inner: sample_plan(),
-                metrics,
-            });
+            let plan = plan_with_metrics(metrics);
 
             let out = DisplayableExecutionPlan::with_metrics(plan.as_ref())
                 .pgjson(false)
@@ -1830,6 +2011,221 @@ mod tests {
         }
 
         #[test]
+        fn idle_bloom_pruning_metrics_are_omitted_from_plan_display() {
+            let mut idle_metrics = MetricsSet::new();
+            idle_metrics.push(pruning_metric(BLOOM_FILTER_PRUNING_METRIC_NAME, 0, 0));
+            idle_metrics.push(pruning_metric("page_index_pages_pruned", 0, 0));
+            idle_metrics.push(pruning_metric("limit_pruned_row_groups", 0, 0));
+            idle_metrics.push(Arc::new(Metric::new(
+                MetricValue::Count {
+                    name: Cow::Borrowed("custom_metric"),
+                    count: Count::new(),
+                },
+                None,
+            )));
+            let idle_plan = plan_with_metrics(idle_metrics);
+
+            for rendered in [
+                DisplayableExecutionPlan::with_metrics(idle_plan.as_ref())
+                    .indent(false)
+                    .to_string(),
+                DisplayableExecutionPlan::with_full_metrics(idle_plan.as_ref())
+                    .indent(false)
+                    .to_string(),
+                DisplayableExecutionPlan::with_metrics(idle_plan.as_ref())
+                    .graphviz()
+                    .to_string(),
+                DisplayableExecutionPlan::with_full_metrics(idle_plan.as_ref())
+                    .graphviz()
+                    .to_string(),
+            ] {
+                assert!(!rendered.contains(BLOOM_FILTER_PRUNING_METRIC_NAME));
+                assert!(rendered.contains("page_index_pages_pruned=0 total → 0 matched"));
+                assert!(rendered.contains("limit_pruned_row_groups=0 total → 0 matched"));
+                assert!(rendered.contains("custom_metric=0"));
+            }
+
+            for display in [
+                DisplayableExecutionPlan::with_metrics(idle_plan.as_ref()),
+                DisplayableExecutionPlan::with_full_metrics(idle_plan.as_ref()),
+            ] {
+                let out = display.pgjson(false).to_string();
+                let value: serde_json::Value = serde_json::from_str(&out).unwrap();
+                let extras = value[0]["Plan"]["Extras"].as_object().unwrap();
+                assert!(!extras.contains_key(BLOOM_FILTER_PRUNING_METRIC_NAME));
+                assert!(extras.contains_key("page_index_pages_pruned"));
+                assert!(extras.contains_key("limit_pruned_row_groups"));
+                assert_eq!(extras["custom_metric"].as_u64(), Some(0));
+            }
+
+            // Put the idle copy after the non-zero copy. Full PostgreSQL JSON
+            // keys metrics only by name, so this also verifies that the idle
+            // copy cannot overwrite the genuine result.
+            let mut mixed_metrics = MetricsSet::new();
+            mixed_metrics.push(pruning_metric(BLOOM_FILTER_PRUNING_METRIC_NAME, 0, 1));
+            mixed_metrics.push(pruning_metric(BLOOM_FILTER_PRUNING_METRIC_NAME, 0, 0));
+            let mixed_plan = plan_with_metrics(mixed_metrics);
+
+            for rendered in [
+                DisplayableExecutionPlan::with_metrics(mixed_plan.as_ref())
+                    .indent(false)
+                    .to_string(),
+                DisplayableExecutionPlan::with_full_metrics(mixed_plan.as_ref())
+                    .indent(false)
+                    .to_string(),
+                DisplayableExecutionPlan::with_metrics(mixed_plan.as_ref())
+                    .graphviz()
+                    .to_string(),
+                DisplayableExecutionPlan::with_full_metrics(mixed_plan.as_ref())
+                    .graphviz()
+                    .to_string(),
+            ] {
+                assert_eq!(
+                    rendered.matches(BLOOM_FILTER_PRUNING_METRIC_NAME).count(),
+                    1
+                );
+                assert!(
+                    rendered
+                        .contains("row_groups_pruned_bloom_filter=1 total → 1 matched")
+                );
+            }
+
+            for display in [
+                DisplayableExecutionPlan::with_metrics(mixed_plan.as_ref()),
+                DisplayableExecutionPlan::with_full_metrics(mixed_plan.as_ref()),
+            ] {
+                let out = display.pgjson(false).to_string();
+                let value: serde_json::Value = serde_json::from_str(&out).unwrap();
+                assert_eq!(
+                    value[0]["Plan"]["Extras"][BLOOM_FILTER_PRUNING_METRIC_NAME].as_str(),
+                    Some("1 total → 1 matched")
+                );
+            }
+        }
+
+        #[test]
+        fn nonzero_bloom_pruned_or_fully_matched_metrics_are_visible() {
+            let mut pruned_metrics = MetricsSet::new();
+            pruned_metrics.push(pruning_metric(BLOOM_FILTER_PRUNING_METRIC_NAME, 3, 0));
+            let pruned_plan = plan_with_metrics(pruned_metrics);
+
+            for rendered in indent_and_graphviz_metric_displays(pruned_plan.as_ref()) {
+                assert!(
+                    rendered
+                        .contains("row_groups_pruned_bloom_filter=3 total → 0 matched")
+                );
+            }
+            for extras in [
+                pgjson_extras(pruned_plan.as_ref(), false),
+                pgjson_extras(pruned_plan.as_ref(), true),
+            ] {
+                assert_eq!(
+                    extras[BLOOM_FILTER_PRUNING_METRIC_NAME].as_str(),
+                    Some("3 total → 0 matched")
+                );
+            }
+
+            let mut fully_matched_metrics = MetricsSet::new();
+            fully_matched_metrics.push(pruning_metric_parts(
+                BLOOM_FILTER_PRUNING_METRIC_NAME,
+                0,
+                0,
+                2,
+                None,
+            ));
+            let fully_matched_plan = plan_with_metrics(fully_matched_metrics);
+
+            for rendered in
+                indent_and_graphviz_metric_displays(fully_matched_plan.as_ref())
+            {
+                assert!(rendered.contains(
+                    "row_groups_pruned_bloom_filter=0 total → 0 matched -> 2 fully matched"
+                ));
+            }
+            for extras in [
+                pgjson_extras(fully_matched_plan.as_ref(), false),
+                pgjson_extras(fully_matched_plan.as_ref(), true),
+            ] {
+                assert_eq!(
+                    extras[BLOOM_FILTER_PRUNING_METRIC_NAME].as_str(),
+                    Some("0 total → 0 matched -> 2 fully matched")
+                );
+            }
+        }
+
+        #[test]
+        fn idle_and_active_bloom_metrics_on_distinct_partitions() {
+            let mut metrics = MetricsSet::new();
+            metrics.push(pruning_metric_parts(
+                BLOOM_FILTER_PRUNING_METRIC_NAME,
+                0,
+                0,
+                0,
+                Some(0),
+            ));
+            metrics.push(pruning_metric_parts(
+                BLOOM_FILTER_PRUNING_METRIC_NAME,
+                0,
+                2,
+                0,
+                Some(1),
+            ));
+            let plan = plan_with_metrics(metrics);
+
+            let aggregated = [
+                DisplayableExecutionPlan::with_metrics(plan.as_ref())
+                    .indent(false)
+                    .to_string(),
+                DisplayableExecutionPlan::with_metrics(plan.as_ref())
+                    .graphviz()
+                    .to_string(),
+            ];
+            for rendered in &aggregated {
+                assert_eq!(
+                    rendered.matches(BLOOM_FILTER_PRUNING_METRIC_NAME).count(),
+                    1
+                );
+                assert!(
+                    rendered
+                        .contains("row_groups_pruned_bloom_filter=2 total → 2 matched")
+                );
+                assert!(!rendered.contains("partition=0"));
+                assert!(!rendered.contains("partition=1"));
+            }
+
+            let full = [
+                DisplayableExecutionPlan::with_full_metrics(plan.as_ref())
+                    .indent(false)
+                    .to_string(),
+                DisplayableExecutionPlan::with_full_metrics(plan.as_ref())
+                    .graphviz()
+                    .to_string(),
+            ];
+            for rendered in &full {
+                assert_eq!(
+                    rendered.matches(BLOOM_FILTER_PRUNING_METRIC_NAME).count(),
+                    1
+                );
+                assert!(rendered.contains(
+                    "row_groups_pruned_bloom_filter{partition=1}=2 total → 2 matched"
+                ));
+                assert!(!rendered.contains("partition=0"));
+            }
+
+            // PostgreSQL JSON extras are keyed by metric name, so partition
+            // labels are not retained; omit still keeps the active totals.
+            for extras in [
+                pgjson_extras(plan.as_ref(), false),
+                pgjson_extras(plan.as_ref(), true),
+            ] {
+                assert_eq!(
+                    extras[BLOOM_FILTER_PRUNING_METRIC_NAME].as_str(),
+                    Some("2 total → 2 matched")
+                );
+            }
+        }
+
+        #[test]
         fn pgjson_includes_summary_when_set() {
             let plan = sample_plan();
             let out = DisplayableExecutionPlan::with_metrics(plan.as_ref())
@@ -1848,8 +2244,6 @@ mod tests {
             let out = DisplayableExecutionPlan::new(plan.as_ref())
                 .pgjson(false)
                 .to_string();
-            // This snapshot assumes `serde_json` is built with the
-            // `preserve_order` feature (enabled via this crate's dev-deps).
             assert_snapshot!(out, @r#"
             [
               {

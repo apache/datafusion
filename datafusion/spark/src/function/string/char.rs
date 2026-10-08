@@ -100,6 +100,9 @@ fn spark_chr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 }
             }
         }
+        ColumnarValue::Scalar(ScalarValue::Int64(None)) => {
+            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
+        }
         _ => exec_err!("The argument must be an Int64 array or scalar."),
     }
 }

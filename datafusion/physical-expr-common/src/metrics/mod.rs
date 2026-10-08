@@ -22,11 +22,14 @@ mod builder;
 mod custom;
 mod elapsed_compute;
 mod expression;
+mod snapshot;
 mod value;
 
 use datafusion_common::HashMap;
 pub use datafusion_common::format::{MetricCategory, MetricType};
+use datafusion_common::human_readable_size;
 use parking_lot::Mutex;
+use snapshot::{Registry, Snapshot};
 use std::{
     borrow::Cow,
     fmt::{self, Debug, Display},
@@ -125,7 +128,21 @@ impl Display for Metric {
         }
 
         // and now the value
-        write!(f, "={}", self.value)
+        write!(f, "=")?;
+
+        if self.metric_category == Some(MetricCategory::Bytes) {
+            match &self.value {
+                MetricValue::Count { count, .. } => {
+                    return write!(f, "{}", human_readable_size(count.value()));
+                }
+                MetricValue::Gauge { gauge, .. } => {
+                    return write!(f, "{}", human_readable_size(gauge.value()));
+                }
+                _ => {}
+            }
+        }
+
+        write!(f, "{}", self.value)
     }
 }
 
@@ -213,9 +230,13 @@ impl Metric {
 }
 
 /// A snapshot of the metrics for a particular execution plan.
+///
+/// The set's members remain fixed as execution registers more metrics, but their
+/// values continue to reflect execution progress. Use [`Self::for_partition`] to
+/// select the metrics belonging to one partition.
 #[derive(Default, Debug, Clone)]
 pub struct MetricsSet {
-    metrics: Vec<Arc<Metric>>,
+    metrics: Snapshot,
 }
 
 impl MetricsSet {
@@ -224,9 +245,37 @@ impl MetricsSet {
         Default::default()
     }
 
-    /// Add the specified metric
+    /// Add the specified metric without changing other snapshots.
     pub fn push(&mut self, metric: Arc<Metric>) {
         self.metrics.push(metric)
+    }
+
+    /// Returns this set with the derived `output_rows_skew` metric appended,
+    /// or unchanged if no partition reported `output_rows` yet.
+    ///
+    /// This is typically used in `ExecutionPlan::metrics` of operators that
+    /// execute in multiple partitions (e.g. repartitions, partitioned joins and
+    /// aggregations), where it shows how evenly their output rows are spread
+    /// across partitions. With a single partition the skew is always `0%`.
+    ///
+    /// See [`BaselineMetrics::output_rows_skew_metric`] for how skew is computed.
+    pub fn with_output_rows_skew(mut self) -> Self {
+        if let Some(output_rows_skew) = BaselineMetrics::output_rows_skew_metric(&self) {
+            self.push(output_rows_skew);
+        }
+        self
+    }
+
+    /// Return the metrics whose partition ID equals `partition`.
+    ///
+    /// Unpartitioned metrics are excluded; an unknown partition yields an empty
+    /// set. Registration order and duplicates are preserved. Selected metrics
+    /// share their current values with this set, but changes to either set's
+    /// membership do not affect the other.
+    pub fn for_partition(&self, partition: usize) -> Self {
+        Self {
+            metrics: self.metrics.for_partition(partition),
+        }
     }
 
     /// Returns an iterator across all metrics
@@ -314,7 +363,7 @@ impl MetricsSet {
             MetricValue::EndTimestamp(_) => false,
             MetricValue::PruningMetrics { name, .. } => name == metric_name,
             MetricValue::Ratio { name, .. } => name == metric_name,
-            MetricValue::Custom { .. } => false,
+            MetricValue::Custom { name, .. } => name == metric_name,
         })
     }
 
@@ -345,10 +394,7 @@ impl MetricsSet {
                 });
         }
 
-        let new_metrics = map
-            .into_iter()
-            .map(|(_k, v)| Arc::new(v))
-            .collect::<Vec<_>>();
+        let new_metrics = map.into_iter().map(|(_k, v)| Arc::new(v)).collect();
 
         Self {
             metrics: new_metrics,
@@ -356,14 +402,15 @@ impl MetricsSet {
     }
 
     /// Sort the order of metrics so the "most useful" show up first
-    pub fn sorted_for_display(mut self) -> Self {
-        self.metrics.sort_unstable_by_key(|metric| {
+    pub fn sorted_for_display(self) -> Self {
+        let mut metrics: Vec<_> = self.into_iter().collect();
+        metrics.sort_unstable_by_key(|metric| {
             (
                 metric.value().display_sort_key(),
                 metric.value().name().to_owned(),
             )
         });
-        self
+        metrics.into_iter().collect()
     }
 
     /// Remove all timestamp metrics (for more compact display)
@@ -373,7 +420,7 @@ impl MetricsSet {
         let metrics = metrics
             .into_iter()
             .filter(|m| !m.value.is_timestamp())
-            .collect::<Vec<_>>();
+            .collect();
 
         Self { metrics }
     }
@@ -382,14 +429,14 @@ impl MetricsSet {
     /// [`MetricType`] appears in `allowed`.
     pub fn filter_by_metric_types(self, allowed: &[MetricType]) -> Self {
         if allowed.is_empty() {
-            return Self { metrics: vec![] };
+            return Self::new();
         }
 
         let metrics = self
             .metrics
             .into_iter()
             .filter(|metric| allowed.contains(&metric.metric_type()))
-            .collect::<Vec<_>>();
+            .collect();
         Self { metrics }
     }
 
@@ -403,7 +450,7 @@ impl MetricsSet {
     ///   removed.
     pub fn filter_by_categories(self, allowed: &[MetricCategory]) -> Self {
         if allowed.is_empty() {
-            return Self { metrics: vec![] };
+            return Self::new();
         }
 
         let metrics = self
@@ -415,7 +462,7 @@ impl MetricsSet {
                     .unwrap_or(MetricCategory::Uncategorized);
                 allowed.contains(&cat)
             })
-            .collect::<Vec<_>>();
+            .collect();
         Self { metrics }
     }
 
@@ -423,14 +470,14 @@ impl MetricsSet {
     /// Only metrics with the names appearing the list will be kept.
     pub fn filter_by_names(self, names: &[String]) -> Self {
         if names.is_empty() {
-            return Self { metrics: vec![] };
+            return Self::new();
         }
 
         let metrics = self
             .metrics
             .into_iter()
             .filter(|metric| names.iter().any(|name| name == metric.value().name()))
-            .collect::<Vec<_>>();
+            .collect();
         Self { metrics }
     }
 }
@@ -494,33 +541,35 @@ impl FromIterator<Arc<Metric>> for MetricsSet {
 /// underlying metrics set
 #[derive(Default, Debug, Clone)]
 pub struct ExecutionPlanMetricsSet {
-    inner: Arc<Mutex<MetricsSet>>,
+    inner: Arc<Mutex<Registry>>,
 }
 
 impl ExecutionPlanMetricsSet {
     /// Create a new empty shared metrics set
     pub fn new() -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(MetricsSet::new())),
-        }
+        Self::default()
     }
 
     /// Add the specified metric to the underlying metric set
     pub fn register(&self, metric: Arc<Metric>) {
-        self.inner.lock().push(metric)
+        self.inner.lock().register(metric)
     }
 
-    /// Return a clone of the inner [`MetricsSet`]
+    /// Return a snapshot of the currently registered metrics.
+    ///
+    /// Later registrations do not appear in this snapshot, but changes to the
+    /// values of existing metrics remain visible.
     pub fn clone_inner(&self) -> MetricsSet {
-        let guard = self.inner.lock();
-        (*guard).clone()
+        MetricsSet {
+            metrics: Snapshot::new(Arc::clone(&self.inner)),
+        }
     }
 }
 
 impl From<MetricsSet> for ExecutionPlanMetricsSet {
     fn from(metrics: MetricsSet) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(metrics)),
+            inner: Arc::new(Mutex::new(Registry::new(metrics.into_iter().collect()))),
         }
     }
 }
@@ -656,6 +705,8 @@ impl Display for LabelValue {
 
 #[cfg(test)]
 mod tests {
+    use std::any::Any;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     use chrono::{TimeZone, Utc};
@@ -721,6 +772,134 @@ mod tests {
     }
 
     #[test]
+    fn selected_snapshot_mutations_are_independent() {
+        let registry = ExecutionPlanMetricsSet::new();
+        MetricBuilder::new(&registry).output_rows(0).add(3);
+        MetricBuilder::new(&registry).output_rows(1).add(7);
+        MetricBuilder::new(&registry)
+            .global_counter("global")
+            .add(11);
+        let full = registry.clone_inner();
+        let selected = full.for_partition(0);
+        assert_eq!(selected.for_partition(0).output_rows(), Some(3));
+        assert_eq!(selected.for_partition(1).iter().count(), 0);
+        let mut modified = selected.clone();
+        let count = Count::new();
+        count.add(13);
+        modified.push(Arc::new(Metric::new(
+            MetricValue::OutputRows(count),
+            Some(1),
+        )));
+        assert_eq!(modified.output_rows(), Some(16));
+        assert_eq!(modified.for_partition(1).output_rows(), Some(13));
+        assert_eq!(selected.output_rows(), Some(3));
+        assert_eq!(full.output_rows(), Some(10));
+        assert_eq!(registry.clone_inner().iter().count(), 3);
+        assert_eq!(modified.clone().into_iter().count(), 2);
+        assert_eq!(
+            modified.sorted_for_display().for_partition(0).output_rows(),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn partition_snapshots_preserve_registration_and_shared_values() {
+        let metrics = ExecutionPlanMetricsSet::new();
+        assert_eq!(metrics.clone_inner().for_partition(0).iter().count(), 0);
+        let first = MetricBuilder::new(&metrics).output_rows(0);
+        first.add(11);
+        MetricBuilder::new(&metrics).global_counter("global").add(7);
+        MetricBuilder::new(&metrics).output_rows(usize::MAX).add(99);
+        // Same name and partition must not overwrite the earlier metric.
+        MetricBuilder::new(&metrics).output_rows(0).add(13);
+        let snapshot = metrics.clone_inner().for_partition(0);
+        assert_eq!(snapshot.output_rows(), Some(24));
+        assert_eq!(snapshot.iter().count(), 2);
+        assert_eq!(snapshot.aggregate_by_name().output_rows(), Some(24));
+        assert_eq!(
+            metrics
+                .clone_inner()
+                .for_partition(usize::MAX)
+                .output_rows(),
+            Some(99)
+        );
+        assert_eq!(metrics.clone_inner().for_partition(1).iter().count(), 0);
+
+        let shared = metrics.clone();
+        first.add(1);
+        MetricBuilder::new(&shared).output_rows(0).add(17);
+        assert_eq!(snapshot.output_rows(), Some(25));
+        assert_eq!(
+            shared.clone_inner().for_partition(0).output_rows(),
+            Some(42)
+        );
+        assert_eq!(
+            metrics.clone_inner().for_partition(0).output_rows(),
+            Some(42)
+        );
+
+        let full = metrics.clone_inner();
+        let imported = ExecutionPlanMetricsSet::from(full.clone());
+        for (original, copied) in full.iter().zip(imported.clone_inner().iter()) {
+            assert!(Arc::ptr_eq(original, copied));
+        }
+        for partition in [0, 1, usize::MAX] {
+            let expected: Vec<_> = full
+                .iter()
+                .filter(|metric| metric.partition() == Some(partition))
+                .collect();
+            let selected = imported.clone_inner().for_partition(partition);
+            assert_eq!(expected.len(), selected.iter().count());
+            for (original, copied) in expected.into_iter().zip(selected.iter()) {
+                assert!(Arc::ptr_eq(original, copied));
+            }
+        }
+        // From shares metric values, but creates an independent registration set.
+        MetricBuilder::new(&imported).output_rows(0).add(3);
+        assert_eq!(
+            imported.clone_inner().for_partition(0).output_rows(),
+            Some(45)
+        );
+        assert_eq!(
+            metrics.clone_inner().for_partition(0).output_rows(),
+            Some(42)
+        );
+        assert_eq!(full.iter().filter(|m| m.partition().is_none()).count(), 1);
+    }
+
+    #[test]
+    fn partition_snapshots_during_registration() {
+        let metrics = ExecutionPlanMetricsSet::new();
+        let barrier = std::sync::Barrier::new(5);
+        std::thread::scope(|scope| {
+            for partition in 0..4 {
+                let metrics = &metrics;
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    barrier.wait();
+                    for _ in 0..1000 {
+                        MetricBuilder::new(metrics).output_rows(partition).add(1);
+                    }
+                });
+            }
+            barrier.wait();
+            for _ in 0..1000 {
+                for partition in 0..4 {
+                    let selected = metrics.clone_inner().for_partition(partition);
+                    assert!(selected.iter().all(|m| m.partition() == Some(partition)));
+                    assert!(selected.iter().count() <= 1000);
+                }
+            }
+        });
+        for partition in 0..4 {
+            let selected = metrics.clone_inner().for_partition(partition);
+            assert_eq!(selected.iter().count(), 1000);
+            assert_eq!(selected.output_rows(), Some(1000));
+        }
+        assert_eq!(metrics.clone_inner().output_rows(), Some(4000));
+    }
+
+    #[test]
     fn test_output_rows() {
         let metrics = ExecutionPlanMetricsSet::new();
         assert!(metrics.clone_inner().output_rows().is_none());
@@ -771,6 +950,138 @@ mod tests {
         };
 
         assert_eq!(metrics.sum(|_| true), Some(expected_sum));
+    }
+
+    #[test]
+    fn test_bytes_counter_and_gauge_use_byte_units() {
+        let metrics = ExecutionPlanMetricsSet::new();
+
+        // A dedicated byte counter/gauge (like `bytes_scanned` or
+        // `stream_memory_usage`) must render with human_readable_size's
+        // 1024-based units (KB/MB/GB), not human_readable_count's 1000-based
+        // units (K/M/B) - see #24203. 3 GiB, chosen to clear
+        // human_readable_size's >= 2x-tier threshold for GB (below that it
+        // falls back to a large MB value).
+        let three_gib = 3 * 1024 * 1024 * 1024;
+        let bytes_scanned =
+            MetricBuilder::new(&metrics).bytes_counter("bytes_scanned", 0);
+        bytes_scanned.add(three_gib);
+
+        let stream_memory_usage =
+            MetricBuilder::new(&metrics).bytes_gauge("stream_memory_usage", 0);
+        stream_memory_usage.add(three_gib);
+
+        // ParquetSink uses the global (non-partitioned) builder for
+        // `bytes_written`, distinct from `bytes_scanned`'s partitioned
+        // `bytes_counter` above - cover that path too.
+        let bytes_written =
+            MetricBuilder::new(&metrics).global_bytes_counter("bytes_written");
+        bytes_written.add(three_gib);
+
+        // A generic Count/Gauge explicitly tagged Bytes must ALSO be
+        // byte-formatted at Display time - see #24203. `MetricValue` is a
+        // public, already-released exhaustive enum, so dedicated
+        // BytesCount/BytesGauge variants would be a SemVer break; instead
+        // `Display for Metric` reinterprets any Bytes-category Count/Gauge.
+        let generic_bytes_gauge = MetricBuilder::new(&metrics)
+            .with_category(MetricCategory::Bytes)
+            .gauge("right_input_bytes", 0);
+        generic_bytes_gauge.add(three_gib);
+
+        // A generic Count/Gauge with NO Bytes category must keep
+        // count-formatting (human_readable_count), not byte-formatting.
+        let generic_rows_gauge =
+            MetricBuilder::new(&metrics).gauge("right_input_rows", 0);
+        generic_rows_gauge.add(three_gib);
+
+        let rendered: Vec<String> = metrics
+            .clone_inner()
+            .iter()
+            .map(|m| m.to_string())
+            .collect();
+
+        assert!(
+            rendered
+                .iter()
+                .any(|s| s == "bytes_scanned{partition=0}=3.0 GB"),
+            "bytes_scanned should be byte-formatted, got: {rendered:?}"
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|s| s == "stream_memory_usage{partition=0}=3.0 GB"),
+            "stream_memory_usage should be byte-formatted, got: {rendered:?}"
+        );
+        assert!(
+            rendered.iter().any(|s| s == "bytes_written=3.0 GB"),
+            "bytes_written (global_bytes_counter, no partition) should be byte-formatted, got: {rendered:?}"
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|s| s == "right_input_bytes{partition=0}=3.0 GB"),
+            "a generic Gauge tagged Bytes should be byte-formatted, got: {rendered:?}"
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|s| s == "right_input_rows{partition=0}=3.22 B"),
+            "a generic Gauge with no Bytes category must keep count-formatting, got: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn test_sum_by_name_custom_metric() {
+        #[derive(Debug)]
+        struct CustomCount(AtomicUsize);
+
+        impl Display for CustomCount {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "{}", self.0.load(Ordering::Relaxed))
+            }
+        }
+
+        impl CustomMetricValue for CustomCount {
+            fn new_empty(&self) -> Arc<dyn CustomMetricValue> {
+                Arc::new(Self(AtomicUsize::new(0)))
+            }
+
+            fn aggregate(&self, other: Arc<dyn CustomMetricValue + 'static>) {
+                let other = other.as_any().downcast_ref::<Self>().unwrap();
+                self.0
+                    .fetch_add(other.0.load(Ordering::Relaxed), Ordering::Relaxed);
+            }
+
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+
+            fn as_usize(&self) -> usize {
+                self.0.load(Ordering::Relaxed)
+            }
+
+            fn is_eq(&self, other: &Arc<dyn CustomMetricValue>) -> bool {
+                other.as_any().downcast_ref::<Self>().is_some_and(|other| {
+                    self.0.load(Ordering::Relaxed) == other.0.load(Ordering::Relaxed)
+                })
+            }
+        }
+
+        let metrics = ExecutionPlanMetricsSet::new();
+        for (name, value) in [("custom_count", 1), ("custom_count", 2), ("other", 4)] {
+            MetricBuilder::new(&metrics).build(MetricValue::Custom {
+                name: name.into(),
+                value: Arc::new(CustomCount(AtomicUsize::new(value))),
+            });
+        }
+
+        assert_eq!(
+            metrics
+                .clone_inner()
+                .sum_by_name("custom_count")
+                .map(|metric| metric.as_usize()),
+            Some(3)
+        );
     }
 
     #[test]
@@ -885,7 +1196,7 @@ mod tests {
             _ => {
                 panic!("Not a timestamp");
             }
-        };
+        }
 
         let mut ts = aggregated
             .iter()
@@ -903,7 +1214,7 @@ mod tests {
             _ => {
                 panic!("Not a timestamp");
             }
-        };
+        }
     }
 
     #[test]

@@ -35,6 +35,11 @@ SET datafusion.optimizer.prefer_existing_sort = true
 statement ok
 SET datafusion.execution.enable_migration_aggregate = true
 
+# Limit merge buffers so replay can allocate while another partition retains
+# its aggregate state in the shared greedy pool.
+statement ok
+SET datafusion.runtime.max_spill_merge_fan_in = 2
+
 statement ok
 SET datafusion.runtime.memory_limit = '1M'
 
@@ -108,7 +113,7 @@ GROUP BY round(v1, -4), v1 % 5000
 ----
 45000 values hashing to e6ece4b4b86e6152a1c785e90ab5ba12
 
-# Round 2: The same query spills five times with a 600 KB limit.
+# Round 2: The same query spills with a 600 KB limit.
 statement ok
 SET datafusion.runtime.memory_limit = '600K'
 
@@ -132,7 +137,7 @@ GROUP BY round(v1, -4), v1 % 5000
 ----
 45000 values hashing to e6ece4b4b86e6152a1c785e90ab5ba12
 
-# Round 3: The same query spills six times with a 500 KB limit.
+# Round 3: The same query spills with a 500 KB limit.
 statement ok
 SET datafusion.runtime.memory_limit = '500K'
 
@@ -162,7 +167,7 @@ GROUP BY round(v1, -4), v1 % 5000
 statement ok
 SET datafusion.runtime.memory_limit = '600K'
 
-# Ensures final aggregate has spill_count > 0
+# Check spilled rows because extra merge passes can change the byte unit.
 query TT
 EXPLAIN ANALYZE
 SELECT round(v1, -4), v1 % 5000,
@@ -171,7 +176,7 @@ FROM generate_series(20000) AS t1(v1)
 GROUP BY round(v1, -4), v1 % 5000
 ----
 Plan with Metrics
-01)AggregateExec: mode=FinalPartitioned,<slt:ignore>aggr=[sum(t1.v1 * Int64(2)), min(t1.v1 % Int64(2))], ordering_mode=PartiallySorted([0]), metrics=[<slt:ignore>spilled_bytes=<slt:ignore>KB,<slt:ignore>]
+01)AggregateExec: mode=FinalPartitioned,<slt:ignore>aggr=[sum(t1.v1 * Int64(2)), min(t1.v1 % Int64(2))], ordering_mode=PartiallySorted([0]), metrics=[<slt:ignore>spilled_rows=<slt:ignore> K,<slt:ignore>]
 02)--RepartitionExec:<slt:ignore>input_partitions=1, maintains_sort_order=true<slt:ignore>
 03)----AggregateExec: mode=Partial,<slt:ignore>aggr=[sum(t1.v1 * Int64(2)), min(t1.v1 % Int64(2))], ordering_mode=PartiallySorted([0]), metrics=[<slt:ignore>spill_count=0,<slt:ignore>]
 <slt:ignore>
@@ -248,6 +253,9 @@ RESET datafusion.execution.batch_size
 
 statement ok
 SET datafusion.execution.target_partitions = 4
+
+statement ok
+RESET datafusion.runtime.max_spill_merge_fan_in
 
 statement ok
 RESET datafusion.catalog.create_default_catalog_and_schema

@@ -26,10 +26,11 @@ mod tests {
         ExecutionPlanPrivateData, FFI_ExecutionPlan, ForeignExecutionPlan,
         tests::EmptyExec,
     };
-    use datafusion_ffi::tests::utils::get_module;
+    use datafusion_ffi::tests::utils::{get_byte_metrics_exec, get_module};
+    use datafusion_physical_expr_common::metrics::{MetricCategory, MetricValue};
     use datafusion_physical_plan::execution_plan::InvariantLevel;
     use datafusion_physical_plan::{
-        ChildrenPropertiesMode, ExecutionPlan, ReplaceChildrenOptions,
+        ChildrenPropertiesMode, ExecutionPlan, Partitioning, ReplaceChildrenOptions,
     };
     use std::sync::Arc;
 
@@ -64,6 +65,114 @@ mod tests {
 
         let observed_part = with_stats.partition_statistics(Some(0))?;
         assert_eq!(observed_part.as_ref(), &expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_execution_plan_byte_metrics_cross_library() -> Result<(), DataFusionError>
+    {
+        let plan = get_byte_metrics_exec()?;
+        let plan: Arc<dyn ExecutionPlan> = (&plan).try_into()?;
+        assert!(plan.is::<ForeignExecutionPlan>());
+
+        // metrics() crosses the FFI boundary for real here: `plan` is a
+        // ForeignExecutionPlan backed by a separately loaded copy of this
+        // same cdylib, so this call marshals a MetricsSet containing a
+        // Bytes-category MetricValue::Count/Gauge through FFI_MetricsSet
+        // across that boundary - not just the in-process From conversions
+        // covered by physical_expr::metrics's roundtrip tests.
+        let metrics = plan.metrics().expect("plan should report metrics");
+        let selected = metrics.for_partition(0);
+        let expected: Vec<_> = metrics
+            .iter()
+            .filter(|m| m.partition() == Some(0))
+            .collect();
+        assert!(!expected.is_empty());
+        assert_eq!(selected.iter().count(), expected.len());
+        for (actual, expected) in selected.iter().zip(expected) {
+            assert!(Arc::ptr_eq(actual, expected));
+        }
+        assert_eq!(metrics.for_partition(usize::MAX).iter().count(), 0);
+
+        // Assert the transported Bytes category, the generic variant/name/
+        // value, and (below) the byte-formatted display output - MetricValue
+        // is a public, already-released exhaustive enum, so this crosses the
+        // FFI boundary as a generic Count/Gauge tagged MetricCategory::Bytes
+        // rather than as a dedicated variant.
+        let mut found_bytes_count = false;
+        let mut found_bytes_gauge = false;
+        for metric in metrics.iter() {
+            let is_bytes = metric.metric_category() == Some(MetricCategory::Bytes);
+            match metric.value() {
+                MetricValue::Count { name, count }
+                    if name.as_ref() == "bytes_scanned" =>
+                {
+                    assert!(is_bytes, "bytes_scanned should be tagged Bytes category");
+                    assert_eq!(count.value(), 1536);
+                    found_bytes_count = true;
+                }
+                MetricValue::Gauge { name, gauge }
+                    if name.as_ref() == "stream_memory_usage" =>
+                {
+                    assert!(
+                        is_bytes,
+                        "stream_memory_usage should be tagged Bytes category"
+                    );
+                    assert_eq!(gauge.value(), 2048);
+                    found_bytes_gauge = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(
+            found_bytes_count,
+            "expected a Bytes-category bytes_scanned Count metric, got: {metrics:?}"
+        );
+        assert!(
+            found_bytes_gauge,
+            "expected a Bytes-category stream_memory_usage Gauge metric, got: {metrics:?}"
+        );
+
+        // Also confirm the byte-unit Display formatting still applies
+        // post-round-trip.
+        let rendered: Vec<String> = metrics.iter().map(|m| m.to_string()).collect();
+        assert!(
+            rendered
+                .iter()
+                .any(|s| s == "bytes_scanned{partition=0}=1536.0 B"),
+            "bytes_scanned should survive the FFI round trip byte-formatted, got: {rendered:?}"
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|s| s == "stream_memory_usage{partition=0}=2.0 KB"),
+            "stream_memory_usage should survive the FFI round trip byte-formatted, got: {rendered:?}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_range_partitioning_cross_library() -> Result<(), DataFusionError> {
+        let module = get_module()?;
+        let plan = (module.create_exec_with_statistics)();
+        let plan: Arc<dyn ExecutionPlan> = (&plan).try_into()?;
+        let Partitioning::Range(range) = plan.properties().output_partitioning() else {
+            panic!("expected range partitioning");
+        };
+
+        assert_eq!(range.partition_count(), 3);
+        assert_eq!(range.max_partition_count(), 6);
+        assert_eq!(range.samples().len(), 5);
+        assert_eq!(
+            range
+                .split_points()
+                .iter()
+                .map(|point| point.to_string())
+                .collect::<Vec<_>>(),
+            vec!["(20)", "(40)"]
+        );
 
         Ok(())
     }

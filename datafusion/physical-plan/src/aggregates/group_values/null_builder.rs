@@ -17,6 +17,8 @@
 
 use arrow::array::NullBufferBuilder;
 use arrow::buffer::NullBuffer;
+use datafusion_common::Result;
+use datafusion_expr::GroupSelection;
 
 /// Helper methods for NullBufferBuilder that are used in Group By columns
 pub(crate) trait NullBufferBuilderExt {
@@ -24,6 +26,12 @@ pub(crate) trait NullBufferBuilderExt {
 
     /// Return true if the row at index `row` is null
     fn is_null(&self, row: usize) -> bool;
+
+    /// Returns a null buffer for `selection` without changing this builder.
+    fn build_preserving(
+        &self,
+        selection: GroupSelection<'_>,
+    ) -> Result<Option<NullBuffer>>;
 
     /// Returns a NullBuffer representing the first `n` rows accumulated so far
     /// shifting any remaining down by `n`
@@ -43,6 +51,22 @@ impl NullBufferBuilderExt for NullBufferBuilder {
 
     fn is_null(&self, row: usize) -> bool {
         !self.is_valid(row)
+    }
+
+    fn build_preserving(
+        &self,
+        selection: GroupSelection<'_>,
+    ) -> Result<Option<NullBuffer>> {
+        selection.validate_num_groups(self.len())?;
+        if self.as_slice().is_none() {
+            return Ok(None);
+        }
+
+        let mut selected = NullBufferBuilder::new(selection.len());
+        for index in selection.iter() {
+            selected.append(self.is_valid(index));
+        }
+        Ok(selected.finish())
     }
 
     fn take_n(&mut self, n: usize) -> Option<NullBuffer> {

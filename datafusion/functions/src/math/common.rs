@@ -15,8 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::ArrowNativeTypeOp;
+use arrow::array::{Array, ArrowNativeTypeOp, ArrowPrimitiveType, PrimitiveArray};
+use arrow::buffer::BooleanBuffer;
 use arrow::error::ArrowError;
+use datafusion_common::{Result, exec_err};
 use num_traits::{CheckedMul, CheckedNeg, Signed};
 use std::fmt::Display;
 use std::mem::swap;
@@ -24,9 +26,9 @@ use std::ops::RemAssign;
 
 /// A gcd helper to compute GCD using Euclidean GCD algorithm
 /// on non-negative numbers (scalars and decimals)
-fn gcd_helper<T>(a: T, b: T) -> Result<T, ArrowError>
+fn gcd_helper<T>(a: T, b: T) -> T
 where
-    T: ArrowNativeTypeOp + RemAssign + CheckedNeg,
+    T: ArrowNativeTypeOp + RemAssign,
 {
     debug_assert!(a >= T::ZERO);
     debug_assert!(b >= T::ZERO);
@@ -37,7 +39,7 @@ where
         b %= a;
     }
 
-    Ok(a)
+    a
 }
 
 /// Computes gcd of two unsigned integers using Binary GCD algorithm
@@ -84,7 +86,7 @@ where
             .ok_or_else(|| ArrowError::ComputeError("Signed integer overflow".into()))?
     };
     // Call with signed numbers
-    gcd_helper(a, b)
+    Ok(gcd_helper(a, b))
 }
 
 /// Computes gcd of two signed integers
@@ -123,7 +125,7 @@ where
             .ok_or_else(|| ArrowError::ComputeError("Signed integer overflow".into()))?
     };
     // Call with signed numbers
-    let gcd = gcd_helper(a, b)?;
+    let gcd = gcd_helper(a, b);
     // gcd is not zero since both a and b are not zero, so the division is safe.
     (a / gcd).checked_mul(&b).ok_or_else(|| {
         ArrowError::ComputeError(format!("Signed integer overflow in LCM({x}, {y})"))
@@ -140,7 +142,7 @@ pub(crate) fn lcm_signed_int(x: i64, y: i64) -> Result<i64, ArrowError> {
     let a = x.unsigned_abs();
     let b = y.unsigned_abs();
 
-    let gcd = gcd_helper::<u64>(a, b)?;
+    let gcd = unsigned_gcd(a, b);
     // gcd is not zero since both a and b are not zero, so the division is safe.
     (a / gcd)
         .checked_mul(b)
@@ -150,10 +152,60 @@ pub(crate) fn lcm_signed_int(x: i64, y: i64) -> Result<i64, ArrowError> {
         })
 }
 
+/// An alternative to `try_unary` that lets the compiler vectorize both the
+/// input check and `op`, for functions that return an error for some argument
+/// values, such as `sqrt`, which returns an error for negative numbers.
+///
+/// `try_unary` can return early on any value, which keeps the compiler from
+/// vectorizing its loop. Instead, this applies `op` to every value in `array`,
+/// like `unary`, and calls `input_error` on every value, including those in
+/// null slots, in the same loop. Only if some value fails is the array searched
+/// again, ignoring null slots, for an error to report. `input_error` should
+/// therefore be a cheap check, such as a comparison.
+///
+/// For cheap functions like `sqrt`, this is several times faster than
+/// `try_unary`. But because it also does work for null slots, `try_unary` can
+/// be faster on arrays with many nulls, especially when `op` is expensive and
+/// can't be vectorized anyway.
+pub(crate) fn unary_with_input_check<T: ArrowPrimitiveType>(
+    array: &PrimitiveArray<T>,
+    op: impl Fn(T::Native) -> T::Native,
+    input_error: impl Fn(T::Native) -> Option<&'static str>,
+) -> Result<PrimitiveArray<T>> {
+    let mut any_invalid = false;
+    let values: Vec<T::Native> = array
+        .values()
+        .iter()
+        .map(|&x| {
+            any_invalid |= input_error(x).is_some();
+            op(x)
+        })
+        .collect();
+
+    // The check above also ran on null slots, which can hold any value, so the
+    // failure may be spurious. Re-check every value into a bitmap and mask out
+    // the null slots, which is faster than checking only the non-null values one
+    // at a time.
+    if any_invalid {
+        let input = array.values();
+        let mut failed =
+            BooleanBuffer::collect_bool(input.len(), |i| input_error(input[i]).is_some());
+        if let Some(nulls) = array.nulls() {
+            failed = &failed & nulls.inner();
+        }
+        if let Some(message) = failed.set_indices().find_map(|i| input_error(input[i])) {
+            return exec_err!("{message}");
+        }
+    }
+
+    Ok(PrimitiveArray::new(values.into(), array.nulls().cloned()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_buffer::i256;
+    use arrow::array::Float64Array;
+    use arrow_buffer::{NullBuffer, i256};
 
     const GCD_COMMON_TEST_CASES: [(i64, i64, i64); 18] = [
         // Basic cases
@@ -316,5 +368,22 @@ mod tests {
                 "lcm_signed({a}, {b}) expected {expected}, actual {actual}"
             );
         }
+    }
+
+    #[test]
+    fn test_unary_with_input_check() {
+        let input_error = |x: f64| (x < 0.0).then_some("negative input");
+
+        // -1.0 is in a null slot, so it is not an error.
+        let array = Float64Array::new(
+            vec![4.0, -1.0, 9.0].into(),
+            Some(NullBuffer::from(vec![true, false, true])),
+        );
+        let result = unary_with_input_check(&array, f64::sqrt, input_error).unwrap();
+        assert_eq!(result, Float64Array::from(vec![Some(2.0), None, Some(3.0)]));
+
+        let array = Float64Array::from(vec![Some(4.0), None, Some(-1.0)]);
+        let error = unary_with_input_check(&array, f64::sqrt, input_error).unwrap_err();
+        assert_eq!(error.strip_backtrace(), "Execution error: negative input");
     }
 }

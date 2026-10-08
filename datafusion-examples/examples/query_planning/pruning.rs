@@ -211,5 +211,5 @@ fn create_pruning_predicate(expr: Expr, schema: &SchemaRef) -> PruningPredicate 
 }
 
 fn i32_array<'a>(values: impl Iterator<Item = &'a Option<i32>>) -> ArrayRef {
-    Arc::new(Int32Array::from_iter(values.cloned()))
+    Arc::new(Int32Array::from_iter(values.copied()))
 }

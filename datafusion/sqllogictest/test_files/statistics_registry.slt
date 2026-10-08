@@ -18,16 +18,17 @@
 # StatisticsRegistry: demonstrates improved join ordering via more conservative
 # cardinality estimates on a skewed dataset.
 #
+# The session registers a test-only provider in test_context.rs that replaces
+# the join estimate with the Cartesian product of the input row counts.
+#
 # customers (10 rows, 3 distinct customer_ids, skewed 8:1:1)
 # orders    (10 rows, same distribution)
 # dim_small (50 rows)
 #
-# Built-in operator stats give 10*10 / NDV(3) = 33 < 50, which would keep the
+# The operators' own estimates give 10*10 / NDV(3) = 33 < 50, which would keep the
 # inner join on the build side (wrong; actual output is 66). The registry's
 # conservative estimate 10*10 = 100 > 50 swaps dim_small to the build side.
 #
-# Parquet files written by COPY TO carry min/max stats (NDV=3 via range) but no
-# distinct_count, so the registry falls back to the cartesian product upper bound.
 # Threshold settings force Partitioned mode so statistics alone drive the swap.
 
 statement ok

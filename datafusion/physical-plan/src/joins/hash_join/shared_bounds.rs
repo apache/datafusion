@@ -26,11 +26,12 @@ use crate::ExecutionPlanProperties;
 use crate::Partitioning;
 use crate::joins::Map;
 use crate::joins::PartitionMode;
-use crate::joins::hash_join::exec::HASH_JOIN_SEED;
+use crate::joins::hash_join::exec::{HASH_JOIN_SEED, NullAwareMode};
 use crate::joins::hash_join::inlist_builder::build_struct_fields;
 use crate::joins::hash_join::partitioned_hash_eval::{
     HashExpr, HashTableLookupExpr, SeededRandomState,
 };
+use crate::joins::key_range_bitmap::KeyRangeBitmap;
 use crate::repartition::RangeExpr;
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, Schema};
@@ -136,12 +137,15 @@ fn create_membership_predicate(
             )?)))
         }
         // Use hash table lookup for large build sides
-        PushdownStrategy::Map(hash_map) => Ok(Some(Arc::new(HashTableLookupExpr::new(
-            on_right.to_vec(),
-            random_state.clone(),
-            hash_map,
-            "hash_lookup".to_string(),
-        )) as Arc<dyn PhysicalExpr>)),
+        PushdownStrategy::Map(hash_map, pruning_bitmap) => {
+            Ok(Some(Arc::new(HashTableLookupExpr::new(
+                on_right.to_vec(),
+                random_state.clone(),
+                hash_map,
+                "hash_lookup".to_string(),
+                pruning_bitmap,
+            )) as Arc<dyn PhysicalExpr>))
+        }
         // Empty partition - should not create a filter for this
         PushdownStrategy::Empty => Ok(None),
     }
@@ -269,7 +273,7 @@ pub(crate) struct SharedBuildAccumulator {
     null_equality: NullEquality,
     /// Null-aware anti join (`NOT IN`). A probe-side NULL must reach the join so its
     /// three-valued logic can collapse the result, so the pushed filter keeps NULL rows.
-    null_aware: bool,
+    null_aware: Option<NullAwareMode>,
 }
 
 /// Strategy for filter pushdown (decided at collection time)
@@ -277,8 +281,9 @@ pub(crate) struct SharedBuildAccumulator {
 pub(crate) enum PushdownStrategy {
     /// Use InList for small build sides (< 128MB)
     InList(ArrayRef),
-    /// Use map lookup for large build sides
-    Map(Arc<Map>),
+    /// Use map lookup for large build sides. If `Some` the second field
+    /// represents the build side's keys using a bucket bitmap.
+    Map(Arc<Map>, Option<Arc<KeyRangeBitmap>>),
     /// There was no data in this partition, do not build a dynamic filter for it
     Empty,
 }
@@ -380,7 +385,7 @@ impl SharedBuildAccumulator {
         on_right: Vec<PhysicalExprRef>,
         repartition_random_state: SeededRandomState,
         null_equality: NullEquality,
-        null_aware: bool,
+        null_aware: Option<NullAwareMode>,
     ) -> Self {
         // Troubleshooting: If partition counts are incorrect, verify this logic matches
         // the actual execution pattern in collect_build_side()
@@ -761,9 +766,10 @@ impl SharedBuildAccumulator {
                     partition_filters.len(),
                     range_partitioning.partition_count()
                 );
-                Arc::new(RangeExpr::try_new(
+                Arc::new(RangeExpr::try_new_with_schema(
                     self.on_right.clone(),
                     range_partitioning,
+                    &self.probe_schema,
                 )?) as Arc<dyn PhysicalExpr>
             } else {
                 // Routes probe rows with the same `hash(keys) % partition_count` expression used
@@ -799,11 +805,14 @@ impl SharedBuildAccumulator {
 
     /// Keeps probe rows with a NULL key when the join semantics need them.
     ///
-    /// The build-side predicate drops probe rows whose key is NULL. A null-aware anti join
-    /// (`NOT IN`) needs that NULL to reach the join so three-valued logic can collapse the
-    /// result, and a null-equal join needs it to match a build-side NULL. OR-ing `key IS NULL`
-    /// keeps those rows while preserving the filter's selectivity for the rest; the join refines
-    /// whatever the widened filter lets through.
+    /// The build-side predicate drops probe rows whose key is NULL. A null-aware join
+    /// needs a NULL value key to reach the join for `NOT IN` three-valued logic, and a
+    /// null-equal join needs NULL keys to match build-side NULLs.
+    ///
+    /// For a null-aware join, only the `NOT IN` value keys `on_right[..V]` need the
+    /// escape, while `on_right[V..]` are correlation scope keys: a NULL in any element
+    /// of a multi-column value key can make the tuple comparison UNKNOWN. For a
+    /// null-equal join, every nullable key needs the escape.
     fn preserve_probe_nulls(
         &self,
         filter_expr: Arc<dyn PhysicalExpr>,
@@ -813,17 +822,29 @@ impl SharedBuildAccumulator {
         // probe NULL makes `NOT IN` unknown for every build row. A null-equal join needs probe
         // NULLs only to match an actual build-side NULL, so a NULL-free build keeps the filter
         // at full selectivity.
-        let needs_probe_nulls = self.null_aware
+        let needs_probe_nulls = self.null_aware.is_some()
             || (self.null_equality == NullEquality::NullEqualsNull
                 && build_keys_have_null);
         if !needs_probe_nulls {
             return Ok(filter_expr);
         }
-        // Only a key that can actually be NULL needs the disjunct; a NOT NULL key never widens.
-        // Null-aware joins are single-key; null-equal joins can be multi-key, so OR every nullable
-        // key. If every key is NOT NULL the filter is left untouched, at full selectivity.
+        let keys = match self.null_aware {
+            Some(mode) => {
+                let value_keys = mode.value_keys();
+                assert_or_internal_err!(
+                    (1..=self.on_right.len()).contains(&value_keys),
+                    "null-aware join must have between 1 and {} value keys, got {value_keys}",
+                    self.on_right.len()
+                );
+                &self.on_right[..value_keys]
+            }
+            None => self.on_right.as_slice(),
+        };
+
+        // Only a key that can actually be NULL needs the disjunct; a NOT NULL key
+        // never widens the filter.
         let mut any_key_is_null: Option<Arc<dyn PhysicalExpr>> = None;
-        for key in &self.on_right {
+        for key in keys {
             // `nullable` fails only when a key is out of sync with the probe schema. That is
             // a construction bug, so surface it instead of widening around it.
             if !key.nullable(&self.probe_schema)? {
@@ -877,7 +898,7 @@ pub(super) fn make_partitioned_accumulator_for_test(
         probe_schema,
         probe_range_partitioning: None,
         null_equality: NullEquality::NullEqualsNothing,
-        null_aware: false,
+        null_aware: None,
     }
 }
 
@@ -942,7 +963,7 @@ mod tests {
             probe_schema: test_probe_schema(),
             probe_range_partitioning: None,
             null_equality: NullEquality::NullEqualsNothing,
-            null_aware: false,
+            null_aware: None,
         }
     }
 
@@ -1430,7 +1451,10 @@ mod tests {
             probe_schema,
             probe_range_partitioning: None,
             null_equality,
-            null_aware,
+            null_aware: null_aware.then_some(NullAwareMode::LeftAnti {
+                correlated: false,
+                value_keys: 1,
+            }),
         }
     }
 
@@ -1605,5 +1629,92 @@ mod tests {
         // depend on the build content.
         let widened = acc.preserve_probe_nulls(lit(true), false).unwrap();
         assert_eq!(format!("{widened}").matches("IS NULL").count(), 1);
+    }
+
+    // A null-aware join with several probe keys has its `NOT IN` value keys
+    // first (`on_right[..V]`: one for a scalar `NOT IN`, one per tuple element
+    // for a multi-column one) and correlation scope keys after them. A NULL in
+    // any value key can make `NOT IN` UNKNOWN, so the NULL escape must wrap
+    // every value key and no scope key.
+    #[test]
+    fn null_aware_multi_key_filter_escapes_value_keys_only() {
+        for value_keys in [1, 2] {
+            let mut on_right: Vec<PhysicalExprRef> = (0..value_keys)
+                .map(|i| Arc::new(Column::new(&format!("value_key_{i}"), i)) as _)
+                .collect();
+            on_right.push(Arc::new(Column::new("scope_key", value_keys)));
+            let mut fields: Vec<Field> = (0..value_keys)
+                .map(|i| Field::new(format!("value_key_{i}"), DataType::Int32, true))
+                .collect();
+            // Keep the scope key nullable so this test proves it is not widened.
+            fields.push(Field::new("scope_key", DataType::Int32, true));
+
+            let dynamic_filter = test_dynamic_filter(&on_right);
+            let acc = SharedBuildAccumulator {
+                inner: Mutex::new(AccumulatorState {
+                    data: AccumulatedBuildData::CollectLeft {
+                        data: PartitionStatus::Pending,
+                        reported_count: 0,
+                        expected_reports: 1,
+                    },
+                    completion: CompletionState::Pending,
+                }),
+                completion_notify: Notify::new(),
+                dynamic_filter,
+                on_right,
+                repartition_random_state: SeededRandomState::with_seed(1),
+                probe_schema: Arc::new(Schema::new(fields)),
+                probe_range_partitioning: None,
+                null_equality: NullEquality::NullEqualsNothing,
+                null_aware: Some(NullAwareMode::LeftMark {
+                    correlated: true,
+                    value_keys,
+                }),
+            };
+
+            let bounds = PartitionBounds::new(
+                (0..=value_keys as i32)
+                    .map(|i| {
+                        ColumnBounds::new(
+                            ScalarValue::Int32(Some(10 * i)),
+                            ScalarValue::Int32(Some(10 * i + 5)),
+                        )
+                    })
+                    .collect(),
+            );
+            acc.build_filter(FinalizeInput::CollectLeft(reported(
+                PushdownStrategy::Empty,
+                bounds,
+            )))
+            .unwrap();
+
+            let expr = current_expr(&acc);
+            let or = binary_expr(&expr);
+            assert_eq!(or.op(), &Operator::Or);
+            let mut escaped = vec![];
+            collect_is_null_columns(or.left(), &mut escaped);
+            assert_eq!(
+                escaped,
+                (0..value_keys).collect::<Vec<_>>(),
+                "escape must target every NOT IN value key and nothing else"
+            );
+        }
+    }
+
+    /// Column indices under the `IS NULL` disjuncts of an `OR` chain.
+    fn collect_is_null_columns(expr: &Arc<dyn PhysicalExpr>, out: &mut Vec<usize>) {
+        if let Some(or) = expr.downcast_ref::<BinaryExpr>() {
+            assert_eq!(or.op(), &Operator::Or);
+            collect_is_null_columns(or.left(), out);
+            collect_is_null_columns(or.right(), out);
+        } else {
+            let column = expr
+                .downcast_ref::<IsNullExpr>()
+                .expect("expected IS NULL escape")
+                .arg()
+                .downcast_ref::<Column>()
+                .expect("expected column under IS NULL");
+            out.push(column.index());
+        }
     }
 }

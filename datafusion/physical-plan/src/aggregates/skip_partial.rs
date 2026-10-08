@@ -21,8 +21,7 @@ use crate::metrics;
 
 /// Tracks if the aggregate should skip partial aggregations
 ///
-/// See "partial aggregation" discussion on
-/// [`crate::aggregates::grouped_hash_stream::GroupedHashAggregateStream`].
+/// Used by [`crate::aggregates::hash_stream::PartialHashAggregateStream`].
 pub(super) struct SkipAggregationProbe {
     // ========================================================================
     // PROPERTIES:
@@ -40,7 +39,7 @@ pub(super) struct SkipAggregationProbe {
     // ========================================================================
     // STATES:
     // Fields changes during execution. Can be buffer, or state flags that
-    // influence the execution in parent `GroupedHashAggregateStream`
+    // influence the execution in the parent aggregate stream
     // ========================================================================
     /// Number of processed input rows (updated during probing)
     input_rows: usize,

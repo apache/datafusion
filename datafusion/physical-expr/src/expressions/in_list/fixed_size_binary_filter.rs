@@ -38,7 +38,6 @@
 //! Reinterpreting an aligned Arrow buffer is zero-copy. An unaligned buffer is
 //! copied into aligned primitive storage before filter construction or probing.
 
-use std::marker::PhantomData;
 use std::mem::size_of;
 use std::sync::Arc;
 
@@ -84,16 +83,12 @@ where
 }
 
 /// Adapts a primitive filter to concrete, same-width `FixedSizeBinary` arrays.
-struct FixedSizeBinaryFilter<T: ArrowPrimitiveType> {
+struct FixedSizeBinaryFilter {
     data_type: DataType,
     inner: StaticFilterRef,
-    _marker: PhantomData<T>,
 }
 
-impl<T> StaticFilter for FixedSizeBinaryFilter<T>
-where
-    T: ArrowPrimitiveType + Send + Sync + 'static,
-{
+impl StaticFilter for FixedSizeBinaryFilter {
     fn null_count(&self) -> usize {
         self.inner.null_count()
     }
@@ -112,26 +107,28 @@ where
                 self.data_type
             )
         })?;
-        let primitive = reinterpret_as_primitive::<T>(array)?;
-        self.inner.contains(&primitive, negated)
+        let primitive = reinterpret(array)?.ok_or_else(|| {
+            // Instantiation code rejects unsupported widths, so this is unexpected
+            internal_datafusion_err!(
+                "FixedSizeBinary filter: unsupported width {}",
+                array.value_size()
+            )
+        })?;
+        self.inner.contains(primitive.as_ref(), negated)
     }
 }
 
-fn instantiate_for_primitive<T>(array: &FixedSizeBinaryArray) -> Result<StaticFilterRef>
-where
-    T: ArrowPrimitiveType + Send + Sync + 'static,
-{
-    let primitive: ArrayRef = Arc::new(reinterpret_as_primitive::<T>(array)?);
-    let inner = instantiate_primitive_filter(&primitive)?.ok_or_else(|| {
-        internal_datafusion_err!(
-            "FixedSizeBinary filter: no primitive filter for {}",
-            primitive.data_type()
-        )
-    })?;
-    Ok(Arc::new(FixedSizeBinaryFilter::<T> {
-        data_type: array.data_type().clone(),
-        inner,
-        _marker: PhantomData,
+/// Reinterprets a supported-width array as its same-width primitive array, or
+/// `None` if the width has no primitive representation.
+fn reinterpret(array: &FixedSizeBinaryArray) -> Result<Option<ArrayRef>> {
+    Ok(Some(match array.value_size() {
+        1 => Arc::new(reinterpret_as_primitive::<UInt8Type>(array)?) as ArrayRef,
+        2 => Arc::new(reinterpret_as_primitive::<UInt16Type>(array)?),
+        4 => Arc::new(reinterpret_as_primitive::<UInt32Type>(array)?),
+        8 => Arc::new(reinterpret_as_primitive::<UInt64Type>(array)?),
+        16 => Arc::new(reinterpret_as_primitive::<Decimal128Type>(array)?),
+
+        _ => return Ok(None),
     }))
 }
 
@@ -139,22 +136,27 @@ where
 pub(super) fn instantiate_fixed_size_binary_filter(
     in_array: &ArrayRef,
 ) -> Result<Option<StaticFilterRef>> {
-    let DataType::FixedSizeBinary(width) = in_array.data_type() else {
+    if !matches!(in_array.data_type(), DataType::FixedSizeBinary(_)) {
         return Ok(None);
-    };
+    }
     let Some(array) = in_array.as_fixed_size_binary_opt() else {
         return Ok(None);
     };
 
-    let filter = match width {
-        1 => instantiate_for_primitive::<UInt8Type>(array)?,
-        2 => instantiate_for_primitive::<UInt16Type>(array)?,
-        4 => instantiate_for_primitive::<UInt32Type>(array)?,
-        8 => instantiate_for_primitive::<UInt64Type>(array)?,
-        16 => instantiate_for_primitive::<Decimal128Type>(array)?,
-        _ => return Ok(None),
+    let Some(primitive) = reinterpret(array)? else {
+        return Ok(None);
     };
-    Ok(Some(filter))
+    let inner = instantiate_primitive_filter(&primitive)?.ok_or_else(|| {
+        // reinterpret should have returned None for unsupported widths, so this is unexpected
+        internal_datafusion_err!(
+            "FixedSizeBinary filter: no primitive filter for {}",
+            primitive.data_type()
+        )
+    })?;
+    Ok(Some(Arc::new(FixedSizeBinaryFilter {
+        data_type: in_array.data_type().clone(),
+        inner,
+    })))
 }
 
 #[cfg(test)]
@@ -319,6 +321,8 @@ mod tests {
         Ok(())
     }
 
+    // The cast only checks alignment; the pointer is never dereferenced.
+    #[expect(clippy::cast_ptr_alignment)]
     fn unaligned_i128_array(
         values: &[Vec<u8>],
         nulls: Option<NullBuffer>,

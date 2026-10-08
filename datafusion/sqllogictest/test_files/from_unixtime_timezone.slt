@@ -1,0 +1,168 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## from_unixtime timezone tests
+##
+## https://github.com/apache/datafusion/issues/12892
+##########
+
+## Make sure we start from the default (unset) session time zone
+statement ok
+RESET datafusion.execution.time_zone
+
+## Test 1: session time zone unset -> timezone naive, as before
+query TP
+SELECT arrow_typeof(from_unixtime(1704110400)), from_unixtime(1704110400);
+----
+Timestamp(s) 2024-01-01T12:00:00
+
+## Test 2: fixed offset session time zone
+statement ok
+SET datafusion.execution.time_zone = '+08:00';
+
+query TP
+SELECT arrow_typeof(from_unixtime(1704110400)), from_unixtime(1704110400);
+----
+Timestamp(s, "+08:00") 2024-01-01T20:00:00+08:00
+
+## The reproducer from the issue: to_unixtime/from_unixtime must round trip
+query I
+SELECT to_unixtime(from_unixtime(1704110400));
+----
+1704110400
+
+## Test 3: named IANA session time zone
+statement ok
+SET datafusion.execution.time_zone = 'America/Denver';
+
+query TP
+SELECT arrow_typeof(from_unixtime(1704110400)), from_unixtime(1704110400);
+----
+Timestamp(s, "America/Denver") 2024-01-01T05:00:00-07:00
+
+# January alone (`-07:00`) cannot tell a DST-aware zone from a fixed `-07:00`
+# offset. A July instant must render `-06:00`, which only a DST-aware zone does.
+query TP
+SELECT arrow_typeof(from_unixtime(1719835200)), from_unixtime(1719835200);
+----
+Timestamp(s, "America/Denver") 2024-07-01T06:00:00-06:00
+
+## Test 4: an explicit timezone argument wins over the session time zone
+query TP
+SELECT
+  arrow_typeof(from_unixtime(1704110400, 'America/New_York')),
+  from_unixtime(1704110400, 'America/New_York');
+----
+Timestamp(s, "America/New_York") 2024-01-01T07:00:00-05:00
+
+## Test 5: array (not constant folded) input carries the session time zone too
+query TP
+SELECT arrow_typeof(from_unixtime(v)), from_unixtime(v) FROM (VALUES (1704110400), (0)) AS t(v);
+----
+Timestamp(s, "America/Denver") 2024-01-01T05:00:00-07:00
+Timestamp(s, "America/Denver") 1969-12-31T17:00:00-07:00
+
+## Test 6: NULL input stays NULL, but keeps the session time zone in its type
+query TP
+SELECT arrow_typeof(from_unixtime(NULL)), from_unixtime(NULL);
+----
+Timestamp(s, "America/Denver") NULL
+
+query TP
+SELECT arrow_typeof(from_unixtime(arrow_cast(NULL, 'Int64'), 'America/New_York')), from_unixtime(arrow_cast(NULL, 'Int64'), 'America/New_York');
+----
+Timestamp(s, "America/New_York") NULL
+
+## Test 7: the underlying instant is unchanged - only the displayed time zone differs
+query B
+SELECT from_unixtime(1704110400) = from_unixtime(1704110400, 'America/New_York');
+----
+true
+
+## Test 8: RESET restores the timezone naive behaviour
+statement ok
+RESET datafusion.execution.time_zone
+
+query TP
+SELECT arrow_typeof(from_unixtime(1704110400)), from_unixtime(1704110400);
+----
+Timestamp(s) 2024-01-01T12:00:00
+
+##########
+## Out of range values
+##
+## A `Timestamp(Second, Some(tz))` is rendered by shifting the UTC instant by
+## the zone's offset, and that shifted value has to stay inside the range
+## chrono's `NaiveDateTime` can represent, otherwise formatting the value
+## panics.
+##
+## https://github.com/apache/datafusion/issues/16594
+##########
+
+## The last value `America/New_York` can represent (its offset is -04:56 that
+## far in the past, so the local time runs out before the UTC instant does)
+query P
+SELECT from_unixtime(-8334601211038, 'America/New_York');
+----
+-262143-01-01T00:00:00-04:56
+
+## One second earlier is an error, not a panic
+query error DataFusion error: Execution error: Cannot convert \-8334601211039 to a timestamp in timezone "America/New_York" for function from_unixtime: the local date and time is outside the supported range
+SELECT from_unixtime(-8334601211039, 'America/New_York');
+
+## The same bound applies to the session time zone form
+statement ok
+SET datafusion.execution.time_zone = 'America/New_York';
+
+query P
+SELECT from_unixtime(-8334601211038);
+----
+-262143-01-01T00:00:00-04:56
+
+query error DataFusion error: Execution error: Cannot convert \-8334601211039 to a timestamp in timezone "America/New_York" for function from_unixtime: the local date and time is outside the supported range
+SELECT from_unixtime(-8334601211039);
+
+## ... and to array (not constant folded) input
+query error DataFusion error: Execution error: Cannot convert \-8334601211039 to a timestamp in timezone "America/New_York" for function from_unixtime: the local date and time is outside the supported range
+SELECT from_unixtime(v) FROM (VALUES (0), (-8334601211039)) AS t(v);
+
+## A zone that is ahead of UTC runs out at the other end
+statement ok
+SET datafusion.execution.time_zone = '+08:00';
+
+query P
+SELECT from_unixtime(8210266847999);
+----
++262142-12-31T23:59:59+08:00
+
+query error DataFusion error: Execution error: Cannot convert 8210266848000 to a timestamp in timezone "\+08:00" for function from_unixtime: the local date and time is outside the supported range
+SELECT from_unixtime(8210266848000);
+
+statement ok
+RESET datafusion.execution.time_zone
+
+## Without a time zone the full range stays usable
+query P
+SELECT from_unixtime(-8334601228800);
+----
+-262143-01-01T00:00:00
+
+query P
+SELECT from_unixtime(8210266876799);
+----
++262142-12-31T23:59:59

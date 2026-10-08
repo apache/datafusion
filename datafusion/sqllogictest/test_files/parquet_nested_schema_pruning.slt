@@ -107,23 +107,23 @@ LOCATION 'test_files/scratch/parquet_nested_schema_pruning/wide.parquet';
 query TT
 explain analyze select events from narrow;
 ----
-Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=172<slt:ignore>]
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=172.0 B<slt:ignore>]
 
 query TT
 explain analyze select events from full_schema;
 ----
-Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=312<slt:ignore>]
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=312.0 B<slt:ignore>]
 
 # Same for the top-level struct column: the clipped read drops `pad`.
 query TT
 explain analyze select s from narrow;
 ----
-Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=146<slt:ignore>]
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=146.0 B<slt:ignore>]
 
 query TT
 explain analyze select s from full_schema;
 ----
-Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=219<slt:ignore>]
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=219.0 B<slt:ignore>]
 
 # Selecting a single field of `s` reads fewer bytes than selecting `s` itself
 # (above): the read clips down to `x` rather than to every field the narrow
@@ -131,19 +131,19 @@ Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignor
 query TT
 explain analyze select s['x'] from narrow;
 ----
-Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=75<slt:ignore>]
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=75.0 B<slt:ignore>]
 
 # Mixed access -- the whole (narrowed) column and a subfield of it -- still
 # reads only the narrow schema's leaves.
 query TT
 explain analyze select s, s['y'] from narrow;
 ----
-Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=146<slt:ignore>]
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=146.0 B<slt:ignore>]
 
 query TT
 explain analyze select s, s['y'] from full_schema;
 ----
-Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=219<slt:ignore>]
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=219.0 B<slt:ignore>]
 
 
 # `SELECT *` goes through the same clipped read as an explicit projection.
@@ -345,12 +345,12 @@ ORDER BY id, i['group_id'];
 query TT
 explain analyze select events from two_level_narrow;
 ----
-Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=2, <slt:ignore>bytes_scanned=381<slt:ignore>]
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=2, <slt:ignore>bytes_scanned=381.0 B<slt:ignore>]
 
 query TT
 explain analyze select events from two_level_full;
 ----
-Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=2, <slt:ignore>bytes_scanned=1.05 K<slt:ignore>]
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=2, <slt:ignore>bytes_scanned=1047.0 B<slt:ignore>]
 
 statement ok
 DROP TABLE two_level_narrow;
@@ -455,12 +455,12 @@ SELECT id, s FROM narrow WHERE id >= 2 ORDER BY id;
 query TT
 explain analyze select s from narrow where id >= 2;
 ----
-Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=2, <slt:ignore>bytes_scanned=219<slt:ignore>]
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=2, <slt:ignore>bytes_scanned=219.0 B<slt:ignore>]
 
 query TT
 explain analyze select s from full_schema where id >= 2;
 ----
-Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=2, <slt:ignore>bytes_scanned=292<slt:ignore>]
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=2, <slt:ignore>bytes_scanned=292.0 B<slt:ignore>]
 
 statement ok
 set datafusion.execution.parquet.pushdown_filters = false;
@@ -551,25 +551,25 @@ NULL NULL
 query TT
 explain analyze select CAST(s AS STRUCT<x BIGINT>) AS q0, CAST(s AS STRUCT<pad VARCHAR>) AS q1 from exact;
 ----
-Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=148<slt:ignore>]
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=148.0 B<slt:ignore>]
 
 # The cast/get_field union likewise skips `pad`.
 query TT
 explain analyze select CAST(s AS STRUCT<x BIGINT>) AS q0, s['y'] AS q1 from exact;
 ----
-Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=146<slt:ignore>]
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=146.0 B<slt:ignore>]
 
 # The nested union reads x/y but skips both pad leaves.
 query TT
 explain analyze select CAST(events AS ARRAY<STRUCT<x BIGINT>>) AS q0, CAST(events AS ARRAY<STRUCT<y VARCHAR>>) AS q1 from exact;
 ----
-Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=172<slt:ignore>]
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=172.0 B<slt:ignore>]
 
 # A full-root baseline remains larger than every union above.
 query TT
 explain analyze select s from exact;
 ----
-Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=219<slt:ignore>]
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=219.0 B<slt:ignore>]
 
 statement ok
 DROP TABLE exact;

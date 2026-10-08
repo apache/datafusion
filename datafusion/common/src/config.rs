@@ -23,7 +23,10 @@ use arrow_ipc::CompressionType;
 use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
 use crate::error::{_config_datafusion_err, _config_err};
 use crate::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
-use crate::parquet_config::DFParquetWriterVersion;
+use crate::parquet_config::{
+    DFParquetCompression, DFParquetStatistics, DFParquetWriterVersion,
+    RowGroupRangeAssignment,
+};
 use crate::parsers::{CompressionTypeVariant, CsvQuoteStyle};
 use crate::utils::get_available_parallelism;
 use crate::{DataFusionError, Result};
@@ -301,7 +304,7 @@ config_namespace! {
         pub collect_spans: bool, default = false
 
         /// Specifies the recursion depth limit when parsing complex SQL Queries
-        pub recursion_limit: ConfigNonZeroUsize, default = non_zero_usize_default(50)
+        pub recursion_limit: ConfigNonZeroUsize, default = non_zero_usize_default(51)
 
         /// Specifies the default null ordering for query results. There are 4 options:
         /// - `nulls_max`: Nulls appear last in ascending order.
@@ -940,8 +943,10 @@ config_namespace! {
 
         /// The default time zone
         ///
-        /// Some functions, e.g. `now` return timestamps in this time zone
-        pub time_zone: Option<String>, default = None
+        /// Some functions, e.g. `now`, return timestamps in this time zone.
+        /// This is also used to interpret timezone-naive timestamps in
+        /// comparisons and subtraction with timezone-aware timestamps.
+        pub time_zone: Option<ConfigTimeZone>, default = None
 
         /// Parquet options
         pub parquet: ParquetOptions, default = Default::default()
@@ -964,13 +969,13 @@ config_namespace! {
         /// the new schema verification step.
         pub skip_physical_aggregate_schema_check: bool, default = false
 
-        /// Temporary switch for aggregate stream implementations that are being
-        /// migrated from `GroupedHashAggregateStream`.
+        /// Whether aggregation uses the implementation from the major refactor
+        /// completed in the 56.0.0 release. When set to `false`, aggregation
+        /// falls back to the implementation used before 55.0.0.
         ///
-        /// When set to true, DataFusion tries the migrated implementations when
-        /// their preconditions are satisfied. When set to false, grouped
-        /// aggregation falls back to `GroupedHashAggregateStream`. This option
-        /// will be removed after the migration is finished.
+        /// The fallback exists only as a workaround for bugs in the new
+        /// implementation and will be removed, together with this option, after
+        /// the 56.0.0 release.
         ///
         /// See <https://github.com/apache/datafusion/issues/22710> for details.
         pub enable_migration_aggregate: bool, default = true
@@ -1031,13 +1036,33 @@ config_namespace! {
         /// Default: 128 MB
         pub max_spill_file_size_bytes: ConfigNonZeroUsize, default = non_zero_usize_default(128 * 1024 * 1024)
 
+        /// Enables the memory-limited fallback for `NestedLoopJoinExec` join
+        /// types that emit unmatched left rows in the final output (LEFT, LEFT
+        /// SEMI, LEFT ANTI, LEFT MARK, FULL) when the right side has multiple
+        /// partitions.
+        ///
+        /// This fallback shares left-side state (the current left chunk, the
+        /// visited bitmap and the probe-thread counter) across all right-side
+        /// partitions, which assumes every partition runs in the same process.
+        /// Distributed engines that execute each output partition as an
+        /// independent task (e.g. Ballista, datafusion-distributed) give each
+        /// task its own copy
+        /// of this state and poll only one partition, so the cross-partition
+        /// counter never reaches zero and the fallback would stall. Such
+        /// engines should set this to `false`: the coordinated fallback is then
+        /// disabled for left-emitting multi-partition joins, which instead fail
+        /// with a resource-exhaustion error under memory pressure rather than
+        /// deadlocking. Single-partition and non-left-emitting joins are
+        /// unaffected and always keep the fallback.
+        pub enable_nlj_coordinated_fallback: bool, default = true
+
         /// Number of files to read in parallel when inferring schema and statistics
         pub meta_fetch_concurrency: ConfigNonZeroUsize, default = non_zero_usize_default(32)
 
         /// Guarantees a minimum level of output files running in parallel.
         /// RecordBatches will be distributed in round robin fashion to each
         /// parallel writer. Each writer is closed and a new file opened once
-        /// soft_max_rows_per_output_file is reached.
+        /// soft_max_rows_per_output_file or soft_max_bytes_per_output_file is reached.
         pub minimum_parallel_output_files: ConfigNonZeroUsize, default = non_zero_usize_default(4)
 
         /// Target number of rows in output files when writing multiple.
@@ -1045,6 +1070,13 @@ config_namespace! {
         /// will be one file smaller than the limit if the total
         /// number of rows written is not roughly divisible by the soft max
         pub soft_max_rows_per_output_file: ConfigNonZeroUsize, default = non_zero_usize_default(50000000)
+
+        /// Target encoded size in bytes of output files when writing multiple.
+        /// Writers asynchronously report the cumulative encoded size as they
+        /// process RecordBatches. The final file size may exceed this limit due
+        /// to batches buffered before the limit is observed, the size of a batch,
+        /// and file metadata written when the file is finalized.
+        pub soft_max_bytes_per_output_file: ConfigNonZeroUsize, default = non_zero_usize_default(4294967295)
 
         /// This is the maximum number of RecordBatches buffered
         /// for each output file being worked. Higher values can potentially
@@ -1116,6 +1148,7 @@ config_namespace! {
         /// DataFusion will not enforce batch size in joins. Enforcing batch size
         /// in joins can reduce memory usage when joining large
         /// tables with a highly-selective join filter, but is also slightly slower.
+        /// Note: this option currently only applies to the symmetric hash join.
         pub enforce_batch_size_in_joins: bool, default = false
 
         /// Size (bytes) of data buffer DataFusion uses when writing output files.
@@ -1329,6 +1362,10 @@ config_namespace! {
 
         /// (reading) If true, parquet reader will read columns of `Utf8/Utf8Large` with `Utf8View`,
         /// and `Binary/BinaryLarge` with `BinaryView`.
+        ///
+        /// The parquet reader is optimized for reading `Utf8View` and `BinaryView`,
+        /// so such queries are significantly faster than reading `Utf8`/`Binary`
+        /// and then casting to the view types.
         pub schema_force_view_types: bool, default = true
 
         /// (reading) If true, parquet reader will read columns of
@@ -1337,6 +1374,10 @@ config_namespace! {
         /// Parquet files generated by some legacy writers do not correctly set
         /// the UTF8 flag for strings, causing string columns to be loaded as
         /// BLOB instead.
+        ///
+        /// The parquet reader has special optimizations for `Utf8` validation,
+        /// so reading such columns as strings is significantly faster than
+        /// reading them as binary and then casting to string.
         pub binary_as_string: bool, default = false
 
         /// (reading) If true, parquet reader will read columns of
@@ -1373,13 +1414,34 @@ config_namespace! {
         /// rewrite; other predicates and Bloom-filter pruning remain available.
         ///
         /// Within the cap, nonempty lists of at most 20 values use the existing
-        /// per-value rewrite. Larger positive, non-null literal string lists
-        /// on a string column use a compact sorted domain. Other lists retain
-        /// the existing per-value rewrite, so raising the cap can make those
-        /// predicates expensive to build and evaluate.
+        /// per-value rewrite. Larger literal lists use a compact representation
+        /// when the column type is string, variable-length binary, integer,
+        /// decimal, date, time, timestamp, or duration. This applies to both `IN`
+        /// and `NOT IN`, including lists with NULL members. `NOT IN` with NULL and
+        /// all-NULL `IN` lists cannot match any rows. Compact lists containing NULL
+        /// do not use the fully-matched-row-group optimization. Floating-point and
+        /// other lists retain the existing per-value rewrite, so raising the cap
+        /// can make those predicates expensive to build and evaluate.
         ///
         /// Defaults to 20.
         pub max_in_list_size: usize, default = 20
+
+        /// (reading) If true, top-level string and binary Parquet columns with
+        /// dictionary pages are inferred and scanned as
+        /// `Dictionary<Int32, Utf8>` / `Dictionary<Int32, Binary>` instead of
+        /// their plain value type.
+        ///
+        /// This applies only when DataFusion infers the table schema. Tables with
+        /// a user-supplied schema are not promoted because the Parquet footer is
+        /// not read at DDL time, so dictionary pages cannot be detected per column.
+        /// See <https://github.com/apache/datafusion/issues/24112>
+        pub enable_rle_to_dictionary: bool, default = false
+
+        /// (reading) Which byte range of a split file reads each row group.
+        /// `start_offset` picks the range containing the row group's start.
+        /// `midpoint` picks the range containing its midpoint, as Spark does,
+        /// which spreads large row groups more evenly across ranges.
+        pub row_group_range_assignment: RowGroupRangeAssignment, default = RowGroupRangeAssignment::StartOffset
 
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
@@ -1408,7 +1470,7 @@ config_namespace! {
         ///
         /// Note that this default setting is not the same as
         /// the default parquet writer setting.
-        pub compression: Option<String>, transform = str::to_lowercase, default = Some("zstd(3)".into())
+        pub compression: Option<DFParquetCompression>, default = Some(DFParquetCompression::Zstd(3))
 
         /// (writing) Sets if dictionary encoding is enabled. If NULL, uses
         /// default parquet writer setting
@@ -1421,7 +1483,7 @@ config_namespace! {
         /// Valid values are: "none", "chunk", and "page"
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
-        pub statistics_enabled: Option<String>, transform = str::to_lowercase, default = Some("page".into())
+        pub statistics_enabled: Option<DFParquetStatistics>, default = Some(DFParquetStatistics::Page)
 
         /// (writing) Target maximum number of rows in each row group (defaults to 1M
         /// rows). Writing larger row groups requires more memory to write, but
@@ -1475,7 +1537,7 @@ config_namespace! {
         /// (writing) Controls whether DataFusion will attempt to speed up writing
         /// parquet files by serializing them in parallel. Each column
         /// in each row group in each output file are serialized in parallel
-        /// leveraging a maximum possible core count of n_files*n_row_groups*n_columns.
+        /// leveraging a maximum possible core count of n_files\*n_row_groups\*n_columns.
         pub allow_single_file_parallelism: bool, default = true
 
         /// (writing) By default parallel parquet writer is tuned for minimum
@@ -1747,7 +1809,9 @@ config_namespace! {
         /// rule. When set to false, any rules that produce errors will cause the query to fail
         pub skip_failed_rules: bool, default = false
 
-        /// Number of times that the optimizer will attempt to optimize the plan
+        /// The logical optimizer applies rules in order for up to `max_passes` passes,
+        /// stopping early if a pass leaves the plan unchanged or repeats an earlier plan.
+        /// The physical optimizer always runs in one pass.
         pub max_passes: usize, default = 3
 
         /// When set to true, the physical plan optimizer will run a top down
@@ -1967,6 +2031,76 @@ impl From<ConfigDurationFormat> for arrow::util::display::DurationFormat {
             ConfigDurationFormat::Iso8601 => {
                 arrow::util::display::DurationFormat::ISO8601
             }
+        }
+    }
+}
+
+/// A time zone that is known to parse as an Arrow
+/// [`Tz`](arrow::array::timezone::Tz), used for
+/// [`ExecutionOptions::time_zone`].
+///
+/// The value is kept as it was written, so `+08` stays `+08` rather than
+/// being normalized to `+08:00`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigTimeZone(String);
+
+impl ConfigTimeZone {
+    /// Returns the time zone as it was written.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl FromStr for ConfigTimeZone {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.parse::<arrow::array::timezone::Tz>() {
+            Ok(_) => Ok(Self(s.to_string())),
+            Err(_) => _config_err!(
+                "Invalid time zone: {s}. Valid values are UTC offsets such as +08:00 or IANA time zone names such as Asia/Taipei"
+            ),
+        }
+    }
+}
+
+impl Display for ConfigTimeZone {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// `ConfigField` for `Option<ConfigTimeZone>` parses before assigning so an
+/// invalid value leaves the current setting unchanged.
+impl ConfigField for Option<ConfigTimeZone> {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        match self {
+            Some(time_zone) => v.some(key, time_zone, description),
+            None => v.none(key, description),
+        }
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        if !key.is_empty() {
+            return _config_err!(
+                "Config field is a scalar Option<ConfigTimeZone> and does not have nested field \"{}\"",
+                key
+            );
+        }
+
+        *self = Some(ConfigTimeZone::from_str(value)?);
+        Ok(())
+    }
+
+    fn reset(&mut self, key: &str) -> Result<()> {
+        if key.is_empty() {
+            *self = None;
+            Ok(())
+        } else {
+            _config_err!(
+                "Config field is a scalar Option<ConfigTimeZone> and does not have nested field \"{}\"",
+                key
+            )
         }
     }
 }
@@ -3418,7 +3552,7 @@ impl ConfigField for ConfigFileEncryptionProperties {
         if key.contains("::") {
             // Handle any column specific properties
             return self.column_encryption_properties.set(key, value);
-        };
+        }
 
         let (key, rem) = key.split_once('.').unwrap_or((key, ""));
         match key {
@@ -3598,7 +3732,7 @@ impl ConfigField for ConfigFileDecryptionProperties {
         if key.contains("::") {
             // Handle any column specific properties
             return self.column_decryption_properties.set(key, value);
-        };
+        }
 
         let (key, rem) = key.split_once('.').unwrap_or((key, ""));
         match key {
@@ -3672,11 +3806,20 @@ impl TryFrom<&Arc<FileDecryptionProperties>> for ConfigFileDecryptionProperties 
     type Error = DataFusionError;
 
     fn try_from(f: &Arc<FileDecryptionProperties>) -> Result<Self> {
+        if f.uses_key_retriever() {
+            // Getting the keys is not possible without the key metadata from
+            // a Parquet file if a key retriever is used.
+            return Err(
+                DataFusionError::Configuration(
+                    "Cannot convert FileDecryptionProperties that use a key retriever to ConfigFileDecryptionProperties".into()
+                )
+            );
+        }
+
         let footer_key = f.footer_key(None).map_err(|e| {
+            // This shouldn't happen for FileDecryptionProperties that don't use a key retriever.
             DataFusionError::Configuration(format!(
-                "Could not retrieve footer key from FileDecryptionProperties. \
-                Note that conversion to ConfigFileDecryptionProperties is not supported \
-                when using a key retriever: {e}"
+                "Could not retrieve footer key from FileDecryptionProperties: {e}"
             ))
         })?;
 
@@ -4010,7 +4153,6 @@ impl Display for OutputFormat {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "parquet")]
     use crate::assert_contains;
     use crate::config::TableParquetOptions;
     use crate::config::{
@@ -4447,14 +4589,10 @@ mod tests {
 
     #[cfg(feature = "parquet_encryption")]
     impl parquet::encryption::decrypt::KeyRetriever for ParquetEncryptionKeyRetriever {
-        fn retrieve_key(&self, key_metadata: &[u8]) -> parquet::errors::Result<Vec<u8>> {
-            if !key_metadata.is_empty() {
-                Ok(b"1234567890123450".to_vec())
-            } else {
-                Err(parquet::errors::ParquetError::General(
-                    "Key metadata not provided".to_string(),
-                ))
-            }
+        fn retrieve_key(&self, _key_metadata: &[u8]) -> parquet::errors::Result<Vec<u8>> {
+            // Ignore key metadata so we can verify that the key retriever isn't used
+            // even if it can provide a key without using metadata.
+            Ok(b"1234567890123450".to_vec())
         }
     }
 
@@ -4474,8 +4612,10 @@ mod tests {
             (&decryption_properties).try_into();
         assert!(config_file_decryption_properties.is_err());
         let err = config_file_decryption_properties.unwrap_err().to_string();
-        assert!(err.contains("key retriever"));
-        assert!(err.contains("Key metadata not provided"));
+        assert_contains!(
+            err,
+            "Cannot convert FileDecryptionProperties that use a key retriever to ConfigFileDecryptionProperties"
+        );
     }
 
     #[cfg(feature = "parquet")]
@@ -4576,6 +4716,195 @@ mod tests {
             err.to_string(),
             "Invalid or Unsupported Configuration: Invalid parquet writer version: 3.0. Expected one of: 1.0, 2.0"
         );
+    }
+
+    #[cfg(feature = "parquet")]
+    #[test]
+    fn test_parquet_statistics_validation() {
+        use crate::{config::ConfigOptions, parquet_config::DFParquetStatistics};
+
+        let mut config = ConfigOptions::default();
+
+        for (value, expected) in [
+            ("none", DFParquetStatistics::None),
+            ("CHUNK", DFParquetStatistics::Chunk),
+            ("page", DFParquetStatistics::Page),
+        ] {
+            config
+                .set("datafusion.execution.parquet.statistics_enabled", value)
+                .unwrap();
+            assert_eq!(config.execution.parquet.statistics_enabled, Some(expected));
+        }
+
+        let err = config
+            .set("datafusion.execution.parquet.statistics_enabled", "invalid")
+            .unwrap_err();
+        assert_contains!(
+            err.to_string(),
+            "Invalid parquet statistics setting: invalid. Expected one of: none, chunk, page"
+        );
+
+        // An unset value can arise from deserialization. An invalid update must
+        // leave that state unchanged rather than inserting the default.
+        config.execution.parquet.statistics_enabled = None;
+        assert_eq!(config.execution.parquet.statistics_enabled, None);
+
+        assert!(
+            config
+                .set("datafusion.execution.parquet.statistics_enabled", "invalid")
+                .is_err()
+        );
+        assert_eq!(config.execution.parquet.statistics_enabled, None);
+
+        config.execution.parquet.statistics_enabled = Some(DFParquetStatistics::Page);
+        assert!(
+            config
+                .set(
+                    "datafusion.execution.parquet.statistics_enabled.typo",
+                    "none"
+                )
+                .is_err()
+        );
+        assert_eq!(
+            config.execution.parquet.statistics_enabled,
+            Some(DFParquetStatistics::Page)
+        );
+
+        assert!(
+            config
+                .reset("datafusion.execution.parquet.statistics_enabled.typo")
+                .is_err()
+        );
+        assert_eq!(
+            config.execution.parquet.statistics_enabled,
+            Some(DFParquetStatistics::Page)
+        );
+
+        let mut scalar = DFParquetStatistics::Page;
+        assert!(ConfigField::set(&mut scalar, "typo", "none").is_err());
+        assert_eq!(scalar, DFParquetStatistics::Page);
+    }
+
+    #[test]
+    fn test_execution_time_zone_validation() {
+        use crate::config::ConfigOptions;
+
+        const KEY: &str = "datafusion.execution.time_zone";
+        let mut config = ConfigOptions::default();
+        assert_eq!(config.execution.time_zone, None);
+
+        // Valid values are kept exactly as written.
+        for value in ["+08:00", "-08:00", "+0800", "+08", "UTC", "Asia/Taipei"] {
+            config.set(KEY, value).unwrap();
+            assert_eq!(
+                config.execution.time_zone.as_ref().map(|tz| tz.as_str()),
+                Some(value)
+            );
+        }
+
+        // A rejected value leaves the previous one in place.
+        for value in ["+08:00:00", "08:00", "08", "Asia/Taipei2", "AEST", ""] {
+            let err = config.set(KEY, value).unwrap_err();
+            assert_contains!(err.to_string(), format!("Invalid time zone: {value}."));
+            assert_eq!(
+                config.execution.time_zone.as_ref().map(|tz| tz.as_str()),
+                Some("Asia/Taipei")
+            );
+        }
+
+        // An invalid update of an unset value leaves it unset.
+        config.reset(KEY).unwrap();
+        assert_eq!(config.execution.time_zone, None);
+        assert!(config.set(KEY, "Asia/Taipei2").is_err());
+        assert_eq!(config.execution.time_zone, None);
+
+        // The option has no nested fields.
+        config.set(KEY, "UTC").unwrap();
+        assert!(config.set(&format!("{KEY}.typo"), "UTC").is_err());
+        assert!(config.reset(&format!("{KEY}.typo")).is_err());
+        assert_eq!(
+            config.execution.time_zone.as_ref().map(|tz| tz.as_str()),
+            Some("UTC")
+        );
+    }
+
+    #[cfg(feature = "parquet")]
+    #[test]
+    fn test_parquet_compression_validation() {
+        use crate::{config::ConfigOptions, parquet_config::DFParquetCompression};
+
+        let mut config = ConfigOptions::default();
+        assert_eq!(
+            config.execution.parquet.compression,
+            Some(DFParquetCompression::Zstd(3))
+        );
+
+        for (value, expected) in [
+            ("snappy", DFParquetCompression::Snappy),
+            ("GZIP(6)", DFParquetCompression::Gzip(6)),
+            ("'zstd(22)'", DFParquetCompression::Zstd(22)),
+        ] {
+            config
+                .set("datafusion.execution.parquet.compression", value)
+                .unwrap();
+            assert_eq!(config.execution.parquet.compression, Some(expected));
+        }
+
+        for (value, message) in [
+            (
+                "zstdd(3)",
+                "Unknown or unsupported parquet compression: zstdd(3)",
+            ),
+            (
+                "zstd",
+                "zstd compression requires specifying a level such as zstd(4)",
+            ),
+            (
+                "snappy(2)",
+                "Compression snappy does not support specifying a level",
+            ),
+            ("zstd(23)", "Invalid compression level 23 for zstd"),
+        ] {
+            let err = config
+                .set("datafusion.execution.parquet.compression", value)
+                .unwrap_err();
+            assert_contains!(err.to_string(), message);
+            // A rejected value leaves the previous one in place.
+            assert_eq!(
+                config.execution.parquet.compression,
+                Some(DFParquetCompression::Zstd(22))
+            );
+        }
+
+        // An unset value can arise from deserialization. An invalid update must
+        // leave that state unchanged rather than inserting the default.
+        config.execution.parquet.compression = None;
+        assert!(
+            config
+                .set("datafusion.execution.parquet.compression", "zstd")
+                .is_err()
+        );
+        assert_eq!(config.execution.parquet.compression, None);
+
+        config.execution.parquet.compression = Some(DFParquetCompression::Lz4);
+        assert!(
+            config
+                .set("datafusion.execution.parquet.compression.typo", "snappy")
+                .is_err()
+        );
+        assert!(
+            config
+                .reset("datafusion.execution.parquet.compression.typo")
+                .is_err()
+        );
+        assert_eq!(
+            config.execution.parquet.compression,
+            Some(DFParquetCompression::Lz4)
+        );
+
+        let mut scalar = DFParquetCompression::Lz4;
+        assert!(ConfigField::set(&mut scalar, "typo", "snappy").is_err());
+        assert_eq!(scalar, DFParquetCompression::Lz4);
     }
 
     #[cfg(feature = "parquet")]

@@ -179,7 +179,12 @@ impl FileOpener for ArrowFileOpener {
                     })?;
                     // build decoder according to footer & projection
                     let schema =
-                        arrow_ipc::convert::fb_to_schema(footer.schema().unwrap());
+                        arrow_ipc::convert::try_fb_to_schema(footer.schema().unwrap())
+                            .map_err(|err| {
+                                exec_datafusion_err!(
+                                    "Unable to convert IPC schema: {err:?}"
+                                )
+                            })?;
                     let mut decoder = FileDecoder::new(schema.into(), footer.version());
                     if let Some(projection) = projection {
                         decoder = decoder.with_projection(projection);
@@ -414,7 +419,20 @@ impl FileSource for ArrowSource {
         use datafusion_proto_models::protobuf;
         use protobuf::physical_plan_node::PhysicalPlanType;
 
-        let format = match self.format {
+        // Exhaustive destructure: adding a field to `ArrowSource` without
+        // deciding how it is serialized is a compile error, not a silent
+        // round-trip gap.
+        let Self {
+            format,
+            // Runtime metrics, not part of the plan.
+            metrics: _,
+            // Serialized in `base` and reapplied on decode.
+            projection: _,
+            // Serialized in `base` and used to rebuild the source on decode.
+            table_schema: _,
+        } = self;
+
+        let format = match format {
             ArrowFormat::File => protobuf::ArrowIpcFormat::File,
             ArrowFormat::Stream => protobuf::ArrowIpcFormat::Stream,
         };
@@ -452,16 +470,18 @@ impl ArrowSource {
             );
         };
 
-        let base_conf = scan.base_conf.as_ref().ok_or_else(|| {
+        let protobuf::ArrowScanExecNode { base_conf, format } = scan;
+
+        let base_conf = base_conf.as_ref().ok_or_else(|| {
             datafusion_common::internal_datafusion_err!(
                 "ArrowScanExecNode is missing required field 'base_conf'"
             )
         })?;
 
-        let format = protobuf::ArrowIpcFormat::try_from(scan.format).map_err(|_| {
+        let format = protobuf::ArrowIpcFormat::try_from(*format).map_err(|_| {
             datafusion_common::internal_datafusion_err!(
                 "Unknown ArrowIpcFormat: {}",
-                scan.format
+                format
             )
         })?;
 

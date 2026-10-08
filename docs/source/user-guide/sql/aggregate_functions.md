@@ -247,10 +247,10 @@ bool_and(expression)
 
 ### `bool_or`
 
-Returns true if all non-null input values are true, otherwise false.
+Returns true if any non-null input value is true, otherwise false.
 
 ```sql
-bool_and(expression)
+bool_or(expression)
 ```
 
 #### Arguments
@@ -260,9 +260,9 @@ bool_and(expression)
 #### Example
 
 ```sql
-> SELECT bool_and(column_name) FROM table_name;
+> SELECT bool_or(column_name) FROM table_name;
 +----------------------------+
-| bool_and(column_name)      |
+| bool_or(column_name)       |
 +----------------------------+
 | true                       |
 +----------------------------+
@@ -644,10 +644,10 @@ _Alias of [covar_samp](#covar_samp)._
 
 ### `covar_pop`
 
-Returns the sample covariance of a set of number pairs.
+Returns the population covariance of a set of number pairs.
 
 ```sql
-covar_samp(expression1, expression2)
+covar_pop(expression1, expression2)
 ```
 
 #### Arguments
@@ -658,11 +658,11 @@ covar_samp(expression1, expression2)
 #### Example
 
 ```sql
-> SELECT covar_samp(column1, column2) FROM table_name;
+> SELECT covar_pop(column1, column2) FROM table_name;
 +-----------------------------------+
-| covar_samp(column1, column2)      |
+| covar_pop(column1, column2)       |
 +-----------------------------------+
-| 8.25                              |
+| 7.63333333333                     |
 +-----------------------------------+
 ```
 

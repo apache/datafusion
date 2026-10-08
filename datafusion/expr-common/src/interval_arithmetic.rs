@@ -417,11 +417,23 @@ impl Interval {
     }
 
     /// Casts this interval to `data_type` using `cast_options`.
+    /// Numeric endpoints that fail to cast become unbounded,
+    /// regardless of `cast_options.safe`. Other cast errors are propagated.
     pub fn cast_to(
         &self,
         data_type: &DataType,
         cast_options: &CastOptions,
     ) -> Result<Self> {
+        // Estimated endpoints may overflow even when all runtime values fit.
+        let bound_options = CastOptions {
+            safe: true,
+            ..cast_options.clone()
+        };
+        let cast_options = if self.data_type().is_numeric() && data_type.is_numeric() {
+            &bound_options
+        } else {
+            cast_options
+        };
         Self::try_new(
             cast_scalar_value(&self.lower, data_type, cast_options)?,
             cast_scalar_value(&self.upper, data_type, cast_options)?,
@@ -663,8 +675,8 @@ impl Interval {
             return Ok(None);
         }
 
-        let lower = max_of_bounds(&lhs.lower, &rhs.lower);
-        let upper = min_of_bounds(&lhs.upper, &rhs.upper);
+        let lower = max_lower_bound(&lhs.lower, &rhs.lower);
+        let upper = min_upper_bound(&lhs.upper, &rhs.upper);
 
         // New lower and upper bounds must always construct a valid interval.
         debug_assert!(
@@ -686,18 +698,8 @@ impl Interval {
         let lhs = lhs_owned.as_ref().unwrap_or(self);
         let rhs = rhs_owned.as_ref().unwrap_or(rhs);
 
-        let lower =
-            if lhs.lower.is_null() || (!rhs.lower.is_null() && lhs.lower <= rhs.lower) {
-                lhs.lower.clone()
-            } else {
-                rhs.lower.clone()
-            };
-        let upper =
-            if lhs.upper.is_null() || (!rhs.upper.is_null() && lhs.upper >= rhs.upper) {
-                lhs.upper.clone()
-            } else {
-                rhs.upper.clone()
-            };
+        let lower = min_lower_bound(&lhs.lower, &rhs.lower);
+        let upper = max_upper_bound(&lhs.upper, &rhs.upper);
 
         // New lower and upper bounds must always construct a valid interval.
         debug_assert!(
@@ -857,10 +859,13 @@ impl Interval {
         let zero = ScalarValue::new_zero(&dt)?;
         // We want 0 to be approachable from both negative and positive sides.
         let zero_point = match &dt {
-            DataType::Float32 | DataType::Float64 => Self::new(zero.clone(), zero),
-            _ => Self::new(prev_value(zero.clone()), next_value(zero)),
+            DataType::Float32 | DataType::Float64 => {
+                Self::new(zero.clone(), zero.clone())
+            }
+            _ => Self::new(prev_value(zero.clone()), next_value(zero.clone())),
         };
 
+        // The helpers treat intervals with a finite upper bound <= 0 as non-positive.
         // Exit early with an unbounded interval if zero is strictly inside the
         // right hand side:
         if rhs_ref.contains(&zero_point)? == Self::TRUE && !dt.is_unsigned_integer() {
@@ -871,19 +876,9 @@ impl Interval {
         else if lhs_ref.contains(&zero_point)? == Self::TRUE
             && !dt.is_unsigned_integer()
         {
-            Ok(div_helper_lhs_zero_inclusive(
-                &dt,
-                lhs_ref,
-                rhs_ref,
-                &zero_point,
-            ))
+            Ok(div_helper_lhs_zero_inclusive(&dt, lhs_ref, rhs_ref, &zero))
         } else {
-            Ok(div_helper_zero_exclusive(
-                &dt,
-                lhs_ref,
-                rhs_ref,
-                &zero_point,
-            ))
+            Ok(div_helper_zero_exclusive(&dt, lhs_ref, rhs_ref, &zero))
         }
     }
 
@@ -1346,9 +1341,17 @@ fn next_value_helper<const INC: bool>(value: ScalarValue) -> ScalarValue {
     }
 }
 
-/// Returns the greater of the given interval bounds. Assumes that a `NULL`
-/// value represents `NEG_INF`.
-fn max_of_bounds(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
+/// Returns the lesser of two lower bounds, treating `NULL` as `NEG_INF`.
+fn min_lower_bound(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
+    if first.is_null() || (!second.is_null() && first <= second) {
+        first.clone()
+    } else {
+        second.clone()
+    }
+}
+
+/// Returns the greater of two lower bounds, treating `NULL` as `NEG_INF`.
+fn max_lower_bound(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
     if !first.is_null() && (second.is_null() || first >= second) {
         first.clone()
     } else {
@@ -1356,10 +1359,18 @@ fn max_of_bounds(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
     }
 }
 
-/// Returns the lesser of the given interval bounds. Assumes that a `NULL`
-/// value represents `INF`.
-fn min_of_bounds(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
+/// Returns the lesser of two upper bounds, treating `NULL` as `INF`.
+fn min_upper_bound(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
     if !first.is_null() && (second.is_null() || first <= second) {
+        first.clone()
+    } else {
+        second.clone()
+    }
+}
+
+/// Returns the greater of two upper bounds, treating `NULL` as `INF`.
+fn max_upper_bound(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
+    if first.is_null() || (!second.is_null() && first >= second) {
         first.clone()
     } else {
         second.clone()
@@ -1482,13 +1493,14 @@ fn mul_helper_multi_zero_inclusive(
     {
         return Interval::make_unbounded(dt).unwrap();
     }
-    // Since unbounded cases are handled above, we can safely
-    // use the utility functions here to eliminate code duplication.
-    let lower = min_of_bounds(
+    // Even finite inputs can produce unbounded endpoints through overflow.
+    // When combining the products, NULL lower bounds represent NEG_INF and
+    // NULL upper bounds represent INF, so either must dominate finite bounds.
+    let lower = min_lower_bound(
         &mul_bounds::<false>(dt, &lhs.lower, &rhs.upper),
         &mul_bounds::<false>(dt, &rhs.lower, &lhs.upper),
     );
-    let upper = max_of_bounds(
+    let upper = max_upper_bound(
         &mul_bounds::<true>(dt, &lhs.upper, &rhs.upper),
         &mul_bounds::<true>(dt, &lhs.lower, &rhs.lower),
     );
@@ -1633,10 +1645,10 @@ fn div_helper_lhs_zero_inclusive(
     dt: &DataType,
     lhs: &Interval,
     rhs: &Interval,
-    zero_point: &Interval,
+    zero: &ScalarValue,
 ) -> Interval {
     // With the following interval bounds, there is no possibility to create an invalid interval.
-    if rhs.upper <= zero_point.lower && !rhs.upper.is_null() {
+    if rhs.upper <= *zero && !rhs.upper.is_null() {
         // <-------=====0=====------->
         // <--======----0------------>
         let lower = div_bounds::<false>(dt, &lhs.upper, &rhs.upper);
@@ -1652,12 +1664,12 @@ fn div_helper_lhs_zero_inclusive(
 }
 
 /// Divides the left-hand side interval by the right-hand side interval when
-/// neither interval contains zero.
+/// neither interval straddles zero (zero endpoints are allowed).
 ///
 /// This function takes in two intervals (`lhs` and `rhs`) as arguments and
 /// returns their quotient (whose data type is known to be `dt`). It is
-/// specifically designed to handle intervals that do not contain zero within
-/// their ranges. Returns an error if the division of bounds fails.
+/// specifically designed to handle intervals that do not straddle zero.
+/// Returns an error if the division of bounds fails.
 ///
 /// ``` text
 /// Left-hand side:  <--======----0------------>
@@ -1686,11 +1698,11 @@ fn div_helper_zero_exclusive(
     dt: &DataType,
     lhs: &Interval,
     rhs: &Interval,
-    zero_point: &Interval,
+    zero: &ScalarValue,
 ) -> Interval {
     let (lower, upper) = match (
-        lhs.upper <= zero_point.lower && !lhs.upper.is_null(),
-        rhs.upper <= zero_point.lower && !rhs.upper.is_null(),
+        lhs.upper <= *zero && !lhs.upper.is_null(),
+        rhs.upper <= *zero && !rhs.upper.is_null(),
     ) {
         // With the following interval bounds, there is no possibility to create an invalid interval.
         (true, true) => (
@@ -2261,15 +2273,239 @@ impl NullableInterval {
 mod tests {
     use crate::{
         interval_arithmetic::{
-            Interval, handle_overflow, next_value, prev_value, satisfy_greater,
+            Interval, cast_scalar_value, handle_overflow, next_value, prev_value,
+            satisfy_greater,
         },
         operator::Operator,
     };
 
     use crate::interval_arithmetic::NullableInterval;
+    use arrow::compute::CastOptions;
     use arrow::datatypes::DataType;
     use datafusion_common::rounding::{next_down, next_up};
     use datafusion_common::{Result, ScalarValue};
+
+    #[test]
+    fn test_numeric_cast_out_of_range_bounds() {
+        for safe in [false, true] {
+            let options = CastOptions {
+                safe,
+                ..Default::default()
+            };
+            for source in [
+                DataType::Int64,
+                DataType::Float64,
+                DataType::Decimal128(10, 0),
+            ] {
+                for (lower, upper, expected_lower, expected_upper) in [
+                    (Some(-129i64), Some(42), None, Some(42i8)),
+                    (Some(-42), Some(128), Some(-42), None),
+                    (Some(-129), Some(128), None, None),
+                    (Some(-128), Some(127), Some(-128i8), Some(127i8)),
+                    (Some(128), Some(129), None, None),
+                    (Some(-130), Some(-129), None, None),
+                    (None, Some(42), None, Some(42)),
+                    (Some(-42), None, Some(-42), None),
+                ] {
+                    let input = Interval::make(lower, upper)
+                        .unwrap()
+                        .cast_to(&source, &options)
+                        .unwrap();
+                    assert_eq!(
+                        input.cast_to(&DataType::Int8, &options).unwrap(),
+                        Interval::make(expected_lower, expected_upper).unwrap(),
+                        "{source}: {input}, safe={safe}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_numeric_cast_bounds_across_types() {
+        for safe in [false, true] {
+            let options = CastOptions {
+                safe,
+                ..Default::default()
+            };
+            // Cover unsigned, floating-point and decimal sources and targets.
+            for source in [
+                DataType::Int64,
+                DataType::UInt64,
+                DataType::Float64,
+                DataType::Decimal128(10, 2),
+                DataType::Decimal256(30, 3),
+            ] {
+                let input = Interval::make(Some(42i64), Some(1000))
+                    .unwrap()
+                    .cast_to(&source, &options)
+                    .unwrap();
+                for target in
+                    [DataType::Int8, DataType::UInt8, DataType::Decimal128(3, 1)]
+                {
+                    let lower = ScalarValue::Int64(Some(42)).cast_to(&target).unwrap();
+                    assert_eq!(
+                        input.cast_to(&target, &options).unwrap(),
+                        Interval::try_new(lower, ScalarValue::try_from(&target).unwrap())
+                            .unwrap(),
+                        "{source} -> {target}, safe={safe}"
+                    );
+                }
+            }
+            assert_eq!(
+                Interval::make(Some(-1i64), Some(42))
+                    .unwrap()
+                    .cast_to(&DataType::UInt8, &options)
+                    .unwrap(),
+                Interval::make(Some(0u8), Some(42)).unwrap()
+            );
+
+            // Fractional inputs retain truncation, including with one overflowing bound.
+            for lower in [-129.5f64, -42.5] {
+                for source in [DataType::Float64, DataType::Decimal128(10, 2)] {
+                    let input = Interval::make(Some(lower), Some(42.5))
+                        .unwrap()
+                        .cast_to(&source, &options)
+                        .unwrap();
+                    let expected_lower = if lower < -128.0 { None } else { Some(-42i8) };
+                    assert_eq!(
+                        input.cast_to(&DataType::Int8, &options).unwrap(),
+                        Interval::make(expected_lower, Some(42)).unwrap()
+                    );
+                }
+            }
+            // Float overflow is normalized by Interval::try_new.
+            assert_eq!(
+                Interval::make(Some(0.0f64), Some(f64::MAX))
+                    .unwrap()
+                    .cast_to(&DataType::Float32, &options)
+                    .unwrap(),
+                Interval::make(Some(0.0f32), None).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn test_numeric_cast_bounds_contain_values() {
+        let types = [
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::UInt8,
+            DataType::UInt16,
+            DataType::UInt32,
+            DataType::UInt64,
+            DataType::Float32,
+            DataType::Float64,
+            DataType::Decimal128(3, 0),
+            DataType::Decimal128(10, 2),
+            DataType::Decimal128(20, -2),
+            DataType::Decimal256(30, 3),
+        ];
+        let samples = [
+            i64::MIN,
+            -16777217,
+            -65537,
+            -129,
+            -128,
+            -1,
+            0,
+            1,
+            42,
+            127,
+            128,
+            255,
+            256,
+            65536,
+            16777217,
+            i64::MAX,
+        ];
+        let safe_options = CastOptions {
+            safe: true,
+            ..Default::default()
+        };
+        let cast = |value: &ScalarValue, target: &DataType| {
+            cast_scalar_value(value, target, &safe_options)
+        };
+        for source in &types {
+            let mut values = samples
+                .iter()
+                .map(|value| cast(&ScalarValue::from(*value), source))
+                .collect::<Result<Vec<_>>>()
+                .unwrap();
+            values.retain(|value| !value.is_null());
+            for target in &types {
+                let converted = values
+                    .iter()
+                    .map(|value| cast(value, target))
+                    .collect::<Result<Vec<_>>>()
+                    .unwrap();
+                for safe in [false, true] {
+                    let options = CastOptions {
+                        safe,
+                        ..Default::default()
+                    };
+                    for start in 0..values.len() {
+                        for end in start..values.len() {
+                            let input = Interval::try_new(
+                                values[start].clone(),
+                                values[end].clone(),
+                            )
+                            .unwrap();
+                            let bounds = input.cast_to(target, &options).unwrap();
+                            for value in &converted[start..=end] {
+                                if !value.is_null() {
+                                    assert!(
+                                        (bounds.lower.is_null()
+                                            || bounds.lower <= *value)
+                                            && (bounds.upper.is_null()
+                                                || *value <= bounds.upper),
+                                        "{source} -> {target}, {input} -> {bounds}, value={value}, safe={safe}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_non_numeric_cast_retains_error_policy() {
+        let strict = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let safe = CastOptions {
+            safe: true,
+            ..strict.clone()
+        };
+        // Exercise failures at either endpoint, preserving the valid opposite bound.
+        for (lower, upper, expected_lower, expected_upper) in [
+            ("not a number", "not a number", None, None),
+            ("1", "not a number", Some(1i8), None),
+            ("!", "42", None, Some(42i8)),
+        ] {
+            let input = Interval::try_new(
+                ScalarValue::Utf8(Some(lower.into())),
+                ScalarValue::Utf8(Some(upper.into())),
+            )
+            .unwrap();
+            assert!(input.cast_to(&DataType::Int8, &strict).is_err());
+            assert_eq!(
+                input.cast_to(&DataType::Int8, &safe).unwrap(),
+                Interval::make(expected_lower, expected_upper).unwrap()
+            );
+        }
+        let numeric = Interval::make(Some(0i64), Some(1)).unwrap();
+        assert!(
+            numeric
+                .cast_to(&DataType::Struct(Default::default()), &safe)
+                .is_err()
+        );
+    }
 
     #[test]
     fn test_next_prev_value() -> Result<()> {
@@ -3482,6 +3718,29 @@ mod tests {
     }
 
     #[test]
+    fn test_mul_zero_inclusive_overflow() -> Result<()> {
+        // Both operands contain zero. Overflow in either candidate endpoint
+        // must not be hidden by the other, finite candidate.
+        let cases = [
+            ((0_i8, 20_i8), (-3, 7), (Some(-60_i8), None)),
+            ((-20, 0), (-7, 3), (Some(-60), None)),
+            ((-20, 0), (-3, 7), (None, Some(60))),
+            ((0, 20), (-7, 3), (None, Some(60))),
+            ((-20, 20), (-7, 7), (None, None)),
+            ((-3, 3), (-7, 7), (Some(-21), Some(21))),
+            ((0, 0), (i8::MIN, i8::MAX), (Some(0), Some(0))),
+        ];
+        for ((lo, hi), (rlo, rhi), (expected_lo, expected_hi)) in cases {
+            let lhs = Interval::make(Some(lo), Some(hi))?;
+            let rhs = Interval::make(Some(rlo), Some(rhi))?;
+            let expected = Interval::make(expected_lo, expected_hi)?;
+            assert_eq!(lhs.mul(&rhs)?, expected, "{lhs:?} * {rhs:?}");
+            assert_eq!(rhs.mul(&lhs)?, expected, "{rhs:?} * {lhs:?}");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_mul() -> Result<()> {
         let cases = vec![
             (
@@ -3645,8 +3904,122 @@ mod tests {
     }
 
     #[test]
+    fn test_div_small_integer_intervals_contain_runtime_results() -> Result<()> {
+        // Include zero at either endpoint, inside the range, and as a singleton.
+        for lo in -3_i64..=3 {
+            for hi in lo..=3 {
+                for rlo in -3_i64..=3 {
+                    for rhi in rlo..=3 {
+                        let lhs = Interval::make(Some(lo), Some(hi))?;
+                        let rhs = Interval::make(Some(rlo), Some(rhi))?;
+                        let result = lhs.div(&rhs)?;
+                        for a in lo..=hi {
+                            for b in rlo..=rhi {
+                                if b != 0 {
+                                    assert!(
+                                        result.contains_value(ScalarValue::Int64(
+                                            Some(a / b)
+                                        ))?,
+                                        "{lhs:?} / {rhs:?} = {result:?} excludes {a} / {b}",
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_div() -> Result<()> {
         let cases = vec![
+            (
+                Interval::make(Some(-3_i64), Some(0_i64))?,
+                Interval::make(Some(-2_i64), Some(-1_i64))?,
+                Interval::make(Some(0_i64), Some(3_i64))?,
+            ),
+            (
+                Interval::make(Some(-3_i64), Some(0_i64))?,
+                Interval::make(Some(1_i64), Some(2_i64))?,
+                Interval::make(Some(-3_i64), Some(0_i64))?,
+            ),
+            (
+                Interval::make(Some(0_i64), Some(3_i64))?,
+                Interval::make(Some(-2_i64), Some(-1_i64))?,
+                Interval::make(Some(-3_i64), Some(0_i64))?,
+            ),
+            (
+                Interval::make(Some(0_i64), Some(3_i64))?,
+                Interval::make(Some(1_i64), Some(2_i64))?,
+                Interval::make(Some(0_i64), Some(3_i64))?,
+            ),
+            (
+                Interval::make(Some(-3_i64), Some(-1_i64))?,
+                Interval::make(Some(-3_i64), Some(0_i64))?,
+                Interval::make(Some(0_i64), None)?,
+            ),
+            (
+                Interval::make(Some(1_i64), Some(3_i64))?,
+                Interval::make(Some(-3_i64), Some(0_i64))?,
+                Interval::make(None, Some(0_i64))?,
+            ),
+            (
+                Interval::make(Some(-3_i64), Some(-1_i64))?,
+                Interval::make(Some(0_i64), Some(3_i64))?,
+                Interval::make(None, Some(0_i64))?,
+            ),
+            (
+                Interval::make(Some(1_i64), Some(3_i64))?,
+                Interval::make(Some(0_i64), Some(3_i64))?,
+                Interval::make(Some(0_i64), None)?,
+            ),
+            (
+                Interval::make(Some(-6_i64), Some(6_i64))?,
+                Interval::make(Some(-3_i64), Some(0_i64))?,
+                Interval::make::<i64>(None, None)?,
+            ),
+            (
+                Interval::make(Some(-6_i64), Some(6_i64))?,
+                Interval::make(Some(0_i64), Some(3_i64))?,
+                Interval::make::<i64>(None, None)?,
+            ),
+            (
+                Interval::make(Some(0_i64), Some(0_i64))?,
+                Interval::make(Some(0_i64), Some(0_i64))?,
+                Interval::make::<i64>(None, None)?,
+            ),
+            (
+                Interval::make(Some(0_u32), Some(0_u32))?,
+                Interval::make(Some(0_u32), Some(5_u32))?,
+                Interval::make(Some(0_u32), Some(0_u32))?,
+            ),
+            (
+                Interval::make(Some(0_u32), Some(0_u32))?,
+                Interval::make(Some(0_u32), Some(0_u32))?,
+                Interval::make::<u32>(None, None)?,
+            ),
+            (
+                Interval::make(Some(0_u32), Some(5_u32))?,
+                Interval::make(Some(0_u32), Some(5_u32))?,
+                Interval::make(Some(0_u32), None)?,
+            ),
+            (
+                Interval::make(Some(1_u32), Some(5_u32))?,
+                Interval::make(Some(0_u32), Some(5_u32))?,
+                Interval::make(Some(0_u32), None)?,
+            ),
+            (
+                Interval::make(Some(0_u64), Some(0_u64))?,
+                Interval::make(Some(0_u64), Some(5_u64))?,
+                Interval::make(Some(0_u64), Some(0_u64))?,
+            ),
+            (
+                Interval::make(Some(0_u64), Some(0_u64))?,
+                Interval::make(Some(0_u64), Some(0_u64))?,
+                Interval::make::<u64>(None, None)?,
+            ),
             (
                 Interval::make(Some(100_i64), Some(200_i64))?,
                 Interval::make(Some(1_i64), Some(2_i64))?,
@@ -3824,7 +4197,7 @@ mod tests {
             ),
         ];
         for case in cases {
-            let result = case.0.div(case.1)?;
+            let result = case.0.div(&case.1)?;
             if case.0.data_type().is_floating() {
                 assert!(
                     result.lower().is_null() && case.2.lower().is_null()
@@ -3835,7 +4208,7 @@ mod tests {
                         || result.upper().ge(case.2.upper())
                 );
             } else {
-                assert_eq!(result, case.2);
+                assert_eq!(result, case.2, "{:?} / {:?}", case.0, case.1);
             }
         }
 
@@ -4811,7 +5184,7 @@ mod tests {
         ];
 
         for case in cases {
-            assert_eq!(case.0.not().unwrap(), case.1, "Failed for NOT {}", case.0,);
+            assert_eq!(case.0.not().unwrap(), case.1, "Failed for NOT {}", case.0);
         }
         Ok(())
     }
@@ -4832,7 +5205,7 @@ mod tests {
 
         for (interval, expected) in test_cases {
             let result = interval.is_certainly_true();
-            assert_eq!(result, expected, "Failed for interval: {interval}",);
+            assert_eq!(result, expected, "Failed for interval: {interval}");
         }
     }
 
@@ -4852,7 +5225,7 @@ mod tests {
 
         for (interval, expected) in test_cases {
             let result = interval.is_true().unwrap();
-            assert_eq!(result, expected, "Failed for interval: {interval}",);
+            assert_eq!(result, expected, "Failed for interval: {interval}");
         }
     }
 
@@ -4872,7 +5245,7 @@ mod tests {
 
         for (interval, expected) in test_cases {
             let result = interval.is_certainly_false();
-            assert_eq!(result, expected, "Failed for interval: {interval}",);
+            assert_eq!(result, expected, "Failed for interval: {interval}");
         }
     }
 
@@ -4892,7 +5265,7 @@ mod tests {
 
         for (interval, expected) in test_cases {
             let result = interval.is_false().unwrap();
-            assert_eq!(result, expected, "Failed for interval: {interval}",);
+            assert_eq!(result, expected, "Failed for interval: {interval}");
         }
     }
 
@@ -4912,7 +5285,7 @@ mod tests {
 
         for (interval, expected) in test_cases {
             let result = interval.is_certainly_unknown();
-            assert_eq!(result, expected, "Failed for interval: {interval}",);
+            assert_eq!(result, expected, "Failed for interval: {interval}");
         }
     }
 
@@ -4932,7 +5305,7 @@ mod tests {
 
         for (interval, expected) in test_cases {
             let result = interval.is_unknown().unwrap();
-            assert_eq!(result, expected, "Failed for interval: {interval}",);
+            assert_eq!(result, expected, "Failed for interval: {interval}");
         }
     }
 
