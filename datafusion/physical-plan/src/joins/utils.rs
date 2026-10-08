@@ -2865,6 +2865,72 @@ mod tests {
     }
 
     #[test]
+    fn update_hash_null_key_does_not_change_matches() -> Result<()> {
+        use crate::joins::join_hash_map::JoinHashMapU32;
+
+        let random_state = RandomState::with_seed(42);
+        let probe: ArrayRef = Arc::new(StringArray::from(vec!["c", "a", "x", "b"]));
+        let mut probe_hashes = vec![0; probe.len()];
+        create_hashes([&probe], &random_state, &mut probe_hashes)?;
+
+        // Probes a unique-key build side 2 rows at a time and returns the
+        // matched (probe row, build key) pairs.
+        let matches = |build: Vec<Option<&str>>| -> Result<Vec<(u32, String)>> {
+            let build = StringArray::from(build);
+            let schema =
+                Arc::new(Schema::new(vec![Field::new("k", DataType::Utf8, true)]));
+            let batch = RecordBatch::try_new(schema, vec![Arc::new(build.clone())])?;
+            let on: Vec<PhysicalExprRef> = vec![Arc::new(Column::new("k", 0))];
+            let mut map = JoinHashMapU32::with_capacity(batch.num_rows());
+            let mut hashes_buffer = vec![0; batch.num_rows()];
+            update_hash(
+                &on,
+                &batch,
+                &mut map,
+                0,
+                &random_state,
+                &mut hashes_buffer,
+                0,
+                true,
+                NullEquality::NullEqualsNothing,
+            )?;
+            let (mut input_indices, mut match_indices, mut pairs) =
+                (vec![], vec![], vec![]);
+            let mut offset = Some((0, None));
+            while let Some(current) = offset {
+                offset = map.get_matched_indices_with_limit_offset(
+                    &probe_hashes,
+                    None,
+                    2,
+                    current,
+                    &mut input_indices,
+                    &mut match_indices,
+                );
+                pairs.extend(
+                    input_indices
+                        .iter()
+                        .zip(&match_indices)
+                        .map(|(&p, &b)| (p, build.value(b as usize).to_string())),
+                );
+            }
+            pairs.sort();
+            Ok(pairs)
+        };
+
+        let without_null = matches(vec![Some("a"), Some("b"), Some("c")])?;
+        let with_null = matches(vec![Some("a"), None, Some("b"), Some("c")])?;
+        assert_eq!(with_null, without_null);
+        if cfg!(not(feature = "force_hash_collisions")) {
+            let expected = [(0, "c"), (1, "a"), (3, "b")];
+            let expected: Vec<_> =
+                expected.iter().map(|&(p, k)| (p, k.to_string())).collect();
+            assert_eq!(without_null, expected);
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn get_anti_indices_handles_dense_matches() {
         let input = UInt32Array::from(vec![2, 3, 4, 5]);
 

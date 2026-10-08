@@ -26,6 +26,11 @@ SELECT char(321::INT);
 A
 
 query T
+SELECT char(NULL::INT);
+----
+NULL
+
+query T
 SELECT char(a) FROM (VALUES (-1::INT), (0::INT), (65::INT), (321::INT)) AS t(a);
 ----
 (empty)

@@ -1809,7 +1809,9 @@ config_namespace! {
         /// rule. When set to false, any rules that produce errors will cause the query to fail
         pub skip_failed_rules: bool, default = false
 
-        /// Number of times that the optimizer will attempt to optimize the plan
+        /// The logical optimizer applies rules in order for up to `max_passes` passes,
+        /// stopping early if a pass leaves the plan unchanged or repeats an earlier plan.
+        /// The physical optimizer always runs in one pass.
         pub max_passes: usize, default = 3
 
         /// When set to true, the physical plan optimizer will run a top down
