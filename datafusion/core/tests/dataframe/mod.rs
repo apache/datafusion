@@ -7794,3 +7794,149 @@ async fn test_unresolved_lambda_variable() -> Result<()> {
 
     Ok(())
 }
+
+fn grouping_bitmap_width_context(
+    width: usize,
+    migration: bool,
+) -> Result<SessionContext> {
+    let mut config = SessionConfig::new().with_target_partitions(1);
+    config.options_mut().execution.enable_migration_aggregate = migration;
+    let ctx = SessionContext::new_with_config(config);
+    let fields = (0..width)
+        .map(|index| Field::new(format!("c{index}"), DataType::Int32, false))
+        .collect::<Vec<_>>();
+    let arrays = (0..width)
+        .map(|index| {
+            Arc::new(Int32Array::from(vec![i32::try_from(index).unwrap()])) as ArrayRef
+        })
+        .collect::<Vec<_>>();
+    ctx.register_batch(
+        "grouping_width_input",
+        RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays)?,
+    )?;
+    Ok(ctx)
+}
+
+fn grouping_bitmap_width_sql(width: usize, projection: &str, sets: bool) -> String {
+    let keys = (0..width)
+        .map(|index| format!("c{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let group_by = if sets {
+        format!("GROUPING SETS (({keys}), ())")
+    } else {
+        keys
+    };
+    format!("SELECT {projection} FROM grouping_width_input GROUP BY {group_by}")
+}
+
+async fn grouping_bitmap_width_refusal(projection: &str) -> Result<()> {
+    for migration in [false, true] {
+        let ctx = grouping_bitmap_width_context(65, migration)?;
+        let sql = grouping_bitmap_width_sql(65, projection, true);
+        let error = ctx.sql(&sql).await?.into_optimized_plan().unwrap_err();
+        assert!(matches!(
+            error.find_root(),
+            DataFusionError::NotImplemented(_)
+        ));
+        assert!(error.to_string().contains("64 grouping columns, got 65"));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn grouping_bitmap_width_rejects_high_bit() -> Result<()> {
+    grouping_bitmap_width_refusal("GROUPING(c0) AS g").await
+}
+
+#[tokio::test]
+async fn grouping_bitmap_width_rejects_low_bit() -> Result<()> {
+    grouping_bitmap_width_refusal("GROUPING(c64) AS g").await
+}
+
+#[tokio::test]
+async fn grouping_bitmap_width_rejects_all_bits() -> Result<()> {
+    let args = (0..65)
+        .map(|index| format!("c{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    grouping_bitmap_width_refusal(&format!("GROUPING({args}) AS g")).await
+}
+
+#[tokio::test]
+async fn grouping_bitmap_width_preserves_63_and_64() -> Result<()> {
+    for migration in [false, true] {
+        for width in [63, 64] {
+            let ctx = grouping_bitmap_width_context(width, migration)?;
+            let last = width - 1;
+            let projection = format!(
+                "GROUPING(c0) AS g_first, GROUPING(c{last}) AS g_last, \
+                 GROUPING(c0, c{last}) AS g_pair"
+            );
+            let sql = grouping_bitmap_width_sql(width, &projection, true);
+            let plan = ctx.sql(&sql).await?.into_optimized_plan()?;
+            assert_eq!(plan.schema().fields().len(), 3);
+            for (field, name) in plan
+                .schema()
+                .fields()
+                .iter()
+                .zip(["g_first", "g_last", "g_pair"])
+            {
+                assert_eq!(field.name(), name);
+                assert_eq!(field.data_type(), &DataType::Int32);
+            }
+            // The 64-key physical kernel is qualified separately from this analyzer guard.
+            if width == 63 {
+                let batches = ctx.sql(&sql).await?.collect().await?;
+                let mut rows = Vec::new();
+                for batch in batches {
+                    for row in 0..batch.num_rows() {
+                        rows.push(
+                            (0..3)
+                                .map(|column| {
+                                    batch
+                                        .column(column)
+                                        .as_any()
+                                        .downcast_ref::<Int32Array>()
+                                        .unwrap()
+                                        .value(row)
+                                })
+                                .collect::<Vec<_>>(),
+                        );
+                    }
+                }
+                rows.sort_unstable();
+                assert_eq!(rows, vec![vec![0, 0, 0], vec![1, 1, 3]]);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn grouping_bitmap_width_preserves_plain_and_count_only() -> Result<()> {
+    for migration in [false, true] {
+        let ctx = grouping_bitmap_width_context(65, migration)?;
+        let plain = grouping_bitmap_width_sql(65, "GROUPING(c0) AS g", false);
+        let batches = ctx.sql(&plain).await?.collect().await?;
+        assert_eq!(
+            batches.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+            1
+        );
+        let values = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(values.value(0), 0);
+
+        let count = grouping_bitmap_width_sql(65, "COUNT(*) AS count", true);
+        ctx.sql(&count).await?.into_optimized_plan()?;
+        let error = ctx.sql(&count).await?.collect().await.unwrap_err();
+        assert!(matches!(
+            error.find_root(),
+            DataFusionError::NotImplemented(_)
+        ));
+    }
+    Ok(())
+}

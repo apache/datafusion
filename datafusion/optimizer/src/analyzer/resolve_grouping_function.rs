@@ -28,7 +28,8 @@ use arrow::datatypes::DataType;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
-    Column, DFSchema, Result, ScalarValue, internal_datafusion_err, plan_err,
+    Column, DFSchema, Result, ScalarValue, internal_datafusion_err, not_impl_err,
+    plan_err,
 };
 use datafusion_expr::expr::{AggregateFunction, Alias};
 use datafusion_expr::logical_plan::LogicalPlan;
@@ -237,6 +238,13 @@ fn grouping_function_on_id(
     let Some(grouping_id_type) = grouping_id_type else {
         return Ok(Expr::Literal(ScalarValue::from(0i32), None));
     };
+
+    if group_by_expr.len() > u64::BITS as usize {
+        return not_impl_err!(
+            "GROUPING supports at most 64 grouping columns, got {}",
+            group_by_expr.len()
+        );
+    }
 
     // Use the actual __grouping_id column type to size literals correctly. This
     // accounts for duplicate-ordinal bits that `Aggregate::grouping_id_type`
