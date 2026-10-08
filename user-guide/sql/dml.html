@@ -625,8 +625,6 @@ UPDATE <i><b>table_name</b></i> SET <i><b>column</b></i> = <i><b>expression</b><
 <section id="known-limitations">
 <h3>Known limitations<a class="headerlink" href="#known-limitations" title="Link to this heading">#</a></h3>
 <ul class="simple">
-<li><p>Subqueries in <code class="docutils literal notranslate"><span class="pre">DELETE</span></code> and <code class="docutils literal notranslate"><span class="pre">UPDATE</span></code> conditions can affect unintended rows: <a class="reference external" href="https://github.com/apache/datafusion/issues/24654">#24654</a>.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">DELETE</span></code> and <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">UPDATE</span></code> can modify in-memory tables: <a class="reference external" href="https://github.com/apache/datafusion/issues/24656">#24656</a>.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">DELETE</span></code> ignores <code class="docutils literal notranslate"><span class="pre">LIMIT</span></code>: <a class="reference external" href="https://github.com/apache/datafusion/issues/24998">#24998</a>.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">UPDATE</span> <span class="pre">...</span> <span class="pre">FROM</span></code> is not supported: <a class="reference external" href="https://github.com/apache/datafusion/issues/19950">#19950</a>.</p></li>
 </ul>
