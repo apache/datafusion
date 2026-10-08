@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Physical optimizer rule ordering and customization.
+//! Physical optimizer traits
 //!
 //! # Physical Optimizer Contract
 //!
