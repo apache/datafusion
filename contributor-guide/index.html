@@ -48,7 +48,7 @@
     <link rel="icon" href="../_static/favicon.svg"/>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="Reviewing Pull Requests" href="pr_review.html" />
+    <link rel="next" title="AI Policy" href="ai-policy.html" />
     <link rel="prev" title="Query Optimizer" href="../library-user-guide/query-optimizer.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
@@ -340,6 +340,7 @@
 <ul class="current nav bd-sidenav">
 <li class="toctree-l1 current active"><a class="current reference internal" href="#">Introduction</a></li>
 
+<li class="toctree-l1"><a class="reference internal" href="ai-policy.html">AI Policy</a></li>
 <li class="toctree-l1"><a class="reference internal" href="pr_review.html">Reviewing Pull Requests</a></li>
 <li class="toctree-l1"><a class="reference internal" href="communication.html">Community Communication</a></li>
 <li class="toctree-l1"><a class="reference internal" href="development_environment.html">Development Environment</a></li>
@@ -476,15 +477,18 @@ work on an issue, nor limits to how many people can work on an issue at the same
 <p>Contributors drive the project forward based on their own priorities and
 interests and thus you are free to work on any issue that interests you.</p>
 <p>If someone is already working on an issue that you want or need but hasn’t
-been able to finish it yet, you should feel free to work on it as well. In
-general it is both polite and will help avoid unnecessary duplication of work if
-you leave a note on an issue when you start working on it.</p>
-<p>If you want to work on an issue which is not already assigned to someone else
-and there are no comment indicating that someone is already working on that
-issue then you can assign the issue to yourself by submitting a single word
-comment <code class="docutils literal notranslate"><span class="pre">take</span></code>. This will assign the issue to yourself. However, if you are
-unable to make progress you should unassign the issue by commenting a single
-word <code class="docutils literal notranslate"><span class="pre">untake</span></code>.</p>
+been able to finish it yet, feel free to help them out.</p>
+<p>If there is an existing open PR for an issue you plan to work on, please review that
+PR before opening a new one. Duplicate, unacknowledged PRs consume valuable
+reviewer time and we may close them. If there is an existing PR, please identify
+it in the PR description and explain why you are opening a new one and not
+helping with the previous one. In general it is both polite and will help avoid
+unnecessary duplication of work if you also leave a note on an issue when you
+start working on it.</p>
+<p>If you want to work on an issue which is not already assigned to someone and has
+no comment indicating someone is already working on it, you can assign the issue
+to yourself by submitting a single word comment <code class="docutils literal notranslate"><span class="pre">take</span></code>. However, if you are unable
+to make progress please unassign the issue by commenting a single word <code class="docutils literal notranslate"><span class="pre">untake</span></code>.</p>
 </section>
 </section>
 </section>
@@ -493,7 +497,8 @@ word <code class="docutils literal notranslate"><span class="pre">untake</span><
 <section id="pull-request-overview">
 <h2>Pull Request Overview<a class="headerlink" href="#pull-request-overview" title="Link to this heading">#</a></h2>
 <p>We welcome pull requests (PRs) from anyone in the community.</p>
-<p>DataFusion is a rapidly evolving project and we try to review and merge PRs quickly.</p>
+<p>DataFusion is a rapidly evolving project and we try to review and merge PRs
+quickly.</p>
 <p>Review bandwidth is currently our most limited resource, and we highly encourage reviews by the broader community. If you are waiting for your PR to be reviewed, consider helping review other PRs that are waiting. Such review both helps the reviewer to learn the codebase and become more expert, as well as helps identify issues in the PR (such as lack of test coverage), that can be addressed and make future reviews faster and more efficient.</p>
 <p>The lifecycle of a PR is:</p>
 <ol class="arabic simple">
@@ -517,7 +522,7 @@ to be merged or close them until you have fewer than 3 before opening another.</
 <ol class="arabic simple">
 <li><p>The PR is more likely to be reviewed quickly – our reviewers struggle to find the contiguous time needed to review large PRs.</p></li>
 <li><p>The PR discussions tend to be more focused and less likely to get lost among several different threads.</p></li>
-<li><p>It is often easier to accept and act on feedback when it comes early on in a small change, before a particular approach has been polished too much.</p></li>
+<li><p>It is often easier to accept and act on feedback when it comes early in a small change, before a particular approach has been polished too much.</p></li>
 </ol>
 <p>If you are concerned that a larger design will be lost in a string of small PRs, creating a large draft PR that shows how they all work together can help.</p>
 <p>Note all commits in a PR are squashed when merged to the <code class="docutils literal notranslate"><span class="pre">main</span></code> branch so there is one commit per PR after merge.</p>
@@ -547,6 +552,12 @@ over Rust unit tests where possible. See
 <a class="reference internal" href="testing.html#choosing-what-kind-of-test-to-write"><span class="std std-ref">Choosing What Kind of Test to Write</span></a>.</p></li>
 <li><p>Run any relevant commands from the <a class="reference internal" href="testing.html#testing-quick-start"><span class="std std-ref">testing quick start</span></a>.</p></li>
 </ul>
+</section>
+<section id="ai-assisted-contributions">
+<h2>AI-Assisted Contributions<a class="headerlink" href="#ai-assisted-contributions" title="Link to this heading">#</a></h2>
+<p>We welcome AI-assisted PRs, but not unreviewed “AI dumps”. See the
+<a class="reference internal" href="ai-policy.html"><span class="std std-doc">AI Policy</span></a> page for what we expect from authors and reviewers
+who use AI tools.</p>
 </section>
 <section id="conventional-commits-labeling-prs">
 <h2>Conventional Commits &amp; Labeling PRs<a class="headerlink" href="#conventional-commits-labeling-prs" title="Link to this heading">#</a></h2>
@@ -600,32 +611,10 @@ benchmark, and then a PR with the code change that improves the benchmark.</p>
 <p>Pull requests will be marked with a <code class="docutils literal notranslate"><span class="pre">stale</span></code> label after 60 days of inactivity and then closed 7 days after that.
 Commenting on the PR will remove the <code class="docutils literal notranslate"><span class="pre">stale</span></code> label.</p>
 </section>
-<section id="ai-assisted-contributions">
-<h2>AI-Assisted contributions<a class="headerlink" href="#ai-assisted-contributions" title="Link to this heading">#</a></h2>
-<p>DataFusion has the following policy for AI-assisted PRs:</p>
-<ul class="simple">
-<li><p>The PR author should <strong>understand the core ideas</strong> behind the implementation <strong>end-to-end</strong>, and be able to justify the design and code during review.</p></li>
-<li><p><strong>Calls out unknowns and assumptions</strong>. It’s okay to not fully understand some bits of AI generated code. You should comment on these cases and point them out to reviewers so that they can use their knowledge of the codebase to clear up any concerns. For example, you might comment “calling this function here seems to work but I’m not familiar with how it works internally, I wonder if there’s a race condition if it is called concurrently”.</p></li>
-</ul>
-<section id="why-fully-ai-generated-prs-without-understanding-are-not-helpful">
-<h3>Why fully AI-generated PRs without understanding are not helpful<a class="headerlink" href="#why-fully-ai-generated-prs-without-understanding-are-not-helpful" title="Link to this heading">#</a></h3>
-<p>Today, AI tools cannot reliably make complex changes to DataFusion on their own, which is why we rely on pull requests and code review.</p>
-<p>The purposes of code review are:</p>
-<ol class="arabic simple">
-<li><p>Finish the intended task.</p></li>
-<li><p>Share knowledge between authors and reviewers, as a long-term investment in the project. For this reason, even if someone familiar with the codebase can finish a task quickly, we’re still happy to help a new contributor work on it even if it takes longer.</p></li>
-</ol>
-<p>An AI dump for an issue doesn’t meet these purposes. Maintainers could finish the task faster by using AI directly, and the submitters gain little knowledge if they act only as a pass through AI proxy without understanding.</p>
-<p>Please understand the reviewing capacity is <strong>very limited</strong> for the project, so large PRs which appear to not have the requisite understanding might not get reviewed, and eventually closed or redirected.</p>
-</section>
-<section id="better-ways-to-contribute-than-an-ai-dump">
-<h3>Better ways to contribute than an “AI dump”<a class="headerlink" href="#better-ways-to-contribute-than-an-ai-dump" title="Link to this heading">#</a></h3>
-<p>It’s recommended to write a high-quality issue with a clear problem statement and a minimal, reproducible example. This can make it easier for others to contribute.</p>
-</section>
 <section id="ci-runners">
-<h3>CI Runners<a class="headerlink" href="#ci-runners" title="Link to this heading">#</a></h3>
+<h2>CI Runners<a class="headerlink" href="#ci-runners" title="Link to this heading">#</a></h2>
 <section id="runs-on">
-<h4>Runs-On<a class="headerlink" href="#runs-on" title="Link to this heading">#</a></h4>
+<h3>Runs-On<a class="headerlink" href="#runs-on" title="Link to this heading">#</a></h3>
 <p>We use <a class="reference external" href="https://runs-on.com/">Runs-On</a> for some actions in the main repository, which run in the ASF AWS account to speed up CI. In forks, these actions run on the default GitHub runners since forks do not have access to ASF infrastructure.</p>
 <p>To configure them, we use the following format:</p>
 <p><code class="docutils literal notranslate"><span class="pre">runs-on:</span> <span class="pre">${{</span> <span class="pre">github.repository_owner</span> <span class="pre">==</span> <span class="pre">'apache'</span> <span class="pre">&amp;&amp;</span> <span class="pre">format('runs-on={0},family=m8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion',</span> <span class="pre">github.run_id)</span> <span class="pre">||</span> <span class="pre">'ubuntu-latest'</span> <span class="pre">}}</span></code></p>
@@ -634,7 +623,7 @@ Commenting on the PR will remove the <code class="docutils literal notranslate">
 <p><code class="docutils literal notranslate"><span class="pre">-</span> <span class="pre">uses:</span> <span class="pre">runs-on/action&#64;cd2b598b0515d39d78c38a02d529db87d2196d1e</span></code></p>
 <p>For the standard GitHub runners, this action will do nothing.</p>
 <section id="spot-instances">
-<h5>Spot Instances<a class="headerlink" href="#spot-instances" title="Link to this heading">#</a></h5>
+<h4>Spot Instances<a class="headerlink" href="#spot-instances" title="Link to this heading">#</a></h4>
 <p>By default, Runs-On actions run as <a class="reference external" href="https://runs-on.com/configuration/spot-instances/">spot instances</a>, which means they might occasionally be interrupted. In the CI you would see:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">Error</span><span class="p">:</span> <span class="n">The</span> <span class="n">operation</span> <span class="n">was</span> <span class="n">canceled</span><span class="o">.</span>
 </pre></div>
@@ -643,9 +632,8 @@ Commenting on the PR will remove the <code class="docutils literal notranslate">
 </section>
 </section>
 <section id="github-runners">
-<h4>GitHub Runners<a class="headerlink" href="#github-runners" title="Link to this heading">#</a></h4>
+<h3>GitHub Runners<a class="headerlink" href="#github-runners" title="Link to this heading">#</a></h3>
 <p>We also use standard GitHub runners for some actions in the main repository; these are also runnable in forks.</p>
-</section>
 </section>
 </section>
 </section>
@@ -670,11 +658,11 @@ Commenting on the PR will remove the <code class="docutils literal notranslate">
       </div>
     </a>
     <a class="right-next"
-       href="pr_review.html"
+       href="ai-policy.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Reviewing Pull Requests</p>
+        <p class="prev-next-title">AI Policy</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -710,22 +698,18 @@ Commenting on the PR will remove the <code class="docutils literal notranslate">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#creating-pull-requests">Creating Pull Requests</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#release-management-and-backports">Release Management and Backports</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#before-submitting-a-pr">Before Submitting a PR</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#ai-assisted-contributions">AI-Assisted Contributions</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#conventional-commits-labeling-prs">Conventional Commits &amp; Labeling PRs</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#reviewing-pull-requests">Reviewing Pull Requests</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#performance-improvements">Performance Improvements</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#major-and-minor-prs">“Major” and “Minor” PRs</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#stale-prs">Stale PRs</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#ai-assisted-contributions">AI-Assisted contributions</a><ul class="nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#why-fully-ai-generated-prs-without-understanding-are-not-helpful">Why fully AI-generated PRs without understanding are not helpful</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#better-ways-to-contribute-than-an-ai-dump">Better ways to contribute than an “AI dump”</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ci-runners">CI Runners</a><ul class="nav section-nav flex-column">
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#runs-on">Runs-On</a><ul class="nav section-nav flex-column">
-<li class="toc-h5 nav-item toc-entry"><a class="reference internal nav-link" href="#spot-instances">Spot Instances</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#ci-runners">CI Runners</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#runs-on">Runs-On</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#spot-instances">Spot Instances</a></li>
 </ul>
 </li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#github-runners">GitHub Runners</a></li>
-</ul>
-</li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#github-runners">GitHub Runners</a></li>
 </ul>
 </li>
 </ul>

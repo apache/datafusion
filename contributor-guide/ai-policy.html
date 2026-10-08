@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Development Environment &#8212; Apache DataFusion  documentation</title>
+    <title>AI Policy &#8212; Apache DataFusion  documentation</title>
   
   
   
@@ -42,14 +42,14 @@
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
-    <script>DOCUMENTATION_OPTIONS.pagename = 'contributor-guide/development_environment';</script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'contributor-guide/ai-policy';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <link rel="canonical" href="https://datafusion.apache.org/contributor-guide/development_environment.html" />
+    <link rel="canonical" href="https://datafusion.apache.org/contributor-guide/ai-policy.html" />
     <link rel="icon" href="../_static/favicon.svg"/>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="Architecture" href="architecture.html" />
-    <link rel="prev" title="Community Communication" href="communication.html" />
+    <link rel="next" title="Reviewing Pull Requests" href="pr_review.html" />
+    <link rel="prev" title="Introduction" href="index.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
@@ -340,10 +340,10 @@
 <ul class="current nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="index.html">Introduction</a></li>
 
-<li class="toctree-l1"><a class="reference internal" href="ai-policy.html">AI Policy</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">AI Policy</a></li>
 <li class="toctree-l1"><a class="reference internal" href="pr_review.html">Reviewing Pull Requests</a></li>
 <li class="toctree-l1"><a class="reference internal" href="communication.html">Community Communication</a></li>
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">Development Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="development_environment.html">Development Environment</a></li>
 <li class="toctree-l1"><a class="reference internal" href="architecture.html">Architecture</a></li>
 <li class="toctree-l1"><a class="reference internal" href="architecture/dependency-graph.html">Workspace Dependency Graph</a></li>
 <li class="toctree-l1"><a class="reference internal" href="testing.html">Testing</a></li>
@@ -412,7 +412,7 @@
         <i class="fa-solid fa-home"></i>
       </a>
     </li>
-    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Development Environment</span></li>
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">AI Policy</span></li>
   </ul>
 </nav>
 </div>
@@ -447,121 +447,96 @@
   specific language governing permissions and limitations
   under the License.
 -->
-<section id="development-environment">
-<h1>Development Environment<a class="headerlink" href="#development-environment" title="Link to this heading">#</a></h1>
-<p>This section describes how you can get started at developing DataFusion.</p>
-<section id="quick-start">
-<h2>Quick Start<a class="headerlink" href="#quick-start" title="Link to this heading">#</a></h2>
-<p>For the fastest path to a working local environment, follow these steps
-from the repository root:</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span><span class="c1"># 1. Install Rust (https://rust-lang.org/tools/install/) and verify the active toolchain with</span>
-rustup<span class="w"> </span>show
-
-<span class="c1"># 2. Install protoc 3.15+ (see details below)</span>
-protoc<span class="w"> </span>--version
-
-<span class="c1"># 3. Download test data used by examples and many tests</span>
-git<span class="w"> </span>submodule<span class="w"> </span>update<span class="w"> </span>--init<span class="w"> </span>--recursive
-
-<span class="c1"># 4. Build the workspace</span>
-cargo<span class="w"> </span>build
-
-<span class="c1"># 5. Verify that Rust integration tests can be run</span>
-cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-p<span class="w"> </span>datafusion<span class="w"> </span>--test<span class="w"> </span>parquet_integration
-
-<span class="c1"># 6. Verify that sqllogictests can run</span>
-cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--profile<span class="o">=</span>ci<span class="w"> </span>--test<span class="w"> </span>sqllogictests
-</pre></div>
-</div>
-<p>Notes:</p>
+<section id="ai-policy">
+<h1>AI Policy<a class="headerlink" href="#ai-policy" title="Link to this heading">#</a></h1>
+<p>DataFusion has the following policy for AI-assisted PRs:</p>
 <ul class="simple">
-<li><p>The pinned Rust version is defined in <code class="docutils literal notranslate"><span class="pre">rust-toolchain.toml</span></code>.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">protoc</span></code> is required to compile DataFusion from source.</p></li>
-<li><p>Some tests and examples rely on git submodule data being present locally.</p></li>
+<li><p>We welcome AI-assisted PRs from anyone. We do not welcome unreviewed “AI
+dumps” (defined below).</p></li>
+<li><p>The PR author should have personally read the entire PR they submit and
+<strong>understand the core ideas end-to-end</strong>. Authors should be ready to justify
+and help reviewers understand the design and code during review.</p></li>
+<li><p><strong>Call out unknowns and assumptions</strong>. It’s okay to not fully understand
+some bits of AI-generated code. Please point these cases out so we can work
+together to clear up any concerns.</p></li>
+<li><p><strong>Follow <a class="reference external" href="https://www.apache.org/legal/generative-tooling.html">ASF Generative Tooling Guidance</a></strong>. Among other things,
+the author must ensure the PR does not include undisclosed third-party
+code or copyrighted material.</p></li>
 </ul>
+<p>While “understand the core ideas” is partly subjective, it means more than being
+able to follow the diff textually. We expect the PR author to take an active
+role in responding to feedback and crafting the PR to make sure it fits well
+into the project as a whole. The worst situation is one where the reviewer ends
+up simply driving the contributor’s LLM, for the reasons described in the next
+section.</p>
+<section id="what-is-an-ai-dump-and-why-it-is-not-helpful">
+<h2>What is an “AI dump” and why it is not helpful<a class="headerlink" href="#what-is-an-ai-dump-and-why-it-is-not-helpful" title="Link to this heading">#</a></h2>
+<p>An “AI dump” is a PR, or a series of PRs, consisting largely of AI-generated
+code and descriptions that the author has not reviewed and does not understand.
+The code may even be correct. The problem is that all the work of understanding
+falls on the reviewer.</p>
+<p>Code review serves two purposes:</p>
+<ol class="arabic simple">
+<li><p>Finishing the intended task.</p></li>
+<li><p>Sharing knowledge between authors and reviewers, as a long-term investment in
+the project. For this reason, even if someone familiar with the codebase
+could finish a task more quickly by themselves, we are still happy to help
+a new contributor work on it.</p></li>
+</ol>
+<p>An AI dump meets neither purpose. Maintainers could finish the task faster by
+running the AI tool themselves, and an author who acts only as a pass-through
+proxy for the tool learns little from the review.</p>
+<p>Reviewing capacity for the project is <strong>very limited</strong>, so PRs that appear to be
+AI dumps may not get reviewed, and may eventually be closed.</p>
+<p>Multiple PRs created in a short amount of time, especially by a first-time
+contributor, that in our judgment show a lack of understanding or author
+engagement may be treated as spam and closed. One high-quality PR that you work
+with maintainers to merge is far more valuable to you and the project than ten
+PRs you have your agent generate and submit for you.</p>
 </section>
-<section id="windows-setup">
-<h2>Windows Setup<a class="headerlink" href="#windows-setup" title="Link to this heading">#</a></h2>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>wget<span class="w"> </span>https://az792536.vo.msecnd.net/vms/VMBuild_20190311/VirtualBox/MSEdge/MSEdge.Win10.VirtualBox.zip
-choco<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>git<span class="w"> </span>rustup.install<span class="w"> </span>visualcpp-build-tools
-git-bash.exe
-cargo<span class="w"> </span>build
-</pre></div>
-</div>
+<section id="responding-to-review-comments">
+<h2>Responding to review comments<a class="headerlink" href="#responding-to-review-comments" title="Link to this heading">#</a></h2>
+<p>The same policy applies to review discussion as to the code itself: reviewers
+want to talk to <strong>you</strong>, not to your AI tool. Please do not respond to reviewer
+comments with unreviewed, fully AI-generated responses, as this again puts all
+the burden on the reviewer and you learn nothing. We expect your responses to be
+in your own words, though it is fine to use AI to help prepare your response
+(for example to understand the comment, or help translate your response to
+English). Examples of unreviewed AI-generated replies:</p>
+<ul class="simple">
+<li><p>Summarizes the diff rather than answering the question that was asked.</p></li>
+<li><p>Lists the commands run locally (e.g. <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">fmt</span></code>, <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">test</span></code>)
+and whether they passed. This is not useful to reviewers because CI already runs
+these checks.</p></li>
+<li><p>Contains statements that don’t make sense in context, such as claiming
+tests could not be run because <code class="docutils literal notranslate"><span class="pre">cargo</span></code> is not installed.</p></li>
+</ul>
+<p>For example, see <a class="reference external" href="https://github.com/apache/arrow-rs/pull/11209#discussion_r4145512124">this review thread in arrow-rs</a> where
+the reviewer asked a design question, and received several replies that
+described what had changed and which commands had been run, rather than an
+answer to the question.</p>
+<p>Again, the point of code review is to help the project <strong>and</strong> to help you grow
+as an engineer, so please read each comment, make sure you understand it, and
+reply in your own words.</p>
 </section>
-<section id="dev-container-setup">
-<h2>Dev Container setup<a class="headerlink" href="#dev-container-setup" title="Link to this heading">#</a></h2>
-<p>DataFusion has support for <a class="reference external" href="https://containers.dev/">dev containers</a> which may be used for
-developing DataFusion in an isolated environment either locally or remote if desired. Using dev containers for developing
-DataFusion is not a requirement but is available where doing local development could be tricky
-such as with Windows and WSL2, those with older hardware, etc.</p>
-<p>For specific details on IDE support for dev containers see the documentation for <a class="reference external" href="https://code.visualstudio.com/docs/devcontainers/containers">Visual Studio Code</a>,
-<a class="reference external" href="https://www.jetbrains.com/help/idea/connect-to-devcontainer.html">IntelliJ IDEA</a>,
-<a class="reference external" href="https://www.jetbrains.com/help/rust/connect-to-devcontainer.html">Rust Rover</a>, and
-<a class="reference external" href="https://docs.github.com/en/codespaces/setting-up-your-project-for-codespaces/adding-a-dev-container-configuration/introduction-to-dev-containers">GitHub Codespaces</a>.</p>
+<section id="ai-assisted-reviews">
+<h2>AI-assisted reviews<a class="headerlink" href="#ai-assisted-reviews" title="Link to this heading">#</a></h2>
+<p>The same standard applies to AI-generated reviews as to AI-generated code: you
+should have read and understood anything you post. Raw AI review output is often
+verbose with unnecessary details, and it can take substantial effort to figure
+out what is actually being asked.</p>
+<p>If you review PRs with the help of an AI tool, read all comments first, remove
+detail that is unnecessary or you don’t understand, and explain the rest in your
+own words so that each comment makes a clear, specific request.</p>
 </section>
-<section id="protoc-installation">
-<h2><code class="docutils literal notranslate"><span class="pre">protoc</span></code> Installation<a class="headerlink" href="#protoc-installation" title="Link to this heading">#</a></h2>
-<p>Compiling DataFusion from sources requires an installed version of the protobuf compiler, <code class="docutils literal notranslate"><span class="pre">protoc</span></code>.</p>
-<p>On most platforms this can be installed from your system’s package manager. For example:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span># Ubuntu
-$ sudo apt install -y protobuf-compiler
-
-# Fedora
-$ dnf install -y protobuf-devel
-
-# Arch Linux
-$ pacman -S protobuf
-
-# macOS
-$ brew install protobuf
-</pre></div>
-</div>
-<p>You will want to verify the version installed is <code class="docutils literal notranslate"><span class="pre">3.15</span></code> or greater, which has support for explicit <a class="reference external" href="https://github.com/protocolbuffers/protobuf/blob/v3.15.0/docs/field_presence.md">field presence</a>. Older versions may fail to compile.</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span>protoc<span class="w"> </span>--version
-libprotoc<span class="w"> </span><span class="m">3</span>.15.0
-</pre></div>
-</div>
-<p>Alternatively a binary release can be downloaded from the <a class="reference external" href="https://github.com/protocolbuffers/protobuf/releases">Release Page</a> or <a class="reference external" href="https://github.com/protocolbuffers/protobuf/blob/main/src/README.md">built from source</a>.</p>
-</section>
-<section id="bootstrap-environment">
-<h2>Bootstrap Environment<a class="headerlink" href="#bootstrap-environment" title="Link to this heading">#</a></h2>
-<p>DataFusion is written in Rust and it uses a standard rust toolkit:</p>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">rustup</span> <span class="pre">update</span> <span class="pre">stable</span></code> DataFusion generally uses the latest stable release of Rust, though it may lag when new Rust toolchains release</p>
-<ul>
-<li><p>See which toolchain is currently pinned in the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/rust-toolchain.toml"><code class="docutils literal notranslate"><span class="pre">rust-toolchain.toml</span></code></a> file</p></li>
-<li><p>This can cause issues such as not having the rust-analyzer component installed for the specified toolchain, in which case just install it manually, e.g. <code class="docutils literal notranslate"><span class="pre">rustup</span> <span class="pre">component</span> <span class="pre">add</span> <span class="pre">--toolchain</span> <span class="pre">1.99.0</span> <span class="pre">rust-analyzer</span></code></p></li>
-</ul>
-</li>
-<li><p><code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">build</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">fmt</span></code> to format the code</p></li>
-<li><p>etc.</p></li>
-</ul>
-<p>Testing setup:</p>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">git</span> <span class="pre">submodule</span> <span class="pre">init</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">git</span> <span class="pre">submodule</span> <span class="pre">update</span> <span class="pre">--init</span> <span class="pre">--remote</span> <span class="pre">--recursive</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">test</span></code> to run tests</p></li>
-</ul>
-<p>Note that running <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">test</span></code> requires significant memory resources, due to cargo running many tests in parallel by default. If you run into issues with slow tests or system lock ups, you can significantly reduce the memory required by instead running <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">test</span> <span class="pre">--</span> <span class="pre">--test-threads=1</span></code>. For more information see <a class="reference external" href="https://github.com/apache/datafusion/issues/5347">this issue</a>.</p>
-<p>Formatting instructions:</p>
-<ul class="simple">
-<li><p><a class="reference download internal" download="" href="../_downloads/4a91b8629bd17ce8ae200ee0b5345f19/rust_fmt.sh"><span class="xref download myst">ci/scripts/rust_fmt.sh</span></a></p></li>
-<li><p><a class="reference download internal" download="" href="../_downloads/ca7ec2ded721157172203812bd6e22b2/rust_clippy.sh"><span class="xref download myst">ci/scripts/rust_clippy.sh</span></a></p></li>
-<li><p><a class="reference download internal" download="" href="../_downloads/5b1657e27416274aa54d7579d8b125c3/rust_toml_fmt.sh"><span class="xref download myst">ci/scripts/rust_toml_fmt.sh</span></a></p></li>
-</ul>
-<p>or run them all at once:</p>
-<ul class="simple">
-<li><p><a class="reference download internal" download="" href="../_downloads/1e336e540124589d1e27210fa4f805f6/rust_lint.sh"><span class="xref download myst">dev/rust_lint.sh</span></a></p></li>
-</ul>
-<p>Debugging:</p>
-<p>The standard dev profile, used by cargo build and cargo test, disables variable-level DWARF debug information that is required by interactive debuggers.</p>
-<p>If you need to step through the code with a debugger, build with:</p>
-<p><code class="docutils literal notranslate"><span class="pre">CARGO_PROFILE_DEV_DEBUG=2</span> <span class="pre">cargo</span> <span class="pre">build</span></code></p>
-<p>Alternatively, you can set <code class="docutils literal notranslate"><span class="pre">CARGO_PROFILE_DEV_DEBUG=2</span></code> as an environment variable in your IDE.</p>
-<p>This enables the additional debug information required for source-level debugging.</p>
-<p>For more details, see the DataFusion <a class="reference external" href="https://github.com/apache/datafusion/blob/main/Cargo.toml#L329">Cargo.toml</a> configuration.</p>
+<section id="better-ways-to-contribute-than-an-ai-dump">
+<h2>Better ways to contribute than an “AI dump”<a class="headerlink" href="#better-ways-to-contribute-than-an-ai-dump" title="Link to this heading">#</a></h2>
+<p>It’s recommended to write a high-quality issue with a clear problem statement
+and a minimal, reproducible example. The reproducer should focus on the
+end-user-visible behavior rather than explaining the details of some code
+defect.</p>
+<p>This will make it easier for others to contribute and for reviewers to
+understand the problem being addressed.</p>
 </section>
 </section>
 
@@ -576,20 +551,20 @@ libprotoc<span class="w"> </span><span class="m">3</span>.15.0
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="communication.html"
+       href="index.html"
        title="previous page">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">Community Communication</p>
+        <p class="prev-next-title">Introduction</p>
       </div>
     </a>
     <a class="right-next"
-       href="architecture.html"
+       href="pr_review.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Architecture</p>
+        <p class="prev-next-title">Reviewing Pull Requests</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -612,11 +587,10 @@ libprotoc<span class="w"> </span><span class="m">3</span>.15.0
   </div>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#quick-start">Quick Start</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#windows-setup">Windows Setup</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#dev-container-setup">Dev Container setup</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#protoc-installation"><code class="docutils literal notranslate"><span class="pre">protoc</span></code> Installation</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#bootstrap-environment">Bootstrap Environment</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#what-is-an-ai-dump-and-why-it-is-not-helpful">What is an “AI dump” and why it is not helpful</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#responding-to-review-comments">Responding to review comments</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#ai-assisted-reviews">AI-assisted reviews</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#better-ways-to-contribute-than-an-ai-dump">Better ways to contribute than an “AI dump”</a></li>
 </ul>
   </nav></div>
 
@@ -624,7 +598,7 @@ libprotoc<span class="w"> </span><span class="m">3</span>.15.0
 
   
   <div class="tocsection editthispage">
-    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/contributor-guide/development_environment.md">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/contributor-guide/ai-policy.md">
       <i class="fa-solid fa-pencil"></i>
       
       
@@ -639,7 +613,7 @@ libprotoc<span class="w"> </span><span class="m">3</span>.15.0
   <div class="sidebar-secondary-item">
 
   <div class="tocsection sourcelink">
-    <a href="../_sources/contributor-guide/development_environment.md.txt">
+    <a href="../_sources/contributor-guide/ai-policy.md.txt">
       <i class="fa-solid fa-file-lines"></i> Show Source
     </a>
   </div>
