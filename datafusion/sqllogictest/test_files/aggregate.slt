@@ -7553,7 +7553,7 @@ physical_plan
 02)--GlobalLimitExec: skip=0, fetch=3
 03)----AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3, __grouping_id@2 as __grouping_id], aggr=[], lim=[3]
 04)------CoalescePartitionsExec
-05)--------AggregateExec: mode=Partial, gby=[(NULL as c2, NULL as c3), (c2@0 as c2, NULL as c3), (c2@0 as c2, c3@1 as c3)], aggr=[]
+05)--------AggregateExec: mode=Partial, gby=[(NULL as c2, NULL as c3), (c2@0 as c2, NULL as c3), (c2@0 as c2, c3@1 as c3)], aggr=[], lim=[3]
 06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
 
@@ -7639,9 +7639,8 @@ logical_plan
 03)----TableScan: distinct_limit_combine projection=[a, b]
 physical_plan
 01)GlobalLimitExec: skip=0, fetch=2
-02)--AggregateExec: mode=Final, gby=[b@0 as b, a@1 as a], aggr=[], lim=[2]
-03)----AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--AggregateExec: mode=Single, gby=[b@1 as b, a@0 as a], aggr=[], lim=[2]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 # LIMIT without ORDER BY may return any two groups
 query II
@@ -7659,9 +7658,8 @@ logical_plan
 03)----TableScan: distinct_limit_combine projection=[a]
 physical_plan
 01)GlobalLimitExec: skip=0, fetch=2
-02)--AggregateExec: mode=Final, gby=[distinct_limit_combine.a % Int64(3)@0 as distinct_limit_combine.a % Int64(3)], aggr=[], lim=[2]
-03)----AggregateExec: mode=Partial, gby=[a@0 % 3 as distinct_limit_combine.a % Int64(3)], aggr=[]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--AggregateExec: mode=Single, gby=[a@0 % 3 as distinct_limit_combine.a % Int64(3)], aggr=[], lim=[2]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 query II
 SELECT count(*), count(DISTINCT m)
@@ -8229,6 +8227,55 @@ c,a,b,d d,b,a,c
 
 statement ok
 drop table t;
+
+# A sort key repeated in an ordered aggregate's ORDER BY is redundant, and the
+# query must behave as if the key were listed once (issue #25398). Each `k` is
+# unique so every expected value is determined by the ordering.
+statement ok
+CREATE TABLE dup_sort_keys (g INT, k INT, v INT) AS VALUES
+  (1, 2, 20), (1, 1, 10), (2, 4, 40), (2, 3, 30);
+
+query IIII
+SELECT g,
+  first_value(v ORDER BY k, k),
+  last_value(v ORDER BY k, k),
+  nth_value(v, 2 ORDER BY k + 0, k + 0)
+FROM dup_sort_keys GROUP BY g ORDER BY g;
+----
+1 10 20 20
+2 30 40 40
+
+query I?T
+SELECT g,
+  array_agg(v ORDER BY k, k),
+  string_agg(CAST(v AS VARCHAR), ',' ORDER BY k DESC, k ASC)
+FROM dup_sort_keys GROUP BY g ORDER BY g;
+----
+1 [10, 20] 20,10
+2 [30, 40] 40,30
+
+# With DISTINCT, the ORDER BY may only sort by the aggregated expression. The
+# repeated key is dropped first, so these are accepted.
+query I?
+SELECT g, array_agg(DISTINCT k ORDER BY k, k) FROM dup_sort_keys GROUP BY g ORDER BY g;
+----
+1 [1, 2]
+2 [3, 4]
+
+query I?
+SELECT g, array_agg(DISTINCT k ORDER BY k DESC, k ASC) FROM dup_sort_keys GROUP BY g ORDER BY g;
+----
+1 [2, 1]
+2 [4, 3]
+
+query II
+SELECT DISTINCT ON (g) g, v FROM dup_sort_keys ORDER BY g, g, k;
+----
+1 10
+2 30
+
+statement ok
+drop table dup_sort_keys;
 
 
 # Tests for aggregating with NaN values

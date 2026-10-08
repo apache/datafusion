@@ -22,6 +22,7 @@ package datafusion_common;
 
 message ColumnRelation {
   string relation = 1;
+  repeated string parts = 2;
 }
 
 message Column {
@@ -628,6 +629,7 @@ message ParquetOptions {
 
   // "start_offset" or "midpoint". Empty means "start_offset".
   string row_group_range_assignment = 39;
+  bool enable_rle_to_dictionary = 40;
 
   string created_by = 16;
 
