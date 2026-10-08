@@ -136,6 +136,14 @@ pub async fn exec_from_repl(
     rl.load_history(".history").ok();
 
     loop {
+        // The dialect and recursion limit can change through any input,
+        // including `\i` files, so sync the validator before every read.
+        let task_ctx = ctx.task_ctx();
+        let sql_parser = &task_ctx.session_config().options().sql_parser;
+        let helper = rl.helper_mut().unwrap();
+        helper.set_dialect(&sql_parser.dialect);
+        helper.set_recursion_limit(sql_parser.recursion_limit.get());
+
         match rl.readline("> ") {
             Ok(line) if line.starts_with('\\') => {
                 rl.add_history_entry(line.trim_end())?;
@@ -183,15 +191,8 @@ pub async fn exec_from_repl(
                         },
                         _ = signal::ctrl_c() => {
                             println!("^C");
-                            continue
                         },
                     }
-                    // dialect or recursion limit might have changed
-                    let task_ctx = ctx.task_ctx();
-                    let sql_parser = &task_ctx.session_config().options().sql_parser;
-                    let helper = rl.helper_mut().unwrap();
-                    helper.set_dialect(&sql_parser.dialect);
-                    helper.set_recursion_limit(sql_parser.recursion_limit.get());
                 }
             }
             Err(ReadlineError::Interrupted) => {
