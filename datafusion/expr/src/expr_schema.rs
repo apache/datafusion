@@ -143,6 +143,7 @@ fn case_field_metadata(case: &Case, schema: &dyn ExprSchema) -> Result<FieldRef>
     enum Work<'a> {
         Visit(&'a Expr),
         FinishCase(&'a Case),
+        FinishBinary(&'a BinaryExpr),
         FinishCast(&'a FieldRef, bool),
         FinishAlias(Option<&'a FieldMetadata>),
     }
@@ -170,6 +171,11 @@ fn case_field_metadata(case: &Case, schema: &dyn ExprSchema) -> Result<FieldRef>
         match item {
             Work::Visit(expr) => match expr {
                 Expr::Case(nested) => schedule_case(nested, &mut work),
+                Expr::BinaryExpr(binary) => {
+                    work.push(Work::FinishBinary(binary));
+                    work.push(Work::Visit(&binary.right));
+                    work.push(Work::Visit(&binary.left));
+                }
                 Expr::Cast(cast) => {
                     work.push(Work::FinishCast(&cast.field, false));
                     work.push(Work::Visit(&cast.expr));
@@ -191,6 +197,29 @@ fn case_field_metadata(case: &Case, schema: &dyn ExprSchema) -> Result<FieldRef>
                     ),
                 }),
             },
+            Work::FinishBinary(binary) => {
+                let Some(right) = fields.pop() else {
+                    return internal_err!("Missing CASE binary right field");
+                };
+                let Some(left) = fields.pop() else {
+                    return internal_err!("Missing CASE binary left field");
+                };
+                let mut coercer = BinaryTypeCoercer::new(
+                    left.field.data_type(),
+                    &binary.op,
+                    right.field.data_type(),
+                );
+                coercer.set_lhs_spans(binary.left.spans().cloned().unwrap_or_default());
+                coercer.set_rhs_spans(binary.right.spans().cloned().unwrap_or_default());
+                let nullable = match binary.op {
+                    Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => false,
+                    _ => left.field.is_nullable() || right.field.is_nullable(),
+                };
+                fields.push(BranchField {
+                    field: Arc::new(Field::new("", coercer.get_result_type()?, nullable)),
+                    certainly_null: false,
+                });
+            }
             Work::FinishCast(target, force_nullable) => {
                 let Some(source) = fields.pop() else {
                     return internal_err!("Missing CASE cast input field");
@@ -1484,6 +1513,15 @@ mod tests {
         }
         let cast_nested = when(lit(true), cast_nested).otherwise(col("b"))?;
         assert_eq!(cast_nested.to_field(&schema)?.1.metadata(), &shared);
+
+        let mut binary_nested = col("a");
+        for _ in 0..128 {
+            binary_nested = when(lit(true), binary_nested + lit(1)).otherwise(lit(0))?;
+        }
+        let binary_nested = when(lit(true), binary_nested).otherwise(col("b"))?;
+        let binary_field = binary_nested.to_field(&schema)?.1;
+        assert_eq!(binary_field.data_type(), &DataType::Int32);
+        assert!(binary_field.metadata().is_empty());
 
         let mismatched = when(lit(true), col("a")).otherwise(col("c"))?;
         assert!(mismatched.to_field(&schema)?.1.metadata().is_empty());
