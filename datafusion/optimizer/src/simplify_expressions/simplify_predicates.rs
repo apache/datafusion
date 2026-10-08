@@ -32,6 +32,7 @@ use datafusion_common::utils::normalize_float_zero_scalar;
 use datafusion_common::{Column, DataFusionError, Result, ScalarValue, internal_err};
 use datafusion_expr::utils::{conjunction, split_conjunction_owned};
 use datafusion_expr::{BinaryExpr, Expr, Operator, lit};
+use indexmap::IndexSet;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
@@ -127,12 +128,20 @@ fn simplify_disjunction(
         return Ok(predicate);
     };
     let mut simplify_branch = |branch| {
-        let predicates = simplify_with_context(
-            split_conjunction_owned(branch),
-            assumptions,
-            depth + 1,
-            remaining,
-        )?;
+        let original = split_conjunction_owned(branch);
+        let predicates =
+            simplify_with_context(original.clone(), assumptions, depth + 1, remaining)?;
+        // Grouping comparisons by column can merely permute an AND branch.
+        // Preserve its evaluation order when no predicates were simplified.
+        let predicates = if original.len() == predicates.len()
+            && original != predicates
+            && original.iter().collect::<IndexSet<_>>()
+                == predicates.iter().collect::<IndexSet<_>>()
+        {
+            original
+        } else {
+            predicates
+        };
         Ok::<_, DataFusionError>(conjunction(predicates).unwrap_or_else(|| lit(true)))
     };
     let left = simplify_branch(*left)?;
