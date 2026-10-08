@@ -716,7 +716,7 @@ impl From<StreamType> for SendableRecordBatchStream {
         match stream {
             StreamType::AggregateStream(stream) => Box::pin(stream),
             StreamType::PartialHash(stream) => stream.into_stream(),
-            StreamType::PartialReduceHash(stream) => Box::pin(stream),
+            StreamType::PartialReduceHash(stream) => stream.into_stream(),
             StreamType::FinalHash(stream) => stream.into_stream(),
             StreamType::SingleHash(stream) => stream.into_stream(),
             StreamType::OrderedPartialAggregate(stream) => stream.into_stream(),
@@ -1391,6 +1391,23 @@ impl AggregateExec {
     /// Aggregation mode (full, partial)
     pub fn mode(&self) -> &AggregateMode {
         &self.mode
+    }
+
+    /// Returns whether this is a compatible partial/final aggregation pair.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is made public for the physical optimizer to use, this is not part of
+    /// the public API.
+    #[doc(hidden)]
+    pub fn matches_partial(&self, partial: &Self) -> bool {
+        matches!(
+            (self.mode, partial.mode),
+            (
+                AggregateMode::Final | AggregateMode::FinalPartitioned,
+                AggregateMode::Partial,
+            )
+        ) && self.group_expr() == &partial.group_expr().as_final()
     }
 
     /// Set a legacy limit hint. Unsupported requests leave ordinary aggregation.
@@ -2520,11 +2537,38 @@ impl ExecutionPlan for AggregateExec {
                     Arc::clone(&self.input_schema),
                     Arc::clone(&self.schema),
                 )?;
-                // Reapply a DISTINCT limit only if the new input remains eligible.
-                if let AggregateKind::DistinctLimit { limit, .. } = &self.kind
-                    && let Some(optimized) =
+                // Reapply a limit only if the new input remains eligible.
+                let optimized = match &self.kind {
+                    AggregateKind::General { .. } => None,
+                    AggregateKind::DistinctLimit { limit, .. } => {
                         me.clone().try_optimize_distinct_soft_limit(*limit)
-                {
+                    }
+                    AggregateKind::TopKMinMax {
+                        aggr_expr,
+                        limit,
+                        descending,
+                        nulls_first,
+                        ..
+                    } => me.clone().try_optimize_topk(
+                        *limit,
+                        aggr_expr.name(),
+                        SortOptions::new(*descending, *nulls_first),
+                    ),
+                    // TopK DISTINCT orders by its single grouping key and
+                    // ignores `nulls_first`.
+                    AggregateKind::TopKDistinct {
+                        group_by,
+                        limit,
+                        descending,
+                    } => group_by.expr().first().and_then(|(_, alias)| {
+                        me.clone().try_optimize_topk(
+                            *limit,
+                            alias,
+                            SortOptions::new(*descending, false),
+                        )
+                    }),
+                };
+                if let Some(optimized) = optimized {
                     me = optimized.data;
                 }
                 me.dynamic_filter.clone_from(&self.dynamic_filter);
@@ -2600,7 +2644,7 @@ impl ExecutionPlan for AggregateExec {
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.metrics.clone_inner())
+        Some(self.metrics.clone_inner().with_output_rows_skew())
     }
 
     fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
@@ -3643,6 +3687,7 @@ pub fn evaluate_group_by(
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use std::mem::size_of;
     use std::task::{Context, Poll};
 
     use super::*;
@@ -3924,7 +3969,8 @@ mod tests {
 
         const KEYS: usize = 64;
         const VALUES_PER_KEY: i64 = 64;
-        const MEMORY_LIMIT: usize = 8192;
+        // Leave only a small amount above 8 KiB for the empty aggregate state.
+        const MEMORY_LIMIT: usize = 8_384;
         let schema = Arc::new(Schema::new(vec![
             Field::new("key", DataType::Int64, false),
             Field::new("value", DataType::Int64, false),
@@ -4328,8 +4374,8 @@ mod tests {
         )];
 
         let task_ctx = if spill {
-            // adjust the max memory size to have the partial aggregate result for spill mode.
-            new_spill_ctx(4, 500)
+            // Includes the descriptor-aware empty grouping-set table state.
+            new_spill_ctx(4, 700)
         } else {
             Arc::new(TaskContext::default())
         };
@@ -4347,6 +4393,14 @@ mod tests {
             collect(partial_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
 
         if spill {
+            let early_emit_count = partial_aggregate
+                .metrics()
+                .unwrap()
+                .sum_by_name("early_emit_count")
+                .unwrap()
+                .as_usize();
+            assert!(early_emit_count > 0);
+
             // In spill mode, we test with the limited memory, if the mem usage exceeds,
             // we trigger the early emit rule, which turns out the partial aggregate result.
             allow_duplicates! {
@@ -6042,9 +6096,11 @@ mod tests {
         let stream: SendableRecordBatchStream = stream.into();
         let output = collect(stream).await?;
 
-        // Same flush cadence as the column-backed test: one flush per input
-        // batch, each sliced into batches of 2 and 1 rows.
-        assert_eq!(output.len(), 2 * num_input_batches);
+        // One flush per input batch. The memory limit only fits the table, so
+        // holding the materialized flush while slicing it does not fit and each
+        // flush is emitted whole instead of in `batch_size` slices.
+        assert_eq!(output.len(), num_input_batches);
+        assert!(output.iter().all(|batch| batch.num_rows() == 3));
         assert_snapshot!(batches_to_string(&output), @r"
         +---+---+-------------+
         | a | n | SUM(b)[sum] |
@@ -7751,9 +7807,11 @@ mod tests {
         )?);
 
         let batch_size = 2;
-        let memory_pool = Arc::new(FairSpillPool::new(
-            initial_reservation(&single_aggregate)? + 200,
-        ));
+        // Allow the already-retained initial table but no extra headroom.
+        // This fixture's groups can fit in that initial capacity, so successful
+        // execution need not spill.
+        let memory_pool =
+            Arc::new(FairSpillPool::new(initial_reservation(&single_aggregate)?));
         let task_ctx = Arc::new(
             TaskContext::default()
                 .with_session_config(SessionConfig::new().with_batch_size(batch_size))
@@ -7767,8 +7825,6 @@ mod tests {
         let result = collect(single_aggregate.execute(0, Arc::clone(&task_ctx))?).await;
         match result {
             Ok(result) => {
-                assert_spill_count_metric(true, single_aggregate);
-
                 allow_duplicates! {
                     assert_snapshot!(batches_to_string(&result), @r"
                 +---+---+--------+--------+
