@@ -48,25 +48,24 @@ Run the provided script to build the HTML pages.
 ./build.sh
 ```
 
-The HTML will be generated into a `build` directory. Serve the site over HTTP
-to test the version switcher (it cannot fetch JSON from a `file:` URL):
+The HTML will be generated into a `build` directory. Open `build/html/index.html`
+in your preferred browser, for example on Linux via
+
+```bash
+# On macOS
+open build/html/index.html
+# On Linux with Firefox
+firefox build/html/index.html
+```
+
+Note that some features of the site, such as the "Version Picker" do not work
+when read from files. To preview such features, start a local webserver:
 
 ```bash
 python3 -m http.server --directory build/html 8000
 ```
 
-The version switcher reads `source/_static/versions.json` from the site root.
-Add an entry only when that release's documentation is published. For the manual
-release build and publication procedure, see
-[the release guide](../dev/release/README.md#publish-the-versioned-documentation).
-
-For a local or fork preview, set `DATAFUSION_DOCS_BASE_URL` to the preview's root
-URL when building both development and released docs, and change the URLs in
-the preview's `_static/versions.json` to that same root. For example, use
-`http://localhost:8000/` locally or `https://<username>.github.io/datafusion/`
-on GitHub Pages. Serve the combined site, with released docs under `versions/`,
-and check the picker in both directions, a page missing from a release, search,
-and static assets. Only the preview manifest should contain preview URLs.
+And then open http://localhost:8000/ in your browser
 
 ## Making Changes
 
