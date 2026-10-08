@@ -17,7 +17,7 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
-use arrow::array::RecordBatch;
+use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{DataType, Field, FieldRef, Metadata, Schema, SchemaRef};
 use hashbrown::HashMap;
 
@@ -199,7 +199,17 @@ pub fn batches_with_display_names(
         .iter()
         .map(|batch| {
             let schema = schema_with_display_names(&batch.schema());
-            Ok(RecordBatch::try_new(schema, batch.columns().to_vec())?)
+            if Arc::ptr_eq(&schema, &batch.schema()) {
+                return Ok(batch.clone());
+            }
+            // Keep the row count so zero-column batches survive the rebuild.
+            let options =
+                RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+            Ok(RecordBatch::try_new_with_options(
+                schema,
+                batch.columns().to_vec(),
+                &options,
+            )?)
         })
         .collect()
 }
@@ -493,5 +503,40 @@ mod tests {
     fn schema_with_display_names_keeps_unlabeled_schema() {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
         assert!(Arc::ptr_eq(&schema_with_display_names(&schema), &schema));
+    }
+
+    #[test]
+    fn batches_with_display_names_keeps_zero_column_rows() {
+        let options = RecordBatchOptions::new().with_row_count(Some(3));
+        let batch = RecordBatch::try_new_with_options(
+            Arc::new(Schema::empty()),
+            vec![],
+            &options,
+        )
+        .unwrap();
+        let out = batches_with_display_names(&[batch]).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].num_columns(), 0);
+        assert_eq!(out[0].num_rows(), 3);
+    }
+
+    #[test]
+    fn batches_with_display_names_keeps_unlabeled_schema_arc() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+        let batch = RecordBatch::new_empty(Arc::clone(&schema));
+        let out = batches_with_display_names(&[batch]).unwrap();
+        assert!(Arc::ptr_eq(&out[0].schema(), &schema));
+    }
+
+    #[test]
+    fn batches_with_display_names_relabels_labeled_columns() {
+        let field = labeled_field("t.a + Int64(1)", "a + 1", "t.a + Int64(1)");
+        let schema = Arc::new(Schema::new(vec![field]));
+        let column: arrow::array::ArrayRef =
+            Arc::new(arrow::array::Int64Array::from(vec![1, 2]));
+        let batch = RecordBatch::try_new(schema, vec![column]).unwrap();
+        let out = batches_with_display_names(&[batch]).unwrap();
+        assert_eq!(out[0].schema().field(0).name(), "a + 1");
+        assert_eq!(out[0].num_rows(), 2);
     }
 }
