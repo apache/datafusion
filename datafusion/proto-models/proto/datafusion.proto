@@ -287,6 +287,10 @@ message JoinNode {
   datafusion_common.NullEquality null_equality = 7;
   LogicalExprNode filter = 8;
   bool null_aware = 9;
+  // Number of `NOT IN` value keys of a null-aware join (see
+  // `Join::null_aware_value_keys`). Messages predating this field decode it
+  // as 0, which is read as 1: they can only hold scalar `NOT IN` joins.
+  uint32 null_aware_value_keys = 10;
 }
 
 enum AsOfMatchOperator {
@@ -1431,6 +1435,11 @@ message HashJoinExecNode {
   // turning old plans into empty results. With `optional`, absent decodes to
   // `None`, which is the correct reading of an older message.
   optional uint64 fetch = 12;
+  // Number of `NOT IN` value keys of a null-aware join (see
+  // `HashJoinExec::null_aware_value_keys`). Messages predating this field
+  // decode it as 0, which is read as 1: they can only hold scalar `NOT IN`
+  // joins.
+  uint32 null_aware_value_keys = 13;
 }
 
 enum StreamPartitionMode {
@@ -1517,6 +1526,11 @@ message ProjectionExecNode {
   PhysicalPlanNode input = 1;
   repeated PhysicalExprNode expr = 2;
   repeated string expr_name = 3;
+  // Only field and schema metadata are used; output types are derived from expr.
+  // Present when the projection output has metadata or explicitly overrides
+  // inherited metadata, including an explicit clear. Absent for older plans
+  // and metadata-free projections.
+  datafusion_common.Schema schema = 4;
 }
 
 enum AggregateMode {

@@ -61,7 +61,7 @@ use datafusion_functions_aggregate_common::accumulator::{
 };
 use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
 #[derive(Debug, Clone)]
 struct AggregateHumanDisplay {
@@ -265,12 +265,18 @@ impl AggregateExprBuilder {
         assert_or_internal_err!(!args.is_empty(), "args should not be empty");
 
         // An order-insensitive aggregate ignores its ORDER BY, so drop it here.
-        // Everything derived from `order_bys` below, such as the ordering fields
-        // in the aggregate's state, then agrees that there is no ordering.
+        // Otherwise drop sort keys that repeat an earlier one: a repeated key can
+        // never break a tie the earlier one left (`ORDER BY b ASC, b DESC` orders
+        // like `ORDER BY b ASC`), and accumulators build their ordering with
+        // `LexOrdering`, which drops such repeats. Everything derived from
+        // `order_bys` below, such as the ordering fields in the aggregate's
+        // state, then matches the sort keys the accumulators compare.
         let order_bys = if fun.order_sensitivity().is_insensitive() {
             vec![]
         } else {
-            order_bys
+            LexOrdering::new(order_bys)
+                .map(Vec::from)
+                .unwrap_or_default()
         };
 
         let ordering_types = order_bys

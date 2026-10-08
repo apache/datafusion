@@ -439,6 +439,11 @@ pub struct JoinNode {
     pub filter: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
     #[prost(bool, tag = "9")]
     pub null_aware: bool,
+    /// Number of `NOT IN` value keys of a null-aware join (see
+    /// `Join::null_aware_value_keys`). Messages predating this field decode it
+    /// as 0, which is read as 1: they can only hold scalar `NOT IN` joins.
+    #[prost(uint32, tag = "10")]
+    pub null_aware_value_keys: u32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AsOfJoinNode {
@@ -2173,6 +2178,12 @@ pub struct HashJoinExecNode {
     /// `None`, which is the correct reading of an older message.
     #[prost(uint64, optional, tag = "12")]
     pub fetch: ::core::option::Option<u64>,
+    /// Number of `NOT IN` value keys of a null-aware join (see
+    /// `HashJoinExec::null_aware_value_keys`). Messages predating this field
+    /// decode it as 0, which is read as 1: they can only hold scalar `NOT IN`
+    /// joins.
+    #[prost(uint32, tag = "13")]
+    pub null_aware_value_keys: u32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SymmetricHashJoinExecNode {
@@ -2291,6 +2302,12 @@ pub struct ProjectionExecNode {
     pub expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
     #[prost(string, repeated, tag = "3")]
     pub expr_name: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Only field and schema metadata are used; output types are derived from expr.
+    /// Present when the projection output has metadata or explicitly overrides
+    /// inherited metadata, including an explicit clear. Absent for older plans
+    /// and metadata-free projections.
+    #[prost(message, optional, tag = "4")]
+    pub schema: ::core::option::Option<super::datafusion_common::Schema>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PartiallySortedInputOrderMode {
