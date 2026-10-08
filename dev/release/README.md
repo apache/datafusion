@@ -315,10 +315,8 @@ git push apache 55.2.0
 
 #### Publish the versioned documentation
 
-After the final release tag is available, build its complete documentation
-using the configuration from the tag. The small configuration overlay adds the
-version picker and the correct URL prefix to older tags without changing their
-documentation source. For example, from the repository root, for `55.0.0`:
+After the final release tag is available, build the documentation for this release
+For example, from the repository root, for `55.0.0`:
 
 ```shell
 git fetch origin tag 55.0.0
@@ -350,10 +348,6 @@ Review the generated files and open the publication PR for review.
 Once it is published, add its entry to `docs/source/_static/versions.json` on
 `main` so the picker offers only working destinations. Remove the temporary
 worktrees afterward.
-
-Merge the separate documentation-retention workflow change before publishing
-the first release documentation; otherwise the next `main` deployment would
-delete `/versions/`.
 
 ### 10. Publish on Crates.io
 
