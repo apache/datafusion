@@ -3054,6 +3054,34 @@ mod test {
     }
 
     #[test]
+    fn test_case_coercion_preserves_matching_field_metadata() -> Result<()> {
+        let metadata = std::collections::HashMap::from([(
+            "structured_type".to_string(),
+            "ARRAY(NUMBER)".to_string(),
+        )]);
+        let schema = DFSchema::from_unqualified_fields(
+            vec![
+                Field::new("structured", DataType::Int32, false)
+                    .with_metadata(metadata.clone()),
+            ]
+            .into(),
+            std::collections::HashMap::new(),
+        )?;
+        let case = Case {
+            expr: None,
+            when_then_expr: vec![(Box::new(lit(true)), Box::new(col("structured")))],
+            else_expr: Some(Box::new(lit(ScalarValue::Null))),
+        };
+        let coerced = coerce_case_expression(case, &schema, None)?;
+        assert!(matches!(coerced.else_expr.as_deref(), Some(Expr::Cast(_))));
+        assert_eq!(
+            Expr::Case(coerced).to_field(&schema)?.1.metadata(),
+            &metadata
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_case_expression_coercion() -> Result<()> {
         let schema = Arc::new(DFSchema::from_unqualified_fields(
             vec![

@@ -18,7 +18,7 @@
 use super::{Between, Expr, Like, predicate_bounds};
 use crate::ValueOrLambda;
 use crate::expr::{
-    AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Cast, InList,
+    AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Case, Cast, InList,
     InSubquery, Lambda, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
     WindowFunctionParams, in_subquery_tuple_values,
 };
@@ -37,7 +37,7 @@ use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_K
 use datafusion_common::datatype::FieldExt;
 use datafusion_common::{
     Column, DataFusionError, ExprSchema, Result, ScalarValue, Spans, TableReference,
-    not_impl_err, plan_datafusion_err, plan_err,
+    internal_err, not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
@@ -136,6 +136,146 @@ fn scalar_argument_for_field(expr: &Expr, arg_field: &FieldRef) -> Option<Scalar
         ),
         _ => None,
     }
+}
+
+// Resolve metadata bottom-up so nested CASE and CAST branches are visited once.
+fn case_field_metadata(case: &Case, schema: &dyn ExprSchema) -> Result<FieldRef> {
+    enum Work<'a> {
+        Visit(&'a Expr),
+        FinishCase(&'a Case),
+        FinishCast(&'a FieldRef, bool),
+        FinishAlias(Option<&'a FieldMetadata>),
+    }
+
+    struct BranchField {
+        field: FieldRef,
+        certainly_null: bool,
+    }
+
+    fn schedule_case<'a>(case: &'a Case, work: &mut Vec<Work<'a>>) {
+        work.push(Work::FinishCase(case));
+        work.extend(case.else_expr.iter().map(|expr| Work::Visit(expr)));
+        work.extend(
+            case.when_then_expr
+                .iter()
+                .rev()
+                .map(|(_, then_expr)| Work::Visit(then_expr)),
+        );
+    }
+
+    let mut work = Vec::new();
+    let mut fields: Vec<BranchField> = Vec::new();
+    schedule_case(case, &mut work);
+    while let Some(item) = work.pop() {
+        match item {
+            Work::Visit(expr) => match expr {
+                Expr::Case(nested) => schedule_case(nested, &mut work),
+                Expr::Cast(cast) => {
+                    work.push(Work::FinishCast(&cast.field, false));
+                    work.push(Work::Visit(&cast.expr));
+                }
+                Expr::TryCast(cast) => {
+                    work.push(Work::FinishCast(&cast.field, true));
+                    work.push(Work::Visit(&cast.expr));
+                }
+                Expr::Alias(alias) => {
+                    work.push(Work::FinishAlias(alias.metadata.as_ref()));
+                    work.push(Work::Visit(&alias.expr));
+                }
+                Expr::Negative(inner) => work.push(Work::Visit(inner)),
+                _ => fields.push(BranchField {
+                    field: expr.to_field(schema)?.1,
+                    certainly_null: matches!(
+                        unwrap_certainly_null_expr(expr),
+                        Expr::Literal(value, _) if value.is_null()
+                    ),
+                }),
+            },
+            Work::FinishCast(target, force_nullable) => {
+                let Some(source) = fields.pop() else {
+                    return internal_err!("Missing CASE cast input field");
+                };
+                fields.push(BranchField {
+                    field: cast_output_field(&source.field, target, force_nullable),
+                    certainly_null: source.certainly_null,
+                });
+            }
+            Work::FinishAlias(metadata) => {
+                let Some(source) = fields.pop() else {
+                    return internal_err!("Missing CASE alias input field");
+                };
+                let mut combined = source.field.metadata().clone();
+                if let Some(metadata) = metadata {
+                    combined.extend(metadata.to_hashmap());
+                }
+                fields.push(BranchField {
+                    field: Arc::new(
+                        source.field.as_ref().clone().with_metadata(combined),
+                    ),
+                    certainly_null: source.certainly_null,
+                });
+            }
+            Work::FinishCase(case) => {
+                let count =
+                    case.when_then_expr.len() + usize::from(case.else_expr.is_some());
+                if fields.len() < count {
+                    return internal_err!("Missing CASE result fields");
+                }
+                let start = fields.len() - count;
+                let mut then_type = DataType::Null;
+                let mut else_type = DataType::Null;
+                let mut branch_type = None;
+                let mut metadata = None;
+                let mut conflict = false;
+                let mut certainly_null = true;
+                for (index, branch) in fields.drain(start..).enumerate() {
+                    let data_type = branch.field.data_type();
+                    if index < case.when_then_expr.len() {
+                        if then_type.is_null() && !data_type.is_null() {
+                            then_type = data_type.clone();
+                        }
+                    } else {
+                        else_type = data_type.clone();
+                    }
+                    certainly_null &= branch.certainly_null;
+                    if data_type.is_null()
+                        || (branch.certainly_null && branch.field.metadata().is_empty())
+                    {
+                        continue;
+                    }
+                    if branch_type.as_ref().is_some_and(|other| other != data_type)
+                        || branch.field.metadata().is_empty()
+                        || metadata
+                            .as_ref()
+                            .is_some_and(|other| other != branch.field.metadata())
+                    {
+                        conflict = true;
+                    }
+                    branch_type.get_or_insert_with(|| data_type.clone());
+                    metadata.get_or_insert_with(|| branch.field.metadata().clone());
+                }
+                let data_type = if then_type.is_null() {
+                    else_type
+                } else {
+                    then_type
+                };
+                if conflict || branch_type.as_ref() != Some(&data_type) {
+                    metadata = None;
+                }
+                fields.push(BranchField {
+                    field: Arc::new(
+                        Field::new("", data_type, true)
+                            .with_metadata(metadata.unwrap_or_default()),
+                    ),
+                    certainly_null,
+                });
+            }
+        }
+    }
+    let Some(result) = fields.pop() else {
+        return internal_err!("Missing CASE output field");
+    };
+    Ok(result.field)
 }
 
 impl ExprSchemable for Expr {
@@ -678,11 +818,40 @@ impl ExprSchemable for Expr {
             Expr::LambdaVariable(LambdaVariable {
                 field: Some(field), ..
             }) => Ok(Arc::clone(field).renamed(&schema_name)),
+            Expr::Case(case) => {
+                let data_type = self.get_type(schema)?;
+                let nullable = self.nullable(schema)?;
+                if let Some((_, first_result)) = case.when_then_expr.first()
+                    && matches!(
+                        first_result.as_ref(),
+                        Expr::Column(_) | Expr::Literal(_, _)
+                    )
+                {
+                    let field = first_result.to_field(schema)?.1;
+                    if !field.data_type().is_null()
+                        && !matches!(first_result.as_ref(), Expr::Literal(value, _) if value.is_null())
+                        && field.metadata().is_empty()
+                    {
+                        return Ok((
+                            relation,
+                            Arc::new(Field::new(&schema_name, data_type, nullable)),
+                        ));
+                    }
+                }
+                let branch_field = case_field_metadata(case, schema)?;
+                let metadata = if branch_field.data_type() == &data_type {
+                    branch_field.metadata().clone()
+                } else {
+                    Default::default()
+                };
+                Ok(Arc::new(
+                    Field::new(&schema_name, data_type, nullable).with_metadata(metadata),
+                ))
+            }
             Expr::Like(_)
             | Expr::SimilarTo(_)
             | Expr::Not(_)
             | Expr::Between(_)
-            | Expr::Case(_)
             | Expr::InList(_)
             | Expr::InSubquery(_)
             | Expr::SetComparison(_)
@@ -1065,6 +1234,13 @@ mod tests {
         assert_not_nullable(&e, &nullable_schema);
         assert_not_nullable(&e, &not_nullable_schema);
 
+        let varchar_schema = MockExprSchema::new()
+            .with_data_type(DataType::Utf8)
+            .with_nullable(true);
+        let try_cast = Expr::TryCast(TryCast::new(Box::new(col("x")), DataType::Int32));
+        let e = when(col("x").is_not_null(), try_cast).otherwise(lit(0))?;
+        assert_nullable(&e, &varchar_schema);
+
         // CASE WHEN NOT x IS NULL THEN x ELSE 0
         let e = when(not(col("x").is_null()), col("x")).otherwise(lit(0))?;
         assert_not_nullable(&e, &nullable_schema);
@@ -1255,6 +1431,70 @@ mod tests {
             Column::from_name("foo"),
         );
         assert_eq!(meta, outer_ref.metadata(&schema).unwrap());
+    }
+
+    #[test]
+    fn test_case_field_metadata() -> Result<()> {
+        let shared = HashMap::from([("type".to_string(), "structured".to_string())]);
+        let different = HashMap::from([("type".to_string(), "other".to_string())]);
+        let schema = DFSchema::from_unqualified_fields(
+            vec![
+                Field::new("a", DataType::Int32, false).with_metadata(shared.clone()),
+                Field::new("b", DataType::Int32, false).with_metadata(shared.clone()),
+                Field::new("c", DataType::Int32, false).with_metadata(different),
+                Field::new("d", DataType::Int32, false),
+            ]
+            .into(),
+            HashMap::new(),
+        )?;
+
+        let same = when(lit(true), col("a")).otherwise(col("b"))?;
+        assert_eq!(same.to_field(&schema)?.1.metadata(), &shared);
+
+        let null_else = when(lit(true), col("a")).otherwise(lit(ScalarValue::Null))?;
+        assert_eq!(null_else.to_field(&schema)?.1.metadata(), &shared);
+
+        let coerced_null_else = when(lit(true), col("a"))
+            .otherwise(lit(ScalarValue::Null).cast_to(&DataType::Int32, &schema)?)?;
+        assert_eq!(coerced_null_else.to_field(&schema)?.1.metadata(), &shared);
+
+        let try_cast_null_else = when(lit(true), col("a")).otherwise(Expr::TryCast(
+            TryCast::new(Box::new(lit(ScalarValue::Null)), DataType::Int32),
+        ))?;
+        assert_eq!(try_cast_null_else.to_field(&schema)?.1.metadata(), &shared);
+
+        let typed_null = Expr::Cast(Cast::new_from_field(
+            Box::new(lit(ScalarValue::Null)),
+            Arc::new(Field::new("", DataType::Int32, true).with_metadata(shared.clone())),
+        ));
+        let all_typed_null = when(lit(true), typed_null.clone()).otherwise(typed_null)?;
+        assert_eq!(all_typed_null.to_field(&schema)?.1.metadata(), &shared);
+
+        let mut nested = col("a");
+        for _ in 0..128 {
+            nested = when(lit(true), col("a")).otherwise(nested)?;
+        }
+        let nested = when(lit(true), nested).otherwise(col("b"))?;
+        assert_eq!(nested.to_field(&schema)?.1.metadata(), &shared);
+
+        let mut cast_nested = col("a");
+        for _ in 0..128 {
+            let inner = when(lit(true), col("a")).otherwise(cast_nested)?;
+            cast_nested = Expr::Cast(Cast::new(Box::new(inner), DataType::Int32));
+        }
+        let cast_nested = when(lit(true), cast_nested).otherwise(col("b"))?;
+        assert_eq!(cast_nested.to_field(&schema)?.1.metadata(), &shared);
+
+        let mismatched = when(lit(true), col("a")).otherwise(col("c"))?;
+        assert!(mismatched.to_field(&schema)?.1.metadata().is_empty());
+
+        let unmarked = when(lit(true), col("a")).otherwise(col("d"))?;
+        assert!(unmarked.to_field(&schema)?.1.metadata().is_empty());
+
+        let first_unmarked = when(lit(true), col("d")).otherwise(col("a"))?;
+        assert!(first_unmarked.to_field(&schema)?.1.metadata().is_empty());
+
+        Ok(())
     }
 
     #[test]
