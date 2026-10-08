@@ -160,6 +160,12 @@ pub enum ChildStats {
 /// a long-lived context at a lifecycle boundary to bound its memory (see
 /// [`Self::reset_cache`]).
 ///
+/// Cached statistics are served for as long as the context lives, so a plan
+/// node must not change its statistics in place (for example through interior
+/// mutability) while a context holds it: the cache would return stale values.
+/// Optimizer rules satisfy this because they replace nodes instead of changing
+/// them.
+///
 /// An optional [`StatisticsRegistry`] plugs providers into the walk: at each node
 /// they are consulted before the operator's built-in
 /// [`ExecutionPlan::statistics_from_inputs`]. An empty registry is the built-in
