@@ -304,6 +304,13 @@ impl<S: HashState> ChildHashing for HashStateChildHashing<'_, S> {
 /// Builds hash values of PrimitiveArray and writes them into `hashes_buffer`
 /// If `rehash==true` this folds the existing hash into the hasher state
 /// and hashes only the new value (avoiding a separate combine step).
+///
+/// The hot loops are 8-way manually unrolled: foldhash on a primitive is a
+/// single 64x64→128 multiply + xor fold whose iterations are fully independent,
+/// so unrolling exposes extra ILP for the backend scheduler. Nullable paths
+/// hash every slot and use a branchless `csel`-style blend to preserve the
+/// previous buffer value for null rows; this is cheaper than iterating
+/// `valid_indices()` for the common low-null-density case.
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_array_primitive<T>(
     array: &PrimitiveArray<T>,
@@ -319,36 +326,295 @@ fn hash_array_primitive<T>(
         "hashes_buffer and array should be of equal length"
     );
 
+    let values = array.values();
+    let n = values.len();
+
     if array.null_count() == 0 {
         if rehash {
-            for (hash, &value) in hashes_buffer.iter_mut().zip(array.values().iter()) {
-                let mut hasher = random_state.seeded_state(*hash).build_hasher();
-                value.hash_write(&mut hasher);
-                *hash = hasher.finish();
-            }
+            hash_prim_rehash_unrolled(values, hashes_buffer, random_state);
         } else {
-            for (hash, &value) in hashes_buffer.iter_mut().zip(array.values().iter()) {
-                *hash = value.hash_one(random_state);
-            }
-        }
-    } else if rehash {
-        for i in array.nulls().unwrap().valid_indices() {
-            let value = unsafe { array.value_unchecked(i) };
-            let mut hasher = random_state.seeded_state(hashes_buffer[i]).build_hasher();
-            value.hash_write(&mut hasher);
-            hashes_buffer[i] = hasher.finish();
+            hash_prim_fresh_unrolled(values, hashes_buffer, random_state);
         }
     } else {
-        for i in array.nulls().unwrap().valid_indices() {
-            let value = unsafe { array.value_unchecked(i) };
-            hashes_buffer[i] = value.hash_one(random_state);
+        // Branchless path: hash every element then blend into the buffer based on
+        // the null bitmap. Avoids the per-element work of `.valid_indices()`.
+        let nulls = array.nulls().unwrap();
+        if rehash {
+            for i in 0..n {
+                // SAFETY: i < values.len() == hashes_buffer.len()
+                let value = unsafe { *values.get_unchecked(i) };
+                let prev = unsafe { *hashes_buffer.get_unchecked(i) };
+                let mut hasher = random_state.seeded_state(prev).build_hasher();
+                value.hash_write(&mut hasher);
+                let new_hash = hasher.finish();
+                let valid = nulls.is_valid(i);
+                unsafe {
+                    *hashes_buffer.get_unchecked_mut(i) =
+                        if valid { new_hash } else { prev };
+                }
+            }
+        } else {
+            for i in 0..n {
+                let value = unsafe { *values.get_unchecked(i) };
+                let prev = unsafe { *hashes_buffer.get_unchecked(i) };
+                let new_hash = value.hash_one(random_state);
+                let valid = nulls.is_valid(i);
+                unsafe {
+                    *hashes_buffer.get_unchecked_mut(i) =
+                        if valid { new_hash } else { prev };
+                }
+            }
         }
+    }
+}
+
+/// 8-way unrolled hash loop for the null-free, fresh-hash primitive path.
+///
+/// Each `hash_one` call is independent, so unrolling lets the backend keep
+/// multiple folded_multiply operations in flight.
+#[cfg(not(feature = "force_hash_collisions"))]
+#[inline(always)]
+fn hash_prim_fresh_unrolled<N, S>(values: &[N], out: &mut [u64], state: &S)
+where
+    N: HashValue + Copy,
+    S: HashState,
+{
+    debug_assert_eq!(values.len(), out.len());
+    let n = values.len();
+    let main = n & !7;
+    // SAFETY: all get_unchecked indices below are < main <= n == out.len().
+    let mut i = 0;
+    while i < main {
+        unsafe {
+            let v0 = *values.get_unchecked(i);
+            let v1 = *values.get_unchecked(i + 1);
+            let v2 = *values.get_unchecked(i + 2);
+            let v3 = *values.get_unchecked(i + 3);
+            let v4 = *values.get_unchecked(i + 4);
+            let v5 = *values.get_unchecked(i + 5);
+            let v6 = *values.get_unchecked(i + 6);
+            let v7 = *values.get_unchecked(i + 7);
+
+            let h0 = v0.hash_one(state);
+            let h1 = v1.hash_one(state);
+            let h2 = v2.hash_one(state);
+            let h3 = v3.hash_one(state);
+            let h4 = v4.hash_one(state);
+            let h5 = v5.hash_one(state);
+            let h6 = v6.hash_one(state);
+            let h7 = v7.hash_one(state);
+
+            *out.get_unchecked_mut(i) = h0;
+            *out.get_unchecked_mut(i + 1) = h1;
+            *out.get_unchecked_mut(i + 2) = h2;
+            *out.get_unchecked_mut(i + 3) = h3;
+            *out.get_unchecked_mut(i + 4) = h4;
+            *out.get_unchecked_mut(i + 5) = h5;
+            *out.get_unchecked_mut(i + 6) = h6;
+            *out.get_unchecked_mut(i + 7) = h7;
+        }
+        i += 8;
+    }
+    while i < n {
+        unsafe {
+            let v = *values.get_unchecked(i);
+            *out.get_unchecked_mut(i) = v.hash_one(state);
+        }
+        i += 1;
+    }
+}
+
+/// 8-way unrolled hash loop for the null-free, rehash primitive path.
+///
+/// Each iteration seeds a fresh hasher with the prior per-row hash, so iterations
+/// stay independent and benefit from the same unroll treatment.
+#[cfg(not(feature = "force_hash_collisions"))]
+#[inline(always)]
+fn hash_prim_rehash_unrolled<N, S>(values: &[N], out: &mut [u64], state: &S)
+where
+    N: HashValue + Copy,
+    S: HashState,
+{
+    debug_assert_eq!(values.len(), out.len());
+    let n = values.len();
+    let main = n & !7;
+    let mut i = 0;
+    while i < main {
+        unsafe {
+            let v0 = *values.get_unchecked(i);
+            let v1 = *values.get_unchecked(i + 1);
+            let v2 = *values.get_unchecked(i + 2);
+            let v3 = *values.get_unchecked(i + 3);
+            let v4 = *values.get_unchecked(i + 4);
+            let v5 = *values.get_unchecked(i + 5);
+            let v6 = *values.get_unchecked(i + 6);
+            let v7 = *values.get_unchecked(i + 7);
+
+            let p0 = *out.get_unchecked(i);
+            let p1 = *out.get_unchecked(i + 1);
+            let p2 = *out.get_unchecked(i + 2);
+            let p3 = *out.get_unchecked(i + 3);
+            let p4 = *out.get_unchecked(i + 4);
+            let p5 = *out.get_unchecked(i + 5);
+            let p6 = *out.get_unchecked(i + 6);
+            let p7 = *out.get_unchecked(i + 7);
+
+            let h0 = rehash_one(state, p0, v0);
+            let h1 = rehash_one(state, p1, v1);
+            let h2 = rehash_one(state, p2, v2);
+            let h3 = rehash_one(state, p3, v3);
+            let h4 = rehash_one(state, p4, v4);
+            let h5 = rehash_one(state, p5, v5);
+            let h6 = rehash_one(state, p6, v6);
+            let h7 = rehash_one(state, p7, v7);
+
+            *out.get_unchecked_mut(i) = h0;
+            *out.get_unchecked_mut(i + 1) = h1;
+            *out.get_unchecked_mut(i + 2) = h2;
+            *out.get_unchecked_mut(i + 3) = h3;
+            *out.get_unchecked_mut(i + 4) = h4;
+            *out.get_unchecked_mut(i + 5) = h5;
+            *out.get_unchecked_mut(i + 6) = h6;
+            *out.get_unchecked_mut(i + 7) = h7;
+        }
+        i += 8;
+    }
+    while i < n {
+        unsafe {
+            let v = *values.get_unchecked(i);
+            let prev = *out.get_unchecked(i);
+            *out.get_unchecked_mut(i) = rehash_one(state, prev, v);
+        }
+        i += 1;
+    }
+}
+
+#[cfg(not(feature = "force_hash_collisions"))]
+#[inline(always)]
+fn rehash_one<N: HashValue, S: HashState>(state: &S, prev: u64, value: N) -> u64 {
+    let mut hasher = state.seeded_state(prev).build_hasher();
+    value.hash_write(&mut hasher);
+    hasher.finish()
+}
+
+/// 8-way unrolled hash loop for a slice of inlined StringView/BinaryView views.
+///
+/// Hashes each `u128` view (which includes length and inlined bytes for strings
+/// up to 12 bytes) as a single `folded_multiply`, with no cross-iteration
+/// dependency. Unrolling helps the backend keep multiple multiplies in flight.
+#[cfg(not(feature = "force_hash_collisions"))]
+#[inline(always)]
+fn hash_views_fresh_unrolled<S: HashState>(views: &[u128], out: &mut [u64], state: &S) {
+    debug_assert_eq!(views.len(), out.len());
+    let n = views.len();
+    let main = n & !7;
+    let mut i = 0;
+    while i < main {
+        unsafe {
+            let v0 = *views.get_unchecked(i);
+            let v1 = *views.get_unchecked(i + 1);
+            let v2 = *views.get_unchecked(i + 2);
+            let v3 = *views.get_unchecked(i + 3);
+            let v4 = *views.get_unchecked(i + 4);
+            let v5 = *views.get_unchecked(i + 5);
+            let v6 = *views.get_unchecked(i + 6);
+            let v7 = *views.get_unchecked(i + 7);
+
+            let h0 = v0.hash_one(state);
+            let h1 = v1.hash_one(state);
+            let h2 = v2.hash_one(state);
+            let h3 = v3.hash_one(state);
+            let h4 = v4.hash_one(state);
+            let h5 = v5.hash_one(state);
+            let h6 = v6.hash_one(state);
+            let h7 = v7.hash_one(state);
+
+            *out.get_unchecked_mut(i) = h0;
+            *out.get_unchecked_mut(i + 1) = h1;
+            *out.get_unchecked_mut(i + 2) = h2;
+            *out.get_unchecked_mut(i + 3) = h3;
+            *out.get_unchecked_mut(i + 4) = h4;
+            *out.get_unchecked_mut(i + 5) = h5;
+            *out.get_unchecked_mut(i + 6) = h6;
+            *out.get_unchecked_mut(i + 7) = h7;
+        }
+        i += 8;
+    }
+    while i < n {
+        unsafe {
+            let v = *views.get_unchecked(i);
+            *out.get_unchecked_mut(i) = v.hash_one(state);
+        }
+        i += 1;
+    }
+}
+
+/// 8-way unrolled rehash variant for inlined StringView/BinaryView views.
+#[cfg(not(feature = "force_hash_collisions"))]
+#[inline(always)]
+fn hash_views_rehash_unrolled<S: HashState>(views: &[u128], out: &mut [u64], state: &S) {
+    debug_assert_eq!(views.len(), out.len());
+    let n = views.len();
+    let main = n & !7;
+    let mut i = 0;
+    while i < main {
+        unsafe {
+            let v0 = *views.get_unchecked(i);
+            let v1 = *views.get_unchecked(i + 1);
+            let v2 = *views.get_unchecked(i + 2);
+            let v3 = *views.get_unchecked(i + 3);
+            let v4 = *views.get_unchecked(i + 4);
+            let v5 = *views.get_unchecked(i + 5);
+            let v6 = *views.get_unchecked(i + 6);
+            let v7 = *views.get_unchecked(i + 7);
+
+            let p0 = *out.get_unchecked(i);
+            let p1 = *out.get_unchecked(i + 1);
+            let p2 = *out.get_unchecked(i + 2);
+            let p3 = *out.get_unchecked(i + 3);
+            let p4 = *out.get_unchecked(i + 4);
+            let p5 = *out.get_unchecked(i + 5);
+            let p6 = *out.get_unchecked(i + 6);
+            let p7 = *out.get_unchecked(i + 7);
+
+            let h0 = rehash_one(state, p0, v0);
+            let h1 = rehash_one(state, p1, v1);
+            let h2 = rehash_one(state, p2, v2);
+            let h3 = rehash_one(state, p3, v3);
+            let h4 = rehash_one(state, p4, v4);
+            let h5 = rehash_one(state, p5, v5);
+            let h6 = rehash_one(state, p6, v6);
+            let h7 = rehash_one(state, p7, v7);
+
+            *out.get_unchecked_mut(i) = h0;
+            *out.get_unchecked_mut(i + 1) = h1;
+            *out.get_unchecked_mut(i + 2) = h2;
+            *out.get_unchecked_mut(i + 3) = h3;
+            *out.get_unchecked_mut(i + 4) = h4;
+            *out.get_unchecked_mut(i + 5) = h5;
+            *out.get_unchecked_mut(i + 6) = h6;
+            *out.get_unchecked_mut(i + 7) = h7;
+        }
+        i += 8;
+    }
+    while i < n {
+        unsafe {
+            let v = *views.get_unchecked(i);
+            let prev = *out.get_unchecked(i);
+            *out.get_unchecked_mut(i) = rehash_one(state, prev, v);
+        }
+        i += 1;
     }
 }
 
 /// Hashes one array into the `hashes_buffer`
 /// If `rehash==true` this combines the previous hash value in the buffer
-/// with the new hash using `combine_hashes`
+/// with the new hash using `combine_hashes`.
+///
+/// The null-free loops are 4-way manually unrolled to expose ILP (each per-row
+/// `hash_one` is independent). Nullable paths keep iterating `valid_indices()`:
+/// variable-length byte hashing is expensive enough that doing the work for
+/// null rows (as the branchless primitive path does) measurably regresses.
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_array<T>(
     array: &T,
@@ -365,16 +631,67 @@ fn hash_array<T>(
         "hashes_buffer and array should be of equal length"
     );
 
+    let n = hashes_buffer.len();
+
     if array.null_count() == 0 {
+        let main = n & !3;
+        let mut i = 0;
         if rehash {
-            for (i, hash) in hashes_buffer.iter_mut().enumerate() {
-                let value = unsafe { array.value_unchecked(i) };
-                *hash = combine_hashes(value.hash_one(random_state), *hash);
+            while i < main {
+                // SAFETY: all indices are < main <= n == array.len().
+                unsafe {
+                    let v0 = array.value_unchecked(i);
+                    let v1 = array.value_unchecked(i + 1);
+                    let v2 = array.value_unchecked(i + 2);
+                    let v3 = array.value_unchecked(i + 3);
+                    let h0 = v0.hash_one(random_state);
+                    let h1 = v1.hash_one(random_state);
+                    let h2 = v2.hash_one(random_state);
+                    let h3 = v3.hash_one(random_state);
+                    let p0 = *hashes_buffer.get_unchecked(i);
+                    let p1 = *hashes_buffer.get_unchecked(i + 1);
+                    let p2 = *hashes_buffer.get_unchecked(i + 2);
+                    let p3 = *hashes_buffer.get_unchecked(i + 3);
+                    *hashes_buffer.get_unchecked_mut(i) = combine_hashes(h0, p0);
+                    *hashes_buffer.get_unchecked_mut(i + 1) = combine_hashes(h1, p1);
+                    *hashes_buffer.get_unchecked_mut(i + 2) = combine_hashes(h2, p2);
+                    *hashes_buffer.get_unchecked_mut(i + 3) = combine_hashes(h3, p3);
+                }
+                i += 4;
+            }
+            while i < n {
+                unsafe {
+                    let v = array.value_unchecked(i);
+                    let prev = *hashes_buffer.get_unchecked(i);
+                    *hashes_buffer.get_unchecked_mut(i) =
+                        combine_hashes(v.hash_one(random_state), prev);
+                }
+                i += 1;
             }
         } else {
-            for (i, hash) in hashes_buffer.iter_mut().enumerate() {
-                let value = unsafe { array.value_unchecked(i) };
-                *hash = value.hash_one(random_state);
+            while i < main {
+                unsafe {
+                    let v0 = array.value_unchecked(i);
+                    let v1 = array.value_unchecked(i + 1);
+                    let v2 = array.value_unchecked(i + 2);
+                    let v3 = array.value_unchecked(i + 3);
+                    let h0 = v0.hash_one(random_state);
+                    let h1 = v1.hash_one(random_state);
+                    let h2 = v2.hash_one(random_state);
+                    let h3 = v3.hash_one(random_state);
+                    *hashes_buffer.get_unchecked_mut(i) = h0;
+                    *hashes_buffer.get_unchecked_mut(i + 1) = h1;
+                    *hashes_buffer.get_unchecked_mut(i + 2) = h2;
+                    *hashes_buffer.get_unchecked_mut(i + 3) = h3;
+                }
+                i += 4;
+            }
+            while i < n {
+                unsafe {
+                    let v = array.value_unchecked(i);
+                    *hashes_buffer.get_unchecked_mut(i) = v.hash_one(random_state);
+                }
+                i += 1;
             }
         }
     } else if rehash {
@@ -472,19 +789,14 @@ fn hash_generic_byte_view_array<T: ByteViewType>(
         !array.data_buffers().is_empty(),
         rehash,
     ) {
-        // no nulls or buffers ==> hash the inlined views directly
-        // don't call the inner function as Rust seems better able to inline this simpler code (2-3% faster)
+        // no nulls or buffers ==> hash the inlined views directly.
+        // 8-way unrolled: each view hash is one folded_multiply with no
+        // cross-iteration dependency, so unrolling exposes ILP for the backend.
         (false, false, false) => {
-            for (hash, &view) in hashes_buffer.iter_mut().zip(array.views().iter()) {
-                *hash = view.hash_one(random_state);
-            }
+            hash_views_fresh_unrolled(array.views(), hashes_buffer, random_state);
         }
         (false, false, true) => {
-            for (hash, &view) in hashes_buffer.iter_mut().zip(array.views().iter()) {
-                let mut hasher = random_state.seeded_state(*hash).build_hasher();
-                view.hash_write(&mut hasher);
-                *hash = hasher.finish();
-            }
+            hash_views_rehash_unrolled(array.views(), hashes_buffer, random_state);
         }
         (false, true, false) => hash_string_view_array_inner::<T, false, true, false>(
             array,
