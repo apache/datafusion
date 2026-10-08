@@ -410,10 +410,6 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         matches!(self.state, AggregateHashTableState::Building(_))
     }
 
-    pub(in crate::aggregates) fn is_done(&self) -> bool {
-        matches!(self.state, AggregateHashTableState::Done)
-    }
-
     pub(super) fn start_outputting(&mut self) {
         let AggregateHashTableState::Building(mut state) =
             std::mem::replace(&mut self.state, AggregateHashTableState::Done)
