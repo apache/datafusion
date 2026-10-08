@@ -315,39 +315,65 @@ git push apache 55.2.0
 
 #### Publish the versioned documentation
 
-After the final release tag is available, build the documentation for this release
-For example, from the repository root, for `55.0.0`:
+**1. Build the documentation from the release tagm using the a configuration
+overlay (`docs/scripts/release/conf.py`) from the main checkout. For example,
+for `55.0.0`, from the repository root:
 
 ```shell
-git fetch origin tag 55.0.0
+export DATAFUSION_DOCS_OVERLAY="$PWD/docs/scripts/release"
+git fetch apache tag 55.0.0
 git worktree add --detach /tmp/datafusion-55.0.0 55.0.0
 cd /tmp/datafusion-55.0.0/docs
 DATAFUSION_DOCS_SOURCE="$PWD/source" DATAFUSION_DOCS_VERSION=55.0.0 \
-  SPHINXOPTS="-W -c /path/to/current/datafusion/docs/scripts/release" \
+  SPHINXOPTS="-W -c $DATAFUSION_DOCS_OVERLAY" \
   uv run --package datafusion-docs --with sphinx-sitemap ./build.sh
+cd -
 ```
 
-Replace the version and paths for each release. Use an absolute path to the
-overlay in your current checkout. The existing `build.sh` generates the tagged
-dependency graph and builds the HTML with warnings treated as errors. The
-`--with sphinx-sitemap` option supplies the sitemap extension for older tags.
+Notes:
+1. You need ot use an absolute path to the overlay in your current checkout. 
+2. The `--with sphinx-sitemap` option supplies the sitemap extension for older tags.
 
-From the current checkout, prepare a separate PR targeting `asf-site`:
+prepare a PR targeting `asf-site` that contains the
+documentation for this release. (For example
+[#25881](https://github.com/apache/datafusion/pull/25881)).
 
 ```shell
-git fetch origin asf-site
-git worktree add -b docs/publish-55.0.0 /tmp/datafusion-asf-site origin/asf-site
-mkdir -p /tmp/datafusion-asf-site/versions/55.0.0
+mkdir -p docs/build/html/versions/55.0.0
+rsync -a /tmp/datafusion-55.0.0/docs/build/html/ docs/build/html/versions/55.0.0/
+python3 -m http.server --directory docs/build/html 8000
+```
+
+**2. Add the built site to the `asf-site` branch.** Open a PR against
+`asf-site` that adds the release under `versions/<version>/`:
+
+```shell
+git fetch apache asf-site
+git worktree add -b docs/publish-55.0.0 /tmp/datafusion-asf-site apache/asf-site
 rsync -a --exclude '/.buildinfo' \
   /tmp/datafusion-55.0.0/docs/build/html/ \
   /tmp/datafusion-asf-site/versions/55.0.0/
+cd /tmp/datafusion-asf-site
+git add versions/55.0.0
+git commit -m "Publish documentation for 55.0.0"
+git push origin docs/publish-55.0.0
 ```
 
-Check that the release directory does not already exist before copying it.
-Review the generated files and open the publication PR for review.
-Once it is published, add its entry to `docs/source/_static/versions.json` on
-`main` so the picker offers only working destinations. Remove the temporary
-worktrees afterward.
+The release is live at `https://datafusion.apache.org/versions/55.0.0/` once
+the PR is merged.
+
+**3. Add the release to the version picker.** Open a PR against `main` that
+adds the release to `docs/source/_static/versions.json`. Put the new release
+first and move `"preferred": true` to it, so that it is the default shown.
+Only add releases that are already published, since the picker links to them
+directly.
+
+Finally, remove the temporary worktrees:
+
+```shell
+git worktree remove /tmp/datafusion-55.0.0
+git worktree remove /tmp/datafusion-asf-site
+```
 
 ### 10. Publish on Crates.io
 
