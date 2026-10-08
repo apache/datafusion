@@ -251,7 +251,10 @@ impl OptimizerConfig for OptimizerContext {
     }
 }
 
-/// A rule-based optimizer.
+/// A rule-based logical optimizer.
+///
+/// Applies rules in order for up to `datafusion.optimizer.max_passes` passes,
+/// stopping early if the plan repeats.
 #[derive(Clone, Debug)]
 pub struct Optimizer {
     /// All optimizer rules to apply
