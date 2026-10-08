@@ -31,6 +31,6 @@ body:
       description: >
         The Apache DataFusion community encourages feature contributions. Would you or another member of your organization be willing to contribute to this feature for the Apache DataFusion codebase?
       options:
-        - I can contribute to this feature independently
-        - I would be willing to contribute to this feature with guidance from the DataFusion community
+        - I plan to contribute to this feature independently
+        - I would like to contribute to this feature, but request guidance from the DataFusion community
         - I cannot contribute to this feature at this time

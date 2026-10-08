@@ -32,6 +32,6 @@ body:
       description: >
         The Apache DataFusion community encourages bug fix contributions. Would you or another member of your organization be willing to contribute a fix for this bug to the Apache DataFusion codebase?
       options:
-        - I can contribute a fix for this bug independently
-        - I would be willing to contribute a fix for this bug with guidance from the DataFusion community
+        - I plan to contribute a fix for this bug independently
+        - I would like to contribute a fix for this bug, but request guidance from the DataFusion community
         - I cannot contribute a fix for this bug at this time
