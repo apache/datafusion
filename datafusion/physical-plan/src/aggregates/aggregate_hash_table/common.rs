@@ -31,10 +31,10 @@ use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::{AggregateMetrics, EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::GroupsAccumulatorAdapter;
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
-use datafusion_physical_expr_common::utils::ScalarArrayCache;
 use log::debug;
 
 use crate::PhysicalExpr;
+use crate::aggregates::aggregate_argument::AggregateArgument;
 use crate::aggregates::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
     GroupByMetrics, GroupValues, new_group_values,
@@ -527,11 +527,8 @@ pub(super) struct HashAggregateAccumulator {
 
     /// Arguments to pass to this accumulator.
     ///
-    /// Example: `CORR(x, y)` stores two expressions here, while `SUM(x)` stores one.
-    arguments: Vec<Arc<dyn PhysicalExpr>>,
-
-    /// One cache per aggregate argument.
-    argument_caches: Vec<ScalarArrayCache>,
+    /// Example: `CORR(x, y)` stores two arguments here, while `SUM(x)` stores one.
+    arguments: Vec<AggregateArgument>,
 
     /// Optional `FILTER` expression for this accumulator.
     ///
@@ -722,14 +719,9 @@ impl HashAggregateAccumulator {
         accumulator: Box<dyn GroupsAccumulator>,
         submetrics: Arc<dyn AggregateMetrics>,
     ) -> Self {
-        let argument_caches = arguments
-            .iter()
-            .map(|_| ScalarArrayCache::default())
-            .collect();
         Self {
             aggregate_expr,
-            arguments,
-            argument_caches,
+            arguments: arguments.into_iter().map(AggregateArgument::new).collect(),
             filter,
             accumulator,
             submetrics,
@@ -743,7 +735,10 @@ impl HashAggregateAccumulator {
             create_group_accumulator(&self.aggregate_expr, Arc::clone(&self.submetrics))?;
         Ok(Self::new(
             Arc::clone(&self.aggregate_expr),
-            self.arguments.clone(),
+            self.arguments
+                .iter()
+                .map(|argument| Arc::clone(argument.expr()))
+                .collect(),
             self.filter.clone(),
             accumulator,
             Arc::clone(&self.submetrics),
@@ -780,15 +775,13 @@ impl HashAggregateAccumulator {
         };
         let arguments = self
             .arguments
-            .iter()
-            .zip(&mut self.argument_caches)
-            .map(|(expr, cache)| {
+            .iter_mut()
+            .map(|argument| {
                 if let Some(argument_batch) = argument_batch {
-                    expr.evaluate(argument_batch).and_then(|value| {
-                        cache.into_array_of_size(value, argument_batch.num_rows())
-                    })
+                    argument.evaluate(argument_batch)
                 } else {
-                    let data_type = expr.data_type(batch.schema_ref().as_ref())?;
+                    let data_type =
+                        argument.expr().data_type(batch.schema_ref().as_ref())?;
                     Ok(new_empty_array(&data_type))
                 }
             })
@@ -813,15 +806,10 @@ impl HashAggregateAccumulator {
         let selection = filter.as_ref();
         let arguments = self
             .arguments
-            .iter()
-            .zip(&mut self.argument_caches)
-            .map(|(expr, cache)| {
-                selection
-                    .map_or_else(
-                        || expr.evaluate(batch),
-                        |selection| expr.evaluate_selection(batch, selection),
-                    )
-                    .and_then(|value| cache.into_array_of_size(value, batch.num_rows()))
+            .iter_mut()
+            .map(|argument| match selection {
+                Some(selection) => argument.evaluate_selection(batch, selection),
+                None => argument.evaluate(batch),
             })
             .collect::<Result<_>>()?;
 
@@ -911,8 +899,8 @@ impl HashAggregateAccumulator {
     ) -> Result<Vec<ArrayRef>> {
         self.arguments
             .iter()
-            .map(|expr| {
-                let data_type = expr.data_type(input_schema)?;
+            .map(|argument| {
+                let data_type = argument.expr().data_type(input_schema)?;
                 Ok(new_null_array(&data_type, num_rows))
             })
             .collect()
