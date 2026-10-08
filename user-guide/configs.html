@@ -916,7 +916,7 @@ example, to configure <code class="docutils literal notranslate"><span class="pr
 </tr>
 <tr class="row-even"><td><p>datafusion.optimizer.max_passes</p></td>
 <td><p>3</p></td>
-<td><p>Number of times that the optimizer will attempt to optimize the plan</p></td>
+<td><p>The logical optimizer applies rules in order for up to <code class="docutils literal notranslate"><span class="pre">max_passes</span></code> passes, stopping early if a pass leaves the plan unchanged or repeats an earlier plan. The physical optimizer always runs in one pass.</p></td>
 </tr>
 <tr class="row-odd"><td><p>datafusion.optimizer.top_down_join_key_reordering</p></td>
 <td><p>true</p></td>
