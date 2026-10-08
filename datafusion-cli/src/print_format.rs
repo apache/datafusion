@@ -507,6 +507,29 @@ mod tests {
         assert_eq!(output, "")
     }
 
+    #[test]
+    fn test_print_batches_zero_column_batch_with_rows() {
+        let options = arrow::array::RecordBatchOptions::new().with_row_count(Some(2));
+        let batch = RecordBatch::try_new_with_options(
+            Arc::new(Schema::empty()),
+            vec![],
+            &options,
+        )
+        .unwrap();
+
+        // Table format must not fail on a batch that has rows but no columns
+        let output = PrintBatchesTest::new()
+            .with_format(PrintFormat::Table)
+            .with_schema(Arc::new(Schema::empty()))
+            .with_batches(vec![batch])
+            .run();
+        assert_snapshot!(output, @r"
+        ++
+        ++
+        ++
+        ");
+    }
+
     #[derive(Debug)]
     struct PrintBatchesTest {
         format: PrintFormat,
