@@ -18,10 +18,11 @@
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, Float32Array, Float64Array, RecordBatch};
-use arrow::compute::{max, min};
+use arrow::compute::{cast, max, min};
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{
-    Result, ScalarValue, downcast_value, internal_datafusion_err, internal_err, plan_err,
+    Result, ScalarValue, downcast_value, internal_datafusion_err, internal_err,
+    plan_datafusion_err, plan_err,
 };
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -58,7 +59,11 @@ fn scalar_to_percentile(scalar_value: ScalarValue, fn_name: &str) -> Result<f64>
         }
     };
 
-    // Ensure the percentile is between 0 and 1.
+    check_percentile_range(percentile)
+}
+
+/// Ensures the percentile is between 0 and 1.
+fn check_percentile_range(percentile: f64) -> Result<f64> {
     if !(0.0..=1.0).contains(&percentile) {
         return plan_err!(
             "Percentile value must be between 0.0 and 1.0 inclusive, {percentile} is invalid"
@@ -87,7 +92,11 @@ impl PercentileParam {
     /// Try to resolve the percentile eagerly. If the expression can't be
     /// evaluated without row data (i.e. it references a column), defer
     /// resolution to the first batch instead of erroring here.
-    pub(crate) fn try_new(expr: &Arc<dyn PhysicalExpr>, fn_name: &str, is_desc: bool) -> Result<Self> {
+    pub(crate) fn try_new(
+        expr: &Arc<dyn PhysicalExpr>,
+        fn_name: &str,
+        is_desc: bool,
+    ) -> Result<Self> {
         match get_scalar_value(expr) {
             Ok(scalar_value) => Ok(PercentileParam {
                 aggregate_fn_name: fn_name.to_string(),
@@ -180,11 +189,67 @@ impl PercentileParam {
     /// The percentile to use, applying the `1.0 - p` flip for descending
     /// `WITHIN GROUP (ORDER BY ... DESC)`.
     pub(crate) fn effective_percentile(&self) -> Result<f64> {
-        let percentile = self.get()?;
-        Ok(if self.is_desc {
+        Ok(self.apply_order(self.get()?))
+    }
+
+    /// Applies the `1.0 - p` flip for descending `WITHIN GROUP (ORDER BY ... DESC)`.
+    pub(crate) fn apply_order(&self, percentile: f64) -> f64 {
+        if self.is_desc {
             1.0 - percentile
         } else {
             percentile
+        }
+    }
+
+    /// Returns `true` if the percentile must be read from the input rows,
+    /// i.e. it was given as a column reference rather than a literal.
+    pub(crate) fn is_pending(&self) -> bool {
+        matches!(self.state, PercentileParamState::Pending)
+    }
+
+    /// Casts a percentile argument array to `Float64`.
+    pub(crate) fn to_float64_array(&self, array: &ArrayRef) -> Result<Float64Array> {
+        match array.data_type() {
+            DataType::Float64 | DataType::Float32 => {
+                let array = cast(array, &DataType::Float64)?;
+                Ok(downcast_value!(array, Float64Array).clone())
+            }
+            data_type => {
+                let agg_fn_name = &self.aggregate_fn_name;
+                plan_err!(
+                    "Percentile value for {agg_fn_name} must be Float32 or Float64 (got {data_type})"
+                )
+            }
+        }
+    }
+
+    /// Validates `value` as the percentile of a single group: it must be in
+    /// range and agree with the group's `current` percentile, if any.
+    pub(crate) fn resolve_group_value(
+        &self,
+        current: Option<f64>,
+        value: f64,
+    ) -> Result<f64> {
+        match current {
+            Some(current) if current == value => Ok(current),
+            Some(_) => {
+                let agg_fn_name = &self.aggregate_fn_name;
+                plan_err!(
+                    "Percentile value for '{agg_fn_name}' must be constant across the aggregation, found differing values"
+                )
+            }
+            None => check_percentile_range(value),
+        }
+    }
+
+    /// Returns the resolved percentile of a group.
+    /// Errors if no percentile was seen for it.
+    pub(crate) fn get_group_value(&self, value: Option<f64>) -> Result<f64> {
+        value.ok_or_else(|| {
+            let aggregate_fn_name = &self.aggregate_fn_name;
+            plan_datafusion_err!(
+                "Percentile value for '{aggregate_fn_name}' could not be determined: no non-null percentile value was seen"
+            )
         })
     }
 }

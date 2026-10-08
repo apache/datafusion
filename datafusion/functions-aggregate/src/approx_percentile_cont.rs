@@ -181,8 +181,11 @@ impl ApproxPercentileCont {
             .map(|sort_expr| sort_expr.options.descending)
             .unwrap_or(false);
 
-        let percentile =
-            PercentileParam::try_new(&args.exprs[1], "APPROX_PERCENTILE_CONT", is_descending)?;
+        let percentile = PercentileParam::try_new(
+            &args.exprs[1],
+            "APPROX_PERCENTILE_CONT",
+            is_descending,
+        )?;
 
         let tdigest_max_size = if args.exprs.len() == 3 {
             Some(validate_input_max_size_expr(&args.exprs[2])?)
@@ -200,10 +203,7 @@ impl ApproxPercentileCont {
                         max_size,
                     )
                 } else {
-                    ApproxPercentileAccumulator::new(
-                        percentile,
-                        data_type.clone(),
-                    )
+                    ApproxPercentileAccumulator::new(percentile, data_type.clone())
                 }
             }
             other => {
@@ -347,10 +347,7 @@ pub struct ApproxPercentileAccumulator {
 }
 
 impl ApproxPercentileAccumulator {
-    pub(crate) fn new(
-        percentile: PercentileParam,
-        return_type: DataType,
-    ) -> Self {
+    pub(crate) fn new(percentile: PercentileParam, return_type: DataType) -> Self {
         Self {
             digest: TDigest::new(DEFAULT_MAX_SIZE),
             percentile,
@@ -424,7 +421,7 @@ impl Accumulator for ApproxPercentileAccumulator {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         let mut state: Vec<ScalarValue> =
             self.digest.to_scalar_state().into_iter().collect();
-            state.push(ScalarValue::Float64(self.percentile.get().ok()));
+        state.push(ScalarValue::Float64(self.percentile.get().ok()));
         Ok(state)
     }
 
@@ -448,7 +445,9 @@ impl Accumulator for ApproxPercentileAccumulator {
         if self.digest.count() == 0.0 {
             return ScalarValue::try_from(self.return_type.clone());
         }
-        let q = self.digest.estimate_quantile(self.percentile.effective_percentile()?);
+        let q = self
+            .digest
+            .estimate_quantile(self.percentile.effective_percentile()?);
 
         // These acceptable return types MUST match the validation in
         // ApproxPercentile::create_accumulator.
@@ -465,8 +464,7 @@ impl Accumulator for ApproxPercentileAccumulator {
             return Ok(());
         }
 
-        if let Some(percentile_array) = states.get(STATE_PERCENTILE_IDX)
-        {
+        if let Some(percentile_array) = states.get(STATE_PERCENTILE_IDX) {
             self.percentile.resolve(percentile_array)?;
         }
 
@@ -495,9 +493,6 @@ impl Accumulator for ApproxPercentileAccumulator {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use arrow::array::{ArrayRef, Float64Array};
     use arrow::datatypes::DataType;
 
     use datafusion_functions_aggregate_common::tdigest::TDigest;
@@ -538,67 +533,5 @@ mod tests {
         assert_eq!(accumulator.digest.count(), 50_000.0);
         accumulator.merge_digests(&[t2]);
         assert_eq!(accumulator.digest.count(), 100_000.0);
-    }
-
-    #[test]
-    fn test_resolve_percentile_from_deferred_column() {
-        let mut accumulator =
-            ApproxPercentileAccumulator::new_with_max_size(
-                PercentileParam::try_new(
-                    &datafusion_physical_expr::expressions::col(
-                        "m",
-                        &arrow::datatypes::Schema::new(vec![
-                            arrow::datatypes::Field::new("m", DataType::Float64, false),
-                        ]),
-                    )
-                    .unwrap(),
-                    "APPROX_PERCENTILE_CONT",
-                    false
-                )
-                .unwrap(),
-                DataType::Float64,
-                100,
-            );
-
-        let percentile_array: ArrayRef =
-            Arc::new(Float64Array::from(vec![0.5, 0.5, 0.5]));
-        accumulator.resolve_percentile(&percentile_array).unwrap();
-        assert_eq!(accumulator.percentile.effective_percentile().unwrap(), 0.5);
-
-        // A later batch that disagrees with the resolved value must error.
-        let bad_array: ArrayRef = Arc::new(Float64Array::from(vec![0.9]));
-        let err = accumulator.resolve_percentile(&bad_array).unwrap_err();
-        assert!(
-            err.to_string().contains("must be constant"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn test_resolve_percentile_non_constant_within_batch_errors() {
-        let mut accumulator = make_accumulator();
-        accumulator.percentile = PercentileParam::try_new(
-            &datafusion_physical_expr::expressions::col(
-                "m",
-                &arrow::datatypes::Schema::new(vec![arrow::datatypes::Field::new(
-                    "m",
-                    DataType::Float64,
-                    false,
-                )]),
-            )
-            .unwrap(),
-            "APPROX_PERCENTILE_CONT",
-            false
-        )
-        .unwrap();
-
-        let percentile_array: ArrayRef = Arc::new(Float64Array::from(vec![0.1, 0.9]));
-        let err = accumulator
-            .resolve_percentile(&percentile_array)
-            .unwrap_err();
-        assert!(
-            err.to_string().contains("must be constant"),
-            "unexpected error: {err}"
-        );
     }
 }

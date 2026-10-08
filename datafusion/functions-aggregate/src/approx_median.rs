@@ -109,6 +109,7 @@ impl AggregateUDFImpl for ApproxMedian {
                     Field::new_list_field(Float64, true),
                     false,
                 ),
+                Field::new(format_state_name(args.name, "percentile"), Float64, true),
             ]
             .into_iter()
             .map(Arc::new)
