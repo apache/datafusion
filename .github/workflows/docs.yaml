@@ -71,7 +71,7 @@ jobs:
             -a \
             --delete \
             --exclude '/.git/' \
-            --exclude '/versions/' \
+            --exclude '/versions/' \ # don't delete old versions of the docs
             ../docs/build/html/ \
             ./
           cp ../.asf.yaml .
