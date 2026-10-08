@@ -23,6 +23,11 @@
 # directly. `fact` is only joined with `mid`, but through `mid.m_key = fact.f_key`
 # the `dim` filter is rewritten over `f_key` and reaches the `fact` scan too.
 
+# This file tests filter transfer across a fixed join shape, so cost-based join
+# order enumeration is kept from reordering the joins.
+statement ok
+set datafusion.optimizer.join_enumeration = false;
+
 statement ok
 CREATE TABLE dim_src(d_key INT, d_val VARCHAR) AS VALUES
 (1, 'one'),
@@ -133,3 +138,6 @@ DROP TABLE mid_src;
 
 statement ok
 DROP TABLE fact_src;
+
+statement ok
+RESET datafusion.optimizer.join_enumeration;
