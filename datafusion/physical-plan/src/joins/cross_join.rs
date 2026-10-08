@@ -1003,7 +1003,9 @@ mod tests {
     async fn join_metrics_count_rows_once_across_batches() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         // 2: left 2+1, right 2.  1: left 3×1, right 2×1.
-        for input_batch_size in [2, 1] {
+        for (input_batch_size, expected_build_batches, expected_probe_batches) in
+            [(2, 2, 1), (1, 3, 2)]
+        {
             let left = build_table_scan_i32_chunked(
                 ("a1", &vec![1, 2, 3]),
                 ("b1", &vec![4, 5, 6]),
@@ -1024,6 +1026,14 @@ mod tests {
             assert_join_metrics!(metrics, 6);
             assert_eq!(metric_count(&metrics, "build_input_rows"), 3);
             assert_eq!(metric_count(&metrics, "input_rows"), 2);
+            assert_eq!(
+                metric_count(&metrics, "build_input_batches"),
+                expected_build_batches
+            );
+            assert_eq!(
+                metric_count(&metrics, "input_batches"),
+                expected_probe_batches
+            );
         }
 
         Ok(())
