@@ -59,10 +59,10 @@ firefox build/html/index.html
 ```
 
 Note that some features of the site, such as the "Version Picker" do not work
-when read from files. To preview such features, start a local webserver:
+when read from files. To preview such features, you can use the sphinx like this:
 
 ```bash
-python3 -m http.server --directory build/html 8000
+uv run --with sphinx-autobuild sphinx-autobuild source build/html --port 8000
 ```
 
 And then open http://localhost:8000/ in your browser
