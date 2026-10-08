@@ -1957,7 +1957,7 @@ mod tests {
     use std::ops::{Add, Sub};
     use std::{sync::Arc, vec};
 
-    use crate::unparser::dialect::{MySqlDialect, SqliteDialect};
+    use crate::unparser::dialect::{MySqlDialect, SnowflakeDialect, SqliteDialect};
     use arrow::array::{LargeListArray, LargeListViewArray, ListArray, ListViewArray};
     use arrow::datatypes::{DataType::Int8, Field, Int32Type, Schema, TimeUnit};
     use ast::ObjectName;
@@ -3965,5 +3965,32 @@ mod tests {
                 .to_string(),
             "NULL"
         );
+    }
+
+    #[test]
+    fn test_random_function() -> Result<()> {
+        let duckdb_dialect = DuckDBDialect::new();
+        let dialects = vec![
+            (Unparser::new(&DefaultDialect {}), "random()"),
+            (Unparser::new(&PostgreSqlDialect {}), "random()"),
+            (Unparser::new(&duckdb_dialect), "random()"),
+            (Unparser::new(&MySqlDialect {}), "rand()"),
+            (Unparser::new(&SqliteDialect {}), "random()"),
+            (Unparser::new(&BigQueryDialect {}), "rand()"),
+            (Unparser::new(&SnowflakeDialect {}), "random()"),
+        ];
+
+        let expr = Expr::ScalarFunction(ScalarFunction {
+            func: Arc::new(ScalarUDF::from(
+                datafusion_functions::math::random::RandomFunc::new(),
+            )),
+            args: vec![],
+        });
+
+        for (unparser, result) in dialects {
+            assert_eq!(unparser.expr_to_sql(&expr)?.to_string(), result);
+        }
+
+        Ok(())
     }
 }

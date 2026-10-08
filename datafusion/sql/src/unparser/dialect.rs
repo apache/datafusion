@@ -620,6 +620,11 @@ impl Dialect for MySqlDialect {
             return date_part_to_sql(unparser, self.date_field_extract_style(), args);
         }
 
+        // https://dev.mysql.com/doc/refman/9.7/en/mathematical-functions.html#function_rand
+        if func_name == "random" {
+            return Ok(Some(unparser.scalar_function_to_sql("rand", args)?));
+        }
+
         Ok(None)
     }
 }
@@ -758,6 +763,11 @@ impl Dialect for BigQueryDialect {
     ) -> Result<Option<ast::Expr>> {
         if func_name == "date_part" {
             return date_part_to_sql(unparser, self.date_field_extract_style(), args);
+        }
+
+        // https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/mathematical_functions#rand
+        if func_name == "random" {
+            return Ok(Some(unparser.scalar_function_to_sql("rand", args)?));
         }
 
         Ok(None)
