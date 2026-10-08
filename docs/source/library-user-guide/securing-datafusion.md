@@ -19,9 +19,9 @@
 
 # Securing DataFusion
 
-As described in the [DataFusion security policy](../../../SECURITY.md), the end
-application is responsible for security decisions. The settings below can help
-control what a query can do.
+As described in the [DataFusion security policy](https://github.com/apache/datafusion/blob/main/SECURITY.md),
+the end application is responsible for security decisions. The settings below
+can help control what a query can do.
 
 ## Restrict SQL statements
 
