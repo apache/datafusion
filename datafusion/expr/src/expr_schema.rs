@@ -144,6 +144,7 @@ fn case_field_metadata(case: &Case, schema: &dyn ExprSchema) -> Result<FieldRef>
         Visit(&'a Expr),
         FinishCase(&'a Case),
         FinishBinary(&'a BinaryExpr),
+        FinishScalar(&'a ScalarFunction),
         FinishCast(&'a FieldRef, bool),
         FinishAlias(Option<&'a FieldMetadata>),
     }
@@ -175,6 +176,10 @@ fn case_field_metadata(case: &Case, schema: &dyn ExprSchema) -> Result<FieldRef>
                     work.push(Work::FinishBinary(binary));
                     work.push(Work::Visit(&binary.right));
                     work.push(Work::Visit(&binary.left));
+                }
+                Expr::ScalarFunction(function) => {
+                    work.push(Work::FinishScalar(function));
+                    work.extend(function.args.iter().rev().map(Work::Visit));
                 }
                 Expr::Cast(cast) => {
                     work.push(Work::FinishCast(&cast.field, false));
@@ -217,6 +222,34 @@ fn case_field_metadata(case: &Case, schema: &dyn ExprSchema) -> Result<FieldRef>
                 };
                 fields.push(BranchField {
                     field: Arc::new(Field::new("", coercer.get_result_type()?, nullable)),
+                    certainly_null: false,
+                });
+            }
+            Work::FinishScalar(function) => {
+                if fields.len() < function.args.len() {
+                    return internal_err!("Missing CASE scalar function arguments");
+                }
+                let start = fields.len() - function.args.len();
+                let input_fields = fields
+                    .drain(start..)
+                    .map(|arg| arg.field)
+                    .collect::<Vec<_>>();
+                let coerced_fields =
+                    verify_function_arguments(function.func.as_ref(), &input_fields)?;
+                let scalar_arguments = function
+                    .args
+                    .iter()
+                    .map(|arg| match arg {
+                        Expr::Literal(value, _) => Some(value),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                let field = function.func.return_field_from_args(ReturnFieldArgs {
+                    arg_fields: &coerced_fields,
+                    scalar_arguments: &scalar_arguments,
+                })?;
+                fields.push(BranchField {
+                    field,
                     certainly_null: false,
                 });
             }
@@ -1522,6 +1555,38 @@ mod tests {
         let binary_field = binary_nested.to_field(&schema)?.1;
         assert_eq!(binary_field.data_type(), &DataType::Int32);
         assert!(binary_field.metadata().is_empty());
+
+        let identity = Arc::new(crate::expr_fn::create_udf(
+            "identity",
+            vec![DataType::Int32],
+            DataType::Int32,
+            crate::Volatility::Immutable,
+            Arc::new(|_| {
+                Ok(
+                    datafusion_expr_common::columnar_value::ColumnarValue::Scalar(
+                        ScalarValue::Int32(Some(0)),
+                    ),
+                )
+            }),
+        ));
+        let mut scalar_nested = col("a");
+        for _ in 0..128 {
+            let nested_case = when(lit(true), scalar_nested).otherwise(col("b"))?;
+            scalar_nested = Expr::ScalarFunction(ScalarFunction::new_udf(
+                Arc::clone(&identity),
+                vec![nested_case],
+            ));
+        }
+        let Expr::Case(scalar_case) =
+            when(lit(true), scalar_nested).otherwise(col("b"))?
+        else {
+            unreachable!();
+        };
+        assert!(
+            case_field_metadata(&scalar_case, &schema)?
+                .metadata()
+                .is_empty()
+        );
 
         let mismatched = when(lit(true), col("a")).otherwise(col("c"))?;
         assert!(mismatched.to_field(&schema)?.1.metadata().is_empty());
