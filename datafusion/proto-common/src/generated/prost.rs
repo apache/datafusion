@@ -3,6 +3,8 @@
 pub struct ColumnRelation {
     #[prost(string, tag = "1")]
     pub relation: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag = "2")]
+    pub parts: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Column {
@@ -878,6 +880,8 @@ pub struct ParquetOptions {
     /// "start_offset" or "midpoint". Empty means "start_offset".
     #[prost(string, tag = "39")]
     pub row_group_range_assignment: ::prost::alloc::string::String,
+    #[prost(bool, tag = "40")]
+    pub enable_rle_to_dictionary: bool,
     #[prost(string, tag = "16")]
     pub created_by: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "35")]
