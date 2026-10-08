@@ -33,7 +33,8 @@ use datafusion_common::metadata::{FieldMetadata, column_label_metadata};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, Dependency, Result, TableReference};
 use datafusion_expr::expr::{
-    Alias, ExprListDisplay, SortListDisplay, WindowFunction, WindowFunctionParams,
+    AggregateFunction, AggregateFunctionParams, Alias, ExprListDisplay, SortListDisplay,
+    WindowFunction, WindowFunctionParams,
 };
 use datafusion_expr::utils::grouping_set_to_exprlist;
 use datafusion_expr::{
@@ -189,7 +190,7 @@ fn trace_column(plan: &LogicalPlan, idx: usize) -> Result<Option<Expr>> {
                 }
                 idx -= 1;
             }
-            resolve_expr(&aggregate.aggr_expr[idx], &aggregate.input)
+            resolve_aggregate_expr(&aggregate.aggr_expr[idx], &aggregate.input)
         }
         LogicalPlan::Window(window) => {
             let input_len = window.input.schema().fields().len();
@@ -309,6 +310,76 @@ fn is_count_star_window_alias(column: &Column, alias: &str) -> bool {
     column.name.starts_with(PLANNED)
         && column.name.len() > PLANNED.len()
         && alias == column.name.replacen(PLANNED, "count(*)", 1)
+}
+
+/// Like [`resolve_expr`] for an expression of an `Aggregate` node. An
+/// aggregate function is rendered as `name(args)` followed by its
+/// `DISTINCT`, null treatment, `FILTER` and `ORDER BY` parts. An ordered-set
+/// aggregate is rendered with `WITHIN GROUP`, like in the query.
+fn resolve_aggregate_expr(expr: &Expr, input: &LogicalPlan) -> Result<Option<Expr>> {
+    let Expr::AggregateFunction(aggregate_function) = expr else {
+        return resolve_expr(expr, input);
+    };
+    let AggregateFunction { func, params } = aggregate_function;
+    let AggregateFunctionParams {
+        args,
+        distinct,
+        filter,
+        order_by,
+        null_treatment,
+    } = params;
+
+    let Some(args) = args
+        .iter()
+        .map(|e| resolve_expr(e, input))
+        .collect::<Result<Option<Vec<_>>>>()?
+    else {
+        return Ok(None);
+    };
+    let mut resolved_order_by = Vec::with_capacity(order_by.len());
+    for sort in order_by {
+        let Some(expr) = resolve_expr(&sort.expr, input)? else {
+            return Ok(None);
+        };
+        resolved_order_by.push(sort.with_expr(expr));
+    }
+    let order_by = resolved_order_by;
+    let filter = match filter {
+        Some(filter) => match resolve_expr(filter, input)? {
+            Some(filter) => Some(filter),
+            None => return Ok(None),
+        },
+        None => None,
+    };
+
+    let within_group = func.supports_within_group_clause() && !order_by.is_empty();
+    // The planner puts the ordering expression of a WITHIN GROUP clause first
+    // in the args, but the query only has the direct args there
+    let args = if within_group { &args[1..] } else { &args[..] };
+    let mut label = format!(
+        "{}({}{})",
+        func.name(),
+        if *distinct { "DISTINCT " } else { "" },
+        ExprListDisplay::comma_separated(args)
+    );
+    if within_group {
+        write!(
+            label,
+            " WITHIN GROUP (ORDER BY {})",
+            SortListDisplay(&order_by)
+        )?;
+    }
+    if let Some(null_treatment) = null_treatment {
+        write!(label, " {null_treatment}")?;
+    }
+    if let Some(filter) = filter {
+        write!(label, " FILTER (WHERE {})", filter.human_display())?;
+    }
+    if !within_group && !order_by.is_empty() {
+        write!(label, " ORDER BY {}", SortListDisplay(&order_by))?;
+    }
+
+    Ok(Some(Expr::Column(Column::new_unqualified(label))))
 }
 
 /// Like [`resolve_expr`] for an expression of a `Window` node. A window

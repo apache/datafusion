@@ -156,6 +156,25 @@ async fn column_labels_aggregate_functions() -> Result<()> {
 }
 
 #[tokio::test]
+async fn column_labels_ordered_set_aggregates() -> Result<()> {
+    let ctx = labels_ctx().await?;
+    let queries = [
+        "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c) FROM t",
+        "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c DESC) FROM t",
+        "SELECT percentile_cont(c, 0.5) FROM t",
+    ];
+    assert_snapshot!(labels(&ctx, &queries).await?, @r"
+    SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c) FROM t
+      percentile_cont(Float64(0.5)) WITHIN GROUP [t.c ASC NULLS LAST] => percentile_cont(0.5) WITHIN GROUP (ORDER BY c)
+    SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c DESC) FROM t
+      percentile_cont(Float64(0.5)) WITHIN GROUP [t.c DESC NULLS FIRST] => percentile_cont(0.5) WITHIN GROUP (ORDER BY c DESC)
+    SELECT percentile_cont(c, 0.5) FROM t
+      percentile_cont(t.c,Float64(0.5)) => percentile_cont(c, 0.5)
+    ");
+    Ok(())
+}
+
+#[tokio::test]
 async fn column_labels_window_functions() -> Result<()> {
     let ctx = labels_ctx().await?;
     let queries = [
