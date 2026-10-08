@@ -26,7 +26,9 @@ use datafusion_common::cast::{as_list_array, as_primitive_array};
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::utils::memory::estimate_memory_size;
-use datafusion_common::{HashSet, Result, ScalarValue, exec_err};
+use datafusion_common::{
+    HashSet, Result, ScalarValue, exec_datafusion_err, exec_err, internal_datafusion_err,
+};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use std::sync::Arc;
@@ -126,11 +128,14 @@ impl<T: DecimalType> DecimalAverager<T> {
             return exec_err!("Arithmetic Overflow in AvgAccumulator");
         }
 
-        let Some(scale_mul) = T::Native::from_usize(10_usize)
-            .and_then(|b| b.pow_checked(scale_diff as u32).ok())
-        else {
-            return exec_err!("Arithmetic Overflow in AvgAccumulator");
-        };
+        let ten = T::Native::from_usize(10_usize).ok_or_else(|| {
+            internal_datafusion_err!("Failed to compute scale_mul in DecimalAverager")
+        })?;
+        let scale_mul = ten.pow_checked(scale_diff as u32).map_err(|e| {
+            exec_datafusion_err!(
+                "Arithmetic Overflow in AvgAccumulator: cannot rescale from scale {sum_scale} to {target_scale}: {e}"
+            )
+        })?;
 
         Ok(Self {
             scale_mul,
@@ -254,5 +259,39 @@ impl<T: ArrowPrimitiveType> GenericDistinctBuffer<T> {
         let num_elements = self.values.len();
         let fixed_size = size_of_val(self) + size_of_val(&self.values);
         estimate_memory_size::<T::Native>(num_elements, fixed_size).unwrap()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::Decimal128Type;
+
+    #[test]
+    fn decimal_averager_negative_scale() {
+        // Decimal128(10, -2) averaged into Decimal128(14, 2): sums are
+        // rescaled by 10^(2 - -2)
+        let averager = DecimalAverager::<Decimal128Type>::try_new(-2, 14, 2).unwrap();
+        // 100 + 200 at scale -2 is 30000; their average 15000 at scale 2 is 1500000
+        assert_eq!(averager.avg(300, 2).unwrap(), 1_500_000);
+    }
+
+    #[test]
+    fn decimal_averager_unrepresentable_multiplier_keeps_cause() {
+        // 10^255 does not fit in an i128; the error keeps the arrow overflow
+        // detail instead of dropping it
+        let err = DecimalAverager::<Decimal128Type>::try_new(-128, 38, 127)
+            .err()
+            .expect("10^255 overflows i128");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Arithmetic Overflow in AvgAccumulator"),
+            "unexpected error: {msg}"
+        );
+        assert!(
+            msg.contains("cannot rescale from scale -128 to 127"),
+            "unexpected error: {msg}"
+        );
+        assert!(msg.contains("10 ^ 255"), "unexpected error: {msg}");
     }
 }
