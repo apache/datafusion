@@ -2132,13 +2132,48 @@ impl<'a> TryFrom<&'a FormatOptions> for arrow::util::display::FormatOptions<'a> 
             ("time_format", options.time_format.as_deref()),
         ] {
             if let Some(format) = format {
-                chrono::format::StrftimeItems::new(format)
-                    .parse()
-                    .map_err(|error| {
+                let items = chrono::format::StrftimeItems::new(format).parse().map_err(
+                    |error| {
                         DataFusionError::Configuration(format!(
                             "Invalid datafusion.format.{name}: {error}"
                         ))
-                    })?;
+                    },
+                )?;
+
+                // Parsing validates directives, but some directives require fields
+                // that are absent from a particular temporal type (for example,
+                // `%H` for a date). Chrono reports those errors while formatting.
+                let mut rendered = String::new();
+                let result = match name {
+                    "date_format" => chrono::NaiveDate::from_ymd_opt(2001, 2, 3)
+                        .expect("valid sample date")
+                        .format_with_items(items.iter())
+                        .write_to(&mut rendered),
+                    "datetime_format" | "timestamp_format" => {
+                        chrono::NaiveDate::from_ymd_opt(2001, 2, 3)
+                            .expect("valid sample date")
+                            .and_hms_opt(4, 5, 6)
+                            .expect("valid sample time")
+                            .format_with_items(items.iter())
+                            .write_to(&mut rendered)
+                    }
+                    "timestamp_tz_format" => {
+                        chrono::DateTime::from_timestamp(981_173_106, 0)
+                            .expect("valid sample timestamp")
+                            .format_with_items(items.iter())
+                            .write_to(&mut rendered)
+                    }
+                    "time_format" => chrono::NaiveTime::from_hms_opt(4, 5, 6)
+                        .expect("valid sample time")
+                        .format_with_items(items.iter())
+                        .write_to(&mut rendered),
+                    _ => unreachable!("all temporal format names are handled above"),
+                };
+                if result.is_err() {
+                    return Err(DataFusionError::Configuration(format!(
+                        "Invalid datafusion.format.{name}: format is incompatible with its temporal type"
+                    )));
+                }
             }
         }
 
@@ -4213,6 +4248,43 @@ mod tests {
         for (name, options) in invalid_options {
             let error = arrow::util::display::FormatOptions::try_from(&options)
                 .expect_err("invalid format strings must be rejected before rendering");
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("datafusion.format.{name}")),
+                "unexpected validation error: {error}"
+            );
+        }
+
+        let incompatible_options = [
+            (
+                "time_format",
+                FormatOptions {
+                    time_format: Some("%Y".to_owned()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "date_format",
+                FormatOptions {
+                    date_format: Some("%H".to_owned()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "timestamp_format",
+                FormatOptions {
+                    timestamp_format: Some("%+".to_owned()),
+                    ..Default::default()
+                },
+            ),
+        ];
+
+        for (name, options) in incompatible_options {
+            let error = arrow::util::display::FormatOptions::try_from(&options)
+                .expect_err(
+                    "type-incompatible formats must be rejected before rendering",
+                );
             assert!(
                 error
                     .to_string()
