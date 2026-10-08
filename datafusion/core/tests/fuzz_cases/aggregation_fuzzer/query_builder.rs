@@ -293,20 +293,51 @@ impl QueryBuilder {
         while aggregate_functions.len() < num_aggregate_functions {
             let idx = rng.random_range(0..self.aggregate_functions.len());
             let (function_name, is_distinct) = &self.aggregate_functions[idx];
-            let argument = self.random_argument();
             let alias = format!("col{alias_gen}");
             let distinct = if *is_distinct { "DISTINCT " } else { "" };
             alias_gen += 1;
 
-            let (order_by, null_opt) = if function_name.eq("first_value")
+            let (argument, order_by, null_opt) = if function_name.eq("first_value")
                 || function_name.eq("last_value")
             {
-                (
-                    self.order_by(&order_by_black_list), /* Among the order by columns, at most one group by column can be included to avoid all order by column values being identical */
-                    self.null_opt(),
-                )
+                if !self.dataset_sort_keys.is_empty() && rng.random_bool(0.5) {
+                    // Draw the ORDER BY from a prefix of the dataset's own
+                    // sort keys, so on the sorted datasets the plan satisfies
+                    // the aggregate's requirement and the pre-ordered
+                    // first/last fast path is exercised; the unsorted dataset
+                    // runs the same query through the comparing path, giving
+                    // a hinted-vs-unhinted comparison for free. A random
+                    // ORDER BY never does this: it samples up to 12 columns
+                    // with random directions against at most 3 sort keys.
+                    //
+                    // The argument is the last ORDER BY column on purpose:
+                    // rows that tie on the whole ORDER BY then carry equal
+                    // output values, so the documented tie-break difference
+                    // between the fast path (physically last/first) and the
+                    // tournament (first seen) cannot produce false
+                    // mismatches.
+                    let keys = &self.dataset_sort_keys
+                        [rng.random_range(0..self.dataset_sort_keys.len())];
+                    let prefix_len = rng.random_range(1..=keys.len());
+                    let prefix = &keys[..prefix_len];
+                    let order_by = format!(
+                        " order by {}",
+                        prefix
+                            .iter()
+                            .map(|c| format!("{c} ASC"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                    (prefix[prefix_len - 1].clone(), order_by, self.null_opt())
+                } else {
+                    (
+                        self.random_argument(),
+                        self.order_by(&order_by_black_list), /* Among the order by columns, at most one group by column can be included to avoid all order by column values being identical */
+                        self.null_opt(),
+                    )
+                }
             } else {
-                ("".to_string(), "".to_string())
+                (self.random_argument(), "".to_string(), "".to_string())
             };
 
             let function = format!(

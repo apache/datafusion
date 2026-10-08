@@ -31,7 +31,12 @@ datafusion-expr = { workspace = true }
 datafusion-functions-nested = { workspace = true }
 insta = { workspace = true }
 itertools = { workspace = true }
+rstest = { workspace = true }
 
 [[bench]]
 harness = false
 name = "string_in_list_pruning"
+
+[[bench]]
+harness = false
+name = "primitive_in_list_pruning"

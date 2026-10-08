@@ -21,6 +21,7 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{as_float64_array, as_uint64_array};
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::DistinctHandling;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
     function::{AccumulatorArgs, StateFieldsArgs},
@@ -128,18 +129,25 @@ impl AggregateUDFImpl for CovarianceSample {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // Duplicate-sensitive, but the accumulator does not read
+        // `is_distinct` and today silently returns the non-distinct answer.
+        // The tag records the intent; enforcement is a follow-up change.
+        DistinctHandling::Unsupported
+    }
 }
 
 #[user_doc(
     doc_section(label = "Statistical Functions"),
-    description = "Returns the sample covariance of a set of number pairs.",
-    syntax_example = "covar_samp(expression1, expression2)",
+    description = "Returns the population covariance of a set of number pairs.",
+    syntax_example = "covar_pop(expression1, expression2)",
     sql_example = r#"```sql
-> SELECT covar_samp(column1, column2) FROM table_name;
+> SELECT covar_pop(column1, column2) FROM table_name;
 +-----------------------------------+
-| covar_samp(column1, column2)      |
+| covar_pop(column1, column2)       |
 +-----------------------------------+
-| 8.25                              |
+| 7.63333333333                     |
 +-----------------------------------+
 ```"#,
     standard_argument(name = "expression1", prefix = "First"),
@@ -205,6 +213,13 @@ impl AggregateUDFImpl for CovariancePopulation {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // Duplicate-sensitive, but the accumulator does not read
+        // `is_distinct` and today silently returns the non-distinct answer.
+        // The tag records the intent; enforcement is a follow-up change.
+        DistinctHandling::Unsupported
     }
 }
 

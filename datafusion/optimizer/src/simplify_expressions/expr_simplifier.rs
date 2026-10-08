@@ -241,7 +241,14 @@ impl ExprSimplifier {
     /// See the [type coercion module](datafusion_expr::type_coercion)
     /// documentation for more details on type coercion
     pub fn coerce(&self, expr: Expr, schema: &DFSchema) -> Result<Expr> {
-        let mut expr_rewrite = TypeCoercionRewriter { schema };
+        let mut expr_rewrite = TypeCoercionRewriter::new(schema).with_session_time_zone(
+            self.info
+                .config_options()
+                .execution
+                .time_zone
+                .as_ref()
+                .map(|tz| tz.as_str()),
+        );
         expr.rewrite(&mut expr_rewrite).data()
     }
 
@@ -826,6 +833,26 @@ impl<'a> Simplifier<'a> {
     }
 }
 
+/// Returns whether values of the given type are guaranteed to satisfy `value % 1 == 0`.
+fn modulo_one_is_zero_type(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64 => true,
+        // A non-positive scale makes every decimal value an integer.
+        DataType::Decimal32(_, scale)
+        | DataType::Decimal64(_, scale)
+        | DataType::Decimal128(_, scale)
+        | DataType::Decimal256(_, scale) => *scale <= 0,
+        _ => false,
+    }
+}
+
 impl TreeNodeRewriter for Simplifier<'_> {
     type Node = Expr;
 
@@ -1205,13 +1232,13 @@ impl TreeNodeRewriter for Simplifier<'_> {
             // Rules for Modulo
             //
 
-            // A % 1 --> 0 (if A is not nullable and not floating, since NAN % 1 --> NAN)
+            // A % 1 --> 0 (if A is non-null and its type guarantees an integer value)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Modulo,
                 right,
             }) if !info.nullable(&left)?
-                && !info.get_data_type(&left)?.is_floating()
+                && modulo_one_is_zero_type(&info.get_data_type(&left)?)
                 && is_one(&right) =>
             {
                 Transformed::yes(Expr::Literal(
@@ -1573,7 +1600,9 @@ impl TreeNodeRewriter for Simplifier<'_> {
             // ---> (X AND A) OR (Y AND B AND NOT X) OR ... (NOT (X OR Y) AND Q)
             //
             // Note: the rationale for this rewrite is that the expr can then be further
-            // simplified using the existing rules for AND/OR
+            // simplified using the existing rules for AND/OR. Unlike CASE, AND/OR
+            // do not guarantee branch-local evaluation, so only expose columns
+            // and literals from conditional branches.
             Expr::Case(Case {
                 expr: None,
                 when_then_expr,
@@ -1584,7 +1613,8 @@ impl TreeNodeRewriter for Simplifier<'_> {
                     // or all thens are literal bools and a small number of them are true
                     || (when_then_expr.iter().all(|(_, then)| is_bool_lit(then))
                         && when_then_expr.iter().filter(|(_, then)| is_true(then)).count() < 3))
-                && info.is_boolean_type(&when_then_expr[0].1)? =>
+                && info.is_boolean_type(&when_then_expr[0].1)?
+                && can_lower_case_to_boolean(&when_then_expr, else_expr.as_deref()) =>
             {
                 // String disjunction of all the when predicates encountered so far. Not nullable.
                 let mut filter_expr = lit(false);
@@ -1641,7 +1671,8 @@ impl TreeNodeRewriter for Simplifier<'_> {
                     .filter(|(_, then)| is_false(then))
                     .count()
                     < 3
-                && else_expr.as_deref().is_none_or(is_bool_lit) =>
+                && else_expr.as_deref().is_none_or(is_bool_lit)
+                && can_lower_case_to_boolean(&when_then_expr, else_expr.as_deref()) =>
             {
                 Transformed::yes(
                     Expr::Case(Case {
@@ -1892,6 +1923,9 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 right.as_ref(),
                 false,
                 false,
+            ) && inlists_have_set_comparable_literals(
+                left.as_ref(),
+                right.as_ref(),
             ) =>
             {
                 match (*left, *right) {
@@ -1939,6 +1973,9 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 right.as_ref(),
                 false,
                 true,
+            ) && inlists_have_set_comparable_literals(
+                left.as_ref(),
+                right.as_ref(),
             ) =>
             {
                 match (*left, *right) {
@@ -1966,6 +2003,9 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 right.as_ref(),
                 true,
                 false,
+            ) && inlists_have_set_comparable_literals(
+                left.as_ref(),
+                right.as_ref(),
             ) =>
             {
                 match (*left, *right) {
@@ -1993,6 +2033,9 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 right.as_ref(),
                 true,
                 true,
+            ) && inlists_have_set_comparable_literals(
+                left.as_ref(),
+                right.as_ref(),
             ) =>
             {
                 match (*left, *right) {
@@ -2241,8 +2284,26 @@ fn are_inlist_and_eq_and_match_neg(
 ) -> bool {
     match (left, right) {
         (Expr::InList(l), Expr::InList(r)) => {
-            l.expr == r.expr && l.negated == is_left_neg && r.negated == is_right_neg
+            l.expr == r.expr
+                && !l.expr.is_volatile()
+                && !l.list.iter().chain(&r.list).any(Expr::is_volatile)
+                && l.negated == is_left_neg
+                && r.negated == is_right_neg
         }
+        _ => false,
+    }
+}
+
+/// Structural equality can determine set membership only for non-null literals
+/// whose equality agrees with runtime comparisons. Different runtime expressions
+/// can evaluate to the same value, and floating-point equality can differ from
+/// literal equality (for example, positive and negative zero).
+fn inlists_have_set_comparable_literals(left: &Expr, right: &Expr) -> bool {
+    match (left, right) {
+        (Expr::InList(l), Expr::InList(r)) => l.list.iter().chain(&r.list).all(|item| {
+            item.as_literal()
+                .is_some_and(|value| !value.is_null() && !value.data_type().is_floating())
+        }),
         _ => false,
     }
 }
@@ -2255,6 +2316,7 @@ fn are_inlist_and_eq(left: &Expr, right: &Expr) -> bool {
         matches!(lhs.expr.as_ref(), Expr::Column(_))
             && matches!(rhs.expr.as_ref(), Expr::Column(_))
             && lhs.expr == rhs.expr
+            && !lhs.list.iter().chain(&rhs.list).any(Expr::is_volatile)
             && !lhs.negated
             && !rhs.negated
     } else {
@@ -2388,6 +2450,20 @@ fn simplify_inlist_set_operation(
     }))
 }
 
+/// Conservatively checks the inputs whose evaluation can change when lowering
+/// CASE to AND/OR. [`Expr`] has no general fallibility analysis: only columns and
+/// literals are admitted for all WHEN conditions and branch outputs.
+fn can_lower_case_to_boolean(
+    when_then_expr: &[(Box<Expr>, Box<Expr>)],
+    else_expr: Option<&Expr>,
+) -> bool {
+    let is_leaf = |expr: &Expr| matches!(expr, Expr::Column(_) | Expr::Literal(..));
+    when_then_expr
+        .iter()
+        .all(|(when, then)| is_leaf(when) && is_leaf(then))
+        && else_expr.is_none_or(is_leaf)
+}
+
 /// Returns expression testing a boolean `expr` for being exactly `true` (not `false` or NULL).
 fn is_exactly_true(expr: Expr, info: &SimplifyContext) -> Result<Expr> {
     if !info.nullable(&expr)? {
@@ -2432,7 +2508,7 @@ mod tests {
     use super::*;
     use crate::test::test_table_scan_with_name;
     use arrow::{
-        array::{Int32Array, StructArray},
+        array::{BooleanArray, Float64Array, Int32Array, StructArray},
         datatypes::{FieldRef, Fields},
     };
     use datafusion_common::{DFSchemaRef, ToDFSchema, assert_contains};
@@ -2533,12 +2609,15 @@ mod tests {
         //     ELSE false
         //   END
         //
-        // Can be simplified to `i < 5`
+        // Fold the constant conditions, but preserve CASE because the THEN
+        // expression is outside the conservative column/literal subset.
         let expr = when(col("i").gt(lit(5)).and(lit(false)), col("i").gt(lit(5)))
             .when(col("i").lt(lit(5)).and(lit(true)), col("i").lt(lit(5)))
             .otherwise(lit(false))
             .unwrap();
-        let expected = col("i").lt(lit(5));
+        let expected = when(col("i").lt(lit(5)), col("i").lt(lit(5)))
+            .otherwise(lit(false))
+            .unwrap();
         assert_eq!(expected, simplifier.simplify(expr).unwrap());
     }
 
@@ -2813,6 +2892,13 @@ mod tests {
         let result = simplify(expr.clone());
         // The expression should not have been simplified
         assert_eq!(result, expr);
+
+        // Signed zeros compare equal at runtime and must not be treated as
+        // different literals
+        let expr = col("f")
+            .eq(lit(0.0_f64))
+            .and(col("f").not_eq(lit(-0.0_f64)));
+        assert_eq!(simplify(expr.clone()), expr);
     }
 
     #[test]
@@ -2970,6 +3056,55 @@ mod tests {
         let expr =
             col("c3_non_null") % lit(ScalarValue::Decimal128(Some(10000000000), 31, 10));
         assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_modulo_by_one_types() {
+        for (data_type, folds) in [
+            (DataType::Int8, true),
+            (DataType::Int16, true),
+            (DataType::Int32, true),
+            (DataType::Int64, true),
+            (DataType::UInt8, true),
+            (DataType::UInt16, true),
+            (DataType::UInt32, true),
+            (DataType::UInt64, true),
+            (DataType::Float32, false),
+            (DataType::Float64, false),
+            (DataType::Decimal32(9, -1), true),
+            (DataType::Decimal32(9, 0), true),
+            (DataType::Decimal32(9, 2), false),
+            (DataType::Decimal64(18, -1), true),
+            (DataType::Decimal64(18, 0), true),
+            (DataType::Decimal64(18, 2), false),
+            (DataType::Decimal128(38, -1), true),
+            (DataType::Decimal128(38, 0), true),
+            (DataType::Decimal128(38, 2), false),
+            (DataType::Decimal256(76, -1), true),
+            (DataType::Decimal256(76, 0), true),
+            (DataType::Decimal256(76, 2), false),
+        ] {
+            for nullable in [false, true] {
+                let schema =
+                    Schema::new(vec![Field::new("a", data_type.clone(), nullable)])
+                        .to_dfschema_ref()
+                        .unwrap();
+                let simplifier = ExprSimplifier::new(
+                    SimplifyContext::builder().with_schema(schema).build(),
+                );
+                let expr = col("a") % lit(1);
+                let expected = if folds && !nullable {
+                    lit(ScalarValue::new_zero(&data_type).unwrap())
+                } else {
+                    expr.clone()
+                };
+                assert_eq!(
+                    simplifier.simplify(expr).unwrap(),
+                    expected,
+                    "{data_type:?}, nullable={nullable}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -4166,76 +4301,89 @@ mod tests {
             Some(Box::new(lit("ready"))),
         ));
 
-        assert_eq!(
-            simplify(binary_expr(
-                complex_case.clone(),
+        // Comparisons still fold into literal outputs, but later WHEN conditions must
+        // remain conditional: they are not columns or literals.
+        for (op, value, outputs) in [
+            (
                 Operator::Eq,
-                lit("completed"),
-            )),
-            not_distinct_from(col("c1").eq(lit("completed")), lit(true)).and(
-                distinct_from(col("c1").eq(lit("inboxed")), lit(true))
-                    .and(distinct_from(col("c1").eq(lit("scheduled")), lit(true)))
-            )
-        );
-
-        assert_eq!(
-            simplify(binary_expr(
-                complex_case.clone(),
+                "completed",
+                [false, false, true, false, false, false, false],
+            ),
+            (
                 Operator::NotEq,
-                lit("completed"),
-            )),
-            distinct_from(col("c1").eq(lit("completed")), lit(true))
-                .or(not_distinct_from(col("c1").eq(lit("inboxed")), lit(true))
-                    .or(not_distinct_from(col("c1").eq(lit("scheduled")), lit(true))))
-        );
-
-        assert_eq!(
-            simplify(binary_expr(
-                complex_case.clone(),
+                "completed",
+                [true, true, false, true, true, true, true],
+            ),
+            (
                 Operator::Eq,
-                lit("running"),
-            )),
-            not_distinct_from(col("c2"), lit(true)).and(
-                distinct_from(col("c1").eq(lit("inboxed")), lit(true))
-                    .and(distinct_from(col("c1").eq(lit("scheduled")), lit(true)))
-                    .and(distinct_from(col("c1").eq(lit("completed")), lit(true)))
-                    .and(distinct_from(col("c1").eq(lit("paused")), lit(true)))
-            )
-        );
-
-        assert_eq!(
-            simplify(binary_expr(
-                complex_case.clone(),
+                "running",
+                [false, false, false, false, true, false, false],
+            ),
+            (
                 Operator::Eq,
-                lit("ready"),
-            )),
-            distinct_from(col("c1").eq(lit("inboxed")), lit(true))
-                .and(distinct_from(col("c1").eq(lit("scheduled")), lit(true)))
-                .and(distinct_from(col("c1").eq(lit("completed")), lit(true)))
-                .and(distinct_from(col("c1").eq(lit("paused")), lit(true)))
-                .and(distinct_from(col("c2"), lit(true)))
-                .and(distinct_from(
-                    col("c1").eq(lit("invoked")).and(col("c3").gt(lit(0))),
-                    lit(true)
-                ))
-        );
-
-        assert_eq!(
-            simplify(binary_expr(
-                complex_case.clone(),
+                "ready",
+                [false, false, false, false, false, false, true],
+            ),
+            (
                 Operator::NotEq,
-                lit("ready"),
+                "ready",
+                [true, true, true, true, true, true, false],
+            ),
+        ] {
+            let Expr::Case(mut expected) = complex_case.clone() else {
+                unreachable!()
+            };
+            for ((_, then), value) in expected.when_then_expr.iter_mut().zip(outputs) {
+                **then = lit(value);
+            }
+            expected.else_expr = Some(Box::new(lit(outputs[6])));
+            assert_eq!(
+                simplify(binary_expr(complex_case.clone(), op, lit(value))),
+                Expr::Case(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn simplify_case_preserves_conditional_expressions() {
+        let fallible =
+            Expr::Cast(Cast::new(Box::new(col("c1")), DataType::Int32)).gt(lit(0_i32));
+        let volatile = Expr::ScalarFunction(ScalarFunction::new_udf(
+            Arc::new(ScalarUDF::new_from_impl(VolatileUdf::new())),
+            vec![],
+        ));
+        for expr in [
+            Expr::Case(Case::new(
+                None,
+                vec![(Box::new(fallible.clone()), Box::new(lit(false)))],
+                Some(Box::new(lit(false))),
             )),
-            not_distinct_from(col("c1").eq(lit("inboxed")), lit(true))
-                .or(not_distinct_from(col("c1").eq(lit("scheduled")), lit(true)))
-                .or(not_distinct_from(col("c1").eq(lit("completed")), lit(true)))
-                .or(not_distinct_from(col("c1").eq(lit("paused")), lit(true)))
-                .or(not_distinct_from(col("c2"), lit(true)))
-                .or(not_distinct_from(
-                    col("c1").eq(lit("invoked")).and(col("c3").gt(lit(0))),
-                    lit(true)
-                ))
-        );
+            Expr::Case(Case::new(
+                None,
+                vec![(Box::new(col("c2")), Box::new(fallible.clone()))],
+                Some(Box::new(lit(false))),
+            )),
+            Expr::Case(Case::new(
+                None,
+                vec![(Box::new(col("c2")), Box::new(lit(true)))],
+                Some(Box::new(fallible.clone())),
+            )),
+            Expr::Case(Case::new(
+                None,
+                vec![
+                    (Box::new(col("c2")), Box::new(lit(false))),
+                    (Box::new(fallible), Box::new(lit(true))),
+                ],
+                Some(Box::new(lit(false))),
+            )),
+            Expr::Case(Case::new(
+                None,
+                vec![(Box::new(volatile.gt(lit(0_i16))), Box::new(lit(true)))],
+                Some(Box::new(col("c2"))),
+            )),
+        ] {
+            assert_eq!(simplify(expr.clone()), expr);
+        }
     }
 
     #[test]
@@ -4279,19 +4427,20 @@ mod tests {
 
         // CASE WHEN ISNULL(c2) THEN true ELSE c2
         // -->
-        // ISNULL(c2) OR c2
-        //
-        // Need to call simplify 2x due to
-        // https://github.com/apache/datafusion/issues/1160
+        // Preserve CASE because the WHEN expression is outside the conservative
+        // column/literal subset.
+        let expected = Expr::Case(Case::new(
+            None,
+            vec![(Box::new(col("c2").is_null()), Box::new(lit(true)))],
+            Some(Box::new(col("c2"))),
+        ));
         assert_eq!(
             simplify(simplify(Expr::Case(Case::new(
                 None,
                 vec![(Box::new(col("c2").is_null()), Box::new(lit(true)),)],
                 Some(Box::new(col("c2"))),
             )))),
-            col("c2")
-                .is_null()
-                .or(col("c2").is_not_null().and(col("c2")))
+            expected
         );
 
         // CASE WHEN c1 then true WHEN c2 then false ELSE true
@@ -4332,29 +4481,21 @@ mod tests {
             col("c1_non_null").or(col("c1_non_null").not().and(col("c2_non_null").not()))
         );
 
-        // CASE WHEN c > 0 THEN true END AS c1
-        assert_eq!(
-            simplify(simplify(Expr::Case(Case::new(
+        // Preserve CASE with a non-leaf WHEN condition, with or without ELSE.
+        for expr in [
+            Expr::Case(Case::new(
                 None,
                 vec![(Box::new(col("c3").gt(lit(0_i64))), Box::new(lit(true)))],
                 None,
-            )))),
-            not_distinct_from(col("c3").gt(lit(0_i64)), lit(true)).or(distinct_from(
-                col("c3").gt(lit(0_i64)),
-                lit(true)
-            )
-            .and(lit_bool_null()))
-        );
-
-        // CASE WHEN c > 0 THEN true ELSE false END AS c1
-        assert_eq!(
-            simplify(simplify(Expr::Case(Case::new(
+            )),
+            Expr::Case(Case::new(
                 None,
                 vec![(Box::new(col("c3").gt(lit(0_i64))), Box::new(lit(true)))],
                 Some(Box::new(lit(false))),
-            )))),
-            not_distinct_from(col("c3").gt(lit(0_i64)), lit(true))
-        );
+            )),
+        ] {
+            assert_eq!(simplify(simplify(expr.clone())), expr);
+        }
     }
 
     #[test]
@@ -4549,22 +4690,6 @@ mod tests {
             Some(Box::new(lit(2))),
         ));
         assert_eq!(simplify(expr.clone()), expr);
-    }
-
-    fn distinct_from(left: impl Into<Expr>, right: impl Into<Expr>) -> Expr {
-        Expr::BinaryExpr(BinaryExpr {
-            left: Box::new(left.into()),
-            op: Operator::IsDistinctFrom,
-            right: Box::new(right.into()),
-        })
-    }
-
-    fn not_distinct_from(left: impl Into<Expr>, right: impl Into<Expr>) -> Expr {
-        Expr::BinaryExpr(BinaryExpr {
-            left: Box::new(left.into()),
-            op: Operator::IsNotDistinctFrom,
-            right: Box::new(right.into()),
-        })
     }
 
     #[test]
@@ -4844,6 +4969,192 @@ mod tests {
         // https://github.com/apache/datafusion/issues/8970
         // assert_eq!(simplify(expr.clone()), lit(true));
         assert_eq!(simplify(expr.clone()), expr);
+    }
+
+    fn assert_inlist_simplification_result(
+        expr: Expr,
+        batch: &RecordBatch,
+        expected: Vec<bool>,
+    ) -> Result<()> {
+        let schema = batch.schema().to_dfschema_ref()?;
+        let simplifier = ExprSimplifier::new(
+            SimplifyContext::builder()
+                .with_schema(Arc::clone(&schema))
+                .build(),
+        );
+        let original = simplifier.coerce(expr, &schema)?;
+        let simplified = simplifier.simplify(original.clone())?;
+        let props = ExecutionProps::new();
+        let evaluate = |expr: &Expr| {
+            create_physical_expr(
+                expr,
+                &schema,
+                &props,
+                &PhysicalPlanningContext::default(),
+            )?
+            .evaluate(batch)?
+            .into_array(batch.num_rows())
+        };
+        let original_result = evaluate(&original)?;
+        let actual = evaluate(&simplified)?;
+        assert_eq!(original_result.as_ref(), actual.as_ref());
+        assert_eq!(actual.as_boolean(), &BooleanArray::from(expected));
+        Ok(())
+    }
+
+    #[test]
+    fn simplify_inlist_runtime_set_operations() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("x", DataType::Int32, false),
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(Int32Array::from(vec![1, 1, 3])),
+                Arc::new(Int32Array::from(vec![1, 2, 4])),
+            ],
+        )?;
+        let left = |negated| {
+            in_list(col("x"), vec![col("a"), lit(2), lit(10), lit(11)], negated)
+        };
+        let right = |negated| {
+            in_list(col("x"), vec![col("b"), lit(5), lit(12), lit(13)], negated)
+        };
+
+        // Structurally different, non-null columns can hold equal values.
+        for (expr, expected) in [
+            (left(false).and(right(false)), vec![true, true, false]),
+            (left(false).and(right(true)), vec![false, false, true]),
+            (left(true).and(right(false)), vec![false, false, false]),
+            (left(true).or(right(true)), vec![false, false, true]),
+            // Union remains valid for nonvolatile runtime expressions.
+            (left(false).or(right(false)), vec![true, true, true]),
+            (left(true).and(right(true)), vec![false, false, false]),
+        ] {
+            assert_inlist_simplification_result(expr, &batch, expected)?;
+        }
+
+        // Coercion must precede structural comparison of mixed integer literals.
+        let expr = in_list(col("x"), vec![lit(1i32), lit(2), lit(10), lit(11)], false)
+            .and(in_list(
+                col("x"),
+                vec![lit(1i64), lit(3i64), lit(12i64), lit(13i64)],
+                false,
+            ));
+        assert_inlist_simplification_result(expr, &batch, vec![true, false, false])
+    }
+
+    #[test]
+    fn simplify_inlist_signed_zero() -> Result<()> {
+        for data_type in [DataType::Float16, DataType::Float32, DataType::Float64] {
+            let values =
+                arrow::compute::cast(&Float64Array::from(vec![0.0, -0.0]), &data_type)?;
+            let literals = |values: &[f64]| {
+                values
+                    .iter()
+                    .map(|&value| {
+                        ScalarValue::Float64(Some(value))
+                            .cast_to(&data_type)
+                            .map(lit)
+                    })
+                    .collect::<Result<Vec<_>>>()
+            };
+            let left_list = literals(&[0.0, 1.0, 2.0, 3.0])?;
+            let right_list = literals(&[-0.0, 4.0, 5.0, 6.0])?;
+            let schema = Arc::new(Schema::new(vec![Field::new("x", data_type, false)]));
+            let batch = RecordBatch::try_new(schema, vec![values])?;
+            let schema = batch.schema().to_dfschema_ref()?;
+            let simplifier = ExprSimplifier::new(
+                SimplifyContext::builder()
+                    .with_schema(Arc::clone(&schema))
+                    .build(),
+            )
+            .with_canonicalize(false);
+            // Cover both inlined comparisons and lists that reach the set rewrites.
+            assert!(left_list.len() > THRESHOLD_INLINE_INLIST);
+            assert!(right_list.len() > THRESHOLD_INLINE_INLIST);
+            for list_len in [2, left_list.len()] {
+                let left =
+                    |negated| in_list(col("x"), left_list[..list_len].to_vec(), negated);
+                let right =
+                    |negated| in_list(col("x"), right_list[..list_len].to_vec(), negated);
+                for (expr, expected) in [
+                    (left(false).and(right(false)), vec![true, true]),
+                    (left(false).and(right(true)), vec![false, false]),
+                    (left(true).and(right(false)), vec![false, false]),
+                    (left(true).or(right(true)), vec![false, false]),
+                ] {
+                    let simplified = simplifier.simplify(expr.clone())?;
+                    if list_len > THRESHOLD_INLINE_INLIST {
+                        // Floating-point literals must bypass structural set rewrites.
+                        assert_eq!(simplified, expr);
+                    } else {
+                        let actual = create_physical_expr(
+                            &simplified,
+                            &schema,
+                            &ExecutionProps::new(),
+                            &PhysicalPlanningContext::default(),
+                        )?
+                        .evaluate(&batch)?
+                        .into_array(batch.num_rows())?;
+                        assert_eq!(actual.as_boolean(), &BooleanArray::from(expected));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn simplify_inlist_preserves_volatile_evaluations() {
+        let fun = Arc::new(ScalarUDF::new_from_impl(VolatileUdf::new()));
+        let volatile = Expr::ScalarFunction(ScalarFunction::new_udf(fun, vec![]));
+        let left = |negated| {
+            in_list(
+                volatile.clone(),
+                vec![lit(1), lit(2), lit(3), lit(4)],
+                negated,
+            )
+        };
+        let right = |negated| {
+            in_list(
+                volatile.clone(),
+                vec![lit(3), lit(4), lit(5), lit(6)],
+                negated,
+            )
+        };
+        for expr in [
+            left(false).and(right(false)),
+            left(false).and(right(true)),
+            left(true).and(right(false)),
+            left(true).or(right(true)),
+            left(true).and(right(true)),
+        ] {
+            assert_eq!(simplify_no_canonicalize(expr.clone()), expr);
+        }
+
+        // Union deduplication must not remove a repeated volatile list item.
+        for negated in [false, true] {
+            let left = in_list(
+                col("c1"),
+                vec![volatile.clone(), lit(1), lit(2), lit(3)],
+                negated,
+            );
+            let right = in_list(
+                col("c1"),
+                vec![volatile.clone(), lit(4), lit(5), lit(6)],
+                negated,
+            );
+            let expr = if negated {
+                left.and(right)
+            } else {
+                left.or(right)
+            };
+            assert_eq!(simplify_no_canonicalize(expr.clone()), expr);
+        }
     }
 
     #[test]

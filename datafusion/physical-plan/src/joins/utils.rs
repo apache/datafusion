@@ -26,7 +26,6 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::joins::SharedBitmapBuilder;
 use crate::metrics::{
     self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
     MetricType,
@@ -56,7 +55,7 @@ use arrow::array::{
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::{self, take};
 use arrow::datatypes::{
-    ArrowNativeType, Field, Schema, SchemaBuilder, UInt32Type, UInt64Type,
+    ArrowNativeType, Field, Schema, SchemaBuilder, SchemaRef, UInt32Type, UInt64Type,
 };
 use arrow_ord::ord::{DynComparator, make_comparator};
 use arrow_schema::{DataType, SortOptions, TimeUnit};
@@ -153,10 +152,11 @@ pub fn adjust_right_output_partitioning(
                     "Offsetting range partitioning produced an empty ordering"
                 )
             })?;
-            Partitioning::Range(RangePartitioning::new(
+            Partitioning::Range(RangePartitioning::try_new_with_samples(
                 ordering,
-                range.split_points().to_vec(),
-            ))
+                range.samples().to_vec(),
+                range.partition_count(),
+            )?)
         }
         result => result.clone(),
     };
@@ -341,12 +341,8 @@ pub fn build_join_schema(
         _ => (right, left),
     };
 
-    let metadata = schema1
-        .metadata()
-        .clone()
-        .into_iter()
-        .chain(schema2.metadata().clone())
-        .collect();
+    let mut metadata = schema1.metadata().clone();
+    metadata.extend(schema2.metadata().clone());
 
     (fields.finish().with_metadata(metadata), column_indices)
 }
@@ -1217,61 +1213,6 @@ pub(crate) fn is_existence_join(join_type: JoinType) -> bool {
     )
 }
 
-pub(crate) fn get_final_indices_from_shared_bitmap(
-    shared_bitmap: &SharedBitmapBuilder,
-    join_type: JoinType,
-    piecewise: bool,
-) -> (UInt64Array, UInt32Array) {
-    let bitmap = shared_bitmap.lock();
-    get_final_indices_from_bit_map(&bitmap, join_type, piecewise)
-}
-
-/// In the end of join execution, need to use bit map of the matched
-/// indices to generate the final left and right indices.
-///
-/// For example:
-///
-/// 1. left_bit_map: `[true, false, true, true, false]`
-/// 2. join_type: `Left`
-///
-/// The result is: `([1,4], [null, null])`
-pub(crate) fn get_final_indices_from_bit_map(
-    left_bit_map: &BooleanBufferBuilder,
-    join_type: JoinType,
-    // We add a flag for whether this is being passed from the `PiecewiseMergeJoin`
-    // because the bitmap can be for left + right `JoinType`s
-    piecewise: bool,
-) -> (UInt64Array, UInt32Array) {
-    let left_size = left_bit_map.len();
-    if join_type == JoinType::LeftMark || (join_type == JoinType::RightMark && piecewise)
-    {
-        let left_indices = (0..left_size as u64).collect::<UInt64Array>();
-        let right_indices = (0..left_size)
-            .map(|idx| left_bit_map.get_bit(idx).then_some(0))
-            .collect::<UInt32Array>();
-        return (left_indices, right_indices);
-    }
-    let left_indices = if join_type == JoinType::LeftSemi
-        || (join_type == JoinType::RightSemi && piecewise)
-    {
-        (0..left_size)
-            .filter_map(|idx| (left_bit_map.get_bit(idx)).then_some(idx as u64))
-            .collect::<UInt64Array>()
-    } else {
-        // just for `Left`, `LeftAnti` and `Full` join
-        // `LeftAnti`, `Left` and `Full` will produce the unmatched left row finally
-        (0..left_size)
-            .filter_map(|idx| (!left_bit_map.get_bit(idx)).then_some(idx as u64))
-            .collect::<UInt64Array>()
-    };
-    // right_indices
-    // all the element in the right side is None
-    let mut builder = UInt32Builder::with_capacity(left_indices.len());
-    builder.append_nulls(left_indices.len());
-    let right_indices = builder.finish();
-    (left_indices, right_indices)
-}
-
 #[expect(clippy::too_many_arguments)]
 pub(crate) fn apply_join_filter_to_indices(
     build_input_buffer: &RecordBatch,
@@ -1347,10 +1288,10 @@ pub(crate) fn apply_join_filter_to_indices(
 
 /// Creates a [RecordBatch] with zero columns but the given row count.
 /// Used when a join has an empty projection (e.g. `SELECT count(1) ...`).
-fn new_empty_schema_batch(schema: &Schema, row_count: usize) -> Result<RecordBatch> {
+fn new_empty_schema_batch(schema: &SchemaRef, row_count: usize) -> Result<RecordBatch> {
     let options = RecordBatchOptions::new().with_row_count(Some(row_count));
     Ok(RecordBatch::try_new_with_options(
-        Arc::new(schema.clone()),
+        Arc::clone(schema),
         vec![],
         &options,
     )?)
@@ -1360,7 +1301,7 @@ fn new_empty_schema_batch(schema: &Schema, row_count: usize) -> Result<RecordBat
 /// The resulting batch has [Schema] `schema`.
 #[expect(clippy::too_many_arguments)]
 pub(crate) fn build_batch_from_indices(
-    schema: &Schema,
+    schema: &SchemaRef,
     build_input_buffer: &RecordBatch,
     probe_batch: &RecordBatch,
     build_indices: &UInt64Array,
@@ -1417,7 +1358,7 @@ pub(crate) fn build_batch_from_indices(
 
         columns.push(array);
     }
-    Ok(RecordBatch::try_new(Arc::new(schema.clone()), columns)?)
+    Ok(RecordBatch::try_new(Arc::clone(schema), columns)?)
 }
 
 /// Builds the nullable mark column for a null-aware `LeftMark` join.
@@ -1485,7 +1426,7 @@ pub(crate) fn build_null_aware_left_mark_column(
 /// rows or because none of its rows has a matchable (non-NULL) join key.
 /// The resulting batch has [Schema] `schema`.
 pub(crate) fn build_batch_empty_build_side(
-    schema: &Schema,
+    schema: &SchemaRef,
     build_batch: &RecordBatch,
     probe_batch: &RecordBatch,
     column_indices: &[ColumnIndex],
@@ -1493,7 +1434,7 @@ pub(crate) fn build_batch_empty_build_side(
 ) -> Result<RecordBatch> {
     if join_type.empty_build_side_produces_empty_result() {
         // These join types only return data if the left side is not empty.
-        return Ok(RecordBatch::new_empty(Arc::new(schema.clone())));
+        return Ok(RecordBatch::new_empty(Arc::clone(schema)));
     }
 
     // The remaining joins return right-side rows and nulls for the left side.
@@ -1519,7 +1460,7 @@ pub(crate) fn build_batch_empty_build_side(
         })
         .collect();
 
-    Ok(RecordBatch::try_new(Arc::new(schema.clone()), columns)?)
+    Ok(RecordBatch::try_new(Arc::clone(schema), columns)?)
 }
 
 /// The input is the matched indices for left and right and
@@ -2040,6 +1981,20 @@ pub(crate) fn symmetric_join_output_partitioning(
     Ok(result)
 }
 
+/// Convert a boolean filter array into a unified mask bitmap.
+///
+/// Caution: The filter result is NOT a bitmap; it contains true/false/null values.
+/// For example, `1 < NULL` evaluates to NULL. Therefore, we must combine (AND)
+/// the boolean array with its null bitmap to construct a unified bitmap.
+#[inline]
+pub(crate) fn boolean_mask_from_filter(filter_arr: &BooleanArray) -> BooleanArray {
+    let (values, nulls) = filter_arr.clone().into_parts();
+    match nulls {
+        Some(nulls) => BooleanArray::new(nulls.inner() & &values, None),
+        None => BooleanArray::new(values, None),
+    }
+}
+
 pub(crate) fn asymmetric_join_output_partitioning(
     left: &Arc<dyn ExecutionPlan>,
     right: &Arc<dyn ExecutionPlan>,
@@ -2331,12 +2286,65 @@ pub(crate) fn matchable_join_keys(
     }
 }
 
+/// Keeps only the candidate pairs whose join keys are equal.
+///
+/// `comparator` caches the general-path [`JoinKeyComparator`] between calls
+/// that share the same `left_arrays` and `right_arrays`, so its setup cost is
+/// paid once rather than per call. Pass an empty slot whenever either side's
+/// arrays change. Nothing checks this: a slot kept across different arrays
+/// silently returns wrong matches. An empty slot (`&mut None`) is always
+/// correct and only rebuilds the comparator on each call.
 pub(super) fn equal_rows_arr(
     indices_left: &UInt64Array,
     indices_right: &UInt32Array,
     left_arrays: &[ArrayRef],
     right_arrays: &[ArrayRef],
     null_equality: NullEquality,
+    comparator: &mut Option<JoinKeyComparator>,
+) -> Result<(UInt64Array, UInt32Array)> {
+    equal_rows_arr_impl(
+        indices_left,
+        indices_right,
+        left_arrays,
+        right_arrays,
+        null_equality,
+        comparator,
+        true,
+    )
+}
+
+/// Same as [`equal_rows_arr`], but `left_arrays` must already have float
+/// `-0.0` rewritten to `+0.0` (see `normalize_float_zero`), so a comparator
+/// built here skips that scan on the left side. Hash join keeps its build
+/// keys in that form, which saves rescanning the whole build side for every
+/// probe batch.
+pub(super) fn equal_rows_arr_with_normalized_left(
+    indices_left: &UInt64Array,
+    indices_right: &UInt32Array,
+    left_arrays: &[ArrayRef],
+    right_arrays: &[ArrayRef],
+    null_equality: NullEquality,
+    comparator: &mut Option<JoinKeyComparator>,
+) -> Result<(UInt64Array, UInt32Array)> {
+    equal_rows_arr_impl(
+        indices_left,
+        indices_right,
+        left_arrays,
+        right_arrays,
+        null_equality,
+        comparator,
+        false,
+    )
+}
+
+fn equal_rows_arr_impl(
+    indices_left: &UInt64Array,
+    indices_right: &UInt32Array,
+    left_arrays: &[ArrayRef],
+    right_arrays: &[ArrayRef],
+    null_equality: NullEquality,
+    comparator: &mut Option<JoinKeyComparator>,
+    normalize_left: bool,
 ) -> Result<(UInt64Array, UInt32Array)> {
     if indices_left.len() != indices_right.len() {
         return Err(internal_datafusion_err!(
@@ -2378,9 +2386,23 @@ pub(super) fn equal_rows_arr(
         return Ok(res);
     }
 
-    let sort_options = vec![SortOptions::default(); left_arrays.len()];
-    let comparator =
-        JoinKeyComparator::new(left_arrays, right_arrays, &sort_options, null_equality)?;
+    let comparator = match comparator {
+        Some(comparator) => comparator,
+        None => {
+            let sort_options = vec![SortOptions::default(); left_arrays.len()];
+            let new_comparator = if normalize_left {
+                JoinKeyComparator::new
+            } else {
+                JoinKeyComparator::new_with_normalized_left
+            };
+            comparator.insert(new_comparator(
+                left_arrays,
+                right_arrays,
+                &sort_options,
+                null_equality,
+            )?)
+        }
+    };
 
     let mut left_filtered = Vec::with_capacity(indices_left.len());
     let mut right_filtered = Vec::with_capacity(indices_right.len());
@@ -2507,6 +2529,12 @@ pub struct JoinKeyComparator {
     rest: Vec<DynComparator>,
 }
 
+impl Debug for JoinKeyComparator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("JoinKeyComparator").finish_non_exhaustive()
+    }
+}
+
 impl JoinKeyComparator {
     /// Build comparators for each join key column pair.
     pub fn new(
@@ -2514,6 +2542,35 @@ impl JoinKeyComparator {
         right_arrays: &[ArrayRef],
         sort_options: &[SortOptions],
         null_equality: NullEquality,
+    ) -> Result<Self> {
+        Self::build(left_arrays, right_arrays, sort_options, null_equality, true)
+    }
+
+    /// Like [`Self::new`], but trusts `left_arrays` to already have float
+    /// `-0.0` rewritten to `+0.0` and does not scan them again. Only the right
+    /// side is normalized here. Passing a left side that still holds `-0.0`
+    /// makes it compare unequal to `+0.0`.
+    pub(crate) fn new_with_normalized_left(
+        left_arrays: &[ArrayRef],
+        right_arrays: &[ArrayRef],
+        sort_options: &[SortOptions],
+        null_equality: NullEquality,
+    ) -> Result<Self> {
+        Self::build(
+            left_arrays,
+            right_arrays,
+            sort_options,
+            null_equality,
+            false,
+        )
+    }
+
+    fn build(
+        left_arrays: &[ArrayRef],
+        right_arrays: &[ArrayRef],
+        sort_options: &[SortOptions],
+        null_equality: NullEquality,
+        normalize_left: bool,
     ) -> Result<Self> {
         debug_assert_eq!(left_arrays.len(), right_arrays.len());
         debug_assert_eq!(left_arrays.len(), sort_options.len());
@@ -2529,8 +2586,12 @@ impl JoinKeyComparator {
                 // no-op (Arc::clone) for non-floats and for float arrays
                 // that contain no `-0.0`. `normalize_float_zero` preserves
                 // null positions, so the original null masks below remain
-                // valid.
-                let l_norm = normalize_float_zero(l);
+                // valid. A left side that is already normalized is used as is.
+                let l_norm = if normalize_left {
+                    normalize_float_zero(l)
+                } else {
+                    Arc::clone(l)
+                };
                 let r_norm = normalize_float_zero(r);
                 let inner = make_comparator(l_norm.as_ref(), r_norm.as_ref(), *opts)?;
                 if null_equality == NullEquality::NullEqualsNothing {
@@ -4455,8 +4516,20 @@ mod tests {
                 ScalarValue::Int32(Some(20)),
                 ScalarValue::Int32(Some(50)),
             ]),
+            SplitPoint::new(vec![
+                ScalarValue::Int32(Some(30)),
+                ScalarValue::Int32(Some(40)),
+            ]),
+            SplitPoint::new(vec![
+                ScalarValue::Int32(Some(40)),
+                ScalarValue::Int32(Some(30)),
+            ]),
+            SplitPoint::new(vec![
+                ScalarValue::Int32(Some(50)),
+                ScalarValue::Int32(Some(20)),
+            ]),
         ];
-        let range = RangePartitioning::try_new(
+        let range = RangePartitioning::try_new_with_samples(
             LexOrdering::new([
                 PhysicalSortExpr::new(
                     Arc::new(Column::new("a", 0)),
@@ -4469,10 +4542,16 @@ mod tests {
             ])
             .unwrap(),
             split_points.clone(),
+            3,
         )?;
 
         let adjusted = adjust_right_output_partitioning(&Partitioning::Range(range), 3)?;
-        let expected = Partitioning::Range(RangePartitioning::new(
+        let Partitioning::Range(adjusted_range) = &adjusted else {
+            panic!("expected range partitioning");
+        };
+        assert_eq!(adjusted_range.max_partition_count(), 6);
+        assert_eq!(adjusted_range.samples(), split_points);
+        let expected = Partitioning::Range(RangePartitioning::try_new_with_samples(
             LexOrdering::new([
                 PhysicalSortExpr::new(
                     Arc::new(Column::new("a", 3)),
@@ -4485,7 +4564,8 @@ mod tests {
             ])
             .unwrap(),
             split_points,
-        ));
+            3,
+        )?);
 
         assert_eq!(adjusted, expected);
         Ok(())
@@ -4651,7 +4731,7 @@ mod tests {
         // When the output schema has no fields (empty projection pushed into
         // the join), build_batch_empty_build_side should return a RecordBatch
         // with the correct row count but no columns.
-        let empty_schema = Schema::empty();
+        let empty_schema = Arc::new(Schema::empty());
 
         let build_batch = RecordBatch::try_new(
             Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)])),
@@ -4809,6 +4889,54 @@ mod tests {
     }
 
     #[test]
+    fn join_key_comparator_with_normalized_left_skips_left_normalization() {
+        let opts = [SortOptions::default()];
+        let neg_zero: ArrayRef = Arc::new(Float64Array::from(vec![-0.0]));
+        let pos_zero: ArrayRef = Arc::new(Float64Array::from(vec![0.0]));
+
+        // `new` rewrites -0.0 on both sides, so the keys match.
+        let cmp = JoinKeyComparator::new(
+            &[Arc::clone(&neg_zero)],
+            &[Arc::clone(&pos_zero)],
+            &opts,
+            NullEquality::NullEqualsNothing,
+        )
+        .unwrap();
+        assert!(cmp.is_equal(0, 0));
+
+        // The left side is taken as already normalized, so a raw -0.0 there
+        // is compared bit for bit and does not match +0.0.
+        let cmp = JoinKeyComparator::new_with_normalized_left(
+            &[Arc::clone(&neg_zero)],
+            &[Arc::clone(&pos_zero)],
+            &opts,
+            NullEquality::NullEqualsNothing,
+        )
+        .unwrap();
+        assert!(!cmp.is_equal(0, 0));
+
+        // The right side is still normalized by both constructors.
+        for cmp in [
+            JoinKeyComparator::new(
+                &[Arc::clone(&pos_zero)],
+                &[Arc::clone(&neg_zero)],
+                &opts,
+                NullEquality::NullEqualsNothing,
+            )
+            .unwrap(),
+            JoinKeyComparator::new_with_normalized_left(
+                &[Arc::clone(&pos_zero)],
+                &[Arc::clone(&neg_zero)],
+                &opts,
+                NullEquality::NullEqualsNothing,
+            )
+            .unwrap(),
+        ] {
+            assert!(cmp.is_equal(0, 0));
+        }
+    }
+
+    #[test]
     fn test_equal_rows_arr_filters_candidate_pairs() {
         let left_a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 2, 3]));
         let left_b: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c", "d"]));
@@ -4824,6 +4952,7 @@ mod tests {
             &[left_a, left_b],
             &[right_a, right_b],
             NullEquality::NullEqualsNothing,
+            &mut None,
         )
         .unwrap();
 
@@ -4842,6 +4971,7 @@ mod tests {
             &[],
             &[],
             NullEquality::NullEqualsNothing,
+            &mut None,
         )
         .unwrap();
 
@@ -4864,6 +4994,7 @@ mod tests {
             &[Arc::clone(&left)],
             &[Arc::clone(&right)],
             NullEquality::NullEqualsNothing,
+            &mut None,
         )
         .unwrap();
         assert_eq!(left_filtered, UInt64Array::from(vec![0, 2]));
@@ -4875,6 +5006,7 @@ mod tests {
             &[left],
             &[right],
             NullEquality::NullEqualsNull,
+            &mut None,
         )
         .unwrap();
         assert_eq!(left_filtered, UInt64Array::from(vec![0, 1, 2, 3]));
@@ -4907,6 +5039,7 @@ mod tests {
             &[Arc::clone(&left)],
             &[Arc::clone(&right)],
             NullEquality::NullEqualsNothing,
+            &mut None,
         )
         .unwrap();
         assert_eq!(left_filtered, UInt64Array::from(vec![0]));
@@ -4919,6 +5052,7 @@ mod tests {
             &[left],
             &[right],
             NullEquality::NullEqualsNull,
+            &mut None,
         )
         .unwrap();
         assert_eq!(left_filtered, UInt64Array::from(vec![0, 1]));
@@ -4937,6 +5071,7 @@ mod tests {
                 &[left],
                 &[right],
                 NullEquality::NullEqualsNothing,
+                &mut None,
             )
             .unwrap();
             assert_eq!(left_filtered, UInt64Array::from(vec![0]));
@@ -5046,6 +5181,7 @@ mod tests {
             &[left],
             &[right],
             NullEquality::NullEqualsNothing,
+            &mut None,
         )
         .unwrap();
         assert_eq!(left_filtered, UInt64Array::from(vec![0]));
@@ -5063,6 +5199,7 @@ mod tests {
             &[Arc::clone(&left)],
             &[Arc::clone(&right)],
             NullEquality::NullEqualsNothing,
+            &mut None,
         )
         .unwrap_err();
         assert!(
@@ -5076,6 +5213,7 @@ mod tests {
             &[left, Arc::new(Int32Array::from(vec![3, 4]))],
             &[right],
             NullEquality::NullEqualsNothing,
+            &mut None,
         )
         .unwrap_err();
         assert!(

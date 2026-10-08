@@ -467,11 +467,20 @@ impl BitwiseSortMergeJoinStream {
 
     /// Clear inner key group state after processing. Does not resize the
     /// reservation — the next key group will resize when buffering, or
-    /// the stream's Drop will free it. This avoids unnecessary memory
+    /// [`Self::release_inner`] will free it. This avoids unnecessary memory
     /// pool interactions (see apache/datafusion#20729).
     fn clear_inner_key_group(&mut self) {
         self.inner_key_buffer.clear();
         self.inner_buffer_size = 0;
+    }
+
+    /// Drops the inner input and frees the inner key group reservation once no outer row can
+    /// match any more, so that memory is back in the pool before the remaining output is
+    /// emitted rather than when the stream is dropped.
+    fn release_inner(&mut self) {
+        self.clear_inner_key_group();
+        self.reservation.free();
+        self.inner = Box::pin(EmptyRecordBatchStream::new(self.inner.schema()));
     }
 
     /// Fetch the next outer batch. Returns true if a batch was loaded.
@@ -1050,9 +1059,19 @@ impl BitwiseSortMergeJoinStream {
         &mut self,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
+        // The remaining outer rows can no longer match. Anti and mark joins still emit
+        // them; a semi join is finished without reading them and drops the outer input too.
+        let is_semi = matches!(self.join_type, JoinType::LeftSemi | JoinType::RightSemi);
+        self.release_inner();
+        if is_semi {
+            self.outer = Box::pin(EmptyRecordBatchStream::new(self.outer.schema()));
+        }
         loop {
             self.emit_outer_batch()?;
             self.emit_completed_batches(emitter).await;
+            if is_semi {
+                break;
+            }
             if !self.next_outer_batch().await? {
                 break;
             }
@@ -1110,6 +1129,10 @@ impl BitwiseSortMergeJoinStream {
                 self.emit_completed_batches(emitter).await;
             }
         }
+
+        // The outer input is exhausted or dropped by now; when it ran out first, the inner
+        // input and the last inner key group are still held.
+        self.release_inner();
 
         // Flush whatever is still buffered in the coalescer.
         self.coalescer.finish_buffered_batch()?;
@@ -1193,6 +1216,21 @@ fn keys_match(
     null_equality: NullEquality,
 ) -> Result<bool> {
     debug_assert!(left_arrays.iter().all(|a| a.len() == 1));
+    if left_arrays
+        .iter()
+        .any(|array| array.data_type().is_floating())
+    {
+        // The scalar comparator's partial_cmp panics on NaN. Match the merge
+        // scan's floating-point equality, including its signed-zero handling.
+        let right_keys = slice_keys(right_arrays, 0);
+        return Ok(JoinKeyComparator::new(
+            left_arrays,
+            &right_keys,
+            sort_options,
+            null_equality,
+        )?
+        .is_equal(0, 0));
+    }
     let cmp = compare_join_arrays(
         left_arrays,
         0,

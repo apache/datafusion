@@ -583,3 +583,79 @@ physical_plan
 
 statement ok
 DROP TABLE cast_preimage_ts;
+
+# Naive -> timezone-aware timestamp casts are not preimage-rewritable.
+#
+# Arrow reads a timezone-naive timestamp as local wall-clock time and shifts it
+# to UTC when the target is timezone-aware (`adjust_timestamp_to_timezone`), so
+# `CAST(ts AS Timestamp(unit, Some(tz))) OP literal` is not a pure unit change.
+# The shared precision arithmetic works on raw source units and does not model
+# that shift, so the CAST must stay on the column for same-unit, widening and
+# narrowing targets alike.
+#
+# `2024-01-01T00:00:00.5` is 1704067200500000000 ns of naive wall-clock time;
+# read in `+07:00` and shifted to UTC it is 1704042000500000000 ns
+# (1704042000500 ms). The rewritten (buggy) predicate would compare the raw
+# source units against those shifted values and drop the row.
+statement ok
+create table cast_preimage_tz(ts timestamp, l timestamp) as values
+  ('2024-01-01T00:00:00.5'::timestamp, '2024-01-01T00:00:00.5'::timestamp);
+
+statement ok
+create table cast_preimage_tz_ms as
+select arrow_cast('2024-01-01T00:00:00'::timestamp, 'Timestamp(Millisecond, None)') as ts_milli;
+
+# Column-vs-column control: there is no literal to fold, so the CAST is kept and
+# the comparison is evaluated as written.
+query I
+select count(*) from cast_preimage_tz
+where arrow_cast(ts, 'Timestamp(Millisecond, Some("+07:00"))')
+    = arrow_cast(l, 'Timestamp(Millisecond, Some("+07:00"))');
+----
+1
+
+# Narrowing (ns -> ms) with a literal. This pair was already guarded before the
+# shared gate existed, so it stays at 1; without the guard the rewrite would
+# return 0.
+query I
+select count(*) from cast_preimage_tz
+where arrow_cast(ts, 'Timestamp(Millisecond, Some("+07:00"))')
+    = arrow_cast('2024-01-01T00:00:00.5'::timestamp, 'Timestamp(Millisecond, Some("+07:00"))');
+----
+1
+
+# Same unit, only the timezone changes: this is the pair the shared gate has to
+# reject. Without it the literal folds to a naive nanosecond literal and the
+# comparison drops the row (0).
+query I
+select count(*) from cast_preimage_tz
+where arrow_cast(ts, 'Timestamp(Nanosecond, Some("+07:00"))')
+    = arrow_cast('2024-01-01T00:00:00.5'::timestamp, 'Timestamp(Nanosecond, Some("+07:00"))');
+----
+1
+
+# Widening (ms -> ns) with an aligned literal goes through the exact-preimage
+# path and must be rejected there too.
+query I
+select count(*) from cast_preimage_tz_ms
+where arrow_cast(ts_milli, 'Timestamp(Nanosecond, Some("+07:00"))')
+    = arrow_cast('2024-01-01T00:00:00'::timestamp, 'Timestamp(Nanosecond, Some("+07:00"))');
+----
+1
+
+# The IN-list rewrite uses the same exact-preimage helper and must be rejected
+# as well. Two literal items keep this on the IN-list path rather than folding
+# to a single equality.
+query I
+select count(*) from cast_preimage_tz
+where arrow_cast(ts, 'Timestamp(Nanosecond, Some("+07:00"))')
+   in (arrow_cast('2024-01-01T00:00:00.5'::timestamp, 'Timestamp(Nanosecond, Some("+07:00"))'),
+       arrow_cast('2023-06-01T00:00:00'::timestamp, 'Timestamp(Nanosecond, Some("+07:00"))'));
+----
+1
+
+statement ok
+drop table cast_preimage_tz;
+
+statement ok
+drop table cast_preimage_tz_ms;

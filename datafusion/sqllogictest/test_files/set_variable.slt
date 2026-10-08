@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -209,27 +209,29 @@ SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ
 ----
 2000-01-01T00:00:00+08:00
 
-# set time zone bad time zone format
+# the time zone is shown as it was written, not normalized
+query TT
+SHOW TIME ZONE
+----
+datafusion.execution.time_zone +08
+
+# set time zone bad time zone format: rejected at SET time, keeping the previous value
 statement ok
 set datafusion.catalog.information_schema = true
 
-statement ok
+statement error Invalid or Unsupported Configuration: Invalid time zone: \+08:00:00\. Valid values are UTC offsets such as \+08:00 or IANA time zone names such as Asia/Taipei
 SET TIME ZONE = '+08:00:00'
 
-statement error Arrow error: Parser error: Invalid timezone "\+08:00:00": failed to parse timezone
-SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ
-
-statement ok
+statement error Invalid time zone: 08:00\.
 SET TIME ZONE = '08:00'
 
-statement error Arrow error: Parser error: Invalid timezone "08:00": failed to parse timezone
-SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ
-
-statement ok
+statement error Invalid time zone: 08\.
 SET TIME ZONE = '08'
 
-statement error Arrow error: Parser error: Invalid timezone "08": failed to parse timezone
-SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ
+query TT
+SHOW TIME ZONE
+----
+datafusion.execution.time_zone +08
 
 statement ok
 SET TIME ZONE = 'Asia/Taipei'
@@ -239,11 +241,16 @@ SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ
 ----
 2000-01-01T00:00:00+08:00
 
-statement ok
+statement error Invalid time zone: Asia/Taipei2\.
 SET TIME ZONE = 'Asia/Taipei2'
 
-statement error Arrow error: Parser error: Invalid timezone "Asia/Taipei2": failed to parse timezone
-SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ
+statement error Invalid time zone: Asia/Taipei2\.
+SET datafusion.execution.time_zone = 'Asia/Taipei2'
+
+query TT
+SHOW TIME ZONE
+----
+datafusion.execution.time_zone Asia/Taipei
 
 # reset variable restores default
 statement ok
@@ -732,6 +739,67 @@ statement error DataFusion error: Error during planning: Duration has overflowed
 SET datafusion.runtime.list_files_cache_ttl = '1m18446744073709551556s'
 
 # Set invalid value and ensures error
+statement ok
+SET datafusion.execution.parquet.statistics_enabled = 'CHUNK'
+
+query TT
+SHOW datafusion.execution.parquet.statistics_enabled
+----
+datafusion.execution.parquet.statistics_enabled chunk
+
+statement error
+SET datafusion.execution.parquet.statistics_enabled = 'invalid'
+----
+DataFusion error: Error setting config datafusion.execution.parquet.statistics_enabled
+caused by
+Invalid or Unsupported Configuration: Invalid parquet statistics setting: invalid. Expected one of: none, chunk, page
+
+
+statement ok
+RESET datafusion.execution.parquet.statistics_enabled
+
+# parquet.compression is validated when it is set, including the level
+statement ok
+SET datafusion.execution.parquet.compression = 'GZIP(6)'
+
+query TT
+SHOW datafusion.execution.parquet.compression
+----
+datafusion.execution.parquet.compression gzip(6)
+
+statement error
+SET datafusion.execution.parquet.compression = 'zstdd(3)'
+----
+DataFusion error: Error setting config datafusion.execution.parquet.compression
+caused by
+Invalid or Unsupported Configuration: Unknown or unsupported parquet compression: zstdd(3). Valid values are: uncompressed, snappy, gzip(level), brotli(level), lz4, zstd(level), and lz4_raw.
+
+
+statement error
+SET datafusion.execution.parquet.compression = 'zstd'
+----
+DataFusion error: Error setting config datafusion.execution.parquet.compression
+caused by
+Invalid or Unsupported Configuration: zstd compression requires specifying a level such as zstd(4)
+
+
+statement error
+SET datafusion.execution.parquet.compression = 'zstd(23)'
+----
+DataFusion error: Error setting config datafusion.execution.parquet.compression
+caused by
+Invalid or Unsupported Configuration: Invalid compression level 23 for zstd. Expected a level between 0 and 22
+
+
+# The rejected values did not change the setting
+query TT
+SHOW datafusion.execution.parquet.compression
+----
+datafusion.execution.parquet.compression gzip(6)
+
+statement ok
+RESET datafusion.execution.parquet.compression
+
 statement error DataFusion error: Error setting config datafusion\.execution\.batch_size\ncaused by\nInvalid or Unsupported Configuration: value must be greater than 0
 SET datafusion.execution.batch_size = 0
 
@@ -750,6 +818,14 @@ statement error
 SET datafusion.execution.soft_max_rows_per_output_file = 0
 ----
 DataFusion error: Error setting config datafusion.execution.soft_max_rows_per_output_file
+caused by
+Invalid or Unsupported Configuration: value must be greater than 0
+
+
+statement error
+SET datafusion.execution.soft_max_bytes_per_output_file = 0
+----
+DataFusion error: Error setting config datafusion.execution.soft_max_bytes_per_output_file
 caused by
 Invalid or Unsupported Configuration: value must be greater than 0
 

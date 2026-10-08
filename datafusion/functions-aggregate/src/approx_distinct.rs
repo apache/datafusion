@@ -38,8 +38,9 @@ use datafusion_common::{
     DataFusionError, Result, downcast_value, internal_datafusion_err, internal_err,
     not_impl_err,
 };
+use datafusion_expr::DistinctHandling;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::utils::format_state_name;
+use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, EmitTo, GroupsAccumulator, Signature,
     Volatility,
@@ -359,9 +360,8 @@ impl GroupHll {
                 );
             }
             let mut delta = 0;
-            for chunk in bytes.chunks_exact(size_of::<u64>()) {
-                let h = u64::from_le_bytes(chunk.try_into().unwrap());
-                delta += self.add_hash(h);
+            for chunk in bytes.as_chunks::<{ size_of::<u64>() }>().0 {
+                delta += self.add_hash(u64::from_le_bytes(*chunk));
             }
             Ok(delta)
         }
@@ -835,7 +835,9 @@ impl AggregateUDFImpl for ApproxDistinct {
             | DataType::Struct(_)
             | DataType::Union(_, _)
             | DataType::LargeBinary => Box::new(HLLAccumulator::new()),
-            DataType::Dictionary(_, _) if is_supported_type(data_type) => {
+            DataType::Dictionary(_, _) | DataType::RunEndEncoded(_, _)
+                if is_supported_type(data_type) =>
+            {
                 Box::new(HLLAccumulator::new())
             }
             DataType::Null => {
@@ -868,8 +870,17 @@ impl AggregateUDFImpl for ApproxDistinct {
         }
     }
 
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        AggregateOrderSensitivity::Insensitive
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // Updating an HLL register with a value already seen is a no-op.
+        DistinctHandling::Insensitive
     }
 }
 
@@ -885,25 +896,31 @@ fn is_fixed_domain_type(data_type: &DataType) -> bool {
 }
 
 fn is_supported_type(data_type: &DataType) -> bool {
-    let value_type = dictionary_value_type(data_type);
+    let value_type = encoded_value_type(data_type);
     matches!(value_type, DataType::Null)
         || is_fixed_domain_type(value_type)
         || is_hll_groups_type(value_type)
 }
 
-fn dictionary_value_type(data_type: &DataType) -> &DataType {
+fn encoded_value_type(data_type: &DataType) -> &DataType {
     let mut value_type = data_type;
-    while let DataType::Dictionary(_, inner) = value_type {
-        value_type = inner;
+    loop {
+        match value_type {
+            DataType::Dictionary(_, inner) => value_type = inner,
+            DataType::RunEndEncoded(_, values) => value_type = values.data_type(),
+            _ => return value_type,
+        }
     }
-    value_type
 }
 
 /// Returns true for the data types backed by the HyperLogLog
 /// [`HllGroupsAccumulator`]. The fixed-domain types (booleans / small ints) and
 /// `Null` fall back to the per-group [`Accumulator`] path.
 fn is_hll_groups_type(data_type: &DataType) -> bool {
-    if matches!(data_type, DataType::Dictionary(_, _)) {
+    if matches!(
+        data_type,
+        DataType::Dictionary(_, _) | DataType::RunEndEncoded(_, _)
+    ) {
         return is_supported_type(data_type);
     }
 

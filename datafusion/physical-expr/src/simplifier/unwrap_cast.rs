@@ -34,11 +34,9 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Schema};
-use datafusion_common::{Result, ScalarValue, tree_node::Transformed};
+use datafusion_common::{Result, ScalarValue, internal_err, tree_node::Transformed};
 use datafusion_expr::Operator;
-use datafusion_expr_common::casts::{
-    CastPredicatePreimage, cast_predicate_preimage, is_date_narrowing_cast,
-};
+use datafusion_expr_common::casts::{CastPredicatePreimage, cast_predicate_preimage};
 
 use crate::PhysicalExpr;
 use crate::expressions::{
@@ -132,10 +130,6 @@ fn try_unwrap_cast_comparison(
     // Get the data type of the inner expression
     let inner_type = inner_expr.data_type(schema)?;
 
-    if is_date_narrowing_cast(&inner_type, cast_type) {
-        return Ok(None);
-    }
-
     match cast_predicate_preimage(&inner_type, cast_type, op, literal_value)? {
         Some(CastPredicatePreimage::Exact(casted_literal)) => {
             let literal_expr = lit(casted_literal);
@@ -202,7 +196,7 @@ fn rewrite_with_preimage(
             Operator::Or,
             is_null(expr)?,
         ),
-        _ => unreachable!("preimage only supports comparison operators"),
+        _ => return internal_err!("Expect comparison operators, got {op}"),
     };
 
     Ok(rewritten_expr)
@@ -360,6 +354,100 @@ mod tests {
 
         let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
         assert!(!result.transformed);
+    }
+
+    /// Unit-specific timestamp literal, e.g. `0` in milliseconds or nanoseconds.
+    fn timestamp_literal(
+        unit: &TimeUnit,
+        value: i64,
+        tz: Option<Arc<str>>,
+    ) -> ScalarValue {
+        match unit {
+            TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(Some(value), tz),
+            TimeUnit::Millisecond => ScalarValue::TimestampMillisecond(Some(value), tz),
+            other => unreachable!("unsupported test time unit {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_no_unwrap_naive_to_timezone_timestamp() {
+        let tz: Option<Arc<str>> = Some("+07:00".into());
+
+        // cast(naive_ts AS Timestamp(unit, "+07:00")) must NOT unwrap for CAST or
+        // TRY_CAST: Arrow adjusts naive values to UTC, which the precision-only
+        // preimage arithmetic does not model. Same unit, widening and narrowing
+        // targets are all rejected by the shared gate.
+        for (source_unit, target_unit) in [
+            (TimeUnit::Nanosecond, TimeUnit::Nanosecond),
+            (TimeUnit::Millisecond, TimeUnit::Nanosecond),
+            (TimeUnit::Nanosecond, TimeUnit::Millisecond),
+        ] {
+            let schema = timestamp_schema(source_unit);
+            let column_expr = col("ts", &schema).unwrap();
+            let target_type = DataType::Timestamp(target_unit, tz.clone());
+            let literal = lit(timestamp_literal(&target_unit, 0, tz.clone()));
+
+            for try_cast in [false, true] {
+                let cast_expr: Arc<dyn PhysicalExpr> = if try_cast {
+                    Arc::new(TryCastExpr::new(
+                        Arc::clone(&column_expr),
+                        target_type.clone(),
+                    ))
+                } else {
+                    Arc::new(CastExpr::new(
+                        Arc::clone(&column_expr),
+                        target_type.clone(),
+                        None,
+                    ))
+                };
+                let binary_expr = Arc::new(BinaryExpr::new(
+                    cast_expr,
+                    Operator::Eq,
+                    Arc::clone(&literal),
+                ));
+
+                let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
+                assert!(
+                    !result.transformed,
+                    "unexpected rewrite: {source_unit:?} -> {target_unit:?}, try_cast={try_cast}"
+                );
+            }
+        }
+
+        // Safe control: the same widening to a *naive* target still unwraps.
+        let ms_schema = timestamp_schema(TimeUnit::Millisecond);
+        let column_expr = col("ts", &ms_schema).unwrap();
+        let cast_expr = Arc::new(CastExpr::new(
+            column_expr,
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            None,
+        ));
+        let literal_expr = lit(ScalarValue::TimestampNanosecond(Some(123_000_000), None));
+        let binary_expr =
+            Arc::new(BinaryExpr::new(cast_expr, Operator::GtEq, literal_expr));
+
+        let result = unwrap_cast_in_comparison(binary_expr, &ms_schema).unwrap();
+        assert!(result.transformed);
+    }
+
+    #[test]
+    fn test_rewrite_with_preimage_rejects_non_comparison_operator() {
+        // Range preimages only map onto comparison operators; anything else is
+        // an internal error rather than a panic.
+        let schema = test_schema();
+        let expr = col("c1", &schema).unwrap();
+        let interval = datafusion_expr_common::interval_arithmetic::Interval::try_new(
+            ScalarValue::Int32(Some(0)),
+            ScalarValue::Int32(Some(10)),
+        )
+        .unwrap();
+
+        let err = rewrite_with_preimage(interval, Operator::Plus, expr).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Expect comparison operators, got +"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

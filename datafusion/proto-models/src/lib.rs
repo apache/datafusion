@@ -57,3 +57,19 @@ pub mod protobuf {
 /// Re-export of the `datafusion_proto_common` types as exposed through this
 /// crate's generated module, for callers that want the common-only namespace.
 pub use generated::datafusion_common;
+
+#[cfg(all(test, feature = "json"))]
+mod tests {
+    use crate::protobuf::FileScanExecConf;
+
+    #[test]
+    fn file_scan_preserve_order_json_distinguishes_false_from_absent() {
+        for (json, preserve_order) in
+            [(r#"{"preserveOrder":false}"#, Some(false)), ("{}", None)]
+        {
+            let config: FileScanExecConf = serde_json::from_str(json).unwrap();
+            assert_eq!(config.preserve_order, preserve_order);
+            assert_eq!(serde_json::to_string(&config).unwrap(), json);
+        }
+    }
+}

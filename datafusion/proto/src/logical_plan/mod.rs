@@ -59,17 +59,17 @@ use datafusion_datasource_json::file_format::{
 use datafusion_datasource_parquet::file_format::{ParquetFormat, ParquetFormatFactory};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{
-    AggregateUDF, DmlStatement, FetchType, HigherOrderUDF, RangePartitioning,
+    AggregateUDF, DmlStatement, FetchType, HigherOrderUDF, Operator, RangePartitioning,
     RecursiveQuery, SkipType, TableSource, Unnest, WriteOp,
 };
 use datafusion_expr::{
     DistinctOn, DropView, Expr, JoinConstraint, LogicalPlan, LogicalPlanBuilder,
     ScalarUDF, SortExpr, Statement, WindowUDF, dml,
     logical_plan::{
-        Aggregate, CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateView,
-        DdlStatement, Distinct, EmptyRelation, Extension, Join, Prepare, Projection,
-        Repartition, Sort, SubqueryAlias, TableScan, TableScanBuilder, Values, Window,
-        builder::project,
+        Aggregate, AsOfJoin, AsOfMatch, CreateCatalog, CreateCatalogSchema,
+        CreateExternalTable, CreateView, DdlStatement, Distinct, EmptyRelation,
+        Extension, Filter, Join, Prepare, Projection, Repartition, Sort, SubqueryAlias,
+        TableScan, TableScanBuilder, Values, Window,
     },
 };
 use datafusion_proto_common::protobuf_common;
@@ -536,7 +536,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let expr: Vec<Expr> =
                     from_proto::parse_exprs(&projection.expr, ctx, extension_codec)?;
 
-                let new_proj = project(input, expr)?;
+                let new_proj =
+                    LogicalPlan::Projection(Projection::try_new(expr, Arc::new(input))?);
                 match projection.optional_alias.as_ref() {
                     Some(a) => match a {
                         protobuf::projection_node::OptionalAlias::Alias(alias) => {
@@ -558,14 +559,17 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .map(|expr| from_proto::parse_expr(expr, ctx, extension_codec))
                     .transpose()?
                     .ok_or_else(|| proto_error("expression required"))?;
-                LogicalPlanBuilder::from(input).filter(expr)?.build()
+                Ok(LogicalPlan::Filter(Filter::try_new(expr, Arc::new(input))?))
             }
             LogicalPlanType::Window(window) => {
                 let input: LogicalPlan =
                     into_logical_plan!(window.input, ctx, extension_codec)?;
                 let window_expr =
                     from_proto::parse_exprs(&window.window_expr, ctx, extension_codec)?;
-                LogicalPlanBuilder::from(input).window(window_expr)?.build()
+                Ok(LogicalPlan::Window(Window::try_new(
+                    window_expr,
+                    Arc::new(input),
+                )?))
             }
             LogicalPlanType::Aggregate(aggregate) => {
                 let input: LogicalPlan =
@@ -574,9 +578,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                     from_proto::parse_exprs(&aggregate.group_expr, ctx, extension_codec)?;
                 let aggr_expr =
                     from_proto::parse_exprs(&aggregate.aggr_expr, ctx, extension_codec)?;
-                LogicalPlanBuilder::from(input)
-                    .aggregate(group_expr, aggr_expr)?
-                    .build()
+                Ok(LogicalPlan::Aggregate(Aggregate::try_new(
+                    Arc::new(input),
+                    group_expr,
+                    aggr_expr,
+                )?))
             }
             LogicalPlanType::ListingScan(scan) => {
                 let schema: Schema = convert_required!(scan.schema)?;
@@ -696,13 +702,16 @@ impl AsLogicalPlan for LogicalPlanNode {
                     projection = Some(column_indices);
                 }
 
-                LogicalPlanBuilder::scan_with_filters(
+                let table_scan = TableScanBuilder::new(
                     table_name,
                     provider_as_source(Arc::new(provider)),
-                    projection,
-                    filters,
-                )?
-                .build()
+                )
+                .with_projection(projection)
+                .with_filters(filters)
+                .with_fetch(scan.fetch.map(|f| f as usize))
+                .with_skip(scan.skip.map(|o| o as usize))
+                .build()?;
+                LogicalPlanBuilder::table_scan(table_scan)?.build()
             }
             LogicalPlanType::CustomScan(scan) => {
                 let schema: Schema = convert_required!(scan.schema)?;
@@ -730,13 +739,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ctx,
                 )?;
 
-                LogicalPlanBuilder::scan_with_filters(
-                    table_name,
-                    provider_as_source(provider),
-                    projection,
-                    filters,
-                )?
-                .build()
+                let table_scan =
+                    TableScanBuilder::new(table_name, provider_as_source(provider))
+                        .with_projection(projection)
+                        .with_filters(filters)
+                        .with_fetch(scan.fetch.map(|f| f as usize))
+                        .with_skip(scan.skip.map(|o| o as usize))
+                        .build()?;
+                LogicalPlanBuilder::table_scan(table_scan)?.build()
             }
             LogicalPlanType::Sort(sort) => {
                 let input: LogicalPlan =
@@ -746,9 +756,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let fetch = (sort.fetch >= 0)
                     .then(|| usize_from_wire(sort.fetch, "Sort", "fetch"))
                     .transpose()?;
-                LogicalPlanBuilder::from(input)
-                    .sort_with_limit(sort_expr, fetch)?
-                    .build()
+                Ok(LogicalPlan::Sort(Sort {
+                    expr: sort_expr,
+                    input: Arc::new(input),
+                    fetch,
+                }))
             }
             LogicalPlanType::Repartition(repartition) => {
                 use datafusion_expr::Partitioning;
@@ -1061,6 +1073,69 @@ impl AsLogicalPlan for LogicalPlanNode {
                     join.null_aware,
                 )?))
             }
+            LogicalPlanType::AsOfJoin(join) => {
+                let left_keys =
+                    from_proto::parse_exprs(&join.left_join_key, ctx, extension_codec)?;
+                let right_keys =
+                    from_proto::parse_exprs(&join.right_join_key, ctx, extension_codec)?;
+                if left_keys.len() != right_keys.len() {
+                    return Err(proto_error(format!(
+                        "Received an AsOfJoinNode with left_join_key and right_join_key of different lengths: {} and {}",
+                        left_keys.len(),
+                        right_keys.len()
+                    )));
+                }
+                let left_match = from_proto::parse_expr(
+                    join.left_match_expr.as_ref().ok_or_else(|| {
+                        proto_error("AsOfJoinNode left_match_expr is missing")
+                    })?,
+                    ctx,
+                    extension_codec,
+                )?;
+                let right_match = from_proto::parse_expr(
+                    join.right_match_expr.as_ref().ok_or_else(|| {
+                        proto_error("AsOfJoinNode right_match_expr is missing")
+                    })?,
+                    ctx,
+                    extension_codec,
+                )?;
+                let match_operator = protobuf::AsOfMatchOperator::try_from(
+                    join.match_operator,
+                )
+                .map_err(|_| {
+                    proto_error(format!(
+                        "Unknown ASOF match operator {}",
+                        join.match_operator
+                    ))
+                })?;
+                let op = match match_operator {
+                    protobuf::AsOfMatchOperator::Lt => Operator::Lt,
+                    protobuf::AsOfMatchOperator::LtEq => Operator::LtEq,
+                    protobuf::AsOfMatchOperator::Gt => Operator::Gt,
+                    protobuf::AsOfMatchOperator::GtEq => Operator::GtEq,
+                    protobuf::AsOfMatchOperator::Unspecified => {
+                        return Err(proto_error("ASOF match operator must be specified"));
+                    }
+                };
+                let join_constraint = protobuf::JoinConstraint::try_from(
+                    join.join_constraint,
+                )
+                .map_err(|_| {
+                    proto_error(format!(
+                        "Unknown ASOF JoinConstraint {}",
+                        join.join_constraint
+                    ))
+                })?;
+                let left = into_logical_plan!(join.left, ctx, extension_codec)?;
+                let right = into_logical_plan!(join.right, ctx, extension_codec)?;
+                Ok(LogicalPlan::AsOfJoin(AsOfJoin::try_new(
+                    Arc::new(left),
+                    Arc::new(right),
+                    left_keys.into_iter().zip(right_keys).collect(),
+                    AsOfMatch::new(left_match, op, right_match),
+                    JoinConstraint::from(join_constraint),
+                )?))
+            }
             LogicalPlanType::Union(union) => {
                 assert_or_internal_err!(
                     union.inputs.len() >= 2,
@@ -1147,12 +1222,15 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let table_name =
                     from_table_reference(scan.table_name.as_ref(), "ViewScan")?;
 
-                LogicalPlanBuilder::scan(
+                let table_scan = TableScanBuilder::new(
                     table_name,
                     provider_as_source(Arc::new(provider)),
-                    projection,
-                )?
-                .build()
+                )
+                .with_projection(projection)
+                .with_fetch(scan.fetch.map(|f| f as usize))
+                .with_skip(scan.skip.map(|o| o as usize))
+                .build()?;
+                LogicalPlanBuilder::table_scan(table_scan)?.build()
             }
             LogicalPlanType::Prepare(prepare) => {
                 let input: LogicalPlan =
@@ -1289,13 +1367,12 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 let provider = Arc::new(EmptyTable::new(Arc::clone(&schema)));
 
-                LogicalPlanBuilder::scan_with_filters(
-                    table_name,
-                    provider_as_source(provider),
-                    projection,
-                    filters,
-                )?
-                .build()
+                let table_scan =
+                    TableScanBuilder::new(table_name, provider_as_source(provider))
+                        .with_projection(projection)
+                        .with_filters(filters)
+                        .build()?;
+                LogicalPlanBuilder::table_scan(table_scan)?.build()
             }
             LogicalPlanType::Dml(dml_node) => {
                 let table_name =
@@ -1345,6 +1422,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                 source,
                 filters,
                 projection,
+                fetch,
+                skip,
                 ..
             }) => {
                 let provider = source_as_provider(source)?;
@@ -1477,6 +1556,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 projection,
                                 filters,
                                 file_sort_order: exprs_vec,
+                                fetch: fetch.map(|f| f as u64),
+                                skip: skip.map(|o| o as u64),
                             },
                         )),
                     })
@@ -1500,6 +1581,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                                     .definition()
                                     .map(|s| s.to_string())
                                     .unwrap_or_default(),
+                                fetch: fetch.map(|f| f as u64),
+                                skip: skip.map(|o| o as u64),
                             },
                         ))),
                     })
@@ -1547,6 +1630,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                         schema: Some(schema),
                         filters,
                         custom_table_data: bytes,
+                        fetch: fetch.map(|f| f as u64),
+                        skip: skip.map(|o| o as u64),
                     });
                     let node = LogicalPlanNode {
                         logical_plan_type: Some(scan),
@@ -1714,6 +1799,68 @@ impl AsLogicalPlan for LogicalPlanNode {
                             null_equality: null_equality.into(),
                             filter,
                             null_aware: *null_aware,
+                        },
+                    ))),
+                })
+            }
+            LogicalPlan::AsOfJoin(AsOfJoin {
+                left,
+                right,
+                on,
+                match_condition,
+                join_constraint,
+                ..
+            }) => {
+                let left = LogicalPlanNode::try_from_logical_plan(
+                    left.as_ref(),
+                    extension_codec,
+                )?;
+                let right = LogicalPlanNode::try_from_logical_plan(
+                    right.as_ref(),
+                    extension_codec,
+                )?;
+                let (left_join_key, right_join_key) = on
+                    .iter()
+                    .map(|(left, right)| {
+                        Ok((
+                            serialize_expr(left, extension_codec)?,
+                            serialize_expr(right, extension_codec)?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, ToProtoError>>()?
+                    .into_iter()
+                    .unzip();
+                let match_operator = match match_condition.op {
+                    Operator::Lt => protobuf::AsOfMatchOperator::Lt,
+                    Operator::LtEq => protobuf::AsOfMatchOperator::LtEq,
+                    Operator::Gt => protobuf::AsOfMatchOperator::Gt,
+                    Operator::GtEq => protobuf::AsOfMatchOperator::GtEq,
+                    op => {
+                        return Err(proto_error(format!(
+                            "Unsupported ASOF match operator {op}"
+                        )));
+                    }
+                };
+                Ok(LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::AsOfJoin(Box::new(
+                        protobuf::AsOfJoinNode {
+                            left: Some(Box::new(left)),
+                            right: Some(Box::new(right)),
+                            left_join_key,
+                            right_join_key,
+                            left_match_expr: Some(Box::new(serialize_expr(
+                                &match_condition.left,
+                                extension_codec,
+                            )?)),
+                            right_match_expr: Some(Box::new(serialize_expr(
+                                &match_condition.right,
+                                extension_codec,
+                            )?)),
+                            match_operator: match_operator.into(),
+                            join_constraint: protobuf::JoinConstraint::from(
+                                *join_constraint,
+                            )
+                            .into(),
                         },
                     ))),
                 })
@@ -2137,6 +2284,12 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(_)) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DropCatalogSchema",
             )),
+            LogicalPlan::Ddl(DdlStatement::CreateExternalCatalog(_)) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for CreateExternalCatalog",
+            )),
+            LogicalPlan::Ddl(DdlStatement::DropCatalog(_)) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for DropCatalog",
+            )),
             LogicalPlan::Ddl(DdlStatement::CreateFunction(_)) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for CreateFunction",
             )),
@@ -2224,9 +2377,6 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlan::DescribeTable(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DescribeTable",
-            )),
-            LogicalPlan::AsOfJoin(_) => Err(proto_error(
-                "LogicalPlan serde is not yet implemented for AsOfJoin",
             )),
             LogicalPlan::RecursiveQuery(recursive) => {
                 let static_term = LogicalPlanNode::try_from_logical_plan(

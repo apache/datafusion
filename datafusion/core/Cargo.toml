@@ -340,3 +340,7 @@ required-features = ["parquet"]
 [[bench]]
 harness = false
 name = "reset_plan_states"
+
+[[bench]]
+harness = false
+name = "partition_metrics"

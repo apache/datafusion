@@ -15,14 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray};
-use arrow::compute::try_binary;
+use arrow::array::{
+    Array, ArrayRef, ArrowPrimitiveType, AsArray, MapArray, PrimitiveArray, Scalar,
+    UInt32Array, UInt32Builder, make_comparator,
+};
+use arrow::buffer::NullBuffer;
+use arrow::compute::kernels::cmp::eq;
+use arrow::compute::{SortOptions, cast, try_binary};
 use arrow::datatypes::{DataType, DecimalType};
 use arrow::error::ArrowError;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::function::Hint;
 use std::cmp::Ordering;
+use std::ops::Range;
 use std::sync::Arc;
 
 /// Creates a function to identify the optimal return type of a string function given
@@ -33,7 +39,8 @@ use std::sync::Arc;
 ///
 /// If the input type is `Utf8` or `Binary` the return type is `$utf8Type`,
 ///
-/// If the input type is `Utf8View` the return type is $utf8Type,
+/// If the input type is `Utf8View`, `BinaryView` or `FixedSizeBinary` the
+/// return type is `$utf8Type`,
 macro_rules! get_optimal_return_type {
     ($FUNC:ident, $largeUtf8Type:expr, $utf8Type:expr) => {
         pub(crate) fn $FUNC(arg_type: &DataType, name: &str) -> Result<DataType> {
@@ -44,10 +51,13 @@ macro_rules! get_optimal_return_type {
                 DataType::Utf8 | DataType::Binary => $utf8Type,
                 // Utf8View max offset size is u32::MAX, the same as UTF8
                 DataType::Utf8View | DataType::BinaryView => $utf8Type,
+                // FixedSizeBinary sizes are declared as i32
+                DataType::FixedSizeBinary(_) => $utf8Type,
                 DataType::Null => DataType::Null,
                 DataType::Dictionary(_, value_type) => match **value_type {
                     DataType::LargeUtf8 | DataType::LargeBinary => $largeUtf8Type,
                     DataType::Utf8 | DataType::Binary => $utf8Type,
+                    DataType::FixedSizeBinary(_) => $utf8Type,
                     DataType::Null => DataType::Null,
                     _ => {
                         return datafusion_common::exec_err!(
@@ -343,6 +353,188 @@ pub fn decimal64_to_i64(value: i64, scale: i8) -> Result<i64, ArrowError> {
     }
 }
 
+/// Finds, for each row of `map`, an entry whose key equals that row's
+/// lookup key.
+///
+/// `keys` holds either a single key, which every row is looked up with, or
+/// one key per map row. The result has one element per map row: the index of
+/// the matching entry into `map.values()`, or null when the row is null, the
+/// lookup key is null, or no entry matches. It can be passed directly to
+/// [`arrow::compute::take`] on `map.values()`.
+///
+/// Map keys should be unique. If a row contains duplicate keys, any matching
+/// entry may be returned. The selected entry is not guaranteed to stay the
+/// same across lookup strategies or batch boundaries.
+///
+/// Untyped null keys match nothing. Other non-nested keys must have the map's
+/// key type, up to dictionary encoding.
+/// Nested keys must have the same structure, and may differ in field names
+/// and nullability. Keys are compared the way `ORDER BY` compares values:
+/// floating point keys use total ordering, so `-0.0` and `0.0` are different
+/// keys and NaN matches NaN.
+pub fn map_lookup(map: &MapArray, keys: &dyn Array) -> Result<UInt32Array> {
+    let map_keys = map.keys();
+    let single_key = match keys.len() {
+        1 => true,
+        len if len == map.len() => false,
+        len => {
+            return internal_err!(
+                "map_lookup expects one lookup key or one per map row ({}), got {len}",
+                map.len()
+            );
+        }
+    };
+    if keys.data_type().is_null() {
+        return Ok(UInt32Array::new_null(map.len()));
+    }
+    let key_type = map_keys.data_type();
+    // A nested lookup key only has to be nested here; `make_comparator`
+    // checks its structure. A non-nested lookup key must have the map's
+    // key type, ignoring dictionary encoding.
+    let compatible = if key_type.is_nested() {
+        keys.data_type().is_nested()
+    } else {
+        strip_dictionary(key_type).equals_datatype(strip_dictionary(keys.data_type()))
+    };
+    if !compatible {
+        return exec_err!(
+            "The key type {} does not match the map key type {}",
+            keys.data_type(),
+            key_type
+        );
+    }
+    // The comparison kernels need both sides to use the same encoding.
+    let cast_keys;
+    let keys: &dyn Array = if key_type.is_nested() || keys.data_type() == key_type {
+        keys
+    } else {
+        cast_keys = cast(keys, key_type)?;
+        cast_keys.as_ref()
+    };
+
+    let offsets = map.value_offsets();
+    let (first, last) = (offsets[0] as usize, offsets[map.len()] as usize);
+    // No row has any entries, so nothing can match. Map keys are never
+    // null, so a null lookup key matches nothing either.
+    if first == last || (single_key && keys.logical_null_count() > 0) {
+        return Ok(UInt32Array::new_null(map.len()));
+    }
+    let key_nulls = if single_key {
+        None
+    } else {
+        keys.logical_nulls()
+    };
+    let mut scanner = RowScanner::new(map, key_nulls.as_ref());
+
+    // Scan with a comparator, trying the previous match's position first.
+    // Count the comparisons over a sample of rows to see whether stopping
+    // early pays off.
+    let cmp = make_comparator(map_keys.as_ref(), keys, SortOptions::default())?;
+    let compare =
+        |entry: usize, row: usize| cmp(entry, if single_key { 0 } else { row }).is_eq();
+    let sample = map.len().min(SAMPLE_ROWS);
+    let mut comparisons = 0;
+    let sampled_entries = scanner.scan(0..sample, |entry, row| {
+        comparisons += 1;
+        compare(entry, row)
+    });
+
+    // If the sampled rows compared more than half of their entries, stopping
+    // early is not paying off, so the remaining rows are cheaper to compare all
+    // at once with the vectorized `eq`. We can only use `eq` when we have a
+    // single, non-nested key. The exact break-even point depends on the key
+    // type and the hardware; half keeps the cost of a wrong guess to about a
+    // third in either direction.
+    let rest = sample..map.len();
+    if single_key
+        && !key_type.is_nested()
+        && !rest.is_empty()
+        && comparisons * 2 > sampled_entries
+    {
+        let range_start = offsets[sample] as usize;
+        let in_range = map_keys.slice(range_start, last - range_start);
+        let matches = eq(&Scalar::new(keys.slice(0, 1)), &in_range)?;
+        // Neither side has nulls, so the value bits alone are meaningful.
+        let bits = matches.values();
+        scanner.scan(rest, |entry, _| bits.value(entry - range_start));
+    } else {
+        scanner.scan(rest, compare);
+    }
+    Ok(scanner.finish())
+}
+
+/// Number of rows [`map_lookup`] scans with the comparator before deciding
+/// whether the rest of the batch is better served by the vectorized `eq`.
+const SAMPLE_ROWS: usize = 32;
+
+/// The value type of a dictionary-encoded type, or the type itself.
+fn strip_dictionary(data_type: &DataType) -> &DataType {
+    match data_type {
+        DataType::Dictionary(_, value_type) => value_type,
+        other => other,
+    }
+}
+
+/// Scans map rows for an entry that satisfies a predicate.
+struct RowScanner<'a> {
+    offsets: &'a [i32],
+    /// Rows to skip: null map rows and rows whose lookup key is null.
+    skip: Option<NullBuffer>,
+    found: UInt32Builder,
+    /// Position within its row of the most recent match.
+    hint: usize,
+}
+
+impl<'a> RowScanner<'a> {
+    fn new(map: &'a MapArray, key_nulls: Option<&NullBuffer>) -> Self {
+        Self {
+            offsets: map.value_offsets(),
+            skip: NullBuffer::union(map.nulls(), key_nulls),
+            found: UInt32Builder::with_capacity(map.len()),
+            hint: 0,
+        }
+    }
+
+    /// Scans `rows`, recording an entry for which `is_match(entry, row)`
+    /// holds, or null for a skipped row or a row without a match. Returns the
+    /// number of entries in the rows that were scanned.
+    fn scan(
+        &mut self,
+        rows: Range<usize>,
+        mut is_match: impl FnMut(usize, usize) -> bool,
+    ) -> usize {
+        let mut entries = 0;
+        for row in rows {
+            if self.skip.as_ref().is_some_and(|skip| skip.is_null(row)) {
+                self.found.append_null();
+                continue;
+            }
+            let start = self.offsets[row] as usize;
+            let end = self.offsets[row + 1] as usize;
+            entries += end - start;
+
+            // Rows in a batch usually share the same key order, so try the
+            // position where the previous row matched first. When that guess
+            // is right, the lookup costs one comparison wherever the key sits.
+            let hinted = start + self.hint;
+            let found = if hinted < end && is_match(hinted, row) {
+                Some(hinted)
+            } else {
+                (start..end).find(|&entry| entry != hinted && is_match(entry, row))
+            };
+            if let Some(entry) = found {
+                self.hint = entry - start;
+            }
+            self.found.append_option(found.map(|entry| entry as u32));
+        }
+        entries
+    }
+
+    fn finish(mut self) -> UInt32Array {
+        self.found.finish()
+    }
+}
+
 #[cfg(test)]
 pub mod test {
     /// $FUNC ScalarUDFImpl to test
@@ -458,13 +650,28 @@ pub mod test {
     }
 
     use arrow::{
-        array::Int32Array,
+        array::{Int32Array, StringArray},
         datatypes::{DataType, Int32Type},
     };
     use itertools::Either;
     pub(crate) use test_function;
 
     use super::*;
+
+    /// Builds a string or binary array containing `visible`, with a nonzero
+    /// starting offset and a large retained values buffer for capacity tests.
+    pub(crate) fn sliced_byte_array(
+        visible: &[Option<&str>],
+        data_type: &DataType,
+    ) -> Result<ArrayRef> {
+        let padding = "x".repeat(65536);
+        let mut values = vec![Some(padding.as_str())];
+        values.extend_from_slice(visible);
+        values.push(Some(padding.as_str()));
+        let input = StringArray::from(values);
+        // Cast before slicing so every data type retains the padding.
+        Ok(cast(&input, data_type)?.slice(1, visible.len()))
+    }
 
     #[test]
     fn test_calculate_binary_math_scalar_null() {
@@ -620,5 +827,383 @@ pub mod test {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod map_lookup_tests {
+    use super::*;
+    use arrow::array::{
+        DictionaryArray, Float64Array, Int32Array, Int64Array, ListArray, NullArray,
+        StringArray, StructArray,
+    };
+    use arrow::buffer::{NullBuffer, OffsetBuffer};
+    use arrow::datatypes::{Field, Int32Type};
+
+    /// A map whose rows have the given lengths, drawing keys and values in
+    /// order from `keys` and `values`. Rows flagged false in `valid` are null.
+    fn make_map(
+        keys: ArrayRef,
+        values: ArrayRef,
+        lengths: &[usize],
+        valid: Option<&[bool]>,
+    ) -> MapArray {
+        let entries = StructArray::from(vec![
+            (
+                Arc::new(Field::new("key", keys.data_type().clone(), false)),
+                keys,
+            ),
+            (
+                Arc::new(Field::new("value", values.data_type().clone(), true)),
+                values,
+            ),
+        ]);
+        MapArray::new(
+            Arc::new(Field::new("entries", entries.data_type().clone(), false)),
+            OffsetBuffer::from_lengths(lengths.iter().copied()),
+            entries,
+            valid.map(|valid| NullBuffer::from(valid.to_vec())),
+            false,
+        )
+    }
+
+    /// Rows: `{1: 10, 2: 20}`, `{}`, `{2: 30}`, and a null row that still
+    /// carries the entry `{1: 40}`.
+    fn int_map() -> MapArray {
+        make_map(
+            Arc::new(Int32Array::from(vec![1, 2, 2, 1])),
+            Arc::new(Int32Array::from(vec![10, 20, 30, 40])),
+            &[2, 0, 1, 1],
+            Some(&[true, true, true, false]),
+        )
+    }
+
+    #[test]
+    fn single_key() -> Result<()> {
+        let map = int_map();
+        let result = map_lookup(&map, &Int32Array::from(vec![2]))?;
+        assert_eq!(
+            result,
+            UInt32Array::from(vec![Some(1), None, Some(2), None])
+        );
+
+        // The null row's entry is never matched.
+        let result = map_lookup(&map, &Int32Array::from(vec![1]))?;
+        assert_eq!(result, UInt32Array::from(vec![Some(0), None, None, None]));
+
+        let result = map_lookup(&map, &Int32Array::from(vec![9]))?;
+        assert_eq!(result, UInt32Array::from(vec![None; 4]));
+        Ok(())
+    }
+
+    #[test]
+    fn single_null_key_matches_nothing() -> Result<()> {
+        let map = int_map();
+        let result = map_lookup(&map, &Int32Array::from(vec![None]))?;
+        assert_eq!(result, UInt32Array::from(vec![None; 4]));
+        Ok(())
+    }
+
+    #[test]
+    fn untyped_null_keys_match_nothing() -> Result<()> {
+        let map = int_map();
+        for len in [1, map.len()] {
+            assert_eq!(
+                map_lookup(&map, &NullArray::new(len))?,
+                UInt32Array::new_null(4)
+            );
+        }
+        // NULL keys must still obey the lookup's cardinality requirement.
+        assert!(map_lookup(&map, &NullArray::new(2)).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn duplicate_keys_return_a_matching_entry() -> Result<()> {
+        // A missing sample forces vectorized equality for the scalar lookup;
+        // without it, the matching rows use the comparator and its hint.
+        for prefix_rows in [0, SAMPLE_ROWS + 1] {
+            let mut keys: Vec<i32> = (0..prefix_rows).flat_map(|_| [1, 2]).collect();
+            // The first match is at position 1, followed by a row with
+            // duplicates. Either entry in the second row is a valid result.
+            keys.extend([1, 7, 7, 7]);
+            let rows = prefix_rows + 2;
+            let map = make_map(
+                Arc::new(Int32Array::from(keys)),
+                Arc::new(Int32Array::from_iter_values(0..(rows * 2) as i32)),
+                &vec![2; rows],
+                None,
+            );
+            let key = Int32Array::from(vec![7]);
+            for batch_size in [1, SAMPLE_ROWS, rows] {
+                for start in (0..rows).step_by(batch_size) {
+                    let len = batch_size.min(rows - start);
+                    assert_lookup_strategies(&map.slice(start, len), &key)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Check scalar and per-row lookups against an independent scan. Unique
+    /// keys must give the same result; duplicate keys may select any match.
+    fn assert_lookup_strategies(map: &MapArray, key: &dyn Array) -> Result<()> {
+        let cmp = make_comparator(map.keys().as_ref(), key, SortOptions::default())?;
+        let matches: Vec<Vec<u32>> = map
+            .value_offsets()
+            .windows(2)
+            .enumerate()
+            .map(|(row, offsets)| {
+                if map.is_null(row) {
+                    vec![]
+                } else {
+                    (offsets[0]..offsets[1])
+                        .filter(|&entry| cmp(entry as usize, 0).is_eq())
+                        .map(|entry| entry as u32)
+                        .collect()
+                }
+            })
+            .collect();
+        let repeated =
+            arrow::compute::take(key, &UInt32Array::from(vec![0; map.len()]), None)?;
+        for keys in [key, repeated.as_ref()] {
+            let result = map_lookup(map, keys)?;
+            assert_eq!(result.len(), matches.len());
+            for (row, (found, matches)) in result.iter().zip(&matches).enumerate() {
+                assert!(
+                    found.map_or(matches.is_empty(), |entry| matches.contains(&entry)),
+                    "row {row}: found {found:?}, matching entries {matches:?}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn vectorized_lookup_on_sliced_maps() -> Result<()> {
+        let rows = 160;
+        let keys: Vec<i32> = (0..rows)
+            .flat_map(|row| match row {
+                // Miss throughout the slice's sample, forcing vectorized eq.
+                0..64 => [1, 2, 3],
+                // Move the matching key to exercise changes in the hint.
+                64 => [1, 2, 9],
+                65 => [2, 9, 1],
+                _ => [9, 1, 2],
+            })
+            .collect();
+        let valid: Vec<bool> = (0..rows).map(|row| row % 7 != 0).collect();
+        let map = make_map(
+            Arc::new(Int32Array::from(keys)),
+            Arc::new(Int32Array::from_iter_values(0..rows * 3)),
+            &vec![3; rows as usize],
+            Some(&valid),
+        );
+        let key = Int32Array::from(vec![9]);
+        let sliced = map.slice(17, 120);
+        assert_lookup_strategies(&sliced, &key)?;
+        let whole = map_lookup(&sliced, &key)?;
+        // Both small comparator batches and larger adaptive batches must
+        // preserve the indices into the unsliced entries.
+        for batch_size in [1, 31, 32, 33, 40, 120] {
+            for start in (0..sliced.len()).step_by(batch_size) {
+                let len = batch_size.min(sliced.len() - start);
+                assert_eq!(
+                    map_lookup(&sliced.slice(start, len), &key)?,
+                    whole.slice(start, len)
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn float_lookup_strategies_agree() -> Result<()> {
+        let nan = f64::NAN;
+        let other_nan = f64::from_bits(nan.to_bits() + 1);
+        let mut keys: Vec<f64> = (0..SAMPLE_ROWS)
+            .flat_map(|_| [1.0, 2.0, 3.0, 4.0])
+            .collect();
+        for _ in 0..40 {
+            keys.extend([-0.0, 0.0, nan, other_nan]);
+        }
+        let rows = keys.len() / 4;
+        let map = make_map(
+            Arc::new(Float64Array::from(keys)),
+            Arc::new(Int32Array::from_iter_values(0..(rows * 4) as i32)),
+            &vec![4; rows],
+            None,
+        );
+        // Every query misses the sample and finds a distinct entry afterward.
+        for key in [-0.0, 0.0, nan, other_nan] {
+            assert_lookup_strategies(&map, &Float64Array::from(vec![key]))?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn dictionary_lookup_strategies_agree() -> Result<()> {
+        let keys: DictionaryArray<Int32Type> = (0..80)
+            .flat_map(|row| {
+                if row < SAMPLE_ROWS {
+                    ["a", "b"]
+                } else {
+                    ["c", "a"]
+                }
+            })
+            .collect();
+        let map = make_map(
+            Arc::new(keys),
+            Arc::new(Int32Array::from_iter_values(0..160)),
+            &[2; 80],
+            None,
+        );
+        let key = cast(&StringArray::from(vec!["c"]), map.key_type())?;
+        assert_lookup_strategies(&map, key.as_ref())
+    }
+
+    #[test]
+    fn one_key_per_row() -> Result<()> {
+        let map = int_map();
+        let keys = Int32Array::from(vec![Some(2), Some(1), None, Some(1)]);
+        let result = map_lookup(&map, &keys)?;
+        assert_eq!(result, UInt32Array::from(vec![Some(1), None, None, None]));
+        Ok(())
+    }
+
+    #[test]
+    fn nested_single_key() -> Result<()> {
+        let keys = ListArray::from_iter_primitive::<Int32Type, _, _>([
+            Some(vec![Some(1), Some(2)]),
+            Some(vec![Some(3), Some(4)]),
+        ]);
+        let map = make_map(
+            Arc::new(keys),
+            Arc::new(Int32Array::from(vec![10, 20])),
+            &[2],
+            None,
+        );
+        let list_key = |values: Vec<i32>| {
+            ListArray::from_iter_primitive::<Int32Type, _, _>([Some(
+                values.into_iter().map(Some),
+            )])
+        };
+        let result = map_lookup(&map, &list_key(vec![3, 4]))?;
+        assert_eq!(result, UInt32Array::from(vec![Some(1)]));
+
+        let result = map_lookup(&map, &list_key(vec![9, 9]))?;
+        assert_eq!(result, UInt32Array::from(vec![None]));
+        Ok(())
+    }
+
+    #[test]
+    fn sliced_map_and_keys() -> Result<()> {
+        let map = int_map();
+        let keys = Int32Array::from(vec![0, 0, 2, 0]);
+
+        // Rows 1 and 2 of the map with keys 1 and 2 of the key array. Entry
+        // indices stay relative to the unsliced entries.
+        let result = map_lookup(&map.slice(1, 2), &keys.slice(1, 2))?;
+        assert_eq!(result, UInt32Array::from(vec![None, Some(2)]));
+
+        // A single key against a slice whose entries start past offset 0.
+        let result = map_lookup(&map.slice(2, 1), &Int32Array::from(vec![2]))?;
+        assert_eq!(result, UInt32Array::from(vec![Some(2)]));
+
+        // An empty slice still sees the unsliced entries buffer.
+        let result = map_lookup(&map.slice(1, 0), &keys.slice(1, 0))?;
+        assert_eq!(result.len(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn dictionary_keys_match_plain_keys() -> Result<()> {
+        // Rows: `{a: 10, b: 20}`, `{a: 30}`.
+        let keys: DictionaryArray<Int32Type> = vec!["a", "b", "a"].into_iter().collect();
+        let map = make_map(
+            Arc::new(keys),
+            Arc::new(Int32Array::from(vec![10, 20, 30])),
+            &[2, 1],
+            None,
+        );
+        let result = map_lookup(&map, &StringArray::from(vec!["b"]))?;
+        assert_eq!(result, UInt32Array::from(vec![Some(1), None]));
+
+        let result = map_lookup(&map, &StringArray::from(vec!["b", "a"]))?;
+        assert_eq!(result, UInt32Array::from(vec![Some(1), Some(2)]));
+        Ok(())
+    }
+
+    #[test]
+    fn vectorized_scan_after_missing_sample() -> Result<()> {
+        // The first 40 rows are `{1: 0, 2: 0, 3: 0}` and the rest are
+        // `{9: 0, 1: 0, 2: 0}`, so a lookup of 9 misses throughout the sampled
+        // rows and must still be found afterwards.
+        let rows = 100;
+        let switch = 40;
+        let keys: Vec<i32> = (0..rows)
+            .flat_map(|row| if row < switch { [1, 2, 3] } else { [9, 1, 2] })
+            .collect();
+        let map = make_map(
+            Arc::new(Int32Array::from(keys)),
+            Arc::new(Int32Array::from(vec![0; rows * 3])),
+            &vec![3; rows],
+            None,
+        );
+        let result = map_lookup(&map, &Int32Array::from(vec![9]))?;
+        let expected: UInt32Array = (0..rows)
+            .map(|row| (row >= switch).then_some(row as u32 * 3))
+            .collect();
+        assert_eq!(result, expected);
+
+        // A key found at the start of the sampled rows keeps the comparator scan.
+        let result = map_lookup(&map, &Int32Array::from(vec![1]))?;
+        let expected: UInt32Array = (0..rows)
+            .map(|row| Some(row as u32 * 3 + u32::from(row >= switch)))
+            .collect();
+        assert_eq!(result, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn nested_keys_may_differ_in_field_names_and_nullability() -> Result<()> {
+        // A map read from a schema with a non-null struct field, looked up
+        // with a struct literal whose fields are nullable.
+        let map_keys = StructArray::from(vec![(
+            Arc::new(Field::new("a", DataType::Int32, false)),
+            Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
+        )]);
+        let map = make_map(
+            Arc::new(map_keys),
+            Arc::new(Int32Array::from(vec![10, 20])),
+            &[2],
+            None,
+        );
+        for name in ["a", "b"] {
+            let lookup = StructArray::from(vec![(
+                Arc::new(Field::new(name, DataType::Int32, true)),
+                Arc::new(Int32Array::from(vec![2])) as ArrayRef,
+            )]);
+            let result = map_lookup(&map, &lookup)?;
+            assert_eq!(result, UInt32Array::from(vec![Some(1)]));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn key_type_mismatch_is_an_error() {
+        let map = int_map();
+        let err = map_lookup(&map, &Int64Array::from(vec![2])).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("The key type Int64 does not match the map key type Int32"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn wrong_key_count_is_an_error() {
+        let map = int_map();
+        assert!(map_lookup(&map, &Int32Array::from(vec![1, 2])).is_err());
     }
 }

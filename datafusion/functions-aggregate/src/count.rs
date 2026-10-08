@@ -40,7 +40,7 @@ use datafusion_expr::{
     TypeSignature, Volatility, WindowFunctionDefinition,
     expr::WindowFunction,
     function::{AccumulatorArgs, StateFieldsArgs},
-    utils::format_state_name,
+    utils::{AggregateOrderSensitivity, format_state_name},
 };
 use datafusion_functions_aggregate_common::aggregate::count_distinct::PrimitiveDistinctCountGroupsAccumulator;
 use datafusion_functions_aggregate_common::aggregate::{
@@ -346,14 +346,31 @@ impl AggregateUDFImpl for Count {
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
-        if args.exprs.len() != 1 {
-            return false;
+        // The answer depends on nothing but the argument types and `DISTINCT`,
+        // so defer to the logical form and keep one list of supported types.
+        let arg_types = args
+            .expr_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        self.groups_accumulator_supported_for_types(&arg_types, args.is_distinct)
+            .unwrap_or(false)
+    }
+
+    fn groups_accumulator_supported_for_types(
+        &self,
+        arg_types: &[DataType],
+        is_distinct: bool,
+    ) -> Option<bool> {
+        if arg_types.len() != 1 {
+            return Some(false);
         }
-        if !args.is_distinct {
-            return true;
+        if !is_distinct {
+            return Some(true);
         }
-        matches!(
-            args.expr_fields[0].data_type(),
+        // Keep in step with `create_distinct_count_groups_accumulator`.
+        Some(matches!(
+            arg_types[0],
             DataType::Int8
                 | DataType::Int16
                 | DataType::Int32
@@ -362,7 +379,7 @@ impl AggregateUDFImpl for Count {
                 | DataType::UInt16
                 | DataType::UInt32
                 | DataType::UInt64
-        )
+        ))
     }
 
     fn create_groups_accumulator(
@@ -377,6 +394,10 @@ impl AggregateUDFImpl for Count {
 
     fn reverse_expr(&self) -> ReversedUDAF {
         ReversedUDAF::Identical
+    }
+
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        AggregateOrderSensitivity::Insensitive
     }
 
     fn default_value(&self, _data_type: &DataType) -> Result<ScalarValue> {
@@ -410,11 +431,15 @@ impl AggregateUDFImpl for Count {
                 let count = i64::try_from(num_rows - val).ok()?;
                 return Some(ScalarValue::Int64(Some(count)));
             }
-        } else if let Some(lit_expr) = expr.downcast_ref::<expressions::Literal>()
-            && lit_expr.value() == &COUNT_STAR_EXPANSION
-        {
-            let num_rows = i64::try_from(num_rows).ok()?;
-            return Some(ScalarValue::Int64(Some(num_rows)));
+        } else if let Some(lit_expr) = expr.downcast_ref::<expressions::Literal>() {
+            // A non-null literal is counted once per row (this covers the common
+            // `count(*)` construct). A non-null literal is never counted.
+            let count = if lit_expr.value().is_null() {
+                0
+            } else {
+                i64::try_from(num_rows).ok()?
+            };
+            return Some(ScalarValue::Int64(Some(count)));
         }
 
         None

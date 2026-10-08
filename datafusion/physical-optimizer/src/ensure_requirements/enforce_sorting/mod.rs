@@ -170,8 +170,10 @@ fn update_coalesce_ctx_children(
         // Plan has no children, it cannot be a `CoalescePartitionsExec`.
         false
     } else if is_coalesce_partitions(&coalesce_context.plan) {
-        // Initiate a connection:
-        true
+        // A fetched coalesce selects rows before the sort. Removing it would
+        // lose that limit, and moving its fetch onto the sort changes which
+        // rows are selected.
+        coalesce_context.plan.fetch().is_none()
     } else {
         children.iter().enumerate().any(|(idx, node)| {
             // Only consider operators that don't require a single partition,
@@ -668,11 +670,9 @@ fn remove_bottleneck_in_subplan_impl(
                 Some(Distribution::SinglePartition)
             )
     };
-    let remove_from_first_child = requirements
-        .children
-        .first()
-        .is_some_and(|child| is_coalesce_partitions(&child.plan))
-        && removable(0);
+    let remove_from_first_child = requirements.children.first().is_some_and(|child| {
+        is_coalesce_partitions(&child.plan) && child.plan.fetch().is_none()
+    }) && removable(0);
     let children = &mut requirements.children;
     if remove_from_first_child {
         // We can safely use the 0th index since we have a `CoalescePartitionsExec`.

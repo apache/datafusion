@@ -108,12 +108,16 @@ pub fn cast_predicate_preimage(
     op: Operator,
     lit_value: &ScalarValue,
 ) -> Result<Option<CastPredicatePreimage>> {
-    if let Some(preimage) = maybe_range_preimage(source_type, target_type, lit_value)? {
-        return Ok(Some(preimage));
+    // Arrow adjusts a timezone-naive value to UTC when the target is
+    // timezone-aware (`adjust_timestamp_to_timezone`). The precision-only
+    // arithmetic here does not model that adjustment, so retain the cast. This
+    // dispatcher check covers the range, exact and widening paths below.
+    if is_naive_to_tz_timestamp_cast(source_type, target_type) {
+        return Ok(None);
     }
 
-    if is_date_narrowing_cast(source_type, target_type) {
-        return Ok(None);
+    if let Some(preimage) = maybe_range_preimage(source_type, target_type, lit_value)? {
+        return Ok(Some(preimage));
     }
 
     if let Some(value) =
@@ -156,10 +160,6 @@ pub fn exact_preimage_cast(
     target_type: &DataType,
     lit_value: &ScalarValue,
 ) -> Option<ScalarValue> {
-    if is_date_narrowing_cast(source_type, target_type) {
-        return None;
-    }
-
     // Apply a family-level safety gate: the source→target cast must normally be
     // value-preserving over the full source domain. Timestamp precision
     // narrowing is handled as a Range preimage, not an Exact preimage.
@@ -203,6 +203,20 @@ fn is_timestamp_cast(source_type: &DataType, target_type: &DataType) -> bool {
     )
 }
 
+/// Returns true when casting a timezone-naive timestamp to a timezone-aware one.
+///
+/// Arrow adjusts such values to UTC (`adjust_timestamp_to_timezone`), which the
+/// precision-only preimage arithmetic here does not model, so the cast is kept.
+fn is_naive_to_tz_timestamp_cast(source_type: &DataType, target_type: &DataType) -> bool {
+    matches!(
+        (source_type, target_type),
+        (
+            DataType::Timestamp(_, None),
+            DataType::Timestamp(_, Some(_))
+        )
+    )
+}
+
 /// Returns `true` when the cast from `source_type` to `target_type` is
 /// value-preserving (injective) and order-preserving at the family level.
 /// Timestamp widening is classified family-safe but retains its pre-existing
@@ -230,7 +244,11 @@ fn is_exact_cast_safe(source_type: &DataType, target_type: &DataType) -> bool {
         return true;
     }
     if is_timestamp_cast(src, tgt) {
-        return !is_timestamp_precision_narrowing_cast(src, tgt);
+        // Timestamp precision narrowing is handled as a Range preimage, and a
+        // naive → timezone-aware cast reads the raw value as local wall-clock
+        // time and shifts it to UTC; neither is an exact preimage.
+        return !is_timestamp_precision_narrowing_cast(src, tgt)
+            && !is_naive_to_tz_timestamp_cast(src, tgt);
     }
 
     // Whitelist of family-level safe casts.  Anything not listed here is
@@ -431,6 +449,8 @@ fn exact_preimage_int_to_str_eq_like(
 ///
 /// Bounds are source-domain literals, so they preserve `source_tz`. The target
 /// timezone belongs to the cast result and is not copied into the bounds.
+/// Timezone-naive sources with timezone-aware targets are rejected by
+/// [`is_naive_to_tz_timestamp_cast`] in the dispatcher.
 fn timestamp_narrowing_range_preimage(
     source_type: &DataType,
     target_type: &DataType,
@@ -438,16 +458,11 @@ fn timestamp_narrowing_range_preimage(
 ) -> Result<Option<Interval>> {
     let (
         DataType::Timestamp(source_unit, source_tz),
-        DataType::Timestamp(target_unit, target_tz),
+        DataType::Timestamp(target_unit, _),
     ) = (source_type, target_type)
     else {
         return Ok(None);
     };
-
-    // A naive source cannot be inverted into a timezone-aware target bucket.
-    if source_tz.is_none() && target_tz.is_some() {
-        return Ok(None);
-    }
 
     let source_scale = i128::from(timestamp_unit_scale(source_unit));
     let target_scale = i128::from(timestamp_unit_scale(target_unit));
@@ -654,12 +669,15 @@ fn is_lossy_temporal_cast(from_type: &DataType, to_type: &DataType) -> bool {
 /// Returns true when casting a date column from `from_type` to `to_type` narrows
 /// `Date64` (milliseconds) to `Date32` (days).
 ///
-/// Like [`is_timestamp_precision_narrowing_cast`], this guards comparison cast
-/// unwrapping against a many-to-one column cast. `CAST(date64 AS Date32) = lit_day`
-/// matches any millisecond within that day, but the rewritten `date64 = lit_ms`
-/// matches only midnight. Arrow does not require `Date64` values to be whole days
-/// (see arrow-rs#5288), so the column may carry sub-day values the planner cannot
-/// see; the widening direction (`Date32 -> Date64`) is injective and stays allowed.
+/// `CAST(date64 AS Date32) = lit_day` matches any millisecond within that day,
+/// but the rewritten `date64 = lit_ms` matches only midnight. Arrow does not
+/// require `Date64` values to be whole days (see arrow-rs#5288), so the column
+/// may carry sub-day values the planner cannot see; the widening direction
+/// (`Date32 -> Date64`) is injective and stays allowed.
+///
+/// This pair is already rejected by the `is_exact_cast_safe` allowlist
+/// (including when wrapped in a `Dictionary`), so predicate rewrites do not need
+/// a separate `Date64 -> Date32` early return.
 pub fn is_date_narrowing_cast(from_type: &DataType, to_type: &DataType) -> bool {
     matches!((from_type, to_type), (DataType::Date64, DataType::Date32))
 }
@@ -1787,6 +1805,92 @@ mod tests {
         let target = DataType::Timestamp(TimeUnit::Millisecond, Some("+01:00".into()));
         let literal = ScalarValue::TimestampMillisecond(Some(0), Some("+01:00".into()));
         assert_preimage_none(&source, &target, Operator::Eq, &literal);
+    }
+
+    #[test]
+    fn test_naive_to_timezone_timestamp_gate_rejected() {
+        // Same unit, widening and narrowing targets: Arrow adjusts naive
+        // values to UTC, which the precision-only arithmetic does not model.
+        // The literal is unit-aligned (0), so the rejection comes from the
+        // timezone adjustment and not from an unaligned widening bound.
+        for (source_unit, target_unit) in [
+            (TimeUnit::Nanosecond, TimeUnit::Nanosecond),
+            (TimeUnit::Millisecond, TimeUnit::Nanosecond),
+            (TimeUnit::Nanosecond, TimeUnit::Millisecond),
+        ] {
+            let source = DataType::Timestamp(source_unit, None);
+            let target = DataType::Timestamp(target_unit, Some("+07:00".into()));
+            let literal = timestamp_scalar(&target_unit, Some("+07:00".into()), 0);
+
+            assert!(
+                !is_exact_cast_safe(&source, &target),
+                "{source:?} -> {target:?} must not be exact-safe"
+            );
+            assert!(
+                exact_preimage_cast(&source, &target, &literal).is_none(),
+                "{source:?} -> {target:?} must not have an exact preimage"
+            );
+            for op in [
+                Operator::Eq,
+                Operator::Gt,
+                Operator::LtEq,
+                Operator::IsDistinctFrom,
+            ] {
+                assert_preimage_none(&source, &target, op, &literal);
+            }
+        }
+
+        // Conservative for every timezone, including fixed zero offsets:
+        // `Some("UTC")` is rejected like `Some("+07:00")`.
+        let source = DataType::Timestamp(TimeUnit::Nanosecond, None);
+        for tz in ["UTC", "+00:00"] {
+            let target = DataType::Timestamp(TimeUnit::Nanosecond, Some(tz.into()));
+            assert!(!is_exact_cast_safe(&source, &target));
+            assert_preimage_none(
+                &source,
+                &target,
+                Operator::Eq,
+                &ScalarValue::TimestampNanosecond(Some(0), Some(tz.into())),
+            );
+        }
+
+        // Positive control: a timezone-aware source keeps the existing accepted
+        // policies (same unit and widening stay exact-safe).
+        let aware_ms = DataType::Timestamp(TimeUnit::Millisecond, Some("+07:00".into()));
+        let aware_ns = DataType::Timestamp(TimeUnit::Nanosecond, Some("+07:00".into()));
+        assert!(is_exact_cast_safe(&aware_ns, &aware_ns));
+        assert!(is_exact_cast_safe(&aware_ms, &aware_ns));
+    }
+
+    #[test]
+    fn test_naive_to_timezone_dictionary_wrapped_gate_rejected() {
+        let dict = |inner: DataType| {
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(inner))
+        };
+        let naive_ns = DataType::Timestamp(TimeUnit::Nanosecond, None);
+        let aware_ns = DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()));
+
+        // `is_exact_cast_safe` unwraps one level of dictionary, so a wrapped
+        // naive -> aware pair is rejected like the bare pair.
+        assert!(!is_exact_cast_safe(&naive_ns, &aware_ns));
+        assert!(!is_exact_cast_safe(
+            &dict(naive_ns.clone()),
+            &dict(aware_ns.clone())
+        ));
+        assert!(!is_exact_cast_safe(&dict(naive_ns.clone()), &aware_ns));
+        assert!(!is_exact_cast_safe(&naive_ns, &dict(aware_ns.clone())));
+
+        // Safe controls stay allowed: aware -> aware unit widening, identity,
+        // and dropping the timezone to a naive target.
+        assert!(is_exact_cast_safe(
+            &DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+            &DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+        ));
+        assert!(is_exact_cast_safe(&naive_ns, &naive_ns));
+        assert!(is_exact_cast_safe(
+            &DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+            &naive_ns,
+        ));
     }
 
     #[test]

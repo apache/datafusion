@@ -44,9 +44,10 @@
 //! C commonly wants A's built-in planning as a starting point, then rewrites the
 //! result. A must export its planner *before* installing C's planner on the
 //! session, and C must retain that handle: after the swap,
-//! [`Session::query_planner`] reports C's own planner, and
-//! [`Session::create_physical_plan`] dispatches to it, so either one is a
-//! self-call. Delegating to the retained handle is safe, because DataFusion's
+//! [`Session::query_planner`] reports C's own planner, so invoking it is a
+//! self-call. [`crate::session::ForeignSession::create_physical_plan`] is
+//! unsupported because forwarding through A's session would likewise re-enter
+//! C's planner. Delegating to the retained handle is safe, because DataFusion's
 //! built-in physical planner never re-dispatches through [`Session`].
 //!
 //! Retain the planner rather than the session. [`FFI_QueryPlanner`] owns a

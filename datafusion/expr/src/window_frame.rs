@@ -475,7 +475,7 @@ pub enum WindowFrameUnits {
     Range,
     /// The GROUPS frame type means that the starting and ending boundaries are determine
     /// by counting "groups" relative to the current group. A "group" is a set of rows that all have
-    /// equivalent values for all all terms of the window ORDER BY clause.
+    /// equivalent values for all terms of the window ORDER BY clause.
     Groups,
 }
 

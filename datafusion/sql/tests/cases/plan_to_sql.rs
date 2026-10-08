@@ -17,6 +17,7 @@
 
 use arrow::datatypes::{DataType, Field, Schema};
 
+use datafusion_common::tree_node::{Transformed, TransformedResult};
 use datafusion_common::{
     Column, DFSchema, DFSchemaRef, DataFusionError, Result, TableReference,
     assert_contains,
@@ -27,7 +28,7 @@ use datafusion_expr::test::function_stub::{
 };
 use datafusion_expr::{
     ColumnarValue, EmptyRelation, Expr, Extension, LogicalPlan, LogicalPlanBuilder,
-    ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Union,
+    ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TableScanBuilder, Union,
     UserDefinedLogicalNode, UserDefinedLogicalNodeCore, Volatility, WindowFrame,
     WindowFunctionDefinition, cast, col, exists, in_subquery, lit, scalar_subquery,
     table_scan, wildcard,
@@ -55,6 +56,7 @@ use std::{fmt, vec};
 use crate::common::{MockContextProvider, MockSessionState};
 use datafusion_expr::builder::{
     project, subquery_alias, table_scan_with_filter_and_fetch, table_scan_with_filters,
+    table_source,
 };
 use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions::unicode::planner::UnicodeFunctionPlanner;
@@ -109,6 +111,25 @@ fn roundtrip_expr(table: TableReference, sql: &str) -> Result<String> {
     let ast = expr_to_sql(&expr)?;
 
     Ok(ast.to_string())
+}
+
+fn remove_column_self_aliases(plan: LogicalPlan) -> Result<LogicalPlan> {
+    plan.transform_up_with_subqueries(|plan| {
+        plan.map_expressions(|expr| {
+            if let Expr::Alias(alias) = &expr
+                && alias.relation.is_none()
+                && alias.metadata.is_none()
+                && let Expr::Column(column) = alias.expr.as_ref()
+                && column.relation.is_none()
+                && column.name == alias.name
+            {
+                Ok(Transformed::yes(*alias.expr.clone()))
+            } else {
+                Ok(Transformed::no(expr))
+            }
+        })
+    })
+    .data()
 }
 
 #[test]
@@ -221,7 +242,14 @@ fn roundtrip_statement() -> Result<()> {
             "SELECT left[1] FROM array",
             "SELECT {a:1, b:2}",
             "SELECT s.a FROM (SELECT {a:1, b:2} AS s)",
-            "SELECT MAP {'a': 1, 'b': 2}"
+            "SELECT MAP {'a': 1, 'b': 2}",
+            // Ordered aggregates, both spellings of the ordering.
+            "SELECT first_name, last_value(age ORDER BY salary) FROM person GROUP BY first_name",
+            "SELECT first_name, first_value(age ORDER BY salary DESC) FROM person GROUP BY first_name",
+            "SELECT first_name, array_agg(age ORDER BY salary) FROM person GROUP BY first_name",
+            "SELECT first_name, array_agg(DISTINCT age ORDER BY salary, id) FROM person GROUP BY first_name",
+            "SELECT first_name, string_agg(CAST(age AS VARCHAR), ',' ORDER BY salary) FROM person GROUP BY first_name",
+            "SELECT first_name, percentile_cont(0.5) WITHIN GROUP (ORDER BY age) FROM person GROUP BY first_name",
     ];
 
     // For each test sql string, we transform as follows:
@@ -241,6 +269,21 @@ fn roundtrip_statement() -> Result<()> {
             .with_aggregate_function(sum_udaf())
             .with_aggregate_function(count_udaf())
             .with_aggregate_function(max_udaf())
+            .with_aggregate_function(
+                datafusion_functions_aggregate::array_agg::array_agg_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::first_last::first_value_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::first_last::last_value_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::string_agg::string_agg_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::percentile_cont::percentile_cont_udaf(),
+            )
             .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
             .with_expr_planner(Arc::new(NestedFunctionPlanner))
             .with_expr_planner(Arc::new(FieldAccessPlanner));
@@ -254,7 +297,11 @@ fn roundtrip_statement() -> Result<()> {
             .sql_statement_to_plan(roundtrip_statement.clone())
             .unwrap();
 
-        assert_eq!(plan, plan_roundtrip);
+        // Explicit output names can add unqualified self-aliases without changing the plan's meaning.
+        assert_eq!(
+            remove_column_self_aliases(plan)?,
+            remove_column_self_aliases(plan_roundtrip)?,
+        );
     }
 
     Ok(())
@@ -318,6 +365,18 @@ macro_rules! roundtrip_statement_with_dialect_helper {
             )
             .with_aggregate_function(
                 datafusion_functions_aggregate::percentile_cont::percentile_cont_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::array_agg::array_agg_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::first_last::first_value_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::first_last::last_value_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::string_agg::string_agg_udaf(),
             )
             .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
             .with_expr_planner(Arc::new(NestedFunctionPlanner))
@@ -388,6 +447,37 @@ fn roundtrip_statement_with_dialect_4() -> Result<(), DataFusionError> {
         parser_dialect: MySqlDialect {},
         unparser_dialect: UnparserMySqlDialect {},
         expected: @"SELECT `j1_id` FROM (SELECT 1 AS `j1_id`) AS `derived_projection`",
+    );
+    Ok(())
+}
+
+#[test]
+fn unparse_preserves_derived_aggregate_output_name() -> Result<()> {
+    let schema = Schema::new(vec![Field::new("j1_id", DataType::Int32, false)]);
+    let aggregate = sum(col("j1.j1_id"));
+    let output = Expr::Column(Column::from_name(aggregate.schema_name().to_string()));
+    let plan = table_scan(Some("j1"), &schema, None)?
+        .aggregate(Vec::<Expr>::new(), vec![aggregate])?
+        .project(vec![output.clone().alias("visible"), output.clone()])?
+        .project(vec![output])?
+        .build()?;
+
+    let sql = Unparser::new(&UnparserPostgreSqlDialect {})
+        .plan_to_sql(&plan)?
+        .to_string();
+    println!("UNPARSED_SQL={sql}");
+    assert_snapshot!(
+        sql,
+        @r#"SELECT "sum(j1.j1_id)" FROM (SELECT sum("j1"."j1_id") AS "visible", sum("j1"."j1_id") AS "sum(j1.j1_id)" FROM "j1") AS "derived_projection""#
+    );
+
+    let sql = Unparser::new(&BigQueryDialect {})
+        .plan_to_sql(&plan)?
+        .to_string();
+    println!("BIGQUERY_SQL={sql}");
+    assert_snapshot!(
+        sql,
+        @r#"SELECT `sum_40j1_46j1_id_41` FROM (SELECT sum(`j1`.`j1_id`) AS `visible`, sum(`j1`.`j1_id`) AS `sum_40j1_46j1_id_41` FROM `j1`)"#
     );
     Ok(())
 }
@@ -2823,6 +2913,37 @@ fn test_unparse_inner_join_with_table_scan_projection() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_unparse_asof_join() -> Result<()> {
+    let trades_schema = Schema::new(vec![
+        Field::new("symbol", DataType::Utf8, false),
+        Field::new("ts", DataType::Int64, false),
+        Field::new("trade_id", DataType::Int32, false),
+    ]);
+    let prices_schema = Schema::new(vec![
+        Field::new("symbol", DataType::Utf8, false),
+        Field::new("ts", DataType::Int64, false),
+        Field::new("price", DataType::Int32, false),
+    ]);
+    let trades = table_scan(Some("trades"), &trades_schema, None)?
+        .alias("t")?
+        .build()?;
+    let prices = table_scan(Some("prices"), &prices_schema, None)?
+        .alias("p")?
+        .build()?;
+    let plan = LogicalPlanBuilder::from(trades)
+        .asof_join_on(
+            prices,
+            Some(col("t.symbol").eq(col("p.symbol"))),
+            col("t.ts").gt_eq(col("p.ts")),
+        )?
+        .project(vec![col("t.trade_id"), col("p.price")])?
+        .build()?;
+
+    assert_snapshot!(plan_to_sql(&plan)?, @r#"SELECT t.trade_id, p.price FROM trades AS t ASOF JOIN prices AS p MATCH_CONDITION ((t.ts >= p.ts)) ON t.symbol = p.symbol"#);
+    Ok(())
+}
+
 /// Build the three base table scans (`left_table`, `mid_table`, `right_table`)
 /// shared by the nested passthrough-projection join unparsing tests.
 fn nested_passthrough_join_tables() -> Result<(LogicalPlan, LogicalPlan, LogicalPlan)> {
@@ -2929,6 +3050,65 @@ fn test_unparse_projected_join_unwraps_left_nested_passthrough_projection() -> R
         sql,
         @r#"SELECT left_table.left_id, mid_table.mid_id, right_table."value" FROM left_table INNER JOIN mid_table ON left_table.mid_id = mid_table.mid_id INNER JOIN right_table ON mid_table.right_id = right_table.right_id"#
     );
+
+    Ok(())
+}
+
+#[test]
+fn test_unparse_nested_asof_join_inputs() -> Result<()> {
+    let (left, mid, right) = nested_passthrough_join_tables()?;
+    let nested_left = LogicalPlanBuilder::from(left)
+        .asof_join_on(
+            mid,
+            Some(col("left_table.mid_id").eq(col("mid_table.mid_id"))),
+            col("left_table.left_id").gt_eq(col("mid_table.mid_id")),
+        )?
+        .project(vec![
+            col("left_table.left_id"),
+            col("mid_table.mid_id"),
+            col("mid_table.right_id"),
+        ])?
+        .build()?;
+    let plan = LogicalPlanBuilder::from(nested_left)
+        .asof_join_on(
+            right,
+            Some(col("mid_table.right_id").eq(col("right_table.right_id"))),
+            col("mid_table.right_id").gt_eq(col("right_table.right_id")),
+        )?
+        .project(vec![
+            col("left_table.left_id"),
+            col("mid_table.mid_id"),
+            col("right_table.value"),
+        ])?
+        .build()?;
+    assert_snapshot!(plan_to_sql(&plan)?, @r#"SELECT left_table.left_id, mid_table.mid_id, right_table."value" FROM left_table ASOF JOIN mid_table MATCH_CONDITION ((left_table.left_id >= mid_table.mid_id)) ON left_table.mid_id = mid_table.mid_id ASOF JOIN right_table MATCH_CONDITION ((mid_table.right_id >= right_table.right_id)) ON mid_table.right_id = right_table.right_id"#);
+
+    let (left, mid, right) = nested_passthrough_join_tables()?;
+    let nested_right = LogicalPlanBuilder::from(mid)
+        .asof_join_on(
+            right,
+            Some(col("mid_table.right_id").eq(col("right_table.right_id"))),
+            col("mid_table.right_id").gt_eq(col("right_table.right_id")),
+        )?
+        .project(vec![
+            col("mid_table.mid_id"),
+            col("mid_table.right_id"),
+            col("right_table.value"),
+        ])?
+        .build()?;
+    let plan = LogicalPlanBuilder::from(left)
+        .asof_join_on(
+            nested_right,
+            Some(col("left_table.mid_id").eq(col("mid_table.mid_id"))),
+            col("left_table.left_id").gt_eq(col("mid_table.mid_id")),
+        )?
+        .project(vec![
+            col("left_table.left_id"),
+            col("mid_table.mid_id"),
+            col("right_table.value"),
+        ])?
+        .build()?;
+    assert_snapshot!(plan_to_sql(&plan)?, @r#"SELECT left_table.left_id, mid_table.mid_id, right_table."value" FROM left_table ASOF JOIN (mid_table ASOF JOIN right_table MATCH_CONDITION ((mid_table.right_id >= right_table.right_id)) ON mid_table.right_id = right_table.right_id) MATCH_CONDITION ((left_table.left_id >= mid_table.mid_id)) ON left_table.mid_id = mid_table.mid_id"#);
 
     Ok(())
 }
@@ -4466,6 +4646,45 @@ fn roundtrip_approx_percentile_cont_within_group_with_centroids()
     Ok(())
 }
 
+/// Ordered aggregates spell their ordering in one of two ways: an argument-list
+/// clause (`array_agg(x ORDER BY y)`) or a `WITHIN GROUP` clause. The
+/// `roundtrip_*_within_group` tests above cover the `WITHIN GROUP` variant;
+/// this covers the argument-list variant.
+#[test]
+fn roundtrip_ordered_aggregate_order_by() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT first_name, last_value(age ORDER BY salary) FROM person GROUP BY first_name",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT person.first_name, last_value(person.age ORDER BY person.salary ASC NULLS LAST) FROM person GROUP BY person.first_name",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT first_name, first_value(age ORDER BY salary DESC) FROM person GROUP BY first_name",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT person.first_name, first_value(person.age ORDER BY person.salary DESC NULLS FIRST) FROM person GROUP BY person.first_name",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT first_name, array_agg(age ORDER BY salary) FROM person GROUP BY first_name",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT person.first_name, array_agg(person.age ORDER BY person.salary ASC NULLS LAST) FROM person GROUP BY person.first_name",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT first_name, string_agg(CAST(age AS VARCHAR), ',' ORDER BY salary) FROM person GROUP BY first_name",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT person.first_name, string_agg(CAST(person.age AS VARCHAR), ',' ORDER BY person.salary ASC NULLS LAST) FROM person GROUP BY person.first_name",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT first_name, array_agg(DISTINCT age ORDER BY salary, id) FROM person GROUP BY first_name",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT person.first_name, array_agg(DISTINCT person.age ORDER BY person.salary ASC NULLS LAST, person.id ASC NULLS LAST) FROM person GROUP BY person.first_name",
+    );
+    Ok(())
+}
+
 #[test]
 fn snowflake_flatten_multiple_unnest_cross_join() -> Result<(), DataFusionError> {
     // Realistic Snowflake pattern:
@@ -4483,5 +4702,26 @@ fn snowflake_flatten_multiple_unnest_cross_join() -> Result<(), DataFusionError>
         unparser_dialect: snowflake,
         expected: @r#"SELECT "a"."VALUE", "b"."VALUE" FROM "multi_array_table" CROSS JOIN LATERAL FLATTEN(INPUT => "multi_array_table"."column_a") AS "a" CROSS JOIN LATERAL FLATTEN(INPUT => "multi_array_table"."column_b") AS "b""#,
     );
+    Ok(())
+}
+
+#[test]
+fn test_table_scan_with_skip() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("age", DataType::Utf8, false),
+    ]);
+    let scan = |skip, fetch| -> Result<String> {
+        let scan = TableScanBuilder::new("t1", table_source(&schema))
+            .with_skip(skip)
+            .with_fetch(fetch)
+            .build()?;
+        let plan = LogicalPlanBuilder::table_scan(scan)?.build()?;
+        Ok(plan_to_sql(&plan)?.to_string())
+    };
+
+    assert_snapshot!(scan(Some(5), Some(10))?, @"SELECT * FROM t1 LIMIT 10 OFFSET 5");
+    assert_snapshot!(scan(Some(5), None)?, @"SELECT * FROM t1 OFFSET 5");
+    assert_snapshot!(scan(None, Some(10))?, @"SELECT * FROM t1 LIMIT 10");
     Ok(())
 }

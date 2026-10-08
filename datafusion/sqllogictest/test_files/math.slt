@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -777,6 +777,19 @@ SELECT c1%1, c2%1 FROM test_non_nullable_float
 NaN NaN
 
 statement ok
+SET datafusion.explain.logical_plan_only = true;
+
+query TT
+EXPLAIN SELECT c2 % 1 AS remainder FROM test_non_nullable_float;
+----
+logical_plan
+01)Projection: test_non_nullable_float.c2 % Float64(1) AS remainder
+02)--TableScan: test_non_nullable_float projection=[c2]
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
+
+statement ok
 drop table test_non_nullable_float
 
 
@@ -864,7 +877,7 @@ statement ok
 CREATE TABLE test_non_nullable_decimal(c1 DECIMAL(9,2) NOT NULL);
 
 query I
-INSERT INTO test_non_nullable_decimal VALUES(1)
+INSERT INTO test_non_nullable_decimal VALUES(1.50)
 ----
 1
 
@@ -878,6 +891,29 @@ SELECT c1/0 FROM test_non_nullable_decimal
 
 query error DataFusion error: Arrow error: Divide by zero error
 SELECT c1%0 FROM test_non_nullable_decimal
+
+query RR
+SELECT c1 % 1 AS int_literal, c1 % CAST(1 AS DECIMAL(9,2)) AS decimal_literal FROM test_non_nullable_decimal
+----
+0.50 0.50
+
+query I
+SELECT count(*) FROM test_non_nullable_decimal WHERE c1 % 1 = 0
+----
+0
+
+statement ok
+SET datafusion.explain.logical_plan_only = true;
+
+query TT
+EXPLAIN SELECT c1 % CAST(1 AS DECIMAL(9,2)) AS remainder FROM test_non_nullable_decimal;
+----
+logical_plan
+01)Projection: test_non_nullable_decimal.c1 % Decimal128(1.00,9,2) AS remainder
+02)--TableScan: test_non_nullable_decimal projection=[c1]
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
 
 statement ok
 drop table test_non_nullable_decimal
@@ -1213,7 +1249,9 @@ physical_plan
 01)ProjectionExec: expr=[log(column1@0, 1) as l1, log(column1@0, column1@0) as la, power(column1@0, 0) as p0, power(column1@0, log(column1@0, column2@1)) as pl]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
-# Non-nullable bases still use the existing simplifications
+# A column base is left alone even when it is not nullable, because its value is
+# not known to be outside {0, 1, negative}. power(a, 0) does not depend on the
+# base value, so it still folds.
 query TT
 EXPLAIN SELECT
   log(a, 1) AS l1,
@@ -1223,13 +1261,39 @@ EXPLAIN SELECT
 FROM (VALUES (2.0::double, 3.0::double)) AS t(a, b);
 ----
 logical_plan
-01)Projection: Float64(0) AS l1, Float64(1) AS la, Float64(1) AS p0, t.b AS pl
+01)Projection: log(t.a, Float64(1)) AS l1, log(t.a, t.a) AS la, Float64(1) AS p0, power(t.a, log(t.a, t.b)) AS pl
 02)--SubqueryAlias: t
-03)----Projection: column2 AS b
+03)----Projection: column1 AS a, column2 AS b
 04)------Values: (Float64(2), Float64(3))
 physical_plan
-01)ProjectionExec: expr=[0 as l1, 1 as la, 1 as p0, column2@1 as pl]
+01)ProjectionExec: expr=[log(column1@0, 1) as l1, log(column1@0, column1@0) as la, 1 as p0, power(column1@0, log(column1@0, column2@1)) as pl]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query RR
+SELECT power(2.0, log(2.0, a)), power(b, log(b, a))
+FROM (VALUES (-3.0::double, 2.0::double)) t(a, b);
+----
+NaN NaN
+
+query I
+SELECT count(*) FROM (VALUES (-3.0::double)) t(a)
+WHERE power(2.0, log(2.0, a)) = -3.0;
+----
+0
+
+query R rowsort
+SELECT power(2.0, log(2.0, a))
+FROM (VALUES (4.0::double), (NULL::double)) t(a);
+----
+4
+NULL
+
+query RR
+SELECT log(2.0, power(2.0, a)), ln(power(2.0, a)) / ln(2.0)
+FROM (VALUES (2000.0::double), (-2000.0::double)) t(a);
+----
+Infinity Infinity
+-Infinity -Infinity
 
 # Float 16/32/64 for log
 query RT

@@ -36,7 +36,7 @@ use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
     Cast, ColumnarValue, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Operator,
-    Projection, ScalarUDF, Volatility, table_scan,
+    Projection, ScalarUDF, Volatility, in_list, table_scan,
 };
 use datafusion_functions::math;
 use datafusion_optimizer::optimizer::Optimizer;
@@ -219,52 +219,127 @@ fn evaluate_physical_simplified_boolean_expr(
     evaluate_physical_boolean_expr(simplified, batch)
 }
 
-#[test]
-fn timestamp_timezone_cast_preimage_preserves_results() {
-    let source_type = DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None);
-    let target_type = DataType::Timestamp(
-        arrow::datatypes::TimeUnit::Millisecond,
-        Some("+01:00".into()),
-    );
-    let batch = RecordBatch::try_from_iter(vec![(
-        "ts",
-        Arc::new(TimestampNanosecondArray::from(vec![
+/// Raw timestamp values clustered near the epoch, expressed in `unit`. They are
+/// far below the one-hour `+01:00` shift, so the tz-aware target never matches
+/// any non-NULL row.
+fn timezone_cast_values(unit: &arrow::datatypes::TimeUnit) -> Vec<Option<i64>> {
+    match unit {
+        arrow::datatypes::TimeUnit::Nanosecond => vec![
             Some(-1_000_000),
             Some(-999_999),
             Some(0),
             Some(999_999),
             Some(1_000_000),
             None,
-        ])) as ArrayRef,
-    )])
-    .unwrap();
-    assert_eq!(batch.schema().field(0).data_type(), &source_type);
-    let expected = vec![
-        Some(false),
-        Some(false),
-        Some(false),
-        Some(false),
-        Some(false),
-        None,
-    ];
+        ],
+        _ => vec![
+            Some(-1000),
+            Some(-999),
+            Some(0),
+            Some(999),
+            Some(1000),
+            None,
+        ],
+    }
+}
 
-    for try_cast in [false, true] {
-        let make_expr = || {
-            cast_or_try_cast(col("ts"), target_type.clone(), try_cast).eq(lit(
-                ScalarValue::TimestampMillisecond(Some(0), Some("+01:00".into())),
-            ))
-        };
-        let original = make_expr();
-        let logical =
-            simplify_logical_expr(make_expr(), batch.schema().to_dfschema_ref().unwrap());
-        let logical_rows = evaluate_boolean_expr(&logical, &batch);
-        let physical_rows =
-            evaluate_physical_simplified_boolean_expr(&make_expr(), &batch);
+fn timezone_cast_array(
+    unit: &arrow::datatypes::TimeUnit,
+    values: Vec<Option<i64>>,
+) -> ArrayRef {
+    match unit {
+        arrow::datatypes::TimeUnit::Nanosecond => {
+            Arc::new(TimestampNanosecondArray::from(values))
+        }
+        arrow::datatypes::TimeUnit::Millisecond => {
+            Arc::new(arrow::array::TimestampMillisecondArray::from(values))
+        }
+        other => unreachable!("unsupported test time unit {other:?}"),
+    }
+}
 
-        // Naive timestamps cannot use the timezone-aware target's bucket preimage.
-        assert_eq!(evaluate_boolean_expr(&original, &batch), expected);
-        assert_eq!(logical_rows, expected);
-        assert_eq!(physical_rows, expected);
+fn timezone_cast_literal(unit: &arrow::datatypes::TimeUnit, value: i64) -> ScalarValue {
+    match unit {
+        arrow::datatypes::TimeUnit::Nanosecond => {
+            ScalarValue::TimestampNanosecond(Some(value), Some("+01:00".into()))
+        }
+        arrow::datatypes::TimeUnit::Millisecond => {
+            ScalarValue::TimestampMillisecond(Some(value), Some("+01:00".into()))
+        }
+        other => unreachable!("unsupported test time unit {other:?}"),
+    }
+}
+
+#[test]
+fn timestamp_timezone_cast_preimage_preserves_results() {
+    use arrow::datatypes::TimeUnit;
+
+    // Same unit, widening and narrowing naive -> tz-aware casts: none of them may
+    // be preimage-rewritten, because Arrow shifts the naive value to UTC when the
+    // target carries a timezone.
+    for (source_unit, target_unit) in [
+        (TimeUnit::Nanosecond, TimeUnit::Nanosecond),
+        (TimeUnit::Millisecond, TimeUnit::Nanosecond),
+        (TimeUnit::Nanosecond, TimeUnit::Millisecond),
+    ] {
+        let source_type = DataType::Timestamp(source_unit, None);
+        let target_type = DataType::Timestamp(target_unit, Some("+01:00".into()));
+        let values = timezone_cast_values(&source_unit);
+        let batch = RecordBatch::try_from_iter(vec![(
+            "ts",
+            timezone_cast_array(&source_unit, values.clone()),
+        )])
+        .unwrap();
+        assert_eq!(batch.schema().field(0).data_type(), &source_type);
+        let expected: Vec<Option<bool>> =
+            values.iter().map(|value| value.map(|_| false)).collect();
+
+        for try_cast in [false, true] {
+            let make_expr = || {
+                cast_or_try_cast(col("ts"), target_type.clone(), try_cast)
+                    .eq(lit(timezone_cast_literal(&target_unit, 0)))
+            };
+            let original = make_expr();
+            let logical = simplify_logical_expr(
+                make_expr(),
+                batch.schema().to_dfschema_ref().unwrap(),
+            );
+            let logical_rows = evaluate_boolean_expr(&logical, &batch);
+            let physical_rows =
+                evaluate_physical_simplified_boolean_expr(&make_expr(), &batch);
+
+            // Naive timestamps cannot use the timezone-aware target's preimage.
+            assert_eq!(evaluate_boolean_expr(&original, &batch), expected);
+            assert_eq!(logical_rows, expected);
+            assert_eq!(physical_rows, expected);
+            assert!(
+                format!("{logical}").contains("CAST(ts AS"),
+                "cast must be retained for {source_unit:?} -> {target_unit:?}, \
+                 try_cast={try_cast}: {logical}"
+            );
+        }
+
+        // The IN-list rewrite uses the same exact-preimage helper, so a
+        // multi-item list must not fold either.
+        let in_list_expr = in_list(
+            cast_or_try_cast(col("ts"), target_type.clone(), false),
+            vec![
+                lit(timezone_cast_literal(&target_unit, 0)),
+                lit(timezone_cast_literal(&target_unit, 1)),
+            ],
+            false,
+        );
+        let logical = simplify_logical_expr(
+            in_list_expr.clone(),
+            batch.schema().to_dfschema_ref().unwrap(),
+        );
+        assert_eq!(evaluate_boolean_expr(&in_list_expr, &batch), expected);
+        assert_eq!(evaluate_boolean_expr(&logical, &batch), expected);
+        assert!(
+            format!("{logical}").contains("CAST(ts AS"),
+            "cast must be retained in the IN-list for {source_unit:?} -> \
+             {target_unit:?}: {logical}"
+        );
     }
 }
 
@@ -877,24 +952,29 @@ fn test_simplify_with_cycle_count(
 
 #[test]
 fn test_simplify_log() {
-    // Log(c3, 1) ===> 0
     {
-        let expr = log(col("c3_non_null"), lit(1));
-        test_simplify(expr, lit(0i64));
+        let expr = log(lit(2.0), lit(1.0));
+        test_simplify(expr, lit(0.0));
     }
-    // Log(c3, c3) ===> 1
     {
-        let expr = log(col("c3_non_null"), col("c3_non_null"));
-        let expected = lit(1i64);
+        let expr = log(lit(2.0), lit(2.0));
+        let expected = lit(1.0);
         test_simplify(expr, expected);
     }
-    // Log(c3, Power(c3, c4)) ===> c4
     {
-        let expr = log(
-            col("c3_non_null"),
-            power(col("c3_non_null"), col("c4_non_null")),
-        );
-        let expected = col("c4_non_null");
+        let expr = log(lit(2i64), power(lit(2i64), col("c4_non_null")));
+        test_simplify(expr.clone(), expr);
+    }
+    // Log(c3, 1) ===> Log(c3, 1), since c3 may be 1, 0 or negative
+    {
+        let expr = log(col("c3_non_null"), lit(1));
+        let expected = log(col("c3_non_null"), lit(1));
+        test_simplify(expr, expected);
+    }
+    // Log(c3, c3) ===> Log(c3, c3)
+    {
+        let expr = log(col("c3_non_null"), col("c3_non_null"));
+        let expected = log(col("c3_non_null"), col("c3_non_null"));
         test_simplify(expr, expected);
     }
     // Log(c3, c4) ===> Log(c3, c4)
@@ -920,20 +1000,21 @@ fn test_simplify_power() {
             Expr::Cast(Cast::new(Box::new(col("c3_non_null")), DataType::Float64));
         test_simplify(expr, expected)
     }
-    // Power(c3, Log(c3, c4)) ===> cast(c4 AS Float64)
-    // The simplifier rewrites `power(b, log(b, x))` to `x`, but the
-    // rewritten expression must keep the same type as the original
-    // `power` call. `power` returns Float64, so the UInt32 c4 has to be cast
-    // to Float64 to preserve the output schema the optimizer already
-    // committed to.
+    // Power(c3, Log(c3, c4)) is left alone, since c3 may be 1, 0 or negative.
     {
         let expr = power(
             col("c3_non_null"),
             log(col("c3_non_null"), col("c4_non_null")),
         );
-        let expected =
-            Expr::Cast(Cast::new(Box::new(col("c4_non_null")), DataType::Float64));
+        let expected = power(
+            col("c3_non_null"),
+            log(col("c3_non_null"), col("c4_non_null")),
+        );
         test_simplify(expr, expected)
+    }
+    {
+        let expr = power(lit(2i64), log(lit(2i64), col("c4_non_null")));
+        test_simplify(expr.clone(), expr)
     }
     // Power(c3, c4) ===> Power(c3, c4)
     {
