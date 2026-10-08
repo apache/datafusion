@@ -1262,6 +1262,14 @@ select sqrt(-1);
 query error cannot take square root of a negative number
 select sqrt((-1.0)::float8);
 
+# sqrt scalar negative float4
+query error cannot take square root of a negative number
+select sqrt(arrow_cast(-1, 'Float32'));
+
+# sqrt negative float4 column
+query error cannot take square root of a negative number
+select sqrt(arrow_cast(a, 'Float32')) from signed_integers;
+
 ## tan
 
 # tan scalar function
