@@ -138,13 +138,11 @@ fn scalar_argument_for_field(expr: &Expr, arg_field: &FieldRef) -> Option<Scalar
     }
 }
 
-// Resolve metadata bottom-up so nested CASE and CAST branches are visited once.
+// Resolve metadata bottom-up for branches whose metadata can be preserved.
 fn case_field_metadata(case: &Case, schema: &dyn ExprSchema) -> Result<FieldRef> {
     enum Work<'a> {
         Visit(&'a Expr),
         FinishCase(&'a Case),
-        FinishBinary(&'a BinaryExpr),
-        FinishScalar(&'a ScalarFunction),
         FinishCast(&'a FieldRef, bool),
         FinishAlias(Option<&'a FieldMetadata>),
     }
@@ -172,15 +170,6 @@ fn case_field_metadata(case: &Case, schema: &dyn ExprSchema) -> Result<FieldRef>
         match item {
             Work::Visit(expr) => match expr {
                 Expr::Case(nested) => schedule_case(nested, &mut work),
-                Expr::BinaryExpr(binary) => {
-                    work.push(Work::FinishBinary(binary));
-                    work.push(Work::Visit(&binary.right));
-                    work.push(Work::Visit(&binary.left));
-                }
-                Expr::ScalarFunction(function) => {
-                    work.push(Work::FinishScalar(function));
-                    work.extend(function.args.iter().rev().map(Work::Visit));
-                }
                 Expr::Cast(cast) => {
                     work.push(Work::FinishCast(&cast.field, false));
                     work.push(Work::Visit(&cast.expr));
@@ -194,65 +183,20 @@ fn case_field_metadata(case: &Case, schema: &dyn ExprSchema) -> Result<FieldRef>
                     work.push(Work::Visit(&alias.expr));
                 }
                 Expr::Negative(inner) => work.push(Work::Visit(inner)),
-                _ => fields.push(BranchField {
+                Expr::Column(_)
+                | Expr::Literal(_, _)
+                | Expr::OuterReferenceColumn(_, _)
+                | Expr::ScalarVariable(_, _)
+                | Expr::Placeholder(_)
+                | Expr::LambdaVariable(_) => fields.push(BranchField {
                     field: expr.to_field(schema)?.1,
                     certainly_null: matches!(
                         unwrap_certainly_null_expr(expr),
                         Expr::Literal(value, _) if value.is_null()
                     ),
                 }),
+                _ => return Ok(Arc::new(Field::new("", DataType::Null, true))),
             },
-            Work::FinishBinary(binary) => {
-                let Some(right) = fields.pop() else {
-                    return internal_err!("Missing CASE binary right field");
-                };
-                let Some(left) = fields.pop() else {
-                    return internal_err!("Missing CASE binary left field");
-                };
-                let mut coercer = BinaryTypeCoercer::new(
-                    left.field.data_type(),
-                    &binary.op,
-                    right.field.data_type(),
-                );
-                coercer.set_lhs_spans(binary.left.spans().cloned().unwrap_or_default());
-                coercer.set_rhs_spans(binary.right.spans().cloned().unwrap_or_default());
-                let nullable = match binary.op {
-                    Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => false,
-                    _ => left.field.is_nullable() || right.field.is_nullable(),
-                };
-                fields.push(BranchField {
-                    field: Arc::new(Field::new("", coercer.get_result_type()?, nullable)),
-                    certainly_null: false,
-                });
-            }
-            Work::FinishScalar(function) => {
-                if fields.len() < function.args.len() {
-                    return internal_err!("Missing CASE scalar function arguments");
-                }
-                let start = fields.len() - function.args.len();
-                let input_fields = fields
-                    .drain(start..)
-                    .map(|arg| arg.field)
-                    .collect::<Vec<_>>();
-                let coerced_fields =
-                    verify_function_arguments(function.func.as_ref(), &input_fields)?;
-                let scalar_arguments = function
-                    .args
-                    .iter()
-                    .map(|arg| match arg {
-                        Expr::Literal(value, _) => Some(value),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>();
-                let field = function.func.return_field_from_args(ReturnFieldArgs {
-                    arg_fields: &coerced_fields,
-                    scalar_arguments: &scalar_arguments,
-                })?;
-                fields.push(BranchField {
-                    field,
-                    certainly_null: false,
-                });
-            }
             Work::FinishCast(target, force_nullable) => {
                 let Some(source) = fields.pop() else {
                     return internal_err!("Missing CASE cast input field");
@@ -1569,24 +1513,10 @@ mod tests {
                 )
             }),
         ));
-        let mut scalar_nested = col("a");
-        for _ in 0..128 {
-            let nested_case = when(lit(true), scalar_nested).otherwise(col("b"))?;
-            scalar_nested = Expr::ScalarFunction(ScalarFunction::new_udf(
-                Arc::clone(&identity),
-                vec![nested_case],
-            ));
-        }
-        let Expr::Case(scalar_case) =
-            when(lit(true), scalar_nested).otherwise(col("b"))?
-        else {
-            unreachable!();
-        };
-        assert!(
-            case_field_metadata(&scalar_case, &schema)?
-                .metadata()
-                .is_empty()
-        );
+        let scalar_result =
+            Expr::ScalarFunction(ScalarFunction::new_udf(identity, vec![col("a")]));
+        let scalar_case = when(lit(true), scalar_result).otherwise(col("b"))?;
+        assert!(scalar_case.to_field(&schema)?.1.metadata().is_empty());
 
         let mismatched = when(lit(true), col("a")).otherwise(col("c"))?;
         assert!(mismatched.to_field(&schema)?.1.metadata().is_empty());
