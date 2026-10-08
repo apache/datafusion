@@ -28,6 +28,7 @@ use datafusion_common::utils::proxy::VecAllocExt;
 use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_common::{Result, exec_datafusion_err};
 use datafusion_expr::GroupSelection;
+use std::mem::size_of;
 use std::sync::Arc;
 
 /// An implementation of [`GroupColumn`] for `FixedSizeBinary` values
@@ -212,7 +213,7 @@ impl GroupColumn for FixedSizeBinaryGroupValueBuilder {
     }
 
     fn size(&self) -> usize {
-        self.buffer.allocated_size() + self.nulls.allocated_size()
+        size_of::<Self>() + self.buffer.allocated_size() + self.nulls.allocated_size()
     }
 
     fn build(self: Box<Self>) -> ArrayRef {

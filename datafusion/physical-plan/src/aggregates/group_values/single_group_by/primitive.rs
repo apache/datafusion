@@ -178,7 +178,9 @@ where
     }
 
     fn size(&self) -> usize {
-        self.map.capacity() * size_of::<(usize, u64)>() + self.values.allocated_size()
+        size_of::<Self>()
+            + self.map.capacity() * size_of::<(usize, u64)>()
+            + self.values.allocated_size()
     }
 
     fn is_empty(&self) -> bool {

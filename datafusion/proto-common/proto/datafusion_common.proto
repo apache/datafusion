@@ -22,6 +22,7 @@ package datafusion_common;
 
 message ColumnRelation {
   string relation = 1;
+  repeated string parts = 2;
 }
 
 message Column {

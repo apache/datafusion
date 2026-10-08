@@ -80,6 +80,8 @@ impl PhysicalOptimizerContext for ConfigOnlyContext<'_> {
 }
 
 /// A rule-based physical optimizer.
+///
+/// Applies its rule list in order in a single pass.
 #[derive(Clone, Debug)]
 pub struct PhysicalOptimizer {
     /// All rules to apply
