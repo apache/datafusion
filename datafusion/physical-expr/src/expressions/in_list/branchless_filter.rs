@@ -38,8 +38,9 @@
 //! `Float32` and a `UInt32` both use four bytes per value. The filter compares
 //! those stored bits through an unsigned type of the same size, without copying
 //! the value buffer. A bit pattern is simply the bytes Arrow uses to store a
-//! value. Comparing it preserves details such as `0.0` versus `-0.0` and
-//! different NaN values. [`BranchlessFilterType`] defines these safe,
+//! value. Float comparisons treat `0.0` and `-0.0` as equal under SQL
+//! semantics, while preserving distinctions between different NaN values.
+//! [`BranchlessFilterType`] defines these safe,
 //! same-sized mappings and checks their sizes at compile time.
 //!
 //! The fast path is limited to short lists:
@@ -75,6 +76,7 @@ use arrow::buffer::{BooleanBuffer, ScalarBuffer};
 use arrow::datatypes::*;
 use arrow::util::bit_iterator::BitIndexIterator;
 use datafusion_common::{Result, exec_datafusion_err, internal_datafusion_err};
+use half::f16;
 
 use super::result::build_result_from_contains;
 use super::static_filter::StaticFilter;
@@ -117,20 +119,24 @@ const BRANCHLESS_MAX_16B: usize = 4;
 ///
 /// `T` is the logical Arrow type accepted by the filter. `CompareType` is the
 /// same-width type used for the fixed comparison chain. Signed integers,
-/// floats, and temporal values use an unsigned comparison type so they compare
-/// by their raw bit pattern.
+/// floats, and temporal values use an unsigned comparison type. Most values
+/// compare by raw bit pattern; floats additionally treat both signed-zero
+/// patterns as equal.
 pub(super) trait BranchlessFilterType:
-    ArrowPrimitiveType + Send + Sync + 'static
+    ArrowPrimitiveType + Send + Sync + Sized + 'static
 {
     type CompareType: ArrowPrimitiveType + Send + Sync + 'static;
 
     /// Maximum number of non-null IN-list values to handle with
     /// [`BranchlessFilter`] for this primitive type.
     const MAX_LIST_LEN: usize;
+
+    /// The two signed-zero encodings for float types.
+    const SIGNED_ZERO_BITS: Option<[BranchlessNative<Self>; 2]> = None;
 }
 
 macro_rules! branchless_filter_type {
-    ($logical:ty, $compare:ty, $max_len:expr) => {
+    ($logical:ty, $compare:ty, $max_len:expr $(, $zero_bits:expr)?) => {
         // The branchless filter reads the same Arrow value buffer as the
         // comparison type. That is only valid when both native types have the
         // same width, so catch any bad mapping here at compile time.
@@ -143,6 +149,7 @@ macro_rules! branchless_filter_type {
         impl BranchlessFilterType for $logical {
             type CompareType = $compare;
             const MAX_LIST_LEN: usize = $max_len;
+            $(const SIGNED_ZERO_BITS: Option<[BranchlessNative<Self>; 2]> = Some($zero_bits);)?
         }
     };
 }
@@ -151,18 +158,33 @@ branchless_filter_type!(Int8Type, UInt8Type, BRANCHLESS_MAX_1B);
 branchless_filter_type!(UInt8Type, UInt8Type, BRANCHLESS_MAX_1B);
 branchless_filter_type!(Int16Type, UInt16Type, BRANCHLESS_MAX_2B);
 branchless_filter_type!(UInt16Type, UInt16Type, BRANCHLESS_MAX_2B);
-branchless_filter_type!(Float16Type, UInt16Type, BRANCHLESS_MAX_2B);
+branchless_filter_type!(
+    Float16Type,
+    UInt16Type,
+    BRANCHLESS_MAX_2B,
+    [f16::ZERO.to_bits(), f16::NEG_ZERO.to_bits()]
+);
 
 branchless_filter_type!(Int32Type, UInt32Type, BRANCHLESS_MAX_4B);
 branchless_filter_type!(UInt32Type, UInt32Type, BRANCHLESS_MAX_4B);
-branchless_filter_type!(Float32Type, UInt32Type, BRANCHLESS_MAX_4B);
+branchless_filter_type!(
+    Float32Type,
+    UInt32Type,
+    BRANCHLESS_MAX_4B,
+    [0.0_f32.to_bits(), (-0.0_f32).to_bits()]
+);
 branchless_filter_type!(Date32Type, UInt32Type, BRANCHLESS_MAX_4B);
 branchless_filter_type!(Time32SecondType, UInt32Type, BRANCHLESS_MAX_4B);
 branchless_filter_type!(Time32MillisecondType, UInt32Type, BRANCHLESS_MAX_4B);
 
 branchless_filter_type!(Int64Type, UInt64Type, BRANCHLESS_MAX_8B);
 branchless_filter_type!(UInt64Type, UInt64Type, BRANCHLESS_MAX_8B);
-branchless_filter_type!(Float64Type, UInt64Type, BRANCHLESS_MAX_8B);
+branchless_filter_type!(
+    Float64Type,
+    UInt64Type,
+    BRANCHLESS_MAX_8B,
+    [0.0_f64.to_bits(), (-0.0_f64).to_bits()]
+);
 branchless_filter_type!(Date64Type, UInt64Type, BRANCHLESS_MAX_8B);
 branchless_filter_type!(Time64MicrosecondType, UInt64Type, BRANCHLESS_MAX_8B);
 branchless_filter_type!(Time64NanosecondType, UInt64Type, BRANCHLESS_MAX_8B);
@@ -218,8 +240,10 @@ where
         }
 
         let all_values = branchless_values::<T>(in_array);
-        let mut in_list_values = Vec::with_capacity(non_null_count);
-
+        // Float zero may add its other signed encoding.
+        let mut in_list_values = Vec::with_capacity(
+            non_null_count + usize::from(T::SIGNED_ZERO_BITS.is_some()),
+        );
         match in_array.nulls() {
             None => {
                 in_list_values.extend(all_values.iter().copied());
@@ -234,6 +258,18 @@ where
         }
 
         debug_assert_eq!(in_list_values.len(), non_null_count);
+
+        // Add the other signed zero once so per-row lookup stays branch-free.
+        if let Some([positive_zero, negative_zero]) = T::SIGNED_ZERO_BITS {
+            match (
+                in_list_values.contains(&positive_zero),
+                in_list_values.contains(&negative_zero),
+            ) {
+                (true, false) => in_list_values.push(negative_zero),
+                (false, true) => in_list_values.push(positive_zero),
+                _ => {}
+            }
+        }
         let in_list_values = in_list_values.into_boxed_slice();
         let check_values = membership_check_for_len::<T>(in_list_values.len());
 
@@ -290,13 +326,23 @@ where
     T: BranchlessFilterType,
     BranchlessNative<T>: Copy + PartialEq,
 {
+    /// Selects a fixed-size comparison function for the enclosing `len` and `T`.
+    ///
+    /// Arguments must enumerate every length from zero through the logical limit.
+    /// Their count is therefore one past that limit: the extra length supported
+    /// for floats when adding the other signed-zero encoding.
+    ///
+    /// The function is selected once during filter construction.
     macro_rules! choose {
-        ($($n:literal),* $(,)?) => {
+        ($($n:literal),+ $(,)?) => {{
+            const EXTRA_LEN: usize = [$($n),+].len();
             match len {
-                $($n => check_values::<BranchlessNative<T>, $n>,)*
+                $($n => check_values::<BranchlessNative<T>, $n>,)+
+                EXTRA_LEN if T::SIGNED_ZERO_BITS.is_some() =>
+                    check_values::<BranchlessNative<T>, EXTRA_LEN>,
                 _ => unreachable!("list length exceeds the configured limit"),
             }
-        };
+        }};
     }
 
     // Avoid creating checks for lengths a type does not support.
@@ -451,11 +497,11 @@ mod tests {
 
         assert_eq!(
             filter.contains(&needles, false)?,
-            BooleanArray::from(vec![None, Some(true), Some(true), None, None])
+            BooleanArray::from(vec![Some(true), Some(true), Some(true), None, None])
         );
         assert_eq!(
             filter.contains(&needles, true)?,
-            BooleanArray::from(vec![None, Some(false), Some(false), None, None])
+            BooleanArray::from(vec![Some(false), Some(false), Some(false), None, None])
         );
 
         let wrong_type = UInt16Array::from(vec![Some(0x8000), Some(0x7e01)]);
@@ -466,19 +512,25 @@ mod tests {
     }
 
     #[test]
-    fn branchless_filter_floats_use_bit_equality() -> Result<()> {
+    fn branchless_filter_floats_use_sql_zero_equality() -> Result<()> {
         let nan_a = f32::from_bits(0x7fc0_0001);
         let nan_b = f32::from_bits(0x7fc0_0002);
         let haystack: ArrayRef =
-            Arc::new(Float32Array::from(vec![Some(-0.0), Some(nan_a)]));
+            Arc::new(Float32Array::from(vec![Some(0.0), Some(nan_a)]));
         let filter = BranchlessFilter::<Float32Type>::try_new(&haystack)?;
         let needles =
             Float32Array::from(vec![Some(0.0), Some(-0.0), Some(nan_a), Some(nan_b)]);
 
         assert_eq!(
             filter.contains(&needles, false)?,
-            BooleanArray::from(vec![Some(false), Some(true), Some(true), Some(false)])
+            BooleanArray::from(vec![Some(true), Some(true), Some(true), Some(false)])
         );
+
+        // A list containing both encodings is not expanded.
+        let zero_only: ArrayRef =
+            Arc::new(Float32Array::from(vec![Some(0.0), Some(-0.0)]));
+        let filter = BranchlessFilter::<Float32Type>::try_new(&zero_only)?;
+        assert_eq!(filter.in_list_values.len(), 2);
 
         let nan_a = f64::from_bits(0x7ff8_0000_0000_0001);
         let nan_b = f64::from_bits(0x7ff8_0000_0000_0002);
@@ -490,7 +542,7 @@ mod tests {
 
         assert_eq!(
             filter.contains(&needles, false)?,
-            BooleanArray::from(vec![Some(false), Some(true), Some(true), Some(false)])
+            BooleanArray::from(vec![Some(true), Some(true), Some(true), Some(false)])
         );
 
         Ok(())

@@ -63,7 +63,7 @@ fn view_types_match(needle_type: &DataType, list_type: &DataType) -> bool {
         && dictionary_value_type(needle_type) == list_type
 }
 
-fn dictionary_value_type(mut data_type: &DataType) -> &DataType {
+pub(super) fn dictionary_value_type(mut data_type: &DataType) -> &DataType {
     while let DataType::Dictionary(_, value_type) = data_type {
         data_type = value_type;
     }
