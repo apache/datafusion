@@ -15,7 +15,26 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""Use the tagged Sphinx configuration when manually building release docs."""
+"""Sphinx configuration overlay for building docs from a release tag.
+
+Loads ``conf.py`` from a``docs/source`` directory located at
+``DATAFUSION_DOCS_SOURCE`` and overrides the following settings:
+- the version string (``DATAFUSION_DOCS_VERSION``),
+- the site base URL used for the sitemap
+- the version switcher.
+
+Why?
+
+Documentation from older release tags do not have the version picker code and
+expect their base URL to be ``/`` rather than ```versions/<version>/``, so we can
+not publish docs built for the archived version without modification.
+
+Rather than modifying the documentation in the old release branch,
+the release process builds docs with the following command from a main
+checkout:
+
+sphinx-build -c docs/scripts/release
+"""
 
 import os
 from pathlib import Path
@@ -33,9 +52,7 @@ html_logo = str(source / html_logo)
 html_favicon = str(source / html_favicon)
 
 version = release = os.environ["DATAFUSION_DOCS_VERSION"]
-docs_base_url = os.environ.get("DATAFUSION_DOCS_BASE_URL", "https://datafusion.apache.org/")
-docs_base_url = docs_base_url.rstrip("/") + "/"
-html_baseurl = f"{docs_base_url}versions/{version}/"
+html_baseurl = f"https://datafusion.apache.org/versions/{version}/"
 sitemap_url_scheme = "{link}"
 if "sphinx_sitemap" not in extensions:
     extensions.append("sphinx_sitemap")
@@ -45,7 +62,7 @@ html_theme_options = {
     "navbar_end": ["version-switcher", "theme-switcher"],
     "check_switcher": False,
     "switcher": {
-        "json_url": docs_base_url + "_static/versions.json",
+        "json_url": "/_static/versions.json",
         "version_match": version,
     },
 }
