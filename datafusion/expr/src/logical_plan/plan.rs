@@ -67,7 +67,8 @@ use datafusion_common::{
     FunctionalDependence, FunctionalDependencies, NullEquality, ParamValues, Result,
     ScalarValue, Spans, SplitPoint, TableReference, UnnestOptions,
     aggregate_functional_dependencies, assert_eq_or_internal_err, assert_or_internal_err,
-    internal_err, plan_datafusion_err, plan_err, validate_range_split_points,
+    internal_err, not_impl_err, plan_datafusion_err, plan_err,
+    validate_range_split_points,
 };
 use indexmap::IndexSet;
 use itertools::Itertools as _;
@@ -4162,6 +4163,15 @@ impl Aggregate {
         let is_grouping_set = matches!(group_expr.as_slice(), [Expr::GroupingSet(_)]);
 
         let grouping_expr: Vec<&Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
+
+        // Each distinct grouping column needs a bit in __grouping_id, whose largest
+        // supported type is UInt64. Reject before constructing its schema or rewriting GROUPING.
+        if is_grouping_set && grouping_expr.len() > u64::BITS as usize {
+            return not_impl_err!(
+                "Grouping sets support at most 64 grouping columns, got {}",
+                grouping_expr.len()
+            );
+        }
 
         let mut qualified_fields = exprlist_to_fields(grouping_expr, &input)?;
 
