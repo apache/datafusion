@@ -37,8 +37,8 @@ use super::metrics::{
 use crate::spill::get_record_batch_memory_size;
 use crate::{SendableRecordBatchStream, stream::RecordBatchStreamAdapter};
 
-use arrow::array::{ArrayRef, RecordBatch, UInt32Array};
-use arrow::datatypes::SchemaRef;
+use arrow::array::{ArrayRef, RecordBatch, UInt32Array, UInt64Array};
+use arrow::datatypes::{FieldRef, Schema, SchemaRef};
 use datafusion_common::{
     HashMap, Result, ScalarValue, internal_datafusion_err, internal_err,
 };
@@ -1714,6 +1714,27 @@ impl StoreSlots for PartitionHeap {
     }
 }
 
+/// Output schema of `PartitionedTopKExec`: its input's columns, plus
+/// `ranking_field` when the operator emits the ranking column itself.
+///
+/// Built once, by the exec, and handed to each partition's state as is, so the
+/// batches a state emits and the schema the exec declares are the same
+/// `SchemaRef` rather than two schemas that happen to agree.
+pub(crate) fn partitioned_topk_output_schema(
+    input_schema: &SchemaRef,
+    ranking_field: Option<&FieldRef>,
+) -> SchemaRef {
+    let Some(field) = ranking_field else {
+        return Arc::clone(input_schema);
+    };
+    let mut fields = input_schema.fields().to_vec();
+    fields.push(Arc::clone(field));
+    Arc::new(Schema::new_with_metadata(
+        fields,
+        input_schema.metadata().clone(),
+    ))
+}
+
 /// What [`PartitionedTopK`] and [`PartitionedTopKRank`] share: the two
 /// [`RowConverter`]s — one for the partition key, one for the ORDER BY key —
 /// and their scratch [`Rows`], the [`MemoryReservation`], [`TopKMetrics`], one
@@ -1726,7 +1747,14 @@ impl StoreSlots for PartitionHeap {
 /// the retention rule — differs, so each operator writes its own row loop over
 /// these fields between the two calls.
 struct PartitionedTopKCore<S> {
-    schema: SchemaRef,
+    /// The schema `emit` produces: the input's columns, plus the ranking
+    /// column when [`Self::emit_ranks`] is set.
+    output_schema: SchemaRef,
+    /// When set, `emit` appends a column holding each retained row's ranking
+    /// value, as computed by the operator's drain in [`Self::emit_with`]. That
+    /// lets the rewrite drop the `BoundedWindowAggExec` that would otherwise
+    /// re-derive the same values over this operator's output.
+    emit_ranks: bool,
     metrics: TopKMetrics,
     reservation: MemoryReservation,
     /// ORDER BY expressions (excludes PARTITION BY).
@@ -1801,11 +1829,13 @@ struct PartitionedTopKCore<S> {
 
 impl<S: StoreSlots> PartitionedTopKCore<S> {
     /// `name` labels the memory consumer, as `name[partition_id]`.
+    /// `ranked_schema` is the exec's output schema when it emits the ranking
+    /// column, which makes `emit` append it, and `None` to emit `schema` as is.
     #[expect(clippy::too_many_arguments)]
     fn try_new(
         name: &str,
         partition_id: usize,
-        schema: SchemaRef,
+        schema: &SchemaRef,
         partition_exprs: Vec<Arc<dyn PhysicalExpr>>,
         partition_sort_fields: Vec<SortField>,
         order_expr: LexOrdering,
@@ -1813,6 +1843,7 @@ impl<S: StoreSlots> PartitionedTopKCore<S> {
         batch_size: usize,
         runtime: &Arc<RuntimeEnv>,
         metrics: &ExecutionPlanMetricsSet,
+        ranked_schema: Option<SchemaRef>,
     ) -> Result<Self> {
         assert!(k > 0, "{name} requires k > 0");
         let reservation = MemoryConsumer::new(format!("{name}[{partition_id}]"))
@@ -1821,7 +1852,7 @@ impl<S: StoreSlots> PartitionedTopKCore<S> {
         // Both encoders are shared by every partition, and each scratch buffer
         // is sized to hold a whole batch so an `insert_batch` pass encodes once
         // per column set with no regrowth.
-        let order_sort_fields = build_sort_fields(&order_expr, &schema)?;
+        let order_sort_fields = build_sort_fields(&order_expr, schema)?;
         let row_converter = RowConverter::new(order_sort_fields)?;
         let scratch_rows =
             row_converter.empty_rows(batch_size, ESTIMATED_BYTES_PER_ROW * batch_size);
@@ -1831,7 +1862,8 @@ impl<S: StoreSlots> PartitionedTopKCore<S> {
             .empty_rows(batch_size, ESTIMATED_BYTES_PER_ROW * batch_size);
 
         Ok(Self {
-            schema,
+            emit_ranks: ranked_schema.is_some(),
+            output_schema: ranked_schema.unwrap_or_else(|| Arc::clone(schema)),
             metrics: TopKMetrics::new(metrics, partition_id),
             reservation,
             expr: order_expr,
@@ -1908,15 +1940,20 @@ impl<S: StoreSlots> PartitionedTopKCore<S> {
     /// its retained rows in output order, and return them as a stream of
     /// `RecordBatch`es ordered by `(partition_keys, order_keys)`.
     ///
+    /// `drain` pairs each row with its ranking value, which is what the
+    /// operator emits when [`Self::emit_ranks`] is set and is ignored
+    /// otherwise.
+    ///
     /// Only the order is resolved here; [`EmitState::stream`] interleaves the
     /// rows out one `batch_size` chunk per poll, carrying the reservation until
     /// the stream is dropped since the store's batches stay pinned until then.
-    fn emit_with<I: IntoIterator<Item = StoreRef>>(
+    fn emit_with<I: IntoIterator<Item = (StoreRef, u64)>>(
         self,
         drain: impl FnMut(S) -> I,
     ) -> Result<SendableRecordBatchStream> {
         let Self {
-            schema,
+            output_schema,
+            emit_ranks,
             metrics,
             reservation,
             partitions,
@@ -1938,7 +1975,8 @@ impl<S: StoreSlots> PartitionedTopKCore<S> {
             .map(|(_key, state)| state)
             .flat_map(drain);
         EmitState::stream(
-            schema,
+            output_schema,
+            emit_ranks,
             metrics,
             reservation,
             batch_size,
@@ -1987,7 +2025,7 @@ impl PartitionedTopK {
     #[expect(clippy::too_many_arguments)]
     pub(crate) fn try_new(
         partition_id: usize,
-        schema: SchemaRef,
+        schema: &SchemaRef,
         partition_exprs: Vec<Arc<dyn PhysicalExpr>>,
         partition_sort_fields: Vec<SortField>,
         order_expr: LexOrdering,
@@ -1995,6 +2033,7 @@ impl PartitionedTopK {
         batch_size: usize,
         runtime: &Arc<RuntimeEnv>,
         metrics: &ExecutionPlanMetricsSet,
+        ranked_schema: Option<SchemaRef>,
     ) -> Result<Self> {
         Ok(Self {
             core: PartitionedTopKCore::try_new(
@@ -2008,6 +2047,7 @@ impl PartitionedTopK {
                 batch_size,
                 runtime,
                 metrics,
+                ranked_schema,
             )?,
         })
     }
@@ -2121,8 +2161,15 @@ impl PartitionedTopK {
     /// the reservation is carried into [`EmitState`] and released when the stream
     /// is dropped rather than when this returns.
     pub(crate) fn emit(self) -> Result<SendableRecordBatchStream> {
-        self.core
-            .emit_with(|mut heap| heap.drain_sorted().into_iter().map(|slot| slot.at))
+        // Each heap drains its partition's rows in ORDER BY order, low to
+        // high, so a row's `ROW_NUMBER()` is just its 1-based position in that
+        // drain.
+        self.core.emit_with(|mut heap| {
+            heap.drain_sorted()
+                .into_iter()
+                .zip(1u64..)
+                .map(|(slot, row_number)| (slot.at, row_number))
+        })
     }
 
     /// Total memory currently held by this operator, including all
@@ -2136,8 +2183,11 @@ impl PartitionedTopK {
 /// Hands out `batch_size` rows at a time, interleaved out of the store batches
 /// the heaps referenced.
 struct EmitState {
+    /// The input's columns, plus the ranking column when `ranks` is set.
+    output_schema: SchemaRef,
     metrics: TopKMetrics,
-    /// Covers the pinned batches and `ordered` for as long as they are held.
+    /// Covers the pinned batches, `ordered` and `ranks` for as long as they
+    /// are held.
     ///
     /// Carried here rather than dropped at the end of `emit` so the bytes stay
     /// accounted for until the stream is, and released by this struct's drop.
@@ -2150,6 +2200,8 @@ struct EmitState {
     batches: Vec<RecordBatch>,
     /// `(array_pos, row)` pairs in `(partition_keys, order_keys)` order.
     ordered: Vec<(usize, usize)>,
+    /// Each `ordered` row's ranking value, when the operator emits it.
+    ranks: Option<Vec<u64>>,
     /// Scratch for [`interleave_referenced`], one entry per batch.
     remap: Vec<usize>,
     pos: usize,
@@ -2158,14 +2210,18 @@ struct EmitState {
 impl EmitState {
     /// Resolve `slots`, `len` of them in output order, against `store`, and
     /// return the stream that emits them. Shared by [`PartitionedTopK::emit`]
-    /// and [`PartitionedTopKRank::emit`], which differ only in that order.
+    /// and [`PartitionedTopKRank::emit`], which differ only in that order and
+    /// in how they derive each row's ranking value, which is kept only when
+    /// `emit_ranks` is set.
+    #[expect(clippy::too_many_arguments)]
     fn stream(
-        schema: SchemaRef,
+        output_schema: SchemaRef,
+        emit_ranks: bool,
         metrics: TopKMetrics,
         reservation: MemoryReservation,
         batch_size: usize,
         store: &RecordBatchStore,
-        slots: impl Iterator<Item = StoreRef>,
+        slots: impl Iterator<Item = (StoreRef, u64)>,
         len: usize,
     ) -> Result<SendableRecordBatchStream> {
         let timer = metrics.baseline.elapsed_compute().timer();
@@ -2176,17 +2232,23 @@ impl EmitState {
 
         // Flattened in output order, so the emit itself is a slice walk.
         let mut ordered: Vec<(usize, usize)> = Vec::with_capacity(len);
-        for slot in slots {
+        // Parallel to `ordered`.
+        let mut ranks: Option<Vec<u64>> = emit_ranks.then(|| Vec::with_capacity(len));
+        for (slot, rank) in slots {
             let array_pos = *batch_id_array_pos
                 .get(&slot.batch_id)
                 .expect("a retained slot's batch_id is present in the store");
             ordered.push((array_pos, slot.row as usize));
+            if let Some(ranks) = &mut ranks {
+                ranks.push(rank);
+            }
         }
         drop(timer);
 
         // What survives this function is the store's batches — pinned until the
         // returned stream is dropped — plus `ordered`, one 16-byte pair per
-        // retained row, and `remap`, one entry per batch. Everything else the
+        // retained row, `ranks`, 8 more bytes per row when the ranking column
+        // is emitted, and `remap`, one entry per batch. Everything else the
         // operator held (its scratch buffers, every partition and its interned
         // key) is freed by now, so the resize below is normally a shrink. The
         // reservation moves into the stream state rather than being dropped
@@ -2198,21 +2260,26 @@ impl EmitState {
                 + store.batches_size
                 + batches.capacity() * size_of::<RecordBatch>()
                 + ordered.capacity() * size_of::<(usize, usize)>()
+                + ranks
+                    .as_ref()
+                    .map_or(0, |r| r.capacity() * size_of::<u64>())
                 + batches.len() * size_of::<usize>(),
         )?;
 
         let state = EmitState {
+            output_schema: Arc::clone(&output_schema),
             metrics,
             _reservation: reservation,
             batch_size,
             remap: vec![usize::MAX; batches.len()],
             batches,
             ordered,
+            ranks,
             pos: 0,
         };
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
-            schema,
+            output_schema,
             futures::stream::try_unfold(state, |mut state| async move {
                 Ok(state.next_batch()?.map(|batch| (batch, state)))
             }),
@@ -2227,14 +2294,46 @@ impl EmitState {
         }
         let _timer = self.metrics.baseline.elapsed_compute().timer();
 
-        let end = (self.pos + self.batch_size).min(self.ordered.len());
-        let chunk = &self.ordered[self.pos..end];
+        let start = self.pos;
+        let end = (start + self.batch_size).min(self.ordered.len());
         self.pos = end;
 
-        let batch = interleave_referenced(&self.batches, chunk, &mut self.remap)?;
-        (&batch).record_output(&self.metrics.baseline);
-        Ok(Some(batch))
+        let batch = interleave_referenced(
+            &self.batches,
+            &self.ordered[start..end],
+            &mut self.remap,
+        )?;
+        let ranks = self.ranks.as_ref().map(|r| r[start..end].iter().copied());
+        finish_chunk(batch, ranks, &self.output_schema, &self.metrics).map(Some)
     }
+}
+
+/// Finish one output chunk: append `ranks` as its last column under
+/// `output_schema` when the operator emits the ranking column, then count the
+/// chunk in `output_rows`.
+///
+/// Each of the three retention policies derives the values differently —
+/// see [`PartitionedTopK::emit`], [`PartitionedTopKRank::emit`], and
+/// [`PartitionedTopKDenseRank::emit`] — but all three know them by the time
+/// they build an output batch, which is what makes the
+/// `BoundedWindowAggExec` above the operator removable. `RecordBatch::try_new`
+/// rejects a `ranks` whose length differs from the chunk's.
+fn finish_chunk(
+    batch: RecordBatch,
+    ranks: Option<impl IntoIterator<Item = u64>>,
+    output_schema: &SchemaRef,
+    metrics: &TopKMetrics,
+) -> Result<RecordBatch> {
+    let batch = match ranks {
+        None => batch,
+        Some(ranks) => {
+            let mut columns = batch.columns().to_vec();
+            columns.push(Arc::new(UInt64Array::from_iter_values(ranks)));
+            RecordBatch::try_new(Arc::clone(output_schema), columns)?
+        }
+    };
+    (&batch).record_output(&metrics.baseline);
+    Ok(batch)
 }
 
 /// Per-partition state for `RANK()` semantics.
@@ -2319,7 +2418,7 @@ impl PartitionedTopKRank {
     #[expect(clippy::too_many_arguments)]
     pub(crate) fn try_new(
         partition_id: usize,
-        schema: SchemaRef,
+        schema: &SchemaRef,
         partition_exprs: Vec<Arc<dyn PhysicalExpr>>,
         partition_sort_fields: Vec<SortField>,
         order_expr: LexOrdering,
@@ -2327,6 +2426,7 @@ impl PartitionedTopKRank {
         batch_size: usize,
         runtime: &Arc<RuntimeEnv>,
         metrics: &ExecutionPlanMetricsSet,
+        ranked_schema: Option<SchemaRef>,
     ) -> Result<Self> {
         Ok(Self {
             core: PartitionedTopKCore::try_new(
@@ -2340,6 +2440,7 @@ impl PartitionedTopKRank {
                 batch_size,
                 runtime,
                 metrics,
+                ranked_schema,
             )?,
             evicted_key: Vec::new(),
             ties_bytes: 0,
@@ -2476,8 +2577,31 @@ impl PartitionedTopKRank {
     /// (all sharing the boundary ob).
     pub(crate) fn emit(self) -> Result<SendableRecordBatchStream> {
         self.core.emit_with(|mut state| {
-            let heap = state.heap.drain_sorted().into_iter().map(|slot| slot.at);
-            heap.chain(state.ties)
+            let heap = state.heap.drain_sorted();
+            // `RANK` is `1 + (rows with a strictly smaller ORDER BY value)`.
+            // Counting positions is only valid because the retained set is a
+            // *complete* order-prefix of the partition: the heap keeps the K
+            // smallest keys and the ties only add rows equal to the boundary, so
+            // no row with a smaller key than a retained row was ever dropped.
+            //
+            // The ties all sit at the boundary, the heap's largest key, so they
+            // share the rank of the first heap row holding it. Ties exist only
+            // while the heap is full, so a heap with no rows has none.
+            let boundary_rank = heap.last().map_or(0, |worst| {
+                heap.partition_point(|slot| slot.key < worst.key) as u64 + 1
+            });
+            // Over the sorted heap, a row either ties with its predecessor and
+            // repeats its rank or starts a new one at its own 1-based position.
+            let mut prev: Option<Vec<u8>> = None;
+            let mut rank = 0;
+            let heap = heap.into_iter().zip(1u64..).map(move |(slot, position)| {
+                if prev.as_ref() != Some(&slot.key) {
+                    rank = position;
+                }
+                prev = Some(slot.key);
+                (slot.at, rank)
+            });
+            heap.chain(state.ties.into_iter().map(move |at| (at, boundary_rank)))
         })
     }
 
@@ -2633,7 +2757,6 @@ impl DenseRankPartitionState {
 ///     row count is added to the `row_replacements` metric.
 ///   - `ob_key >= max` → drop the whole run; no map mutation.
 pub(crate) struct PartitionedTopKDenseRank {
-    schema: SchemaRef,
     metrics: TopKMetrics,
     reservation: MemoryReservation,
     /// ORDER BY expressions (excludes PARTITION BY).
@@ -2670,15 +2793,23 @@ pub(crate) struct PartitionedTopKDenseRank {
     /// keeps the reservation proportional to the batches actually pinned
     /// rather than to the number of entries pointing at them.
     store: RecordBatchStore,
+    /// When set, `emit` appends a column holding each retained row's
+    /// `DENSE_RANK()`, letting the rewrite drop the `BoundedWindowAggExec`
+    /// that would otherwise re-derive it.
+    emit_ranks: bool,
+    /// The schema `emit` produces: the input's columns, plus the ranking
+    /// column when [`Self::emit_ranks`] is set.
+    output_schema: SchemaRef,
     k: usize,
     batch_size: usize,
 }
 
 impl PartitionedTopKDenseRank {
+    /// `ranked_schema` is as for [`PartitionedTopKCore::try_new`].
     #[expect(clippy::too_many_arguments)]
     pub(crate) fn try_new(
         partition_id: usize,
-        schema: SchemaRef,
+        schema: &SchemaRef,
         partition_exprs: Vec<Arc<dyn PhysicalExpr>>,
         partition_sort_fields: Vec<SortField>,
         order_expr: LexOrdering,
@@ -2686,13 +2817,14 @@ impl PartitionedTopKDenseRank {
         batch_size: usize,
         runtime: &Arc<RuntimeEnv>,
         metrics: &ExecutionPlanMetricsSet,
+        ranked_schema: Option<SchemaRef>,
     ) -> Result<Self> {
         assert!(k > 0, "PartitionedTopKDenseRank requires k > 0");
         let reservation =
             MemoryConsumer::new(format!("PartitionedTopKDenseRank[{partition_id}]"))
                 .register(&runtime.memory_pool);
 
-        let order_sort_fields = build_sort_fields(&order_expr, &schema)?;
+        let order_sort_fields = build_sort_fields(&order_expr, schema)?;
         let row_converter = RowConverter::new(order_sort_fields)?;
         let scratch_rows =
             row_converter.empty_rows(batch_size, ESTIMATED_BYTES_PER_ROW * batch_size);
@@ -2702,7 +2834,8 @@ impl PartitionedTopKDenseRank {
             .empty_rows(batch_size, ESTIMATED_BYTES_PER_ROW * batch_size);
 
         Ok(Self {
-            schema,
+            emit_ranks: ranked_schema.is_some(),
+            output_schema: ranked_schema.unwrap_or_else(|| Arc::clone(schema)),
             metrics: TopKMetrics::new(metrics, partition_id),
             reservation,
             expr: order_expr,
@@ -2912,7 +3045,8 @@ impl PartitionedTopKDenseRank {
     /// emitted rows are in ob-sorted order.
     pub(crate) fn emit(self) -> Result<SendableRecordBatchStream> {
         let Self {
-            schema,
+            output_schema,
+            emit_ranks,
             metrics,
             reservation: _,
             expr: _,
@@ -2959,6 +3093,9 @@ impl PartitionedTopKDenseRank {
         let mut batch_refs: Vec<&RecordBatch> = Vec::new();
         let mut batch_id_pos: HashMap<u32, usize> = HashMap::new();
         let mut indices: Vec<(usize, usize)> = Vec::with_capacity(batch_size);
+        // Parallel to `indices`: each row's `DENSE_RANK()`, when emitted.
+        let mut ranks: Option<Vec<u64>> =
+            emit_ranks.then(|| Vec::with_capacity(batch_size));
 
         // Chunk at `batch_size` so the operator emits the same batch sizes
         // as before and no single `interleave` output exceeds `batch_size`.
@@ -2973,7 +3110,11 @@ impl PartitionedTopKDenseRank {
             let mut sorted_obs: Vec<(Vec<u8>, Vec<GroupEntry>)> =
                 groups.into_iter().collect();
             sorted_obs.sort_by(|a, b| a.0.cmp(&b.0));
-            for (_ob, entries) in sorted_obs {
+            // `DENSE_RANK` is the 1-based index of a row's distinct ob value
+            // within its partition, and the state holds exactly the K
+            // distinct-smallest values — so the loop counter *is* the rank,
+            // shared by every row of the group.
+            for (dense_rank, (_ob, entries)) in (1u64..).zip(sorted_obs) {
                 for entry in entries {
                     let batch = &store
                         .get(entry.batch_id)
@@ -2990,10 +3131,18 @@ impl PartitionedTopKDenseRank {
                             })
                         });
                         indices.push((pos, row as usize));
+                        if let Some(ranks) = &mut ranks {
+                            ranks.push(dense_rank);
+                        }
                         if indices.len() == batch_size {
                             let b = interleave_record_batch(&batch_refs, &indices)?;
-                            (&b).record_output(&metrics.baseline);
-                            out.push(Ok(b));
+                            let ranks = ranks.as_mut().map(|r| r.drain(..));
+                            out.push(Ok(finish_chunk(
+                                b,
+                                ranks,
+                                &output_schema,
+                                &metrics,
+                            )?));
                             indices.clear();
                             batch_refs.clear();
                             batch_id_pos.clear();
@@ -3005,12 +3154,12 @@ impl PartitionedTopKDenseRank {
         }
         if !indices.is_empty() {
             let b = interleave_record_batch(&batch_refs, &indices)?;
-            (&b).record_output(&metrics.baseline);
-            out.push(Ok(b));
+            let ranks = ranks.as_mut().map(|r| r.drain(..));
+            out.push(Ok(finish_chunk(b, ranks, &output_schema, &metrics)?));
         }
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
-            schema,
+            output_schema,
             futures::stream::iter(out),
         )))
     }
@@ -3054,7 +3203,7 @@ mod tests {
         AsArray, BooleanArray, Float64Array, Int32Array, StringArray,
         StringDictionaryBuilder,
     };
-    use arrow::datatypes::{DataType, Field, Int32Type, Schema};
+    use arrow::datatypes::{DataType, Field, Int32Type, Schema, UInt64Type};
     use arrow_schema::SortOptions;
     use datafusion_common::{assert_batches_eq, exec_datafusion_err};
     use datafusion_execution::memory_pool::GreedyMemoryPool;
@@ -3944,11 +4093,13 @@ mod tests {
         val_sort_options: SortOptions,
         val_nullable: bool,
     ) -> Result<(Arc<Schema>, PartitionedTopK)> {
-        build_partitioned_topk_inner(
+        build_pk_val_state(
+            PartitionedTopK::try_new,
             k,
             val_sort_options,
             val_nullable,
             &Arc::new(RuntimeEnv::default()),
+            None,
         )
     }
 
@@ -3958,15 +4109,43 @@ mod tests {
         k: usize,
         runtime: &Arc<RuntimeEnv>,
     ) -> Result<(Arc<Schema>, PartitionedTopK)> {
-        build_partitioned_topk_inner(k, SortOptions::default(), false, runtime)
+        build_pk_val_state(
+            PartitionedTopK::try_new,
+            k,
+            SortOptions::default(),
+            false,
+            runtime,
+            None,
+        )
     }
 
-    fn build_partitioned_topk_inner(
+    /// The signature all three policies' `try_new` share, so one builder can
+    /// construct any of them.
+    type StateCtor<T> = fn(
+        usize,
+        &SchemaRef,
+        Vec<Arc<dyn PhysicalExpr>>,
+        Vec<SortField>,
+        LexOrdering,
+        usize,
+        usize,
+        &Arc<RuntimeEnv>,
+        &ExecutionPlanMetricsSet,
+        Option<SchemaRef>,
+    ) -> Result<T>;
+
+    /// Builds a `(pk Int32, val Int32)` schema and a state built by `ctor`,
+    /// partitioned by `pk ASC` and ordered by `val` under `val_sort_options`,
+    /// with batch size 8. With a `ranking_field` the state appends it, as the
+    /// exec would. Shared by every policy's builders.
+    fn build_pk_val_state<T>(
+        ctor: StateCtor<T>,
         k: usize,
         val_sort_options: SortOptions,
         val_nullable: bool,
         runtime: &Arc<RuntimeEnv>,
-    ) -> Result<(Arc<Schema>, PartitionedTopK)> {
+        ranking_field: Option<FieldRef>,
+    ) -> Result<(Arc<Schema>, T)> {
         let schema = pk_val_schema(val_nullable);
 
         let pk_expr: Arc<dyn PhysicalExpr> = col("pk", schema.as_ref())?;
@@ -3979,21 +4158,38 @@ mod tests {
             options: val_sort_options,
         };
 
-        let partition_ordering = vec![pk_sort_expr];
-        let order_expr = LexOrdering::from([val_sort_expr]);
-
-        let state = PartitionedTopK::try_new(
+        let ranked_schema = ranking_field
+            .map(|field| partitioned_topk_output_schema(&schema, Some(&field)));
+        let state = ctor(
             0,
-            Arc::clone(&schema),
+            &schema,
             vec![pk_expr],
-            build_sort_fields(&partition_ordering, &schema)?,
-            order_expr,
+            build_sort_fields(&[pk_sort_expr], &schema)?,
+            LexOrdering::from([val_sort_expr]),
             k,
             8, // batch_size
             runtime,
             &ExecutionPlanMetricsSet::new(),
+            ranked_schema,
         )?;
         Ok((schema, state))
+    }
+
+    /// A state built by `ctor` with [`build_pk_val_state`]'s defaults that
+    /// emits `ranking_field`.
+    fn build_emitting<T>(
+        ctor: StateCtor<T>,
+        k: usize,
+        ranking_field: FieldRef,
+    ) -> Result<(Arc<Schema>, T)> {
+        build_pk_val_state(
+            ctor,
+            k,
+            SortOptions::default(),
+            false,
+            &Arc::new(RuntimeEnv::default()),
+            Some(ranking_field),
+        )
     }
 
     /// Partition-key nullability is a distinct concern from ORDER BY
@@ -4021,7 +4217,7 @@ mod tests {
 
         let state = PartitionedTopK::try_new(
             0,
-            Arc::clone(&schema),
+            &schema,
             vec![pk_expr],
             build_sort_fields(&partition_ordering, &schema)?,
             order_expr,
@@ -4029,6 +4225,7 @@ mod tests {
             8, // batch_size
             &Arc::new(RuntimeEnv::default()),
             &ExecutionPlanMetricsSet::new(),
+            None,
         )?;
         Ok((schema, state))
     }
@@ -4202,7 +4399,7 @@ mod tests {
 
         let mut state = PartitionedTopK::try_new(
             0,
-            Arc::clone(&schema),
+            &schema,
             vec![pk_a, pk_b],
             build_sort_fields(&partition_ordering, &schema)?,
             order_expr,
@@ -4210,6 +4407,7 @@ mod tests {
             8,
             &Arc::new(RuntimeEnv::default()),
             &ExecutionPlanMetricsSet::new(),
+            None,
         )?;
 
         let batch = RecordBatch::try_new(
@@ -5263,7 +5461,7 @@ mod tests {
         }]);
         let mut state = PartitionedTopK::try_new(
             0,
-            Arc::clone(&schema),
+            &schema,
             vec![pk_expr],
             build_sort_fields(&partition_ordering, &schema)?,
             order_expr,
@@ -5271,6 +5469,7 @@ mod tests {
             8,
             &Arc::new(RuntimeEnv::default()),
             &ExecutionPlanMetricsSet::new(),
+            None,
         )?;
 
         let empty = state.size();
@@ -5451,7 +5650,7 @@ mod tests {
         }];
         let mut state = PartitionedTopK::try_new(
             0,
-            Arc::clone(&schema),
+            &schema,
             vec![pk_expr],
             build_sort_fields(&partition_ordering, &schema)?,
             LexOrdering::from(order_ordering.clone()),
@@ -5459,6 +5658,7 @@ mod tests {
             3, // batch_size
             &Arc::new(RuntimeEnv::default()),
             &metrics,
+            None,
         )?;
 
         state.insert_batch(&pk_val_batch(
@@ -5472,6 +5672,175 @@ mod tests {
         assert_eq!(row_counts, vec![3, 3]);
         assert_eq!(output_batches_and_rows(&metrics), (2, 6));
 
+        Ok(())
+    }
+
+    /// With a `ranking_field`, `emit` appends the retained rows'
+    /// `ROW_NUMBER()`: 1-based within each partition, restarting at every
+    /// partition boundary, and independent of how the partitions' rows were
+    /// interleaved on the way in.
+    #[tokio::test]
+    async fn test_partitioned_topk_emits_row_number_column() -> Result<()> {
+        let rn_field = Arc::new(Field::new("rn", DataType::UInt64, false));
+        let (schema, mut state) =
+            build_emitting(PartitionedTopK::try_new, 3, Arc::clone(&rn_field))?;
+
+        // pk=1 vals: 30, 10, 20, 40 → top-3 ASC = [10, 20, 30] (40 evicted)
+        // pk=2 vals: 5              → top-3 ASC = [5]
+        state.insert_batch(&pk_val_batch(
+            &schema,
+            vec![1, 2, 1, 1, 1],
+            vec![30, 5, 10, 20, 40],
+        )?)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_eq!(
+            results[0].schema().field(2),
+            rn_field.as_ref(),
+            "the appended field is the one the caller asked for"
+        );
+        assert_batches_eq!(
+            &[
+                "+----+-----+----+",
+                "| pk | val | rn |",
+                "+----+-----+----+",
+                "| 1  | 10  | 1  |",
+                "| 1  | 20  | 2  |",
+                "| 1  | 30  | 3  |",
+                "| 2  | 5   | 1  |",
+                "+----+-----+----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    /// Input for the ranking-column chunk tests: partition 1 holds vals 1..=4
+    /// three times each, partition 2 holds two 5s, split over two input
+    /// batches. Every policy retains more rows than the builders' batch size
+    /// of 8, so the ranks have to be sliced correctly across output chunks.
+    fn ranking_chunk_batches(schema: &SchemaRef) -> Result<[RecordBatch; 2]> {
+        Ok([
+            pk_val_batch(schema, vec![1; 7], vec![1, 1, 1, 2, 2, 2, 3])?,
+            pk_val_batch(schema, vec![1, 1, 1, 1, 1, 2, 2], vec![3, 3, 4, 4, 4, 5, 5])?,
+        ])
+    }
+
+    /// `(val, rank)` for every emitted row, and how many batches carried them.
+    fn vals_and_ranks(batches: &[RecordBatch]) -> (Vec<(i32, u64)>, usize) {
+        let mut rows = Vec::new();
+        for batch in batches {
+            let vals = batch.column(1).as_primitive::<Int32Type>();
+            let ranks = batch.column(2).as_primitive::<UInt64Type>();
+            rows.extend(
+                vals.values()
+                    .iter()
+                    .copied()
+                    .zip(ranks.values().iter().copied()),
+            );
+        }
+        (rows, batches.len())
+    }
+
+    /// `ROW_NUMBER()` keeps counting across an output chunk boundary, and
+    /// restarts at the next partition.
+    #[tokio::test]
+    async fn test_partitioned_topk_row_number_column_spans_output_chunks() -> Result<()> {
+        let rn = Arc::new(Field::new("rn", DataType::UInt64, false));
+        let (schema, mut state) = build_emitting(PartitionedTopK::try_new, 10, rn)?;
+        for batch in ranking_chunk_batches(&schema)? {
+            state.insert_batch(&batch)?;
+        }
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        let (rows, chunks) = vals_and_ranks(&results);
+        assert_eq!(chunks, 2);
+        assert_eq!(
+            rows,
+            vec![
+                (1, 1),
+                (1, 2),
+                (1, 3),
+                (2, 4),
+                (2, 5),
+                (2, 6),
+                (3, 7),
+                (3, 8),
+                // second chunk
+                (3, 9),
+                (4, 10),
+                (5, 1),
+                (5, 2),
+            ]
+        );
+        Ok(())
+    }
+
+    /// `RANK()` across an output chunk boundary: the second chunk opens inside
+    /// the 3s and ends with the boundary ties, so heap ranks and tie ranks are
+    /// both read past the first chunk.
+    #[tokio::test]
+    async fn test_partitioned_topk_rank_column_spans_output_chunks() -> Result<()> {
+        let rk = Arc::new(Field::new("rk", DataType::UInt64, false));
+        let (schema, mut state) = build_emitting(PartitionedTopKRank::try_new, 10, rk)?;
+        for batch in ranking_chunk_batches(&schema)? {
+            state.insert_batch(&batch)?;
+        }
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        let (rows, chunks) = vals_and_ranks(&results);
+        assert_eq!(chunks, 2);
+        assert_eq!(
+            rows,
+            vec![
+                (1, 1),
+                (1, 1),
+                (1, 1),
+                (2, 4),
+                (2, 4),
+                (2, 4),
+                (3, 7),
+                (3, 7),
+                // second chunk: the last 3, then the heap's 4 and its two ties
+                (3, 7),
+                (4, 10),
+                (4, 10),
+                (4, 10),
+                (5, 1),
+                (5, 1),
+            ]
+        );
+        Ok(())
+    }
+
+    /// `DENSE_RANK()` across an output chunk boundary, which its emit flushes
+    /// separately from the other two policies.
+    #[tokio::test]
+    async fn test_partitioned_topk_dense_rank_column_spans_output_chunks() -> Result<()> {
+        let dr = Arc::new(Field::new("dr", DataType::UInt64, false));
+        let (schema, mut state) =
+            build_emitting(PartitionedTopKDenseRank::try_new, 3, dr)?;
+        for batch in ranking_chunk_batches(&schema)? {
+            state.insert_batch(&batch)?;
+        }
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        let (rows, chunks) = vals_and_ranks(&results);
+        assert_eq!(chunks, 2);
+        assert_eq!(
+            rows,
+            vec![
+                (1, 1),
+                (1, 1),
+                (1, 1),
+                (2, 2),
+                (2, 2),
+                (2, 2),
+                (3, 3),
+                (3, 3),
+                // second chunk
+                (3, 3),
+                (5, 1),
+                (5, 1),
+            ]
+        );
         Ok(())
     }
 
@@ -5737,11 +6106,13 @@ mod tests {
         val_sort_options: SortOptions,
         val_nullable: bool,
     ) -> Result<(Arc<Schema>, PartitionedTopKRank)> {
-        build_partitioned_topk_rank_inner(
+        build_pk_val_state(
+            PartitionedTopKRank::try_new,
             k,
             val_sort_options,
             val_nullable,
             &Arc::new(RuntimeEnv::default()),
+            None,
         )
     }
 
@@ -5752,42 +6123,14 @@ mod tests {
         k: usize,
         runtime: &Arc<RuntimeEnv>,
     ) -> Result<(Arc<Schema>, PartitionedTopKRank)> {
-        build_partitioned_topk_rank_inner(k, SortOptions::default(), false, runtime)
-    }
-
-    fn build_partitioned_topk_rank_inner(
-        k: usize,
-        val_sort_options: SortOptions,
-        val_nullable: bool,
-        runtime: &Arc<RuntimeEnv>,
-    ) -> Result<(Arc<Schema>, PartitionedTopKRank)> {
-        let schema = pk_val_schema(val_nullable);
-
-        let pk_expr: Arc<dyn PhysicalExpr> = col("pk", schema.as_ref())?;
-        let pk_sort_expr = PhysicalSortExpr {
-            expr: Arc::clone(&pk_expr),
-            options: SortOptions::default(),
-        };
-        let val_sort_expr = PhysicalSortExpr {
-            expr: col("val", schema.as_ref())?,
-            options: val_sort_options,
-        };
-
-        let partition_sort_fields = build_sort_fields(&[pk_sort_expr], &schema)?;
-        let order_expr = LexOrdering::from([val_sort_expr]);
-
-        let state = PartitionedTopKRank::try_new(
-            0,
-            Arc::clone(&schema),
-            vec![pk_expr],
-            partition_sort_fields,
-            order_expr,
+        build_pk_val_state(
+            PartitionedTopKRank::try_new,
             k,
-            8, // batch_size
+            SortOptions::default(),
+            false,
             runtime,
-            &ExecutionPlanMetricsSet::new(),
-        )?;
-        Ok((schema, state))
+            None,
+        )
     }
 
     /// Multiple distinct partition keys interleaved within a single
@@ -6059,6 +6402,82 @@ mod tests {
         Ok(())
     }
 
+    /// With a `ranking_field`, RANK's `emit` appends each retained row's
+    /// `RANK()`. The interesting rows are the boundary ties, which are emitted
+    /// *after* the heap's rows and must carry the rank of the first heap row
+    /// holding the boundary key rather than their own position.
+    #[tokio::test]
+    async fn test_partitioned_topk_rank_emits_rank_column() -> Result<()> {
+        let rk_field = Arc::new(Field::new("rk", DataType::UInt64, false));
+        let (schema, mut state) =
+            build_emitting(PartitionedTopKRank::try_new, 2, Arc::clone(&rk_field))?;
+
+        // pk=1 vals 10, 20, 20: heap fills with [10, 20], the second 20 ties at
+        //   the boundary. True RANKs: 10→1, 20→2, 20→2.
+        // pk=2 vals 5, 5:       both tie at rank 1 inside the heap.
+        // pk=3 vals 7, 7, 7:    the boundary key fills the whole heap and the
+        //   third 7 ties at it, so the tie's rank is the boundary's first
+        //   position (1), not the heap's length (2).
+        state.insert_batch(&pk_val_batch(
+            &schema,
+            vec![1, 1, 1, 2, 2, 3, 3, 3],
+            vec![10, 20, 20, 5, 5, 7, 7, 7],
+        )?)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_eq!(results[0].schema().field(2), rk_field.as_ref());
+        assert_batches_eq!(
+            &[
+                "+----+-----+----+",
+                "| pk | val | rk |",
+                "+----+-----+----+",
+                "| 1  | 10  | 1  |",
+                "| 1  | 20  | 2  |",
+                "| 1  | 20  | 2  |",
+                "| 2  | 5   | 1  |",
+                "| 2  | 5   | 1  |",
+                "| 3  | 7   | 1  |",
+                "| 3  | 7   | 1  |",
+                "| 3  | 7   | 1  |",
+                "+----+-----+----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    /// RANK's emitted column must agree with the window function it replaces
+    /// when an eviction leaves the boundary where it was: the evicted row
+    /// still ties with the new root, so it moves to the tie list, and its rank
+    /// then comes from the boundary rather than from a heap position.
+    #[tokio::test]
+    async fn test_partitioned_topk_rank_emits_rank_after_boundary_moves() -> Result<()> {
+        let rk_field = Arc::new(Field::new("rk", DataType::UInt64, false));
+        let (schema, mut state) =
+            build_emitting(PartitionedTopKRank::try_new, 2, Arc::clone(&rk_field))?;
+
+        // Arrive as 20, 20, 10: the heap fills with [20, 20], then 10 evicts one
+        // 20, whose bytes equal the new boundary (20) so it moves to the ties.
+        // True RANKs over {10, 20, 20}: 10→1, 20→2, 20→2.
+        state.insert_batch(&pk_val_batch(&schema, vec![1, 1], vec![20, 20])?)?;
+        state.insert_batch(&pk_val_batch(&schema, vec![1], vec![10])?)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+----+",
+                "| pk | val | rk |",
+                "+----+-----+----+",
+                "| 1  | 10  | 1  |",
+                "| 1  | 20  | 2  |",
+                "| 1  | 20  | 2  |",
+                "+----+-----+----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
     /// Tie rows are emitted in the same `EmitState` chunks as heap rows, so
     /// they must be counted in `output_rows` once, not once as ties and again
     /// as part of the chunk that holds them.
@@ -6077,7 +6496,7 @@ mod tests {
         let metrics = ExecutionPlanMetricsSet::new();
         let mut state = PartitionedTopKRank::try_new(
             0,
-            Arc::clone(&schema),
+            &schema,
             vec![pk_expr],
             build_sort_fields(&[pk_sort_expr], &schema)?,
             LexOrdering::from([val_sort_expr]),
@@ -6085,6 +6504,7 @@ mod tests {
             8, // batch_size
             &Arc::new(RuntimeEnv::default()),
             &metrics,
+            None,
         )?;
 
         // Two 5s fill the heap, the third 5 is retained as a tie.
@@ -6210,7 +6630,7 @@ mod tests {
         }]);
         PartitionedTopKRank::try_new(
             0,
-            Arc::clone(schema),
+            schema,
             vec![pk_expr],
             partition_sort_fields,
             order_expr,
@@ -6218,6 +6638,7 @@ mod tests {
             batch_size,
             &Arc::new(RuntimeEnv::default()),
             &ExecutionPlanMetricsSet::new(),
+            None,
         )
     }
 
@@ -6646,33 +7067,14 @@ mod tests {
         val_sort_options: SortOptions,
         val_nullable: bool,
     ) -> Result<(Arc<Schema>, PartitionedTopKDenseRank)> {
-        let schema = pk_val_schema(val_nullable);
-
-        let pk_expr: Arc<dyn PhysicalExpr> = col("pk", schema.as_ref())?;
-        let pk_sort_expr = PhysicalSortExpr {
-            expr: Arc::clone(&pk_expr),
-            options: SortOptions::default(),
-        };
-        let val_sort_expr = PhysicalSortExpr {
-            expr: col("val", schema.as_ref())?,
-            options: val_sort_options,
-        };
-
-        let partition_sort_fields = build_sort_fields(&[pk_sort_expr], &schema)?;
-        let order_expr = LexOrdering::from([val_sort_expr]);
-
-        let state = PartitionedTopKDenseRank::try_new(
-            0,
-            Arc::clone(&schema),
-            vec![pk_expr],
-            partition_sort_fields,
-            order_expr,
+        build_pk_val_state(
+            PartitionedTopKDenseRank::try_new,
             k,
-            8, // batch_size
+            val_sort_options,
+            val_nullable,
             &Arc::new(RuntimeEnv::default()),
-            &ExecutionPlanMetricsSet::new(),
-        )?;
-        Ok((schema, state))
+            None,
+        )
     }
 
     /// Single-batch DENSE_RANK top-2 across multiple partitions with
@@ -6702,6 +7104,75 @@ mod tests {
                 "| 2  | 20  |",
                 "| 3  | 7   |",
                 "+----+-----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    /// With a `ranking_field`, DENSE_RANK's `emit` appends each retained row's
+    /// `DENSE_RANK()`: the 1-based index of its distinct ORDER BY value, so
+    /// every row of a tied group shares one value and the counter does not skip
+    /// over group sizes the way `RANK` does.
+    #[tokio::test]
+    async fn test_partitioned_topk_dense_rank_emits_rank_column() -> Result<()> {
+        let dr_field = Arc::new(Field::new("dr", DataType::UInt64, false));
+        let (schema, mut state) =
+            build_emitting(PartitionedTopKDenseRank::try_new, 2, Arc::clone(&dr_field))?;
+
+        // pk=1 vals 10, 10, 20, 30: the 2 distinct-smallest are 10 and 20, so
+        //   DENSE_RANKs are 10→1, 10→1, 20→2 and 30 is dropped. Note RANK would
+        //   have given the 20 rank 3, not 2.
+        // pk=2 vals 7, 7:          one distinct value, both dense rank 1.
+        state.insert_batch(&pk_val_batch(
+            &schema,
+            vec![1, 1, 1, 1, 2, 2],
+            vec![10, 10, 20, 30, 7, 7],
+        )?)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_eq!(results[0].schema().field(2), dr_field.as_ref());
+        assert_batches_eq!(
+            &[
+                "+----+-----+----+",
+                "| pk | val | dr |",
+                "+----+-----+----+",
+                "| 1  | 10  | 1  |",
+                "| 1  | 10  | 1  |",
+                "| 1  | 20  | 2  |",
+                "| 2  | 7   | 1  |",
+                "| 2  | 7   | 1  |",
+                "+----+-----+----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    /// DENSE_RANK groups accumulate across batches, and a group's rows can come
+    /// from several source batches — each gathered separately at emit time. The
+    /// rank must be per *group*, not per gathered batch.
+    #[tokio::test]
+    async fn test_partitioned_topk_dense_rank_emits_rank_across_batches() -> Result<()> {
+        let dr_field = Arc::new(Field::new("dr", DataType::UInt64, false));
+        let (schema, mut state) =
+            build_emitting(PartitionedTopKDenseRank::try_new, 2, Arc::clone(&dr_field))?;
+
+        // Both groups (10 and 20) collect a row from each of the two batches.
+        state.insert_batch(&pk_val_batch(&schema, vec![1, 1], vec![20, 10])?)?;
+        state.insert_batch(&pk_val_batch(&schema, vec![1, 1], vec![10, 20])?)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+----+",
+                "| pk | val | dr |",
+                "+----+-----+----+",
+                "| 1  | 10  | 1  |",
+                "| 1  | 10  | 1  |",
+                "| 1  | 20  | 2  |",
+                "| 1  | 20  | 2  |",
+                "+----+-----+----+",
             ],
             &results
         );
@@ -6863,7 +7334,7 @@ mod tests {
 
         let mut state = PartitionedTopKDenseRank::try_new(
             0,
-            Arc::clone(&schema),
+            &schema,
             vec![pk_expr],
             partition_sort_fields,
             order_expr,
@@ -6871,6 +7342,7 @@ mod tests {
             8,  // batch_size
             &Arc::new(RuntimeEnv::default()),
             &ExecutionPlanMetricsSet::new(),
+            None,
         )?;
 
         let dict_batch = |vals: &[&str]| -> Result<RecordBatch> {
@@ -7340,7 +7812,7 @@ mod tests {
         }]);
         let mut state = PartitionedTopKDenseRank::try_new(
             0,
-            Arc::clone(&schema),
+            &schema,
             vec![pk_expr],
             partition_sort_fields,
             order_expr,
@@ -7348,6 +7820,7 @@ mod tests {
             8, // batch_size
             &Arc::new(RuntimeEnv::default()),
             &ExecutionPlanMetricsSet::new(),
+            None,
         )?;
 
         // One row per partition, each with a wide key.
