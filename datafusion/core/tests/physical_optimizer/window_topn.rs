@@ -222,7 +222,7 @@ fn basic_row_number_rn_lteq_3() -> Result<()> {
     let plan = build_window_topn_plan(3, Operator::LtEq)?;
     let optimized = optimize(plan)?;
     assert_snapshot!(plan_str(optimized.as_ref()), @r#"
-     PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@0], order=[val@1 ASC], emit=[row_number]
+    PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@0], order=[val@1 ASC], emit=[row_number]
       PlaceholderRowExec
     "#);
     Ok(())
@@ -392,7 +392,7 @@ fn with_projection_between() -> Result<()> {
     let optimized = optimize(filter)?;
     assert_snapshot!(plan_str(optimized.as_ref()), @r#"
     ProjectionExec: expr=[pk@0 as pk, val@1 as val, row_number@2 as row_number]
-     PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@0], order=[val@1 ASC], emit=[row_number]
+    PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@0], order=[val@1 ASC], emit=[row_number]
         PlaceholderRowExec
     "#);
     Ok(())
@@ -567,7 +567,7 @@ fn rank_rk_lt_4_becomes_fetch_3() -> Result<()> {
     let plan = build_ranking_topn_plan(rank_udwf, "rank", 4, Operator::Lt)?;
     let optimized = optimize(plan)?;
     assert_snapshot!(plan_str(optimized.as_ref()), @r#"
-   PartitionedTopKExec: fn=rank, fetch=3, partition=[pk@0], order=[val@1 ASC], emit=[rank]
+    PartitionedTopKExec: fn=rank, fetch=3, partition=[pk@0], order=[val@1 ASC], emit=[rank]
       PlaceholderRowExec
     "#);
     Ok(())
@@ -578,7 +578,7 @@ fn rank_flipped_3_gteq_rk() -> Result<()> {
     let plan = build_ranking_topn_plan(rank_udwf, "rank", 3, Operator::GtEq)?;
     let optimized = optimize(plan)?;
     assert_snapshot!(plan_str(optimized.as_ref()), @r#"
-     PartitionedTopKExec: fn=rank, fetch=3, partition=[pk@0], order=[val@1 ASC], emit=[rank]
+    PartitionedTopKExec: fn=rank, fetch=3, partition=[pk@0], order=[val@1 ASC], emit=[rank]
       PlaceholderRowExec
     "#);
     Ok(())
@@ -620,7 +620,7 @@ fn basic_dense_rank_dr_lteq_3() -> Result<()> {
     let plan = build_ranking_topn_plan(dense_rank_udwf, "dense_rank", 3, Operator::LtEq)?;
     let optimized = optimize(plan)?;
     assert_snapshot!(plan_str(optimized.as_ref()), @r#"
-   PartitionedTopKExec: fn=dense_rank, fetch=3, partition=[pk@0], order=[val@1 ASC], emit=[dense_rank]
+    PartitionedTopKExec: fn=dense_rank, fetch=3, partition=[pk@0], order=[val@1 ASC], emit=[dense_rank]
       PlaceholderRowExec
     "#);
     Ok(())
