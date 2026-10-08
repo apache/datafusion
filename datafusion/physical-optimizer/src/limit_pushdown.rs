@@ -158,6 +158,12 @@ struct LimitInfo {
 ///
 /// If a limit is encountered, a [`TreeNodeRecursion::Stop`] is returned. Otherwise,
 /// return a [`TreeNodeRecursion::Continue`].
+///
+/// Computes statistics with a new [`StatisticsContext`] that has no statistics
+/// providers. A context built from a statistics registry, as [`LimitPushdown`]
+/// uses, also consults the registered providers, so switching to
+/// [`pushdown_limit_helper_with_stats`] with such a context can change the
+/// result when providers are registered.
 #[deprecated(
     since = "56.0.0",
     note = "use `pushdown_limit_helper_with_stats` and share one `StatisticsContext` across calls"

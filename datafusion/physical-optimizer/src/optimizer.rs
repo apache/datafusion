@@ -43,8 +43,9 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_physical_plan::statistics::StatisticsContext;
 
 // Re-export from this module for backwards compatibility.
-pub use datafusion_session::with_statistics_context;
 pub use datafusion_session::{PhysicalOptimizerContext, PhysicalOptimizerRule};
+
+pub use datafusion_session::with_statistics_context;
 
 /// Simple context wrapping [`ConfigOptions`] for backward compatibility.
 ///
@@ -62,6 +63,7 @@ impl<'a> ConfigOnlyContext<'a> {
     pub fn new(config: &'a ConfigOptions) -> Self {
         Self {
             config,
+            // No providers, matching `statistics_registry()`, which is `None`
             statistics_context: StatisticsContext::new(),
         }
     }

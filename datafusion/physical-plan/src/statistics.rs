@@ -157,7 +157,8 @@ pub enum ChildStats {
 /// plan rewrites. Each entry holds a strong reference to the plan node it was
 /// computed for, so cached nodes (and their per-partition statistics) stay
 /// alive until [`Self::reset_cache`] is called or the context is dropped. Reset
-/// a long-lived context at a lifecycle boundary to bound its memory.
+/// a long-lived context at a lifecycle boundary to bound its memory (see
+/// [`Self::reset_cache`]).
 ///
 /// An optional [`StatisticsRegistry`] plugs providers into the walk: at each node
 /// they are consulted before the operator's built-in
@@ -199,8 +200,10 @@ impl StatisticsContext {
     /// Clears the memoization cache and releases its retained plan nodes.
     ///
     /// Resetting is optional for correctness: each cache entry retains the plan
-    /// node that supplied its pointer key. Use it to bound memory at a logical
-    /// lifecycle boundary, such as after an optimizer pass.
+    /// node that supplied its pointer key. Use it to bound memory at a
+    /// lifecycle boundary, such as the end of a query's physical optimization.
+    /// Do not reset a context that several optimizer rules share between those
+    /// rules: that discards the statistics that later rules would reuse.
     pub fn reset_cache(&self) {
         let mut cache = self.cache.lock();
         cache.statistics.clear();
