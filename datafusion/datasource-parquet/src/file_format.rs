@@ -33,7 +33,7 @@ pub use crate::schema_coercion::{
 
 pub use crate::sink::ParquetSink;
 
-use arrow::datatypes::{Fields, Schema, SchemaRef};
+use arrow::datatypes::{Fields, Metadata, Schema, SchemaRef};
 use datafusion_datasource::TableSchema;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_sink_config::FileSinkConfig;
@@ -67,14 +67,12 @@ use crate::source::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion_datasource::source::DataSourceExec;
-use datafusion_execution::cache::cache_manager::FileMetadataCache;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use parquet::arrow::async_reader::MetadataFetch;
 use parquet::errors::ParquetError;
-use parquet::file::metadata::ParquetMetaData;
 
 #[derive(Default)]
 /// Factory struct used to create [ParquetFormat]
@@ -267,7 +265,7 @@ fn clear_metadata(
             .fields()
             .iter()
             .map(|field| {
-                field.as_ref().clone().with_metadata(Default::default()) // clear meta
+                field.as_ref().clone().with_metadata(Metadata::new()) // clear meta
             })
             .collect::<Fields>();
         Schema::new(fields)
@@ -358,14 +356,16 @@ impl FileFormat for ParquetFormat {
                     &object.location,
                 )
                 .await?;
-                let result = DFParquetMetadata::new(store.as_ref(), object)
+                let meta = DFParquetMetadata::new(store.as_ref(), object)
                     .with_metadata_size_hint(self.metadata_size_hint())
                     .with_decryption_properties(file_decryption_properties)
                     .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
                     .with_coerce_int96(coerce_int96)
                     .with_coerce_int96_tz(coerce_int96_tz.clone())
-                    .fetch_schema_with_location()
-                    .await?;
+                    .with_enable_rle_to_dictionary(
+                        self.options.global.enable_rle_to_dictionary,
+                    );
+                let result = meta.fetch_schema_with_location().await?;
                 Ok::<_, DataFusionError>(result)
             })
             .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
@@ -400,7 +400,12 @@ impl FileFormat for ParquetFormat {
         }
         drop(seen);
 
-        let schemas = schemas.into_iter().map(|(_, schema)| schema);
+        // Normalize dict-promoted schemas before merging so mixed dict/plain files merge cleanly.
+        let mut schemas: Vec<Schema> =
+            schemas.into_iter().map(|(_, schema)| schema).collect();
+        if self.options.global.enable_rle_to_dictionary {
+            schemas = crate::schema_coercion::uniform_dict_schemas(schemas);
+        }
 
         let schema = if self.skip_metadata() {
             Schema::try_merge(clear_metadata(schemas))
@@ -522,7 +527,7 @@ impl FileFormat for ParquetFormat {
         source = source.with_parquet_file_reader_factory(cached_parquet_read_factory);
 
         if let Some(metadata_size_hint) = metadata_size_hint {
-            source = source.with_metadata_size_hint(metadata_size_hint)
+            source = source.with_metadata_size_hint(metadata_size_hint);
         }
 
         source = self.set_source_encryption_factory(source, state)?;
@@ -639,68 +644,6 @@ impl MetadataFetch for ObjectStoreFetch<'_> {
     }
 }
 
-/// Fetches parquet metadata from ObjectStore for given object
-///
-/// This component is a subject to **change** in near future and is exposed for low level integrations
-/// through [`ParquetFileReaderFactory`].
-///
-/// [`ParquetFileReaderFactory`]: crate::ParquetFileReaderFactory
-#[deprecated(
-    since = "50.0.0",
-    note = "Use `DFParquetMetadata::fetch_metadata` instead"
-)]
-pub async fn fetch_parquet_metadata(
-    store: &dyn ObjectStore,
-    object_meta: &ObjectMeta,
-    size_hint: Option<usize>,
-    decryption_properties: Option<&FileDecryptionProperties>,
-    file_metadata_cache: Option<Arc<FileMetadataCache>>,
-) -> Result<Arc<ParquetMetaData>> {
-    let decryption_properties = decryption_properties.cloned().map(Arc::new);
-    DFParquetMetadata::new(store, object_meta)
-        .with_metadata_size_hint(size_hint)
-        .with_decryption_properties(decryption_properties)
-        .with_file_metadata_cache(file_metadata_cache)
-        .fetch_metadata()
-        .await
-}
-
-/// Read and parse the statistics of the Parquet file at location `path`
-///
-/// See [`statistics_from_parquet_meta_calc`] for more details
-#[deprecated(
-    since = "50.0.0",
-    note = "Use `DFParquetMetadata::fetch_statistics` instead"
-)]
-pub async fn fetch_statistics(
-    store: &dyn ObjectStore,
-    table_schema: SchemaRef,
-    file: &ObjectMeta,
-    metadata_size_hint: Option<usize>,
-    decryption_properties: Option<&FileDecryptionProperties>,
-    file_metadata_cache: Option<Arc<FileMetadataCache>>,
-) -> Result<Statistics> {
-    let decryption_properties = decryption_properties.cloned().map(Arc::new);
-    DFParquetMetadata::new(store, file)
-        .with_metadata_size_hint(metadata_size_hint)
-        .with_decryption_properties(decryption_properties)
-        .with_file_metadata_cache(file_metadata_cache)
-        .fetch_statistics(&table_schema)
-        .await
-}
-
-#[deprecated(
-    since = "50.0.0",
-    note = "Use `DFParquetMetadata::statistics_from_parquet_metadata` instead"
-)]
-#[expect(clippy::needless_pass_by_value)]
-pub fn statistics_from_parquet_meta_calc(
-    metadata: &ParquetMetaData,
-    table_schema: SchemaRef,
-) -> Result<Statistics> {
-    DFParquetMetadata::statistics_from_parquet_metadata(metadata, &table_schema)
-}
-
 #[cfg(feature = "proto")]
 use datafusion_proto_models::protobuf::{self, parquet_column_options, parquet_options};
 
@@ -734,8 +677,9 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
             write_batch_size: global_options.global.write_batch_size as u64,
             writer_version: global_options.global.writer_version.to_string(),
             compression_opt: global_options.global.compression.map(|compression| {
-                parquet_options::CompressionOpt::Compression(compression)
+                parquet_options::CompressionOpt::Compression(compression.to_string())
             }),
+            enable_rle_to_dictionary: global_options.global.enable_rle_to_dictionary,
             dictionary_enabled_opt: global_options.global.dictionary_enabled.map(|enabled| {
                 parquet_options::DictionaryEnabledOpt::DictionaryEnabled(enabled)
             }),
@@ -745,6 +689,7 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
             }),
             max_row_group_size: global_options.global.max_row_group_size as u64,
             max_in_list_size: global_options.global.max_in_list_size as u64,
+            row_group_range_assignment: global_options.global.row_group_range_assignment.to_string(),
             created_by: global_options.global.created_by.clone(),
             column_index_truncate_length_opt: global_options.global.column_index_truncate_length.map(|length| {
                 parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(length as u64)

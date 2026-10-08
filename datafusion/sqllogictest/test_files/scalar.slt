@@ -1128,7 +1128,7 @@ select arrow_typeof(round(cast(500 as decimal(10,-2)), -3)),
        round(cast(400 as decimal(10,-2)), -3),
        round(cast(-500 as decimal(10,-2)), -3);
 ----
-Decimal128(10, -3) 1000 0000 -1000
+Decimal128(10, -3) 1000 0 -1000
 
 # round decimal with negative scale and carry-over
 query TR
@@ -1478,6 +1478,21 @@ from (values (NULL::INT, 7), (3, 7)) as t(a, b);
 ----
 7 7 0
 NULL NULL NULL
+
+# arithmetic negation is not bitwise NOT
+query IIIIII
+select
+  i,
+  (-i) & i,
+  i | (-i),
+  (-i) ^ i,
+  -(i & j),
+  -(i | j)
+from (values (5, 3), (6, 3)) as t(i, j)
+order by i;
+----
+5 1 -1 -2 -1 -7
+6 2 -2 -4 -2 -7
 
 # bitwise xor with other operators
 query II rowsort

@@ -22,13 +22,14 @@ use crate::common::proto_error;
 use crate::protobuf_common as protobuf;
 use arrow::array::{ArrayRef, AsArray};
 use arrow::buffer::Buffer;
+use arrow::csv::writer::Terminator;
 use arrow::csv::{QuoteStyle, WriterBuilder};
 use arrow::datatypes::{
     DataType, Field, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, Schema,
     TimeUnit, UnionFields, UnionMode, i256,
 };
 use arrow::ipc::{
-    convert::fb_to_schema,
+    convert::try_fb_to_schema,
     reader::{read_dictionary, read_record_batch},
     root_as_message,
     writer::{DictionaryTracker, IpcDataGenerator, IpcWriteOptions},
@@ -43,6 +44,7 @@ use datafusion_common::{
         ParquetColumnOptions, ParquetOptions, TableParquetOptions,
     },
     file_options::{csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions},
+    parquet_config::RowGroupRangeAssignment,
     parsers::CompressionTypeVariant,
     plan_datafusion_err,
     stats::Precision,
@@ -145,7 +147,14 @@ where
 
 impl From<protobuf::ColumnRelation> for TableReference {
     fn from(rel: protobuf::ColumnRelation) -> Self {
-        Self::parse_str_normalized(rel.relation.as_str(), true)
+        match rel.parts.as_slice() {
+            [table] => Self::bare(table.as_str()),
+            [schema, table] => Self::partial(schema.as_str(), table.as_str()),
+            [catalog, schema, table] => {
+                Self::full(catalog.as_str(), schema.as_str(), table.as_str())
+            }
+            _ => Self::parse_str_normalized(rel.relation.as_str(), true),
+        }
     }
 }
 
@@ -462,7 +471,11 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                                 .to_string(),
                         )
                     })?;
-                    fb_to_schema(ipc_schema)
+                    try_fb_to_schema(ipc_schema).map_err(|e| {
+                        Error::General(format!(
+                            "Error converting IPC schema while deserializing nested ScalarValue: {e}"
+                        ))
+                    })?
                 };
 
                 let message = root_as_message(ipc_message.as_slice()).map_err(|e| {
@@ -985,9 +998,113 @@ impl TryFrom<&protobuf::CsvWriterOptions> for CsvWriterOptions {
     fn try_from(
         opts: &protobuf::CsvWriterOptions,
     ) -> datafusion_common::Result<Self, Self::Error> {
-        let write_options = csv_writer_options_from_proto(opts)?;
-        let compression: CompressionTypeVariant = opts.compression().into();
-        Ok(CsvWriterOptions::new(write_options, compression))
+        let protobuf::CsvWriterOptions {
+            compression,
+            delimiter,
+            has_header,
+            date_format,
+            datetime_format,
+            timestamp_format,
+            time_format,
+            null_value,
+            quote,
+            escape,
+            double_quote,
+            quote_style,
+            ignore_leading_whitespace,
+            ignore_trailing_whitespace,
+            compression_level,
+            timestamp_tz_format,
+            terminator,
+        } = opts;
+
+        let mut writer_options = WriterBuilder::new();
+        if !delimiter.is_empty() {
+            if let Some(delimiter) = delimiter.chars().next() {
+                if delimiter.is_ascii() {
+                    writer_options = writer_options.with_delimiter(delimiter as u8);
+                } else {
+                    return Err(proto_error("CSV Delimiter is not ASCII"));
+                }
+            } else {
+                return Err(proto_error("Error parsing CSV Delimiter"));
+            }
+        }
+        if !quote.is_empty() {
+            if let Some(quote) = quote.chars().next() {
+                if quote.is_ascii() {
+                    writer_options = writer_options.with_quote(quote as u8);
+                } else {
+                    return Err(proto_error("CSV Quote is not ASCII"));
+                }
+            } else {
+                return Err(proto_error("Error parsing CSV Quote"));
+            }
+        }
+        if !escape.is_empty() {
+            if let Some(escape) = escape.chars().next() {
+                if escape.is_ascii() {
+                    writer_options = writer_options.with_escape(escape as u8);
+                } else {
+                    return Err(proto_error("CSV Escape is not ASCII"));
+                }
+            } else {
+                return Err(proto_error("Error parsing CSV Escape"));
+            }
+        }
+        let quote_style = match protobuf::CsvQuoteStyle::try_from(*quote_style) {
+            Ok(protobuf::CsvQuoteStyle::Always) => QuoteStyle::Always,
+            Ok(protobuf::CsvQuoteStyle::NonNumeric) => QuoteStyle::NonNumeric,
+            Ok(protobuf::CsvQuoteStyle::Never) => QuoteStyle::Never,
+            Ok(protobuf::CsvQuoteStyle::Necessary) => QuoteStyle::Necessary,
+            _ => {
+                return Err(proto_error(
+                    "Unknown quote style, must be one of: 'Always', 'NonNumeric', 'Never', 'Necessary'",
+                ));
+            }
+        };
+        writer_options = writer_options
+            .with_header(*has_header)
+            .with_null(null_value.clone())
+            .with_double_quote(*double_quote)
+            .with_quote_style(quote_style)
+            .with_ignore_leading_whitespace(*ignore_leading_whitespace)
+            .with_ignore_trailing_whitespace(*ignore_trailing_whitespace);
+        // Presence-aware: `Some("")` is a valid format distinct from `None`.
+        if let Some(date_format) = date_format {
+            writer_options = writer_options.with_date_format(date_format.clone());
+        }
+        if let Some(datetime_format) = datetime_format {
+            writer_options = writer_options.with_datetime_format(datetime_format.clone());
+        }
+        if let Some(timestamp_format) = timestamp_format {
+            writer_options =
+                writer_options.with_timestamp_format(timestamp_format.clone());
+        }
+        if let Some(timestamp_tz_format) = timestamp_tz_format {
+            writer_options =
+                writer_options.with_timestamp_tz_format(timestamp_tz_format.clone());
+        }
+        if let Some(time_format) = time_format {
+            writer_options = writer_options.with_time_format(time_format.clone());
+        }
+        writer_options = match terminator.as_slice() {
+            [] => writer_options,
+            [byte] => writer_options.with_line_terminator(Terminator::Any(*byte)),
+            [b'\r', b'\n'] => writer_options.with_line_terminator(Terminator::CRLF),
+            _ => {
+                return Err(proto_error("CSV line terminator must be one byte or CRLF"));
+            }
+        };
+
+        let compression = protobuf::CompressionTypeVariant::try_from(*compression)
+            .unwrap_or_default()
+            .into();
+        Ok(CsvWriterOptions {
+            writer_options,
+            compression,
+            compression_level: *compression_level,
+        })
     }
 }
 
@@ -1093,9 +1210,9 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             writer_version: value.writer_version.parse().map_err(|e| {
                 DataFusionError::Internal(format!("Failed to parse writer_version: {e}"))
             })?,
-            compression: value.compression_opt.clone().map(|opt| match opt {
-                protobuf::parquet_options::CompressionOpt::Compression(v) => Some(v),
-            }).unwrap_or(None),
+            compression: value.compression_opt.as_ref().map(|opt| match opt {
+                protobuf::parquet_options::CompressionOpt::Compression(v) => v.parse(),
+            }).transpose()?,
             dictionary_enabled: value.dictionary_enabled_opt.as_ref().map(|protobuf::parquet_options::DictionaryEnabledOpt::DictionaryEnabled(v)| *v),
             // Continuing from where we left off in the TryFrom implementation
             dictionary_page_size_limit: to_usize(
@@ -1110,6 +1227,9 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                 .transpose()?,
             max_row_group_size: to_usize(value.max_row_group_size, "max_row_group_size")?,
             max_in_list_size: to_usize(value.max_in_list_size, "max_in_list_size")?,
+            row_group_range_assignment: RowGroupRangeAssignment::from_proto_str(
+                &value.row_group_range_assignment,
+            )?,
             created_by: value.created_by.clone(),
             column_index_truncate_length: value
                 .column_index_truncate_length_opt.as_ref()
@@ -1180,6 +1300,7 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                 }
             }).transpose()?,
             content_defined_chunking: value.content_defined_chunking.map(ParquetCdcOptions::try_from).transpose()?.unwrap_or_default(),
+            enable_rle_to_dictionary: value.enable_rle_to_dictionary,
         })
     }
 }
@@ -1324,72 +1445,15 @@ where
         .collect::<datafusion_common::Result<_, _>>()
 }
 
-pub(crate) fn csv_writer_options_from_proto(
-    writer_options: &protobuf::CsvWriterOptions,
-) -> datafusion_common::Result<WriterBuilder> {
-    let mut builder = WriterBuilder::new();
-    if !writer_options.delimiter.is_empty() {
-        if let Some(delimiter) = writer_options.delimiter.chars().next() {
-            if delimiter.is_ascii() {
-                builder = builder.with_delimiter(delimiter as u8);
-            } else {
-                return Err(proto_error("CSV Delimiter is not ASCII"));
-            }
-        } else {
-            return Err(proto_error("Error parsing CSV Delimiter"));
-        }
-    }
-    if !writer_options.quote.is_empty() {
-        if let Some(quote) = writer_options.quote.chars().next() {
-            if quote.is_ascii() {
-                builder = builder.with_quote(quote as u8);
-            } else {
-                return Err(proto_error("CSV Quote is not ASCII"));
-            }
-        } else {
-            return Err(proto_error("Error parsing CSV Quote"));
-        }
-    }
-    if !writer_options.escape.is_empty() {
-        if let Some(escape) = writer_options.escape.chars().next() {
-            if escape.is_ascii() {
-                builder = builder.with_escape(escape as u8);
-            } else {
-                return Err(proto_error("CSV Escape is not ASCII"));
-            }
-        } else {
-            return Err(proto_error("Error parsing CSV Escape"));
-        }
-    }
-    let quote_style = match protobuf::CsvQuoteStyle::try_from(writer_options.quote_style)
-    {
-        Ok(protobuf::CsvQuoteStyle::Always) => QuoteStyle::Always,
-        Ok(protobuf::CsvQuoteStyle::NonNumeric) => QuoteStyle::NonNumeric,
-        Ok(protobuf::CsvQuoteStyle::Never) => QuoteStyle::Never,
-        Ok(protobuf::CsvQuoteStyle::Necessary) => QuoteStyle::Necessary,
-        _ => Err(proto_error(
-            "Unknown quote style, must be one of: 'Always', 'NonNumeric', 'Never', 'Necessary'",
-        ))?,
-    };
-    Ok(builder
-        .with_header(writer_options.has_header)
-        .with_date_format(writer_options.date_format.clone())
-        .with_datetime_format(writer_options.datetime_format.clone())
-        .with_timestamp_format(writer_options.timestamp_format.clone())
-        .with_time_format(writer_options.time_format.clone())
-        .with_null(writer_options.null_value.clone())
-        .with_double_quote(writer_options.double_quote)
-        .with_quote_style(quote_style)
-        .with_ignore_leading_whitespace(writer_options.ignore_leading_whitespace)
-        .with_ignore_trailing_whitespace(writer_options.ignore_trailing_whitespace))
-}
-
 #[cfg(test)]
 mod tests {
+    use datafusion_common::TableReference;
     use datafusion_common::config::{
         MaxRowGroupBytes, ParquetCdcOptions, ParquetOptions, TableParquetOptions,
     };
-    use datafusion_common::parquet_config::DFParquetStatistics;
+    use datafusion_common::parquet_config::{
+        DFParquetCompression, DFParquetStatistics, RowGroupRangeAssignment,
+    };
 
     #[test]
     fn constraint_requires_mode() {
@@ -1403,6 +1467,121 @@ mod tests {
             err.to_string()
                 .contains("Constraint: missing required field 'constraint_mode'")
         );
+    }
+
+    #[test]
+    fn column_relation_round_trip_preserves_dotted_bare_table() {
+        let column = datafusion_common::Column::new(
+            Some(TableReference::bare("has.dot")),
+            "column",
+        );
+
+        let proto: crate::protobuf_common::Column = (&column).into();
+        let relation = proto.relation.expect("relation should be present");
+
+        assert_eq!(relation.relation, "has.dot");
+        assert_eq!(relation.parts, vec!["has.dot".to_string()]);
+
+        let recovered = TableReference::from(relation);
+        assert_eq!(recovered, TableReference::bare("has.dot"));
+    }
+
+    #[test]
+    fn column_relation_round_trip_preserves_dotted_partial_reference() {
+        let column = datafusion_common::Column::new(
+            Some(TableReference::partial("my.schema", "table")),
+            "column",
+        );
+
+        let proto: crate::protobuf_common::Column = (&column).into();
+        let relation = proto.relation.expect("relation should be present");
+
+        assert_eq!(relation.relation, "my.schema.table");
+        assert_eq!(
+            relation.parts,
+            vec!["my.schema".to_string(), "table".to_string()]
+        );
+
+        let recovered = TableReference::from(relation);
+        assert_eq!(recovered, TableReference::partial("my.schema", "table"));
+    }
+
+    #[test]
+    fn column_relation_round_trip_preserves_dotted_full_reference() {
+        let column = datafusion_common::Column::new(
+            Some(TableReference::full("catalog", "my.schema", "table")),
+            "column",
+        );
+
+        let proto: crate::protobuf_common::Column = (&column).into();
+        let relation = proto.relation.expect("relation should be present");
+
+        assert_eq!(relation.relation, "catalog.my.schema.table");
+        assert_eq!(
+            relation.parts,
+            vec![
+                "catalog".to_string(),
+                "my.schema".to_string(),
+                "table".to_string()
+            ]
+        );
+
+        let recovered = TableReference::from(relation);
+        assert_eq!(
+            recovered,
+            TableReference::full("catalog", "my.schema", "table")
+        );
+    }
+
+    #[test]
+    fn df_schema_round_trip_preserves_dotted_qualifiers() {
+        use std::sync::Arc;
+
+        use datafusion_common::DFSchema;
+        use datafusion_common::arrow::datatypes::{DataType, Field};
+
+        let schema = DFSchema::new_with_metadata(
+            vec![
+                (
+                    Some(TableReference::partial("my.schema", "table")),
+                    Arc::new(Field::new("partial_col", DataType::Utf8, true)),
+                ),
+                (
+                    Some(TableReference::full("catalog", "my.schema", "table")),
+                    Arc::new(Field::new("full_col", DataType::Utf8, true)),
+                ),
+            ],
+            std::collections::HashMap::<String, String>::new(),
+        )
+        .unwrap();
+
+        let proto: crate::protobuf_common::DfSchema = (&schema).try_into().unwrap();
+        let recovered = DFSchema::try_from(&proto).unwrap();
+
+        let qualifiers = recovered
+            .iter()
+            .map(|(qualifier, _)| qualifier.cloned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            qualifiers,
+            vec![
+                Some(TableReference::partial("my.schema", "table")),
+                Some(TableReference::full("catalog", "my.schema", "table")),
+            ]
+        );
+    }
+
+    #[test]
+    fn column_relation_decodes_legacy_relation() {
+        let proto = crate::protobuf_common::ColumnRelation {
+            relation: "schema.table".to_string(),
+            parts: vec![],
+        };
+
+        let recovered = TableReference::from(proto);
+
+        assert_eq!(recovered, TableReference::partial("schema", "table"));
     }
 
     #[test]
@@ -1500,6 +1679,24 @@ mod tests {
     }
 
     #[test]
+    fn test_parquet_options_row_group_range_assignment_round_trip() {
+        let opts = ParquetOptions {
+            row_group_range_assignment: RowGroupRangeAssignment::Midpoint,
+            ..ParquetOptions::default()
+        };
+        let mut proto: crate::protobuf_common::ParquetOptions =
+            (&opts).try_into().expect("to_proto");
+        assert_eq!(ParquetOptions::try_from(&proto).unwrap(), opts);
+
+        // Options encoded before the field existed decode with the default
+        proto.row_group_range_assignment.clear();
+        assert_eq!(
+            ParquetOptions::try_from(&proto).unwrap(),
+            ParquetOptions::default()
+        );
+    }
+
+    #[test]
     fn test_parquet_statistics_round_trip() {
         let opts = ParquetOptions {
             statistics_enabled: Some(DFParquetStatistics::Chunk),
@@ -1509,6 +1706,35 @@ mod tests {
         assert_eq!(
             recovered.statistics_enabled,
             Some(DFParquetStatistics::Chunk)
+        );
+    }
+
+    #[test]
+    fn test_parquet_compression_round_trip() {
+        let opts = ParquetOptions {
+            compression: Some(DFParquetCompression::Gzip(6)),
+            ..ParquetOptions::default()
+        };
+        let recovered = parquet_options_proto_round_trip(opts);
+        assert_eq!(recovered.compression, Some(DFParquetCompression::Gzip(6)));
+    }
+
+    #[test]
+    fn test_invalid_parquet_compression_rejected_from_proto() {
+        let opts = ParquetOptions::default();
+        let mut proto: crate::protobuf_common::ParquetOptions =
+            (&opts).try_into().expect("to_proto");
+        proto.compression_opt = Some(
+            crate::protobuf_common::parquet_options::CompressionOpt::Compression(
+                "zstd".to_string(),
+            ),
+        );
+
+        let err = ParquetOptions::try_from(&proto).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("zstd compression requires specifying a level such as zstd(4)"),
+            "unexpected error: {err}"
         );
     }
 

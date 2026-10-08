@@ -103,6 +103,10 @@ message ListingTableScanNode {
     datafusion_common.ArrowFormat arrow = 16;
   }
   repeated SortExprNodeCollection file_sort_order = 13;
+  // Optional number of rows to read.
+  optional uint64 fetch = 17;
+  // Optional number of rows to skip.
+  optional uint64 skip = 18;
 }
 
 message ViewTableScanNode {
@@ -112,6 +116,10 @@ message ViewTableScanNode {
   datafusion_common.Schema schema = 3;
   ProjectionColumns projection = 4;
   string definition = 5;
+  // Optional number of rows to read.
+  optional uint64 fetch = 7;
+  // Optional number of rows to skip.
+  optional uint64 skip = 8;
 }
 
 // Logical Plan to Scan a CustomTableProvider registered at runtime
@@ -122,6 +130,10 @@ message CustomTableScanNode {
   datafusion_common.Schema schema = 3;
   repeated LogicalExprNode filters = 4;
   bytes custom_table_data = 5;
+  // Optional number of rows to read.
+  optional uint64 fetch = 7;
+  // Optional number of rows to skip.
+  optional uint64 skip = 8;
 }
 
 message ProjectionNode {
@@ -275,6 +287,10 @@ message JoinNode {
   datafusion_common.NullEquality null_equality = 7;
   LogicalExprNode filter = 8;
   bool null_aware = 9;
+  // Number of `NOT IN` value keys of a null-aware join (see
+  // `Join::null_aware_value_keys`). Messages predating this field decode it
+  // as 0, which is read as 1: they can only hold scalar `NOT IN` joins.
+  uint32 null_aware_value_keys = 10;
 }
 
 enum AsOfMatchOperator {
@@ -352,10 +368,13 @@ message DmlNode{
   MergeIntoOpNode merge_into = 6;
 }
 
-// Carries the ON condition and WHEN clauses of a MERGE INTO operation.
+// Carries the target qualifier, ON condition, and WHEN clauses of a MERGE INTO operation.
 message MergeIntoOpNode {
   LogicalExprNode on = 1;
   repeated MergeIntoClauseNode clauses = 2;
+  // SQL-visible target qualifier. Absent in payloads written before this field
+  // was introduced; readers then fall back to DmlNode.table_name.
+  TableReference target_qualifier = 3;
 }
 
 // A single WHEN clause within a MERGE INTO statement.
@@ -986,9 +1005,25 @@ message CsvSinkExecNode {
   PhysicalSortExprNodeCollection sort_order = 4;
 }
 
+message ParquetSortingColumn {
+  // Zero-based ordinal of the leaf column in the Parquet schema.
+  int32 column_idx = 1;
+  // Whether the column is sorted in descending order.
+  bool descending = 2;
+  // Whether nulls sort before non-null values.
+  bool nulls_first = 3;
+}
+
+message ParquetSortingColumns {
+  // The wrapper preserves the distinction between no sorting metadata and an empty list.
+  repeated ParquetSortingColumn columns = 1;
+}
+
 message ParquetSink {
   FileSinkConfig config = 1;
   datafusion_common.TableParquetOptions parquet_options = 2;
+  // Sorting-column metadata to write to each Parquet row group.
+  ParquetSortingColumns sorting_columns = 3;
 }
 
 message ParquetSinkExecNode {
@@ -1074,7 +1109,13 @@ message PhysicalExprNode {
     PhysicalLambdaVariableExprNode lambda_variable = 26;
     PhysicalRangeExprNode range_expr = 27;
     PhysicalSqlSimilarToPatternNode sql_similar_to_pattern = 28;
+    PhysicalLiteralNode literal_with_metadata = 29;
   }
+}
+
+message PhysicalLiteralNode {
+  datafusion_common.ScalarValue value = 1;
+  map<string, string> metadata = 2;
 }
 
 message PhysicalDynamicFilterNode {
@@ -1164,9 +1205,10 @@ message PhysicalBinaryExprNode {
   PhysicalExprNode l = 1;
   PhysicalExprNode r = 2;
   string op = 3;
-  // Linearized operands for chains of the same operator (e.g. a AND b AND c).
+  // Linearized operands for chains of the same operator and overflow policy.
   // When present, `l` and `r` are ignored and `operands` holds the flattened list.
   repeated PhysicalExprNode operands = 4;
+  bool fail_on_overflow = 5;
 }
 
 message PhysicalDateTimeIntervalExprNode {
@@ -1308,6 +1350,9 @@ message ParquetScanExecNode {
   PhysicalSortExprNodeCollection sort_order_for_reorder = 5;
 
   bool reverse_row_groups = 6;
+
+  // Source-specific footer prefetch size. Absent means no hint.
+  optional uint64 metadata_size_hint = 7;
 }
 
 message CsvScanExecNode {
@@ -1390,6 +1435,11 @@ message HashJoinExecNode {
   // turning old plans into empty results. With `optional`, absent decodes to
   // `None`, which is the correct reading of an older message.
   optional uint64 fetch = 12;
+  // Number of `NOT IN` value keys of a null-aware join (see
+  // `HashJoinExec::null_aware_value_keys`). Messages predating this field
+  // decode it as 0, which is read as 1: they can only hold scalar `NOT IN`
+  // joins.
+  uint32 null_aware_value_keys = 13;
 }
 
 enum StreamPartitionMode {
@@ -1603,7 +1653,12 @@ message PhysicalHashRepartition {
 
 message PhysicalRangePartitioning {
   repeated PhysicalSortExprNode sort_expr = 1;
+  // Effective split points. Kept for compatibility with older readers.
   repeated PhysicalRangeSplitPoint split_point = 2;
+  // Maximum-resolution sample points used to derive effective split points.
+  repeated PhysicalRangeSplitPoint sample_point = 3;
+  // Zero in legacy payloads means split_point.len() + 1.
+  uint64 partition_count = 4;
 }
 
 message PhysicalRangeSplitPoint {

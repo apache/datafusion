@@ -18,13 +18,12 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
-use datafusion_common::{Result, assert_eq_or_internal_err};
-
 use crate::aggregates::group_values::{AccumulatorPhase, new_group_values};
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{AggregateExec, evaluate_group_by};
+use arrow::datatypes::SchemaRef;
+use arrow::record_batch::RecordBatch;
+use datafusion_common::{Result, assert_eq_or_internal_err};
 
 use super::common::{
     AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState,
@@ -51,7 +50,7 @@ impl AggregateHashTable<PartialMarker> {
             Arc::clone(&output_schema),
             output_schema,
             batch_size,
-            agg.filter_expr.iter().cloned().collect(),
+            agg.filter_expr().to_vec(),
         )
     }
 
@@ -91,6 +90,7 @@ impl AggregateHashTable<PartialMarker> {
             aggregate_accumulator_metrics: Arc::clone(
                 &self.aggregate_accumulator_metrics,
             ),
+            aggregate_submetrics: self.aggregate_submetrics.clone(),
             input_schema: Arc::clone(&self.input_schema),
             output_schema: Arc::clone(&self.output_schema),
             state_schema: Arc::clone(&self.state_schema),

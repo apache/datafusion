@@ -220,9 +220,9 @@ cargo run --example dataframe -- dataframe
 
 #### Category: Single Process
 
-| Subcommand   | File Path                                                           | Description                                                             |
-| ------------ | ------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| join_reorder | [`statistics/join_reorder.rs`](examples/statistics/join_reorder.rs) | Supply and refine column statistics via a provider to flip a join order |
+| Subcommand   | File Path                                                           | Description                                                          |
+| ------------ | ------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| join_reorder | [`statistics/join_reorder.rs`](examples/statistics/join_reorder.rs) | Supply catalog column statistics via a provider to flip a join order |
 
 ## UDF Examples
 
