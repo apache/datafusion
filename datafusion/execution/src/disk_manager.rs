@@ -610,7 +610,7 @@ fn escape_for_temp_file_name_prefix(text: &str) -> String {
             add_separator = true;
         }
         if output.len() >= 123 {
-            break; // We limit the output at 126 bytes and keep the space for an extra UTF-8 char and the final dot
+            break; // We limit the output at 128 bytes and keep the space for an extra UTF-8 char and the final dot
         }
     }
     output.push('.');
