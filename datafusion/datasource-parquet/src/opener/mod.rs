@@ -1336,25 +1336,13 @@ impl FiltersPreparedParquetOpen {
                     .row_groups_pruned_statistics
                     .add_matched(row_groups.remaining_row_group_count());
             }
-
-            if !prepared.enable_bloom_filter || row_groups.is_empty() {
-                // Update metrics: bloom filter unavailable, so all row groups are
-                // matched (not pruned)
-                prepared
-                    .file_metrics
-                    .row_groups_pruned_bloom_filter
-                    .add_matched(row_groups.remaining_row_group_count());
-            }
         } else {
             // Update metrics: no predicate, so all row groups are matched (not pruned)
+            // by statistics. Bloom pruning did not run, so its metrics are unchanged.
             let remaining = row_groups.remaining_row_group_count();
             prepared
                 .file_metrics
                 .row_groups_pruned_statistics
-                .add_matched(remaining);
-            prepared
-                .file_metrics
-                .row_groups_pruned_bloom_filter
                 .add_matched(remaining);
         }
 
@@ -3413,6 +3401,32 @@ mod test {
             .expect("row_groups_pruned_statistics metric is emitted")
     }
 
+    /// Bloom pruning counters after a scan, as `(pruned, matched)`.
+    ///
+    /// Direct `MetricsSet` lookup, not plan display: idle Bloom metrics are
+    /// omitted from displayed plans even when the counters remain registered.
+    ///
+    /// Opening one file still registers this name more than once:
+    /// `prepare_open_file` creates `ParquetFileMetrics`, and each
+    /// `ParquetFileReaderFactory::create_reader` call (initial reader plus
+    /// Bloom replacement reader) creates another independent set. Sum the
+    /// counters the same way `MetricsSet::sum_by_name` aggregates pruning
+    /// metrics. Only the opener's set is incremented by Bloom pruning; the
+    /// reader copies stay at zero.
+    fn bloom_filter_pruning_metrics(metrics: &ExecutionPlanMetricsSet) -> (usize, usize) {
+        use datafusion_physical_plan::metrics::MetricValue;
+        match metrics
+            .clone_inner()
+            .sum_by_name("row_groups_pruned_bloom_filter")
+        {
+            Some(MetricValue::PruningMetrics {
+                pruning_metrics, ..
+            }) => (pruning_metrics.pruned(), pruning_metrics.matched()),
+            Some(_) => panic!("row_groups_pruned_bloom_filter is not a pruning metric"),
+            None => panic!("row_groups_pruned_bloom_filter metric is registered"),
+        }
+    }
+
     #[tokio::test]
     async fn test_prune_all_null_column_equality_from_file_statistics() {
         // Regression: a column whose file statistics say every value is
@@ -4743,6 +4757,16 @@ mod test {
             // contribute to this metric.
             bloom_bytes.push(counter_metric_value(&metrics, "bytes_scanned"));
             assert_eq!(collect_int32_values(stream).await, vec![1, 1, 1, 1]);
+            let (pruned, matched) = bloom_filter_pruning_metrics(&metrics);
+            assert_eq!(pruned, 0);
+            if stats_pruning {
+                // [1,1,1] is fully matched by statistics and skips Bloom.
+                // [0,1,2] still evaluates Bloom for `a = 1` and cannot prune.
+                assert_eq!(matched, 1);
+            } else {
+                // Statistics pruning is off, so both row groups evaluate Bloom.
+                assert_eq!(matched, 2);
+            }
         }
         assert!(bloom_bytes[1] > 0, "partial row group needs Bloom I/O");
         assert!(
@@ -4781,6 +4805,10 @@ mod test {
         .unwrap();
         assert_eq!(counter_metric_value(&metrics, "bytes_scanned"), 0);
         assert_eq!(collect_int32_values(stream).await, vec![1, 1, 1]);
+        let (pruned, matched) = bloom_filter_pruning_metrics(&metrics);
+        // Bloom reads and evaluation are skipped for an entirely fully matched file.
+        assert_eq!(pruned, 0);
+        assert_eq!(matched, 0);
     }
 
     #[test]
