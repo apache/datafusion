@@ -51,6 +51,21 @@ pub enum CastPredicatePreimage {
     Range(Interval),
 }
 
+impl CastPredicatePreimage {
+    /// Returns whether this preimage and comparison operator produce multiple
+    /// predicates that each evaluate the input expression.
+    pub fn duplicates_input(&self, op: Operator) -> bool {
+        matches!(self, Self::Range(_))
+            && matches!(
+                op,
+                Operator::Eq
+                    | Operator::NotEq
+                    | Operator::IsDistinctFrom
+                    | Operator::IsNotDistinctFrom
+            )
+    }
+}
+
 /// Convert a literal [`ScalarValue`] to `target_type`, preserving the exact value.
 ///
 /// Returns `None` if the value cannot be represented in `target_type`
@@ -678,6 +693,10 @@ fn is_lossy_temporal_cast(from_type: &DataType, to_type: &DataType) -> bool {
 /// This pair is already rejected by the `is_exact_cast_safe` allowlist
 /// (including when wrapped in a `Dictionary`), so predicate rewrites do not need
 /// a separate `Date64 -> Date32` early return.
+#[deprecated(
+    since = "56.0.0",
+    note = "Date64 -> Date32 is rejected by the cast_predicate_preimage allowlist"
+)]
 pub fn is_date_narrowing_cast(from_type: &DataType, to_type: &DataType) -> bool {
     matches!((from_type, to_type), (DataType::Date64, DataType::Date32))
 }
@@ -1525,6 +1544,38 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_predicate_preimage_duplicates_input() {
+        let exact = CastPredicatePreimage::Exact(ScalarValue::Int32(Some(1)));
+        let range = CastPredicatePreimage::Range(
+            Interval::try_new(ScalarValue::Int32(Some(0)), ScalarValue::Int32(Some(2)))
+                .unwrap(),
+        );
+        let cases = [
+            (Operator::Eq, true),
+            (Operator::NotEq, true),
+            (Operator::IsDistinctFrom, true),
+            (Operator::IsNotDistinctFrom, true),
+            (Operator::Lt, false),
+            (Operator::LtEq, false),
+            (Operator::Gt, false),
+            (Operator::GtEq, false),
+        ];
+
+        for (op, range_duplicates) in cases {
+            assert!(!exact.duplicates_input(op), "Exact with {op:?}");
+            assert_eq!(
+                range.duplicates_input(op),
+                range_duplicates,
+                "Range with {op:?}"
+            );
+        }
+    }
+
+    #[test]
+    #[expect(
+        deprecated,
+        reason = "kept to verify the deprecated helper's semantics"
+    )]
     fn test_is_date_narrowing_cast() {
         // Only Date64 -> Date32 narrows (ms -> days, many-to-one).
         assert!(is_date_narrowing_cast(&DataType::Date64, &DataType::Date32));

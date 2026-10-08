@@ -102,20 +102,8 @@ pub(super) fn supports_cast_predicate_for_binary(
     else {
         return false;
     };
-    if preimage.is_none() {
-        return false;
-    }
-    // Equality-like range predicates duplicate their input; volatile expressions
-    // cannot be duplicated.
-    !(matches!(preimage, Some(CastPredicatePreimage::Range(_)))
-        && matches!(
-            op,
-            Operator::Eq
-                | Operator::NotEq
-                | Operator::IsDistinctFrom
-                | Operator::IsNotDistinctFrom
-        )
-        && inner_expr.is_volatile())
+    // Volatile expressions cannot be duplicated.
+    preimage.is_some_and(|p| !(p.duplicates_input(op) && inner_expr.is_volatile()))
 }
 
 pub(super) fn supports_cast_predicate_for_inlist(
