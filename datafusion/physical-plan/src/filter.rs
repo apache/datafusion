@@ -4565,6 +4565,26 @@ mod tests {
     }
 
     #[test]
+    fn test_fallback_selectivity_missing_column_statistics() {
+        // col_0 = <expr>, but col_stats is empty. -> NDV is unknown, default selectivity is applied.
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let predicate: Arc<dyn PhysicalExpr> = binary(
+            col("a", &schema).unwrap(),
+            Operator::Eq,
+            lit(42i32),
+            &schema,
+        )
+        .unwrap();
+        // Empty column statistics, so getting index 0 will return None
+        let col_stats = vec![];
+        let result = compute_fallback_selectivity(&predicate, &col_stats, 20);
+        assert!(
+            (result - 0.2).abs() < 1e-12,
+            "expected default selectivity 0.2, got {result}"
+        );
+    }
+
+    #[test]
     fn test_fallback_selectivity_multiple_unhandled_conjuncts() {
         // s <> 'abc' AND t <> 'x' AND u <> 'p'
         // None are handled equalities → selectivity = default once = 0.2
