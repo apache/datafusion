@@ -480,6 +480,19 @@ cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span
 <li><p>Some tests and examples rely on git submodule data being present locally.</p></li>
 </ul>
 </section>
+<section id="nix-and-direnv">
+<h2>Nix and direnv<a class="headerlink" href="#nix-and-direnv" title="Link to this heading">#</a></h2>
+<p>The repository’s <code class="docutils literal notranslate"><span class="pre">flake.nix</span></code> provides a Nix development shell. Enter it directly
+with <code class="docutils literal notranslate"><span class="pre">nix</span> <span class="pre">develop</span></code>, or install and configure <a class="reference external" href="https://direnv.net/">direnv</a> and run
+<code class="docutils literal notranslate"><span class="pre">direnv</span> <span class="pre">allow</span></code> from the repository root to load it automatically.</p>
+<p>The repository’s <code class="docutils literal notranslate"><span class="pre">.envrc</span></code> first loads the nearest ancestor <code class="docutils literal notranslate"><span class="pre">.envrc</span></code>, if one
+exists, and then loads the shared Nix environment when Nix is installed. Put
+project-specific direnv settings in <code class="docutils literal notranslate"><span class="pre">.envrc.local</span></code>. This file is ignored by Git
+and loaded last so that local settings take precedence.</p>
+<p>If you previously kept personal settings in the repository’s <code class="docutils literal notranslate"><span class="pre">.envrc</span></code>, move
+only those settings to <code class="docutils literal notranslate"><span class="pre">.envrc.local</span></code>. Do not copy the shared <code class="docutils literal notranslate"><span class="pre">.envrc</span></code>, as doing
+so would load the Nix environment twice.</p>
+</section>
 <section id="windows-setup">
 <h2>Windows Setup<a class="headerlink" href="#windows-setup" title="Link to this heading">#</a></h2>
 <div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>wget<span class="w"> </span>https://az792536.vo.msecnd.net/vms/VMBuild_20190311/VirtualBox/MSEdge/MSEdge.Win10.VirtualBox.zip
@@ -613,6 +626,7 @@ libprotoc<span class="w"> </span><span class="m">3</span>.15.0
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#quick-start">Quick Start</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#nix-and-direnv">Nix and direnv</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#windows-setup">Windows Setup</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#dev-container-setup">Dev Container setup</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#protoc-installation"><code class="docutils literal notranslate"><span class="pre">protoc</span></code> Installation</a></li>
