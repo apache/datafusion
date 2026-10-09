@@ -549,15 +549,13 @@ impl ExprSchemable for Expr {
                 metadata,
                 ..
             }) => {
-                let mut combined_metadata = expr.metadata(schema)?;
+                let field = expr.to_field(schema)?.1;
+                let mut combined_metadata = FieldMetadata::from(field.metadata());
                 if let Some(metadata) = metadata {
                     combined_metadata.extend(metadata.clone());
                 }
 
-                Ok(expr
-                    .to_field(schema)
-                    .map(|(_, f)| f)?
-                    .with_field_metadata(&combined_metadata))
+                Ok(field.with_field_metadata(&combined_metadata))
             }
             Expr::Negative(expr) => expr.to_field(schema).map(|(_, f)| f),
             Expr::Column(c) => schema.field_from_column(c).map(Arc::clone),
@@ -1276,6 +1274,54 @@ mod tests {
             Some(&"some_value".to_string())
         );
         assert_eq!(expr.metadata(&schema).unwrap(), alias_metadata);
+    }
+
+    #[test]
+    fn test_nested_alias_resolves_child_field_once() -> Result<()> {
+        #[derive(Debug)]
+        struct CountingSchema {
+            field: FieldRef,
+            lookups: std::cell::Cell<usize>,
+        }
+
+        impl ExprSchema for CountingSchema {
+            fn nullable(&self, _col: &Column) -> Result<bool> {
+                Ok(self.field.is_nullable())
+            }
+
+            fn field_from_column(&self, _col: &Column) -> Result<&FieldRef> {
+                self.lookups.set(self.lookups.get() + 1);
+                Ok(&self.field)
+            }
+        }
+
+        let schema = CountingSchema {
+            field: Arc::new(Field::new("value", DataType::Int32, false).with_metadata(
+                HashMap::from([
+                    ("override".to_string(), "base".to_string()),
+                    ("keep".to_string(), "base".to_string()),
+                ]),
+            )),
+            lookups: std::cell::Cell::new(0),
+        };
+        let mut expr = col("value");
+        for index in 0..12 {
+            let Expr::Alias(alias) = expr.alias(format!("alias_{index}")) else {
+                unreachable!();
+            };
+            expr = Expr::Alias(alias.with_metadata(Some(FieldMetadata::from(
+                HashMap::from([("override".to_string(), index.to_string())]),
+            ))));
+        }
+
+        let field = expr.to_field(&schema)?.1;
+        assert_eq!(schema.lookups.get(), 1);
+        assert_eq!(field.name(), "alias_11");
+        assert_eq!(field.data_type(), &DataType::Int32);
+        assert!(!field.is_nullable());
+        assert_eq!(field.metadata().get("override"), Some(&"11".to_string()));
+        assert_eq!(field.metadata().get("keep"), Some(&"base".to_string()));
+        Ok(())
     }
 
     #[test]
