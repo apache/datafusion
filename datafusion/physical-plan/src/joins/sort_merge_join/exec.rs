@@ -377,6 +377,11 @@ impl SortMergeJoinExec {
         self.null_equality
     }
 
+    /// Null aware
+    pub fn null_aware(&self) -> bool {
+        self.null_aware
+    }
+
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         left: &Arc<dyn ExecutionPlan>,
@@ -459,6 +464,23 @@ impl SortMergeJoinExec {
         } else {
             reorder_output_after_swap(Arc::new(new_join), &left.schema(), &right.schema())
         }
+    }
+
+    /// The null-aware semantics of this join, if [`Self::null_aware`] is set.
+    ///
+    /// Errors if `null_aware` is set on a join that does not support it.
+    pub(super) fn null_aware_mode(&self) -> Result<Option<NullAwareMode>> {
+        self.null_aware
+            .then(|| {
+                NullAwareMode::try_new(
+                    self.join_type,
+                    self.on.len(),
+                    self.filter.is_some(),
+                    self.null_equality(),
+                    self.sort_options(),
+                )
+            })
+            .transpose()
     }
 }
 
