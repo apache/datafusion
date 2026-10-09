@@ -28,7 +28,7 @@ use arrow::{
 };
 use datafusion_common::types::{NativeType, logical_float64};
 use datafusion_common::{
-    DataFusionError, Result, ScalarValue, downcast_value, internal_err, not_impl_err,
+    Result, ScalarValue, downcast_value, internal_err, not_impl_err, plan_datafusion_err,
     plan_err,
 };
 use datafusion_expr::DistinctHandling;
@@ -219,9 +219,8 @@ impl ApproxPercentileCont {
 
 fn validate_input_max_size_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<usize> {
     let scalar_value = get_scalar_value(expr).map_err(|_e| {
-        DataFusionError::Plan(
+        plan_datafusion_err!(
             "Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be a literal"
-                .to_string(),
         )
     })?;
 
@@ -347,7 +346,7 @@ pub struct ApproxPercentileAccumulator {
 }
 
 impl ApproxPercentileAccumulator {
-    pub(crate) fn new(percentile: PercentileParam, return_type: DataType) -> Self {
+    pub fn new(percentile: PercentileParam, return_type: DataType) -> Self {
         Self {
             digest: TDigest::new(DEFAULT_MAX_SIZE),
             percentile,
@@ -468,7 +467,7 @@ impl Accumulator for ApproxPercentileAccumulator {
             self.percentile.resolve(percentile_array)?;
         }
 
-        let tdigest_states = &states[..6.min(states.len())];
+        let tdigest_states = &states[..STATE_PERCENTILE_IDX];
         let states = (0..tdigest_states[0].len())
             .map(|index| {
                 tdigest_states

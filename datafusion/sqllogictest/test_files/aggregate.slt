@@ -190,7 +190,7 @@ SELECT c1, approx_percentile_cont(0.95, -1000) WITHIN GROUP (ORDER BY c3) AS c3_
 statement error Function 'approx_percentile_cont' failed to match any signature
 SELECT approx_percentile_cont(0.95, c1) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: Percentile value for 'APPROX_PERCENTILE_CONT' must be constant across the aggregation, found differing values
+statement error DataFusion error: Execution error: Percentile value for 'APPROX_PERCENTILE_CONT' must be constant across the aggregation, found differing values
 SELECT approx_percentile_cont(c12) WITHIN GROUP (ORDER BY c12) FROM aggregate_test_100
 
 statement error DataFusion error: Error during planning: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be a literal
@@ -2874,6 +2874,24 @@ SELECT g, percentile_cont(y, m) AS median FROM (SELECT t.x % 3 as g, t.x + 1 as 
 1 56
 2 66
 
+query error DataFusion error: Execution error: Percentile value must be between 0\.0 and 1\.0 inclusive, NaN is invalid
+SELECT approx_percentile_cont(x, m) FROM (VALUES (10,'NaN'::FLOAT),(20,'NaN'::FLOAT),(30,'NaN'::FLOAT),(40,'NaN'::FLOAT)) AS t(x,m)
+
+query error DataFusion error: Execution error: Percentile value must be between 0\.0 and 1\.0 inclusive, NaN is invalid
+SELECT percentile_cont(x, m) FROM (VALUES (10,'NaN'::FLOAT),(20,'NaN'::FLOAT),(30,'NaN'::FLOAT),(40,'NaN'::FLOAT)) AS t(x,m)
+
+query error DataFusion error: Execution error: Error during planning: Percentile value must be between 0\.0 and 1\.0 inclusive, inf is invalid
+SELECT approx_percentile_cont(x, m) FROM (VALUES (10,'+Inf'::FLOAT),(20,'+Inf'::FLOAT),(30,'+Inf'::FLOAT),(40,'+Inf'::FLOAT)) AS t(x,m)
+
+query error DataFusion error: Execution error: Error during planning: Percentile value must be between 0\.0 and 1\.0 inclusive, inf is invalid
+SELECT percentile_cont(x, m) FROM (VALUES (10,'+Inf'::FLOAT),(20,'+Inf'::FLOAT),(30,'+Inf'::FLOAT),(40,'+Inf'::FLOAT)) AS t(x,m)
+
+query error DataFusion error: Execution error: Error during planning: Percentile value must be between 0\.0 and 1\.0 inclusive, \-inf is invalid
+SELECT approx_percentile_cont(x, m) FROM (VALUES (10,'-Inf'::FLOAT),(20,'-Inf'::FLOAT),(30,'-Inf'::FLOAT),(40,'-Inf'::FLOAT)) AS t(x,m)
+
+query error DataFusion error: Execution error: Error during planning: Percentile value must be between 0\.0 and 1\.0 inclusive, \-inf is invalid
+SELECT percentile_cont(x, m) FROM (VALUES (10,'-Inf'::FLOAT),(20,'-Inf'::FLOAT),(30,'-Inf'::FLOAT),(40,'-Inf'::FLOAT)) AS t(x,m)
+
 # the percentile only has to be constant within a group, not across groups
 query IR
 SELECT g, percentile_cont(x, p) FROM (VALUES (1, 10, 0.0), (1, 20, 0.0), (2, 30, 1.0), (2, 40, 1.0)) AS t(g, x, p) GROUP BY g ORDER BY g
@@ -2901,17 +2919,17 @@ SELECT g, percentile_cont(x, p) FROM (VALUES (1, 10, 0.0), (1, 20, 0.0), (2, NUL
 2 NULL
 
 # the percentile must still be constant within each group
-query error DataFusion error: Error during planning: Percentile value for 'PERCENTILE_CONT' must be constant across the aggregation, found differing values
+query error DataFusion error: Execution error: Percentile value for 'PERCENTILE_CONT' must be constant across the aggregation, found differing values 0 and 1
 SELECT g, percentile_cont(x, p) FROM (VALUES (1, 10, 0.0), (1, 20, 1.0), (2, 30, 1.0), (2, 40, 1.0)) AS t(g, x, p) GROUP BY g
 
-query error DataFusion error: Error during planning: Percentile value for 'APPROX_PERCENTILE_CONT' must be constant across the aggregation, found differing values
+query error DataFusion error: Execution error: Percentile value for 'APPROX_PERCENTILE_CONT' must be constant across the aggregation, found differing values
 SELECT g, approx_percentile_cont(x, p) FROM (VALUES (1, 10, 0.0), (1, 20, 1.0), (2, 30, 1.0), (2, 40, 1.0)) AS t(g, x, p) GROUP BY g
 
 # a genuinely non-constant percentile must error clearly
-query error DataFusion error: Error during planning: Percentile value for 'APPROX_PERCENTILE_CONT' must be constant across the aggregation, found differing values
+query error DataFusion error: Execution error: Percentile value for 'APPROX_PERCENTILE_CONT' must be constant across the aggregation, found differing values
 SELECT approx_percentile_cont(x, m) FROM (VALUES (10,0.1),(20,0.5),(30,0.9),(40,0.5)) AS t(x,m)
 
-query error DataFusion error: Error during planning: Percentile value for 'PERCENTILE_CONT' must be constant across the aggregation, found differing values
+query error DataFusion error: Execution error: Percentile value for 'PERCENTILE_CONT' must be constant across the aggregation, found differing values 0.1 and 0.9
 SELECT percentile_cont(x, m) FROM (VALUES (10,0.1),(20,0.5),(30,0.9),(40,0.5)) AS t(x,m)
 
 # percentile column with DESC ordering is flipped to 1 - p
@@ -2938,17 +2956,17 @@ SELECT percentile_cont(x, m), approx_percentile_cont(x, m) FROM (VALUES (10, 0.5
 25 25
 
 # an all-null percentile column cannot be resolved
-query error DataFusion error: Error during planning: Percentile value for 'PERCENTILE_CONT' could not be determined: no non-null percentile value was seen
+query error DataFusion error: Execution error: Percentile value for 'PERCENTILE_CONT' could not be determined: no non\-null percentile value was seen
 SELECT percentile_cont(x, m) FROM (VALUES (10, CAST(NULL AS DOUBLE)), (20, NULL)) AS t(x, m)
 
-query error DataFusion error: Error during planning: Percentile value for 'APPROX_PERCENTILE_CONT' could not be determined: no non-null percentile value was seen
+query error DataFusion error: Execution error: Percentile value for 'APPROX_PERCENTILE_CONT' could not be determined: no non\-null percentile value was seen
 SELECT approx_percentile_cont(x, m) FROM (VALUES (10, CAST(NULL AS DOUBLE)), (20, NULL)) AS t(x, m)
 
 # out of range percentile column
-query error DataFusion error: Error during planning: Percentile value must be between 0.0 and 1.0 inclusive, 1.5 is invalid
+query error DataFusion error: Execution error: Error during planning: Percentile value must be between 0.0 and 1.0 inclusive, 1.5 is invalid
 SELECT percentile_cont(x, m) FROM (VALUES (10, 1.5), (20, 1.5)) AS t(x, m)
 
-query error DataFusion error: Error during planning: Percentile value must be between 0.0 and 1.0 inclusive, -0.5 is invalid
+query error DataFusion error: Execution error: Error during planning: Percentile value must be between 0.0 and 1.0 inclusive, -0.5 is invalid
 SELECT approx_percentile_cont(x, m) FROM (VALUES (10, -0.5), (20, -0.5)) AS t(x, m)
 
 # Percentile column spread across multiple batches and partitions: the
@@ -3007,16 +3025,16 @@ SELECT g, approx_percentile_cont(x, p) FROM (SELECT value % 2 AS g, value AS x, 
 
 # Each batch is constant on its own, but the percentile differs across
 # batches, so the mismatch must be detected across batches / on merge
-query error DataFusion error: Error during planning: Percentile value for 'PERCENTILE_CONT' must be constant across the aggregation, found differing values
+query error DataFusion error: Execution error: Percentile value for 'PERCENTILE_CONT' must be constant across the aggregation, found differing values 0.9 and 0.5
 SELECT percentile_cont(x, m) FROM (SELECT value AS x, CASE WHEN value <= 50 THEN 0.5 ELSE 0.9 END AS m FROM generate_series(1, 100))
 
-query error DataFusion error: Error during planning: Percentile value for 'APPROX_PERCENTILE_CONT' must be constant across the aggregation, found differing values
+query error DataFusion error: Execution error: Percentile value for 'APPROX_PERCENTILE_CONT' must be constant across the aggregation, found differing values
 SELECT approx_percentile_cont(x, m) FROM (SELECT value AS x, CASE WHEN value <= 50 THEN 0.5 ELSE 0.9 END AS m FROM generate_series(1, 100))
 
-query error DataFusion error: Error during planning: Percentile value for 'APPROX_PERCENTILE_CONT' must be constant across the aggregation, found differing values
+query error DataFusion error: Execution error: Percentile value for 'APPROX_PERCENTILE_CONT' must be constant across the aggregation, found differing values
 SELECT approx_percentile_cont_with_weight(x, 1, m) FROM (SELECT value AS x, CASE WHEN value <= 50 THEN 0.5 ELSE 0.9 END AS m FROM generate_series(1, 100))
 
-query error DataFusion error: Error during planning: Percentile value for 'PERCENTILE_CONT' must be constant across the aggregation, found differing values
+query error DataFusion error: Execution error: Percentile value for 'PERCENTILE_CONT' must be constant across the aggregation, found differing values 0.5 and 0.9
 SELECT g, percentile_cont(x, m) FROM (SELECT value % 4 AS g, value AS x, CASE WHEN value <= 50 THEN 0.5 ELSE 0.9 END AS m FROM generate_series(1, 100)) GROUP BY g
 
 # Force skipping partial aggregation so the groups accumulator goes through
@@ -3035,7 +3053,7 @@ SELECT g, percentile_cont(x, m) FROM (SELECT value % 4 AS g, value AS x, 0.25 AS
 2 26
 3 27
 
-query error DataFusion error: Error during planning: Percentile value for 'PERCENTILE_CONT' must be constant across the aggregation, found differing values
+query error DataFusion error: Execution error: Percentile value for 'PERCENTILE_CONT' must be constant across the aggregation, found differing values 0.5 and 0.9
 SELECT g, percentile_cont(x, m) FROM (SELECT value % 4 AS g, value AS x, CASE WHEN value <= 50 THEN 0.5 ELSE 0.9 END AS m FROM generate_series(1, 100)) GROUP BY g
 
 query IR
@@ -4555,7 +4573,7 @@ SELECT percentile_cont(1.5) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 statement error DataFusion error: Error during planning: Percentile value must be between 0.0 and 1.0 inclusive
 SELECT percentile_cont(-0.1) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: Percentile value for 'PERCENTILE_CONT' must be constant across the aggregation, found differing values
+statement error DataFusion error: Execution error: Percentile value for 'PERCENTILE_CONT' must be constant across the aggregation, found differing values 1 and 5
 SELECT percentile_cont(c2) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 
 statement error DataFusion error: Error during planning: \[IGNORE | RESPECT\] NULLS are not permitted for percentile_cont

@@ -616,7 +616,7 @@ impl<T: ArrowNumericType + Debug, I: PercentileInterpolator<T>>
     PercentileContGroupsAccumulator<T, I>
 {
     fn new(percentile: PercentileParam, data_type: DataType) -> Self {
-        let group_percentiles = percentile.is_pending().then(Vec::new);
+        let group_percentiles = percentile.is_col_ref().then(Vec::new);
         Self {
             group_values: vec![],
             percentile,
