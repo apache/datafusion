@@ -506,15 +506,10 @@ fn is_end_bound_safe_for_range(
     idx: usize,
 ) -> Result<bool> {
     match end_bound {
-        WindowFrameBound::Preceding(value) => {
-            let zero = ScalarValue::new_zero(&value.data_type())?;
-            if value.eq(&zero) {
-                is_row_ahead(orderby_col, most_recent_ob_col, sort_options)
-            } else {
-                Ok(true)
-            }
-        }
-        WindowFrameBound::CurrentRow => {
+        // A frame ending in `N PRECEDING` can only reach the end of the buffer
+        // when the current row's frame ends at its last peer, as for a NULL or
+        // NaN ORDER BY value, so it is safe once a row past its peers arrives.
+        WindowFrameBound::Preceding(_) | WindowFrameBound::CurrentRow => {
             is_row_ahead(orderby_col, most_recent_ob_col, sort_options)
         }
         WindowFrameBound::Following(delta) => {
