@@ -16,7 +16,6 @@
 // under the License.
 
 use std::cmp::Ordering;
-use std::mem::size_of;
 use std::sync::Arc;
 
 use arrow::array::ArrayRef;
@@ -102,7 +101,7 @@ enum State {
 }
 
 impl State {
-    fn size(&self) -> usize {
+    fn heap_size(&self) -> usize {
         match self {
             State::Taken => 0,
             State::Start => 0,
@@ -267,9 +266,10 @@ impl GroupOrderingPartial {
         Ok(())
     }
 
-    /// Return the size of memory allocated by this structure
-    pub(crate) fn size(&self) -> usize {
-        size_of::<Self>() + self.order_indices.allocated_size() + self.state.size()
+    /// Returns retained heap allocations, excluding the inline descriptor
+    /// already counted by [`super::GroupOrdering::size`].
+    pub(crate) fn heap_size(&self) -> usize {
+        self.order_indices.allocated_size() + self.state.heap_size()
     }
 }
 
