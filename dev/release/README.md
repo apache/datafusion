@@ -315,7 +315,7 @@ git push apache 55.2.0
 
 #### Publish the versioned documentation
 
-**1. Build the documentation from the release tagm using the a configuration
+**1. Build the documentation from the release tag using the a configuration
 overlay (`docs/scripts/release/conf.py`) from the main checkout. For example,
 for `55.0.0`, from the repository root:
 
