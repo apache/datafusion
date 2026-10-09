@@ -301,16 +301,19 @@ impl<S: HashState> ChildHashing for HashStateChildHashing<'_, S> {
     }
 }
 
-/// Builds hash values of PrimitiveArray and writes them into `hashes_buffer`
-/// If `rehash==true` this folds the existing hash into the hasher state
-/// and hashes only the new value (avoiding a separate combine step).
+/// Builds hash values of PrimitiveArray and writes them into `hashes_buffer`.
 ///
-/// The hot loops are 8-way manually unrolled: foldhash on a primitive is a
-/// single 64x64→128 multiply + xor fold whose iterations are fully independent,
-/// so unrolling exposes extra ILP for the backend scheduler. Nullable paths
-/// hash every slot and use a branchless `csel`-style blend to preserve the
-/// previous buffer value for null rows; this is cheaper than iterating
-/// `valid_indices()` for the common low-null-density case.
+/// If `rehash==true` the previous hash in `hashes_buffer[i]` is folded into the
+/// hasher state as a per-element seed (which, for foldhash's fast tier, is
+/// still a single `folded_multiply`), avoiding a separate combine step.
+///
+/// Null-free hot loops are manually unrolled (16-way fresh, 8-way rehash):
+/// each iteration is a single 64×64→128 multiply + xor fold with no cross-row
+/// dependency, so unrolling exposes ILP to hide the ~3-cycle multiply latency.
+/// Nullable paths walk the null bitmap in 64-bit chunks: all-valid chunks
+/// dispatch to the unrolled hot loop; mixed chunks hash all 64 slots and
+/// branchlessly blend by mask bit (csel on aarch64), which is a win over a
+/// `trailing_zeros` per-bit scan at the null densities we care about.
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_array_primitive<T>(
     array: &PrimitiveArray<T>,
@@ -327,7 +330,6 @@ fn hash_array_primitive<T>(
     );
 
     let values = array.values();
-    let n = values.len();
 
     if array.null_count() == 0 {
         if rehash {
@@ -335,40 +337,24 @@ fn hash_array_primitive<T>(
         } else {
             hash_prim_fresh_unrolled(values, hashes_buffer, random_state);
         }
+    } else if rehash {
+        hash_prim_nulls_chunked::<_, _, true>(
+            values,
+            hashes_buffer,
+            array.nulls().unwrap(),
+            random_state,
+        );
     } else {
-        // Branchless path: hash every element then blend into the buffer based on
-        // the null bitmap. Avoids the per-element work of `.valid_indices()`.
-        let nulls = array.nulls().unwrap();
-        if rehash {
-            for i in 0..n {
-                // SAFETY: i < values.len() == hashes_buffer.len()
-                let value = unsafe { *values.get_unchecked(i) };
-                let prev = unsafe { *hashes_buffer.get_unchecked(i) };
-                let mut hasher = random_state.seeded_state(prev).build_hasher();
-                value.hash_write(&mut hasher);
-                let new_hash = hasher.finish();
-                let valid = nulls.is_valid(i);
-                unsafe {
-                    *hashes_buffer.get_unchecked_mut(i) =
-                        if valid { new_hash } else { prev };
-                }
-            }
-        } else {
-            for i in 0..n {
-                let value = unsafe { *values.get_unchecked(i) };
-                let prev = unsafe { *hashes_buffer.get_unchecked(i) };
-                let new_hash = value.hash_one(random_state);
-                let valid = nulls.is_valid(i);
-                unsafe {
-                    *hashes_buffer.get_unchecked_mut(i) =
-                        if valid { new_hash } else { prev };
-                }
-            }
-        }
+        hash_prim_nulls_chunked::<_, _, false>(
+            values,
+            hashes_buffer,
+            array.nulls().unwrap(),
+            random_state,
+        );
     }
 }
 
-/// 8-way unrolled hash loop for the null-free, fresh-hash primitive path.
+/// 16-way unrolled hash loop for the null-free, fresh-hash primitive path.
 ///
 /// Each `hash_one` call is independent, so unrolling lets the backend keep
 /// multiple folded_multiply operations in flight.
@@ -381,39 +367,18 @@ where
 {
     debug_assert_eq!(values.len(), out.len());
     let n = values.len();
-    let main = n & !7;
+    let main = n & !15;
     // SAFETY: all get_unchecked indices below are < main <= n == out.len().
     let mut i = 0;
     while i < main {
         unsafe {
-            let v0 = *values.get_unchecked(i);
-            let v1 = *values.get_unchecked(i + 1);
-            let v2 = *values.get_unchecked(i + 2);
-            let v3 = *values.get_unchecked(i + 3);
-            let v4 = *values.get_unchecked(i + 4);
-            let v5 = *values.get_unchecked(i + 5);
-            let v6 = *values.get_unchecked(i + 6);
-            let v7 = *values.get_unchecked(i + 7);
-
-            let h0 = v0.hash_one(state);
-            let h1 = v1.hash_one(state);
-            let h2 = v2.hash_one(state);
-            let h3 = v3.hash_one(state);
-            let h4 = v4.hash_one(state);
-            let h5 = v5.hash_one(state);
-            let h6 = v6.hash_one(state);
-            let h7 = v7.hash_one(state);
-
-            *out.get_unchecked_mut(i) = h0;
-            *out.get_unchecked_mut(i + 1) = h1;
-            *out.get_unchecked_mut(i + 2) = h2;
-            *out.get_unchecked_mut(i + 3) = h3;
-            *out.get_unchecked_mut(i + 4) = h4;
-            *out.get_unchecked_mut(i + 5) = h5;
-            *out.get_unchecked_mut(i + 6) = h6;
-            *out.get_unchecked_mut(i + 7) = h7;
+            let v: [N; 16] = std::array::from_fn(|k| *values.get_unchecked(i + k));
+            let h: [u64; 16] = std::array::from_fn(|k| v[k].hash_one(state));
+            for k in 0..16 {
+                *out.get_unchecked_mut(i + k) = h[k];
+            }
         }
-        i += 8;
+        i += 16;
     }
     while i < n {
         unsafe {
@@ -426,8 +391,9 @@ where
 
 /// 8-way unrolled hash loop for the null-free, rehash primitive path.
 ///
-/// Each iteration seeds a fresh hasher with the prior per-row hash, so iterations
-/// stay independent and benefit from the same unroll treatment.
+/// Narrower unroll than the fresh variant: each iteration keeps both `prev`
+/// and `value` live per lane, so 16-way spills registers on multi-column
+/// rehash and regresses `multiple, no nulls`.
 #[cfg(not(feature = "force_hash_collisions"))]
 #[inline(always)]
 fn hash_prim_rehash_unrolled<N, S>(values: &[N], out: &mut [u64], state: &S)
@@ -441,41 +407,12 @@ where
     let mut i = 0;
     while i < main {
         unsafe {
-            let v0 = *values.get_unchecked(i);
-            let v1 = *values.get_unchecked(i + 1);
-            let v2 = *values.get_unchecked(i + 2);
-            let v3 = *values.get_unchecked(i + 3);
-            let v4 = *values.get_unchecked(i + 4);
-            let v5 = *values.get_unchecked(i + 5);
-            let v6 = *values.get_unchecked(i + 6);
-            let v7 = *values.get_unchecked(i + 7);
-
-            let p0 = *out.get_unchecked(i);
-            let p1 = *out.get_unchecked(i + 1);
-            let p2 = *out.get_unchecked(i + 2);
-            let p3 = *out.get_unchecked(i + 3);
-            let p4 = *out.get_unchecked(i + 4);
-            let p5 = *out.get_unchecked(i + 5);
-            let p6 = *out.get_unchecked(i + 6);
-            let p7 = *out.get_unchecked(i + 7);
-
-            let h0 = rehash_one(state, p0, v0);
-            let h1 = rehash_one(state, p1, v1);
-            let h2 = rehash_one(state, p2, v2);
-            let h3 = rehash_one(state, p3, v3);
-            let h4 = rehash_one(state, p4, v4);
-            let h5 = rehash_one(state, p5, v5);
-            let h6 = rehash_one(state, p6, v6);
-            let h7 = rehash_one(state, p7, v7);
-
-            *out.get_unchecked_mut(i) = h0;
-            *out.get_unchecked_mut(i + 1) = h1;
-            *out.get_unchecked_mut(i + 2) = h2;
-            *out.get_unchecked_mut(i + 3) = h3;
-            *out.get_unchecked_mut(i + 4) = h4;
-            *out.get_unchecked_mut(i + 5) = h5;
-            *out.get_unchecked_mut(i + 6) = h6;
-            *out.get_unchecked_mut(i + 7) = h7;
+            let v: [N; 8] = std::array::from_fn(|k| *values.get_unchecked(i + k));
+            let p: [u64; 8] = std::array::from_fn(|k| *out.get_unchecked(i + k));
+            let h: [u64; 8] = std::array::from_fn(|k| rehash_one(state, p[k], v[k]));
+            for k in 0..8 {
+                *out.get_unchecked_mut(i + k) = h[k];
+            }
         }
         i += 8;
     }
@@ -497,124 +434,121 @@ fn rehash_one<N: HashValue, S: HashState>(state: &S, prev: u64, value: N) -> u64
     hasher.finish()
 }
 
-/// 8-way unrolled hash loop for a slice of inlined StringView/BinaryView views.
+/// Nullable primitive hash loop that walks the null bitmap in 64-bit chunks.
 ///
-/// Hashes each `u128` view (which includes length and inlined bytes for strings
-/// up to 12 bytes) as a single `folded_multiply`, with no cross-iteration
-/// dependency. Unrolling helps the backend keep multiple multiplies in flight.
+/// Per chunk:
+/// - all 64 bits set → run the unrolled no-null loop on this chunk
+/// - all 64 bits clear → skip (nothing to write)
+/// - mixed → hash all 64 slots and branchlessly blend by mask bit (csel)
+///
+/// The branchless blend wins over a `trailing_zeros`-based scan when the
+/// chunk is "mostly valid" (realistic null densities in these benches are
+/// a few percent). The u64 mask is already loaded, so there is no per-bit
+/// bitmap extract overhead to speak of — just one csel per slot.
 #[cfg(not(feature = "force_hash_collisions"))]
 #[inline(always)]
-fn hash_views_fresh_unrolled<S: HashState>(views: &[u128], out: &mut [u64], state: &S) {
-    debug_assert_eq!(views.len(), out.len());
-    let n = views.len();
-    let main = n & !7;
-    let mut i = 0;
-    while i < main {
-        unsafe {
-            let v0 = *views.get_unchecked(i);
-            let v1 = *views.get_unchecked(i + 1);
-            let v2 = *views.get_unchecked(i + 2);
-            let v3 = *views.get_unchecked(i + 3);
-            let v4 = *views.get_unchecked(i + 4);
-            let v5 = *views.get_unchecked(i + 5);
-            let v6 = *views.get_unchecked(i + 6);
-            let v7 = *views.get_unchecked(i + 7);
+fn hash_prim_nulls_chunked<N, S, const REHASH: bool>(
+    values: &[N],
+    out: &mut [u64],
+    nulls: &arrow::buffer::NullBuffer,
+    state: &S,
+) where
+    N: HashValue + Copy,
+    S: HashState,
+{
+    debug_assert_eq!(values.len(), out.len());
+    debug_assert_eq!(values.len(), nulls.len());
 
-            let h0 = v0.hash_one(state);
-            let h1 = v1.hash_one(state);
-            let h2 = v2.hash_one(state);
-            let h3 = v3.hash_one(state);
-            let h4 = v4.hash_one(state);
-            let h5 = v5.hash_one(state);
-            let h6 = v6.hash_one(state);
-            let h7 = v7.hash_one(state);
+    let bit_chunks = nulls.inner().bit_chunks();
+    let mut row: usize = 0;
 
-            *out.get_unchecked_mut(i) = h0;
-            *out.get_unchecked_mut(i + 1) = h1;
-            *out.get_unchecked_mut(i + 2) = h2;
-            *out.get_unchecked_mut(i + 3) = h3;
-            *out.get_unchecked_mut(i + 4) = h4;
-            *out.get_unchecked_mut(i + 5) = h5;
-            *out.get_unchecked_mut(i + 6) = h6;
-            *out.get_unchecked_mut(i + 7) = h7;
+    for mask in bit_chunks.iter() {
+        if mask == u64::MAX {
+            // All 64 rows valid: dispatch to the unrolled no-null hasher.
+            // SAFETY: row + 64 <= bit_chunks.len() * 64 <= values.len() == out.len()
+            unsafe {
+                let v = values.get_unchecked(row..row + 64);
+                let o = out.get_unchecked_mut(row..row + 64);
+                if REHASH {
+                    hash_prim_rehash_unrolled(v, o, state);
+                } else {
+                    hash_prim_fresh_unrolled(v, o, state);
+                }
+            }
+        } else if mask != 0 {
+            // SAFETY: row + 64 <= values.len() == out.len()
+            unsafe {
+                let v = values.get_unchecked(row..row + 64);
+                let o = out.get_unchecked_mut(row..row + 64);
+                hash_prim_blend_chunk::<N, S, REHASH>(v, o, mask, state);
+            }
         }
-        i += 8;
+        row += 64;
     }
-    while i < n {
-        unsafe {
-            let v = *views.get_unchecked(i);
-            *out.get_unchecked_mut(i) = v.hash_one(state);
+
+    let rem_len = bit_chunks.remainder_len();
+    if rem_len > 0 {
+        let rem_mask = (1u64 << rem_len) - 1;
+        let mut m = bit_chunks.remainder_bits() & rem_mask;
+        while m != 0 {
+            let bit = m.trailing_zeros() as usize;
+            let i = row + bit;
+            let value = unsafe { *values.get_unchecked(i) };
+            let prev = unsafe { *out.get_unchecked(i) };
+            let new_hash = if REHASH {
+                rehash_one(state, prev, value)
+            } else {
+                value.hash_one(state)
+            };
+            unsafe { *out.get_unchecked_mut(i) = new_hash };
+            m &= m - 1;
         }
-        i += 1;
     }
 }
 
-/// 8-way unrolled rehash variant for inlined StringView/BinaryView views.
+/// Hashes a fixed 64-slot chunk and blends against a null mask with csel.
+///
+/// Each hash is independent, so the backend can keep multiple folded_multiply
+/// multiplies in flight; the mask shift+and+csel sits in a separate dependency
+/// chain and overlaps the hash work.
 #[cfg(not(feature = "force_hash_collisions"))]
 #[inline(always)]
-fn hash_views_rehash_unrolled<S: HashState>(views: &[u128], out: &mut [u64], state: &S) {
-    debug_assert_eq!(views.len(), out.len());
-    let n = views.len();
-    let main = n & !7;
-    let mut i = 0;
-    while i < main {
+fn hash_prim_blend_chunk<N, S, const REHASH: bool>(
+    values: &[N],
+    out: &mut [u64],
+    mask: u64,
+    state: &S,
+) where
+    N: HashValue + Copy,
+    S: HashState,
+{
+    debug_assert_eq!(values.len(), 64);
+    debug_assert_eq!(out.len(), 64);
+    // 8-at-a-time unroll: wider (16) adds register pressure that hurts the
+    // multi-column rehash case; narrower (4) loses ILP on fresh single-column.
+    for base in (0..64).step_by(8) {
+        // SAFETY: base + 7 < 64 == values.len() == out.len()
         unsafe {
-            let v0 = *views.get_unchecked(i);
-            let v1 = *views.get_unchecked(i + 1);
-            let v2 = *views.get_unchecked(i + 2);
-            let v3 = *views.get_unchecked(i + 3);
-            let v4 = *views.get_unchecked(i + 4);
-            let v5 = *views.get_unchecked(i + 5);
-            let v6 = *views.get_unchecked(i + 6);
-            let v7 = *views.get_unchecked(i + 7);
-
-            let p0 = *out.get_unchecked(i);
-            let p1 = *out.get_unchecked(i + 1);
-            let p2 = *out.get_unchecked(i + 2);
-            let p3 = *out.get_unchecked(i + 3);
-            let p4 = *out.get_unchecked(i + 4);
-            let p5 = *out.get_unchecked(i + 5);
-            let p6 = *out.get_unchecked(i + 6);
-            let p7 = *out.get_unchecked(i + 7);
-
-            let h0 = rehash_one(state, p0, v0);
-            let h1 = rehash_one(state, p1, v1);
-            let h2 = rehash_one(state, p2, v2);
-            let h3 = rehash_one(state, p3, v3);
-            let h4 = rehash_one(state, p4, v4);
-            let h5 = rehash_one(state, p5, v5);
-            let h6 = rehash_one(state, p6, v6);
-            let h7 = rehash_one(state, p7, v7);
-
-            *out.get_unchecked_mut(i) = h0;
-            *out.get_unchecked_mut(i + 1) = h1;
-            *out.get_unchecked_mut(i + 2) = h2;
-            *out.get_unchecked_mut(i + 3) = h3;
-            *out.get_unchecked_mut(i + 4) = h4;
-            *out.get_unchecked_mut(i + 5) = h5;
-            *out.get_unchecked_mut(i + 6) = h6;
-            *out.get_unchecked_mut(i + 7) = h7;
+            let v: [N; 8] = std::array::from_fn(|k| *values.get_unchecked(base + k));
+            let p: [u64; 8] = std::array::from_fn(|k| *out.get_unchecked(base + k));
+            let h: [u64; 8] = std::array::from_fn(|k| {
+                if REHASH {
+                    rehash_one(state, p[k], v[k])
+                } else {
+                    v[k].hash_one(state)
+                }
+            });
+            for k in 0..8 {
+                let valid = (mask >> (base + k)) & 1 != 0;
+                *out.get_unchecked_mut(base + k) = if valid { h[k] } else { p[k] };
+            }
         }
-        i += 8;
-    }
-    while i < n {
-        unsafe {
-            let v = *views.get_unchecked(i);
-            let prev = *out.get_unchecked(i);
-            *out.get_unchecked_mut(i) = rehash_one(state, prev, v);
-        }
-        i += 1;
     }
 }
 
 /// Hashes one array into the `hashes_buffer`
 /// If `rehash==true` this combines the previous hash value in the buffer
-/// with the new hash using `combine_hashes`.
-///
-/// The null-free loops are 4-way manually unrolled to expose ILP (each per-row
-/// `hash_one` is independent). Nullable paths keep iterating `valid_indices()`:
-/// variable-length byte hashing is expensive enough that doing the work for
-/// null rows (as the branchless primitive path does) measurably regresses.
+/// with the new hash using `combine_hashes`
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_array<T>(
     array: &T,
@@ -631,67 +565,16 @@ fn hash_array<T>(
         "hashes_buffer and array should be of equal length"
     );
 
-    let n = hashes_buffer.len();
-
     if array.null_count() == 0 {
-        let main = n & !3;
-        let mut i = 0;
         if rehash {
-            while i < main {
-                // SAFETY: all indices are < main <= n == array.len().
-                unsafe {
-                    let v0 = array.value_unchecked(i);
-                    let v1 = array.value_unchecked(i + 1);
-                    let v2 = array.value_unchecked(i + 2);
-                    let v3 = array.value_unchecked(i + 3);
-                    let h0 = v0.hash_one(random_state);
-                    let h1 = v1.hash_one(random_state);
-                    let h2 = v2.hash_one(random_state);
-                    let h3 = v3.hash_one(random_state);
-                    let p0 = *hashes_buffer.get_unchecked(i);
-                    let p1 = *hashes_buffer.get_unchecked(i + 1);
-                    let p2 = *hashes_buffer.get_unchecked(i + 2);
-                    let p3 = *hashes_buffer.get_unchecked(i + 3);
-                    *hashes_buffer.get_unchecked_mut(i) = combine_hashes(h0, p0);
-                    *hashes_buffer.get_unchecked_mut(i + 1) = combine_hashes(h1, p1);
-                    *hashes_buffer.get_unchecked_mut(i + 2) = combine_hashes(h2, p2);
-                    *hashes_buffer.get_unchecked_mut(i + 3) = combine_hashes(h3, p3);
-                }
-                i += 4;
-            }
-            while i < n {
-                unsafe {
-                    let v = array.value_unchecked(i);
-                    let prev = *hashes_buffer.get_unchecked(i);
-                    *hashes_buffer.get_unchecked_mut(i) =
-                        combine_hashes(v.hash_one(random_state), prev);
-                }
-                i += 1;
+            for (i, hash) in hashes_buffer.iter_mut().enumerate() {
+                let value = unsafe { array.value_unchecked(i) };
+                *hash = combine_hashes(value.hash_one(random_state), *hash);
             }
         } else {
-            while i < main {
-                unsafe {
-                    let v0 = array.value_unchecked(i);
-                    let v1 = array.value_unchecked(i + 1);
-                    let v2 = array.value_unchecked(i + 2);
-                    let v3 = array.value_unchecked(i + 3);
-                    let h0 = v0.hash_one(random_state);
-                    let h1 = v1.hash_one(random_state);
-                    let h2 = v2.hash_one(random_state);
-                    let h3 = v3.hash_one(random_state);
-                    *hashes_buffer.get_unchecked_mut(i) = h0;
-                    *hashes_buffer.get_unchecked_mut(i + 1) = h1;
-                    *hashes_buffer.get_unchecked_mut(i + 2) = h2;
-                    *hashes_buffer.get_unchecked_mut(i + 3) = h3;
-                }
-                i += 4;
-            }
-            while i < n {
-                unsafe {
-                    let v = array.value_unchecked(i);
-                    *hashes_buffer.get_unchecked_mut(i) = v.hash_one(random_state);
-                }
-                i += 1;
+            for (i, hash) in hashes_buffer.iter_mut().enumerate() {
+                let value = unsafe { array.value_unchecked(i) };
+                *hash = value.hash_one(random_state);
             }
         }
     } else if rehash {
@@ -789,14 +672,19 @@ fn hash_generic_byte_view_array<T: ByteViewType>(
         !array.data_buffers().is_empty(),
         rehash,
     ) {
-        // no nulls or buffers ==> hash the inlined views directly.
-        // 8-way unrolled: each view hash is one folded_multiply with no
-        // cross-iteration dependency, so unrolling exposes ILP for the backend.
+        // no nulls or buffers ==> hash the inlined views directly
+        // don't call the inner function as Rust seems better able to inline this simpler code (2-3% faster)
         (false, false, false) => {
-            hash_views_fresh_unrolled(array.views(), hashes_buffer, random_state);
+            for (hash, &view) in hashes_buffer.iter_mut().zip(array.views().iter()) {
+                *hash = view.hash_one(random_state);
+            }
         }
         (false, false, true) => {
-            hash_views_rehash_unrolled(array.views(), hashes_buffer, random_state);
+            for (hash, &view) in hashes_buffer.iter_mut().zip(array.views().iter()) {
+                let mut hasher = random_state.seeded_state(*hash).build_hasher();
+                view.hash_write(&mut hasher);
+                *hash = hasher.finish();
+            }
         }
         (false, true, false) => hash_string_view_array_inner::<T, false, true, false>(
             array,
