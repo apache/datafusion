@@ -22,6 +22,8 @@ mod tests {
     use crate::utils::test::{add_plan_schemas_to_ctx, read_json};
     use datafusion::arrow::array::record_batch;
     use datafusion::arrow::datatypes as arrow_schema;
+    use datafusion::arrow::datatypes::DataType;
+    use datafusion::assert_batches_sorted_eq;
     use datafusion::common::{Result, ScalarValue, TableReference};
     use datafusion::dataframe::DataFrame;
     use datafusion::prelude::SessionContext;
@@ -256,6 +258,68 @@ mod tests {
 
         // Trigger execution to ensure plan validity
         DataFrame::new(ctx.state(), plan).show().await?;
+
+        Ok(())
+    }
+
+    /// Substrait ends a multi-set aggregate with the zero-based index of the
+    /// grouping set that produced the row, which is not DataFusion's
+    /// `__grouping_id` bitmask. The sets below are `(a)` then `(b)`, so the two
+    /// differ: the bitmask is 1 then 2, while the index is 0 then 1.
+    #[tokio::test]
+    async fn multiple_grouping_sets_emit_the_set_index() -> Result<()> {
+        let proto_plan = read_json(
+            "tests/testdata/test_plans/aggregate_groupings/grouping_set_index.json",
+        );
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+        let field = plan.schema().field_with_unqualified_name("grouping_set")?;
+        assert_eq!(field.data_type(), &DataType::Int32);
+        assert!(!field.is_nullable(), "the set index is always known");
+
+        let results = DataFrame::new(ctx.state(), plan).collect().await?;
+        assert_batches_sorted_eq!(
+            [
+                "+---+----+--------------+",
+                "| a | b  | grouping_set |",
+                "+---+----+--------------+",
+                "|   | 10 | 1            |",
+                "|   | 20 | 1            |",
+                "| 1 |    | 0            |",
+                "| 2 |    | 0            |",
+                "+---+----+--------------+",
+            ],
+            &results
+        );
+
+        Ok(())
+    }
+
+    /// The same grouping set listed twice is two sets, so each occurrence gets
+    /// its own index and its own copy of the rows.
+    #[tokio::test]
+    async fn duplicate_grouping_sets_are_separate_indexes() -> Result<()> {
+        let proto_plan = read_json(
+            "tests/testdata/test_plans/aggregate_groupings/duplicate_grouping_sets.json",
+        );
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+        let results = DataFrame::new(ctx.state(), plan).collect().await?;
+        assert_batches_sorted_eq!(
+            [
+                "+---+--------------+",
+                "| a | grouping_set |",
+                "+---+--------------+",
+                "| 1 | 0            |",
+                "| 1 | 1            |",
+                "| 2 | 0            |",
+                "| 2 | 1            |",
+                "+---+--------------+",
+            ],
+            &results
+        );
 
         Ok(())
     }
