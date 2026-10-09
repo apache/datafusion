@@ -2101,7 +2101,7 @@ mod tests {
             Field::new("marked_identity", DataType::Binary, true)
                 .with_metadata(metadata.clone()),
         );
-        let options = Arc::new(datafusion_common::config::ConfigOptions::default());
+        let options = Arc::new(ConfigOptions::default());
         for (depth, expected_marked) in [(2, true), (9, false)] {
             let mut branch = col("a", &schema)?;
             for _ in 0..depth {
