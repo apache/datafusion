@@ -397,6 +397,9 @@ impl AggregateUDFImpl for Sum {
         if lit_type == DataType::Null {
             return Ok(None);
         }
+        if !(lit_type.is_integer() || lit_type.is_floating()) {
+            return Ok(None);
+        }
 
         // Build up SUM(arg)
         let mut sum_agg = agg_function.clone();
