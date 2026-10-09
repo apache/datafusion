@@ -1450,7 +1450,7 @@ fn case_result_field_metadata(
                 if let Some((logical_type, logical_metadata)) = &case.logical_result_field
                 {
                     metadata = if logical_type == &data_type {
-                        logical_metadata.to_hashmap()
+                        logical_metadata.to_hashmap().into()
                     } else {
                         Metadata::new()
                     };
