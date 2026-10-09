@@ -1641,6 +1641,7 @@ mod tests {
         WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
     };
     use datafusion_functions_aggregate::count::count_udaf;
+    use datafusion_functions_aggregate::first_last::{first_value_udaf, last_value_udaf};
     use datafusion_functions_aggregate::sum::sum_udaf;
     use datafusion_functions_window::lead_lag::lead_udwf;
     use datafusion_functions_window::nth_value::last_value_udwf;
@@ -2080,6 +2081,119 @@ mod tests {
         | 3 | 3    | 3             | 2             |
         +---+------+---------------+---------------+
         ");
+        Ok(())
+    }
+
+    /// `first_value` / `last_value` aggregates (as opposed to the window
+    /// functions of the same name) over a sliding frame, with `FILTER` and
+    /// `IGNORE NULLS`, which need their accumulators to support retraction.
+    #[tokio::test]
+    async fn first_last_value_aggregate_sliding_frame() -> Result<()> {
+        use arrow::array::{AsArray, BooleanArray, Int64Array};
+        use arrow::datatypes::Int64Type;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("t", DataType::Int64, false),
+            Field::new("v", DataType::Int64, true),
+            Field::new("keep", DataType::Boolean, false),
+        ]));
+        let make_batch = |t: Vec<i64>, v: Vec<Option<i64>>, keep: Vec<bool>| {
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int64Array::from(t)),
+                    Arc::new(Int64Array::from(v)),
+                    Arc::new(BooleanArray::from(keep)),
+                ],
+            )
+        };
+        let batches = vec![
+            make_batch(
+                vec![1, 2, 3],
+                vec![Some(10), Some(20), None],
+                vec![true, false, true],
+            )?,
+            make_batch(
+                vec![4, 5, 6],
+                vec![Some(40), Some(50), None],
+                vec![false, true, true],
+            )?,
+        ];
+
+        let order_by = [PhysicalSortExpr::new_default(col("t", &schema)?)];
+        // ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+        let frame = Arc::new(WindowFrame::new_bounds(
+            WindowFrameUnits::Rows,
+            WindowFrameBound::Preceding(ScalarValue::UInt64(Some(1))),
+            WindowFrameBound::CurrentRow,
+        ));
+        let window_expr = |udaf, name: &str, ignore_nulls, filter| {
+            create_window_expr(
+                &WindowFunctionDefinition::AggregateUDF(udaf),
+                name.to_string(),
+                &[col("v", &schema)?],
+                &[],
+                &order_by,
+                Arc::clone(&frame),
+                Arc::clone(&schema),
+                ignore_nulls,
+                false,
+                filter,
+            )
+        };
+        let keep = Some(col("keep", &schema)?);
+        let window_exprs = vec![
+            window_expr(first_value_udaf(), "first_kept", false, keep.clone())?,
+            window_expr(last_value_udaf(), "last_kept", false, keep)?,
+            window_expr(first_value_udaf(), "first_ignore_nulls", true, None)?,
+            window_expr(last_value_udaf(), "last_ignore_nulls", true, None)?,
+        ];
+
+        let memory_exec =
+            TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
+        let plans: [Arc<dyn ExecutionPlan>; 2] = [
+            Arc::new(BoundedWindowAggExec::try_new(
+                window_exprs.clone(),
+                Arc::clone(&memory_exec) as _,
+                InputOrderMode::Sorted,
+                false,
+            )?),
+            Arc::new(crate::windows::WindowAggExec::try_new(
+                window_exprs,
+                memory_exec,
+                false,
+            )?),
+        ];
+
+        for plan in plans {
+            let batches = collect(plan.execute(0, task_context())?).await?;
+            let batch = arrow::compute::concat_batches(&plan.schema(), &batches)?;
+            let column = |name: &str| -> Vec<Option<i64>> {
+                batch
+                    .column_by_name(name)
+                    .unwrap()
+                    .as_primitive::<Int64Type>()
+                    .iter()
+                    .collect()
+            };
+            // Frames by `t`: {1}, {1, 2}, {2, 3}, {3, 4}, {4, 5}, {5, 6}
+            assert_eq!(
+                column("first_kept"),
+                [Some(10), Some(10), None, None, Some(50), Some(50)]
+            );
+            assert_eq!(
+                column("last_kept"),
+                [Some(10), Some(10), None, None, Some(50), None]
+            );
+            assert_eq!(
+                column("first_ignore_nulls"),
+                [Some(10), Some(10), Some(20), Some(40), Some(40), Some(50)]
+            );
+            assert_eq!(
+                column("last_ignore_nulls"),
+                [Some(10), Some(20), Some(20), Some(40), Some(50), Some(50)]
+            );
+        }
         Ok(())
     }
 
