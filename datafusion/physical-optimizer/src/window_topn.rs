@@ -147,6 +147,21 @@ impl WindowTopN {
             return None;
         }
 
+        // The rewrite replaces the `FilterExec` entirely, so anything it
+        // carries beyond the predicate has to be reproduced or declined.
+        // `fetch` is applied by `FilterExec::execute` *after* the predicate,
+        // and the rewritten plan has nowhere to put it: a
+        // `PartitionedTopKExec` bounds rows per partition, which is not the
+        // same as a row limit over the filtered output. Declining keeps the
+        // rule from silently returning more rows than were asked for.
+        //
+        // The default rule list runs `LimitPushdown` after this rule, so no
+        // plan reaches here with a fetch today. The guard is cheap insurance
+        // for pipelines that reorder the two.
+        if filter.fetch().is_some() {
+            return None;
+        }
+
         // Step 2: Extract limit from predicate (rn <= K, rn < K, etc.)
         let (col_idx, limit_n) = extract_window_limit(filter.predicate())?;
 
