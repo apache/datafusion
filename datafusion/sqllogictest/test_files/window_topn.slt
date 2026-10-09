@@ -994,29 +994,60 @@ statement ok
 DROP TABLE window_topn_rank_t;
 
 ###############################################################################
-# RANK() — equality predicate (negative: rule supports only </<=/>=/>)
+# Ranking functions — equality with one
 ###############################################################################
 #
-# `extract_window_limit` matches only `<, <=, >, >=`. Equality predicates
-# `rk = N` are NOT optimized by this rule (regardless of N). DuckDB
-# special-cases `rk = 1` as equivalent to `rk <= 1`; we don't. The two
-# tests below pin current behavior so that an accidental rule extension
-# (or regression) shows up.
+# Ranking functions return positive integers, so `rank = 1` is equivalent to
+# `rank <= 1`. Equality with larger values must retain the filter.
 
 statement ok
 CREATE TABLE window_topn_rank_eq_t (id INT, pk INT, val INT) AS VALUES
-  (1, 1, 10), (2, 1, 20), (3, 1, 30),
+  (1, 1, 10), (2, 1, 10), (3, 1, 20),
   (4, 2, 5),  (5, 2, 15), (6, 2, 25);
 
-# Test R12: `rk = 1` — correct results, but plan should still contain
-# FilterExec + SortExec (rule did NOT fire).
+# Test R12: `rk = 1` keeps all tied winners.
 query III rowsort
 SELECT id, pk, val FROM (
   SELECT *, RANK() OVER (PARTITION BY pk ORDER BY val) as rk FROM window_topn_rank_eq_t
 ) WHERE rk = 1;
 ----
 1 1 10
+2 1 10
 4 2 5
+
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, RANK() OVER (PARTITION BY pk ORDER BY val) as rk FROM window_topn_rank_eq_t
+) WHERE 1 = rk;
+----
+1 1 10
+2 1 10
+4 2 5
+
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, DENSE_RANK() OVER (PARTITION BY pk ORDER BY val) as rk FROM window_topn_rank_eq_t
+) WHERE rk = 1;
+----
+1 1 10
+2 1 10
+4 2 5
+
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val, id) as rn FROM window_topn_rank_eq_t
+) WHERE rn = 1;
+----
+1 1 10
+4 2 5
+
+# `rank = 2` is not equivalent to `rank <= 2`.
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, RANK() OVER (PARTITION BY pk ORDER BY val) as rk FROM window_topn_rank_eq_t
+) WHERE rk = 2;
+----
+5 2 15
 
 query TT
 EXPLAIN SELECT * FROM (
@@ -1030,9 +1061,9 @@ logical_plan
 04)------TableScan: window_topn_rank_eq_t projection=[id, pk, val]
 physical_plan
 01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, rank() PARTITION BY [window_topn_rank_eq_t.pk] ORDER BY [window_topn_rank_eq_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rk]
-02)--FilterExec: rank() PARTITION BY [window_topn_rank_eq_t.pk] ORDER BY [window_topn_rank_eq_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 = 1
-03)----BoundedWindowAggExec: wdw=[rank() PARTITION BY [window_topn_rank_eq_t.pk] ORDER BY [window_topn_rank_eq_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [window_topn_rank_eq_t.pk] ORDER BY [window_topn_rank_eq_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-04)------SortExec: expr=[pk@1 ASC NULLS LAST, val@2 ASC NULLS LAST], preserve_partitioning=[false]
+02)--BoundedWindowAggExec: wdw=[rank() PARTITION BY [window_topn_rank_eq_t.pk] ORDER BY [window_topn_rank_eq_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [window_topn_rank_eq_t.pk] ORDER BY [window_topn_rank_eq_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----RepartitionExec: partitioning=Hash([pk@1], 4), input_partitions=1, maintains_sort_order=true
+04)------PartitionedTopKExec: fn=rank, fetch=1, partition=[pk@1], order=[val@2 ASC NULLS LAST]
 05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok

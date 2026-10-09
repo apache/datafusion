@@ -101,6 +101,7 @@ use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowUDFExpr};
 /// - `rn < K` → fetch = K - 1
 /// - `K >= rn` (flipped) → fetch = K
 /// - `K > rn` (flipped) → fetch = K - 1
+/// - `rn = 1` or `1 = rn` → fetch = 1
 ///
 /// # When the Rule Fires
 ///
@@ -121,7 +122,7 @@ use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowUDFExpr};
 ///   such as `PARTITION BY pk ORDER BY pk`; for `RANK` / `DENSE_RANK`
 ///   such orderings also make every row tie at rank 1 (degenerate).
 /// - The filter predicate compares the window output column to an integer
-///   literal using `<=`, `<`, `>=`, or `>`
+///   literal using `<=`, `<`, `>=`, `>`, or equality with 1
 ///
 /// [`PartitionedTopKExec`]: datafusion_physical_plan::sorts::partitioned_topk::PartitionedTopKExec
 #[derive(Default, Clone, Debug)]
@@ -300,13 +301,16 @@ impl PhysicalOptimizerRule for WindowTopN {
 /// | `Column(idx) < Literal(N)` | `(idx, N-1)` |
 /// | `Literal(N) >= Column(idx)` | `(idx, N)` |
 /// | `Literal(N) > Column(idx)` | `(idx, N-1)` |
+/// | `Column(idx) = Literal(1)` | `(idx, 1)` |
+/// | `Literal(1) = Column(idx)` | `(idx, 1)` |
 ///
 /// # Examples
 ///
 /// - `rn <= 5` → `Some((2, 5))` (assuming rn is column index 2)
 /// - `rn < 3` → `Some((2, 2))`
 /// - `10 >= rn` → `Some((2, 10))`
-/// - `rn = 1` → `None` (equality not supported)
+/// - `rn = 1` → `Some((2, 1))`
+/// - `rn = 2` → `None` (removing the filter would include rank 1)
 /// - `val <= 5` → `Some((1, 5))` (caller must verify it's a window column)
 fn extract_window_limit(
     predicate: &Arc<dyn datafusion_physical_expr::PhysicalExpr>,
@@ -325,6 +329,7 @@ fn extract_window_limit(
         return match *op {
             Operator::LtEq => Some((col.index(), n)),
             Operator::Lt => Some((col.index(), n - 1)),
+            Operator::Eq if n == 1 => Some((col.index(), 1)),
             _ => None,
         };
     }
@@ -338,6 +343,7 @@ fn extract_window_limit(
         return match *op {
             Operator::GtEq => Some((col.index(), n)),
             Operator::Gt => Some((col.index(), n - 1)),
+            Operator::Eq if n == 1 => Some((col.index(), 1)),
             _ => None,
         };
     }
@@ -408,6 +414,36 @@ fn find_window_below(plan: &Arc<dyn ExecutionPlan>) -> Option<PlanAndIntermediat
             current = next;
         } else {
             return None;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion_physical_expr::PhysicalExpr;
+
+    #[test]
+    fn equality_with_one_is_the_only_rewritable_equality() {
+        for (value, flipped, expected) in [
+            (Some(1), false, Some((2, 1))),
+            (Some(1), true, Some((2, 1))),
+            (Some(0), false, None),
+            (Some(2), false, None),
+            (Some(2), true, None),
+            (None, false, None),
+        ] {
+            let column: Arc<dyn PhysicalExpr> = Arc::new(Column::new("rn", 2));
+            let literal: Arc<dyn PhysicalExpr> =
+                Arc::new(Literal::new(ScalarValue::UInt64(value)));
+            let (left, right) = if flipped {
+                (literal, column)
+            } else {
+                (column, literal)
+            };
+            let predicate: Arc<dyn PhysicalExpr> =
+                Arc::new(BinaryExpr::new(left, Operator::Eq, right));
+            assert_eq!(extract_window_limit(&predicate), expected);
         }
     }
 }
