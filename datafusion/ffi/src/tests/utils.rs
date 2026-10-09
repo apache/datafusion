@@ -120,6 +120,39 @@ pub fn get_byte_metrics_exec() -> Result<crate::execution_plan::FFI_ExecutionPla
     Ok(plan)
 }
 
+/// Builds a [`crate::proto::physical_extension_codec::FFI_PhysicalExtensionCodec`]
+/// from a fresh call to `datafusion_ffi_test_create_scalar_subquery_expr_exec_codec`,
+/// exported as its own top-level symbol rather than a [`ForeignLibraryModule`]
+/// field for the same reason as [`get_byte_metrics_exec`] - see the doc
+/// comment on the exported function for the cross-library rationale.
+pub fn get_scalar_subquery_expr_exec_codec(
+    task_ctx_provider: crate::execution::FFI_TaskContextProvider,
+) -> Result<crate::proto::physical_extension_codec::FFI_PhysicalExtensionCodec> {
+    let lib_path = find_library()?;
+
+    let lib = unsafe {
+        libloading::Library::new(&lib_path)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+    };
+
+    let create_codec: libloading::Symbol<
+        extern "C" fn(
+            crate::execution::FFI_TaskContextProvider,
+        ) -> crate::proto::physical_extension_codec::FFI_PhysicalExtensionCodec,
+    > = unsafe {
+        lib.get(b"datafusion_ffi_test_create_scalar_subquery_expr_exec_codec")
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+    };
+
+    let codec = create_codec(task_ctx_provider);
+
+    // Leak the library to keep it loaded for the duration of the test
+    #[expect(clippy::mem_forget)]
+    std::mem::forget(lib);
+
+    Ok(codec)
+}
+
 /// Load an independent copy of the integration-test cdylib.
 ///
 /// Copying to a unique path makes the dynamic loader create a separate image
