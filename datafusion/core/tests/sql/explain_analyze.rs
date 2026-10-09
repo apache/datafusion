@@ -19,6 +19,7 @@ use super::*;
 use insta::assert_snapshot;
 use rstest::rstest;
 
+use datafusion::catalog::MemTable;
 use datafusion::config::ConfigOptions;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::metrics::Timestamp;
@@ -879,10 +880,7 @@ async fn parquet_explain_analyze() {
 
     // should contain aggregated stats
     assert_contains!(&formatted, "output_rows=8");
-    assert_contains!(
-        &formatted,
-        "row_groups_pruned_bloom_filter=1 total \u{2192} 1 matched"
-    );
+    assert_not_contains!(&formatted, "row_groups_pruned_bloom_filter");
     assert_contains!(
         &formatted,
         "row_groups_pruned_statistics=1 total \u{2192} 1 matched"
@@ -895,16 +893,91 @@ async fn parquet_explain_analyze() {
     // (file-> row-group -> page)
     let i_file = formatted.find("files_ranges_pruned_statistics").unwrap();
     let i_rowgroup_stat = formatted.find("row_groups_pruned_statistics").unwrap();
-    let i_rowgroup_bloomfilter =
-        formatted.find("row_groups_pruned_bloom_filter").unwrap();
     let i_page_rows = formatted.find("page_index_rows_pruned").unwrap();
     let i_page_pages = formatted.find("page_index_pages_pruned").unwrap();
 
     assert!(
         (i_file < i_rowgroup_stat)
-            && (i_rowgroup_stat < i_rowgroup_bloomfilter)
-            && (i_rowgroup_bloomfilter < i_page_pages && i_page_pages < i_page_rows),
-        "The parquet pruning metrics should be displayed in an order of: file range -> row group statistics -> row group bloom filter -> page index."
+            && (i_rowgroup_stat < i_page_pages)
+            && (i_page_pages < i_page_rows),
+        "The parquet pruning metrics should be displayed in an order of: file range -> row group statistics -> page index."
+    );
+}
+
+/// Operators that run once per partition report `output_rows_skew`. A single
+/// join/group/window key hashes every row to one partition, so each
+/// hash-partitioned operator must report the maximum skew.
+#[tokio::test]
+#[cfg_attr(coverage, ignore)]
+async fn explain_analyze_output_rows_skew_on_hash_partitioned_operators() {
+    let mut config = SessionConfig::new().with_target_partitions(4);
+    // Force a partitioned (hash repartitioned) join instead of `CollectLeft`
+    let options = config.options_mut();
+    options.optimizer.hash_join_single_partition_threshold = 0;
+    options.optimizer.hash_join_single_partition_threshold_rows = 0;
+    let ctx = SessionContext::new_with_config(config);
+    // Spread the rows over 4 input partitions so they get hash repartitioned
+    // (a single input partition already satisfies the hash distribution)
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("k", DataType::Int64, false),
+        Field::new("v", DataType::Int64, false),
+    ]));
+    let partitions = (0..4)
+        .map(|p| {
+            let v = (p * 25..(p + 1) * 25).collect::<Vec<i64>>();
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int64Array::from(vec![1; v.len()])),
+                    Arc::new(Int64Array::from(v)),
+                ],
+            )
+            .unwrap();
+            vec![batch]
+        })
+        .collect();
+    let table = MemTable::try_new(schema, partitions).unwrap();
+    ctx.register_table("t", Arc::new(table)).unwrap();
+
+    let sql = "EXPLAIN ANALYZE \
+               SELECT a.k, count(*) FROM t a JOIN t b ON a.k = b.k GROUP BY a.k";
+    let formatted = explain_analyze_output(&ctx, sql).await;
+    for operator in [
+        "RepartitionExec: partitioning=Hash",
+        "HashJoinExec: mode=Partitioned",
+        "AggregateExec: mode=SinglePartitioned",
+    ] {
+        assert_operator_metric(&formatted, operator, "output_rows_skew=100%");
+    }
+
+    let sql = "EXPLAIN ANALYZE \
+               SELECT k, \
+                 row_number() OVER (PARTITION BY k ORDER BY v), \
+                 sum(v) OVER (PARTITION BY k) \
+               FROM t";
+    let formatted = explain_analyze_output(&ctx, sql).await;
+    for operator in ["BoundedWindowAggExec", "WindowAggExec"] {
+        assert_operator_metric(&formatted, operator, "output_rows_skew=100%");
+    }
+}
+
+async fn explain_analyze_output(ctx: &SessionContext, sql: &str) -> String {
+    let actual = execute_to_batches(ctx, sql).await;
+    arrow::util::pretty::pretty_format_batches(&actual)
+        .unwrap()
+        .to_string()
+}
+
+fn assert_operator_metric(formatted: &str, operator: &str, metric: &str) {
+    // Leading space so `WindowAggExec` does not match `BoundedWindowAggExec`
+    let needle = format!(" {operator}");
+    let line = formatted
+        .lines()
+        .find(|line| line.contains(&needle))
+        .unwrap_or_else(|| panic!("{operator} not found in plan:\n{formatted}"));
+    assert!(
+        line.contains(metric),
+        "expected {metric} on {operator}, got:\n{line}"
     );
 }
 
@@ -1101,7 +1174,7 @@ async fn parquet_explain_analyze_verbose() {
         .to_string();
 
     // should contain the raw per file stats (with the label)
-    assert_contains!(&formatted, "row_groups_pruned_bloom_filter{partition=0");
+    assert_not_contains!(&formatted, "row_groups_pruned_bloom_filter");
     assert_contains!(&formatted, "row_groups_pruned_statistics{partition=0");
 }
 

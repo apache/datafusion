@@ -251,6 +251,7 @@ datafusion.execution.parquet.data_pagesize_limit 1048576
 datafusion.execution.parquet.dictionary_enabled true
 datafusion.execution.parquet.dictionary_page_size_limit 1048576
 datafusion.execution.parquet.enable_page_index true
+datafusion.execution.parquet.enable_rle_to_dictionary false
 datafusion.execution.parquet.encoding NULL
 datafusion.execution.parquet.force_filter_selections false
 datafusion.execution.parquet.max_in_list_size 20
@@ -263,12 +264,14 @@ datafusion.execution.parquet.metadata_size_hint 524288
 datafusion.execution.parquet.pruning true
 datafusion.execution.parquet.pushdown_filters false
 datafusion.execution.parquet.reorder_filters false
+datafusion.execution.parquet.row_group_range_assignment start_offset
 datafusion.execution.parquet.schema_force_view_types true
 datafusion.execution.parquet.skip_arrow_metadata false
 datafusion.execution.parquet.skip_metadata true
 datafusion.execution.parquet.statistics_enabled page
 datafusion.execution.parquet.statistics_truncate_length 64
 datafusion.execution.parquet.write_batch_size 1024
+datafusion.execution.parquet.write_row_group_number_distinct_values false
 datafusion.execution.parquet.writer_version 1.0
 datafusion.execution.perfect_hash_join_min_key_density 0.15
 datafusion.execution.perfect_hash_join_small_build_threshold 1024
@@ -413,6 +416,7 @@ datafusion.execution.parquet.data_pagesize_limit 1048576 (writing) Sets best eff
 datafusion.execution.parquet.dictionary_enabled true (writing) Sets if dictionary encoding is enabled. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.dictionary_page_size_limit 1048576 (writing) Sets best effort maximum dictionary page size, in bytes
 datafusion.execution.parquet.enable_page_index true (reading) If true, reads the Parquet data page level metadata (the Page Index), if present, to reduce the I/O and number of rows decoded.
+datafusion.execution.parquet.enable_rle_to_dictionary false (reading) If true, top-level string and binary Parquet columns with dictionary pages are inferred and scanned as `Dictionary<Int32, Utf8>` / `Dictionary<Int32, Binary>` instead of their plain value type. This applies only when DataFusion infers the table schema. Tables with a user-supplied schema are not promoted because the Parquet footer is not read at DDL time, so dictionary pages cannot be detected per column. See <https://github.com/apache/datafusion/issues/24112>
 datafusion.execution.parquet.encoding NULL (writing)  Sets default encoding for any column. Valid values are: plain, plain_dictionary, rle, bit_packed, delta_binary_packed, delta_length_byte_array, delta_byte_array, rle_dictionary, and byte_stream_split. These values are not case sensitive. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.force_filter_selections false (reading) Force the use of RowSelections for filter results, when pushdown_filters is enabled. If false, the reader will automatically choose between a RowSelection and a Bitmap based on the number and pattern of selected rows.
 datafusion.execution.parquet.max_in_list_size 20 Maximum number of input values in an `IN (...)` list eligible for min/max pruning. Lists above this cap, or a cap of 0, skip this rewrite; other predicates and Bloom-filter pruning remain available. Within the cap, nonempty lists of at most 20 values use the existing per-value rewrite. Larger literal lists use a compact representation when the column type is string, variable-length binary, integer, decimal, date, time, timestamp, or duration. This applies to both `IN` and `NOT IN`, including lists with NULL members. `NOT IN` with NULL and all-NULL `IN` lists cannot match any rows. Compact lists containing NULL do not use the fully-matched-row-group optimization. Floating-point and other lists retain the existing per-value rewrite, so raising the cap can make those predicates expensive to build and evaluate. Defaults to 20.
@@ -425,12 +429,14 @@ datafusion.execution.parquet.metadata_size_hint 524288 (reading) If specified, t
 datafusion.execution.parquet.pruning true (reading) If true, the parquet reader attempts to skip entire row groups based on the predicate in the query and the metadata (min/max values) stored in the parquet file
 datafusion.execution.parquet.pushdown_filters false (reading) If true, filter expressions are be applied during the parquet decoding operation to reduce the number of rows decoded. This optimization is sometimes called "late materialization".
 datafusion.execution.parquet.reorder_filters false (reading) If true, filter expressions evaluated during the parquet decoding operation will be reordered heuristically to minimize the cost of evaluation. If false, the filters are applied in the same order as written in the query
+datafusion.execution.parquet.row_group_range_assignment start_offset (reading) Which byte range of a split file reads each row group. `start_offset` picks the range containing the row group's start. `midpoint` picks the range containing its midpoint, as Spark does, which spreads large row groups more evenly across ranges.
 datafusion.execution.parquet.schema_force_view_types true (reading) If true, parquet reader will read columns of `Utf8/Utf8Large` with `Utf8View`, and `Binary/BinaryLarge` with `BinaryView`. The parquet reader is optimized for reading `Utf8View` and `BinaryView`, so such queries are significantly faster than reading `Utf8`/`Binary` and then casting to the view types.
 datafusion.execution.parquet.skip_arrow_metadata false (writing) Skip encoding the embedded arrow metadata in the KV_meta This is analogous to the `ArrowWriterOptions::with_skip_arrow_metadata`. Refer to <https://docs.rs/parquet/53.3.0/parquet/arrow/arrow_writer/struct.ArrowWriterOptions.html#method.with_skip_arrow_metadata>
 datafusion.execution.parquet.skip_metadata true (reading) If true, the parquet reader skip the optional embedded metadata that may be in the file Schema. This setting can help avoid schema conflicts when querying multiple parquet files with schemas containing compatible types but different metadata
 datafusion.execution.parquet.statistics_enabled page (writing) Sets if statistics are enabled for any column Valid values are: "none", "chunk", and "page" These values are not case sensitive. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.statistics_truncate_length 64 (writing) Sets statistics truncate length. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.write_batch_size 1024 (writing) Sets write_batch_size in rows
+datafusion.execution.parquet.write_row_group_number_distinct_values false (writing) Write the number of distinct values (NDV) for each column in row group statistics when creating parquet files. Enabling this improves NDV-based query optimizations at the cost of hashing every non-null value during write.
 datafusion.execution.parquet.writer_version 1.0 (writing) Sets parquet writer version valid values are "1.0" and "2.0"
 datafusion.execution.perfect_hash_join_min_key_density 0.15 The minimum required density of join keys on the build side to consider a perfect hash join (see `HashJoinExec` for more details). Density is calculated as: `(number of rows) / (max_key - min_key + 1)`. A perfect hash join may be used if the actual key density > this value. Currently only supports cases where build_side.num_rows() < u32::MAX. Support for build_side.num_rows() >= u32::MAX will be added in the future.
 datafusion.execution.perfect_hash_join_small_build_threshold 1024 A perfect hash join (see `HashJoinExec` for more details) will be considered if the range of keys (max - min) on the build side is < this threshold. This provides a fast path for joins with very small key ranges, bypassing the density check. Currently only supports cases where build_side.num_rows() < u32::MAX. Support for build_side.num_rows() >= u32::MAX will be added in the future.
@@ -446,7 +452,7 @@ datafusion.execution.sort_spill_reservation_bytes 10485760 Specifies the reserve
 datafusion.execution.spill_compression uncompressed Sets the compression codec used when spilling data to disk. Since datafusion writes spill files using the Arrow IPC Stream format, only codecs supported by the Arrow IPC Stream Writer are allowed. Valid values are: uncompressed, lz4_frame, zstd. Note: lz4_frame offers faster (de)compression, but typically results in larger spill files. In contrast, zstd achieves higher compression ratios at the cost of slower (de)compression speed.
 datafusion.execution.split_file_groups_by_statistics false Attempt to eliminate sorts by packing & sorting files with non-overlapping statistics into the same file groups. Currently experimental
 datafusion.execution.target_partitions 7 Number of partitions for query execution. Increasing partitions can increase concurrency. Defaults to the number of CPU cores on the system
-datafusion.execution.time_zone NULL The default time zone Some functions, e.g. `now` return timestamps in this time zone
+datafusion.execution.time_zone NULL The default time zone Some functions, e.g. `now`, return timestamps in this time zone. This is also used to interpret timezone-naive timestamps in comparisons and subtraction with timezone-aware timestamps.
 datafusion.execution.use_row_number_estimates_to_optimize_partitioning false Should DataFusion use row number estimates at the input to decide whether increasing parallelism is beneficial or not. By default, only exact row numbers (not estimates) are used for this decision. Setting this flag to `true` will likely produce better plans. if the source of statistics is accurate. We plan to make this the default in the future.
 datafusion.explain.analyze_categories all Which metric categories to include in "EXPLAIN ANALYZE" output. Comma-separated list of: "rows", "bytes", "timing", "uncategorized". Use "none" to show plan structure only, or "all" (default) to show everything. Metrics without a declared category are treated as "uncategorized".
 datafusion.explain.analyze_level dev Verbosity level for "EXPLAIN ANALYZE". Default is "dev" "summary" shows common metrics for high-level insights. "dev" provides deep operator-level introspection for developers.
@@ -490,7 +496,7 @@ datafusion.optimizer.hash_join_inlist_pushdown_max_size 131072 Maximum size in b
 datafusion.optimizer.hash_join_single_partition_threshold 4194304 The maximum estimated size in bytes for one input side of a HashJoin will be collected into a single partition
 datafusion.optimizer.hash_join_single_partition_threshold_rows 131072 The maximum estimated size in rows for one input side of a HashJoin will be collected into a single partition
 datafusion.optimizer.join_reordering true When set to true, the physical plan optimizer may swap join inputs based on statistics. When set to false, statistics-driven join input reordering is disabled and the original join order in the query is used.
-datafusion.optimizer.max_passes 3 Number of times that the optimizer will attempt to optimize the plan
+datafusion.optimizer.max_passes 3 The logical optimizer applies rules in order for up to `max_passes` passes, stopping early if a pass leaves the plan unchanged or repeats an earlier plan. The physical optimizer always runs in one pass.
 datafusion.optimizer.prefer_existing_sort false When true, DataFusion will opportunistically remove sorts when the data is already sorted, (i.e. setting `preserve_order` to true on `RepartitionExec`  and using `SortPreservingMergeExec`) When false, DataFusion will maximize plan parallelism using `RepartitionExec` even if this requires subsequently resorting data using a `SortExec`.
 datafusion.optimizer.prefer_existing_union false When set to true, the optimizer will not attempt to convert Union to Interleave
 datafusion.optimizer.prefer_hash_join true When set to true, the physical plan optimizer will prefer HashJoin over SortMergeJoin. HashJoin can work more efficiently than SortMergeJoin but consumes more memory
@@ -557,14 +563,14 @@ datafusion.execution.time_zone NULL
 query TTT
 SHOW TIME ZONE VERBOSE
 ----
-datafusion.execution.time_zone NULL The default time zone Some functions, e.g. `now` return timestamps in this time zone
+datafusion.execution.time_zone NULL The default time zone Some functions, e.g. `now`, return timestamps in this time zone. This is also used to interpret timezone-naive timestamps in comparisons and subtraction with timezone-aware timestamps.
 
 # show_timezone_default_utc
 # https://github.com/apache/datafusion/issues/3255
 query TTT
 SHOW TIMEZONE VERBOSE
 ----
-datafusion.execution.time_zone NULL The default time zone Some functions, e.g. `now` return timestamps in this time zone
+datafusion.execution.time_zone NULL The default time zone Some functions, e.g. `now`, return timestamps in this time zone. This is also used to interpret timezone-naive timestamps in comparisons and subtraction with timezone-aware timestamps.
 
 
 # show empty verbose
@@ -846,8 +852,6 @@ string_agg String AGGREGATE
 query TTTTTTTBTTTT rowsort
 select * from information_schema.routines where routine_name = 'date_trunc' OR routine_name = 'string_agg' OR routine_name = 'rank' ORDER BY routine_name
 ----
-datafusion public date_trunc datafusion public date_trunc FUNCTION true Date SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
-datafusion public date_trunc datafusion public date_trunc FUNCTION true String SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
 datafusion public date_trunc datafusion public date_trunc FUNCTION true Time(ns) SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
 datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(ns) SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
 datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(ns, "+TZ") SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
@@ -863,12 +867,12 @@ false
 query TTTITTTTBI
 select * from information_schema.parameters where specific_name = 'date_trunc' OR specific_name = 'string_agg' OR specific_name = 'rank' ORDER BY specific_name, rid, data_type;
 ----
-datafusion public date_trunc 1 OUT NULL Date NULL false 0
 datafusion public date_trunc 2 IN expression Date NULL false 0
 datafusion public date_trunc 1 IN precision String NULL false 0
+datafusion public date_trunc 1 OUT NULL Timestamp(ns) NULL false 0
 datafusion public date_trunc 1 IN precision String NULL false 1
 datafusion public date_trunc 2 IN expression String NULL false 1
-datafusion public date_trunc 1 OUT NULL String NULL false 1
+datafusion public date_trunc 1 OUT NULL Timestamp(ns) NULL false 1
 datafusion public date_trunc 1 IN precision String NULL false 2
 datafusion public date_trunc 2 IN expression Time(ns) NULL false 2
 datafusion public date_trunc 1 OUT NULL Time(ns) NULL false 2
@@ -896,11 +900,97 @@ repeat String 1 OUT 0
 query TT??TTT rowsort
 show functions like 'date_trunc';
 ----
-date_trunc Date [precision, expression] [String, Date] SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
-date_trunc String [precision, expression] [String, String] SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
 date_trunc Time(ns) [precision, expression] [String, Time(ns)] SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(ns) [precision, expression] [String, Date] SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(ns) [precision, expression] [String, String] SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
 date_trunc Timestamp(ns) [precision, expression] [String, Timestamp(ns)] SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
 date_trunc Timestamp(ns, "+TZ") [precision, expression] [String, Timestamp(ns, "+TZ")] SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
+
+# Schema for function with TypeSignature::Numeric
+query TTITI rowsort
+select specific_name, data_type, ordinal_position, parameter_mode, rid from information_schema.parameters where specific_name = 'abs';
+----
+abs Decimal(38, 10) 1 IN 0
+abs Decimal(38, 10) 1 OUT 0
+abs Float64 1 IN 1
+abs Float64 1 OUT 1
+abs Int64 1 IN 2
+abs Int64 1 OUT 2
+
+query TTT rowsort
+select routine_name, data_type, function_type from information_schema.routines where routine_name = 'abs';
+----
+abs Decimal(38, 10) SCALAR
+abs Float64 SCALAR
+abs Int64 SCALAR
+
+query TT rowsort
+select routine_name, data_type from information_schema.routines where routine_name = 'length';
+----
+length Int32
+length Int64
+
+# Schema for function with TypeSignature::Coercible plus uniform with exact float types
+query TTITI rowsort
+select specific_name, data_type, ordinal_position, parameter_mode, rid from information_schema.parameters where specific_name = 'floor';
+----
+floor Decimal(29, 0) 1 OUT 0
+floor Decimal(38, 10) 1 IN 0
+floor Float32 1 IN 1
+floor Float32 1 OUT 1
+floor Float64 1 IN 2
+floor Float64 1 OUT 2
+
+query TTT rowsort
+select routine_name, data_type, function_type from information_schema.routines where routine_name = 'floor';
+----
+floor Decimal(29, 0) SCALAR
+floor Float32 SCALAR
+floor Float64 SCALAR
+
+# Schemas for date/duration - exact type for Date32/Date64 (logical type is provided)
+query TTITI rowsort
+select specific_name, data_type, ordinal_position, parameter_mode, rid from information_schema.parameters where specific_name = 'to_char' and (data_type like '%Date%' or data_type like '%Duration%');
+----
+to_char Date 1 IN 0
+to_char Duration(ms) 1 IN 1
+to_char Duration(ns) 1 IN 2
+to_char Duration(s) 1 IN 3
+to_char Duration(µs) 1 IN 4
+
+query TTT rowsort
+select routine_name, data_type, function_type from information_schema.routines where routine_name = 'to_char';
+----
+to_char String SCALAR
+
+# Return type cannot be deduced from the signature alone
+query TTT
+select routine_name, data_type, function_type from information_schema.routines where routine_name = 'date_part';
+----
+date_part NULL SCALAR
+
+# No args
+query TTT
+select routine_name, data_type, function_type from information_schema.routines where routine_name = 'pi';
+----
+pi NULL SCALAR
+
+query I
+select count(*) from information_schema.parameters where specific_name = 'date_part' and parameter_mode = 'OUT';
+----
+0
+
+# Verify coerced return type of `generate_series`: it should be Date32
+query TI?T rowsort
+select specific_name, rid,
+    array_agg(data_type order by ordinal_position) filter (where parameter_mode = 'IN') as args,
+    max(data_type) filter (where parameter_mode = 'OUT') as return
+from information_schema.parameters where specific_name = 'generate_series'
+group by specific_name, rid
+having args[1] = 'String' and args[2] like 'Date' and args[3] like 'Interval%';
+----
+generate_series 7 [String, Date, Interval(DayTime)] List(Date)
+generate_series 8 [String, Date, Interval(MonthDayNano)] List(Date)
 
 # Table functions (UDTFs) appear in information_schema.routines with
 # function_type = TABLE and data_type = TABLE.

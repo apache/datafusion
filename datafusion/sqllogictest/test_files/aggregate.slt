@@ -404,6 +404,34 @@ GROUP BY g
 1 1
 2 NULL
 
+# A DISTINCT aggregate may take the distinct argument more than once.
+# Group 1 aggregates over the distinct values 1.0 and 2.0, group 2 over the
+# single distinct value 3.0, which leaves the sample covariance undefined.
+# Group 3 repeats a NULL row alongside the distinct value 2.0: DISTINCT
+# collapses the repeated NULLs into one, and the aggregate then excludes
+# that NULL the same way it would without the rewrite, leaving a single
+# distinct point - again an undefined sample covariance. Group 4 is all
+# NULL, so the aggregate has zero non-null distinct points to work with.
+query IR rowsort
+SELECT g, corr(DISTINCT x, x)
+FROM (VALUES (1, 1.0), (1, 1.0), (1, 2.0), (2, 3.0), (2, 3.0), (3, NULL), (3, NULL), (3, 2.0), (4, NULL), (4, NULL)) AS t(g, x)
+GROUP BY g
+----
+1 1
+2 NULL
+3 NULL
+4 NULL
+
+query IR rowsort
+SELECT g, covar_samp(DISTINCT x, x)
+FROM (VALUES (1, 1.0), (1, 1.0), (1, 2.0), (2, 3.0), (2, 3.0), (3, NULL), (3, NULL), (3, 2.0), (4, NULL), (4, NULL)) AS t(g, x)
+GROUP BY g
+----
+1 0.5
+2 NULL
+3 NULL
+4 NULL
+
 # all_nulls_query_correlation
 query R
 with data as (
@@ -1861,6 +1889,55 @@ SELECT approx_distinct(arrow_cast(i, 'Dictionary(Int32, Float64)')) FROM approx_
 
 statement error DataFusion error: This feature is not implemented: Support for 'approx_distinct' for data type Dictionary\(Int32, Float64\) is not implemented
 SELECT g, approx_distinct(arrow_cast(i, 'Dictionary(Int32, Float64)')) FROM approx_distinct_group_test GROUP BY g;
+
+# RunEndEncoded: run-end encoded values must hash identically to the plain
+# values, so the counts below match the Utf8 / Int32 cases above.
+query I
+SELECT approx_distinct(arrow_cast(s, 'RunEndEncoded("run_ends": non-null Int32, "values": Utf8)')) FROM approx_distinct_group_test WHERE g = 2;
+----
+2
+
+query II
+SELECT g, approx_distinct(arrow_cast(s, 'RunEndEncoded("run_ends": non-null Int32, "values": Utf8)')) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+query II
+SELECT g, approx_distinct(arrow_cast(i, 'RunEndEncoded("run_ends": non-null Int64, "values": Int32)')) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+# RunEndEncoded over a fixed-domain value type (Int8) goes through the
+# HyperLogLog accumulators and must match the Int32 counts above.
+query II
+SELECT g, approx_distinct(arrow_cast(arrow_cast(i, 'Int8'), 'RunEndEncoded("run_ends": non-null Int32, "values": Int8)')) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+# RunEndEncoded over a dictionary
+query II
+SELECT g, approx_distinct(arrow_cast(s, 'RunEndEncoded("run_ends": non-null Int32, "values": Dictionary(Int32, Utf8))')) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+# Unsupported value types are rejected, as for a bare Float64
+statement error DataFusion error: This feature is not implemented: Support for 'approx_distinct' for data type RunEndEncoded
+SELECT approx_distinct(arrow_cast(i, 'RunEndEncoded("run_ends": non-null Int32, "values": Float64)')) FROM approx_distinct_group_test;
+
+statement error DataFusion error: This feature is not implemented: Support for 'approx_distinct' for data type RunEndEncoded
+SELECT g, approx_distinct(arrow_cast(i, 'RunEndEncoded("run_ends": non-null Int32, "values": Float64)')) FROM approx_distinct_group_test GROUP BY g;
 
 
 # List
@@ -5161,6 +5238,25 @@ statement ok
 drop table bit_distinct;
 
 
+# bitwise aggregates over NULL inputs, with and without GROUP BY
+statement ok
+create table bit_null (tag varchar) as values ('A'), ('A'), ('B');
+
+query ???
+SELECT bit_and(NULL), bit_or(NULL), bit_xor(NULL) FROM bit_null;
+----
+NULL NULL NULL
+
+query ???T
+SELECT bit_and(NULL), bit_or(NULL), bit_xor(NULL), tag FROM bit_null GROUP BY tag ORDER BY tag;
+----
+NULL NULL NULL A
+NULL NULL NULL B
+
+statement ok
+drop table bit_null;
+
+
 # bit_and_i32
 statement ok
 create table t (c int) as values (4), (7), (15);
@@ -7485,7 +7581,7 @@ physical_plan
 02)--GlobalLimitExec: skip=0, fetch=3
 03)----AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3, __grouping_id@2 as __grouping_id], aggr=[], lim=[3]
 04)------CoalescePartitionsExec
-05)--------AggregateExec: mode=Partial, gby=[(NULL as c2, NULL as c3), (c2@0 as c2, NULL as c3), (c2@0 as c2, c3@1 as c3)], aggr=[]
+05)--------AggregateExec: mode=Partial, gby=[(NULL as c2, NULL as c3), (c2@0 as c2, NULL as c3), (c2@0 as c2, c3@1 as c3)], aggr=[], lim=[3]
 06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
 
@@ -7550,6 +7646,60 @@ staging 1
 
 statement ok
 DROP TABLE distinct_limit_window_table;
+
+# `LimitedDistinctAggregation` limits only the final aggregate when its grouping
+# differs from the partial's (columns not at their output positions, or
+# expression keys). `CombinePartialFinalAggregate` must leave such a pair
+# uncombined instead of failing to plan.
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+CREATE TABLE distinct_limit_combine AS
+SELECT * FROM (VALUES (1, 10), (2, 20), (3, 30), (4, 40), (5, 50), (6, 60)) AS v(a, b);
+
+query TT
+EXPLAIN SELECT b, a FROM distinct_limit_combine GROUP BY b, a LIMIT 2;
+----
+logical_plan
+01)Limit: skip=0, fetch=2
+02)--Aggregate: groupBy=[[distinct_limit_combine.b, distinct_limit_combine.a]], aggr=[[]]
+03)----TableScan: distinct_limit_combine projection=[a, b]
+physical_plan
+01)GlobalLimitExec: skip=0, fetch=2
+02)--AggregateExec: mode=Single, gby=[b@1 as b, a@0 as a], aggr=[], lim=[2]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# LIMIT without ORDER BY may return any two groups
+query II
+SELECT count(*), count(*) FILTER (WHERE b = a * 10)
+FROM (SELECT b, a FROM distinct_limit_combine GROUP BY b, a LIMIT 2);
+----
+2 2
+
+query TT
+EXPLAIN SELECT a % 3 FROM distinct_limit_combine GROUP BY a % 3 LIMIT 2;
+----
+logical_plan
+01)Limit: skip=0, fetch=2
+02)--Aggregate: groupBy=[[distinct_limit_combine.a % Int64(3)]], aggr=[[]]
+03)----TableScan: distinct_limit_combine projection=[a]
+physical_plan
+01)GlobalLimitExec: skip=0, fetch=2
+02)--AggregateExec: mode=Single, gby=[a@0 % 3 as distinct_limit_combine.a % Int64(3)], aggr=[], lim=[2]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT count(*), count(DISTINCT m)
+FROM (SELECT a % 3 AS m FROM distinct_limit_combine GROUP BY a % 3 LIMIT 2);
+----
+2 2
+
+statement ok
+DROP TABLE distinct_limit_combine;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
 
 #
 # regr_*() tests
@@ -8105,6 +8255,55 @@ c,a,b,d d,b,a,c
 
 statement ok
 drop table t;
+
+# A sort key repeated in an ordered aggregate's ORDER BY is redundant, and the
+# query must behave as if the key were listed once (issue #25398). Each `k` is
+# unique so every expected value is determined by the ordering.
+statement ok
+CREATE TABLE dup_sort_keys (g INT, k INT, v INT) AS VALUES
+  (1, 2, 20), (1, 1, 10), (2, 4, 40), (2, 3, 30);
+
+query IIII
+SELECT g,
+  first_value(v ORDER BY k, k),
+  last_value(v ORDER BY k, k),
+  nth_value(v, 2 ORDER BY k + 0, k + 0)
+FROM dup_sort_keys GROUP BY g ORDER BY g;
+----
+1 10 20 20
+2 30 40 40
+
+query I?T
+SELECT g,
+  array_agg(v ORDER BY k, k),
+  string_agg(CAST(v AS VARCHAR), ',' ORDER BY k DESC, k ASC)
+FROM dup_sort_keys GROUP BY g ORDER BY g;
+----
+1 [10, 20] 20,10
+2 [30, 40] 40,30
+
+# With DISTINCT, the ORDER BY may only sort by the aggregated expression. The
+# repeated key is dropped first, so these are accepted.
+query I?
+SELECT g, array_agg(DISTINCT k ORDER BY k, k) FROM dup_sort_keys GROUP BY g ORDER BY g;
+----
+1 [1, 2]
+2 [3, 4]
+
+query I?
+SELECT g, array_agg(DISTINCT k ORDER BY k DESC, k ASC) FROM dup_sort_keys GROUP BY g ORDER BY g;
+----
+1 [2, 1]
+2 [4, 3]
+
+query II
+SELECT DISTINCT ON (g) g, v FROM dup_sort_keys ORDER BY g, g, k;
+----
+1 10
+2 30
+
+statement ok
+drop table dup_sort_keys;
 
 
 # Tests for aggregating with NaN values
@@ -8841,8 +9040,8 @@ logical_plan
 01)Aggregate: groupBy=[[]], aggr=[[count(Int64(NULL)) AS count(NULL)]]
 02)--TableScan: t projection=[]
 physical_plan
-01)AggregateExec: mode=Single, gby=[], aggr=[count(NULL)]
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[0 as count(NULL)]
+02)--PlaceholderRowExec
 
 statement count 0
 drop table t;
@@ -8915,8 +9114,8 @@ logical_plan
 01)Aggregate: groupBy=[[]], aggr=[[count(Int64(1)), count(Int64(2))]]
 02)--TableScan: t projection=[]
 physical_plan
-01)AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1)), count(Int64(2))]
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[2 as count(Int64(1)), 2 as count(Int64(2))]
+02)--PlaceholderRowExec
 
 query II
 select count(1), count() from t;
@@ -8977,9 +9176,24 @@ logical_plan
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1)), count(Int64(2))]]
 03)----TableScan: t projection=[]
 physical_plan
-01)ProjectionExec: expr=[count(Int64(1))@0 * count(Int64(2))@1 as count(Int64(1)) * count(Int64(2))]
-02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1)), count(Int64(2))]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[2 * 2 as count(Int64(1)) * count(Int64(2))]
+02)--PlaceholderRowExec
+
+# Any non-null literal counts every row, so it can be answered from statistics
+query II
+select count('a'), count(true) from t;
+----
+2 2
+
+query TT
+explain select count('a'), count(true) from t;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[count(Utf8("a")), count(Boolean(true))]]
+02)--TableScan: t projection=[]
+physical_plan
+01)ProjectionExec: expr=[2 as count(Utf8("a")), 2 as count(Boolean(true))]
+02)--PlaceholderRowExec
 
 statement count 0
 drop table t;

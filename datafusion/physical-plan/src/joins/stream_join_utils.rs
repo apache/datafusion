@@ -92,6 +92,7 @@ impl JoinHashMapType for PruningJoinHashMap {
         get_matched_indices_with_limit_offset::<u64>(
             &self.map,
             &next,
+            self.map.len() == next.len(),
             hash_values,
             valid_keys,
             limit,

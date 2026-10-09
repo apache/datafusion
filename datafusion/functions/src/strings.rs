@@ -17,6 +17,7 @@
 
 use std::marker::PhantomData;
 use std::mem::size_of;
+use std::ops::Range;
 use std::sync::Arc;
 
 use datafusion_common::utils::offset_span_len;
@@ -27,8 +28,9 @@ use datafusion_common::{
 
 use arrow::array::{
     Array, ArrayAccessor, ArrayDataBuilder, ArrayRef, BinaryArray, BinaryViewArray,
-    ByteView, GenericStringArray, LargeBinaryArray, LargeStringArray, OffsetSizeTrait,
-    StringArray, StringViewArray, as_largestring_array, make_view,
+    ByteView, GenericStringArray, LargeBinaryArray, LargeStringArray,
+    MAX_INLINE_VIEW_LEN, OffsetSizeTrait, StringArray, StringViewArray,
+    as_largestring_array, make_view,
 };
 use arrow::buffer::{Buffer, MutableBuffer, NullBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
@@ -1179,42 +1181,80 @@ impl BulkNullStringArrayBuilder for StringViewArrayBuilder {
     }
 }
 
-/// Append a new view to the views buffer with the given substr.
-///
-/// Callers are responsible for their own null tracking.
-///
-/// # Safety
-///
-/// original_view must be a valid view (the format described on
-/// [`GenericByteViewArray`](arrow::array::GenericByteViewArray).
+/// Values of at most this many bytes are stored inline in their view.
+pub(crate) const MAX_INLINE_LEN: usize = MAX_INLINE_VIEW_LEN as usize;
+
+/// Returns the view for a substring of the value an existing view refers to.
 ///
 /// # Arguments
-/// - views_buffer: The buffer to append the new view to
-/// - original_view: The original view value
-/// - substr: The substring to append. Must be a valid substring of the original view
-/// - start_offset: The start offset of the substring in the view
+/// - view: The original view value
+/// - source: The bytes the original view refers to
+/// - range: The byte range within `source` of the substring to return a view for
 ///
-/// LLVM is apparently overly eager to inline this function into some hot loops,
-/// which bloats them and regresses performance, so we disable inlining for now.
-#[inline(never)]
-pub(crate) fn append_view(
-    views_buffer: &mut Vec<u128>,
-    original_view: &u128,
-    substr: &str,
-    start_offset: u32,
-) {
-    let substr_len = substr.len();
-    let sub_view = if substr_len > 12 {
-        let view = ByteView::from(*original_view);
-        make_view(
-            substr.as_bytes(),
-            view.buffer_index,
-            view.offset + start_offset,
-        )
+/// Substrings longer than 12 bytes point into the same data buffer as `view`;
+/// shorter ones are stored inline in the new view.
+///
+/// This uses shifts and masks rather than [`make_view`], which picks copy code
+/// based on the substring's length; the CPU often mispredicts that choice when
+/// lengths vary from row to row.
+#[inline]
+pub(crate) fn sub_view(view: u128, source: &[u8], range: Range<usize>) -> u128 {
+    debug_assert!(range.start <= range.end && range.end <= source.len());
+
+    let len = range.end - range.start;
+    if len > MAX_INLINE_LEN {
+        // The substring has more than 12 bytes, so its 4-byte prefix is in bounds.
+        let prefix = source[range.start..range.start + 4].try_into().unwrap();
+        let original = ByteView::from(view);
+        return ByteView {
+            length: len as u32,
+            prefix: u32::from_le_bytes(prefix),
+            offset: original.offset + range.start as u32,
+            ..original
+        }
+        .as_u128();
+    }
+
+    // The substring's bytes, in the low-order bits. Any bits past the end of
+    // the substring are masked off by `inline_view`.
+    let bytes = if source.len() <= MAX_INLINE_LEN {
+        // `source` is stored in `view` itself, after its 4-byte length.
+        (view >> 32) >> (8 * range.start)
     } else {
-        make_view(substr.as_bytes(), 0, 0)
+        // `source` has more than 12 bytes, so read the 12 bytes starting at
+        // `range.start`, or the last 12 bytes if that would run past the end,
+        // and skip any that come before `range.start`.
+        let window_start = range.start.min(source.len() - MAX_INLINE_LEN);
+        let window = source[window_start..window_start + MAX_INLINE_LEN]
+            .try_into()
+            .unwrap();
+        read_12_bytes(window) >> (8 * (range.start - window_start))
     };
-    views_buffer.push(sub_view);
+    inline_view(bytes, len)
+}
+
+/// Returns the view for `substr`, which must be a slice of `string`, the value
+/// `view` refers to. See [`sub_view`].
+#[inline]
+pub(crate) fn substr_view(view: u128, string: &str, substr: &str) -> u128 {
+    let start = substr.as_ptr() as usize - string.as_ptr() as usize;
+    sub_view(view, string.as_bytes(), start..start + substr.len())
+}
+
+/// Reads `bytes` as a little-endian integer.
+#[inline]
+fn read_12_bytes(bytes: &[u8; 12]) -> u128 {
+    let low = u64::from_le_bytes(bytes[..8].try_into().unwrap());
+    let high = u32::from_le_bytes(bytes[8..].try_into().unwrap());
+    u128::from(low) | (u128::from(high) << 64)
+}
+
+/// Returns an inline view of the `len` low-order bytes of `bytes`.
+#[inline]
+fn inline_view(bytes: u128, len: usize) -> u128 {
+    debug_assert!(len <= MAX_INLINE_LEN);
+    let mask = (1u128 << (8 * len)) - 1;
+    ((bytes & mask) << 32) | len as u128
 }
 
 #[derive(Debug)]
@@ -1429,6 +1469,31 @@ pub(crate) fn widest_string_type(types: &[DataType]) -> DataType {
 mod tests {
     use super::*;
     use crate::utils::test::sliced_byte_array;
+
+    #[test]
+    fn sub_view_matches_make_view() {
+        let buffer_index = 3;
+        let offset = 100;
+        for source_len in 0..=40 {
+            // Include bytes >= 0x80 so that masking errors would show up.
+            let source: Vec<u8> = (0..source_len).map(|i| (i * 37 + 11) as u8).collect();
+            let view = make_view(&source, buffer_index, offset);
+            for start in 0..=source_len {
+                for end in start..=source_len {
+                    let expected = make_view(
+                        &source[start..end],
+                        buffer_index,
+                        offset + start as u32,
+                    );
+                    assert_eq!(
+                        sub_view(view, &source, start..end),
+                        expected,
+                        "source_len={source_len}, range={start}..{end}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn concat_capacity_uses_visible_bytes() -> Result<()> {
