@@ -190,7 +190,7 @@ SELECT c1, approx_percentile_cont(0.95, -1000) WITHIN GROUP (ORDER BY c3) AS c3_
 statement error Function 'approx_percentile_cont' failed to match any signature
 SELECT approx_percentile_cont(0.95, c1) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: Percentile value for 'APPROX_PERCENTILE_CONT' must be a literal
+statement error DataFusion error: Execution error: Percentile value for 'APPROX_PERCENTILE_CONT' must be constant across the aggregation, found differing values
 SELECT approx_percentile_cont(c12) WITHIN GROUP (ORDER BY c12) FROM aggregate_test_100
 
 statement error DataFusion error: Error during planning: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be a literal
@@ -2511,7 +2511,7 @@ SELECT APPROX_PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (CAST(
 ----
 NULL
 
-query error DataFusion error: Error during planning: Percentile value for 'APPROX_PERCENTILE_CONT' must be Float32 or Float64 literal \(got null\)
+query error DataFusion error: Error during planning: Percentile value for 'APPROX_PERCENTILE_CONT' must be Float32 or Float64 \(got null\)
 SELECT APPROX_PERCENTILE_CONT(NULL) WITHIN GROUP (ORDER BY v) FROM (VALUES (CAST(NULL as INT))) as t (v);
 
 # percentile_cont_with_weight_with_nulls
@@ -2833,6 +2833,278 @@ b 5 68
 c 5 122.5
 d 5 124.2
 e 5 115.6
+
+
+# percentile from a projected constant column
+query R
+SELECT approx_percentile_cont(y, m) AS median FROM (SELECT t.x + 1 as y, 0.5 as m FROM (VALUES (10), (20), (30)) AS t(x))
+----
+21
+
+query R
+SELECT percentile_cont(y, m) AS median FROM (SELECT t.x + 1 as y, 0.5 as m FROM (VALUES (10), (20), (30)) AS t(x))
+----
+21
+
+query R
+SELECT approx_percentile_cont(m) WITHIN GROUP (ORDER BY y) AS median FROM (SELECT t.x + 1 as y, 0.5 as m FROM (VALUES (10), (20), (30)) AS t(x))
+----
+21
+
+query R
+SELECT percentile_cont(m) WITHIN GROUP (ORDER BY y) AS median FROM (SELECT t.x + 1 as y, 0.5 as m FROM (VALUES (10), (20), (30)) AS t(x))
+----
+21
+
+# percentile as a plain column straight off a VALUES table
+query R
+SELECT approx_percentile_cont(x, m) FROM (VALUES (10,0.5),(20,0.5),(30,0.5),(40,0.5)) AS t(x,m)
+----
+25
+
+query R
+SELECT percentile_cont(x, m) FROM (VALUES (10,0.5),(20,0.5),(30,0.5),(40,0.5)) AS t(x,m)
+----
+25
+
+query R
+SELECT percentile_cont(x, m) FROM (VALUES (10,0.5),(20,0.5),(30,0.5),(40,0.5)) AS t(x,m) WHERE x > 1000
+----
+NULL
+
+query R
+SELECT approx_percentile_cont(x, m) FROM (VALUES (10,0.5),(20,0.5),(30,0.5),(40,0.5)) AS t(x,m) WHERE x > 1000
+----
+NULL
+
+query R
+SELECT percentile_cont(DISTINCT x, m) FROM (VALUES (10,0.5),(20,0.5),(30,0.5),(40,0.5)) AS t(x,m) WHERE x > 1000
+----
+NULL
+
+
+query R
+SELECT approx_percentile_cont_with_weight(y, 1, m) AS median FROM (SELECT t.x + 1 as y, 0.5 as m FROM (VALUES (10), (20), (30)) AS t(x))
+----
+21
+
+query IR
+SELECT g, approx_percentile_cont(y, m) AS median FROM (SELECT t.x % 3 as g, t.x + 1 as y, 0.5 as m FROM (VALUES (10),(20),(30),(40),(50),(60),(70),(80),(90),(100),(110),(120)) AS t(x)) GROUP BY g ORDER BY g
+----
+0 76
+1 56
+2 66
+
+query IR
+SELECT g, percentile_cont(y, m) AS median FROM (SELECT t.x % 3 as g, t.x + 1 as y, 0.5 as m FROM (VALUES (10),(20),(30),(40),(50),(60),(70),(80),(90),(100),(110),(120)) AS t(x)) GROUP BY g ORDER BY g
+----
+0 76
+1 56
+2 66
+
+query error DataFusion error: Execution error: Percentile value must be between 0\.0 and 1\.0 inclusive, NaN is invalid
+SELECT approx_percentile_cont(x, m) FROM (VALUES (10,'NaN'::FLOAT),(20,'NaN'::FLOAT),(30,'NaN'::FLOAT),(40,'NaN'::FLOAT)) AS t(x,m)
+
+query error DataFusion error: Execution error: Percentile value must be between 0\.0 and 1\.0 inclusive, NaN is invalid
+SELECT percentile_cont(x, m) FROM (VALUES (10,'NaN'::FLOAT),(20,'NaN'::FLOAT),(30,'NaN'::FLOAT),(40,'NaN'::FLOAT)) AS t(x,m)
+
+query error DataFusion error: Execution error: Error during planning: Percentile value must be between 0\.0 and 1\.0 inclusive, inf is invalid
+SELECT approx_percentile_cont(x, m) FROM (VALUES (10,'+Inf'::FLOAT),(20,'+Inf'::FLOAT),(30,'+Inf'::FLOAT),(40,'+Inf'::FLOAT)) AS t(x,m)
+
+query error DataFusion error: Execution error: Error during planning: Percentile value must be between 0\.0 and 1\.0 inclusive, inf is invalid
+SELECT percentile_cont(x, m) FROM (VALUES (10,'+Inf'::FLOAT),(20,'+Inf'::FLOAT),(30,'+Inf'::FLOAT),(40,'+Inf'::FLOAT)) AS t(x,m)
+
+query error DataFusion error: Execution error: Error during planning: Percentile value must be between 0\.0 and 1\.0 inclusive, \-inf is invalid
+SELECT approx_percentile_cont(x, m) FROM (VALUES (10,'-Inf'::FLOAT),(20,'-Inf'::FLOAT),(30,'-Inf'::FLOAT),(40,'-Inf'::FLOAT)) AS t(x,m)
+
+query error DataFusion error: Execution error: Error during planning: Percentile value must be between 0\.0 and 1\.0 inclusive, \-inf is invalid
+SELECT percentile_cont(x, m) FROM (VALUES (10,'-Inf'::FLOAT),(20,'-Inf'::FLOAT),(30,'-Inf'::FLOAT),(40,'-Inf'::FLOAT)) AS t(x,m)
+
+# the percentile only has to be constant within a group, not across groups
+query IR
+SELECT g, percentile_cont(x, p) FROM (VALUES (1, 10, 0.0), (1, 20, 0.0), (2, 30, 1.0), (2, 40, 1.0)) AS t(g, x, p) GROUP BY g ORDER BY g
+----
+1 10
+2 40
+
+query IR
+SELECT g, approx_percentile_cont(x, p) FROM (VALUES (1, 10, 0.0), (1, 20, 0.0), (2, 30, 1.0), (2, 40, 1.0)) AS t(g, x, p) GROUP BY g ORDER BY g
+----
+1 10
+2 40
+
+query IR
+SELECT g, percentile_cont(p) WITHIN GROUP (ORDER BY x DESC) FROM (VALUES (1, 10, 0.0), (1, 20, 0.0), (2, 30, 1.0), (2, 40, 1.0)) AS t(g, x, p) GROUP BY g ORDER BY g
+----
+1 20
+2 30
+
+# a group with no non-null values evaluates to NULL even without a percentile
+query IR
+SELECT g, percentile_cont(x, p) FROM (VALUES (1, 10, 0.0), (1, 20, 0.0), (2, NULL, NULL)) AS t(g, x, p) GROUP BY g ORDER BY g
+----
+1 10
+2 NULL
+
+# the percentile must still be constant within each group
+query error DataFusion error: Execution error: Percentile value for 'PERCENTILE_CONT' must be constant across the aggregation, found differing values 0 and 1
+SELECT g, percentile_cont(x, p) FROM (VALUES (1, 10, 0.0), (1, 20, 1.0), (2, 30, 1.0), (2, 40, 1.0)) AS t(g, x, p) GROUP BY g
+
+query error DataFusion error: Execution error: Percentile value for 'APPROX_PERCENTILE_CONT' must be constant across the aggregation, found differing values
+SELECT g, approx_percentile_cont(x, p) FROM (VALUES (1, 10, 0.0), (1, 20, 1.0), (2, 30, 1.0), (2, 40, 1.0)) AS t(g, x, p) GROUP BY g
+
+# a genuinely non-constant percentile must error clearly
+query error DataFusion error: Execution error: Percentile value for 'APPROX_PERCENTILE_CONT' must be constant across the aggregation, found differing values
+SELECT approx_percentile_cont(x, m) FROM (VALUES (10,0.1),(20,0.5),(30,0.9),(40,0.5)) AS t(x,m)
+
+query error DataFusion error: Execution error: Percentile value for 'PERCENTILE_CONT' must be constant across the aggregation, found differing values 0.1 and 0.9
+SELECT percentile_cont(x, m) FROM (VALUES (10,0.1),(20,0.5),(30,0.9),(40,0.5)) AS t(x,m)
+
+# percentile column with DESC ordering is flipped to 1 - p
+query RR
+SELECT percentile_cont(m) WITHIN GROUP (ORDER BY x DESC), approx_percentile_cont(m) WITHIN GROUP (ORDER BY x DESC) FROM (VALUES (10, 0.25), (20, 0.25), (30, 0.25), (40, 0.25), (50, 0.25)) AS t(x, m)
+----
+40 42.5
+
+query RR
+SELECT percentile_cont(m) WITHIN GROUP (ORDER BY x), approx_percentile_cont(m) WITHIN GROUP (ORDER BY x) FROM (VALUES (10, 0.25), (20, 0.25), (30, 0.25), (40, 0.25), (50, 0.25)) AS t(x, m)
+----
+20 17.5
+
+# Float32 percentile column
+query RR
+SELECT percentile_cont(x, arrow_cast(m, 'Float32')), approx_percentile_cont(x, arrow_cast(m, 'Float32')) FROM (VALUES (10, 0.5), (20, 0.5), (30, 0.5)) AS t(x, m)
+----
+20 20
+
+# null percentile rows are ignored when resolving the percentile
+query RR
+SELECT percentile_cont(x, m), approx_percentile_cont(x, m) FROM (VALUES (10, 0.5), (20, NULL), (30, 0.5), (40, NULL)) AS t(x, m)
+----
+25 25
+
+# an all-null percentile column cannot be resolved
+query error DataFusion error: Execution error: Percentile value for 'PERCENTILE_CONT' could not be determined: no non\-null percentile value was seen
+SELECT percentile_cont(x, m) FROM (VALUES (10, CAST(NULL AS DOUBLE)), (20, NULL)) AS t(x, m)
+
+query error DataFusion error: Execution error: Percentile value for 'APPROX_PERCENTILE_CONT' could not be determined: no non\-null percentile value was seen
+SELECT approx_percentile_cont(x, m) FROM (VALUES (10, CAST(NULL AS DOUBLE)), (20, NULL)) AS t(x, m)
+
+# out of range percentile column
+query error DataFusion error: Execution error: Error during planning: Percentile value must be between 0.0 and 1.0 inclusive, 1.5 is invalid
+SELECT percentile_cont(x, m) FROM (VALUES (10, 1.5), (20, 1.5)) AS t(x, m)
+
+query error DataFusion error: Execution error: Error during planning: Percentile value must be between 0.0 and 1.0 inclusive, -0.5 is invalid
+SELECT approx_percentile_cont(x, m) FROM (VALUES (10, -0.5), (20, -0.5)) AS t(x, m)
+
+# Percentile column spread across multiple batches and partitions: the
+# percentile is resolved per batch and must survive partial -> final merges
+statement ok
+set datafusion.execution.batch_size = 10;
+
+query R
+SELECT percentile_cont(x, m) FROM (SELECT value AS x, 0.5 AS m FROM generate_series(1, 100))
+----
+50.5
+
+query R
+SELECT approx_percentile_cont(x, m) FROM (SELECT value AS x, 0.5 AS m FROM generate_series(1, 100))
+----
+50.5
+
+query R
+SELECT percentile_cont(DISTINCT x, m) FROM (SELECT value % 10 AS x, 0.5 AS m FROM generate_series(1, 100))
+----
+4.5
+
+query R
+SELECT approx_percentile_cont_with_weight(x, 1, m) FROM (SELECT value AS x, 0.5 AS m FROM generate_series(1, 100))
+----
+50.5
+
+query IR
+SELECT g, percentile_cont(x, m) FROM (SELECT value % 4 AS g, value AS x, 0.25 AS m FROM generate_series(1, 100)) GROUP BY g ORDER BY g
+----
+0 28
+1 25
+2 26
+3 27
+
+query IR
+SELECT g, approx_percentile_cont(x, m) FROM (SELECT value % 4 AS g, value AS x, 0.25 AS m FROM generate_series(1, 100)) GROUP BY g ORDER BY g
+----
+0 27
+1 24
+2 25
+3 26
+
+# per-group percentiles spread across batches and partitions
+query IR
+SELECT g, percentile_cont(x, p) FROM (SELECT value % 2 AS g, value AS x, CASE WHEN value % 2 = 0 THEN 0.0 ELSE 1.0 END AS p FROM generate_series(1, 100)) GROUP BY g ORDER BY g
+----
+0 2
+1 99
+
+query IR
+SELECT g, approx_percentile_cont(x, p) FROM (SELECT value % 2 AS g, value AS x, CASE WHEN value % 2 = 0 THEN 0.0 ELSE 1.0 END AS p FROM generate_series(1, 100)) GROUP BY g ORDER BY g
+----
+0 2
+1 99
+
+# Each batch is constant on its own, but the percentile differs across
+# batches, so the mismatch must be detected across batches / on merge
+query error DataFusion error: Execution error: Percentile value for 'PERCENTILE_CONT' must be constant across the aggregation, found differing values 0.9 and 0.5
+SELECT percentile_cont(x, m) FROM (SELECT value AS x, CASE WHEN value <= 50 THEN 0.5 ELSE 0.9 END AS m FROM generate_series(1, 100))
+
+query error DataFusion error: Execution error: Percentile value for 'APPROX_PERCENTILE_CONT' must be constant across the aggregation, found differing values
+SELECT approx_percentile_cont(x, m) FROM (SELECT value AS x, CASE WHEN value <= 50 THEN 0.5 ELSE 0.9 END AS m FROM generate_series(1, 100))
+
+query error DataFusion error: Execution error: Percentile value for 'APPROX_PERCENTILE_CONT' must be constant across the aggregation, found differing values
+SELECT approx_percentile_cont_with_weight(x, 1, m) FROM (SELECT value AS x, CASE WHEN value <= 50 THEN 0.5 ELSE 0.9 END AS m FROM generate_series(1, 100))
+
+query error DataFusion error: Execution error: Percentile value for 'PERCENTILE_CONT' must be constant across the aggregation, found differing values 0.5 and 0.9
+SELECT g, percentile_cont(x, m) FROM (SELECT value % 4 AS g, value AS x, CASE WHEN value <= 50 THEN 0.5 ELSE 0.9 END AS m FROM generate_series(1, 100)) GROUP BY g
+
+# Force skipping partial aggregation so the groups accumulator goes through
+# `convert_to_state` with a percentile column
+statement ok
+set datafusion.execution.skip_partial_aggregation_probe_rows_threshold = 10;
+
+statement ok
+set datafusion.execution.skip_partial_aggregation_probe_ratio_threshold = 0.0;
+
+query IR
+SELECT g, percentile_cont(x, m) FROM (SELECT value % 4 AS g, value AS x, 0.25 AS m FROM generate_series(1, 100)) GROUP BY g ORDER BY g
+----
+0 28
+1 25
+2 26
+3 27
+
+query error DataFusion error: Execution error: Percentile value for 'PERCENTILE_CONT' must be constant across the aggregation, found differing values 0.5 and 0.9
+SELECT g, percentile_cont(x, m) FROM (SELECT value % 4 AS g, value AS x, CASE WHEN value <= 50 THEN 0.5 ELSE 0.9 END AS m FROM generate_series(1, 100)) GROUP BY g
+
+query IR
+SELECT g, percentile_cont(x, p) FROM (SELECT value % 2 AS g, value AS x, CASE WHEN value % 2 = 0 THEN 0.0 ELSE 1.0 END AS p FROM generate_series(1, 100)) GROUP BY g ORDER BY g
+----
+0 2
+1 99
+
+# filtered-out rows must not contribute their percentile
+query IR
+SELECT g, percentile_cont(x, p) FILTER (WHERE x > 10) FROM (SELECT value % 2 AS g, value AS x, CASE WHEN value <= 10 THEN 0.5 WHEN value % 2 = 0 THEN 0.0 ELSE 1.0 END AS p FROM generate_series(1, 100)) GROUP BY g ORDER BY g
+----
+0 12
+1 99
+
+statement ok
+reset datafusion.execution.skip_partial_aggregation_probe_rows_threshold;
+
+statement ok
+reset datafusion.execution.skip_partial_aggregation_probe_ratio_threshold;
+
+statement ok
+reset datafusion.execution.batch_size;
 
 # error is unique to this UDAF
 query TRR
@@ -4329,7 +4601,7 @@ SELECT percentile_cont(1.5) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 statement error DataFusion error: Error during planning: Percentile value must be between 0.0 and 1.0 inclusive
 SELECT percentile_cont(-0.1) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: Percentile value for 'PERCENTILE_CONT' must be a literal
+statement error DataFusion error: Execution error: Percentile value for 'PERCENTILE_CONT' must be constant across the aggregation, found differing values 1 and 5
 SELECT percentile_cont(c2) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 
 statement error DataFusion error: Error during planning: \[IGNORE | RESPECT\] NULLS are not permitted for percentile_cont

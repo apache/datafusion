@@ -46,7 +46,6 @@ use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_functions_aggregate_common::noop_accumulator::NoopAccumulator;
 
 use crate::min_max::{max_udaf, min_udaf};
-use crate::utils::validate_percentile_expr;
 use datafusion_common::{
     Result, ScalarValue, exec_datafusion_err, internal_datafusion_err,
     utils::{SingleRowListArrayBuilder, take_function_args},
@@ -66,6 +65,8 @@ use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumu
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filtered_null_mask;
 use datafusion_functions_aggregate_common::utils::Hashable;
 use datafusion_macros::user_doc;
+
+use crate::utils::PercentileParam;
 
 /// Precision multiplier for linear interpolation calculations.
 ///
@@ -227,12 +228,18 @@ impl AggregateUDFImpl for PercentileCont {
                 true,
             )
             .into(),
+            Field::new(
+                format_state_name(args.name, "percentile"),
+                DataType::Float64,
+                true,
+            )
+            .into(),
         ])
     }
 
     fn accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         // Always verify percentiles
-        let percentile = get_percentile(&args)?;
+        let percentile = get_percentile_param(&args)?;
         create_percentile_accumulator(
             self.name(),
             percentile,
@@ -250,7 +257,7 @@ impl AggregateUDFImpl for PercentileCont {
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
         // Always verify percentiles
-        let percentile = get_percentile(&args)?;
+        let percentile = get_percentile_param(&args)?;
         create_percentile_groups_accumulator(
             self.name(),
             percentile,
@@ -273,27 +280,21 @@ impl AggregateUDFImpl for PercentileCont {
     }
 }
 
-fn get_percentile(args: &AccumulatorArgs) -> Result<f64> {
-    let percentile = validate_percentile_expr(&args.exprs[1], "PERCENTILE_CONT")?;
-
+fn get_percentile_param(args: &AccumulatorArgs) -> Result<PercentileParam> {
     let is_descending = args
         .order_bys
         .first()
         .map(|sort_expr| sort_expr.options.descending)
         .unwrap_or(false);
 
-    let percentile = if is_descending {
-        1.0 - percentile
-    } else {
-        percentile
-    };
-
+    let percentile =
+        PercentileParam::try_new(&args.exprs[1], "PERCENTILE_CONT", is_descending)?;
     Ok(percentile)
 }
 
 pub fn create_percentile_accumulator(
     name: &str,
-    percentile: f64,
+    percentile: PercentileParam,
     input_dt: &DataType,
     is_distinct: bool,
 ) -> Result<Box<dyn Accumulator>> {
@@ -339,7 +340,7 @@ pub fn create_percentile_accumulator(
 
 pub fn create_percentile_groups_accumulator(
     name: &str,
-    percentile: f64,
+    percentile: PercentileParam,
     input_dt: &DataType,
 ) -> Result<Box<dyn GroupsAccumulator>> {
     macro_rules! helper {
@@ -442,7 +443,7 @@ struct PercentileContAccumulator<
     I: PercentileInterpolator<T>,
 > {
     all_values: Vec<T::Native>,
-    percentile: f64,
+    percentile: PercentileParam,
     data_type: DataType,
     _interpolator: PhantomData<I>,
 }
@@ -450,7 +451,7 @@ struct PercentileContAccumulator<
 impl<T: ArrowNumericType + Debug, I: PercentileInterpolator<T>>
     PercentileContAccumulator<T, I>
 {
-    fn new(percentile: f64, data_type: DataType) -> Self {
+    fn new(percentile: PercentileParam, data_type: DataType) -> Self {
         Self {
             all_values: vec![],
             percentile,
@@ -487,10 +488,17 @@ where
             None,
         );
 
-        Ok(vec![ScalarValue::List(Arc::new(list_array))])
+        Ok(vec![
+            ScalarValue::List(Arc::new(list_array)),
+            ScalarValue::Float64(self.percentile.get().ok()),
+        ])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if values.len() > 1 {
+            self.percentile.resolve(&values[1])?;
+        }
+
         let values = values[0].as_primitive::<T>();
         let additional = values.len() - values.null_count();
         self.all_values.try_reserve(additional).map_err(|e| {
@@ -508,6 +516,9 @@ where
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        if let Some(percentile_array) = states.get(1) {
+            self.percentile.resolve(percentile_array)?;
+        }
         let array = states[0].as_list::<i32>();
         // Feed all list elements from a batch
         for values in array.iter().flatten() {
@@ -517,7 +528,11 @@ where
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let value = calculate_percentile::<T, I>(&mut self.all_values, self.percentile)?;
+        if self.all_values.is_empty() {
+            return ScalarValue::new_primitive::<T>(None, &self.data_type);
+        }
+        let percentile = self.percentile.effective_percentile()?;
+        let value = calculate_percentile::<T, I>(&mut self.all_values, percentile)?;
         ScalarValue::new_primitive::<T>(value, &self.data_type)
     }
 
@@ -588,7 +603,11 @@ struct PercentileContGroupsAccumulator<
     I: PercentileInterpolator<T>,
 > {
     group_values: Vec<Vec<T::Native>>,
-    percentile: f64,
+    percentile: PercentileParam,
+    /// Per-group percentiles, only used when the percentile is given as a
+    /// column reference: it then has to be constant within each group, but
+    /// may differ between groups.
+    group_percentiles: Option<Vec<Option<f64>>>,
     data_type: DataType,
     _interpolator: PhantomData<I>,
 }
@@ -596,13 +615,45 @@ struct PercentileContGroupsAccumulator<
 impl<T: ArrowNumericType + Debug, I: PercentileInterpolator<T>>
     PercentileContGroupsAccumulator<T, I>
 {
-    fn new(percentile: f64, data_type: DataType) -> Self {
+    fn new(percentile: PercentileParam, data_type: DataType) -> Self {
+        let group_percentiles = percentile.is_col_ref().then(Vec::new);
         Self {
             group_values: vec![],
             percentile,
+            group_percentiles,
             data_type,
             _interpolator: PhantomData,
         }
+    }
+
+    /// Resolves the percentile of each group from the `percentiles` argument,
+    /// either per group or, for a literal percentile, once for all groups.
+    fn resolve_percentiles(
+        &mut self,
+        percentiles: &ArrayRef,
+        group_indices: &[usize],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        let Some(group_percentiles) = self.group_percentiles.as_mut() else {
+            return self.percentile.resolve(percentiles);
+        };
+        group_percentiles.resize(total_num_groups, None);
+
+        let percentiles = self.percentile.to_float64_array(percentiles)?;
+        for (row, (&group_index, value)) in
+            group_indices.iter().zip(percentiles.iter()).enumerate()
+        {
+            let Some(value) = value else { continue };
+            if opt_filter.is_some_and(|f| !f.is_valid(row) || !f.value(row)) {
+                continue;
+            }
+            group_percentiles[group_index] = Some(
+                self.percentile
+                    .resolve_group_value(group_percentiles[group_index], value)?,
+            );
+        }
+        Ok(())
     }
 }
 
@@ -618,8 +669,14 @@ where
         opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
-        // For ordered-set aggregates, we only care about the ORDER BY column (first element)
-        // The percentile parameter is already stored in self.percentile
+        if values.len() > 1 {
+            self.resolve_percentiles(
+                &values[1],
+                group_indices,
+                opt_filter,
+                total_num_groups,
+            )?;
+        }
 
         let values = values[0].as_primitive::<T>();
 
@@ -643,7 +700,14 @@ where
         group_indices: &[usize],
         total_num_groups: usize,
     ) -> Result<()> {
-        assert_eq!(values.len(), 1, "one argument to merge_batch");
+        if let Some(percentile_array) = values.get(1) {
+            self.resolve_percentiles(
+                percentile_array,
+                group_indices,
+                None,
+                total_num_groups,
+            )?;
+        }
 
         let input_group_values = values[0].as_list::<i32>();
 
@@ -667,6 +731,7 @@ where
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         // Emit values
         let emit_group_values = emit_to.take_needed(&mut self.group_values);
+        let num_groups = emit_group_values.len();
 
         // Build offsets
         let mut offsets = Vec::with_capacity(self.group_values.len() + 1);
@@ -693,7 +758,19 @@ where
             None,
         );
 
-        Ok(vec![Arc::new(result_list_array)])
+        let percentile_array: ArrayRef = match self.group_percentiles.as_mut() {
+            Some(group_percentiles) => Arc::new(arrow::array::Float64Array::from(
+                emit_to.take_needed(group_percentiles),
+            )),
+            None => Arc::new(arrow::array::Float64Array::from(vec![
+                self.percentile
+                    .get()
+                    .ok();
+                num_groups
+            ])),
+        };
+
+        Ok(vec![Arc::new(result_list_array), percentile_array])
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
@@ -704,10 +781,33 @@ where
         let mut evaluate_result_builder =
             PrimitiveBuilder::<T>::with_capacity(emit_group_values.len())
                 .with_data_type(self.data_type.clone());
-        for values in &mut emit_group_values {
-            let value =
-                calculate_percentile::<T, I>(values.as_mut_slice(), self.percentile)?;
-            evaluate_result_builder.append_option(value);
+        match self.group_percentiles.as_mut() {
+            Some(group_percentiles) => {
+                let mut emit_group_percentiles = emit_to.take_needed(group_percentiles);
+                emit_group_percentiles.resize(emit_group_values.len(), None);
+                for (values, percentile) in
+                    emit_group_values.iter_mut().zip(emit_group_percentiles)
+                {
+                    if values.is_empty() {
+                        evaluate_result_builder.append_null();
+                        continue;
+                    }
+                    let percentile = self
+                        .percentile
+                        .apply_order(self.percentile.get_group_value(percentile)?);
+                    let value =
+                        calculate_percentile::<T, I>(values.as_mut_slice(), percentile)?;
+                    evaluate_result_builder.append_option(value);
+                }
+            }
+            None => {
+                let percentile = self.percentile.effective_percentile()?;
+                for values in &mut emit_group_values {
+                    let value =
+                        calculate_percentile::<T, I>(values.as_mut_slice(), percentile)?;
+                    evaluate_result_builder.append_option(value);
+                }
+            }
         }
 
         Ok(Arc::new(evaluate_result_builder.finish()))
@@ -729,8 +829,8 @@ where
         // with only one element; otherwise, this row in `ListArray` will be set
         // to null.
 
-        // Reuse values buffer in `input_array` to build `values` in `ListArray`
-        let values = PrimitiveArray::<T>::new(input_array.values().clone(), None)
+        // Reuse values buffer in `input_array` to build `list_values` in `ListArray`
+        let list_values = PrimitiveArray::<T>::new(input_array.values().clone(), None)
             .with_data_type(self.data_type.clone());
 
         // `offsets` in `ListArray`, each row as a list element
@@ -754,11 +854,32 @@ where
         let converted_list_array = ListArray::new(
             Arc::new(Field::new_list_field(self.data_type.clone(), true)),
             offsets,
-            Arc::new(values),
+            Arc::new(list_values),
             nulls,
         );
 
-        Ok(vec![Arc::new(converted_list_array)])
+        // `state_fields` always declares a second (percentile) state field, so
+        // `convert_to_state` must also produce one array per row to match it.
+        // When the percentile is given as a column reference, propagate its
+        // per-row values (nulled out for filtered rows); otherwise broadcast
+        // the resolved constant.
+        let percentile_array: ArrayRef = if let Some(percentile_values) = values.get(1) {
+            let percentile_values =
+                self.percentile.to_float64_array(percentile_values)?;
+            let nulls = filtered_null_mask(opt_filter, &percentile_values);
+            Arc::new(arrow::array::Float64Array::new(
+                percentile_values.values().clone(),
+                nulls,
+            ))
+        } else {
+            let percentile = self.percentile.get().ok();
+            Arc::new(arrow::array::Float64Array::from(vec![
+                percentile;
+                input_array.len()
+            ]))
+        };
+
+        Ok(vec![Arc::new(converted_list_array), percentile_array])
     }
     fn size(&self) -> usize {
         self.group_values
@@ -767,6 +888,10 @@ where
             .sum::<usize>()
             // account for size of self.group_values too
             + self.group_values.capacity() * size_of::<Vec<T::Native>>()
+            + self
+                .group_percentiles
+                .as_ref()
+                .map_or(0, |p| p.capacity() * size_of::<Option<f64>>())
     }
 }
 
@@ -788,7 +913,7 @@ struct DistinctPercentileContAccumulator<
     /// `GenericDistinctBuffer` rather than the standard library's default
     /// SipHash, which is considerably slower for this hot path.
     counts: HashMap<Hashable<T::Native>, usize, RandomState>,
-    percentile: f64,
+    percentile: PercentileParam,
     data_type: DataType,
     _interpolator: PhantomData<I>,
 }
@@ -796,7 +921,7 @@ struct DistinctPercentileContAccumulator<
 impl<T: ArrowNumericType, I: PercentileInterpolator<T>>
     DistinctPercentileContAccumulator<T, I>
 {
-    fn new(percentile: f64, data_type: DataType) -> Self {
+    fn new(percentile: PercentileParam, data_type: DataType) -> Self {
         Self {
             counts: HashMap::default(),
             percentile,
@@ -822,12 +947,15 @@ where
         );
         Ok(vec![
             SingleRowListArrayBuilder::new(arr).build_list_scalar(),
+            ScalarValue::Float64(self.percentile.get().ok()),
         ])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        // `values` may carry extra argument columns (e.g. the percentile
-        // literal); only the first column holds the aggregated values.
+        if values.len() > 1 {
+            self.percentile.resolve(&values[1])?;
+        }
+
         let arr = values[0].as_primitive::<T>();
         if arr.null_count() > 0 {
             for value in arr.iter().flatten() {
@@ -843,6 +971,9 @@ where
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        if let Some(percentile_array) = states.get(1) {
+            self.percentile.resolve(percentile_array)?;
+        }
         let list = states[0].as_list::<i32>();
         for values in list.iter().flatten() {
             let arr = values.as_primitive::<T>();
@@ -855,7 +986,11 @@ where
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
         let mut values: Vec<T::Native> = self.counts.keys().map(|v| v.0).collect();
-        let value = calculate_percentile::<T, I>(&mut values, self.percentile)?;
+        if values.is_empty() {
+            return ScalarValue::new_primitive::<T>(None, &self.data_type);
+        }
+        let percentile = self.percentile.effective_percentile()?;
+        let value = calculate_percentile::<T, I>(&mut values, percentile)?;
         ScalarValue::new_primitive::<T>(value, &self.data_type)
     }
 
@@ -1102,16 +1237,25 @@ fn calculate_percentile<T: ArrowPrimitiveType, I: PercentileInterpolator<T>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::PercentileParamState;
     use arrow::array::Float64Array;
     use arrow::datatypes::{Decimal64Type, Decimal128Type, Float16Type, Float64Type};
     use half::f16;
 
+    fn create_accumulator() -> PercentileContAccumulator<Float64Type, FloatInterpolator> {
+        PercentileContAccumulator::<Float64Type, FloatInterpolator>::new(
+            PercentileParam {
+                aggregate_fn_name: "PERCENTILE_CONT".to_string(),
+                state: PercentileParamState::Resolved(0.5),
+                is_desc: false,
+            },
+            DataType::Float64,
+        )
+    }
+
     #[test]
     fn retract_batch_errors_on_untracked_value() {
-        let mut acc = PercentileContAccumulator::<Float64Type, FloatInterpolator>::new(
-            0.5,
-            DataType::Float64,
-        );
+        let mut acc = create_accumulator();
         let values: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0]));
         acc.update_batch(std::slice::from_ref(&values)).unwrap();
 
@@ -1139,19 +1283,11 @@ mod tests {
             Some(3.0),
         ]));
 
-        let mut dense_acc =
-            PercentileContAccumulator::<Float64Type, FloatInterpolator>::new(
-                0.5,
-                DataType::Float64,
-            );
+        let mut dense_acc = create_accumulator();
         dense_acc
             .update_batch(std::slice::from_ref(&dense))
             .unwrap();
-        let mut sparse_acc =
-            PercentileContAccumulator::<Float64Type, FloatInterpolator>::new(
-                0.5,
-                DataType::Float64,
-            );
+        let mut sparse_acc = create_accumulator();
         sparse_acc
             .update_batch(std::slice::from_ref(&sparse))
             .unwrap();
