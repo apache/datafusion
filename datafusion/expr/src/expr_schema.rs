@@ -256,8 +256,23 @@ fn case_field_metadata(case: &Case, schema: &dyn ExprSchema) -> Result<FieldRef>
                 let Some(source) = fields.pop() else {
                     return internal_err!("Missing CASE cast input field");
                 };
+                let untyped_null =
+                    source.certainly_null && source.field.data_type().is_null();
+                let mut field = cast_output_field(&source.field, target, force_nullable);
+                // A type-only coercion must not make an untyped NULL constrain CASE metadata.
+                if untyped_null
+                    && target.metadata().is_empty()
+                    && !field.metadata().is_empty()
+                {
+                    field = Arc::new(
+                        field
+                            .as_ref()
+                            .clone()
+                            .with_metadata(arrow_schema::Metadata::default()),
+                    );
+                }
                 fields.push(BranchField {
-                    field: cast_output_field(&source.field, target, force_nullable),
+                    field,
                     certainly_null: source.certainly_null,
                 });
             }

@@ -3082,6 +3082,55 @@ mod test {
     }
 
     #[test]
+    fn test_case_coercion_preserves_metadata_with_annotated_null() -> Result<()> {
+        let metadata = std::collections::HashMap::from([
+            (
+                "ARROW:extension:name".to_string(),
+                "example.case".to_string(),
+            ),
+            ("structured_type".to_string(), "ARRAY(NUMBER)".to_string()),
+        ]);
+        let schema = DFSchema::from_unqualified_fields(
+            vec![
+                Field::new("structured", DataType::Int32, false)
+                    .with_metadata(metadata.clone()),
+            ]
+            .into(),
+            std::collections::HashMap::new(),
+        )?;
+        let conflicting = std::collections::HashMap::from([
+            (
+                "ARROW:extension:name".to_string(),
+                "example.other".to_string(),
+            ),
+            ("structured_type".to_string(), "OBJECT".to_string()),
+        ]);
+        for null_metadata in [metadata.clone(), conflicting] {
+            let annotated_null = Expr::Literal(
+                ScalarValue::Null,
+                Some(expr::FieldMetadata::from(null_metadata)),
+            );
+            let case = Case {
+                expr: None,
+                when_then_expr: vec![(Box::new(lit(true)), Box::new(col("structured")))],
+                else_expr: Some(Box::new(annotated_null)),
+            };
+            assert_eq!(
+                Expr::Case(case.clone()).to_field(&schema)?.1.metadata(),
+                &metadata
+            );
+
+            let coerced = coerce_case_expression(case, &schema, None)?;
+            assert!(matches!(coerced.else_expr.as_deref(), Some(Expr::Cast(_))));
+            assert_eq!(
+                Expr::Case(coerced).to_field(&schema)?.1.metadata(),
+                &metadata
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_case_expression_coercion() -> Result<()> {
         let schema = Arc::new(DFSchema::from_unqualified_fields(
             vec![
