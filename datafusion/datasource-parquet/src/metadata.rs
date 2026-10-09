@@ -23,11 +23,11 @@ use crate::{Int96Coercer, apply_file_schema_type_coercions};
 use arrow::array::{Array, ArrayRef, BooleanArray};
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::{and, sum};
-use arrow::datatypes::{DataType, Schema, SchemaRef, TimeUnit};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    ColumnStatistics, DataFusionError, HashMap, Result, ScalarValue, Statistics,
+    ColumnStatistics, DataFusionError, HashMap, HashSet, Result, ScalarValue, Statistics,
     internal_datafusion_err,
 };
 use datafusion_execution::cache::cache_manager::{
@@ -80,7 +80,13 @@ pub(crate) fn has_untrusted_min_max_order(
     parquet_column_index: usize,
 ) -> bool {
     let column = parquet_schema.column(parquet_column_index);
-    if column.sort_order() == SortOrder::UNDEFINED {
+    // As of arrow 60, INT96 columns report `SortOrder::INT96_TIMESTAMP`
+    // rather than `UNDEFINED`; keep treating their min/max as untrusted.
+    // until <https://github.com/apache/datafusion/issues/25484>
+    if matches!(
+        column.sort_order(),
+        SortOrder::UNDEFINED | SortOrder::INT96_TIMESTAMP
+    ) {
         return true;
     }
     requires_unsigned_byte_array_order(&column)
@@ -146,6 +152,8 @@ pub struct DFParquetMetadata<'a> {
     pub coerce_int96: Option<TimeUnit>,
     /// Optional timezone applied to INT96-coerced timestamps.
     pub coerce_int96_tz: Option<Arc<str>>,
+    /// If true, promote string/binary columns with dictionary pages to `Dictionary(Int32, ...)`.
+    enable_rle_to_dictionary: bool,
 }
 
 impl<'a> DFParquetMetadata<'a> {
@@ -163,7 +171,14 @@ impl<'a> DFParquetMetadata<'a> {
             page_index_policy: None,
             coerce_int96: None,
             coerce_int96_tz: None,
+            enable_rle_to_dictionary: false,
         }
+    }
+
+    /// Promote string/binary columns with dictionary pages to `Dictionary(Int32, ...)`.
+    pub fn with_enable_rle_to_dictionary(mut self, enable: bool) -> Self {
+        self.enable_rle_to_dictionary = enable;
+        self
     }
 
     /// Set a hint for the number of trailing bytes to prefetch from the end
@@ -313,12 +328,13 @@ impl<'a> DFParquetMetadata<'a> {
     }
 
     /// Check whether `metadata` already has both the column index and the
-    /// offset index populated (see [`ParquetMetaData::column_index`] and
-    /// [`ParquetMetaData::offset_index`]).
+    /// offset index populated (see [`ParquetMetaData::page_index`]).
     ///
     /// Used to decide whether page index I/O can be skipped.
     fn metadata_has_page_index(metadata: &ParquetMetaData) -> bool {
-        metadata.column_index().is_some() && metadata.offset_index().is_some()
+        metadata
+            .page_index()
+            .is_some_and(|page_index| page_index.is_complete())
     }
 
     /// Store `metadata` in the configured [`FileMetadataCache`], keyed by
@@ -405,7 +421,10 @@ impl<'a> DFParquetMetadata<'a> {
         object_meta: &ObjectMeta,
         metadata: Arc<ParquetMetaData>,
     ) -> Result<Arc<ParquetMetaData>> {
-        if metadata.column_index().is_some() && metadata.offset_index().is_some() {
+        if metadata
+            .page_index()
+            .is_some_and(|page_index| page_index.is_complete())
+        {
             return Ok(metadata);
         }
         let metadata =
@@ -439,6 +458,68 @@ impl<'a> DFParquetMetadata<'a> {
                     .coerce()
             })
             .unwrap_or(schema);
+
+        let schema = if self.enable_rle_to_dictionary {
+            let schema_descr = file_metadata.schema_descr();
+            // Top-level columns that have a dictionary page in at least one row group.
+            let dict_cols: HashSet<String> = metadata
+                .row_groups()
+                .iter()
+                .flat_map(|rg| {
+                    rg.columns()
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(col_idx, col)| {
+                            col.dictionary_page_offset()?;
+                            let col_desc = schema_descr.column(col_idx);
+                            let parts = col_desc.path().parts();
+                            // Skip nested columns: their leaf name doesn't match the
+                            // Arrow top-level field name.
+                            (parts.len() == 1).then(|| parts[0].clone())
+                        })
+                })
+                .collect();
+            if dict_cols.is_empty() {
+                schema
+            } else {
+                let promoted: Vec<_> = schema
+                    .fields()
+                    .iter()
+                    .map(|field| {
+                        if !dict_cols.contains(field.name()) {
+                            return Arc::clone(field);
+                        }
+                        let dict_value_type = match field.data_type() {
+                            DataType::Utf8 => Some(DataType::Utf8),
+                            DataType::LargeUtf8 => Some(DataType::LargeUtf8),
+                            DataType::Binary => Some(DataType::Binary),
+                            DataType::LargeBinary => Some(DataType::LargeBinary),
+                            _ => None,
+                        };
+                        dict_value_type.map_or_else(
+                            || Arc::clone(field),
+                            |value_type| {
+                                Arc::new(
+                                    Field::new(
+                                        field.name(),
+                                        DataType::Dictionary(
+                                            Box::new(DataType::Int32),
+                                            Box::new(value_type),
+                                        ),
+                                        field.is_nullable(),
+                                    )
+                                    .with_metadata(field.metadata().clone()),
+                                )
+                            },
+                        )
+                    })
+                    .collect();
+                Schema::new_with_metadata(promoted, schema.metadata().clone())
+            }
+        } else {
+            schema
+        };
+
         Ok(schema)
     }
 
@@ -769,7 +850,7 @@ fn summarize_column_statistics(
         summarize_null_counts(stats_converter, row_groups_metadata)?;
 
     accumulators.distinct_counts_array[logical_schema_index] =
-        summarize_distinct_counts(parquet_index, row_groups_metadata);
+        summarize_distinct_counts(stats_converter, row_groups_metadata)?;
 
     let arrow_field = logical_file_schema.field(logical_schema_index);
     accumulators.column_byte_sizes[logical_schema_index] = compute_arrow_column_size(
@@ -920,29 +1001,27 @@ where
 
 /// Extract distinct counts from row group column statistics.
 fn summarize_distinct_counts(
-    parquet_idx: Option<usize>,
+    stats_converter: &StatisticsConverter,
     row_groups_metadata: &[RowGroupMetaData],
-) -> Precision<usize> {
-    let Some(parquet_idx) = parquet_idx else {
-        return Precision::Absent;
-    };
+) -> Result<Precision<usize>> {
+    if stats_converter.parquet_column_index().is_none() {
+        return Ok(Precision::Absent);
+    }
 
     let num_row_groups = row_groups_metadata.len();
     if num_row_groups == 0 {
-        return Precision::Absent;
+        return Ok(Precision::Absent);
     }
 
     let required_count = (num_row_groups as f64 * PARTIAL_NDV_THRESHOLD).ceil() as usize;
+    let distinct_counts =
+        stats_converter.row_group_distinct_counts(row_groups_metadata)?;
+
     let mut ndv_count = 0;
     let mut max_distinct_count: Option<u64> = None;
 
-    for (row_group_idx, row_group) in row_groups_metadata.iter().enumerate() {
-        if let Some(distinct_count) = row_group
-            .columns()
-            .get(parquet_idx)
-            .and_then(|col| col.statistics())
-            .and_then(|stats| stats.distinct_count_opt())
-        {
+    for (row_group_idx, value) in distinct_counts.iter().enumerate() {
+        if let Some(distinct_count) = value {
             ndv_count += 1;
             max_distinct_count = Some(match max_distinct_count {
                 Some(max) => max.max(distinct_count),
@@ -953,17 +1032,14 @@ fn summarize_distinct_counts(
         // Return early if there's no chance to reach the required coverage.
         let remaining = num_row_groups - row_group_idx - 1;
         if ndv_count + remaining < required_count {
-            return Precision::Absent;
+            return Ok(Precision::Absent);
         }
     }
 
-    match max_distinct_count {
-        Some(distinct_count) if num_row_groups == 1 => {
-            Precision::Exact(distinct_count as usize)
-        }
+    Ok(match max_distinct_count {
         Some(distinct_count) => Precision::Inexact(distinct_count as usize),
         None => Precision::Absent,
-    }
+    })
 }
 
 /// Compute the Arrow in-memory size for a single column
@@ -1049,8 +1125,10 @@ impl FileMetadata for CachedParquetMetaData {
     }
 
     fn extra_info(&self) -> HashMap<String, String> {
-        let page_index =
-            self.0.column_index().is_some() && self.0.offset_index().is_some();
+        let page_index = self
+            .0
+            .page_index()
+            .is_some_and(|page_index| page_index.is_complete());
         HashMap::from([("page_index".to_owned(), page_index.to_string())])
     }
 }
@@ -1523,7 +1601,7 @@ mod tests {
 
         #[test]
         fn test_distinct_count_single_row_group_with_ndv() {
-            // Single row group with distinct count should return Exact
+            // Single row group with distinct count should return Inexact
             let schema_descr = create_schema_descr(1);
             let arrow_schema = create_arrow_schema(1);
 
@@ -1548,7 +1626,7 @@ mod tests {
 
             assert_eq!(
                 result.column_statistics[0].distinct_count,
-                Precision::Exact(42)
+                Precision::Inexact(42)
             );
         }
 
@@ -1735,7 +1813,7 @@ mod tests {
 
             assert_eq!(
                 result.column_statistics[0].distinct_count,
-                Precision::Exact(5)
+                Precision::Inexact(5)
             );
             assert_eq!(
                 result.column_statistics[1].distinct_count,
@@ -1743,7 +1821,7 @@ mod tests {
             );
             assert_eq!(
                 result.column_statistics[2].distinct_count,
-                Precision::Exact(100)
+                Precision::Inexact(100)
             );
         }
 
@@ -1912,15 +1990,15 @@ mod tests {
             // category: 10 distinct values
             assert_eq!(
                 result.column_statistics[1].distinct_count,
-                Precision::Exact(10),
-                "category column should have Exact(10) distinct_count"
+                Precision::Inexact(10),
+                "category column should have Inexact(10) distinct_count"
             );
 
             // name: 5 distinct values
             assert_eq!(
                 result.column_statistics[2].distinct_count,
-                Precision::Exact(5),
-                "name column should have Exact(5) distinct_count"
+                Precision::Inexact(5),
+                "name column should have Inexact(5) distinct_count"
             );
         }
     }

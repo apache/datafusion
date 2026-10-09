@@ -20,7 +20,7 @@ use crate::ValueOrLambda;
 use crate::expr::{
     AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Cast, InList,
     InSubquery, Lambda, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
-    WindowFunctionParams,
+    WindowFunctionParams, in_subquery_tuple_values,
 };
 use crate::expr::{FieldMetadata, LambdaVariable};
 use crate::higher_order_function::HigherOrderReturnFieldArgs;
@@ -182,14 +182,9 @@ impl ExprSchemable for Expr {
     #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn get_type(&self, schema: &dyn ExprSchema) -> Result<DataType> {
         match self {
-            Expr::Alias(Alias { expr, name, .. }) => match &**expr {
-                Expr::Placeholder(Placeholder { field, .. }) => match &field {
-                    None => schema.data_type(&Column::from_name(name)).cloned(),
-                    Some(field) => Ok(field.data_type().clone()),
-                },
-                _ => expr.get_type(schema),
-            },
-            Expr::Negative(expr) => expr.get_type(schema),
+            Expr::Alias(Alias { expr, .. }) | Expr::Negative(expr) => {
+                expr.get_type(schema)
+            }
             Expr::Column(c) => Ok(schema.data_type(c)?.clone()),
             Expr::OuterReferenceColumn(field, _) => Ok(field.data_type().clone()),
             Expr::ScalarVariable(field, _) => Ok(field.data_type().clone()),
@@ -413,6 +408,23 @@ impl ExprSchemable for Expr {
             | Expr::Exists { .. } => Ok(false),
             Expr::SetComparison(_) => Ok(true),
             Expr::InSubquery(InSubquery { expr, subquery, .. }) => {
+                // A multi-column `(a, b) IN (SELECT x, y ...)` is UNKNOWN when
+                // any element or subquery column is NULL. The tuple is a
+                // `struct` call, which itself is never NULL, so its elements
+                // and every subquery column count.
+                if let Some(values) = in_subquery_tuple_values(expr, &subquery.subquery)?
+                {
+                    let mut nullable = subquery
+                        .subquery
+                        .schema()
+                        .fields()
+                        .iter()
+                        .any(|field| field.is_nullable());
+                    for value in values.iter() {
+                        nullable |= value.nullable(input_schema)?;
+                    }
+                    return Ok(nullable);
+                }
                 let expr_nullable = expr.nullable(input_schema)?;
                 let subquery_nullable = subquery.subquery.schema().fields().first().ok_or_else(|| {
                     plan_datafusion_err!("subquery must return exactly one column of data to compare against")
@@ -823,27 +835,58 @@ fn scalar_subquery_nullable(subquery: &Subquery) -> bool {
 /// 2. **Non-projection plan**: If the subquery isn't a projection, it adds a projection to the plan
 ///    with the casted first column.
 pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subquery> {
-    if subquery.subquery.schema().field(0).data_type() == cast_to_type {
+    cast_subquery_columns(subquery, std::slice::from_ref(cast_to_type))
+}
+
+/// Cast the leading columns of a subquery to the given types, one per column,
+/// like [`cast_subquery`] does for its first column. The result keeps only
+/// the `cast_to_types.len()` leading columns.
+///
+/// Used by a multi-column `(a, b) IN (SELECT x, y ...)`, whose tuple elements
+/// are coerced column by column.
+pub fn cast_subquery_columns(
+    subquery: Subquery,
+    cast_to_types: &[DataType],
+) -> Result<Subquery> {
+    let schema = subquery.subquery.schema();
+    if schema
+        .fields()
+        .iter()
+        .zip(cast_to_types)
+        .all(|(field, cast_to_type)| field.data_type() == cast_to_type)
+    {
         return Ok(subquery);
     }
 
     let plan = subquery.subquery.as_ref();
     let new_plan = match plan {
         LogicalPlan::Projection(projection) => {
-            let cast_expr = projection.expr[0]
-                .clone()
-                .cast_to(cast_to_type, projection.input.schema())?;
+            let cast_exprs = projection
+                .expr
+                .iter()
+                .zip(cast_to_types)
+                .map(|(expr, cast_to_type)| {
+                    expr.clone()
+                        .cast_to(cast_to_type, projection.input.schema())
+                })
+                .collect::<Result<Vec<_>>>()?;
             LogicalPlan::Projection(Projection::try_new(
-                vec![cast_expr],
+                cast_exprs,
                 Arc::clone(&projection.input),
             )?)
         }
         _ => {
-            let cast_expr = Expr::Column(Column::from(plan.schema().qualified_field(0)))
-                .cast_to(cast_to_type, subquery.subquery.schema())?;
+            let cast_exprs = cast_to_types
+                .iter()
+                .enumerate()
+                .map(|(i, cast_to_type)| {
+                    Expr::Column(Column::from(plan.schema().qualified_field(i)))
+                        .cast_to(cast_to_type, subquery.subquery.schema())
+                })
+                .collect::<Result<Vec<_>>>()?;
             LogicalPlan::Projection(Projection::try_new(
-                vec![cast_expr],
-                subquery.subquery,
+                cast_exprs,
+                Arc::clone(&subquery.subquery),
             )?)
         }
     };
@@ -1283,6 +1326,21 @@ mod tests {
         assert_eq!(
             (expr_alias_field.data_type(), expr_alias_field.is_nullable()),
             (&DataType::Utf8, false)
+        );
+    }
+
+    #[test]
+    fn test_untyped_aliased_placeholder_in_empty_schema() {
+        // A UNION arm computes the type of `$1 AS a` against the input of the
+        // projection, which does not have a column `a`.
+        let schema = DFSchema::empty();
+        let expr = Expr::Placeholder(Placeholder::new_with_field("$1".to_string(), None))
+            .alias("a");
+
+        assert_eq!(expr.get_type(&schema).unwrap(), DataType::Null);
+        assert_eq!(
+            expr.to_field(&schema).unwrap().1.data_type(),
+            &DataType::Null
         );
     }
 

@@ -2099,7 +2099,7 @@ async fn test_remove_unnecessary_sort3() -> Result<()> {
         EnforceSortingTest::new(physical_plan.clone()).with_repartition_sorts(true);
     assert_snapshot!(test.run(), @r"
     Input Plan:
-    AggregateExec: mode=Final, gby=[], aggr=[]
+    AggregateExec: mode=Single, gby=[], aggr=[COUNT(*)]
       SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]
         SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[true]
           RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
@@ -2108,7 +2108,7 @@ async fn test_remove_unnecessary_sort3() -> Result<()> {
                 DataSourceExec: partitions=1, partition_sizes=[0]
 
     Optimized Plan:
-    AggregateExec: mode=Final, gby=[], aggr=[]
+    AggregateExec: mode=Single, gby=[], aggr=[COUNT(*)]
       DataSourceExec: partitions=1, partition_sizes=[0]
     ");
 

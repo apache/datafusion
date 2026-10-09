@@ -100,7 +100,7 @@ impl TryFrom<&Field> for protobuf::Field {
             arrow_type: Some(Box::new(arrow_type)),
             nullable: field.is_nullable(),
             children: Vec::new(),
-            metadata: field.metadata().clone(),
+            metadata: field.metadata().into(),
         })
     }
 }
@@ -248,6 +248,7 @@ impl From<Column> for protobuf::Column {
         Self {
             relation: c.relation.map(|relation| protobuf::ColumnRelation {
                 relation: relation.to_string(),
+                parts: relation.to_vec(),
             }),
             name: c.name,
         }
@@ -266,7 +267,7 @@ impl TryFrom<&Schema> for protobuf::Schema {
     fn try_from(schema: &Schema) -> Result<Self, Self::Error> {
         Ok(Self {
             columns: convert_arc_fields_to_proto_fields(schema.fields())?,
-            metadata: schema.metadata.clone(),
+            metadata: schema.metadata().into(),
         })
     }
 }
@@ -277,7 +278,7 @@ impl TryFrom<SchemaRef> for protobuf::Schema {
     fn try_from(schema: SchemaRef) -> Result<Self, Self::Error> {
         Ok(Self {
             columns: convert_arc_fields_to_proto_fields(schema.fields())?,
-            metadata: schema.metadata.clone(),
+            metadata: schema.metadata().into(),
         })
     }
 }
@@ -293,13 +294,14 @@ impl TryFrom<&DFSchema> for protobuf::DfSchema {
                     field: Some(field.as_ref().try_into()?),
                     qualifier: qualifier.map(|r| protobuf::ColumnRelation {
                         relation: r.to_string(),
+                        parts: r.to_vec(),
                     }),
                 })
             })
             .collect::<Result<Vec<_>, Error>>()?;
         Ok(Self {
             columns,
-            metadata: s.metadata().clone(),
+            metadata: s.metadata().into(),
         })
     }
 }
@@ -942,12 +944,13 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             data_pagesize_limit: value.data_pagesize_limit as u64,
             write_batch_size: value.write_batch_size as u64,
             writer_version: value.writer_version.to_string(),
-            compression_opt: value.compression.clone().map(protobuf::parquet_options::CompressionOpt::Compression),
+            compression_opt: value.compression.map(|v| protobuf::parquet_options::CompressionOpt::Compression(v.to_string())),
             dictionary_enabled_opt: value.dictionary_enabled.map(protobuf::parquet_options::DictionaryEnabledOpt::DictionaryEnabled),
             dictionary_page_size_limit: value.dictionary_page_size_limit as u64,
             statistics_enabled_opt: value.statistics_enabled.map(|v| protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled(v.to_string())),
             max_row_group_size: value.max_row_group_size as u64,
             max_in_list_size: value.max_in_list_size as u64,
+            row_group_range_assignment: value.row_group_range_assignment.to_string(),
             created_by: value.created_by.clone(),
             column_index_truncate_length_opt: value.column_index_truncate_length.map(|v| protobuf::parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(v as u64)),
             statistics_truncate_length_opt: value.statistics_truncate_length.map(|v| protobuf::parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(v as u64)),
@@ -963,11 +966,13 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             schema_force_view_types: value.schema_force_view_types,
             binary_as_string: value.binary_as_string,
             skip_arrow_metadata: value.skip_arrow_metadata,
+            write_row_group_number_distinct_values: value.write_row_group_number_distinct_values,
             coerce_int96_opt: value.coerce_int96.clone().map(protobuf::parquet_options::CoerceInt96Opt::CoerceInt96),
             coerce_int96_tz_opt: value.coerce_int96_tz.clone().map(protobuf::parquet_options::CoerceInt96TzOpt::CoerceInt96Tz),
             max_predicate_cache_size_opt: value.max_predicate_cache_size.map(|v| protobuf::parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v as u64)),
             max_row_group_bytes_opt: value.max_row_group_bytes.map(|v| protobuf::parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(v.get() as u64)),
             content_defined_chunking: Some((&value.content_defined_chunking).into()),
+            enable_rle_to_dictionary: value.enable_rle_to_dictionary,
         })
     }
 }

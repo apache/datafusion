@@ -57,7 +57,7 @@ pub use crate::ordering::InputOrderMode;
 pub use crate::sort_pushdown::SortOrderPushdownResult;
 pub use crate::statistics::{ChildStats, StatisticsArgs, StatisticsContext};
 pub use crate::stream::EmptyRecordBatchStream;
-pub use crate::topk::TopK;
+pub use crate::topk::{TopK, TopKDynamicFilters};
 pub use crate::visitor::{ExecutionPlanVisitor, accept, visit_execution_plan};
 pub use crate::work_table::WorkTable;
 pub use spill::spill_manager::SpillManager;
@@ -115,4 +115,10 @@ pub mod udaf {
     pub use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 }
 
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
 pub mod test;

@@ -492,7 +492,11 @@ impl ExecutionPlan for ProjectionExec {
         Ok(Arc::new(
             self.projector
                 .projection()
-                .project_statistics(input_stats, &output_schema)?,
+                .project_statistics_with_input_schema(
+                    input_stats,
+                    self.input.schema().as_ref(),
+                    &output_schema,
+                )?,
         ))
     }
 
@@ -648,13 +652,25 @@ impl ExecutionPlan for ProjectionExec {
             metrics: _,
             // Derived plan properties, recomputed on decode.
             cache: _,
-            // Derived metadata comparison, recomputed with the projector.
-            overrides_metadata: _,
+            overrides_metadata,
         } = self;
         let projection_exprs = projector.projection().as_ref();
         let input = ctx.encode_child(input)?;
         let expr = ctx.encode_expressions(projection_exprs.iter().map(|p| &p.expr))?;
         let expr_name = projection_exprs.iter().map(|p| p.alias.clone()).collect();
+        let output_schema = projector.output_schema();
+        // Preserve explicit overrides and field metadata that cannot be
+        // reconstructed from the child. Inherited schema metadata can be.
+        let schema = if *overrides_metadata
+            || output_schema
+                .fields()
+                .iter()
+                .any(|field| !field.metadata().is_empty())
+        {
+            Some(output_schema.as_ref().try_into()?)
+        } else {
+            None
+        };
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Projection(Box::new(
@@ -662,6 +678,7 @@ impl ExecutionPlan for ProjectionExec {
                         input: Some(Box::new(input)),
                         expr,
                         expr_name,
+                        schema,
                     },
                 )),
             ),
@@ -697,6 +714,7 @@ impl ProjectionExec {
             input,
             expr,
             expr_name,
+            schema,
         } = &**projection;
         let input =
             ctx.decode_required_child(input.as_deref(), "ProjectionExec", "input")?;
@@ -711,7 +729,15 @@ impl ProjectionExec {
                 })
             })
             .collect::<Result<Vec<ProjectionExpr>>>()?;
-        Ok(Arc::new(ProjectionExec::try_new(exprs, input)?))
+        let projection = match schema {
+            Some(schema) => ProjectionExec::try_new_with_schema_metadata(
+                exprs,
+                input,
+                &Schema::try_from(schema)?,
+            )?,
+            None => ProjectionExec::try_new(exprs, input)?,
+        };
+        Ok(Arc::new(projection))
     }
 }
 
@@ -1570,7 +1596,8 @@ mod tests {
     use datafusion_functions::core::arrow_metadata::ArrowMetadataFunc;
     use datafusion_physical_expr::ScalarFunctionExpr;
     use datafusion_physical_expr::expressions::{
-        BinaryExpr, Column, DynamicFilterPhysicalExpr, Literal, binary, col, is_null, lit,
+        BinaryExpr, CastExpr, Column, DynamicFilterPhysicalExpr, Literal, binary, col,
+        is_null, lit,
     };
 
     #[test]
@@ -2146,6 +2173,37 @@ mod tests {
             "Expected 2 columns in projection statistics"
         );
         assert!(stats.total_byte_size.is_exact().unwrap_or(false));
+    }
+
+    #[test]
+    fn test_projection_statistics_safe_cast_without_extrema() {
+        let input_schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let mut input_statistics = Statistics::new_unknown(&input_schema);
+        input_statistics.column_statistics[0].null_count = Precision::Exact(3);
+        input_statistics.column_statistics[0].distinct_count = Precision::Exact(2);
+        let input = Arc::new(StatisticsExec::new(input_statistics, input_schema));
+        let projection = ProjectionExec::try_new(
+            vec![ProjectionExpr::new(
+                Arc::new(CastExpr::new(
+                    Arc::new(Column::new("a", 0)),
+                    DataType::Int64,
+                    None,
+                )),
+                "a",
+            )],
+            input,
+        )
+        .unwrap();
+
+        let stats = StatisticsContext::new()
+            .compute(&projection, &StatisticsArgs::new())
+            .unwrap();
+
+        assert_eq!(stats.column_statistics[0].null_count, Precision::Exact(3));
+        assert_eq!(
+            stats.column_statistics[0].distinct_count,
+            Precision::Exact(2)
+        );
     }
 
     #[test]

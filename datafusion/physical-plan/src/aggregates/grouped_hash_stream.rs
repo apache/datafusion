@@ -34,7 +34,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::vec;
 
-use super::aggregate_hash_table::accumulator_phases;
+use super::aggregate_hash_table::{accumulator_phases, create_group_accumulator};
 use super::order::GroupOrdering;
 use super::skip_partial::SkipAggregationProbe;
 use super::{AggregateExec, format_human_display};
@@ -63,11 +63,12 @@ use datafusion_common::{
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use datafusion_expr::{AggregateMetrics, EmitTo, GroupsAccumulator};
-use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
+use datafusion_execution::memory_pool::{
+    MemoryConsumer, MemoryPool, MemoryReservation, MergeMemoryPool,
+};
+use datafusion_expr::{EmitTo, GroupsAccumulator};
+use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 
@@ -370,6 +371,9 @@ pub(crate) struct GroupedHashAggregateStream {
     // EXECUTION RESOURCES:
     // Fields related to managing execution resources and monitoring performance.
     // ========================================================================
+    /// The pool shared by aggregate state and spill replay workspace.
+    merge_pool: Arc<MergeMemoryPool>,
+
     /// The memory reservation for this grouping
     reservation: MemoryReservation,
 
@@ -401,15 +405,15 @@ impl GroupedHashAggregateStream {
     ) -> Result<Self> {
         debug!("Creating GroupedHashAggregateStream");
         let agg_schema = Arc::clone(&agg.schema);
-        let agg_group_by = Arc::clone(&agg.group_by);
-        let agg_filter_expr = Arc::clone(&agg.filter_expr);
+        let agg_group_by = Arc::clone(agg.group_by());
+        let agg_filter_expr = agg.clone_filter_exprs();
 
         let batch_size = context.session_config().batch_size();
         let input = agg.input.execute(partition, Arc::clone(context))?;
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let group_by_metrics = GroupByMetrics::new(&agg.metrics, partition);
         let aggregate_labels = agg
-            .aggr_expr
+            .aggr_expr()
             .iter()
             .map(|agg_expr| aggregate_metric_label(agg_expr))
             .collect::<Vec<_>>();
@@ -432,25 +436,25 @@ impl GroupedHashAggregateStream {
 
         let timer = baseline_metrics.elapsed_compute().timer();
 
-        let aggregate_exprs = Arc::clone(&agg.aggr_expr);
+        let aggregate_exprs = agg.clone_aggr_exprs();
 
         // arguments for each aggregate, one vec of expressions per
         // aggregate
         let aggregate_arguments = aggregates::aggregate_expressions(
-            &agg.aggr_expr,
+            agg.aggr_expr(),
             &agg.mode,
             agg_group_by.num_group_exprs(),
         )?;
         // arguments for aggregating spilled data is the same as the one for final aggregation
         let merging_aggregate_arguments = aggregates::aggregate_expressions(
-            &agg.aggr_expr,
+            agg.aggr_expr(),
             &AggregateMode::Final,
             agg_group_by.num_group_exprs(),
         )?;
 
         let filter_expressions = match agg.mode.input_mode() {
             AggregateInputMode::Raw => agg_filter_expr,
-            AggregateInputMode::Partial => vec![None; agg.aggr_expr.len()].into(),
+            AggregateInputMode::Partial => vec![None; agg.aggr_expr().len()].into(),
         };
 
         // Instantiate the accumulators
@@ -552,12 +556,16 @@ impl GroupedHashAggregateStream {
         };
 
         let group_values = new_group_values(group_schema, &group_ordering)?;
-        let reservation = MemoryConsumer::new(name)
-            // We interpret 'can spill' as 'can handle memory back pressure'.
-            // This value needs to be set to true for the default memory pool implementations
-            // to ensure fair application of back pressure amongst the memory consumers.
-            .with_can_spill(oom_mode != OutOfMemoryMode::ReportError)
-            .register(context.memory_pool());
+        let merge_pool = Arc::new(MergeMemoryPool::new(
+            Arc::clone(context.memory_pool()),
+            MemoryConsumer::new(name)
+                // We interpret 'can spill' as 'can handle memory back pressure'.
+                // This value needs to be set to true for the default memory pool implementations
+                // to ensure fair application of back pressure amongst the memory consumers.
+                .with_can_spill(oom_mode != OutOfMemoryMode::ReportError),
+        ));
+        let reservation = MemoryConsumer::new("GroupedHashAggregateStream state")
+            .register(&(Arc::clone(&merge_pool) as Arc<dyn MemoryPool>));
         timer.done();
 
         let exec_state = ExecutionState::ReadingInput;
@@ -632,6 +640,7 @@ impl GroupedHashAggregateStream {
             aggregate_arguments,
             filter_expressions,
             group_by: agg_group_by,
+            merge_pool,
             reservation,
             oom_mode,
             group_values,
@@ -649,29 +658,6 @@ impl GroupedHashAggregateStream {
             skip_aggregation_probe,
             reduction_factor,
         })
-    }
-}
-
-/// Create an accumulator for `agg_expr` -- a [`GroupsAccumulator`] if
-/// that is supported by the aggregate, or a
-/// [`GroupsAccumulatorAdapter`] if not.
-pub(crate) fn create_group_accumulator(
-    agg_expr: &Arc<AggregateFunctionExpr>,
-    metrics: Arc<dyn AggregateMetrics>,
-) -> Result<Box<dyn GroupsAccumulator>> {
-    if agg_expr.groups_accumulator_supported() {
-        agg_expr.create_groups_accumulator_with_metrics(metrics)
-    } else {
-        // Note in the log when the slow path is used
-        debug!(
-            "Creating GroupsAccumulatorAdapter for {}: {agg_expr:?}",
-            agg_expr.name()
-        );
-        let agg_expr = Arc::clone(agg_expr);
-        let mut adapter =
-            GroupsAccumulatorAdapter::new(move || agg_expr.create_accumulator());
-        adapter.set_metrics(metrics);
-        Ok(Box::new(adapter))
     }
 }
 
@@ -1376,6 +1362,8 @@ impl GroupedHashAggregateStream {
                 .with_metrics(self.baseline_metrics.clone())
                 .with_batch_size(self.batch_size)
                 .with_reservation(self.reservation.new_empty())
+                .with_merge_pool(Arc::clone(&self.merge_pool))
+                .with_replay_headroom()
                 .build()?;
             self.input_done = false;
 
@@ -1403,6 +1391,9 @@ impl GroupedHashAggregateStream {
             // to ensure we don't spill the spilled data to disk again.
             self.oom_mode = OutOfMemoryMode::ReportError;
 
+            // Release unused initial capacity from recreated group values so it
+            // does not consume the memory available for spill replay.
+            self.group_values.clear_shrink(0);
             self.update_memory_reservation()?;
 
             ExecutionState::ReadingInput
@@ -1508,7 +1499,7 @@ mod tests {
     use arrow::array::{Int32Array, Int64Array, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-    use datafusion_expr::AggregateMetric;
+    use datafusion_expr::{AggregateMetric, AggregateMetrics};
     use datafusion_functions_aggregate::{array_agg::array_agg_udaf, count::count_udaf};
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::col;
