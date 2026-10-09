@@ -33,7 +33,7 @@ use crate::filter_pushdown::{
     ChildFilterDescription, FilterDescription, FilterPushdownPhase, PushedDownPredicate,
 };
 use crate::joins::SharedBitmapBuilder;
-use crate::joins::logical_batch::{BatchRow, LogicalBatch};
+use crate::joins::logical_batch::{BatchRow, LogicalBatch, RowIndices};
 use crate::joins::utils::{
     BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceAsync, OnceFut,
     boolean_mask_from_filter, build_join_schema, check_join_is_valid,
@@ -59,7 +59,9 @@ use arrow::array::{
     UInt64Array, new_null_array,
 };
 use arrow::buffer::BooleanBuffer;
-use arrow::compute::{BatchCoalescer, filter, filter_record_batch, not, take};
+use arrow::compute::{
+    BatchCoalescer, filter, filter_record_batch, not, take, take_record_batch,
+};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_iterator::BitIndexIterator;
@@ -1941,6 +1943,176 @@ impl SpillStateActive {
     }
 }
 
+/// Probe state for RightSemi/RightAnti within one buffered left chunk.
+/// The original right batch stays in the stream for output and spill replay.
+struct RightExistenceProbe {
+    /// Only the right columns referenced by the filter, cached across probes.
+    candidates: RecordBatch,
+    /// Filter with right column indices remapped to `candidates`.
+    filter: Option<JoinFilter>,
+    /// Candidate row -> original right row. None until the first compaction.
+    original_indices: Option<Vec<usize>>,
+    /// Matches in original right-row coordinates, for output/spill merging.
+    matched: BooleanBufferBuilder,
+    /// Matches in candidate coordinates, reset after compaction.
+    candidate_matched: Vec<u64>,
+    remaining: usize,
+}
+
+impl RightExistenceProbe {
+    fn new(right: &RecordBatch, filter: Option<&JoinFilter>) -> Result<Self> {
+        let mut projection = Vec::new();
+        let mut filter = filter.cloned();
+        if let Some(filter) = &mut filter {
+            for column in &mut filter.column_indices {
+                if column.side == JoinSide::Right {
+                    let index = projection.iter().position(|&i| i == column.index);
+                    column.index = index.unwrap_or_else(|| {
+                        projection.push(column.index);
+                        projection.len() - 1
+                    });
+                }
+            }
+        }
+        let rows = right.num_rows();
+        let mut matched = BooleanBufferBuilder::new(rows);
+        matched.append_n(rows, false);
+        Ok(Self {
+            candidates: right.project(&projection)?,
+            filter,
+            original_indices: None,
+            matched,
+            candidate_matched: vec![0; rows.div_ceil(64)],
+            remaining: rows,
+        })
+    }
+
+    /// Probe the next left range, returning the number of left rows consumed.
+    fn probe(
+        &mut self,
+        left: &LogicalBatch,
+        start: usize,
+        batch_size: usize,
+    ) -> Result<usize> {
+        let candidate_rows = self.candidates.num_rows();
+        let rows_per_range = batch_size / candidate_rows;
+        let count = if rows_per_range > 10 {
+            rows_per_range
+        } else {
+            1
+        };
+        let count = count.min(left.num_rows() - start);
+        let remaining_before = self.remaining;
+
+        let matches = match &self.filter {
+            Some(filter) if count == 1 => apply_filter_to_row_join_batch(
+                left.row(start)?,
+                &self.candidates,
+                filter,
+            )?,
+            Some(filter) => {
+                let left_indices = left.row_indices(
+                    (start..start + count)
+                        .flat_map(|i| std::iter::repeat_n(i, candidate_rows)),
+                )?;
+                let right_indices = UInt32Array::from_iter_values(
+                    (0..count).flat_map(|_| 0..candidate_rows as u32),
+                );
+                apply_filter_to_indices(
+                    left,
+                    &self.candidates,
+                    &left_indices,
+                    &right_indices,
+                    filter,
+                )?
+            }
+            None => {
+                BooleanArray::new(BooleanBuffer::new_set(count * candidate_rows), None)
+            }
+        };
+        if !matches.has_true() {
+            return Ok(count);
+        }
+        self.update_matches(matches.values());
+
+        if start + count < left.num_rows()
+            && self.remaining > 0
+            && self.remaining < remaining_before
+            && self.remaining <= candidate_rows / 2
+        {
+            self.compact()?;
+        }
+        Ok(count)
+    }
+
+    fn update_matches(&mut self, matches: &BooleanBuffer) {
+        let candidate_rows = self.candidates.num_rows();
+        // Each left row contributes one candidate-sized segment. BitChunks handles
+        // both sliced filter results and segments that start within a byte/word.
+        for offset in (0..matches.len()).step_by(candidate_rows) {
+            let segment = matches.slice(offset, candidate_rows);
+            let chunks = segment.bit_chunks();
+            for (word_index, (previous, current)) in self
+                .candidate_matched
+                .iter_mut()
+                .zip(chunks.iter_padded())
+                .enumerate()
+            {
+                let mut new_matches = current & !*previous;
+                *previous |= current;
+                self.remaining -= new_matches.count_ones() as usize;
+                // Only visit new matches, including when several left rows match
+                // the same candidate in this range or in subsequent probes.
+                while new_matches != 0 {
+                    let candidate =
+                        word_index * 64 + new_matches.trailing_zeros() as usize;
+                    let original = self
+                        .original_indices
+                        .as_ref()
+                        .map_or(candidate, |indices| indices[candidate]);
+                    self.matched.set_bit(original, true);
+                    new_matches &= new_matches - 1;
+                }
+            }
+            if self.remaining == 0 {
+                break;
+            }
+        }
+    }
+
+    fn compact(&mut self) -> Result<()> {
+        let indices = UInt32Array::from_iter_values(
+            (0..self.candidates.num_rows())
+                .filter(|&i| self.candidate_matched[i / 64] & (1 << (i % 64)) == 0)
+                .map(|i| i as u32),
+        );
+        let original_indices = indices
+            .values()
+            .iter()
+            .map(|&i| {
+                self.original_indices
+                    .as_ref()
+                    .map_or(i as usize, |original| original[i as usize])
+            })
+            .collect();
+        // Take the cached projection only when compacting, never the original
+        // payload or the original right columns on every probe.
+        self.candidates = if self.candidates.num_columns() == 0 {
+            create_record_batch_with_empty_schema(
+                self.candidates.schema(),
+                indices.len(),
+            )?
+        } else {
+            take_record_batch(&self.candidates, &indices)?
+        };
+        self.original_indices = Some(original_indices);
+        self.candidate_matched.clear();
+        self.candidate_matched
+            .resize(self.remaining.div_ceil(64), 0);
+        Ok(())
+    }
+}
+
 pub(crate) struct NestedLoopJoinStream {
     // ========================================================================
     // PROPERTIES:
@@ -2016,6 +2188,8 @@ pub(crate) struct NestedLoopJoinStream {
     // For right join, keep track of matched rows in `current_right_batch`
     // Constructed when fetching each new incoming right batch in `FetchingRight` state.
     current_right_batch_matched: Option<BooleanArray>,
+    /// Candidate pruning for right semi/anti joins in the current left chunk.
+    right_existence_probe: Option<RightExistenceProbe>,
 
     /// Memory-limited spill fallback state. See [`SpillState`] for details.
     spill_state: SpillState,
@@ -2363,6 +2537,7 @@ impl NestedLoopJoinStream {
             batch_size,
             current_right_batch: None,
             current_right_batch_matched: None,
+            right_existence_probe: None,
             state: NLJState::BufferingLeft,
             left_probe_idx: 0,
             left_emit_idx: 0,
@@ -2675,7 +2850,12 @@ impl NestedLoopJoinStream {
                 self.current_right_batch = Some(right_batch);
 
                 // Prepare right bitmap
-                if self.should_track_unmatched_right {
+                if self.should_track_unmatched_right
+                    && !matches!(
+                        self.join_type,
+                        JoinType::RightSemi | JoinType::RightAnti
+                    )
+                {
                     let zeroed_buf = BooleanBuffer::new_unset(right_batch_rows);
                     self.current_right_batch_matched =
                         Some(BooleanArray::new(zeroed_buf, None));
@@ -3102,6 +3282,28 @@ impl NestedLoopJoinStream {
     /// next state (ProbeRight)
     fn process_probe_batch(&mut self) -> Result<bool> {
         let left_data = Arc::clone(self.get_left_data()?);
+        if matches!(self.join_type, JoinType::RightSemi | JoinType::RightAnti) {
+            if self.right_existence_probe.is_none() {
+                let right = self.current_right_batch.as_ref().ok_or_else(|| {
+                    internal_datafusion_err!("Right batch should be available")
+                })?;
+                self.right_existence_probe =
+                    Some(RightExistenceProbe::new(right, self.join_filter.as_ref())?);
+            }
+            let probe = self.right_existence_probe.as_mut().unwrap();
+            if probe.remaining == 0 || self.left_probe_idx >= left_data.batch().num_rows()
+            {
+                let mut probe = self.right_existence_probe.take().unwrap();
+                self.current_right_batch_matched =
+                    Some(BooleanArray::new(probe.matched.finish(), None));
+                // In spill mode this completes only the current left chunk.
+                // EmitRightUnmatched merges these original-row matches across chunks.
+                return Ok(false);
+            }
+            self.left_probe_idx +=
+                probe.probe(left_data.batch(), self.left_probe_idx, self.batch_size)?;
+            return Ok(true);
+        }
         let right_batch = self
             .current_right_batch
             .as_ref()
@@ -3217,37 +3419,13 @@ impl NestedLoopJoinStream {
         // Evaluate the join filter (if any) over an intermediate batch built
         // using the filter's own schema/column indices.
         let bitmap_combined = if let Some(filter) = &self.join_filter {
-            // Build the intermediate batch for filter evaluation
-            let intermediate_batch = if filter.schema.fields().is_empty() {
-                // Constant predicate (e.g., TRUE/FALSE). Use an empty schema with row_count
-                create_record_batch_with_empty_schema(
-                    Arc::new((*filter.schema).clone()),
-                    total_rows,
-                )?
-            } else {
-                let mut filter_columns: Vec<Arc<dyn Array>> =
-                    Vec::with_capacity(filter.column_indices().len());
-                for column_index in filter.column_indices() {
-                    let array = if column_index.side == JoinSide::Left {
-                        left_batch.take_column(column_index.index, &left_indices)?
-                    } else {
-                        let col = right_batch.column(column_index.index);
-                        take(col.as_ref(), &right_indices, None)?
-                    };
-                    filter_columns.push(array);
-                }
-
-                RecordBatch::try_new(Arc::new((*filter.schema).clone()), filter_columns)?
-            };
-
-            let filter_result = filter
-                .expression()
-                .evaluate(&intermediate_batch)?
-                .into_array(intermediate_batch.num_rows())?;
-            let filter_arr = as_boolean_array(&filter_result)?;
-
-            // Combine with null bitmap to get a unified mask
-            boolean_mask_from_filter(filter_arr)
+            apply_filter_to_indices(
+                left_data.batch(),
+                right_batch,
+                &left_indices,
+                &right_indices,
+                filter,
+            )?
         } else {
             // No filter: all pairs match
             BooleanArray::from(vec![true; total_rows])
@@ -3618,6 +3796,42 @@ impl NestedLoopJoinStream {
 }
 
 // ==== Utilities ====
+
+/// Evaluate a Cartesian product using only the columns referenced by the filter.
+fn apply_filter_to_indices(
+    left: &LogicalBatch,
+    right: &RecordBatch,
+    left_indices: &RowIndices,
+    right_indices: &UInt32Array,
+    filter: &JoinFilter,
+) -> Result<BooleanArray> {
+    let columns = filter
+        .column_indices()
+        .iter()
+        .map(|column| {
+            if column.side == JoinSide::Left {
+                left.take_column(column.index, left_indices)
+            } else {
+                Ok(take(
+                    right.column(column.index).as_ref(),
+                    right_indices,
+                    None,
+                )?)
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let options = RecordBatchOptions::new().with_row_count(Some(left_indices.len()));
+    let intermediate = RecordBatch::try_new_with_options(
+        Arc::clone(filter.schema()),
+        columns,
+        &options,
+    )?;
+    let result = filter
+        .expression()
+        .evaluate(&intermediate)?
+        .into_array(intermediate.num_rows())?;
+    Ok(boolean_mask_from_filter(as_boolean_array(&result)?))
+}
 
 /// Apply the join filter between:
 /// (left_row in left buffer) x (right batch)
@@ -5005,6 +5219,114 @@ pub(crate) mod tests {
             stats.column_statistics.len(),
         );
         assert_eq!(2, stats.column_statistics.len());
+        Ok(())
+    }
+
+    #[test]
+    fn right_existence_compacts_zero_column_candidates() -> Result<()> {
+        let right = create_record_batch_with_empty_schema(Arc::new(Schema::empty()), 5)?;
+        let mut probe = RightExistenceProbe::new(&right, None)?;
+        // A row-varying predicate can partially match even when it references
+        // no right columns. Retain the row count of this empty projection.
+        probe.update_matches(&BooleanBuffer::from(vec![true, false, true, true, false]));
+        probe.compact()?;
+        assert_eq!(probe.candidates.num_columns(), 0);
+        assert_eq!(probe.candidates.num_rows(), 2);
+        assert_eq!(probe.original_indices, Some(vec![1, 4]));
+        probe.update_matches(&BooleanBuffer::from(vec![false, true]));
+        assert_eq!(probe.remaining, 1);
+        assert_eq!(
+            probe.matched.finish().set_indices().collect::<Vec<_>>(),
+            vec![0, 2, 3, 4]
+        );
+        Ok(())
+    }
+
+    #[rstest]
+    fn right_existence_sliced_match_words(
+        #[values(63, 64, 65)] rows: usize,
+    ) -> Result<()> {
+        let right =
+            create_record_batch_with_empty_schema(Arc::new(Schema::empty()), rows)?;
+        let mut probe = RightExistenceProbe::new(&right, None)?;
+        // Set surrounding bits too, so failing to mask the tail or honor the
+        // non-byte-aligned slice would incorrectly match extra candidates.
+        let mut bits = vec![true; 3 + rows * 3 + 7];
+        for left in 0..3 {
+            for candidate in 0..rows {
+                bits[3 + left * rows + candidate] =
+                    candidate == 0 || candidate == rows - 1;
+            }
+        }
+        let mask = BooleanBuffer::from(bits).slice(3, rows * 3);
+        probe.update_matches(&mask);
+        probe.update_matches(&mask);
+        assert_eq!(probe.remaining, rows - 2);
+        assert_eq!(
+            probe.matched.finish().set_indices().collect::<Vec<_>>(),
+            vec![0, rows - 1]
+        );
+        Ok(())
+    }
+
+    #[rstest]
+    #[case(JoinType::RightSemi)]
+    #[case(JoinType::RightAnti)]
+    #[tokio::test]
+    async fn right_existence_stops_after_all_rows_match(
+        #[case] join_type: JoinType,
+        #[values(false, true)] with_filter: bool,
+    ) -> Result<()> {
+        let ctx = new_task_ctx(65);
+        let left = create_record_batch_with_empty_schema(Arc::new(Schema::empty()), 32)?;
+        let right = create_record_batch_with_empty_schema(Arc::new(Schema::empty()), 65)?;
+        let schema = right.schema();
+        let filter = with_filter.then(|| {
+            JoinFilter::new(
+                Arc::new(Literal::new(ScalarValue::Boolean(Some(true)))),
+                vec![],
+                Arc::clone(&schema),
+            )
+        });
+        let left_data = JoinLeftData::new(
+            left.into(),
+            Mutex::new(BooleanBufferBuilder::new(0)),
+            AtomicUsize::new(1),
+            MemoryConsumer::new("test").register(ctx.memory_pool()),
+        );
+        let mut stream = NestedLoopJoinStream::new(
+            Arc::clone(&schema),
+            filter,
+            join_type,
+            Box::pin(crate::stream::RecordBatchStreamAdapter::new(
+                schema,
+                futures::stream::iter(vec![Ok(right)]),
+            )),
+            OnceFut::new(async { internal_err!("unused left input") }),
+            vec![],
+            NestedLoopJoinMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
+            65,
+            SpillState::Disabled,
+        );
+        stream.buffered_left_data = Some(Arc::new(left_data));
+        let mut cx = std::task::Context::from_waker(futures::task::noop_waker_ref());
+        assert!(stream.handle_fetching_right(&mut cx).is_continue());
+        assert!(stream.process_probe_batch()?);
+        assert_eq!(stream.left_probe_idx, 1);
+        assert!(
+            !stream.process_probe_batch()?,
+            "all right rows already matched"
+        );
+        let output = stream.process_right_unmatched()?;
+        let rows = output.map_or(0, |batch| batch.num_rows());
+        assert_eq!(
+            rows,
+            if join_type == JoinType::RightSemi {
+                65
+            } else {
+                0
+            }
+        );
         Ok(())
     }
 
