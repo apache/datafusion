@@ -3155,12 +3155,12 @@ fn concat_build_batches(
 /// Arrow's `concat` kernel appends every batch's `data_buffers` list verbatim, resulting
 /// in N × K buffer references for N batches that share K allocations.
 ///
-/// This function walks the buffer list, identifies duplicates by raw pointer address,
+/// This function walks the buffer list, identifies duplicates by their `(pointer, length)` pair,
 /// and rewrites the 4-byte `buffer_index` inside each non-inline view (length > 12) to
 /// point into the deduplicated buffer vector. **No string bytes are copied.**
 ///
-/// The fast path (0 or 1 data buffers, or no duplicates found) clones the array reference
-/// with no allocations.
+/// The fast path (0 or 1 data buffers, or no duplicates found) avoids rewriting the views
+/// by cloning the original array reference.
 fn deduplicate_view_array_buffers<T: ByteViewType>(
     array: &GenericByteViewArray<T>,
 ) -> GenericByteViewArray<T> {
@@ -3173,8 +3173,8 @@ fn deduplicate_view_array_buffers<T: ByteViewType>(
     // idiomatic way to use pointer values as HashMap keys on stable Rust.
     let mut unique_buffers: Vec<arrow::buffer::Buffer> =
         Vec::with_capacity(data_buffers.len());
-    let mut pointer_map: HashMap<(usize, usize), u32> =
-        HashMap::with_capacity(data_buffers.len());
+    let mut pointer_map: hashbrown::HashMap<(usize, usize), u32> =
+        hashbrown::HashMap::with_capacity(data_buffers.len());
     let mut index_remap: Vec<u32> = Vec::with_capacity(data_buffers.len());
     let mut has_duplicates = false;
 
@@ -3233,9 +3233,10 @@ fn deduplicate_view_array_buffers<T: ByteViewType>(
 /// Returns a new [`RecordBatch`] with deduplicated view buffer references.
 ///
 /// This function is infallible: we reconstruct the batch using the original
-/// schema and the same set of columns (same lengths, same types). `RecordBatch::try_new`
-/// only fails when column lengths or schema mismatches occur — neither can happen here
-/// since we only replace view columns with logically equivalent deduplicated versions.
+/// schema and the same set of columns. `RecordBatch::try_new` only fails on structural
+/// mismatches (like column count or length) or invalid nullability, none of which
+/// can occur here because the original valid batch's schema, column count, lengths, types,
+/// and null validity are all perfectly preserved when deduplicating the view columns.
 fn deduplicate_record_batch_view_buffers(batch: &RecordBatch) -> RecordBatch {
     let has_view_columns = batch
         .columns()
@@ -8511,6 +8512,7 @@ mod tests {
         assert_eq!(id_col.value(2), 3);
         assert_eq!(id_col.value(3), 4);
         assert_eq!(id_col.value(4), 1);
+        assert_eq!(reservation.size(), get_record_batch_memory_size(&batch));
     }
 
     #[test]
@@ -8587,6 +8589,7 @@ mod tests {
             .unwrap();
         assert_eq!(id_col.value(0), 10);
         assert_eq!(id_col.value(4), 10);
+        assert_eq!(reservation.size(), get_record_batch_memory_size(&batch));
     }
 
     /// Regression test: two arrays backed by Buffer objects that share the same
@@ -8752,6 +8755,7 @@ mod tests {
             "another long string that exceeds inline size 12",
             "value from duplicate longer-declared-length buffer should survive (row 3)"
         );
+        assert_eq!(reservation.size(), get_record_batch_memory_size(&batch));
     }
 
     /// The build side is concatenated into a single batch, and that copy must
