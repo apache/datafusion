@@ -388,6 +388,79 @@ async fn test_query_parameters_with_metadata() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_sql_case_field_metadata() -> Result<()> {
+    let ctx = SessionContext::new();
+    let metadata =
+        HashMap::from([("structured_type".to_string(), "ARRAY(NUMBER)".to_string())]);
+    let other_metadata =
+        HashMap::from([("structured_type".to_string(), "OBJECT".to_string())]);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("flag", DataType::Boolean, false),
+        Field::new("a", DataType::Int32, false).with_metadata(metadata.clone()),
+        Field::new("b", DataType::Int32, false).with_metadata(metadata.clone()),
+        Field::new("c", DataType::Int32, false).with_metadata(other_metadata),
+    ]));
+    ctx.register_batch(
+        "t",
+        RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(BooleanArray::from(vec![true, false])),
+                Arc::new(Int32Array::from(vec![1, 2])),
+                Arc::new(Int32Array::from(vec![3, 4])),
+                Arc::new(Int32Array::from(vec![5, 6])),
+            ],
+        )?,
+    )?;
+
+    let empty_metadata = HashMap::new();
+    for (sql, preserve_metadata) in [
+        (
+            "SELECT CASE WHEN flag THEN a ELSE b END AS value FROM t",
+            true,
+        ),
+        (
+            "SELECT CASE WHEN flag THEN a ELSE NULL END AS value FROM t",
+            true,
+        ),
+        (
+            "SELECT CASE WHEN flag THEN NULL ELSE a END AS value FROM t",
+            true,
+        ),
+        (
+            "SELECT CASE WHEN flag THEN a ELSE c END AS value FROM t",
+            false,
+        ),
+    ] {
+        let df = ctx.sql(sql).await?;
+        let optimized = ctx.state().optimize(df.logical_plan())?;
+        let expected_metadata = if preserve_metadata {
+            &metadata
+        } else {
+            &empty_metadata
+        };
+        for field in [df.schema().field(0), optimized.schema().field(0)] {
+            assert_eq!(field.metadata(), expected_metadata);
+        }
+        if sql == "SELECT CASE WHEN flag THEN a ELSE b END AS value FROM t" {
+            let batches = df.collect().await?;
+            datafusion::assert_batches_eq!(
+                [
+                    "+-------+",
+                    "| value |",
+                    "+-------+",
+                    "| 1     |",
+                    "| 4     |",
+                    "+-------+"
+                ],
+                &batches
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_limit_offset_parameters_named() -> Result<()> {
     let ctx = SessionContext::new();
     let df = ctx
