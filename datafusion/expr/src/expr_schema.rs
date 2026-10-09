@@ -35,6 +35,7 @@ use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Field};
 use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion_common::datatype::FieldExt;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{
     Column, DataFusionError, ExprSchema, Result, ScalarValue, Spans, TableReference,
     internal_err, not_impl_err, plan_datafusion_err, plan_err,
@@ -140,6 +141,23 @@ fn scalar_argument_for_field(expr: &Expr, arg_field: &FieldRef) -> Option<Scalar
 
 // Resolve metadata bottom-up for branches whose metadata can be preserved.
 fn case_field_metadata(case: &Case, schema: &dyn ExprSchema) -> Result<FieldRef> {
+    // `to_field` can revisit nested aliases; delegate only shallow branches.
+    const MAX_EXACT_BRANCH_DEPTH: usize = 8;
+
+    fn can_infer_exact_branch(expr: &Expr) -> Result<bool> {
+        let mut work = vec![(expr, 1)];
+        while let Some((node, depth)) = work.pop() {
+            if matches!(node, Expr::Case(_)) || depth > MAX_EXACT_BRANCH_DEPTH {
+                return Ok(false);
+            }
+            node.apply_children(|child| {
+                work.push((child, depth + 1));
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+        }
+        Ok(true)
+    }
+
     enum Work<'a> {
         Visit(&'a Expr),
         FinishCase(&'a Case),
@@ -170,19 +188,53 @@ fn case_field_metadata(case: &Case, schema: &dyn ExprSchema) -> Result<FieldRef>
         match item {
             Work::Visit(expr) => match expr {
                 Expr::Case(nested) => schedule_case(nested, &mut work),
+                Expr::Cast(cast)
+                    if !cast.field.metadata().is_empty()
+                        && can_infer_exact_branch(expr)? =>
+                {
+                    fields.push(BranchField {
+                        field: expr.to_field(schema)?.1,
+                        certainly_null: false,
+                    });
+                }
                 Expr::Cast(cast) => {
                     work.push(Work::FinishCast(&cast.field, false));
                     work.push(Work::Visit(&cast.expr));
                 }
+                Expr::TryCast(cast)
+                    if !cast.field.metadata().is_empty()
+                        && can_infer_exact_branch(expr)? =>
+                {
+                    fields.push(BranchField {
+                        field: expr.to_field(schema)?.1,
+                        certainly_null: false,
+                    });
+                }
                 Expr::TryCast(cast) => {
                     work.push(Work::FinishCast(&cast.field, true));
                     work.push(Work::Visit(&cast.expr));
+                }
+                Expr::Alias(alias)
+                    if alias.metadata.is_some() && can_infer_exact_branch(expr)? =>
+                {
+                    fields.push(BranchField {
+                        field: expr.to_field(schema)?.1,
+                        certainly_null: false,
+                    });
                 }
                 Expr::Alias(alias) => {
                     work.push(Work::FinishAlias(alias.metadata.as_ref()));
                     work.push(Work::Visit(&alias.expr));
                 }
                 Expr::Negative(inner) => work.push(Work::Visit(inner)),
+                Expr::ScalarFunction(_) | Expr::HigherOrderFunction(_)
+                    if can_infer_exact_branch(expr)? =>
+                {
+                    fields.push(BranchField {
+                        field: expr.to_field(schema)?.1,
+                        certainly_null: false,
+                    });
+                }
                 Expr::Column(_)
                 | Expr::Literal(_, _)
                 | Expr::OuterReferenceColumn(_, _)
@@ -1441,6 +1493,40 @@ mod tests {
 
     #[test]
     fn test_case_field_metadata() -> Result<()> {
+        #[derive(Debug, PartialEq, Eq, Hash)]
+        struct MarkedIdentity {
+            signature: crate::Signature,
+        }
+
+        impl crate::ScalarUDFImpl for MarkedIdentity {
+            fn name(&self) -> &str {
+                "marked_identity"
+            }
+
+            fn signature(&self) -> &crate::Signature {
+                &self.signature
+            }
+
+            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+                Ok(DataType::Int32)
+            }
+
+            fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+                let input = &args.arg_fields[0];
+                Ok(Arc::new(
+                    Field::new("marked_identity", DataType::Int32, input.is_nullable())
+                        .with_metadata(input.metadata().clone()),
+                ))
+            }
+
+            fn invoke_with_args(
+                &self,
+                _args: crate::ScalarFunctionArgs,
+            ) -> Result<crate::ColumnarValue> {
+                Ok(crate::ColumnarValue::Scalar(ScalarValue::Int32(Some(0))))
+            }
+        }
+
         let shared = HashMap::from([("type".to_string(), "structured".to_string())]);
         let different = HashMap::from([("type".to_string(), "other".to_string())]);
         let schema = DFSchema::from_unqualified_fields(
@@ -1456,6 +1542,19 @@ mod tests {
 
         let same = when(lit(true), col("a")).otherwise(col("b"))?;
         assert_eq!(same.to_field(&schema)?.1.metadata(), &shared);
+
+        let no_else = when(lit(true), col("a")).end()?;
+        assert_eq!(no_else.to_field(&schema)?.1.metadata(), &shared);
+
+        let multiple_when = when(lit(false), col("a"))
+            .when(lit(true), col("b"))
+            .otherwise(lit(ScalarValue::Null))?;
+        assert_eq!(multiple_when.to_field(&schema)?.1.metadata(), &shared);
+
+        let conflicting_when = when(lit(false), col("a"))
+            .when(lit(true), col("c"))
+            .otherwise(col("b"))?;
+        assert!(conflicting_when.to_field(&schema)?.1.metadata().is_empty());
 
         let null_else = when(lit(true), col("a")).otherwise(lit(ScalarValue::Null))?;
         assert_eq!(null_else.to_field(&schema)?.1.metadata(), &shared);
@@ -1517,6 +1616,63 @@ mod tests {
             Expr::ScalarFunction(ScalarFunction::new_udf(identity, vec![col("a")]));
         let scalar_case = when(lit(true), scalar_result).otherwise(col("b"))?;
         assert!(scalar_case.to_field(&schema)?.1.metadata().is_empty());
+
+        let marked = Arc::new(crate::ScalarUDF::from(MarkedIdentity {
+            signature: crate::Signature::uniform(
+                1,
+                vec![DataType::Int32],
+                crate::Volatility::Immutable,
+            ),
+        }));
+        let marked_call = |arg| {
+            Expr::ScalarFunction(ScalarFunction::new_udf(Arc::clone(&marked), vec![arg]))
+        };
+        let marked_case =
+            when(lit(true), marked_call(col("a"))).otherwise(marked_call(col("b")))?;
+        assert_eq!(marked_case.to_field(&schema)?.1.metadata(), &shared);
+
+        let nested_arg = when(lit(true), col("a")).otherwise(col("b"))?;
+        let nested_call = when(lit(true), marked_call(nested_arg)).otherwise(col("b"))?;
+        assert!(nested_call.to_field(&schema)?.1.metadata().is_empty());
+
+        let binary = col("d") + lit(1);
+        let Expr::Alias(alias) = binary.clone().alias("marked") else {
+            unreachable!();
+        };
+        let marked_alias =
+            Expr::Alias(alias.with_metadata(Some(FieldMetadata::from(shared.clone()))));
+        let aliased_case = when(lit(true), marked_alias).otherwise(col("b"))?;
+        assert_eq!(aliased_case.to_field(&schema)?.1.metadata(), &shared);
+
+        let marked_cast = Expr::Cast(Cast::new_from_field(
+            Box::new(binary.clone()),
+            Arc::new(Field::new("", DataType::Int32, true).with_metadata(shared.clone())),
+        ));
+        let cast_case = when(lit(true), marked_cast).otherwise(col("b"))?;
+        assert_eq!(cast_case.to_field(&schema)?.1.metadata(), &shared);
+
+        let marked_try_cast = Expr::TryCast(TryCast::new_from_field(
+            Box::new(binary),
+            Arc::new(Field::new("", DataType::Int32, true).with_metadata(shared.clone())),
+        ));
+        let try_cast_case = when(lit(true), marked_try_cast).otherwise(col("b"))?;
+        assert_eq!(try_cast_case.to_field(&schema)?.1.metadata(), &shared);
+
+        let mut deep_alias = col("a");
+        for _ in 0..10 {
+            deep_alias = deep_alias.alias("nested");
+        }
+        let deep_udf_case =
+            when(lit(true), marked_call(deep_alias.clone())).otherwise(col("b"))?;
+        assert!(deep_udf_case.to_field(&schema)?.1.metadata().is_empty());
+
+        let Expr::Alias(alias) = deep_alias.alias("marked") else {
+            unreachable!();
+        };
+        let deep_marked_alias =
+            Expr::Alias(alias.with_metadata(Some(FieldMetadata::from(shared.clone()))));
+        let deep_alias_case = when(lit(true), deep_marked_alias).otherwise(col("b"))?;
+        assert_eq!(deep_alias_case.to_field(&schema)?.1.metadata(), &shared);
 
         let mismatched = when(lit(true), col("a")).otherwise(col("c"))?;
         assert!(mismatched.to_field(&schema)?.1.metadata().is_empty());
