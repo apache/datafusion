@@ -56,10 +56,10 @@ static UTC: LazyLock<Tz> = LazyLock::new(|| "UTC".parse().expect("UTC is always 
 ///   value is out of range (between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804)
 ///   or the parsed value does not correspond to an unambiguous time.
 pub(crate) fn string_to_timestamp_nanos_with_timezone(
-    timezone: &Option<Tz>,
+    timezone: Option<&Tz>,
     s: &str,
 ) -> Result<i64> {
-    let tz = timezone.as_ref().unwrap_or(&UTC);
+    let tz = timezone.unwrap_or(&UTC);
     let dt = string_to_datetime(tz, s)?;
     let parsed = dt
         .timestamp_nanos_opt()
@@ -211,11 +211,11 @@ pub(crate) fn string_to_datetime_formatted<T: TimeZone>(
 /// [`chrono::format::strftime`]: https://docs.rs/chrono/latest/chrono/format/strftime/index.html
 #[inline]
 pub(crate) fn string_to_timestamp_nanos_formatted_with_timezone(
-    timezone: &Option<Tz>,
+    timezone: Option<&Tz>,
     s: &str,
     format: &str,
 ) -> Result<i64, DataFusionError> {
-    let dt = string_to_datetime_formatted(timezone.as_ref().unwrap_or(&UTC), s, format)?;
+    let dt = string_to_datetime_formatted(timezone.unwrap_or(&UTC), s, format)?;
     let parsed = dt
         .timestamp_nanos_opt()
         .ok_or_else(|| exec_datafusion_err!("{ERR_NANOSECONDS_NOT_SUPPORTED}"))?;
@@ -521,7 +521,7 @@ where
                         val = Some(r);
                     }
                 }
-            };
+            }
 
             val.transpose()
         })
@@ -583,4 +583,16 @@ fn scalar_value(dt: &DataType, r: Option<i64>) -> Result<ScalarValue> {
         },
         t => Err(internal_datafusion_err!("Unsupported data type: {t:?}")),
     }
+}
+
+/// Parse the optional timezone string carried by [`DataType::Timestamp`] into a
+/// [`Tz`].
+///
+/// Returns `Ok(None)` when the timestamp type is timezone-naive.
+pub(crate) fn parse_tz(tz: Option<&Arc<str>>) -> Result<Option<Tz>> {
+    tz.map(|tz| {
+        tz.parse::<Tz>()
+            .map_err(|op| exec_datafusion_err!("failed on timezone {tz}: {op:?}"))
+    })
+    .transpose()
 }

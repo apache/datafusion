@@ -17,10 +17,9 @@
 
 //! PiecewiseMergeJoin stream specialized for existence joins.
 //!
-//! Instantiated by [`PiecewiseMergeJoinExec`] when the join type is `LeftSemi` or `LeftAnti`.
-//! The other existence joins are rejected in `PiecewiseMergeJoinExec::try_new`:
-//! `RightSemi`/`RightAnti`/`RightMark` mark the right side and so need an input swap, while
-//! `LeftMark` marks the left side but needs an extra boolean column rather than a slice.
+//! Instantiated by [`PiecewiseMergeJoinExec`] when the join type is `LeftSemi`, `LeftAnti`, or
+//! `LeftMark`. `RightSemi`/`RightAnti`/`RightMark` mark the streamed side instead and are
+//! served by `RightExistencePWMJStream` (see `right_existence_join.rs`).
 //!
 //! # Motivation
 //!
@@ -66,21 +65,24 @@
 //! so a partition that starts late reads nothing at all.
 //!
 //! Rows whose join key is NULL never satisfy a comparison predicate. Buffered NULLs sort to
-//! the front, so the scan starts past them and null-keyed buffered rows are left unmarked —
+//! either end, outside the searched range, and null-keyed buffered rows are left unmarked —
 //! correctly excluded from `LeftSemi` and included in `LeftAnti`. The extreme key is picked
 //! from each streamed batch with NULLs ignored, so it is non-null unless the whole batch is.
 //!
 //! # Output
 //!
 //! Marking only ever covers a suffix, and each mark lowers the watermark to its own start,
-//! so the matched set is always exactly `[min_marked, buffered_len)`. A bitmap would be a
-//! less compact encoding of that one index, so none is allocated (see
-//! `build_visited_indices_map`).
+//! so the matched set is always exactly `[min_marked, non_null_end)`. A bitmap would be a
+//! less compact encoding of that one index, so none is allocated. `ClassicPWMJStream` marks
+//! the same way, which is why the watermark lives in `BufferedSideData` rather than here.
 //!
 //! Once every streamed partition has been consumed, the last one to finish slices the
-//! buffered batch: `LeftSemi` takes `[min_marked, len)`, `LeftAnti` the complementary
-//! prefix `[0, min_marked)`, which is where the null-keyed rows live. Only the buffered
-//! (left) columns are produced.
+//! buffered batch: `LeftSemi` takes `[min_marked, non_null_end)`, `LeftAnti` the complementary
+//! prefix `[0, min_marked)` plus any trailing null-keyed rows. `LeftMark` takes
+//! neither slice: every buffered row is preserved, with a `mark` column built from the same
+//! watermark (`true` in the matched range, `false` elsewhere) appended instead of any row
+//! being dropped. Only the buffered (left) columns, plus that `mark` column for `LeftMark`,
+//! are produced.
 //!
 //! [`PiecewiseMergeJoinExec`]: super::PiecewiseMergeJoinExec
 
@@ -89,8 +91,12 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering as AtomicOrdering;
 use std::task::{Poll, ready};
 
-use arrow::array::{Array, ArrayRef, RecordBatch};
-use arrow::compute::BatchCoalescer;
+use arrow::array::{
+    Array, ArrayRef, BooleanArray, BooleanBufferBuilder, RecordBatch, UInt32Array,
+    new_null_array,
+};
+use arrow::compute::{BatchCoalescer, take};
+use arrow_ord::ord::make_comparator;
 use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::{NullEquality, Result, internal_err};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
@@ -99,6 +105,7 @@ use datafusion_functions_aggregate_common::min_max::{max_batch, min_batch};
 use datafusion_physical_expr::PhysicalExprRef;
 use futures::{Stream, StreamExt};
 
+use super::utils::{non_null_range, unmatched_buffered_batch};
 use crate::handle_state;
 use crate::joins::piecewise_merge_join::exec::{BufferedSide, BufferedSideReadyState};
 use crate::joins::utils::{
@@ -117,12 +124,13 @@ pub(super) enum ExistencePWMJStreamState {
 }
 
 pub(super) struct ExistencePWMJStream {
-    /// Output schema, which for `LeftSemi`/`LeftAnti` is the buffered side's schema
+    /// Output schema, which for `LeftSemi`/`LeftAnti` is the buffered side's schema, and for
+    /// `LeftMark` is that schema plus a trailing `mark` column
     schema: SchemaRef,
     /// Physical expression evaluated on the streamed side. The buffered side's
     /// equivalent is already evaluated when the buffered side is collected.
     on_streamed: PhysicalExprRef,
-    /// `LeftSemi` or `LeftAnti`
+    /// `LeftSemi`, `LeftAnti`, or `LeftMark`
     join_type: JoinType,
     /// Comparison operator
     operator: Operator,
@@ -227,7 +235,10 @@ impl ExistencePWMJStream {
             return Poll::Ready(Ok(StatefulStreamResult::Continue));
         }
 
-        match ready!(self.streamed.poll_next_unpin(cx)) {
+        let next_batch = ready!(self.streamed.poll_next_unpin(cx));
+        let join_time = self.join_metrics.join_time.clone();
+        let _join_timer = join_time.timer();
+        match next_batch {
             None => self.finish_streamed_side()?,
             Some(Ok(batch)) => {
                 let stream_values: ArrayRef = self
@@ -256,12 +267,11 @@ impl ExistencePWMJStream {
     /// lets every other partition stop too.
     fn nothing_left_to_mark(&self) -> Result<bool> {
         let buffered_data = &self.buffered_side.try_as_ready()?.buffered_data;
-        let min_marked = buffered_data
-            .existence_min_marked
-            .load(AtomicOrdering::SeqCst);
+        let min_marked = buffered_data.min_marked.load(AtomicOrdering::SeqCst);
         let buffered_values = buffered_data.values();
 
-        Ok(min_marked.min(buffered_values.len()) <= buffered_values.null_count())
+        let (start, end) = non_null_range(buffered_values.as_ref(), self.sort_option);
+        Ok(min_marked.min(end) <= start)
     }
 
     /// Marks this partition done with the streamed side: releases the input pipeline and,
@@ -297,20 +307,18 @@ impl ExistencePWMJStream {
         {
             let buffered_data = &self.buffered_side.try_as_ready()?.buffered_data;
             let buffered_values = buffered_data.values();
-            let buffered_len = buffered_values.len();
 
-            // NULL keys can never match, and `sort_options` uses `nulls_first` for every
-            // operator (see `try_new`), so buffered nulls sit at the front -- skip past them.
-            let first_non_null_buffered = buffered_values.null_count();
+            let (first_non_null_buffered, non_null_end) =
+                non_null_range(buffered_values.as_ref(), sort_option);
 
-            // `[min_marked, buffered_len)` was already marked, by this partition or
+            // `[min_marked, non_null_end)` was already marked, by this partition or
             // another, so a match found there would write nothing. Stop the scan at the
             // watermark: that bounds the comparisons this batch performs, not just the
             // bits it writes.
             let scan_limit = buffered_data
-                .existence_min_marked
+                .min_marked
                 .load(AtomicOrdering::SeqCst)
-                .min(buffered_len);
+                .min(non_null_end);
 
             // The extreme key is the only one that can decide anything: it reaches the
             // smallest matching `buffer_idx`, and every other row in the batch matches a
@@ -366,7 +374,7 @@ impl ExistencePWMJStream {
                 if buffer_idx < scan_limit {
                     // Everything from `buffer_idx` on matches, so lowering the
                     // watermark to it records the match: the marked set is exactly
-                    // `[existence_min_marked, buffered_len)` and needs no bitmap.
+                    // `[min_marked, non_null_end)` and needs no bitmap.
                     //
                     // INVARIANT: sound only because the buffered side and each
                     // streamed batch are sorted the same way for this operator
@@ -377,7 +385,7 @@ impl ExistencePWMJStream {
                     // order, which is why the watermark takes a `min` rather than just
                     // decreasing.
                     buffered_data
-                        .existence_min_marked
+                        .min_marked
                         .fetch_min(buffer_idx, AtomicOrdering::SeqCst);
                 }
             }
@@ -387,8 +395,10 @@ impl ExistencePWMJStream {
     }
 
     /// Emits the existence result by slicing at the watermark: the marked buffered rows for
-    /// `LeftSemi`, the unmarked ones for `LeftAnti`.
+    /// `LeftSemi`, the unmarked ones for `LeftAnti`, or -- for `LeftMark` -- every buffered row
+    /// with a `mark` column built from the same watermark.
     fn emit_matched(&mut self) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
+        let _join_timer = self.join_metrics.join_time.timer();
         if !self.emitted {
             self.emitted = true;
 
@@ -397,31 +407,57 @@ impl ExistencePWMJStream {
             let buffered_batch = buffered_data.batch();
             let buffered_len = buffered_batch.num_rows();
 
-            // The marked rows are always the contiguous suffix `[min_marked, len)`: each
-            // match covers `[k, previous min_marked)` and then lowers the watermark to
-            // `k`, so the union is `[k, len)`. The result is therefore a slice, with no
-            // index array to materialize and no `take`.
+            // The matched non-null suffix is `[min_marked, non_null_end)`.
+            // Each match lowers the watermark; trailing NULL keys stay unmarked.
+            let (_, non_null_end) =
+                non_null_range(buffered_data.values().as_ref(), self.sort_option);
             let min_marked = buffered_data
-                .existence_min_marked
+                .min_marked
                 .load(AtomicOrdering::SeqCst)
-                .min(buffered_len);
+                .min(non_null_end);
 
-            let sliced = match self.join_type {
+            let (num_rows, columns) = match self.join_type {
                 JoinType::LeftSemi => {
-                    buffered_batch.slice(min_marked, buffered_len - min_marked)
+                    let sliced =
+                        buffered_batch.slice(min_marked, non_null_end - min_marked);
+                    (sliced.num_rows(), sliced.columns().to_vec())
                 }
-                // The unmarked prefix, which includes every null-keyed row: nulls sort
-                // first and the watermark never drops below the buffered null count.
-                _ => buffered_batch.slice(0, min_marked),
+                // `LeftMark` keeps every buffered row -- nothing to slice -- and appends
+                // the watermark as a `mark` column: true only within the matched
+                // non-null range, false for the prefix and any trailing NULL keys.
+                JoinType::LeftMark => {
+                    let mut mark = BooleanBufferBuilder::new(buffered_len);
+                    mark.append_n(min_marked, false);
+                    mark.append_n(non_null_end - min_marked, true);
+                    mark.append_n(buffered_len - non_null_end, false);
+
+                    let mut columns = buffered_batch.columns().to_vec();
+                    columns.push(
+                        Arc::new(BooleanArray::new(mark.finish(), None)) as ArrayRef
+                    );
+                    (buffered_len, columns)
+                }
+                // `LeftAnti` includes the unmarked prefix and any trailing NULL keys.
+                JoinType::LeftAnti => {
+                    let sliced = unmatched_buffered_batch(
+                        buffered_batch,
+                        min_marked,
+                        non_null_end,
+                    )?;
+                    (sliced.num_rows(), sliced.columns().to_vec())
+                }
+                other => {
+                    return internal_err!(
+                        "ExistencePWMJStream does not support join type {other:?}"
+                    );
+                }
             };
 
-            if sliced.num_rows() > 0 {
-                // Existence joins output the buffered (left) columns only; rebuild against
-                // the join's own schema, which keeps the slice zero-copy.
-                let batch = RecordBatch::try_new(
-                    Arc::clone(&self.schema),
-                    sliced.columns().to_vec(),
-                )?;
+            if num_rows > 0 {
+                // Existence joins output the buffered (left) columns only (plus `mark` for
+                // `LeftMark`); rebuild against the join's own schema, which keeps a slice
+                // zero-copy.
+                let batch = RecordBatch::try_new(Arc::clone(&self.schema), columns)?;
                 self.output_batches.push_batch(batch)?;
                 self.output_batches.finish_buffered_batch()?;
             }
@@ -447,10 +483,36 @@ impl ExistencePWMJStream {
 /// Ordered the same way as [`JoinKeyComparator`]: both use IEEE 754 totalOrder for floats,
 /// and the comparator normalizes `-0.0` on either side of it.
 ///
-/// Numeric, temporal, string, binary and boolean keys get a typed arrow kernel -- a linear
-/// scan that allocates nothing. Dictionary and nested keys fall to `min_max_batch_generic`, a
-/// `ScalarValue`-per-row comparator loop; specializing those is left to a follow-up.
-fn extreme_key(values: &ArrayRef, descending: bool) -> Result<ArrayRef> {
+/// Nested keys use Arrow's comparator, so inner NULLs have the same ordering as
+/// sorting and range comparisons. Other keys use the typed min/max kernels.
+pub(super) fn extreme_key(values: &ArrayRef, descending: bool) -> Result<ArrayRef> {
+    if values.data_type().is_nested() {
+        // Reverse both value and inner-NULL ordering for max, matching SQL's
+        // ascending NULLS FIRST nested comparison order.
+        let cmp = make_comparator(
+            values.as_ref(),
+            values.as_ref(),
+            SortOptions::new(descending, !descending),
+        )?;
+        let nulls = values.logical_nulls();
+        let mut extreme = None;
+        for idx in 0..values.len() {
+            if nulls.as_ref().is_some_and(|n| n.is_null(idx)) {
+                continue;
+            }
+            if extreme.is_none_or(|current| cmp(idx, current) == Ordering::Less) {
+                extreme = Some(idx);
+            }
+        }
+        return match extreme {
+            Some(idx) => Ok(take(
+                values.as_ref(),
+                &UInt32Array::from(vec![idx as u32]),
+                None,
+            )?),
+            None => Ok(new_null_array(values.data_type(), 1)),
+        };
+    }
     let extreme = if descending {
         max_batch(values)?
     } else {
@@ -485,7 +547,7 @@ mod tests {
     use crate::{
         ExecutionPlan, common,
         joins::PiecewiseMergeJoinExec,
-        test::{TestMemoryExec, build_table_i32},
+        test::{TestMemoryExec, assert_join_metrics, build_table_i32},
     };
     use arrow_schema::{DataType, Field, Schema};
     use datafusion_common::test_util::batches_to_string;
@@ -566,6 +628,25 @@ mod tests {
         Ok(())
     }
 
+    /// `LeftMark` keeps every buffered row -- unlike `LeftSemi`/`LeftAnti`, neither is
+    /// dropped -- and appends a `mark` column: `true` for exactly the rows `LeftSemi` would
+    /// have kept.
+    #[tokio::test]
+    async fn join_left_mark() -> Result<()> {
+        let batches = join_collect(JoinType::LeftMark).await?;
+
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+----+----+-------+
+        | a1 | b1 | c1 | mark  |
+        +----+----+----+-------+
+        | 1  | 1  | 7  | false |
+        | 2  | 2  | 8  | false |
+        | 3  | 5  | 9  | true  |
+        +----+----+----+-------+
+        ");
+        Ok(())
+    }
+
     /// Once every markable buffered row is marked, no later streamed batch can lower the
     /// watermark, so the stream stops reading rather than scanning batches that provably
     /// cannot contribute. The first batch below is smaller than every buffered value, so it
@@ -638,7 +719,8 @@ mod tests {
 
     /// The final pass pushes one slice of the buffered batch into a `BatchCoalescer`, so a
     /// result wider than `batch_size` has to be drained over several polls. Also pins the
-    /// `output_rows` metric, which `record_poll` in `poll_next` is what supplies.
+    /// `output_rows` metric, which `record_poll` in `poll_next` is what supplies, and
+    /// `join_time`, which the streamed-side scan and the final pass record.
     #[tokio::test]
     async fn final_pass_chunks_output_and_records_output_rows() -> Result<()> {
         let left = build_table(
@@ -685,12 +767,15 @@ mod tests {
         assert_eq!(batches.len(), 2, "expected the final pass to be chunked");
         assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 4);
 
-        let output_rows = join
-            .metrics()
-            .unwrap()
-            .output_rows()
-            .expect("output_rows metric");
-        assert_eq!(output_rows, 4);
+        let metrics = join.metrics().expect("metrics should be available");
+        assert_join_metrics!(metrics, 4);
+        assert!(
+            metrics
+                .sum_by_name("join_time")
+                .expect("join_time metric")
+                .as_usize()
+                > 0
+        );
         Ok(())
     }
 
@@ -768,52 +853,6 @@ mod tests {
             .expect("input_batches metric")
             .as_usize();
         assert_eq!(consumed, 1, "partition 1 should not have read any batch");
-        Ok(())
-    }
-
-    /// The unsupported existence joins must be rejected at construction, not deeper in.
-    /// `required_input_ordering` still has an `unimplemented!()` for right existence joins
-    /// and cannot return an error, so this test is what keeps that panic unreachable: if
-    /// someone opens the gate for RightSemi/RightAnti without also supplying an ordering
-    /// requirement, this fails instead of panicking the optimizer at runtime.
-    #[test]
-    fn try_new_rejects_unsupported_existence_joins() -> Result<()> {
-        let left = build_table(
-            ("a1", &vec![1, 2, 3]),
-            ("b1", &vec![1, 2, 5]),
-            ("c1", &vec![7, 8, 9]),
-        );
-        let right = build_table(
-            ("a2", &vec![10, 20, 30]),
-            ("b1", &vec![2, 3, 4]),
-            ("c2", &vec![70, 80, 90]),
-        );
-        let on = (
-            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
-            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
-        );
-
-        for join_type in [
-            JoinType::RightSemi,
-            JoinType::RightAnti,
-            JoinType::LeftMark,
-            JoinType::RightMark,
-        ] {
-            let err = PiecewiseMergeJoinExec::try_new(
-                Arc::clone(&left),
-                Arc::clone(&right),
-                on.clone(),
-                Operator::Gt,
-                join_type,
-                1,
-            )
-            .expect_err(&format!("{join_type} should be rejected"))
-            .to_string();
-            assert!(
-                err.contains("not supported for PiecewiseMergeJoin"),
-                "unexpected error for {join_type}: {err}"
-            );
-        }
         Ok(())
     }
 }

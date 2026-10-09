@@ -92,6 +92,7 @@ impl JoinHashMapType for PruningJoinHashMap {
         get_matched_indices_with_limit_offset::<u64>(
             &self.map,
             &next,
+            self.map.len() == next.len(),
             hash_values,
             valid_keys,
             limit,
@@ -727,9 +728,8 @@ impl StreamJoinMetrics {
             input_rows,
         };
 
-        let stream_memory_usage = MetricBuilder::new(metrics)
-            .with_category(MetricCategory::Bytes)
-            .gauge("stream_memory_usage", partition);
+        let stream_memory_usage =
+            MetricBuilder::new(metrics).bytes_gauge("stream_memory_usage", partition);
 
         Self {
             left,

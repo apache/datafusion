@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -54,3 +54,13 @@ GROUP BY a
 ORDER BY a;
 ----
 0 0
+
+# avg ignores ORDER BY, so the ORDER BY column must not reach its accumulators
+query IR
+SELECT a % 2 AS g, avg(a ORDER BY b)
+FROM (VALUES (40, 1), (23, 2), (17, 3), (40, 4), (30, 5)) AS t(a, b)
+GROUP BY g
+ORDER BY g;
+----
+0 36.666666666666664
+1 20

@@ -1,0 +1,13 @@
+# ROW_NUMBER top-2 per partition over the declared-sorted input, swept across
+# partition cardinality. This mirrors the `window` subgroup q14-q17 sweep, with
+# the partition key materialized as a column so the ordering can be declared.
+
+subgroup window_sorted
+
+template sql_benchmarks/h2o/window_sorted.benchmark.template
+QPAD=01
+FN=ROW_NUMBER
+PK_MOD=100
+OB_EXPR=v2
+OB_BOUND=count(DISTINCT ob) > 1000
+NAME=window_sorted_q01_row_number_100_partitions

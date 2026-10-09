@@ -759,7 +759,7 @@ fn bench_dict_int32(
     let mut rng = StdRng::seed_from_u64(seed);
 
     let dict_values: Vec<i32> = (0..dict_size).map(|_| rng.random()).collect();
-    let haystack: Vec<i32> = dict_values.iter().take(list_size).cloned().collect();
+    let haystack: Vec<i32> = dict_values.iter().take(list_size).copied().collect();
 
     let indices: Vec<i32> = (0..ARRAY_SIZE)
         .map(|_| rng.random_range(0..dict_size as i32))
@@ -1169,6 +1169,8 @@ fn generate_fixed_size_binary_data(
     (haystack, values)
 }
 
+// The cast only checks alignment; the pointer is never dereferenced.
+#[expect(clippy::cast_ptr_alignment)]
 fn unaligned_fixed_size_binary_16(values: &[Vec<u8>]) -> FixedSizeBinaryArray {
     const WIDTH: usize = 16;
     let payload_len = values.len() * WIDTH;

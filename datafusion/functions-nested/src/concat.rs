@@ -32,7 +32,7 @@ use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::Result;
 use datafusion_common::utils::{
-    ListCoercion, base_type, coerced_type_with_base_type_only,
+    ListCoercion, base_type, coerced_type_with_base_type_only, offset_span_len,
 };
 use datafusion_common::{
     cast::as_generic_list_array,
@@ -441,8 +441,11 @@ fn concat_internal<O: OffsetSizeTrait>(
         list_arrays.iter().map(|la| la.values().to_data()).collect();
     let values_data_refs: Vec<&ArrayData> = values_data.iter().collect();
 
-    // Estimate capacity as the sum of all values arrays' lengths.
-    let total_capacity: usize = values_data.iter().map(|d| d.len()).sum();
+    // Only reserve for values covered by the visible rows of each input.
+    let total_capacity: usize = list_arrays
+        .iter()
+        .map(|array| offset_span_len(array.offsets()))
+        .sum();
 
     let mut mutable = MutableArrayData::with_capacities(
         values_data_refs,
@@ -572,7 +575,8 @@ where
 ///
 /// This function takes a ListArray, an ArrayRef, a FieldRef, and a boolean flag
 /// indicating whether to append or prepend the elements. It returns a `Result<ArrayRef>`
-/// representing the resulting ListArray after the operation.
+/// representing the resulting ListArray after the operation. A NULL list is
+/// treated as an empty list, so its result holds only the element.
 ///
 /// # Arguments
 ///
@@ -583,10 +587,13 @@ where
 ///
 /// # Examples
 ///
+/// ```text
 /// generic_append_and_prepend(
 ///     [1, 2, 3], 4, append => [1, 2, 3, 4]
 ///     5, [6, 7, 8], prepend => [5, 6, 7, 8]
+///     NULL, 4, append => [4]
 /// )
+/// ```
 fn generic_append_and_prepend<O: OffsetSizeTrait>(
     list_array: &GenericListArray<O>,
     element_array: &ArrayRef,
@@ -600,7 +607,8 @@ where
     let values = list_array.values();
     let original_data = values.to_data();
     let element_data = element_array.to_data();
-    let capacity = Capacities::Array(original_data.len() + element_data.len());
+    let capacity =
+        Capacities::Array(offset_span_len(list_array.offsets()) + element_array.len());
 
     let mut mutable = MutableArrayData::with_capacities(
         vec![&original_data, &element_data],
@@ -612,8 +620,14 @@ where
     let element_index = 1;
 
     for (row_index, offset_window) in list_array.offsets().windows(2).enumerate() {
-        let start = offset_window[0].to_usize().unwrap();
-        let end = offset_window[1].to_usize().unwrap();
+        let (start, end) = if list_array.is_null(row_index) {
+            (0, 0)
+        } else {
+            (
+                offset_window[0].to_usize().unwrap(),
+                offset_window[1].to_usize().unwrap(),
+            )
+        };
         if is_append {
             mutable.try_extend(values_index, start, end)?;
             mutable.try_extend(element_index, row_index, row_index + 1)?;
@@ -632,4 +646,29 @@ where
         arrow::array::make_array(data),
         None,
     )?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_concat_sliced_capacity() -> Result<()> {
+        crate::utils::tests::check_sliced_list_behavior(|input| {
+            array_concat_inner(&[Arc::clone(input), Arc::clone(input)])
+        })
+    }
+
+    #[test]
+    fn test_append_sliced_capacity() -> Result<()> {
+        crate::utils::tests::check_sliced_list_behavior(|input| {
+            array_append_inner(
+                &[
+                    Arc::clone(input),
+                    Arc::new(arrow::array::Float64Array::from(vec![3.0; input.len()])),
+                ],
+                input.data_type(),
+            )
+        })
+    }
 }

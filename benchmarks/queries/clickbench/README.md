@@ -260,8 +260,73 @@ FROM hits
 WHERE "URL" < 'zzzz';
 ```
 
+### Q14: Grouped `COUNT(DISTINCT <string>)` beside a non-distinct `COUNT(*)`
+
+**Question**: "For the top 10 search phrases by hit count, how many distinct
+mobile phone models were used?"
+
+**Important Query Properties**: A single `COUNT(DISTINCT)` over a high
+cardinality string, next to a non-distinct `COUNT(*)`, grouped by a high
+cardinality string.
+
+`COUNT(DISTINCT)` has a specialized `GroupsAccumulator` for the integer types
+and for no other type. Every other type falls back to
+`GroupsAccumulatorAdapter`, which holds one boxed `Accumulator`, and therefore
+one hash table, for each group. The cost of that fallback is per group, so it is
+the group cardinality that decides how much it costs.
+
+Extended Q2 above is the only other query that puts a `COUNT(DISTINCT)` on a
+non-integer column, and it groups by `BrowserCountry`. This query groups by
+`SearchPhrase` instead, which has far more distinct values, so it exercises the
+adapter where its cost actually scales.
+
+The shape is also the one `SingleDistinctToGroupBy` reasons about. That rule
+rewrites a lone distinct aggregate into a two phase group by, which is what
+keeps it off the adapter. Standard Q8, Q10, Q11 and Q13 are already rewritten
+because their distinct aggregate stands alone, and Q9 is not because it carries
+an `AVG`. Q22 is the only standard query that pairs a lone distinct aggregate
+with a non-distinct count, and its distinct argument is an `Int64`, which has a
+specialized accumulator and never reaches the adapter. So no query in either
+suite covers a lone `COUNT(DISTINCT <string>)` next to a non-distinct count.
+
+```sql
+SELECT "SearchPhrase", COUNT(*) AS c, COUNT(DISTINCT "MobilePhoneModel") AS models
+FROM hits
+WHERE "SearchPhrase" <> ''
+GROUP BY "SearchPhrase"
+ORDER BY c DESC
+LIMIT 10;
+```
 
 
+
+### Q15: Correlation of ad slot dimensions per user
+
+**Question**: "How correlated are the width and height of the screens each user browses from?"
+
+**Important Query Properties**: `covar_samp` over a very high cardinality `GROUP BY` (about 17.6M distinct `UserID`s). Q16 is the low cardinality version of this query.
+
+```sql
+SELECT MAX(c) FROM (
+    SELECT covar_samp("ResolutionWidth", "ResolutionHeight") as c
+    FROM hits
+    GROUP BY "UserID"
+);
+```
+
+### Q16: Correlation of ad slot dimensions per region
+
+**Question**: "How correlated are the width and height of the screens browsed from in each region?"
+
+**Important Query Properties**: the same `covar_samp` aggregate as Q15, but over about 9,000 distinct `RegionID`s instead of 17.6M. It is the low cardinality version of Q15.
+
+```sql
+SELECT MAX(c) FROM (
+    SELECT covar_samp("ResolutionWidth", "ResolutionHeight") as c
+    FROM hits
+    GROUP BY "RegionID"
+);
+```
 
 ## Data Notes
 

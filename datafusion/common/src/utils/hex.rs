@@ -153,8 +153,8 @@ pub fn encode_bytes_to_slice(bytes: &[u8], case: HexCase, out: &mut [u8]) -> Res
         );
     }
     let lookup = case.lookup();
-    for (&b, chunk) in bytes.iter().zip(out.chunks_exact_mut(2)) {
-        chunk.copy_from_slice(&lookup[b as usize]);
+    for (&b, chunk) in bytes.iter().zip(out.as_chunks_mut::<2>().0) {
+        *chunk = lookup[b as usize];
     }
     Ok(())
 }
@@ -241,6 +241,7 @@ fn write_digits(v: u64, case: HexCase, buf: &mut [u8; 16]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Write as _;
 
     fn hex_u64(v: u64, case: HexCase) -> String {
         let mut buf = [0u8; 16];
@@ -319,10 +320,16 @@ mod tests {
     fn encode_bytes_covers_every_byte_value() {
         let bytes: Vec<u8> = (0..=255u8).collect();
 
-        let expected: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+        let expected: String = bytes.iter().fold(String::new(), |mut acc, b| {
+            write!(acc, "{b:02x}").ok();
+            acc
+        });
         assert_eq!(encode_bytes(&bytes, HexCase::Lower), expected);
 
-        let expected: String = bytes.iter().map(|b| format!("{b:02X}")).collect();
+        let expected: String = bytes.iter().fold(String::new(), |mut acc, b| {
+            write!(acc, "{b:02X}").ok();
+            acc
+        });
         assert_eq!(encode_bytes(&bytes, HexCase::Upper), expected);
     }
 

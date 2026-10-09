@@ -29,7 +29,7 @@ use arrow::array::{
 };
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{
-    DataType, Field, FieldRef, Fields, Schema, SchemaRef, TimeUnit, UInt32Type,
+    DataType, Field, FieldRef, Fields, Metadata, Schema, SchemaRef, TimeUnit, UInt32Type,
     UnionFields,
 };
 use arrow::record_batch::RecordBatch;
@@ -37,6 +37,7 @@ use datafusion::catalog::{
     CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, SchemaProvider, Session,
 };
 use datafusion::common::config::Dialect;
+use datafusion::common::stats::Precision;
 use datafusion::common::{DataFusionError, Result, not_impl_err};
 use datafusion::functions::math::abs;
 use datafusion::logical_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
@@ -61,8 +62,13 @@ use range_partitioning::{
 use async_trait::async_trait;
 use datafusion::common::cast::as_float64_array;
 use datafusion::execution::SessionStateBuilder;
-use datafusion::execution::runtime_env::RuntimeEnv;
-use datafusion::physical_plan::operator_statistics::StatisticsRegistry;
+use datafusion::execution::memory_pool::UnboundedMemoryPool;
+use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+use datafusion::physical_plan::joins::HashJoinExec;
+use datafusion::physical_plan::operator_statistics::{
+    ClosureStatisticsProvider, StatisticsRegistry, StatisticsResult,
+};
+use datafusion::physical_plan::statistics::StatisticsArgs;
 use log::info;
 use sqlparser::ast;
 use tempfile::TempDir;
@@ -85,8 +91,7 @@ impl TypePlanner for SqlLogicTestTypePlanner {
         match sql_type {
             ast::DataType::Uuid => Ok(Some(Arc::new(
                 Field::new("", DataType::FixedSizeBinary(16), true).with_metadata(
-                    [("ARROW:extension:name".to_string(), "arrow.uuid".to_string())]
-                        .into(),
+                    Metadata::new().with("ARROW:extension:name", "arrow.uuid"),
                 ),
             ))),
             _ => Ok(None),
@@ -111,7 +116,14 @@ impl TestContext {
         let config = SessionConfig::new()
             // hardcode target partitions so plans are deterministic
             .with_target_partitions(4);
-        let runtime = Arc::new(RuntimeEnv::default());
+        let pool = crate::memory_drift::wrap_pool(
+            Arc::new(UnboundedMemoryPool::default()),
+            &relative_path.display().to_string(),
+        );
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(pool)
+            .build_arc()
+            .expect("default runtime builds");
 
         let mut state_builder = SessionStateBuilder::new()
             .with_config(config)
@@ -137,9 +149,31 @@ impl TestContext {
             relative_path.file_name().and_then(|name| name.to_str()),
             Some("statistics_registry.slt")
         ) {
-            state_builder = state_builder.with_statistics_registry(
-                StatisticsRegistry::default_with_builtin_providers(),
+            // Replaces the join estimate with the Cartesian product
+            let join_provider = ClosureStatisticsProvider::with_matches(
+                |plan| plan.downcast_ref::<HashJoinExec>().is_some(),
+                |plan, child_stats| {
+                    let (Some(&left_rows), Some(&right_rows)) = (
+                        child_stats[0].base().num_rows.get_value(),
+                        child_stats[1].base().num_rows.get_value(),
+                    ) else {
+                        return Ok(StatisticsResult::Delegate);
+                    };
+                    let child_base = child_stats
+                        .iter()
+                        .map(|c| Arc::clone(c.base_arc()))
+                        .collect::<Vec<_>>();
+                    let mut stats = Arc::unwrap_or_clone(
+                        plan.statistics_from_inputs(&child_base, &StatisticsArgs::new())?,
+                    );
+                    stats.num_rows =
+                        Precision::Inexact(left_rows.saturating_mul(right_rows));
+                    Ok(StatisticsResult::Computed(stats.into()))
+                },
             );
+            let registry =
+                StatisticsRegistry::with_providers(vec![Arc::new(join_provider)]);
+            state_builder = state_builder.with_statistics_registry(registry);
         }
 
         let state = state_builder.build();
@@ -148,6 +182,9 @@ impl TestContext {
 
         let file_name = relative_path.file_name().unwrap().to_str().unwrap();
         match file_name {
+            "parquet_missing_bounds.slt" => {
+                register_parquet_missing_bounds(&mut test_ctx).await;
+            }
             "cte.slt" => {
                 info!("Registering strict schema provider for CTE tests");
                 register_strict_schema_provider(test_ctx.session_ctx());
@@ -219,7 +256,7 @@ impl TestContext {
             _ => {
                 info!("Using default SessionContext");
             }
-        };
+        }
 
         Some(test_ctx)
     }
@@ -241,6 +278,35 @@ impl TestContext {
     /// Returns a reference to the internal SessionContext
     pub fn session_ctx(&self) -> &SessionContext {
         &self.ctx
+    }
+
+    /// Apply `key = value` config overrides to the `SessionContext` in place,
+    /// used by the runner to sweep `# configMatrix:` directives.
+    ///
+    /// Each override runs as `SET <key> = '<value>'`, the same path an in-file
+    /// `SET` takes, so it accepts any key `SET` does: `datafusion.runtime.*` keys
+    /// reach the runtime environment and config-dependent UDFs are refreshed.
+    /// Values are single-quoted (embedded quotes doubled) so strings like
+    /// timezones and `100M` parse as literals.
+    ///
+    /// `origin` labels error messages, typically the test file path.
+    pub async fn apply_config_overrides(
+        &self,
+        overrides: &[(String, String)],
+        origin: &Path,
+    ) -> Result<()> {
+        for (key, value) in overrides {
+            // Single-quote as a string literal, doubling embedded quotes.
+            let escaped = value.replace('\'', "''");
+            let sql = format!("SET {key} = '{escaped}'");
+            self.ctx.sql(&sql).await.map_err(|e| {
+                e.context(format!(
+                    "configMatrix in {}: failed to set `{key}` = `{value}`",
+                    origin.display()
+                ))
+            })?;
+        }
+        Ok(())
     }
 }
 
@@ -381,6 +447,77 @@ pub async fn register_partition_table(test_ctx: &mut TestContext) {
             "test_partition_table",
             test_ctx.testdir_path().to_str().unwrap(),
             CsvReadOptions::new().schema(&schema),
+        )
+        .await
+        .unwrap();
+}
+
+/// Write row groups with different statistics settings using the public writer API.
+async fn register_parquet_missing_bounds(test_ctx: &mut TestContext) {
+    use datafusion::parquet::column::writer::ColumnWriterImpl;
+    use datafusion::parquet::data_type::{ByteArray, ByteArrayType};
+    use datafusion::parquet::file::properties::{EnabledStatistics, WriterProperties};
+    use datafusion::parquet::file::writer::{
+        SerializedFileWriter, SerializedPageWriter, TrackedWrite,
+    };
+    use datafusion::parquet::schema::parser::parse_message_type;
+
+    test_ctx.enable_testdir();
+    let path = test_ctx.testdir_path().join("missing_bounds.parquet");
+    let column_path = test_ctx.testdir_path().join("column.pages");
+    let schema = Arc::new(
+        parse_message_type("message schema { REQUIRED BINARY a (UTF8); }").unwrap(),
+    );
+    let mut writer = SerializedFileWriter::new(
+        File::create(&path).unwrap(),
+        schema,
+        Arc::new(WriterProperties::default()),
+    )
+    .unwrap();
+    let long_value = "z".repeat(8192);
+    for (values, statistics) in [
+        (["a", "b"], EnabledStatistics::Chunk),
+        (
+            [long_value.as_str(), long_value.as_str()],
+            EnabledStatistics::None,
+        ),
+    ] {
+        // parquet-rs truncates long extrema rather than omitting them. Disable
+        // statistics for the second chunk to exercise the missing-bound case
+        // produced naturally by writers such as PyArrow, without editing metadata.
+        let properties = Arc::new(
+            WriterProperties::builder()
+                .set_statistics_enabled(statistics)
+                .build(),
+        );
+        let mut buffer = TrackedWrite::new(File::create(&column_path).unwrap());
+        let mut column = ColumnWriterImpl::<ByteArrayType>::new(
+            writer.schema_descr().column(0),
+            properties,
+            Box::new(SerializedPageWriter::new(&mut buffer)),
+        );
+        let values = values.map(ByteArray::from);
+        column.write_batch(&values, None, None).unwrap();
+        let result = column.close().unwrap();
+        assert_eq!(
+            result.metadata.statistics().is_some(),
+            statistics == EnabledStatistics::Chunk
+        );
+        buffer.into_inner().unwrap();
+        let mut group = writer.next_row_group().unwrap();
+        group
+            .append_column(&File::open(&column_path).unwrap(), result)
+            .unwrap();
+        group.close().unwrap();
+    }
+    writer.close().unwrap();
+    std::fs::remove_file(&column_path).unwrap();
+    test_ctx
+        .ctx
+        .register_parquet(
+            "missing_bounds",
+            path.to_str().unwrap(),
+            ParquetReadOptions::default(),
         )
         .await
         .unwrap();
@@ -709,23 +846,25 @@ fn register_dictionary_struct_table(ctx: &SessionContext) {
 
     ctx.register_batch("dict_struct_table", batch).unwrap();
 
-    // Second table: dictionary-encoded struct with nullable entries
-    let names_nullable = Arc::new(StringArray::from(vec!["X", "Y"])) as ArrayRef;
-    let ids_nullable = Arc::new(Int32Array::from(vec![10, 20])) as ArrayRef;
+    // Second table: null keys, null structs with valid children, and null children.
+    let names_nullable =
+        Arc::new(StringArray::from(vec!["X", "Y", "hidden"])) as ArrayRef;
+    let ids_nullable =
+        Arc::new(Int32Array::from(vec![Some(10), None, Some(30)])) as ArrayRef;
     let struct_fields_nullable: Fields = vec![
         Field::new("name", DataType::Utf8, false),
-        Field::new("id", DataType::Int32, false),
+        Field::new("id", DataType::Int32, true),
     ]
     .into();
     let values_struct_nullable = Arc::new(
         StructArray::try_new(
             struct_fields_nullable.clone(),
             vec![names_nullable, ids_nullable],
-            None,
+            Some(vec![true, true, false].into()),
         )
         .unwrap(),
     ) as ArrayRef;
-    let keys_nullable = UInt32Array::from(vec![Some(0), None, Some(1), None]);
+    let keys_nullable = UInt32Array::from(vec![Some(0), None, Some(1), Some(2), Some(2)]);
     let dict_nullable =
         DictionaryArray::<UInt32Type>::try_new(keys_nullable, values_struct_nullable)
             .unwrap();
@@ -807,4 +946,78 @@ fn register_conflicting_metadata_tables(ctx: &SessionContext) {
     let batch_right =
         RecordBatch::try_new(Arc::new(schema_right), vec![Arc::new(data_right)]).unwrap();
     ctx.register_batch("smaller_table", batch_right).unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion::execution::memory_pool::MemoryConsumer;
+
+    /// Non-runtime keys land on `ConfigOptions`, same as a plain `SET`.
+    #[tokio::test]
+    async fn apply_config_overrides_sets_config_options() {
+        let test_ctx = TestContext::new(SessionContext::new());
+        test_ctx
+            .apply_config_overrides(
+                &[(
+                    "datafusion.execution.batch_size".to_string(),
+                    "1234".to_string(),
+                )],
+                Path::new("test.slt"),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            test_ctx
+                .session_ctx()
+                .state()
+                .config()
+                .options()
+                .execution
+                .batch_size
+                .to_string(),
+            "1234"
+        );
+    }
+
+    /// `datafusion.runtime.*` keys reach the runtime environment, not just
+    /// `ConfigOptions` (a direct write would reject `runtime` keys).
+    #[tokio::test]
+    async fn apply_config_overrides_routes_runtime_keys() {
+        let test_ctx = TestContext::new(SessionContext::new());
+        test_ctx
+            .apply_config_overrides(
+                &[(
+                    "datafusion.runtime.memory_limit".to_string(),
+                    "100M".to_string(),
+                )],
+                Path::new("test.slt"),
+            )
+            .await
+            .unwrap();
+
+        // The override took effect: the pool now caps reservations at 100M.
+        let pool = Arc::clone(&test_ctx.session_ctx().runtime_env().memory_pool);
+        let reservation = MemoryConsumer::new("test").register(&pool);
+        assert!(reservation.try_grow(50 * 1024 * 1024).is_ok());
+        assert!(reservation.try_grow(100 * 1024 * 1024).is_err());
+    }
+
+    /// An unknown key still fails fast, naming the originating file.
+    #[tokio::test]
+    async fn apply_config_overrides_reports_invalid_key() {
+        let test_ctx = TestContext::new(SessionContext::new());
+        let err = test_ctx
+            .apply_config_overrides(
+                &[("datafusion.does.not.exist".to_string(), "1".to_string())],
+                Path::new("bad.slt"),
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("bad.slt"), "got {err}");
+        assert!(err.contains("datafusion.does.not.exist"), "got {err}");
+    }
 }

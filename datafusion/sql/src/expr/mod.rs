@@ -24,19 +24,20 @@ use datafusion_expr::planner::{
 use sqlparser::ast::{
     AccessExpr, BinaryOperator, CastFormat, CastKind, CeilFloorKind,
     DataType as SQLDataType, DateTimeField, DictionaryField, Expr as SQLExpr,
-    ExprWithAlias as SQLExprWithAlias, JsonPath, MapEntry, Spanned, StructField,
-    Subscript, TrimWhereField, TypedString, Value, ValueWithSpan,
+    ExprWithAlias as SQLExprWithAlias, JsonPath, JsonPathElem, MapEntry, Spanned,
+    StructField, Subscript, TrimWhereField, TypedString, Value, ValueWithSpan,
 };
 use sqlparser::ast::{Query, Visit, Visitor};
 
 use datafusion_common::{
-    DFSchema, Diagnostic, Result, ScalarValue, Span, internal_datafusion_err,
+    DFSchema, Diagnostic, HashMap, Result, ScalarValue, Span, internal_datafusion_err,
     internal_err, not_impl_err, plan_err,
 };
 
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr::SetQuantifier;
 use datafusion_expr::expr::{InList, WildcardOptions};
+use datafusion_expr::utils::{find_window_exprs, window_function_not_allowed_err};
 use datafusion_expr::{
     Between, BinaryExpr, Cast, Expr, ExprSchemable, GetFieldAccess, Like, Literal,
     Operator, TryCast, lit, when,
@@ -137,10 +138,106 @@ impl<S: ContextProvider> Visitor for NullEqualityPredicateVisitor<'_, '_, S> {
     }
 }
 
+/// Finds the location of the first window function call in a SQL expression.
+/// An identifier that is an alias of a `SELECT` expression containing a window
+/// function call counts as well, since aliases are resolved before the window
+/// function check (`HAVING total > 0` where `total` is `sum(x) OVER ()`).
+/// Subqueries are skipped: window functions are legal there.
+struct WindowFunctionSpanVisitor<'a, 'b, S: ContextProvider> {
+    sql_to_rel: &'a SqlToRel<'b, S>,
+    aliases: &'a HashMap<String, Expr>,
+    subquery_depth: usize,
+    span: Option<sqlparser::tokenizer::Span>,
+}
+
+impl<S: ContextProvider> Visitor for WindowFunctionSpanVisitor<'_, '_, S> {
+    type Break = ();
+
+    fn pre_visit_query(&mut self, _query: &Query) -> ControlFlow<Self::Break> {
+        self.subquery_depth += 1;
+        ControlFlow::Continue(())
+    }
+
+    fn post_visit_query(&mut self, _query: &Query) -> ControlFlow<Self::Break> {
+        self.subquery_depth -= 1;
+        ControlFlow::Continue(())
+    }
+
+    fn pre_visit_expr(&mut self, expr: &SQLExpr) -> ControlFlow<Self::Break> {
+        if self.subquery_depth > 0 {
+            return ControlFlow::Continue(());
+        }
+        let found = match expr {
+            SQLExpr::Function(function) => function.over.is_some(),
+            SQLExpr::Identifier(ident) => {
+                let name = self.sql_to_rel.ident_normalizer.normalize(ident.clone());
+                self.aliases
+                    .get(&name)
+                    .is_some_and(|aliased| !find_window_exprs([aliased]).is_empty())
+            }
+            _ => false,
+        };
+        if found {
+            self.span = Some(expr.span());
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    }
+}
+
+/// Help for a window function in `WHERE` or `HAVING`: `QUALIFY` is the clause
+/// that filters on window function results.
+pub(crate) const QUALIFY_HELP: &str = "Move the condition that uses this window function to a QUALIFY clause, which is evaluated after window functions are computed";
+
+/// Returns an error if `expr`, planned from a clause where window functions
+/// cannot be evaluated, contains a window function call. `clause` names it in
+/// the message, `help` says how to rewrite the query and `span` is the location
+/// of the call in the SQL text, see [`SqlToRel::window_function_span`].
+///
+/// The physical planner rejects such expressions in every position, but
+/// without a span or a clause-specific hint. This check exists to give a
+/// better error for the common mistakes.
+pub(crate) fn reject_window_functions(
+    expr: &Expr,
+    clause: &str,
+    help: &str,
+    span: Option<Span>,
+) -> Result<()> {
+    match find_window_exprs([expr]).into_iter().next() {
+        None => Ok(()),
+        Some(window) => Err(window_function_not_allowed_err(&window, clause, span, help)),
+    }
+}
+
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(crate) fn warn_on_null_equality_predicate(&self, predicate: &SQLExpr) {
         let mut visitor = NullEqualityPredicateVisitor::new(self);
         let _ = predicate.visit(&mut visitor);
+    }
+
+    /// The location in the SQL text of the first window function call in
+    /// `expr`, or of the first identifier that is an alias (in `aliases`) of a
+    /// `SELECT` expression containing one. Falls back to the location of the
+    /// whole of `expr`, and returns `None` only if the parser recorded no
+    /// spans.
+    ///
+    /// Used to point the [`Diagnostic`] for a window function in `WHERE` or
+    /// `HAVING` at the offending call, which the planned [`Expr`] cannot do:
+    /// only columns carry spans there.
+    pub(crate) fn window_function_span(
+        &self,
+        expr: &SQLExpr,
+        aliases: &HashMap<String, Expr>,
+    ) -> Option<Span> {
+        let mut visitor = WindowFunctionSpanVisitor {
+            sql_to_rel: self,
+            aliases,
+            subquery_depth: 0,
+            span: None,
+        };
+        let _ = expr.visit(&mut visitor);
+        Span::try_from_sqlparser_span(visitor.span.unwrap_or_else(|| expr.span()))
     }
 
     pub(crate) fn sql_expr_to_logical_expr_with_alias(
@@ -216,21 +313,31 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         right: Expr,
         schema: &DFSchema,
     ) -> Result<Expr> {
-        // try extension planers
-        let mut binary_expr = RawBinaryExpr { op, left, right };
+        let binary_expr = RawBinaryExpr { op, left, right };
+        match self.try_plan_binary_op(binary_expr, schema)? {
+            PlannerResult::Planned(expr) => Ok(expr),
+            PlannerResult::Original(RawBinaryExpr { op, left, right }) => {
+                self.build_binary_expr(&op, left, right)
+            }
+        }
+    }
+
+    fn try_plan_binary_op(
+        &self,
+        mut binary_expr: RawBinaryExpr,
+        schema: &DFSchema,
+    ) -> Result<PlannerResult<RawBinaryExpr>> {
         for planner in self.context_provider.get_expr_planners() {
             match planner.plan_binary_op(binary_expr, schema)? {
                 PlannerResult::Planned(expr) => {
-                    return Ok(expr);
+                    return Ok(PlannerResult::Planned(expr));
                 }
                 PlannerResult::Original(expr) => {
                     binary_expr = expr;
                 }
             }
         }
-
-        let RawBinaryExpr { op, left, right } = binary_expr;
-        self.build_binary_expr(&op, left, right)
+        Ok(PlannerResult::Original(binary_expr))
     }
 
     pub fn sql_to_expr_with_alias(
@@ -353,16 +460,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 planner_context,
             ),
 
-            SQLExpr::Cast { array: true, .. } => {
-                not_impl_err!("`CAST(... AS type ARRAY`) not supported")
-            }
-
             SQLExpr::Cast {
                 kind: CastKind::Cast | CastKind::DoubleColon,
                 expr,
                 data_type,
                 format,
-                array: false,
             } => {
                 self.sql_cast_to_expr(*expr, &data_type, format, schema, planner_context)
             }
@@ -372,7 +474,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 expr,
                 data_type,
                 format,
-                array: false,
             } => {
                 if let Some(format) = format {
                     return not_impl_err!("CAST with format is not supported: {format}");
@@ -749,20 +850,72 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         value: Box<SQLExpr>,
         path: &JsonPath,
     ) -> Result<Expr> {
+        let value = self.sql_to_expr(*value, schema, planner_context)?;
         let json_path = path.to_string();
-        let json_path = if let Some(json_path) = json_path.strip_prefix(":") {
-            // sqlparser's JsonPath display adds an extra `:` at the beginning.
-            json_path.to_owned()
-        } else {
-            json_path
+        let json_path = json_path.strip_prefix(":").unwrap_or(&json_path);
+        let binary_expr = RawBinaryExpr {
+            op: BinaryOperator::Custom(":".to_owned()),
+            left: value,
+            right: Expr::Literal(ScalarValue::Utf8(Some(json_path.to_owned())), None),
         };
-        self.build_logical_expr(
-            BinaryOperator::Custom(":".to_owned()),
-            self.sql_to_expr(*value, schema, planner_context)?,
-            // pass json path as a string literal, let the impl parse it when needed.
-            Expr::Literal(ScalarValue::Utf8(Some(json_path)), None),
-            schema,
-        )
+        let binary_expr = match self.try_plan_binary_op(binary_expr, schema)? {
+            PlannerResult::Planned(expr) => return Ok(expr),
+            PlannerResult::Original(expr) => expr,
+        };
+
+        if !path.path.is_empty()
+            && matches!(&binary_expr.op, BinaryOperator::Custom(op) if op == ":")
+            && is_struct_like(&binary_expr.left.get_type(schema)?)
+            && path
+                .path
+                .iter()
+                .all(|element| struct_field_name_from_json_path_elem(element).is_some())
+        {
+            let mut planned = binary_expr.left.clone();
+            let mut all_fields_planned = true;
+
+            for element in &path.path {
+                let field_name = struct_field_name_from_json_path_elem(element)
+                    .expect("all path elements were checked above");
+                let field_access = RawFieldAccessExpr {
+                    expr: planned,
+                    field_access: GetFieldAccess::NamedStructField {
+                        name: ScalarValue::from(field_name),
+                    },
+                };
+                match self.try_plan_field_access(field_access, schema)? {
+                    PlannerResult::Planned(expr) => planned = expr,
+                    PlannerResult::Original(field_access) => {
+                        planned = field_access.expr;
+                        all_fields_planned = false;
+                        break;
+                    }
+                }
+            }
+
+            if all_fields_planned {
+                return Ok(planned);
+            }
+        }
+
+        let RawBinaryExpr { op, left, right } = binary_expr;
+        self.build_binary_expr(&op, left, right)
+    }
+
+    fn try_plan_field_access(
+        &self,
+        mut field_access_expr: RawFieldAccessExpr,
+        schema: &DFSchema,
+    ) -> Result<PlannerResult<RawFieldAccessExpr>> {
+        for planner in self.context_provider.get_expr_planners() {
+            match planner.plan_field_access(field_access_expr, schema)? {
+                PlannerResult::Planned(expr) => {
+                    return Ok(PlannerResult::Planned(expr));
+                }
+                PlannerResult::Original(expr) => field_access_expr = expr,
+            }
+        }
+        Ok(PlannerResult::Original(field_access_expr))
     }
 
     /// Parses a struct(..) expression and plans it creation
@@ -971,7 +1124,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         negated: bool,
         expr: SQLExpr,
         pattern: SQLExpr,
-        escape_char: Option<ValueWithSpan>,
+        escape_char: Option<Box<SQLExpr>>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
         case_insensitive: bool,
@@ -981,13 +1134,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return not_impl_err!("ANY in LIKE expression");
         }
         let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
-        let escape_char = match escape_char.map(|v| v.value) {
-            Some(Value::SingleQuotedString(char)) if char.len() == 1 => {
-                Some(char.chars().next().unwrap())
-            }
-            Some(value) => {
+        let escape_char = match escape_char.map(|e| *e) {
+            Some(SQLExpr::Value(ValueWithSpan {
+                value: Value::SingleQuotedString(char),
+                ..
+            })) if char.len() == 1 => Some(char.chars().next().unwrap()),
+            Some(expr) => {
                 return plan_err!(
-                    "Invalid escape character in LIKE expression. Expected a single character wrapped with single quotes, got {value}"
+                    "Invalid escape character in LIKE expression. Expected a single character wrapped with single quotes, got {expr}"
                 );
             }
             None => None,
@@ -1006,18 +1160,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         negated: bool,
         expr: SQLExpr,
         pattern: SQLExpr,
-        escape_char: Option<ValueWithSpan>,
+        escape_char: Option<Box<SQLExpr>>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
-        let escape_char = match escape_char.map(|v| v.value) {
-            Some(Value::SingleQuotedString(char)) if char.len() == 1 => {
-                Some(char.chars().next().unwrap())
-            }
-            Some(value) => {
+        let escape_char = match escape_char.map(|e| *e) {
+            Some(SQLExpr::Value(ValueWithSpan {
+                value: Value::SingleQuotedString(char),
+                ..
+            })) if char.len() == 1 => Some(char.chars().next().unwrap()),
+            Some(expr) => {
                 return plan_err!(
-                    "Invalid escape character in SIMILAR TO expression. Expected a single character wrapped with single quotes, got {value}"
+                    "Invalid escape character in SIMILAR TO expression. Expected a single character wrapped with single quotes, got {expr}"
                 );
             }
             None => None,
@@ -1310,19 +1465,44 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .into_iter()
             .flatten()
             .try_fold(root, |expr, field_access| {
-                let mut field_access_expr = RawFieldAccessExpr { expr, field_access };
-                for planner in self.context_provider.get_expr_planners() {
-                    match planner.plan_field_access(field_access_expr, schema)? {
-                        PlannerResult::Planned(expr) => return Ok(expr),
-                        PlannerResult::Original(expr) => {
-                            field_access_expr = expr;
-                        }
-                    }
+                let field_access_expr = RawFieldAccessExpr { expr, field_access };
+                match self.try_plan_field_access(field_access_expr, schema)? {
+                    PlannerResult::Planned(expr) => Ok(expr),
+                    PlannerResult::Original(field_access_expr) => not_impl_err!(
+                        "GetFieldAccess not supported by ExprPlanner: {field_access_expr:?}"
+                    ),
                 }
-                not_impl_err!(
-                    "GetFieldAccess not supported by ExprPlanner: {field_access_expr:?}"
-                )
             })
+    }
+}
+
+fn is_struct_like(data_type: &DataType) -> bool {
+    matches!(data_type, DataType::Struct(_))
+        || matches!(
+            data_type,
+            DataType::Dictionary(_, value_type)
+                if matches!(value_type.as_ref(), DataType::Struct(_))
+        )
+}
+
+fn struct_field_name_from_json_path_elem(element: &JsonPathElem) -> Option<&str> {
+    match element {
+        JsonPathElem::Dot { key, .. } => Some(key),
+        JsonPathElem::Bracket {
+            key:
+                SQLExpr::Value(ValueWithSpan {
+                    value: Value::SingleQuotedString(key) | Value::DoubleQuotedString(key),
+                    span: _,
+                }),
+        }
+        | JsonPathElem::ColonBracket {
+            key:
+                SQLExpr::Value(ValueWithSpan {
+                    value: Value::SingleQuotedString(key) | Value::DoubleQuotedString(key),
+                    span: _,
+                }),
+        } => Some(key),
+        JsonPathElem::Bracket { .. } | JsonPathElem::ColonBracket { .. } => None,
     }
 }
 

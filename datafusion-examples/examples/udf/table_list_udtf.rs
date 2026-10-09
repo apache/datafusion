@@ -21,13 +21,13 @@ use std::sync::{Arc, LazyLock};
 
 use arrow::array::{RecordBatch, StringBuilder};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use datafusion::common::{DataFusionError, plan_err};
 use datafusion::{
     catalog::{MemTable, TableFunctionArgs, TableFunctionImpl, TableProvider},
     common::Result,
     execution::SessionState,
     prelude::SessionContext,
 };
-use datafusion_common::{DataFusionError, plan_err};
 use tokio::{runtime::Handle, task::block_in_place};
 
 const FUNCTION_NAME: &str = "table_list";
