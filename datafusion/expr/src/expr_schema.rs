@@ -1538,6 +1538,8 @@ mod tests {
                 Field::new("b", DataType::Int32, false).with_metadata(shared.clone()),
                 Field::new("c", DataType::Int32, false).with_metadata(different),
                 Field::new("d", DataType::Int32, false),
+                Field::new("e", DataType::Boolean, false).with_metadata(shared.clone()),
+                Field::new("f", DataType::Boolean, false).with_metadata(shared.clone()),
             ]
             .into(),
             HashMap::new(),
@@ -1558,6 +1560,24 @@ mod tests {
             .when(lit(true), col("c"))
             .otherwise(col("b"))?;
         assert!(conflicting_when.to_field(&schema)?.1.metadata().is_empty());
+
+        let marked_literal = Expr::Literal(
+            ScalarValue::Int32(Some(1)),
+            Some(FieldMetadata::from(shared.clone())),
+        );
+        let literal_case = when(lit(true), marked_literal).otherwise(col("b"))?;
+        assert_eq!(literal_case.to_field(&schema)?.1.metadata(), &shared);
+
+        let unmarked_literal = when(lit(true), col("a")).otherwise(lit(1_i32))?;
+        assert!(unmarked_literal.to_field(&schema)?.1.metadata().is_empty());
+
+        let negative_case = when(lit(true), Expr::Negative(Box::new(col("a"))))
+            .otherwise(Expr::Negative(Box::new(col("b"))))?;
+        assert_eq!(negative_case.to_field(&schema)?.1.metadata(), &shared);
+
+        let unsupported_case =
+            when(lit(true), Expr::Not(Box::new(col("e")))).otherwise(col("f"))?;
+        assert!(unsupported_case.to_field(&schema)?.1.metadata().is_empty());
 
         let null_else = when(lit(true), col("a")).otherwise(lit(ScalarValue::Null))?;
         assert_eq!(null_else.to_field(&schema)?.1.metadata(), &shared);
