@@ -724,12 +724,13 @@ SELECT sum(c) FROM (SELECT random() < 0.5 AS k, count(*) AS c FROM generate_seri
 ----
 10000
 
-# Window filter pushdown over an expression PARTITION BY key.
+# Window filter pushdown over expression PARTITION BY keys.
 #
 # A predicate that reads only the partition keys is constant within a partition,
-# so pushing it below the window drops whole partitions and leaves every
-# surviving row's window value alone. The unit tests pin where the filter lands;
-# these pin that the answers do not move, which is what a wrong push breaks.
+# so it is pushed below the window; anything else stays above it.
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
 
 statement ok
 create table window_expr_key(k varchar, v int) as values
@@ -752,8 +753,20 @@ a 3 6
 (empty) 5 9
 b 6 6
 
-# Pushable: the predicate reads only the partition key, so partition 'a'
-# survives whole and its sum is still 1+2+3.
+# Pushed: the predicate reads only the partition key.
+query TT
+EXPLAIN SELECT k, v, s FROM (
+  SELECT k, v, SUM(v) OVER (PARTITION BY NULLIF(k, '')) AS s
+  FROM window_expr_key
+)
+WHERE NULLIF(k, '') = 'a';
+----
+logical_plan
+01)Projection: window_expr_key.k, window_expr_key.v, sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+02)--WindowAggr: windowExpr=[[sum(CAST(window_expr_key.v AS Int64)) PARTITION BY [nullif(window_expr_key.k, Utf8View(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+03)----Filter: nullif(window_expr_key.k, Utf8View("")) = Utf8View("a")
+04)------TableScan: window_expr_key projection=[k, v]
+
 query TII
 SELECT k, v, s FROM (
   SELECT k, v, SUM(v) OVER (PARTITION BY NULLIF(k, '')) AS s
@@ -766,9 +779,48 @@ a 1 6
 a 2 6
 a 3 6
 
-# Not pushable: `v` is not a partition key, so this takes rows out of a
-# partition rather than dropping partitions. Pushing it would recompute the
-# sums over the survivors and report 5 instead of 6 for partition 'a'.
+# Pushed: a predicate built on top of the key still reads only the key.
+query TT
+EXPLAIN SELECT k, v, s FROM (
+  SELECT k, v, SUM(v) OVER (PARTITION BY NULLIF(k, '')) AS s
+  FROM window_expr_key
+)
+WHERE NULLIF(k, '') IS NOT NULL;
+----
+logical_plan
+01)Projection: window_expr_key.k, window_expr_key.v, sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+02)--WindowAggr: windowExpr=[[sum(CAST(window_expr_key.v AS Int64)) PARTITION BY [nullif(window_expr_key.k, Utf8View(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+03)----Filter: nullif(window_expr_key.k, Utf8View("")) IS NOT NULL
+04)------TableScan: window_expr_key projection=[k, v]
+
+query TII
+SELECT k, v, s FROM (
+  SELECT k, v, SUM(v) OVER (PARTITION BY NULLIF(k, '')) AS s
+  FROM window_expr_key
+)
+WHERE NULLIF(k, '') IS NOT NULL
+ORDER BY v;
+----
+a 1 6
+a 2 6
+a 3 6
+b 6 6
+
+# Kept: `v` is not a partition key. Pushing it would recompute the sums over the
+# surviving rows and report 5 instead of 6 for partition 'a'.
+query TT
+EXPLAIN SELECT k, v, s FROM (
+  SELECT k, v, SUM(v) OVER (PARTITION BY NULLIF(k, '')) AS s
+  FROM window_expr_key
+)
+WHERE v > 1;
+----
+logical_plan
+01)Projection: window_expr_key.k, window_expr_key.v, sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+02)--Filter: window_expr_key.v > Int32(1)
+03)----WindowAggr: windowExpr=[[sum(CAST(window_expr_key.v AS Int64)) PARTITION BY [nullif(window_expr_key.k, Utf8View(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+04)------TableScan: window_expr_key projection=[k, v]
+
 query TII
 SELECT k, v, s FROM (
   SELECT k, v, SUM(v) OVER (PARTITION BY NULLIF(k, '')) AS s
@@ -783,9 +835,38 @@ a 3 6
 (empty) 5 9
 b 6 6
 
-# Not pushable: a subquery hides what it correlates on from the expression
-# walk, so it has to stay above the window even though its left-hand side is
-# the partition key.
+# Kept: `k` on its own is not a key, only NULLIF(k, '') is.
+query TT
+EXPLAIN SELECT k, v, s FROM (
+  SELECT k, v, SUM(v) OVER (PARTITION BY NULLIF(k, '')) AS s
+  FROM window_expr_key
+)
+WHERE k = 'a';
+----
+logical_plan
+01)Projection: window_expr_key.k, window_expr_key.v, sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+02)--Filter: window_expr_key.k = Utf8View("a")
+03)----WindowAggr: windowExpr=[[sum(CAST(window_expr_key.v AS Int64)) PARTITION BY [nullif(window_expr_key.k, Utf8View(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+04)------TableScan: window_expr_key projection=[k, v]
+
+# Kept: a subquery, even one whose left-hand side is the key.
+query TT
+EXPLAIN SELECT k, v, s FROM (
+  SELECT k, v, SUM(v) OVER (PARTITION BY NULLIF(k, '')) AS s
+  FROM window_expr_key
+)
+WHERE NULLIF(k, '') IN (SELECT k FROM window_expr_key WHERE v > 5);
+----
+logical_plan
+01)LeftSemi Join: nullif(window_expr_key.k, Utf8View("")) = __correlated_sq_1.k
+02)--Projection: window_expr_key.k, window_expr_key.v, sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+03)----WindowAggr: windowExpr=[[sum(CAST(window_expr_key.v AS Int64)) PARTITION BY [nullif(window_expr_key.k, Utf8View(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+04)------TableScan: window_expr_key projection=[k, v]
+05)--SubqueryAlias: __correlated_sq_1
+06)----Projection: window_expr_key.k
+07)------Filter: window_expr_key.v > Int32(5)
+08)--------TableScan: window_expr_key projection=[k, v]
+
 query TII
 SELECT k, v, s FROM (
   SELECT k, v, SUM(v) OVER (PARTITION BY NULLIF(k, '')) AS s
@@ -796,19 +877,137 @@ ORDER BY v;
 ----
 b 6 6
 
-# A predicate built on top of the key still reads only the key.
-query TII
-SELECT k, v, s FROM (
+# Kept: a scalar subquery.
+query TT
+EXPLAIN SELECT k, v, s FROM (
   SELECT k, v, SUM(v) OVER (PARTITION BY NULLIF(k, '')) AS s
   FROM window_expr_key
 )
-WHERE NULLIF(k, '') IS NOT NULL
-ORDER BY v;
+WHERE NULLIF(k, '') = (SELECT max(k) FROM window_expr_key);
 ----
-a 1 6
-a 2 6
-a 3 6
-b 6 6
+logical_plan
+01)Projection: window_expr_key.k, window_expr_key.v, sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+02)--Filter: nullif(window_expr_key.k, Utf8View("")) = (<subquery>)
+03)----Subquery:
+04)------Aggregate: groupBy=[[]], aggr=[[max(window_expr_key.k)]]
+05)--------TableScan: window_expr_key projection=[k]
+06)----WindowAggr: windowExpr=[[sum(CAST(window_expr_key.v AS Int64)) PARTITION BY [nullif(window_expr_key.k, Utf8View(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+07)------TableScan: window_expr_key projection=[k, v]
+
+# Kept: a volatile predicate, even one that reads no column at all.
+query TT
+EXPLAIN SELECT k, v, s FROM (
+  SELECT k, v, SUM(v) OVER (PARTITION BY NULLIF(k, '')) AS s
+  FROM window_expr_key
+)
+WHERE random() < 2;
+----
+logical_plan
+01)Projection: window_expr_key.k, window_expr_key.v, sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+02)--Filter: random() < Float64(2)
+03)----WindowAggr: windowExpr=[[sum(CAST(window_expr_key.v AS Int64)) PARTITION BY [nullif(window_expr_key.k, Utf8View(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+04)------TableScan: window_expr_key projection=[k, v]
 
 statement ok
 drop table window_expr_key;
+
+statement ok
+create table window_ab(a int, b int, c int) as values
+  (1, 1, 10), (1, 2, 20), (2, 2, 30), (3, 3, 40);
+
+# Pushed: an arithmetic expression key.
+query TT
+EXPLAIN SELECT a, b, s FROM (
+  SELECT a, b, SUM(c) OVER (PARTITION BY a + b) AS s FROM window_ab
+)
+WHERE a + b > 2;
+----
+logical_plan
+01)Projection: window_ab.a, window_ab.b, sum(window_ab.c) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+02)--WindowAggr: windowExpr=[[sum(CAST(window_ab.c AS Int64)) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+03)----Filter: window_ab.a + window_ab.b > Int32(2)
+04)------TableScan: window_ab projection=[a, b, c]
+
+# Pushed: the key appears twice in one predicate.
+query TT
+EXPLAIN SELECT a, b, s FROM (
+  SELECT a, b, SUM(c) OVER (PARTITION BY a + b) AS s FROM window_ab
+)
+WHERE a + b > 5 OR a + b < 3;
+----
+logical_plan
+01)Projection: window_ab.a, window_ab.b, sum(window_ab.c) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+02)--WindowAggr: windowExpr=[[sum(CAST(window_ab.c AS Int64)) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+03)----Projection: window_ab.a, window_ab.b, window_ab.c
+04)------Filter: __common_expr_3 > Int32(5) OR __common_expr_3 < Int32(3)
+05)--------Projection: window_ab.a + window_ab.b AS __common_expr_3, window_ab.a, window_ab.b, window_ab.c
+06)----------TableScan: window_ab projection=[a, b, c]
+
+# Pushed: a predicate over a column key and an expression key of the same window.
+query TT
+EXPLAIN SELECT a, b, s FROM (
+  SELECT a, b, SUM(c) OVER (PARTITION BY a, a + b) AS s FROM window_ab
+)
+WHERE a > 1 OR a + b > 4;
+----
+logical_plan
+01)Projection: window_ab.a, window_ab.b, sum(window_ab.c) PARTITION BY [window_ab.a, window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+02)--WindowAggr: windowExpr=[[sum(CAST(window_ab.c AS Int64)) PARTITION BY [window_ab.a, window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+03)----Filter: window_ab.a > Int32(1) OR window_ab.a + window_ab.b > Int32(4)
+04)------TableScan: window_ab projection=[a, b, c]
+
+# Kept: the match is structural, `b + a` is not the key `a + b`.
+query TT
+EXPLAIN SELECT a, b, s FROM (
+  SELECT a, b, SUM(c) OVER (PARTITION BY a + b) AS s FROM window_ab
+)
+WHERE b + a > 2;
+----
+logical_plan
+01)Projection: window_ab.a, window_ab.b, sum(window_ab.c) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+02)--Filter: window_ab.b + window_ab.a > Int32(2)
+03)----Projection: window_ab.a, window_ab.b, sum(window_ab.c) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+04)------WindowAggr: windowExpr=[[sum(CAST(window_ab.c AS Int64)) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+05)--------TableScan: window_ab projection=[a, b, c]
+
+# Pushed: every window function partitions by the key.
+query TT
+EXPLAIN SELECT a, b, s, r FROM (
+  SELECT a, b,
+    SUM(c) OVER (PARTITION BY a + b) AS s,
+    RANK() OVER (PARTITION BY a + b ORDER BY c) AS r
+  FROM window_ab
+)
+WHERE a + b > 2;
+----
+logical_plan
+01)Projection: window_ab.a, window_ab.b, sum(window_ab.c) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s, rank() PARTITION BY [window_ab.a + window_ab.b] ORDER BY [window_ab.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS r
+02)--WindowAggr: windowExpr=[[sum(CAST(window_ab.c AS Int64)) PARTITION BY [__common_expr_1 AS window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+03)----WindowAggr: windowExpr=[[rank() PARTITION BY [__common_expr_1 AS window_ab.a + window_ab.b] ORDER BY [window_ab.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------Projection: window_ab.a + window_ab.b AS __common_expr_1, window_ab.a, window_ab.b, window_ab.c
+05)--------Filter: window_ab.a + window_ab.b > Int32(2)
+06)----------TableScan: window_ab projection=[a, b, c]
+
+# Kept: one window function partitions by something else.
+query TT
+EXPLAIN SELECT a, b, s, r FROM (
+  SELECT a, b,
+    SUM(c) OVER (PARTITION BY a + b) AS s,
+    RANK() OVER (PARTITION BY a ORDER BY c) AS r
+  FROM window_ab
+)
+WHERE a + b > 2;
+----
+logical_plan
+01)Projection: window_ab.a, window_ab.b, sum(window_ab.c) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s, rank() PARTITION BY [window_ab.a] ORDER BY [window_ab.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS r
+02)--Filter: window_ab.a + window_ab.b > Int32(2)
+03)----Projection: window_ab.a, window_ab.b, sum(window_ab.c) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, rank() PARTITION BY [window_ab.a] ORDER BY [window_ab.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+04)------WindowAggr: windowExpr=[[rank() PARTITION BY [window_ab.a] ORDER BY [window_ab.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+05)--------WindowAggr: windowExpr=[[sum(CAST(window_ab.c AS Int64)) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+06)----------TableScan: window_ab projection=[a, b, c]
+
+statement ok
+drop table window_ab;
+
+statement ok
+set datafusion.explain.logical_plan_only = false;

@@ -1135,13 +1135,8 @@ impl OptimizerRule for PushDownFilter {
                 // multiple window functions, each with potentially different partition keys.
                 // Therefore, we need to ensure that any potential partition key returned is used in
                 // ALL window functions. Otherwise, filters cannot be pushed by through that column.
-                // Keyed by the partition *expression*, not by a name synthesised
-                // from it. `PARTITION BY a + b` used to be mapped through
-                // `qualified_name()` to a column literally called "a + b", which no
-                // predicate's real column refs could ever match, so such a key was
-                // dead weight in this set.
-                fn extract_partition_keys(func: &WindowFunction) -> HashSet<Expr> {
-                    func.params.partition_by.iter().cloned().collect()
+                fn extract_partition_keys(func: &WindowFunction) -> HashSet<&Expr> {
+                    func.params.partition_by.iter().collect()
                 }
 
                 let potential_partition_keys = window
@@ -1177,12 +1172,8 @@ impl OptimizerRule for PushDownFilter {
                 let mut keep_predicates = vec![];
                 let mut push_predicates = vec![];
                 for expr in predicates {
-                    // A volatile predicate has to stay above the window. Pushing it
-                    // changes which rows the window function sees, and so the value
-                    // it computes for the rows that do survive. Checking this first
-                    // also covers a volatile predicate that reads no columns at all,
-                    // such as `random() < 0.5`, which would otherwise satisfy the
-                    // partition-key test vacuously.
+                    // A volatile predicate has to stay above the window: pushing it
+                    // changes which rows the window function sees.
                     if !expr.is_volatile()
                         && reads_only_partition_keys(&expr, &potential_partition_keys)?
                     {
@@ -1596,33 +1587,27 @@ fn with_filters(predicates: Vec<Expr>, plan: LogicalPlan) -> LogicalPlan {
     }
 }
 
-/// Does `expr` read nothing beyond the given window partition keys?
+/// Can `expr` be evaluated below a window with these `PARTITION BY` keys?
 ///
-/// A subtree that is exactly one of the keys counts as read in full, so a
-/// predicate on an *expression* key, say `NULLIF(c, '') IS NOT NULL` against
-/// `PARTITION BY NULLIF(c, '')`, qualifies even though the column it ultimately
-/// reads (`c`) is not a key on its own. Such a predicate is constant within each
-/// partition, so applying it below the window drops whole partitions and leaves
-/// every surviving row's window value unchanged.
+/// A predicate that reads only the partition keys is constant within each
+/// partition, so filtering before the window drops whole partitions and leaves
+/// the surviving rows' window values unchanged. "Reads only the keys" is checked
+/// structurally: every column reference must sit inside a subtree that is equal
+/// to one of the keys. Given `PARTITION BY a, b + c`:
 ///
-/// Matching is structural, which makes this conservative rather than wrong: a
-/// predicate written `b + a` does not match a key written `a + b`, and is simply
-/// left above the window.
+/// * `a < 5`, `b + c = 4` and `(b + c) + 1 > 10` can be pushed down
+/// * `d < 5` and `b < 5` cannot (`b` on its own is not a key), and neither can
+///   `c + b = 4` (the match is structural, `c + b` is not `b + c`)
 ///
-/// A node carrying a subquery counts as reading something else, whatever the
-/// keys are. `Expr::apply` does not descend into a subquery's plan, so the
-/// columns it correlates on are invisible here, and an outer reference can vary
-/// inside a single partition: with `PARTITION BY a + b`, the predicate
-/// `a + b > (SELECT ... WHERE inner.x = outer.a)` would otherwise look like it
-/// reads nothing but the key. The same blind spot hides a volatile function
-/// inside a subquery from the caller's `is_volatile` check.
+/// A predicate containing a subquery is never pushed: what the subquery reads is
+/// not visible from the expression tree.
 fn reads_only_partition_keys(
     expr: &Expr,
-    partition_keys: &HashSet<Expr>,
+    partition_keys: &HashSet<&Expr>,
 ) -> Result<bool> {
     let mut reads_something_else = false;
     expr.apply(|node| {
-        Ok(if partition_keys.contains(node) {
+        Ok(if partition_keys.contains(&node) {
             // the whole key was matched, so whatever it reads is accounted for
             TreeNodeRecursion::Jump
         } else if reads_beyond_this_node(node) {
@@ -1635,12 +1620,9 @@ fn reads_only_partition_keys(
     Ok(!reads_something_else)
 }
 
-/// Does this node read data that walking its children cannot account for?
-///
-/// A column reads itself. The subquery-bearing variants read whatever their
-/// plan reads, including outer references to the window's own input, and
-/// `Expr::apply` yields none of that: `Exists` and `ScalarSubquery` are leaves,
-/// and `InSubquery` and `SetComparison` expose only their left-hand expression.
+/// Does this node read data that walking its children cannot account for? A
+/// column reads itself; a subquery reads whatever its plan reads, which
+/// `Expr::apply` does not visit.
 fn reads_beyond_this_node(node: &Expr) -> bool {
     matches!(
         node,
@@ -1679,7 +1661,6 @@ mod tests {
         ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Subquery, TableScan,
         TableSource, TableType, UserDefinedLogicalNodeCore, Volatility,
         WindowFunctionDefinition, col, exists, in_list, in_subquery, lit, out_ref_col,
-        scalar_subquery,
     };
 
     use crate::OptimizerContext;
@@ -2025,8 +2006,10 @@ mod tests {
         )
     }
 
-    /// verifies that a filter on an expression partition key is pushed, matched
-    /// against the key expression itself rather than against its column refs
+    /// verifies that a filter on an expression partition key is pushed; the
+    /// remaining shapes (mixed keys, operand order, subqueries, volatile
+    /// predicates, several windows) are covered in
+    /// `push_down_filter_regression.slt`
     #[test]
     fn filter_expression_move_window() -> Result<()> {
         let table_scan = test_table_scan()?;
@@ -2044,9 +2027,7 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .window(vec![window])?
-            // the single partition column "test.a + test.b" is not available to the
-            // plan, so the predicate is written over the underlying columns
-            .filter(add(col("a"), col("b")).gt(lit(10i64)))?
+            .filter(add(col("a"), col("b")).gt(lit(10i64)))? // a + b > 10
             .build()?;
 
         assert_optimized_plan_equal!(
@@ -2054,467 +2035,6 @@ mod tests {
             @r"
         WindowAggr: windowExpr=[[rank() PARTITION BY [test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
           TableScan: test, full_filters=[test.a + test.b > Int64(10)]
-        "
-        )
-    }
-
-    /// verifies that a single predicate spanning a column key and an expression
-    /// key is pushed: it is constant within every partition, but neither the old
-    /// column-name matching nor a rule that looked only at expression keys could
-    /// see that
-    #[test]
-    fn filter_move_window_mixed_column_and_expression_keys() -> Result<()> {
-        let table_scan = test_table_scan()?;
-
-        let window = Expr::from(WindowFunction::new(
-            WindowFunctionDefinition::WindowUDF(
-                datafusion_functions_window::rank::rank_udwf(),
-            ),
-            vec![],
-        ))
-        .partition_by(vec![col("a"), add(col("a"), col("b"))]) // PARTITION BY a, a + b
-        .order_by(vec![col("c").sort(true, true)])
-        .build()
-        .unwrap();
-
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .window(vec![window])?
-            .filter(
-                col("a")
-                    .gt(lit(1i64))
-                    .or(add(col("a"), col("b")).gt(lit(10i64))),
-            )?
-            .build()?;
-
-        assert_optimized_plan_equal!(
-            plan,
-            @r"
-        WindowAggr: windowExpr=[[rank() PARTITION BY [test.a, test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-          TableScan: test, full_filters=[test.a > Int64(1) OR test.a + test.b > Int64(10)]
-        "
-        )
-    }
-
-    /// verifies that an expression partition key does not make the columns it
-    /// reads pushable on their own: `a` alone is not constant within a partition
-    /// of `a + b`
-    #[test]
-    fn filter_keep_window_column_underlying_expression_key() -> Result<()> {
-        let table_scan = test_table_scan()?;
-
-        let window = Expr::from(WindowFunction::new(
-            WindowFunctionDefinition::WindowUDF(
-                datafusion_functions_window::rank::rank_udwf(),
-            ),
-            vec![],
-        ))
-        .partition_by(vec![add(col("a"), col("b"))]) // PARTITION BY a + b
-        .order_by(vec![col("c").sort(true, true)])
-        .build()
-        .unwrap();
-
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .window(vec![window])?
-            .filter(col("a").gt(lit(10i64)))?
-            .build()?;
-        assert_plan_not_transformed!(plan.clone());
-
-        assert_optimized_plan_equal!(
-            plan,
-            @r"
-        Filter: test.a > Int64(10)
-          WindowAggr: windowExpr=[[rank() PARTITION BY [test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-            TableScan: test
-        "
-        )
-    }
-
-    /// verifies that a predicate on a *function* expression key is pushed. This is
-    /// the shape the rule exists for: `PARTITION BY NULLIF(c, '')` with a predicate
-    /// on `NULLIF(c, '')`, where the key is not an arithmetic expression and the
-    /// column it reads is not a key on its own.
-    #[test]
-    fn filter_move_window_function_expression_key() -> Result<()> {
-        let table_scan = test_table_scan()?;
-
-        let window = Expr::from(WindowFunction::new(
-            WindowFunctionDefinition::WindowUDF(
-                datafusion_functions_window::rank::rank_udwf(),
-            ),
-            vec![],
-        ))
-        .partition_by(vec![immutable_udf_call(col("c"))])
-        .order_by(vec![col("c").sort(true, true)])
-        .build()
-        .unwrap();
-
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .window(vec![window])?
-            .filter(immutable_udf_call(col("c")).is_not_null())?
-            .build()?;
-
-        assert_optimized_plan_equal!(
-            plan,
-            @r"
-        WindowAggr: windowExpr=[[rank() PARTITION BY [TestScalarUDF(test.c)] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-          TableScan: test, full_filters=[TestScalarUDF(test.c) IS NOT NULL]
-        "
-        )
-    }
-
-    /// verifies that matching is structural, so a predicate written with the
-    /// operands in the other order does not match the key and stays above the
-    /// window. Conservative rather than wrong.
-    #[test]
-    fn filter_keep_window_expression_key_operand_order() -> Result<()> {
-        let table_scan = test_table_scan()?;
-
-        let window = Expr::from(WindowFunction::new(
-            WindowFunctionDefinition::WindowUDF(
-                datafusion_functions_window::rank::rank_udwf(),
-            ),
-            vec![],
-        ))
-        .partition_by(vec![add(col("a"), col("b"))]) // PARTITION BY a + b
-        .order_by(vec![col("c").sort(true, true)])
-        .build()
-        .unwrap();
-
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .window(vec![window])?
-            .filter(add(col("b"), col("a")).gt(lit(10i64)))? // b + a, not a + b
-            .build()?;
-        assert_plan_not_transformed!(plan.clone());
-
-        assert_optimized_plan_equal!(
-            plan,
-            @r"
-        Filter: test.b + test.a > Int64(10)
-          WindowAggr: windowExpr=[[rank() PARTITION BY [test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-            TableScan: test
-        "
-        )
-    }
-
-    /// verifies that a predicate built *on top of* an expression key is pushed:
-    /// the key subtree accounts for everything it reads, and the literal around it
-    /// reads nothing, so the predicate is still constant within each partition
-    #[test]
-    fn filter_move_window_expression_key_subtree() -> Result<()> {
-        let table_scan = test_table_scan()?;
-
-        let window = Expr::from(WindowFunction::new(
-            WindowFunctionDefinition::WindowUDF(
-                datafusion_functions_window::rank::rank_udwf(),
-            ),
-            vec![],
-        ))
-        .partition_by(vec![add(col("a"), col("b"))]) // PARTITION BY a + b
-        .order_by(vec![col("c").sort(true, true)])
-        .build()
-        .unwrap();
-
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .window(vec![window])?
-            .filter(add(add(col("a"), col("b")), lit(1i64)).gt(lit(10i64)))?
-            .build()?;
-
-        assert_optimized_plan_equal!(
-            plan,
-            @r"
-        WindowAggr: windowExpr=[[rank() PARTITION BY [test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-          TableScan: test, full_filters=[test.a + test.b + Int64(1) > Int64(10)]
-        "
-        )
-    }
-
-    /// verifies that an expression key shared by every window function is pushed,
-    /// the expression-key counterpart of filter_multiple_windows_common_partitions
-    #[test]
-    fn filter_multiple_windows_common_expression_partition() -> Result<()> {
-        let table_scan = test_table_scan()?;
-
-        let window1 = Expr::from(WindowFunction::new(
-            WindowFunctionDefinition::WindowUDF(
-                datafusion_functions_window::rank::rank_udwf(),
-            ),
-            vec![],
-        ))
-        .partition_by(vec![add(col("a"), col("b"))])
-        .order_by(vec![col("c").sort(true, true)])
-        .build()
-        .unwrap();
-
-        let window2 = Expr::from(WindowFunction::new(
-            WindowFunctionDefinition::WindowUDF(
-                datafusion_functions_window::rank::rank_udwf(),
-            ),
-            vec![],
-        ))
-        .partition_by(vec![col("b"), add(col("a"), col("b"))])
-        .order_by(vec![col("c").sort(true, true)])
-        .build()
-        .unwrap();
-
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .window(vec![window1, window2])?
-            .filter(add(col("a"), col("b")).gt(lit(10i64)))? // a + b is in both
-            .build()?;
-
-        assert_optimized_plan_equal!(
-            plan,
-            @r"
-        WindowAggr: windowExpr=[[rank() PARTITION BY [test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, rank() PARTITION BY [test.b, test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-          TableScan: test, full_filters=[test.a + test.b > Int64(10)]
-        "
-        )
-    }
-
-    /// verifies that an expression key present in only one of the window functions
-    /// is not pushed, since the other function's partitions would change
-    #[test]
-    fn filter_multiple_windows_disjoint_expression_partition() -> Result<()> {
-        let table_scan = test_table_scan()?;
-
-        let window1 = Expr::from(WindowFunction::new(
-            WindowFunctionDefinition::WindowUDF(
-                datafusion_functions_window::rank::rank_udwf(),
-            ),
-            vec![],
-        ))
-        .partition_by(vec![add(col("a"), col("b"))])
-        .order_by(vec![col("c").sort(true, true)])
-        .build()
-        .unwrap();
-
-        let window2 = Expr::from(WindowFunction::new(
-            WindowFunctionDefinition::WindowUDF(
-                datafusion_functions_window::rank::rank_udwf(),
-            ),
-            vec![],
-        ))
-        .partition_by(vec![col("a")])
-        .order_by(vec![col("c").sort(true, true)])
-        .build()
-        .unwrap();
-
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .window(vec![window1, window2])?
-            .filter(add(col("a"), col("b")).gt(lit(10i64)))? // a + b is in one only
-            .build()?;
-        assert_plan_not_transformed!(plan.clone());
-
-        assert_optimized_plan_equal!(
-            plan,
-            @r"
-        Filter: test.a + test.b > Int64(10)
-          WindowAggr: windowExpr=[[rank() PARTITION BY [test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, rank() PARTITION BY [test.a] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-            TableScan: test
-        "
-        )
-    }
-
-    /// verifies that the volatile check still wins over an expression key: the
-    /// predicate matches the key structurally, but pushing it would change which
-    /// rows each partition contains and so the window values of the survivors
-    #[test]
-    fn filter_volatile_keep_window_expression_key() -> Result<()> {
-        let table_scan = test_table_scan()?;
-
-        let window = Expr::from(WindowFunction::new(
-            WindowFunctionDefinition::WindowUDF(
-                datafusion_functions_window::rank::rank_udwf(),
-            ),
-            vec![],
-        ))
-        .partition_by(vec![add(col("a"), col("b"))])
-        .order_by(vec![col("c").sort(true, true)])
-        .build()
-        .unwrap();
-
-        let fun = ScalarUDF::new_from_impl(TestScalarUDF {
-            signature: Signature::exact(vec![], Volatility::Volatile),
-        });
-        let volatile =
-            Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![]));
-
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .window(vec![window])?
-            .filter(add(col("a"), col("b")).gt(volatile))?
-            .build()?;
-        assert_plan_not_transformed!(plan.clone());
-
-        assert_optimized_plan_equal!(
-            plan,
-            @r"
-        Filter: test.a + test.b > TestScalarUDF()
-          WindowAggr: windowExpr=[[rank() PARTITION BY [test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-            TableScan: test
-        "
-        )
-    }
-
-    /// verifies that a predicate carrying a correlated scalar subquery stays
-    /// above the window even though its visible part is exactly the expression
-    /// key. `Expr::apply` does not enter the subquery plan, so `outer.a`, which
-    /// varies inside a partition of `a + b`, is invisible to the key test.
-    #[test]
-    fn filter_keep_window_scalar_subquery_over_expression_key() -> Result<()> {
-        let table_scan = test_table_scan()?;
-        let subplan = Arc::new(
-            LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
-                .filter(col("sq.c").eq(out_ref_col(DataType::UInt32, "test.a")))?
-                .aggregate(Vec::<Expr>::new(), vec![sum(col("sq.c"))])?
-                .build()?,
-        );
-
-        let window = Expr::from(WindowFunction::new(
-            WindowFunctionDefinition::WindowUDF(
-                datafusion_functions_window::rank::rank_udwf(),
-            ),
-            vec![],
-        ))
-        .partition_by(vec![add(col("a"), col("b"))]) // PARTITION BY a + b
-        .order_by(vec![col("c").sort(true, true)])
-        .build()
-        .unwrap();
-
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .window(vec![window])?
-            .filter(add(col("a"), col("b")).gt(scalar_subquery(subplan)))?
-            .build()?;
-        assert_plan_not_transformed!(plan.clone());
-
-        assert_optimized_plan_equal!(
-            plan,
-            @r"
-        Filter: test.a + test.b > (<subquery>)
-          Subquery:
-            Aggregate: groupBy=[[]], aggr=[[sum(sq.c)]]
-              TableScan: sq, full_filters=[sq.c = outer_ref(test.a)]
-          WindowAggr: windowExpr=[[rank() PARTITION BY [test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-            TableScan: test
-        "
-        )
-    }
-
-    /// the same guard for `IN (subquery)`, whose subquery plan `Expr::apply`
-    /// also skips: only the left-hand expression is walked
-    #[test]
-    fn filter_keep_window_in_subquery_over_expression_key() -> Result<()> {
-        let table_scan = test_table_scan()?;
-        let subplan = Arc::new(
-            LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
-                .filter(col("sq.c").eq(out_ref_col(DataType::UInt32, "test.a")))?
-                .project(vec![col("sq.c")])?
-                .build()?,
-        );
-
-        let window = Expr::from(WindowFunction::new(
-            WindowFunctionDefinition::WindowUDF(
-                datafusion_functions_window::rank::rank_udwf(),
-            ),
-            vec![],
-        ))
-        .partition_by(vec![add(col("a"), col("b"))]) // PARTITION BY a + b
-        .order_by(vec![col("c").sort(true, true)])
-        .build()
-        .unwrap();
-
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .window(vec![window])?
-            .filter(in_subquery(add(col("a"), col("b")), subplan))?
-            .build()?;
-        assert_plan_not_transformed!(plan.clone());
-
-        assert_optimized_plan_equal!(
-            plan,
-            @r"
-        Filter: test.a + test.b IN (<subquery>)
-          Subquery:
-            Projection: sq.c
-              TableScan: sq, full_filters=[sq.c = outer_ref(test.a)]
-          WindowAggr: windowExpr=[[rank() PARTITION BY [test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-            TableScan: test
-        "
-        )
-    }
-
-    /// An immutable one-argument UDF call, for building an expression partition
-    /// key that is a function call rather than an arithmetic expression.
-    fn immutable_udf_call(arg: Expr) -> Expr {
-        let fun = ScalarUDF::new_from_impl(TestScalarUDF {
-            signature: Signature::any(1, Volatility::Immutable),
-        });
-        Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![arg]))
-    }
-
-    /// verifies that a volatile predicate is not pushed through a window, even
-    /// when it reads no columns and so trivially satisfies the partition-key test
-    #[test]
-    fn filter_volatile_keep_window() -> Result<()> {
-        let table_scan = test_table_scan()?;
-
-        let window = Expr::from(WindowFunction::new(
-            WindowFunctionDefinition::WindowUDF(
-                datafusion_functions_window::rank::rank_udwf(),
-            ),
-            vec![],
-        ))
-        .partition_by(vec![col("a")])
-        .order_by(vec![col("c").sort(true, true)])
-        .build()
-        .unwrap();
-
-        let fun = ScalarUDF::new_from_impl(TestScalarUDF {
-            signature: Signature::exact(vec![], Volatility::Volatile),
-        });
-        let volatile =
-            Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![]));
-
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .window(vec![window])?
-            .filter(volatile.gt(lit(10i64)))?
-            .build()?;
-
-        assert_optimized_plan_equal!(
-            plan,
-            @r"
-        Filter: TestScalarUDF() > Int64(10)
-          WindowAggr: windowExpr=[[rank() PARTITION BY [test.a] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-            TableScan: test
-        "
-        )
-    }
-
-    /// verifies that filters are not pushed on order by columns (that are not used in partitioning)
-    #[test]
-    fn filter_order_keep_window() -> Result<()> {
-        let table_scan = test_table_scan()?;
-
-        let window = Expr::from(WindowFunction::new(
-            WindowFunctionDefinition::WindowUDF(
-                datafusion_functions_window::rank::rank_udwf(),
-            ),
-            vec![],
-        ))
-        .partition_by(vec![col("a")])
-        .order_by(vec![col("c").sort(true, true)])
-        .build()
-        .unwrap();
-
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .window(vec![window])?
-            .filter(col("c").gt(lit(10i64)))?
-            .build()?;
-        assert_plan_not_transformed!(plan.clone());
-
-        assert_optimized_plan_equal!(
-            plan,
-            @r"
-        Filter: test.c > Int64(10)
-          WindowAggr: windowExpr=[[rank() PARTITION BY [test.a] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-            TableScan: test
         "
         )
     }
