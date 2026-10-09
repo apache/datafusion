@@ -188,7 +188,8 @@ macro_rules! hash_array_primitive {
     };
 }
 
-/// Hash a floating-point primitive array, normalizing `-0.0` to `0.0` per Spark.
+/// Hash a floating-point primitive array, normalizing `-0.0` to `0.0` and
+/// canonicalizing NaN per Spark.
 #[macro_export]
 #[doc(hidden)]
 macro_rules! hash_array_primitive_float {
@@ -201,6 +202,12 @@ macro_rules! hash_array_primitive_float {
                 // Spark uses 0 as hash for -0.0, see `Murmur3Hash` expression.
                 if v == 0.0 && v.is_sign_negative() {
                     (0 as $ty2).to_le_bytes()
+                }
+                // Spark hashes `floatToIntBits` / `doubleToLongBits`, which map every
+                // NaN to the canonical one (0x7fc00000 / 0x7ff8000000000000), the same
+                // bits as Rust's `f32::NAN` / `f64::NAN`.
+                else if v.is_nan() {
+                    <$ty>::NAN.to_le_bytes()
                 } else {
                     (v as $ty).to_le_bytes()
                 }
