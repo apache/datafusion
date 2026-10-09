@@ -1125,38 +1125,36 @@ fn unique_match_limit(
     predicate: &Arc<dyn PhysicalExpr>,
     statistics: &Statistics,
 ) -> Option<usize> {
-    if !statistics
-        .column_statistics
-        .iter()
-        .any(|column| holds_each_value_once(column, &statistics.num_rows))
-    {
-        return None;
-    }
-    let mut limit: Option<usize> = None;
-    for expr in split_conjunction(predicate) {
-        let Some((index, values)) = restricted_column(expr) else {
-            continue;
-        };
-        let holds_once = statistics
+    let holds_once_fn = |index: usize| {
+        statistics
             .column_statistics
             .get(index)
-            .is_some_and(|column| holds_each_value_once(column, &statistics.num_rows));
-        if !holds_once {
-            continue;
-        }
-        limit = Some(limit.map_or(values, |limit: usize| limit.min(values)));
-    }
-    limit
+            .is_some_and(|column| holds_each_value_once(column, &statistics.num_rows))
+    };
+    split_conjunction(predicate)
+        .into_iter()
+        .filter_map(|expr| restricted_column(expr, holds_once_fn))
+        .min()
 }
 
-/// The column an expression restricts to a fixed set of values, and how many values
-/// that is. NULL is never one of them: it matches nothing.
-fn restricted_column(expr: &Arc<dyn PhysicalExpr>) -> Option<(usize, usize)> {
+/// How many values an expression restricts a column to, when it restricts a column
+/// for which `holds_once_fn` is true to a fixed set of values. NULL is never one of
+/// them: it matches nothing.
+///
+/// The column is checked before the values are counted, so IN lists on columns that
+/// may hold a value more than once are never scanned.
+fn restricted_column(
+    expr: &Arc<dyn PhysicalExpr>,
+    holds_once_fn: impl Fn(usize) -> bool,
+) -> Option<usize> {
     if let Some(in_list) = expr.downcast_ref::<InListExpr>() {
         if in_list.negated() {
             return None;
         }
         let column = in_list.expr().downcast_ref::<Column>()?;
+        if !holds_once_fn(column.index()) {
+            return None;
+        }
         let mut values: HashSet<&ScalarValue> = HashSet::new();
         for expr in in_list.list() {
             let value = expr.downcast_ref::<Literal>()?.value();
@@ -1164,7 +1162,7 @@ fn restricted_column(expr: &Arc<dyn PhysicalExpr>) -> Option<(usize, usize)> {
                 values.insert(value);
             }
         }
-        return Some((column.index(), values.len()));
+        return Some(values.len());
     }
 
     let binary = expr.downcast_ref::<BinaryExpr>()?;
@@ -1180,7 +1178,7 @@ fn restricted_column(expr: &Arc<dyn PhysicalExpr>) -> Option<(usize, usize)> {
         _ => return None,
     };
     let value = literal.downcast_ref::<Literal>()?.value();
-    (!value.is_null()).then_some((column.index(), 1))
+    (!value.is_null() && holds_once_fn(column.index())).then_some(1)
 }
 
 /// Whether the column has as many distinct values as it has non-null rows, so each
