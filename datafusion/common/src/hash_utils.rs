@@ -519,6 +519,138 @@ fn hash_generic_byte_view_array<T: ByteViewType>(
     }
 }
 
+/// Dense-path unroll width; 8 lanes keep the gather pipeline full on ARM64/x86.
+#[cfg(not(feature = "force_hash_collisions"))]
+const DICT_SCATTER_LANES: usize = 8;
+
+/// Fold `dict_hash` into `prev` when `MULTI_COL`, else
+/// overwrite with `dict_hash`.
+#[cfg(not(feature = "force_hash_collisions"))]
+#[inline(always)]
+fn maybe_combine_dict_hash<const MULTI_COL: bool>(prev: u64, dict_hash: u64) -> u64 {
+    if MULTI_COL {
+        combine_hashes(dict_hash, prev)
+    } else {
+        dict_hash
+    }
+}
+
+/// Scatter precomputed dict-value hashes into every key position with no
+/// null checks, 8-way unrolled.
+///
+/// The 8-wide unroll is for performance, splitting the loop into
+/// `std::array::from_fn` (gather 8 dict hashes by key index) followed by a
+/// fixed-length inner loop encourages the compiler to overlap 8
+/// independent load latencies, saturating the gather pipeline instead of
+/// serializing one lookup at a time.
+///
+/// Invariants: `keys.len() == hashes.len()`; no key or dict value referenced
+/// here is null.
+#[cfg(not(feature = "force_hash_collisions"))]
+#[inline(always)]
+fn scatter_dict_hashes_no_null_checks<
+    K: ArrowDictionaryKeyType,
+    const MULTI_COL: bool,
+>(
+    keys: &[K::Native],
+    dict_hashes: &[u64],
+    hashes: &mut [u64],
+) {
+    let full_len = (keys.len() / DICT_SCATTER_LANES) * DICT_SCATTER_LANES;
+    let (keys_full, keys_tail) = keys.split_at(full_len);
+    let (hashes_full, hashes_tail) = hashes.split_at_mut(full_len);
+    for (key_group, hash_group) in keys_full
+        .chunks_exact(DICT_SCATTER_LANES)
+        .zip(hashes_full.chunks_exact_mut(DICT_SCATTER_LANES))
+    {
+        let lane_hashes: [u64; DICT_SCATTER_LANES] = std::array::from_fn(|lane| unsafe {
+            *dict_hashes.get_unchecked(key_group[lane].as_usize())
+        });
+        for lane in 0..DICT_SCATTER_LANES {
+            hash_group[lane] =
+                maybe_combine_dict_hash::<MULTI_COL>(hash_group[lane], lane_hashes[lane]);
+        }
+    }
+    // need to handle the remainder for non 64 byte multiples
+    for (key, hash) in keys_tail.iter().zip(hashes_tail.iter_mut()) {
+        let dict_hash = unsafe { *dict_hashes.get_unchecked(key.as_usize()) };
+        *hash = maybe_combine_dict_hash::<MULTI_COL>(*hash, dict_hash);
+    }
+}
+
+/// Scatter dict-value hashes to every key position, skipping positions
+/// where the dict value is null. Exists for the non-null-keys +
+/// nullable-values case; the per-lane `is_valid` check is unavoidable.
+#[cfg(not(feature = "force_hash_collisions"))]
+#[inline(always)]
+fn scatter_dict_hashes_skip_value_nulls<
+    K: ArrowDictionaryKeyType,
+    const MULTI_COL: bool,
+>(
+    keys: &[K::Native],
+    dict_values: &dyn Array,
+    dict_hashes: &[u64],
+    hashes: &mut [u64],
+) {
+    for (key, hash) in keys.iter().zip(hashes.iter_mut()) {
+        let value_idx = key.as_usize();
+        if dict_values.is_valid(value_idx) {
+            let dict_hash = unsafe { *dict_hashes.get_unchecked(value_idx) };
+            *hash = maybe_combine_dict_hash::<MULTI_COL>(*hash, dict_hash);
+        }
+    }
+}
+
+/// Scatter inside a mixed-validity 64-key chunk governed by `mask`.
+#[cfg(not(feature = "force_hash_collisions"))]
+#[inline(always)]
+fn scatter_dict_hashes_in_masked_chunk<
+    K: ArrowDictionaryKeyType,
+    const HAS_NULL_VALUES: bool,
+    const MULTI_COL: bool,
+>(
+    keys: &[K::Native],
+    dict_values: &dyn Array,
+    dict_hashes: &[u64],
+    hashes: &mut [u64],
+    mask: u64,
+) {
+    debug_assert_eq!(keys.len(), 64);
+    debug_assert_eq!(hashes.len(), 64);
+    if HAS_NULL_VALUES {
+        let mut remaining = mask;
+        while remaining != 0 {
+            let lane = remaining.trailing_zeros() as usize;
+            remaining &= remaining - 1;
+            let value_idx = unsafe { keys.get_unchecked(lane).as_usize() };
+            if dict_values.is_valid(value_idx) {
+                let dict_hash = unsafe { *dict_hashes.get_unchecked(value_idx) };
+                let slot = unsafe { hashes.get_unchecked_mut(lane) };
+                *slot = maybe_combine_dict_hash::<MULTI_COL>(*slot, dict_hash);
+            }
+        }
+        return;
+    }
+    // null-key lanes carry garbage indices; we gather them anyway and mask the result out below
+    let max_valid_idx = dict_hashes.len().saturating_sub(1);
+    for lane_base in (0..64).step_by(DICT_SCATTER_LANES) {
+        // gather 8 dict hashes in parallel; clamp keeps garbage indices in-bounds
+        let lane_hashes: [u64; DICT_SCATTER_LANES] = std::array::from_fn(|lane_offset| {
+            let raw_idx =
+                unsafe { keys.get_unchecked(lane_base + lane_offset).as_usize() };
+            let clamped_idx = raw_idx.min(max_valid_idx);
+            unsafe { *dict_hashes.get_unchecked(clamped_idx) }
+        });
+        for lane_offset in 0..DICT_SCATTER_LANES {
+            let slot = unsafe { hashes.get_unchecked_mut(lane_base + lane_offset) };
+            let combined_hash =
+                maybe_combine_dict_hash::<MULTI_COL>(*slot, lane_hashes[lane_offset]);
+            let is_valid = ((mask >> (lane_base + lane_offset)) & 1) == 1;
+            *slot = if is_valid { combined_hash } else { *slot };
+        }
+    }
+}
+
 /// Scatter precomputed dictionary value hashes to key positions.
 ///
 /// Uses const generics to eliminate runtime branching in the hot loop:
@@ -538,28 +670,82 @@ fn hash_dictionary_scatter<
     hashes_buffer: &mut [u64],
 ) {
     let dict_values = array.values();
-    if HAS_NULL_KEYS {
-        for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().iter()) {
-            if let Some(key) = key {
-                let idx = key.as_usize();
-                if !HAS_NULL_VALUES || dict_values.is_valid(idx) {
-                    if MULTI_COL {
-                        *hash = combine_hashes(dict_hashes[idx], *hash);
-                    } else {
-                        *hash = dict_hashes[idx];
-                    }
-                }
-            }
+    let keys = array.keys().values();
+
+    if !HAS_NULL_KEYS {
+        if HAS_NULL_VALUES {
+            scatter_dict_hashes_skip_value_nulls::<K, MULTI_COL>(
+                keys,
+                dict_values.as_ref(),
+                dict_hashes,
+                hashes_buffer,
+            );
+        } else {
+            scatter_dict_hashes_no_null_checks::<K, MULTI_COL>(
+                keys,
+                dict_hashes,
+                hashes_buffer,
+            );
         }
-    } else {
-        for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().values()) {
-            let idx = key.as_usize();
-            if !HAS_NULL_VALUES || dict_values.is_valid(idx) {
-                if MULTI_COL {
-                    *hash = combine_hashes(dict_hashes[idx], *hash);
-                } else {
-                    *hash = dict_hashes[idx];
-                }
+        return;
+    }
+
+    let null_buffer = array.keys().nulls().expect("HAS_NULL_KEYS implies nulls");
+    let bit_chunks = null_buffer.inner().bit_chunks();
+    let chunk_len = bit_chunks.chunk_len();
+
+    // Walk the key null buffer 64 bits at a time; bit i set = lane i's key is non-null.
+    for (chunk_idx, mask) in bit_chunks.iter().enumerate() {
+        let base = chunk_idx * 64;
+        let keys_chunk = &keys[base..base + 64];
+        let hashes_chunk = &mut hashes_buffer[base..base + 64];
+        if mask == u64::MAX {
+            // all 64 keys valid: dense helper
+            if HAS_NULL_VALUES {
+                scatter_dict_hashes_skip_value_nulls::<K, MULTI_COL>(
+                    keys_chunk,
+                    dict_values.as_ref(),
+                    dict_hashes,
+                    hashes_chunk,
+                );
+            } else {
+                scatter_dict_hashes_no_null_checks::<K, MULTI_COL>(
+                    keys_chunk,
+                    dict_hashes,
+                    hashes_chunk,
+                );
+            }
+        } else if mask != 0 {
+            // mixed: masked-chunk helper (mask == 0 falls through, nothing to write)
+            scatter_dict_hashes_in_masked_chunk::<K, HAS_NULL_VALUES, MULTI_COL>(
+                keys_chunk,
+                dict_values.as_ref(),
+                dict_hashes,
+                hashes_chunk,
+                mask,
+            );
+        }
+    }
+
+    // non-64 multiple: scalar path for the tail
+    let remainder_len = bit_chunks.remainder_len();
+    if remainder_len > 0 {
+        let remainder = bit_chunks.remainder_bits();
+        let base = chunk_len * 64;
+        let mut remaining = remainder;
+        while remaining != 0 {
+            let lane = remaining.trailing_zeros() as usize;
+            remaining &= remaining - 1;
+            if lane >= remainder_len {
+                break;
+            }
+            let value_idx = keys[base + lane].as_usize();
+            if !HAS_NULL_VALUES || dict_values.is_valid(value_idx) {
+                let dict_hash = unsafe { *dict_hashes.get_unchecked(value_idx) };
+                hashes_buffer[base + lane] = maybe_combine_dict_hash::<MULTI_COL>(
+                    hashes_buffer[base + lane],
+                    dict_hash,
+                );
             }
         }
     }
