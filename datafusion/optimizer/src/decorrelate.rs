@@ -918,32 +918,39 @@ fn is_grouping_call(expr: &Expr) -> bool {
     matches!(expr, Expr::AggregateFunction(agg) if agg.func.name().eq_ignore_ascii_case("grouping"))
 }
 
-/// Columns read by a node strictly above the first `Aggregate` found in
+/// Columns read by a node that has a grouping set `Aggregate` below it in
 /// `plan`, which is the subquery's original, not yet rewritten, plan.
 ///
 /// [`PullUpCorrelatedExpr::f_up`] runs bottom-up, so by the time it visits an
 /// `Aggregate` it cannot yet tell whether a `HAVING` or `Projection` above it
 /// reads one of the columns a grouping set pull up would add. This walks the
-/// plan top-down instead, before the rewrite starts, and stops at the first
-/// `Aggregate` along each branch, collecting the columns every node above it
-/// reads in its own expressions. A nested `Subquery` is a different
-/// correlation scope and is skipped, the same way
+/// plan top-down instead, before the rewrite starts, collecting the columns
+/// every node above a grouping set `Aggregate` reads in its own expressions.
+/// It visits every input and walks through every `Aggregate` - a node that
+/// reads the pulled-up column may sit in a later input, above another
+/// (non-grouping-set) `Aggregate`, or between nested grouping sets, not only
+/// directly above the first `Aggregate` found. A nested `Subquery` is a
+/// different correlation scope and is skipped, the same way
 /// [`PullUpCorrelatedExpr::f_down`] skips it.
 fn columns_read_above_aggregate(plan: &LogicalPlan) -> BTreeSet<Column> {
     fn walk(plan: &LogicalPlan, above: &mut BTreeSet<Column>) -> bool {
         if matches!(plan, LogicalPlan::Subquery(_)) {
             return false;
         }
-        if matches!(plan, LogicalPlan::Aggregate(_)) {
-            return true;
+        let mut found_below = false;
+        for child in plan.inputs() {
+            found_below |= walk(child, above);
         }
-        let found_below = plan.inputs().into_iter().any(|child| walk(child, above));
         if found_below {
             for expr in plan.expressions() {
                 above.extend(expr.column_refs().into_iter().cloned());
             }
         }
         found_below
+            || matches!(plan, LogicalPlan::Aggregate(aggregate) if aggregate
+                .group_expr
+                .iter()
+                .any(|expr| matches!(expr, Expr::GroupingSet(_))))
     }
 
     let mut above = BTreeSet::new();

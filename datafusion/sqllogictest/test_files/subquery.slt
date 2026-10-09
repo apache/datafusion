@@ -2943,6 +2943,25 @@ SELECT gs_outer.k, EXISTS (SELECT 1 FROM gs_inner WHERE gs_inner.k = gs_outer.k 
 5 true
 NULL false
 
+# A filter above the grouping set `Aggregate`, through another `Aggregate`
+# stacked on top of it, reads the NULL filled column. `walk` must not stop at
+# the first `Aggregate` it finds (the outer `count(*)`) without recursing into
+# its input, or it never sees that read and wrongly decorrelates.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+SELECT gs_outer.k, (SELECT count(*) FROM (SELECT gs_inner.k AS kk FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY GROUPING SETS ((gs_inner.k), (gs_inner.j))) t WHERE t.kk IS NULL) FROM gs_outer ORDER BY gs_outer.k;
+
+# The same read, but in a later join input rather than directly above the
+# grouping set `Aggregate`. `walk` must visit every input, not stop once one
+# of them turns up a grouping set `Aggregate` below it.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT gs_outer.k, EXISTS (SELECT 1 FROM (SELECT count(*) AS c FROM gs_inner) a JOIN (SELECT gs_inner.k FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY GROUPING SETS ((gs_inner.k), (gs_inner.j))) b ON a.c > 0 WHERE b.k IS NULL) FROM gs_outer ORDER BY gs_outer.k;
+
+# The same read, above a second, nested grouping set `Aggregate` stacked on
+# top of the first. `walk` must keep walking through a grouping set
+# `Aggregate` too, not only a plain one.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT gs_outer.k, EXISTS (SELECT 1 FROM (SELECT gs_inner.k AS kk, gs_inner.j AS jj FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY GROUPING SETS ((gs_inner.k), (gs_inner.j))) t GROUP BY GROUPING SETS ((t.kk), (t.kk, t.jj)) HAVING t.kk IS NULL) FROM gs_outer ORDER BY gs_outer.k;
+
 # The same sets with a HAVING that reads the NULL filled column. For k = 1 the
 # `(j)` set yields the row `(NULL, 10)`, which passes the HAVING, so EXISTS is
 # true; with `(j, k)` that row holds k = 1 and is filtered out. On main this
