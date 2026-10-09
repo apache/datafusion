@@ -604,9 +604,8 @@ mod tests {
 
             let emitted_capacity =
                 accumulator.inner.min_max[0].as_ref().unwrap().capacity();
-            let (data_bytes, emitted) = accumulator.inner.emit_to(EmitTo::First(1));
-            assert_eq!(data_bytes, short.len());
-            assert_eq!(emitted[0].as_deref(), Some(short.as_bytes()));
+            let emitted = accumulator.evaluate(EmitTo::First(1))?;
+            assert_eq!(emitted.as_string::<i32>(), &StringArray::from(vec![short]));
             assert_eq!(
                 accumulator.size(),
                 accumulator.inner.min_max.capacity() * size_of::<Option<Vec<u8>>>()
