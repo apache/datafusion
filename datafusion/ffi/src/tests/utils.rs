@@ -120,19 +120,14 @@ pub fn get_byte_metrics_exec() -> Result<crate::execution_plan::FFI_ExecutionPla
     Ok(plan)
 }
 
-/// Calls `datafusion_ffi_test_decode_scalar_subquery_expr_exec_result` in a
-/// fresh load of the cdylib, exported as its own top-level symbol rather than
-/// a [`ForeignLibraryModule`] field for the same reason as
-/// [`get_byte_metrics_exec`] - see the doc comment on the exported function
-/// for the cross-library rationale.
-pub fn decode_scalar_subquery_expr_exec_result(
+/// Builds a [`crate::proto::physical_extension_codec::FFI_PhysicalExtensionCodec`]
+/// from a fresh call to `datafusion_ffi_test_create_scalar_subquery_expr_exec_codec`,
+/// exported as its own top-level symbol rather than a [`ForeignLibraryModule`]
+/// field for the same reason as [`get_byte_metrics_exec`] - see the doc
+/// comment on the exported function for the cross-library rationale.
+pub fn get_scalar_subquery_expr_exec_codec(
     task_ctx_provider: crate::execution::FFI_TaskContextProvider,
-    bytes: &[u8],
-    scalar_subquery_results: crate::util::FFI_Option<
-        crate::proto::scalar_subquery_results::FFI_ScalarSubqueryResults,
-    >,
-    index: u64,
-) -> Result<Option<i64>> {
+) -> Result<crate::proto::physical_extension_codec::FFI_PhysicalExtensionCodec> {
     let lib_path = find_library()?;
 
     let lib = unsafe {
@@ -140,37 +135,22 @@ pub fn decode_scalar_subquery_expr_exec_result(
             .map_err(|e| DataFusionError::External(Box::new(e)))?
     };
 
-    let decode: libloading::Symbol<
+    let create_codec: libloading::Symbol<
         extern "C" fn(
             crate::execution::FFI_TaskContextProvider,
-            stabby::slice::Slice<u8>,
-            crate::util::FFI_Option<
-                crate::proto::scalar_subquery_results::FFI_ScalarSubqueryResults,
-            >,
-            u64,
-        ) -> crate::util::FFI_Result<crate::util::FFI_Option<i64>>,
+        ) -> crate::proto::physical_extension_codec::FFI_PhysicalExtensionCodec,
     > = unsafe {
-        lib.get(b"datafusion_ffi_test_decode_scalar_subquery_expr_exec_result")
+        lib.get(b"datafusion_ffi_test_create_scalar_subquery_expr_exec_codec")
             .map_err(|e| DataFusionError::External(Box::new(e)))?
     };
 
-    let result = decode(
-        task_ctx_provider,
-        bytes.into(),
-        scalar_subquery_results,
-        index,
-    );
+    let codec = create_codec(task_ctx_provider);
 
     // Leak the library to keep it loaded for the duration of the test
     #[expect(clippy::mem_forget)]
     std::mem::forget(lib);
 
-    match result {
-        crate::util::FFI_Result::Ok(value) => Ok(value.into_option()),
-        crate::util::FFI_Result::Err(e) => {
-            Err(DataFusionError::External(e.to_string().into()))
-        }
-    }
+    Ok(codec)
 }
 
 /// Load an independent copy of the integration-test cdylib.

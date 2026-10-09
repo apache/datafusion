@@ -539,13 +539,18 @@ impl PhysicalExtensionCodec for ForeignPhysicalExtensionCodec {
 pub mod fixtures {
     use std::sync::Arc;
 
+    use arrow::array::RecordBatch;
+    use arrow_schema::{Field, Schema};
     use datafusion_common::tree_node::TreeNodeRecursion;
     use datafusion_common::{Result, exec_err, internal_datafusion_err};
     use datafusion_execution::TaskContext;
+    use datafusion_physical_expr::EquivalenceProperties;
+    use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+    use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
     use datafusion_physical_plan::{
         ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan,
-        PhysicalExpr, PlanProperties, ReplaceChildrenOptions, SendableRecordBatchStream,
-        apply_expression_roots,
+        Partitioning, PhysicalExpr, PlanProperties, ReplaceChildrenOptions,
+        SendableRecordBatchStream, apply_expression_roots,
     };
     use datafusion_proto::physical_plan::{
         PhysicalExtensionCodec, PhysicalPlanDecodeContext,
@@ -555,11 +560,42 @@ pub mod fixtures {
     use prost::Message;
 
     /// An extension plan that carries a single physical expression, so its
-    /// codec has to decode that expression itself.
+    /// codec has to decode that expression itself. Executing it evaluates
+    /// that expression and emits the result as the single row of a
+    /// single-column batch, which is how the cross-library integration test
+    /// observes a decoded `ScalarSubqueryExpr`'s value without a generic
+    /// `FFI_PhysicalExpr` wrapper: the value crosses back through the
+    /// `FFI_ExecutionPlan`/`FFI_RecordBatchStream` machinery every
+    /// `ExecutionPlan` already has, via the Arrow C Data Interface.
     #[derive(Debug)]
     pub struct ScalarSubqueryExprExec {
         pub expr: Arc<dyn PhysicalExpr>,
         pub child: Arc<dyn ExecutionPlan>,
+        properties: Arc<PlanProperties>,
+    }
+
+    impl ScalarSubqueryExprExec {
+        pub fn new(expr: Arc<dyn PhysicalExpr>, child: Arc<dyn ExecutionPlan>) -> Self {
+            let field = expr
+                .return_field(child.schema().as_ref())
+                .expect("ScalarSubqueryExpr always returns a field");
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                field.name(),
+                field.data_type().clone(),
+                field.is_nullable(),
+            )]));
+            let properties = Arc::new(PlanProperties::new(
+                EquivalenceProperties::new(schema),
+                Partitioning::UnknownPartitioning(1),
+                EmissionType::Incremental,
+                Boundedness::Bounded,
+            ));
+            Self {
+                expr,
+                child,
+                properties,
+            }
+        }
     }
 
     impl DisplayAs for ScalarSubqueryExprExec {
@@ -578,7 +614,7 @@ pub mod fixtures {
         }
 
         fn properties(&self) -> &Arc<PlanProperties> {
-            self.child.properties()
+            &self.properties
         }
 
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -610,12 +646,24 @@ pub mod fixtures {
             )
         }
 
+        /// `ScalarSubqueryExpr::evaluate` ignores its batch argument - it
+        /// only reads its own cached result - so this evaluates it directly
+        /// rather than pulling a batch from `child`, and always emits
+        /// exactly one row regardless of what `child` would have produced.
         fn execute(
             &self,
             _partition: usize,
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
-            unreachable!()
+            let schema = self.properties.eq_properties.schema();
+            let empty_batch = RecordBatch::new_empty(self.child.schema());
+            let value = self.expr.evaluate(&empty_batch)?;
+            let array = value.into_array(1)?;
+            let batch = RecordBatch::try_new(Arc::clone(schema), vec![array])?;
+            Ok(Box::pin(RecordBatchStreamAdapter::new(
+                Arc::clone(schema),
+                futures::stream::once(async move { Ok(batch) }),
+            )))
         }
     }
 
@@ -660,10 +708,10 @@ pub mod fixtures {
             let schema = inputs[0].schema();
             let expr =
                 proto_converter.proto_to_physical_expr(&expr_proto, &schema, ctx)?;
-            Ok(Arc::new(ScalarSubqueryExprExec {
+            Ok(Arc::new(ScalarSubqueryExprExec::new(
                 expr,
-                child: Arc::clone(&inputs[0]),
-            }))
+                Arc::clone(&inputs[0]),
+            )))
         }
 
         fn try_encode(
@@ -1109,10 +1157,11 @@ pub(crate) mod tests {
             SubqueryIndex::new(0),
             results.clone(),
         ));
-        let extension_plan: Arc<dyn ExecutionPlan> = Arc::new(ScalarSubqueryExprExec {
-            expr: sq_expr,
-            child: Arc::new(RealEmptyExec::new(Arc::clone(&schema))),
-        });
+        let extension_plan: Arc<dyn ExecutionPlan> =
+            Arc::new(ScalarSubqueryExprExec::new(
+                sq_expr,
+                Arc::new(RealEmptyExec::new(Arc::clone(&schema))),
+            ));
         let plan: Arc<dyn ExecutionPlan> = Arc::new(ScalarSubqueryExec::new(
             extension_plan,
             vec![ScalarSubqueryLink {
