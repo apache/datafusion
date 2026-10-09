@@ -31,6 +31,7 @@ use arrow::datatypes::{
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, ScalarType, ScalarValue, exec_datafusion_err, exec_err};
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
     Signature, Volatility,
@@ -581,6 +582,16 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
         }
     }
 
+    fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        if let [value] = input
+            && value.range.data_type().is_integer()
+        {
+            Ok(value.sort_properties)
+        } else {
+            Ok(SortProperties::Unordered)
+        }
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
@@ -647,6 +658,16 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
                     other
                 )
             }
+        }
+    }
+
+    fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        if let [value] = input
+            && value.range.data_type().is_integer()
+        {
+            Ok(value.sort_properties)
+        } else {
+            Ok(SortProperties::Unordered)
         }
     }
 
@@ -719,6 +740,16 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
         }
     }
 
+    fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        if let [value] = input
+            && value.range.data_type().is_integer()
+        {
+            Ok(value.sort_properties)
+        } else {
+            Ok(SortProperties::Unordered)
+        }
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
@@ -788,6 +819,16 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
         }
     }
 
+    fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        if let [value] = input
+            && value.range.data_type().is_integer()
+        {
+            Ok(value.sort_properties)
+        } else {
+            Ok(SortProperties::Unordered)
+        }
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
@@ -851,6 +892,66 @@ mod tests {
     use datafusion_expr::ScalarFunctionImplementation;
 
     use super::*;
+
+    #[test]
+    fn integer_timestamp_ordering() -> Result<()> {
+        use arrow::compute::SortOptions;
+        use datafusion_expr::interval_arithmetic::Interval;
+
+        let config = ConfigOptions::default();
+        let functions: [Box<dyn ScalarUDFImpl>; 4] = [
+            Box::new(ToTimestampSecondsFunc::new_with_config(&config)),
+            Box::new(ToTimestampMillisFunc::new_with_config(&config)),
+            Box::new(ToTimestampMicrosFunc::new_with_config(&config)),
+            Box::new(ToTimestampNanosFunc::new_with_config(&config)),
+        ];
+        for function in functions {
+            for descending in [false, true] {
+                for nulls_first in [false, true] {
+                    let ordering = SortProperties::Ordered(SortOptions {
+                        descending,
+                        nulls_first,
+                    });
+                    for (data_type, supported) in [
+                        (Int8, true),
+                        (Int16, true),
+                        (Int32, true),
+                        (Int64, true),
+                        (UInt8, true),
+                        (UInt16, true),
+                        (UInt32, true),
+                        (UInt64, true),
+                        (Float64, false),
+                        (Decimal128(20, 0), false),
+                        (Date32, false),
+                        (Date64, false),
+                        (Utf8, false),
+                        (Null, false),
+                        (Timestamp(Microsecond, None), false),
+                    ] {
+                        let input = ExprProperties::new_unknown()
+                            .with_order(ordering)
+                            .with_range(Interval::make_unbounded(&data_type)?);
+                        let expected = if supported {
+                            ordering
+                        } else {
+                            SortProperties::Unordered
+                        };
+                        assert_eq!(
+                            function.output_ordering(std::slice::from_ref(&input))?,
+                            expected
+                        );
+                        assert_eq!(
+                            function.output_ordering(&[input.clone(), input])?,
+                            SortProperties::Unordered
+                        );
+                    }
+                }
+            }
+            assert_eq!(function.output_ordering(&[])?, SortProperties::Unordered);
+        }
+        Ok(())
+    }
 
     fn to_timestamp(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let timezone: Option<Arc<str>> = Some("UTC".into());
