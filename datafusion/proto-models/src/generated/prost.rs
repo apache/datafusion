@@ -2704,6 +2704,8 @@ pub struct SortMergeJoinExecNode {
     pub null_equality: i32,
     #[prost(uint32, repeated, tag = "8")]
     pub projection: ::prost::alloc::vec::Vec<u32>,
+    #[prost(bool, tag = "9")]
+    pub null_aware: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PiecewiseMergeJoinExecNode {

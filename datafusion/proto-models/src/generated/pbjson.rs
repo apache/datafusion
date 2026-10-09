@@ -27125,6 +27125,9 @@ impl serde::Serialize for SortMergeJoinExecNode {
         if !self.projection.is_empty() {
             len += 1;
         }
+        if self.null_aware {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.SortMergeJoinExecNode", len)?;
         if let Some(v) = self.left.as_ref() {
             struct_ser.serialize_field("left", v)?;
@@ -27154,6 +27157,9 @@ impl serde::Serialize for SortMergeJoinExecNode {
         if !self.projection.is_empty() {
             struct_ser.serialize_field("projection", &self.projection)?;
         }
+        if self.null_aware {
+            struct_ser.serialize_field("nullAware", &self.null_aware)?;
+        }
         struct_ser.end()
     }
 }
@@ -27175,6 +27181,8 @@ impl<'de> serde::Deserialize<'de> for SortMergeJoinExecNode {
             "null_equality",
             "nullEquality",
             "projection",
+            "null_aware",
+            "nullAware",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -27187,6 +27195,7 @@ impl<'de> serde::Deserialize<'de> for SortMergeJoinExecNode {
             SortOptions,
             NullEquality,
             Projection,
+            NullAware,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -27216,6 +27225,7 @@ impl<'de> serde::Deserialize<'de> for SortMergeJoinExecNode {
                             "sortOptions" | "sort_options" => Ok(GeneratedField::SortOptions),
                             "nullEquality" | "null_equality" => Ok(GeneratedField::NullEquality),
                             "projection" => Ok(GeneratedField::Projection),
+                            "nullAware" | "null_aware" => Ok(GeneratedField::NullAware),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -27243,6 +27253,7 @@ impl<'de> serde::Deserialize<'de> for SortMergeJoinExecNode {
                 let mut sort_options__ = None;
                 let mut null_equality__ = None;
                 let mut projection__ = None;
+                let mut null_aware__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Left => {
@@ -27296,6 +27307,12 @@ impl<'de> serde::Deserialize<'de> for SortMergeJoinExecNode {
                                     .into_iter().map(|x| x.0).collect())
                             ;
                         }
+                        GeneratedField::NullAware => {
+                            if null_aware__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nullAware"));
+                            }
+                            null_aware__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(SortMergeJoinExecNode {
@@ -27307,6 +27324,7 @@ impl<'de> serde::Deserialize<'de> for SortMergeJoinExecNode {
                     sort_options: sort_options__.unwrap_or_default(),
                     null_equality: null_equality__.unwrap_or_default(),
                     projection: projection__.unwrap_or_default(),
+                    null_aware: null_aware__.unwrap_or_default(),
                 })
             }
         }

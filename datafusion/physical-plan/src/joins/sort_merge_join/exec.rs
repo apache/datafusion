@@ -64,7 +64,6 @@ use datafusion_physical_expr_common::physical_expr::{PhysicalExprRef, fmt_sql};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 use futures::StreamExt;
 
-
 /// Null-aware (`NOT IN`) semantics of a soft merge join, derived from
 /// [`SortMergeJoinExec::null_aware`] and the join type.
 ///
@@ -73,7 +72,7 @@ use futures::StreamExt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum NullAwareMode {
     /// `left.key NOT IN (right.key)`: emits left rows.
-    LeftAnti
+    LeftAnti,
 }
 
 impl NullAwareMode {
@@ -86,18 +85,14 @@ impl NullAwareMode {
         sort_options: &[SortOptions],
     ) -> Result<Self> {
         if num_keys != 1 || has_filter {
-            return plan_err!(
-                "null-aware SortMergeJoin requires one key and no filter"
-            );
+            return plan_err!("null-aware SortMergeJoin requires one key and no filter");
         }
 
         // NULL keys must not match each other.
         // The null-aware execution path handles UNKNOWN results separately.
         // UNKNOWN happens when `WHERE x NOT IN (NULL)`
         if null_equality != NullEquality::NullEqualsNothing {
-            return plan_err!(
-                "null-aware SortMergeJoin requires NullEqualsNothing"
-            );
+            return plan_err!("null-aware SortMergeJoin requires NullEqualsNothing");
         }
 
         let mode = match join_type {
@@ -123,7 +118,6 @@ impl NullAwareMode {
         }
     }
 }
-
 
 /// Join execution plan that executes equi-join predicates on multiple partitions using Sort-Merge
 /// join algorithm and applies an optional filter post join. Can be used to join arbitrarily large
@@ -195,6 +189,19 @@ pub struct SortMergeJoinExec {
     pub sort_options: Vec<SortOptions>,
     /// Defines the null equality for the join.
     pub null_equality: NullEquality,
+    /// Flag to indicate if this join uses null-aware equality semantics.
+    ///
+    /// Currently supported only for uncorrelated `LeftAnti` joins with one
+    /// join key, no join filter, and [`NullEquality::NullEqualsNothing`].
+    ///
+    /// Both inputs must have a single partition and be sorted with NULLS FIRST.
+    /// This lets the join determine whether the entire right input is empty
+    /// or contains a NULL key before emitting any left rows.
+    ///
+    /// An empty right input preserves all left rows, including NULL keys.
+    /// A right input containing a NULL key produces no rows.
+    /// Otherwise, only unmatched left rows with non-NULL keys are emitted.
+    pub null_aware: bool,
     /// The columns of `schema` to emit, in order. `None` emits all of them.
     pub projection: Option<Vec<usize>>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
@@ -206,6 +213,7 @@ impl SortMergeJoinExec {
     /// The inputs are sorted using `sort_options` are applied to the columns in the `on`
     /// # Error
     /// This function errors when it is not possible to join the left and right sides on keys `on`.
+    #[expect(clippy::too_many_arguments)]
     pub fn try_new(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
@@ -214,6 +222,7 @@ impl SortMergeJoinExec {
         join_type: JoinType,
         sort_options: Vec<SortOptions>,
         null_equality: NullEquality,
+        null_aware: bool,
     ) -> Result<Self> {
         let left_schema = left.schema();
         let right_schema = right.schema();
@@ -269,6 +278,7 @@ impl SortMergeJoinExec {
             right_sort_exprs,
             sort_options,
             null_equality,
+            null_aware,
             projection: None,
             cache: Arc::new(cache),
         })
@@ -424,6 +434,7 @@ impl SortMergeJoinExec {
             self.join_type().swap(),
             self.sort_options.clone(),
             self.null_equality,
+            self.null_aware,
         )?
         .with_projection(swap_join_projection(
             left.schema().fields().len(),
@@ -603,6 +614,7 @@ impl ExecutionPlan for SortMergeJoinExec {
                         self.join_type,
                         self.sort_options.clone(),
                         self.null_equality,
+                        self.null_aware,
                     )?
                     .with_projection(self.projection.clone())?,
                 )),
@@ -755,6 +767,7 @@ impl ExecutionPlan for SortMergeJoinExec {
                 self.join_type,
                 self.sort_options.clone(),
                 self.null_equality,
+                self.null_aware,
             )?)))
         } else {
             try_embed_projection(projection, self)
@@ -778,6 +791,7 @@ impl ExecutionPlan for SortMergeJoinExec {
             join_type,
             sort_options,
             null_equality,
+            null_aware,
             projection,
             // derived from the children's schemas by `try_new` on decode
             schema: _,
@@ -805,6 +819,7 @@ impl ExecutionPlan for SortMergeJoinExec {
 
         let join_type = crate::joins::proto::join_type_to_proto(*join_type);
         let null_equality = crate::joins::proto::null_equality_to_proto(*null_equality);
+        let null_aware = *null_aware;
         let filter = filter
             .as_ref()
             .map(|filter| crate::joins::proto::join_filter_to_proto(filter, ctx))
@@ -843,6 +858,7 @@ impl ExecutionPlan for SortMergeJoinExec {
                                 indices.iter().map(|index| *index as u32).collect()
                             }
                         },
+                        null_aware,
                     },
                 )),
             ),
@@ -879,6 +895,7 @@ impl SortMergeJoinExec {
             sort_options,
             null_equality,
             projection,
+            null_aware,
         } = &**sort_join;
 
         let left =
@@ -912,6 +929,9 @@ impl SortMergeJoinExec {
             *null_equality,
             "SortMergeJoinExec",
         )?;
+
+        let null_aware = *null_aware;
+
         let filter = filter
             .as_ref()
             .map(|filter| {
@@ -946,6 +966,7 @@ impl SortMergeJoinExec {
                 join_type,
                 sort_options,
                 null_equality,
+                null_aware,
             )?
             .with_projection(projection)?,
         ))
