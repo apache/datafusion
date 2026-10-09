@@ -1,0 +1,872 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>EXPLAIN &#8212; Apache DataFusion 55.0.0 documentation</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../../_static/styles/theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
+<link href="../../_static/styles/pydata-sphinx-theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../../_static/theme_overrides.css?v=d08b24aa" />
+  
+  <!-- So that users can add custom icons -->
+  <script defer src="../../_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
+<link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
+
+    <script src="../../_static/documentation_options.js?v=9d921e93"></script>
+    <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'user-guide/sql/explain';</script>
+    <script>
+        DOCUMENTATION_OPTIONS.theme_version = '0.20.0';
+        DOCUMENTATION_OPTIONS.theme_switcher_json_url = 'https://datafusion.apache.org/_static/versions.json';
+        DOCUMENTATION_OPTIONS.theme_switcher_version_match = '55.0.0';
+        DOCUMENTATION_OPTIONS.show_version_warning_banner =
+            false;
+        </script>
+    <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
+    <link rel="canonical" href="https://datafusion.apache.org/versions/55.0.0/user-guide/sql/explain.html" />
+    <link rel="icon" href="../../_static/favicon.svg"/>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Information Schema" href="information_schema.html" />
+    <link rel="prev" title="DML" href="dml.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="55.0.0" />
+  
+    
+    <script src="../../_static/searchtools.js"></script>
+    <script src="../../_static/language_data.js"></script>
+    <script src="../../searchindex.js"></script>
+  
+  </head>
+  <body data-default-mode="">
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+  
+  
+  
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header id="pst-header" class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class="col-lg-3 navbar-header-items__start">
+    
+      <div class="navbar-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../../_static/original.svg" class="logo__image only-light" alt="Apache DataFusion 55.0.0 documentation - Home"/>
+    <img src="../../_static/original_dark.svg" class="logo__image only-dark pst-js-only" alt="Apache DataFusion 55.0.0 documentation - Home"/>
+  
+  
+</a></div>
+    
+  </div>
+  
+  <div class="col-lg-9 navbar-header-items">
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+        <div class="navbar-item">
+<div class="version-switcher__container dropdown pst-js-only">
+  <button id="pst-version-switcher-button-2"
+    type="button"
+    class="version-switcher__button btn btn-sm dropdown-toggle"
+    data-bs-toggle="dropdown"
+    aria-haspopup="listbox"
+    aria-controls="pst-version-switcher-list-2"
+    aria-label="Version switcher list"
+  >
+    Choose version  <!-- this text may get changed later by javascript -->
+    <span class="caret"></span>
+  </button>
+  <div id="pst-version-switcher-list-2"
+    class="version-switcher__menu dropdown-menu list-group-flush py-0"
+    role="listbox" aria-labelledby="pst-version-switcher-button-2">
+    <!-- dropdown will be populated by javascript on page load -->
+  </div>
+</div></div>
+      
+        <div class="navbar-item">
+
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
+  </ul>
+</div></div>
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+      <div class="sidebar-header-items__end">
+        
+          <div class="navbar-item">
+<div class="version-switcher__container dropdown pst-js-only">
+  <button id="pst-version-switcher-button-3"
+    type="button"
+    class="version-switcher__button btn btn-sm dropdown-toggle"
+    data-bs-toggle="dropdown"
+    aria-haspopup="listbox"
+    aria-controls="pst-version-switcher-list-3"
+    aria-label="Version switcher list"
+  >
+    Choose version  <!-- this text may get changed later by javascript -->
+    <span class="caret"></span>
+  </button>
+  <div id="pst-version-switcher-list-3"
+    class="version-switcher__menu dropdown-menu list-group-flush py-0"
+    role="listbox" aria-labelledby="pst-version-switcher-button-3">
+    <!-- dropdown will be populated by javascript on page load -->
+  </div>
+</div></div>
+        
+          <div class="navbar-item">
+
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
+  </ul>
+</div></div>
+        
+      </div>
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item"><nav class="bd-links" id="bd-docs-nav" aria-label="Main navigation">
+
+  <div class="bd-toc-item active">
+    
+    <p aria-level="2" class="caption" role="heading"><span class="caption-text">ASF Links</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://apache.org">Apache Software Foundation</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/licenses/">License</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/foundation/sponsorship.html">Donate</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/foundation/thanks.html">Thanks</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/security/">Security</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Links</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://github.com/apache/datafusion">GitHub and Issue Tracker</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://crates.io/crates/datafusion">crates.io</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/">API Docs</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/blog/">Blog</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://github.com/apache/datafusion/blob/main/CODE_OF_CONDUCT.md">Code of conduct</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../download.html">Download</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">User Guide</span></p>
+<ul class="current nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../example-usage.html">Example Usage</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../features.html">Features</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../concepts-readings-events.html">Concepts, Readings, Events</a></li>
+
+
+<li class="toctree-l1"><a class="reference internal" href="../crate-configuration.html">Crate Configuration</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../cli/index.html">DataFusion CLI</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../cli/overview.html">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/installation.html">Installation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/usage.html">Usage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/datasources.html">Local Files / Directories</a></li>
+
+
+
+
+<li class="toctree-l2"><a class="reference internal" href="../cli/functions.html">CLI Specific Functions</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../dataframe.html">DataFrame API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../arrow-introduction.html">Gentle Arrow Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../expressions.html">Expression API</a></li>
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="index.html">SQL Reference</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="data_types.html">Data Types</a></li>
+<li class="toctree-l2"><a class="reference internal" href="struct_coercion.html">Struct Type Coercion and Field Mapping</a></li>
+<li class="toctree-l2"><a class="reference internal" href="select.html">SELECT syntax</a></li>
+<li class="toctree-l2"><a class="reference internal" href="subqueries.html">Subqueries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ddl.html">DDL</a></li>
+<li class="toctree-l2"><a class="reference internal" href="dml.html">DML</a></li>
+<li class="toctree-l2 current active"><a class="current reference internal" href="#">EXPLAIN</a></li>
+<li class="toctree-l2"><a class="reference internal" href="information_schema.html">Information Schema</a></li>
+<li class="toctree-l2"><a class="reference internal" href="operators.html">Operators and Literals</a></li>
+<li class="toctree-l2"><a class="reference internal" href="aggregate_functions.html">Aggregate Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="window_functions.html">Window Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="scalar_functions.html">Scalar Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="special_functions.html">Special Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="format_options.html">Format Options</a></li>
+
+<li class="toctree-l2"><a class="reference internal" href="prepared_statements.html">Prepared Statements</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../configs.html">Configuration Settings</a></li>
+
+
+
+<li class="toctree-l1"><a class="reference internal" href="../explain-usage.html">Reading Explain Plans</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../parquet-content-defined-chunking.html">Parquet Content-Defined Chunking</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../metrics.html">Metrics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../faq.html">Frequently Asked Questions</a></li>
+
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Library User Guide</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/index.html">Introduction</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../library-user-guide/upgrading/index.html">Upgrade Guides</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../library-user-guide/upgrading/55.0.0.html">DataFusion 55.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../library-user-guide/upgrading/54.0.0.html">DataFusion 54.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../library-user-guide/upgrading/53.0.0.html">DataFusion 53.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../library-user-guide/upgrading/52.0.0.html">DataFusion 52.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../library-user-guide/upgrading/51.0.0.html">DataFusion 51.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../library-user-guide/upgrading/50.0.0.html">DataFusion 50.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../library-user-guide/upgrading/49.0.0.html">DataFusion 49.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../library-user-guide/upgrading/48.0.1.html">DataFusion 48.0.1</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../library-user-guide/upgrading/48.0.0.html">DataFusion 48.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../library-user-guide/upgrading/47.0.0.html">DataFusion 47.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../library-user-guide/upgrading/46.0.0.html">DataFusion 46.0.0</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/extensions.html">Extensions List</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/using-the-sql-api.html">Using the SQL API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/extending-sql.html">Extending SQL Syntax</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/working-with-exprs.html">Working with <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/using-the-dataframe-api.html">Using the DataFrame API</a></li>
+
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/building-logical-plans.html">Building Logical Plans</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/catalogs.html">Catalogs, Schemas, and Tables</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../library-user-guide/functions/index.html">Functions</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../library-user-guide/functions/adding-udfs.html">Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../library-user-guide/functions/spark.html">Spark Compatible Functions</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/custom-table-providers.html">Custom Table Provider</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/table-constraints.html">Table Constraint Enforcement</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/extending-operators.html">Extending Operators</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/profiling.html">Profiling Cookbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/query-optimizer.html">Query Optimizer</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Contributor Guide</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/index.html">Introduction</a></li>
+
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/pr_review.html">Reviewing Pull Requests</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/communication.html">Community Communication</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/development_environment.html">Development Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/architecture.html">Architecture</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/architecture/dependency-graph.html">Workspace Dependency Graph</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/testing.html">Testing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/api-health.html">API health policy</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/howtos.html">HOWTOs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/release_management.html">Release Management</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/roadmap.html">Roadmap and Improvement Proposals</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/governance.html">Governance</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/inviting.html">Inviting New Committers and PMC Members</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../contributor-guide/specification/index.html">Specifications</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../contributor-guide/specification/invariants.html">Invariants</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../contributor-guide/specification/output-field-name-semantic.html">Output field name semantics</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../contributor-guide/gsoc/index.html">Google Summer of Code (GSOC)</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../contributor-guide/gsoc/gsoc_application_guidelines_2025.html">GSoC Application Guidelines (2025)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../contributor-guide/gsoc/gsoc_project_ideas_2025.html">GSoC Project Ideas (2025)</a></li>
+</ul>
+</details></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">DataFusion Subprojects</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/ballista/">DataFusion Ballista</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/comet/">DataFusion Comet</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/java/">DataFusion Java</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/python/">DataFusion Python</a></li>
+</ul>
+
+    
+  </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item">
+
+<nav aria-label="Breadcrumb" class="d-print-none">
+  <ul class="bd-breadcrumbs">
+    
+    <li class="breadcrumb-item breadcrumb-home">
+      <a href="../../index.html" class="nav-link" aria-label="Home">
+        <i class="fa-solid fa-home"></i>
+      </a>
+    </li>
+    
+    <li class="breadcrumb-item"><a href="index.html" class="nav-link">SQL Reference</a></li>
+    
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">EXPLAIN</span></li>
+  </ul>
+</nav>
+</div>
+      
+    </div>
+  
+  
+</div>
+</div>
+              
+              
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <!---
+  Licensed to the Apache Software Foundation (ASF) under one
+  or more contributor license agreements.  See the NOTICE file
+  distributed with this work for additional information
+  regarding copyright ownership.  The ASF licenses this file
+  to you under the Apache License, Version 2.0 (the
+  "License"); you may not use this file except in compliance
+  with the License.  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing,
+  software distributed under the License is distributed on an
+  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, either express or implied.  See the License for the
+  specific language governing permissions and limitations
+  under the License.
+-->
+<section id="explain">
+<h1>EXPLAIN<a class="headerlink" href="#explain" title="Link to this heading">#</a></h1>
+<p>The <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span></code> command shows the logical and physical execution plan for the specified SQL statement.</p>
+<section id="syntax">
+<h2>Syntax<a class="headerlink" href="#syntax" title="Link to this heading">#</a></h2>
+<pre>
+EXPLAIN [ANALYZE] [VERBOSE] [FORMAT format] statement
+</pre>
+</section>
+<section id="id1">
+<h2><code class="docutils literal notranslate"><span class="pre">EXPLAIN</span></code><a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
+<p>Shows the execution plan of a statement.
+If you need more detailed output, use <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">VERBOSE</span></code>.
+Note that <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">VERBOSE</span></code> only supports the <code class="docutils literal notranslate"><span class="pre">indent</span></code> format.</p>
+<p>The optional <code class="docutils literal notranslate"><span class="pre">[FORMAT</span> <span class="pre">format]</span></code> clause controls how the plan is displayed as
+explained below. If this clause is not specified, the plan is displayed using
+the format from the <a class="reference internal" href="../configs.html"><span class="std std-doc">configuration value</span></a> <code class="docutils literal notranslate"><span class="pre">datafusion.explain.format</span></code>.</p>
+<section id="tree-format-default">
+<h3><code class="docutils literal notranslate"><span class="pre">tree</span></code> format (default)<a class="headerlink" href="#tree-format-default" title="Link to this heading">#</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">tree</span></code> format is modeled after <a class="reference external" href="https://duckdb.org/docs/stable/guides/meta/explain.html">DuckDB plans</a> and is designed to be easier
+to see the high level structure of the plan</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">EXPLAIN</span><span class="w"> </span><span class="n">FORMAT</span><span class="w"> </span><span class="n">TREE</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="k">SUM</span><span class="p">(</span><span class="n">x</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">b</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">---------------+-------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">plan_type</span><span class="w">     </span><span class="o">|</span><span class="w"> </span><span class="n">plan</span><span class="w">                          </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------+-------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">physical_plan</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="err">┌───────────────────────────┐</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">│</span><span class="w">       </span><span class="n">ProjectionExec</span><span class="w">      </span><span class="err">│</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">│</span><span class="w">    </span><span class="c1">--------------------   │ |</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">│</span><span class="w">    </span><span class="k">sum</span><span class="p">(</span><span class="n">t</span><span class="p">.</span><span class="n">x</span><span class="p">):</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">t</span><span class="p">.</span><span class="n">x</span><span class="p">)</span><span class="o">@</span><span class="mi">1</span><span class="w">   </span><span class="err">│</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">└─────────────┬─────────────┘</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">┌─────────────┴─────────────┐</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">│</span><span class="w">       </span><span class="n">AggregateExec</span><span class="w">       </span><span class="err">│</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">│</span><span class="w">    </span><span class="c1">--------------------   │ |</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">│</span><span class="w">       </span><span class="n">aggr</span><span class="p">:</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">t</span><span class="p">.</span><span class="n">x</span><span class="p">)</span><span class="w">      </span><span class="err">│</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">│</span><span class="w">     </span><span class="n">group_by</span><span class="p">:</span><span class="w"> </span><span class="n">b</span><span class="o">@</span><span class="mi">0</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">b</span><span class="w">    </span><span class="err">│</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">│</span><span class="w">                           </span><span class="err">│</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">│</span><span class="w">           </span><span class="k">mode</span><span class="p">:</span><span class="w">           </span><span class="err">│</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">│</span><span class="w">      </span><span class="n">FinalPartitioned</span><span class="w">     </span><span class="err">│</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">└─────────────┬─────────────┘</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">┌─────────────┴─────────────┐</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">│</span><span class="w">    </span><span class="n">CoalesceBatchesExec</span><span class="w">    </span><span class="err">│</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">└─────────────┬─────────────┘</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">┌─────────────┴─────────────┐</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">│</span><span class="w">      </span><span class="n">RepartitionExec</span><span class="w">      </span><span class="err">│</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">│</span><span class="w">    </span><span class="c1">--------------------   │ |</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">│</span><span class="w">   </span><span class="n">input_partition_count</span><span class="p">:</span><span class="w">  </span><span class="err">│</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">│</span><span class="w">             </span><span class="mi">1</span><span class="w">             </span><span class="err">│</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">│</span><span class="w">                           </span><span class="err">│</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">│</span><span class="w">    </span><span class="n">partitioning_scheme</span><span class="p">:</span><span class="w">   </span><span class="err">│</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">│</span><span class="w">      </span><span class="n">Hash</span><span class="p">([</span><span class="n">b</span><span class="o">@</span><span class="mi">0</span><span class="p">],</span><span class="w"> </span><span class="mi">16</span><span class="p">)</span><span class="w">      </span><span class="err">│</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">└─────────────┬─────────────┘</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">┌─────────────┴─────────────┐</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">│</span><span class="w">       </span><span class="n">AggregateExec</span><span class="w">       </span><span class="err">│</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">│</span><span class="w">    </span><span class="c1">--------------------   │ |</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">│</span><span class="w">       </span><span class="n">aggr</span><span class="p">:</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">t</span><span class="p">.</span><span class="n">x</span><span class="p">)</span><span class="w">      </span><span class="err">│</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">│</span><span class="w">     </span><span class="n">group_by</span><span class="p">:</span><span class="w"> </span><span class="n">b</span><span class="o">@</span><span class="mi">1</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">b</span><span class="w">    </span><span class="err">│</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">│</span><span class="w">       </span><span class="k">mode</span><span class="p">:</span><span class="w"> </span><span class="k">Partial</span><span class="w">       </span><span class="err">│</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">└─────────────┬─────────────┘</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">┌─────────────┴─────────────┐</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">│</span><span class="w">       </span><span class="n">DataSourceExec</span><span class="w">      </span><span class="err">│</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">│</span><span class="w">    </span><span class="c1">--------------------   │ |</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">│</span><span class="w">         </span><span class="n">bytes</span><span class="p">:</span><span class="w"> </span><span class="mi">224</span><span class="w">        </span><span class="err">│</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">│</span><span class="w">       </span><span class="n">format</span><span class="p">:</span><span class="w"> </span><span class="n">memory</span><span class="w">      </span><span class="err">│</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">│</span><span class="w">          </span><span class="k">rows</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="w">          </span><span class="err">│</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w"> </span><span class="err">└───────────────────────────┘</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w">                               </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------+-------------------------------+</span>
+<span class="mi">1</span><span class="w"> </span><span class="k">row</span><span class="p">(</span><span class="n">s</span><span class="p">)</span><span class="w"> </span><span class="n">fetched</span><span class="p">.</span>
+<span class="n">Elapsed</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">016</span><span class="w"> </span><span class="n">seconds</span><span class="p">.</span>
+</pre></div>
+</div>
+</section>
+<section id="indent-format">
+<h3><code class="docutils literal notranslate"><span class="pre">indent</span></code> format<a class="headerlink" href="#indent-format" title="Link to this heading">#</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">indent</span></code> format shows both the logical and physical plan, with one line for
+each operator in the plan. Child plans are indented to show the hierarchy.</p>
+<p>See <a class="reference internal" href="../explain-usage.html"><span class="std std-doc">Reading Explain Plans</span></a> for more information on how to interpret these plans.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">t</span><span class="p">(</span><span class="n">x</span><span class="w"> </span><span class="nb">int</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="nb">int</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="k">VALUES</span><span class="w"> </span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">),</span><span class="w"> </span><span class="p">(</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">);</span>
+<span class="mi">0</span><span class="w"> </span><span class="k">row</span><span class="p">(</span><span class="n">s</span><span class="p">)</span><span class="w"> </span><span class="n">fetched</span><span class="p">.</span>
+<span class="n">Elapsed</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">004</span><span class="w"> </span><span class="n">seconds</span><span class="p">.</span>
+
+<span class="o">&gt;</span><span class="w"> </span><span class="k">EXPLAIN</span><span class="w"> </span><span class="n">FORMAT</span><span class="w"> </span><span class="n">INDENT</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="k">SUM</span><span class="p">(</span><span class="n">x</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">b</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">---------------+-------------------------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">plan_type</span><span class="w">     </span><span class="o">|</span><span class="w"> </span><span class="n">plan</span><span class="w">                                                                          </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------+-------------------------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">logical_plan</span><span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="n">Projection</span><span class="p">:</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">t</span><span class="p">.</span><span class="n">x</span><span class="p">)</span><span class="w">                                                          </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w">   </span><span class="k">Aggregate</span><span class="p">:</span><span class="w"> </span><span class="n">groupBy</span><span class="o">=</span><span class="p">[[</span><span class="n">t</span><span class="p">.</span><span class="n">b</span><span class="p">]],</span><span class="w"> </span><span class="n">aggr</span><span class="o">=</span><span class="p">[[</span><span class="k">sum</span><span class="p">(</span><span class="k">CAST</span><span class="p">(</span><span class="n">t</span><span class="p">.</span><span class="n">x</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">Int64</span><span class="p">))]]</span><span class="w">                </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w">     </span><span class="n">TableScan</span><span class="p">:</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="n">projection</span><span class="o">=</span><span class="p">[</span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">]</span><span class="w">                                            </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">physical_plan</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">ProjectionExec</span><span class="p">:</span><span class="w"> </span><span class="n">expr</span><span class="o">=</span><span class="p">[</span><span class="k">sum</span><span class="p">(</span><span class="n">t</span><span class="p">.</span><span class="n">x</span><span class="p">)</span><span class="o">@</span><span class="mi">1</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">t</span><span class="p">.</span><span class="n">x</span><span class="p">)]</span><span class="w">                                 </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w">   </span><span class="n">AggregateExec</span><span class="p">:</span><span class="w"> </span><span class="k">mode</span><span class="o">=</span><span class="n">FinalPartitioned</span><span class="p">,</span><span class="w"> </span><span class="n">gby</span><span class="o">=</span><span class="p">[</span><span class="n">b</span><span class="o">@</span><span class="mi">0</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">b</span><span class="p">],</span><span class="w"> </span><span class="n">aggr</span><span class="o">=</span><span class="p">[</span><span class="k">sum</span><span class="p">(</span><span class="n">t</span><span class="p">.</span><span class="n">x</span><span class="p">)]</span><span class="w">       </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w">     </span><span class="n">CoalesceBatchesExec</span><span class="p">:</span><span class="w"> </span><span class="n">target_batch_size</span><span class="o">=</span><span class="mi">8192</span><span class="w">                               </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w">       </span><span class="n">RepartitionExec</span><span class="p">:</span><span class="w"> </span><span class="n">partitioning</span><span class="o">=</span><span class="n">Hash</span><span class="p">([</span><span class="n">b</span><span class="o">@</span><span class="mi">0</span><span class="p">],</span><span class="w"> </span><span class="mi">16</span><span class="p">),</span><span class="w"> </span><span class="n">input_partitions</span><span class="o">=</span><span class="mi">1</span><span class="w">       </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w">         </span><span class="n">AggregateExec</span><span class="p">:</span><span class="w"> </span><span class="k">mode</span><span class="o">=</span><span class="k">Partial</span><span class="p">,</span><span class="w"> </span><span class="n">gby</span><span class="o">=</span><span class="p">[</span><span class="n">b</span><span class="o">@</span><span class="mi">1</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">b</span><span class="p">],</span><span class="w"> </span><span class="n">aggr</span><span class="o">=</span><span class="p">[</span><span class="k">sum</span><span class="p">(</span><span class="n">t</span><span class="p">.</span><span class="n">x</span><span class="p">)]</span><span class="w">          </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w">           </span><span class="n">DataSourceExec</span><span class="p">:</span><span class="w"> </span><span class="n">partitions</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">partition_sizes</span><span class="o">=</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="w">                   </span><span class="o">|</span>
+<span class="o">|</span><span class="w">               </span><span class="o">|</span><span class="w">                                                                               </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------+-------------------------------------------------------------------------------+</span>
+<span class="mi">2</span><span class="w"> </span><span class="k">row</span><span class="p">(</span><span class="n">s</span><span class="p">)</span><span class="w"> </span><span class="n">fetched</span><span class="p">.</span>
+<span class="n">Elapsed</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">004</span><span class="w"> </span><span class="n">seconds</span><span class="p">.</span>
+</pre></div>
+</div>
+</section>
+<section id="pgjson-format">
+<h3><code class="docutils literal notranslate"><span class="pre">pgjson</span></code> format<a class="headerlink" href="#pgjson-format" title="Link to this heading">#</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">pgjson</span></code> format is modeled after <a class="reference external" href="https://www.postgresql.org/docs/current/sql-explain.html">Postgres JSON</a> format.</p>
+<p>You can use this format to visualize the plan in existing plan visualization
+tools, such as <a class="reference external" href="https://explain.dalibo.com/">dalibo</a></p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">EXPLAIN</span><span class="w"> </span><span class="n">FORMAT</span><span class="w"> </span><span class="n">PGJSON</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="k">SUM</span><span class="p">(</span><span class="n">x</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">b</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">--------------+----------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">plan_type</span><span class="w">    </span><span class="o">|</span><span class="w"> </span><span class="n">plan</span><span class="w">                                               </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------+----------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">logical_plan</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="w">                                                  </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">   </span><span class="err">{</span><span class="w">                                                </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">     </span><span class="ss">&quot;Plan&quot;</span><span class="p">:</span><span class="w"> </span><span class="err">{</span><span class="w">                                      </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">       </span><span class="ss">&quot;Expressions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="w">                             </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">         </span><span class="ss">&quot;sum(t.x)&quot;</span><span class="w">                                 </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">       </span><span class="p">],</span><span class="w">                                           </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">       </span><span class="ss">&quot;Node Type&quot;</span><span class="p">:</span><span class="w"> </span><span class="ss">&quot;Projection&quot;</span><span class="p">,</span><span class="w">                   </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">       </span><span class="ss">&quot;Output&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="w">                                  </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">         </span><span class="ss">&quot;sum(t.x)&quot;</span><span class="w">                                 </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">       </span><span class="p">],</span><span class="w">                                           </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">       </span><span class="ss">&quot;Plans&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="w">                                   </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">         </span><span class="err">{</span><span class="w">                                          </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">           </span><span class="ss">&quot;Aggregates&quot;</span><span class="p">:</span><span class="w"> </span><span class="ss">&quot;sum(CAST(t.x AS Int64))&quot;</span><span class="p">,</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">           </span><span class="ss">&quot;Group By&quot;</span><span class="p">:</span><span class="w"> </span><span class="ss">&quot;t.b&quot;</span><span class="p">,</span><span class="w">                       </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">           </span><span class="ss">&quot;Node Type&quot;</span><span class="p">:</span><span class="w"> </span><span class="ss">&quot;Aggregate&quot;</span><span class="p">,</span><span class="w">                </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">           </span><span class="ss">&quot;Output&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="w">                              </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">             </span><span class="ss">&quot;b&quot;</span><span class="p">,</span><span class="w">                                   </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">             </span><span class="ss">&quot;sum(t.x)&quot;</span><span class="w">                             </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">           </span><span class="p">],</span><span class="w">                                       </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">           </span><span class="ss">&quot;Plans&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="w">                               </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">             </span><span class="err">{</span><span class="w">                                      </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">               </span><span class="ss">&quot;Node Type&quot;</span><span class="p">:</span><span class="w"> </span><span class="ss">&quot;TableScan&quot;</span><span class="p">,</span><span class="w">            </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">               </span><span class="ss">&quot;Output&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="w">                          </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">                 </span><span class="ss">&quot;x&quot;</span><span class="p">,</span><span class="w">                               </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">                 </span><span class="ss">&quot;b&quot;</span><span class="w">                                </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">               </span><span class="p">],</span><span class="w">                                   </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">               </span><span class="ss">&quot;Plans&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[],</span><span class="w">                         </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">               </span><span class="ss">&quot;Relation Name&quot;</span><span class="p">:</span><span class="w"> </span><span class="ss">&quot;t&quot;</span><span class="w">                 </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">             </span><span class="err">}</span><span class="w">                                      </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">           </span><span class="p">]</span><span class="w">                                        </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">         </span><span class="err">}</span><span class="w">                                          </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">       </span><span class="p">]</span><span class="w">                                            </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">     </span><span class="err">}</span><span class="w">                                              </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">   </span><span class="err">}</span><span class="w">                                                </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w"> </span><span class="p">]</span><span class="w">                                                  </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------+----------------------------------------------------+</span>
+<span class="mi">1</span><span class="w"> </span><span class="k">row</span><span class="p">(</span><span class="n">s</span><span class="p">)</span><span class="w"> </span><span class="n">fetched</span><span class="p">.</span>
+<span class="n">Elapsed</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">008</span><span class="w"> </span><span class="n">seconds</span><span class="p">.</span>
+</pre></div>
+</div>
+</section>
+<section id="graphviz-format">
+<h3><code class="docutils literal notranslate"><span class="pre">graphviz</span></code> format<a class="headerlink" href="#graphviz-format" title="Link to this heading">#</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">graphviz</span></code> format uses the <a class="reference external" href="https://graphviz.org/doc/info/lang.html">DOT language</a> that can be used with <a class="reference external" href="https://graphviz.org/">Graphviz</a> to
+generate a visual representation of the plan.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">EXPLAIN</span><span class="w"> </span><span class="n">FORMAT</span><span class="w"> </span><span class="n">GRAPHVIZ</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="k">SUM</span><span class="p">(</span><span class="n">x</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">b</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">--------------+------------------------------------------------------------------------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">plan_type</span><span class="w">    </span><span class="o">|</span><span class="w"> </span><span class="n">plan</span><span class="w">                                                                                                                         </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------+------------------------------------------------------------------------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">logical_plan</span><span class="w"> </span><span class="o">|</span><span class="w">                                                                                                                              </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w"> </span><span class="o">//</span><span class="w"> </span><span class="k">Begin</span><span class="w"> </span><span class="n">DataFusion</span><span class="w"> </span><span class="n">GraphViz</span><span class="w"> </span><span class="n">Plan</span><span class="p">,</span><span class="w">                                                                                           </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w"> </span><span class="o">//</span><span class="w"> </span><span class="n">display</span><span class="w"> </span><span class="n">it</span><span class="w"> </span><span class="n">online</span><span class="w"> </span><span class="n">here</span><span class="p">:</span><span class="w"> </span><span class="n">https</span><span class="p">:</span><span class="o">//</span><span class="n">dreampuf</span><span class="p">.</span><span class="n">github</span><span class="p">.</span><span class="n">io</span><span class="o">/</span><span class="n">GraphvizOnline</span><span class="w">                                                         </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">                                                                                                                              </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w"> </span><span class="n">digraph</span><span class="w"> </span><span class="err">{</span><span class="w">                                                                                                                    </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">   </span><span class="n">subgraph</span><span class="w"> </span><span class="n">cluster_1</span><span class="w">                                                                                                         </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">   </span><span class="err">{</span><span class="w">                                                                                                                          </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">     </span><span class="n">graph</span><span class="p">[</span><span class="n">label</span><span class="o">=</span><span class="ss">&quot;LogicalPlan&quot;</span><span class="p">]</span><span class="w">                                                                                               </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">     </span><span class="mi">2</span><span class="p">[</span><span class="n">shape</span><span class="o">=</span><span class="n">box</span><span class="w"> </span><span class="n">label</span><span class="o">=</span><span class="ss">&quot;Projection: sum(t.x)&quot;</span><span class="p">]</span><span class="w">                                                                                </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">     </span><span class="mi">3</span><span class="p">[</span><span class="n">shape</span><span class="o">=</span><span class="n">box</span><span class="w"> </span><span class="n">label</span><span class="o">=</span><span class="ss">&quot;Aggregate: groupBy=[[t.b]], aggr=[[sum(CAST(t.x AS Int64))]]&quot;</span><span class="p">]</span><span class="w">                                        </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">     </span><span class="mi">2</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="mi">3</span><span class="w"> </span><span class="p">[</span><span class="n">arrowhead</span><span class="o">=</span><span class="k">none</span><span class="p">,</span><span class="w"> </span><span class="n">arrowtail</span><span class="o">=</span><span class="n">normal</span><span class="p">,</span><span class="w"> </span><span class="n">dir</span><span class="o">=</span><span class="n">back</span><span class="p">]</span><span class="w">                                                                      </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">     </span><span class="mi">4</span><span class="p">[</span><span class="n">shape</span><span class="o">=</span><span class="n">box</span><span class="w"> </span><span class="n">label</span><span class="o">=</span><span class="ss">&quot;TableScan: t projection=[x, b]&quot;</span><span class="p">]</span><span class="w">                                                                      </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">     </span><span class="mi">3</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="mi">4</span><span class="w"> </span><span class="p">[</span><span class="n">arrowhead</span><span class="o">=</span><span class="k">none</span><span class="p">,</span><span class="w"> </span><span class="n">arrowtail</span><span class="o">=</span><span class="n">normal</span><span class="p">,</span><span class="w"> </span><span class="n">dir</span><span class="o">=</span><span class="n">back</span><span class="p">]</span><span class="w">                                                                      </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">   </span><span class="err">}</span><span class="w">                                                                                                                          </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">   </span><span class="n">subgraph</span><span class="w"> </span><span class="n">cluster_5</span><span class="w">                                                                                                         </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">   </span><span class="err">{</span><span class="w">                                                                                                                          </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">     </span><span class="n">graph</span><span class="p">[</span><span class="n">label</span><span class="o">=</span><span class="ss">&quot;Detailed LogicalPlan&quot;</span><span class="p">]</span><span class="w">                                                                                      </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">     </span><span class="mi">6</span><span class="p">[</span><span class="n">shape</span><span class="o">=</span><span class="n">box</span><span class="w"> </span><span class="n">label</span><span class="o">=</span><span class="ss">&quot;Projection: sum(t.x)\nSchema: [sum(t.x):Int64;N]&quot;</span><span class="p">]</span><span class="w">                                                    </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">     </span><span class="mi">7</span><span class="p">[</span><span class="n">shape</span><span class="o">=</span><span class="n">box</span><span class="w"> </span><span class="n">label</span><span class="o">=</span><span class="ss">&quot;Aggregate: groupBy=[[t.b]], aggr=[[sum(CAST(t.x AS Int64))]]\nSchema: [b:Int32;N, sum(t.x):Int64;N]&quot;</span><span class="p">]</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">     </span><span class="mi">6</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="mi">7</span><span class="w"> </span><span class="p">[</span><span class="n">arrowhead</span><span class="o">=</span><span class="k">none</span><span class="p">,</span><span class="w"> </span><span class="n">arrowtail</span><span class="o">=</span><span class="n">normal</span><span class="p">,</span><span class="w"> </span><span class="n">dir</span><span class="o">=</span><span class="n">back</span><span class="p">]</span><span class="w">                                                                      </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">     </span><span class="mi">8</span><span class="p">[</span><span class="n">shape</span><span class="o">=</span><span class="n">box</span><span class="w"> </span><span class="n">label</span><span class="o">=</span><span class="ss">&quot;TableScan: t projection=[x, b]\nSchema: [x:Int32;N, b:Int32;N]&quot;</span><span class="p">]</span><span class="w">                                      </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">     </span><span class="mi">7</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="mi">8</span><span class="w"> </span><span class="p">[</span><span class="n">arrowhead</span><span class="o">=</span><span class="k">none</span><span class="p">,</span><span class="w"> </span><span class="n">arrowtail</span><span class="o">=</span><span class="n">normal</span><span class="p">,</span><span class="w"> </span><span class="n">dir</span><span class="o">=</span><span class="n">back</span><span class="p">]</span><span class="w">                                                                      </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">   </span><span class="err">}</span><span class="w">                                                                                                                          </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w"> </span><span class="err">}</span><span class="w">                                                                                                                            </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w"> </span><span class="o">//</span><span class="w"> </span><span class="k">End</span><span class="w"> </span><span class="n">DataFusion</span><span class="w"> </span><span class="n">GraphViz</span><span class="w"> </span><span class="n">Plan</span><span class="w">                                                                                              </span><span class="o">|</span>
+<span class="o">|</span><span class="w">              </span><span class="o">|</span><span class="w">                                                                                                                              </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------+------------------------------------------------------------------------------------------------------------------------------+</span>
+<span class="mi">1</span><span class="w"> </span><span class="k">row</span><span class="p">(</span><span class="n">s</span><span class="p">)</span><span class="w"> </span><span class="n">fetched</span><span class="p">.</span>
+<span class="n">Elapsed</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">010</span><span class="w"> </span><span class="n">seconds</span><span class="p">.</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="explain-analyze">
+<h2><code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">ANALYZE</span></code><a class="headerlink" href="#explain-analyze" title="Link to this heading">#</a></h2>
+<p>Shows the execution plan and metrics of a statement. <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">ANALYZE</span></code> supports
+the <code class="docutils literal notranslate"><span class="pre">indent</span></code> format (the default) and the <a class="reference internal" href="#pgjson-format-with-analyze"><code class="docutils literal notranslate"><span class="pre">pgjson</span></code></a>
+format; the <code class="docutils literal notranslate"><span class="pre">tree</span></code> and <code class="docutils literal notranslate"><span class="pre">graphviz</span></code> formats are not supported with <code class="docutils literal notranslate"><span class="pre">ANALYZE</span></code>.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">EXPLAIN</span><span class="w"> </span><span class="k">ANALYZE</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="k">SUM</span><span class="p">(</span><span class="n">x</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">b</span><span class="p">;</span>
+
+<span class="o">+</span><span class="c1">-------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">plan_type</span><span class="w">         </span><span class="o">|</span><span class="w"> </span><span class="n">plan</span><span class="w">                                                                                                                                                      </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Plan</span><span class="w"> </span><span class="k">with</span><span class="w"> </span><span class="n">Metrics</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">CoalescePartitionsExec</span><span class="p">,</span><span class="w"> </span><span class="n">metrics</span><span class="o">=</span><span class="p">[]</span><span class="w">                                                                                                                        </span><span class="o">|</span>
+<span class="o">|</span><span class="w">                   </span><span class="o">|</span><span class="w">   </span><span class="n">ProjectionExec</span><span class="p">:</span><span class="w"> </span><span class="n">expr</span><span class="o">=</span><span class="p">[</span><span class="k">SUM</span><span class="p">(</span><span class="k">table</span><span class="p">.</span><span class="n">x</span><span class="p">)</span><span class="o">@</span><span class="mi">1</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="k">SUM</span><span class="p">(</span><span class="n">x</span><span class="p">)],</span><span class="w"> </span><span class="n">metrics</span><span class="o">=</span><span class="p">[]</span><span class="w">                                                                                             </span><span class="o">|</span>
+<span class="o">|</span><span class="w">                   </span><span class="o">|</span><span class="w">     </span><span class="n">HashAggregateExec</span><span class="p">:</span><span class="w"> </span><span class="k">mode</span><span class="o">=</span><span class="n">FinalPartitioned</span><span class="p">,</span><span class="w"> </span><span class="n">gby</span><span class="o">=</span><span class="p">[</span><span class="n">b</span><span class="o">@</span><span class="mi">0</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">b</span><span class="p">],</span><span class="w"> </span><span class="n">aggr</span><span class="o">=</span><span class="p">[</span><span class="k">SUM</span><span class="p">(</span><span class="n">x</span><span class="p">)],</span><span class="w"> </span><span class="n">metrics</span><span class="o">=</span><span class="p">[</span><span class="n">outputRows</span><span class="o">=</span><span class="mi">2</span><span class="p">]</span><span class="w">                                                       </span><span class="o">|</span>
+<span class="o">|</span><span class="w">                   </span><span class="o">|</span><span class="w">       </span><span class="n">CoalesceBatchesExec</span><span class="p">:</span><span class="w"> </span><span class="n">target_batch_size</span><span class="o">=</span><span class="mi">4096</span><span class="p">,</span><span class="w"> </span><span class="n">metrics</span><span class="o">=</span><span class="p">[]</span><span class="w">                                                                                             </span><span class="o">|</span>
+<span class="o">|</span><span class="w">                   </span><span class="o">|</span><span class="w">         </span><span class="n">RepartitionExec</span><span class="p">:</span><span class="w"> </span><span class="n">partitioning</span><span class="o">=</span><span class="n">Hash</span><span class="p">([</span><span class="k">Column</span><span class="w"> </span><span class="err">{</span><span class="w"> </span><span class="n">name</span><span class="p">:</span><span class="w"> </span><span class="ss">&quot;b&quot;</span><span class="p">,</span><span class="w"> </span><span class="k">index</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="err">}</span><span class="p">],</span><span class="w"> </span><span class="mi">16</span><span class="p">),</span><span class="w"> </span><span class="n">metrics</span><span class="o">=</span><span class="p">[</span><span class="n">sendTime</span><span class="o">=</span><span class="mi">839560</span><span class="p">,</span><span class="w"> </span><span class="n">fetchTime</span><span class="o">=</span><span class="mi">122528525</span><span class="p">,</span><span class="w"> </span><span class="n">repartitionTime</span><span class="o">=</span><span class="mi">5327877</span><span class="p">]</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">                   </span><span class="o">|</span><span class="w">           </span><span class="n">HashAggregateExec</span><span class="p">:</span><span class="w"> </span><span class="k">mode</span><span class="o">=</span><span class="k">Partial</span><span class="p">,</span><span class="w"> </span><span class="n">gby</span><span class="o">=</span><span class="p">[</span><span class="n">b</span><span class="o">@</span><span class="mi">1</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">b</span><span class="p">],</span><span class="w"> </span><span class="n">aggr</span><span class="o">=</span><span class="p">[</span><span class="k">SUM</span><span class="p">(</span><span class="n">x</span><span class="p">)],</span><span class="w"> </span><span class="n">metrics</span><span class="o">=</span><span class="p">[</span><span class="n">outputRows</span><span class="o">=</span><span class="mi">2</span><span class="p">]</span><span class="w">                                                          </span><span class="o">|</span>
+<span class="o">|</span><span class="w">                   </span><span class="o">|</span><span class="w">             </span><span class="n">RepartitionExec</span><span class="p">:</span><span class="w"> </span><span class="n">partitioning</span><span class="o">=</span><span class="n">RoundRobinBatch</span><span class="p">(</span><span class="mi">16</span><span class="p">),</span><span class="w"> </span><span class="n">metrics</span><span class="o">=</span><span class="p">[</span><span class="n">fetchTime</span><span class="o">=</span><span class="mi">5660489</span><span class="p">,</span><span class="w"> </span><span class="n">repartitionTime</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">sendTime</span><span class="o">=</span><span class="mi">8012</span><span class="p">]</span><span class="w">                              </span><span class="o">|</span>
+<span class="o">|</span><span class="w">                   </span><span class="o">|</span><span class="w">               </span><span class="n">DataSourceExec</span><span class="p">:</span><span class="w"> </span><span class="n">file_groups</span><span class="o">=</span><span class="err">{</span><span class="mi">1</span><span class="w"> </span><span class="k">group</span><span class="p">:</span><span class="w"> </span><span class="p">[[</span><span class="o">/</span><span class="n">tmp</span><span class="o">/</span><span class="k">table</span><span class="p">.</span><span class="n">csv</span><span class="p">]]</span><span class="err">}</span><span class="p">,</span><span class="w"> </span><span class="n">has_header</span><span class="o">=</span><span class="k">false</span><span class="p">,</span><span class="w"> </span><span class="n">metrics</span><span class="o">=</span><span class="p">[]</span><span class="w">                                                        </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------+</span>
+</pre></div>
+</div>
+<p>By default <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">ANALYZE</span></code> shows the aggregated metrics from all partitions for each operator. If you need to display per-partition metrics, use <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">ANALYZE</span> <span class="pre">VERBOSE</span></code>.</p>
+<p>You can also set <code class="docutils literal notranslate"><span class="pre">datafusion.explain.analyze_level</span></code> from the <a class="reference internal" href="../configs.html"><span class="std std-doc">configuration value</span></a> to control the detail level for the metrics displayed.</p>
+<section id="pgjson-format-with-analyze">
+<h3><code class="docutils literal notranslate"><span class="pre">pgjson</span></code> format with <code class="docutils literal notranslate"><span class="pre">ANALYZE</span></code><a class="headerlink" href="#pgjson-format-with-analyze" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">ANALYZE</span></code> can also emit the physical plan and its live execution
+metrics in the <a class="reference internal" href="#pgjson-format"><code class="docutils literal notranslate"><span class="pre">pgjson</span></code></a> format, so the analyzed plan can be
+loaded into PostgreSQL plan visualizers such as <a class="reference external" href="https://explain.dalibo.com/">dalibo</a>. Each node reports its
+<code class="docutils literal notranslate"><span class="pre">Actual</span> <span class="pre">Rows</span></code> and <code class="docutils literal notranslate"><span class="pre">Actual</span> <span class="pre">Total</span> <span class="pre">Time</span></code> (compute time, in milliseconds) using the
+PostgreSQL key names, with any remaining DataFusion metrics under <code class="docutils literal notranslate"><span class="pre">Extras</span></code>.</p>
+<p>The format can be requested with either the keyword form
+(<code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">ANALYZE</span> <span class="pre">FORMAT</span> <span class="pre">pgjson</span> <span class="pre">...</span></code>) or, more idiomatically, the PostgreSQL
+<a class="reference internal" href="../explain-usage.html"><span class="std std-doc">option-list form</span></a>, which also lets you combine it with the
+<code class="docutils literal notranslate"><span class="pre">METRICS</span></code> and <code class="docutils literal notranslate"><span class="pre">LEVEL</span></code> knobs in a single statement:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">t</span><span class="p">(</span><span class="n">x</span><span class="w"> </span><span class="nb">int</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="nb">int</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="k">VALUES</span><span class="w"> </span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">),</span><span class="w"> </span><span class="p">(</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">);</span>
+<span class="o">&gt;</span><span class="w"> </span><span class="k">EXPLAIN</span><span class="w"> </span><span class="p">(</span><span class="k">ANALYZE</span><span class="p">,</span><span class="w"> </span><span class="n">FORMAT</span><span class="w"> </span><span class="n">pgjson</span><span class="p">,</span><span class="w"> </span><span class="n">METRICS</span><span class="w"> </span><span class="s1">&#39;rows&#39;</span><span class="p">)</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">-------------------+---------------------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">plan_type</span><span class="w">         </span><span class="o">|</span><span class="w"> </span><span class="n">plan</span><span class="w">                                                                      </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------+---------------------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Plan</span><span class="w"> </span><span class="k">with</span><span class="w"> </span><span class="n">Metrics</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="w">                                                                         </span><span class="o">|</span>
+<span class="o">|</span><span class="w">                   </span><span class="o">|</span><span class="w">   </span><span class="err">{</span><span class="w">                                                                       </span><span class="o">|</span>
+<span class="o">|</span><span class="w">                   </span><span class="o">|</span><span class="w">     </span><span class="ss">&quot;Plan&quot;</span><span class="p">:</span><span class="w"> </span><span class="err">{</span><span class="w">                                                             </span><span class="o">|</span>
+<span class="o">|</span><span class="w">                   </span><span class="o">|</span><span class="w">       </span><span class="ss">&quot;Node Type&quot;</span><span class="p">:</span><span class="w"> </span><span class="ss">&quot;FilterExec&quot;</span><span class="p">,</span><span class="w">                                          </span><span class="o">|</span>
+<span class="o">|</span><span class="w">                   </span><span class="o">|</span><span class="w">       </span><span class="ss">&quot;Details&quot;</span><span class="p">:</span><span class="w"> </span><span class="ss">&quot;FilterExec: b@1 &gt; 2, projection=[x@0]&quot;</span><span class="p">,</span><span class="w">                 </span><span class="o">|</span>
+<span class="o">|</span><span class="w">                   </span><span class="o">|</span><span class="w">       </span><span class="ss">&quot;Actual Rows&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w">                                                   </span><span class="o">|</span>
+<span class="o">|</span><span class="w">                   </span><span class="o">|</span><span class="w">       </span><span class="ss">&quot;Extras&quot;</span><span class="p">:</span><span class="w"> </span><span class="err">{</span><span class="w">                                                         </span><span class="o">|</span>
+<span class="o">|</span><span class="w">                   </span><span class="o">|</span><span class="w">         </span><span class="ss">&quot;output_batches&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w">                                              </span><span class="o">|</span>
+<span class="o">|</span><span class="w">                   </span><span class="o">|</span><span class="w">         </span><span class="ss">&quot;selectivity&quot;</span><span class="p">:</span><span class="w"> </span><span class="ss">&quot;50% (1/2)&quot;</span><span class="w">                                        </span><span class="o">|</span>
+<span class="o">|</span><span class="w">                   </span><span class="o">|</span><span class="w">       </span><span class="err">}</span><span class="p">,</span><span class="w">                                                                  </span><span class="o">|</span>
+<span class="o">|</span><span class="w">                   </span><span class="o">|</span><span class="w">       </span><span class="ss">&quot;Plans&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="w">                                                          </span><span class="o">|</span>
+<span class="o">|</span><span class="w">                   </span><span class="o">|</span><span class="w">         </span><span class="err">{</span><span class="w">                                                                 </span><span class="o">|</span>
+<span class="o">|</span><span class="w">                   </span><span class="o">|</span><span class="w">           </span><span class="ss">&quot;Node Type&quot;</span><span class="p">:</span><span class="w"> </span><span class="ss">&quot;DataSourceExec&quot;</span><span class="p">,</span><span class="w">                                  </span><span class="o">|</span>
+<span class="o">|</span><span class="w">                   </span><span class="o">|</span><span class="w">           </span><span class="ss">&quot;Details&quot;</span><span class="p">:</span><span class="w"> </span><span class="ss">&quot;DataSourceExec: partitions=1, partition_sizes=[1]&quot;</span><span class="p">,</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w">                   </span><span class="o">|</span><span class="w">           </span><span class="ss">&quot;Plans&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="w">                                                     </span><span class="o">|</span>
+<span class="o">|</span><span class="w">                   </span><span class="o">|</span><span class="w">         </span><span class="err">}</span><span class="w">                                                                 </span><span class="o">|</span>
+<span class="o">|</span><span class="w">                   </span><span class="o">|</span><span class="w">       </span><span class="p">]</span><span class="w">                                                                   </span><span class="o">|</span>
+<span class="o">|</span><span class="w">                   </span><span class="o">|</span><span class="w">     </span><span class="err">}</span><span class="w">                                                                     </span><span class="o">|</span>
+<span class="o">|</span><span class="w">                   </span><span class="o">|</span><span class="w">   </span><span class="err">}</span><span class="w">                                                                       </span><span class="o">|</span>
+<span class="o">|</span><span class="w">                   </span><span class="o">|</span><span class="w"> </span><span class="p">]</span><span class="w">                                                                         </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------+---------------------------------------------------------------------------+</span>
+</pre></div>
+</div>
+</section>
+</section>
+</section>
+
+
+                </article>
+              
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="dml.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">DML</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="information_schema.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Information Schema</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#syntax">Syntax</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1"><code class="docutils literal notranslate"><span class="pre">EXPLAIN</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#tree-format-default"><code class="docutils literal notranslate"><span class="pre">tree</span></code> format (default)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#indent-format"><code class="docutils literal notranslate"><span class="pre">indent</span></code> format</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pgjson-format"><code class="docutils literal notranslate"><span class="pre">pgjson</span></code> format</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#graphviz-format"><code class="docutils literal notranslate"><span class="pre">graphviz</span></code> format</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#explain-analyze"><code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">ANALYZE</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pgjson-format-with-analyze"><code class="docutils literal notranslate"><span class="pre">pgjson</span></code> format with <code class="docutils literal notranslate"><span class="pre">ANALYZE</span></code></a></li>
+</ul>
+</li>
+</ul>
+  </nav></div>
+
+  <div class="sidebar-secondary-item">
+
+  
+  <div class="tocsection editthispage">
+    <a href="https://github.com/apache/datafusion/edit/55.0.0/docs/source/user-guide/sql/explain.md">
+      <i class="fa-solid fa-pencil"></i>
+      
+      
+        
+          Edit on GitHub
+        
+      
+    </a>
+  </div>
+</div>
+
+  <div class="sidebar-secondary-item">
+
+  <div class="tocsection sourcelink">
+    <a href="../../_sources/user-guide/sql/explain.md.txt">
+      <i class="fa-solid fa-file-lines"></i> Show Source
+    </a>
+  </div>
+</div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+          </footer>
+        
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9"></script>
+<script defer src="../../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9"></script>
+
+<!-- Based on pydata_sphinx_theme/footer.html -->
+<footer class="footer mt-5 mt-md-0">
+  <div class="container">
+    
+    <div class="footer-item">
+      <p>Apache DataFusion, Apache, the Apache feather logo, and the Apache DataFusion project logo</p>
+      <p>are either registered trademarks or trademarks of The Apache Software Foundation in the United States and other countries.</p>
+    </div>
+  </div>
+</footer>
+
+
+  </body>
+</html>

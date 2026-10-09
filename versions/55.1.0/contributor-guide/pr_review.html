@@ -1,0 +1,814 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Reviewing Pull Requests &#8212; Apache DataFusion 55.1.0 documentation</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../_static/theme_overrides.css?v=d08b24aa" />
+  
+  <!-- So that users can add custom icons -->
+  <script defer src="../_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
+
+    <script src="../_static/documentation_options.js?v=ec4754ca"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'contributor-guide/pr_review';</script>
+    <script>
+        DOCUMENTATION_OPTIONS.theme_version = '0.20.0';
+        DOCUMENTATION_OPTIONS.theme_switcher_json_url = 'https://datafusion.apache.org/_static/versions.json';
+        DOCUMENTATION_OPTIONS.theme_switcher_version_match = '55.1.0';
+        DOCUMENTATION_OPTIONS.show_version_warning_banner =
+            false;
+        </script>
+    <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
+    <link rel="canonical" href="https://datafusion.apache.org/versions/55.1.0/contributor-guide/pr_review.html" />
+    <link rel="icon" href="../_static/favicon.svg"/>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Community Communication" href="communication.html" />
+    <link rel="prev" title="Introduction" href="index.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="55.1.0" />
+  
+    
+    <script src="../_static/searchtools.js"></script>
+    <script src="../_static/language_data.js"></script>
+    <script src="../searchindex.js"></script>
+  
+  </head>
+  <body data-default-mode="">
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+  
+  
+  
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header id="pst-header" class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class="col-lg-3 navbar-header-items__start">
+    
+      <div class="navbar-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/original.svg" class="logo__image only-light" alt="Apache DataFusion 55.1.0 documentation - Home"/>
+    <img src="../_static/original_dark.svg" class="logo__image only-dark pst-js-only" alt="Apache DataFusion 55.1.0 documentation - Home"/>
+  
+  
+</a></div>
+    
+  </div>
+  
+  <div class="col-lg-9 navbar-header-items">
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+        <div class="navbar-item">
+<div class="version-switcher__container dropdown pst-js-only">
+  <button id="pst-version-switcher-button-2"
+    type="button"
+    class="version-switcher__button btn btn-sm dropdown-toggle"
+    data-bs-toggle="dropdown"
+    aria-haspopup="listbox"
+    aria-controls="pst-version-switcher-list-2"
+    aria-label="Version switcher list"
+  >
+    Choose version  <!-- this text may get changed later by javascript -->
+    <span class="caret"></span>
+  </button>
+  <div id="pst-version-switcher-list-2"
+    class="version-switcher__menu dropdown-menu list-group-flush py-0"
+    role="listbox" aria-labelledby="pst-version-switcher-button-2">
+    <!-- dropdown will be populated by javascript on page load -->
+  </div>
+</div></div>
+      
+        <div class="navbar-item">
+
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
+  </ul>
+</div></div>
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+      <div class="sidebar-header-items__end">
+        
+          <div class="navbar-item">
+<div class="version-switcher__container dropdown pst-js-only">
+  <button id="pst-version-switcher-button-3"
+    type="button"
+    class="version-switcher__button btn btn-sm dropdown-toggle"
+    data-bs-toggle="dropdown"
+    aria-haspopup="listbox"
+    aria-controls="pst-version-switcher-list-3"
+    aria-label="Version switcher list"
+  >
+    Choose version  <!-- this text may get changed later by javascript -->
+    <span class="caret"></span>
+  </button>
+  <div id="pst-version-switcher-list-3"
+    class="version-switcher__menu dropdown-menu list-group-flush py-0"
+    role="listbox" aria-labelledby="pst-version-switcher-button-3">
+    <!-- dropdown will be populated by javascript on page load -->
+  </div>
+</div></div>
+        
+          <div class="navbar-item">
+
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
+  </ul>
+</div></div>
+        
+      </div>
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item"><nav class="bd-links" id="bd-docs-nav" aria-label="Main navigation">
+
+  <div class="bd-toc-item active">
+    
+    <p aria-level="2" class="caption" role="heading"><span class="caption-text">ASF Links</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://apache.org">Apache Software Foundation</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/licenses/">License</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/foundation/sponsorship.html">Donate</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/foundation/thanks.html">Thanks</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/security/">Security</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Links</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://github.com/apache/datafusion">GitHub and Issue Tracker</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://crates.io/crates/datafusion">crates.io</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/">API Docs</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/blog/">Blog</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://github.com/apache/datafusion/blob/main/CODE_OF_CONDUCT.md">Code of conduct</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../download.html">Download</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">User Guide</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/example-usage.html">Example Usage</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/features.html">Features</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/concepts-readings-events.html">Concepts, Readings, Events</a></li>
+
+
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/crate-configuration.html">Crate Configuration</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../user-guide/cli/index.html">DataFusion CLI</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/cli/overview.html">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/cli/installation.html">Installation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/cli/usage.html">Usage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/cli/datasources.html">Local Files / Directories</a></li>
+
+
+
+
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/cli/functions.html">CLI Specific Functions</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/dataframe.html">DataFrame API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/arrow-introduction.html">Gentle Arrow Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/expressions.html">Expression API</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../user-guide/sql/index.html">SQL Reference</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/data_types.html">Data Types</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/struct_coercion.html">Struct Type Coercion and Field Mapping</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/select.html">SELECT syntax</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/subqueries.html">Subqueries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/ddl.html">DDL</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/dml.html">DML</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/explain.html">EXPLAIN</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/information_schema.html">Information Schema</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/operators.html">Operators and Literals</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/aggregate_functions.html">Aggregate Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/window_functions.html">Window Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/scalar_functions.html">Scalar Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/special_functions.html">Special Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/format_options.html">Format Options</a></li>
+
+<li class="toctree-l2"><a class="reference internal" href="../user-guide/sql/prepared_statements.html">Prepared Statements</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/configs.html">Configuration Settings</a></li>
+
+
+
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/explain-usage.html">Reading Explain Plans</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/parquet-content-defined-chunking.html">Parquet Content-Defined Chunking</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/metrics.html">Metrics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../user-guide/faq.html">Frequently Asked Questions</a></li>
+
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Library User Guide</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/index.html">Introduction</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../library-user-guide/upgrading/index.html">Upgrade Guides</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/55.0.0.html">DataFusion 55.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/54.0.0.html">DataFusion 54.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/53.0.0.html">DataFusion 53.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/52.0.0.html">DataFusion 52.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/51.0.0.html">DataFusion 51.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/50.0.0.html">DataFusion 50.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/49.0.0.html">DataFusion 49.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/48.0.1.html">DataFusion 48.0.1</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/48.0.0.html">DataFusion 48.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/47.0.0.html">DataFusion 47.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/46.0.0.html">DataFusion 46.0.0</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/extensions.html">Extensions List</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/using-the-sql-api.html">Using the SQL API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/extending-sql.html">Extending SQL Syntax</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/working-with-exprs.html">Working with <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/using-the-dataframe-api.html">Using the DataFrame API</a></li>
+
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/building-logical-plans.html">Building Logical Plans</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/catalogs.html">Catalogs, Schemas, and Tables</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../library-user-guide/functions/index.html">Functions</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/functions/adding-udfs.html">Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/functions/spark.html">Spark Compatible Functions</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/custom-table-providers.html">Custom Table Provider</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/table-constraints.html">Table Constraint Enforcement</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/extending-operators.html">Extending Operators</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/profiling.html">Profiling Cookbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../library-user-guide/query-optimizer.html">Query Optimizer</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Contributor Guide</span></p>
+<ul class="current nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="index.html">Introduction</a></li>
+
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">Reviewing Pull Requests</a></li>
+<li class="toctree-l1"><a class="reference internal" href="communication.html">Community Communication</a></li>
+<li class="toctree-l1"><a class="reference internal" href="development_environment.html">Development Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="architecture.html">Architecture</a></li>
+<li class="toctree-l1"><a class="reference internal" href="architecture/dependency-graph.html">Workspace Dependency Graph</a></li>
+<li class="toctree-l1"><a class="reference internal" href="testing.html">Testing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api-health.html">API health policy</a></li>
+<li class="toctree-l1"><a class="reference internal" href="howtos.html">HOWTOs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="release_management.html">Release Management</a></li>
+<li class="toctree-l1"><a class="reference internal" href="roadmap.html">Roadmap and Improvement Proposals</a></li>
+<li class="toctree-l1"><a class="reference internal" href="governance.html">Governance</a></li>
+<li class="toctree-l1"><a class="reference internal" href="inviting.html">Inviting New Committers and PMC Members</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="specification/index.html">Specifications</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="specification/invariants.html">Invariants</a></li>
+<li class="toctree-l2"><a class="reference internal" href="specification/output-field-name-semantic.html">Output field name semantics</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="gsoc/index.html">Google Summer of Code (GSOC)</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="gsoc/gsoc_application_guidelines_2025.html">GSoC Application Guidelines (2025)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gsoc/gsoc_project_ideas_2025.html">GSoC Project Ideas (2025)</a></li>
+</ul>
+</details></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">DataFusion Subprojects</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/ballista/">DataFusion Ballista</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/comet/">DataFusion Comet</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/java/">DataFusion Java</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/python/">DataFusion Python</a></li>
+</ul>
+
+    
+  </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item">
+
+<nav aria-label="Breadcrumb" class="d-print-none">
+  <ul class="bd-breadcrumbs">
+    
+    <li class="breadcrumb-item breadcrumb-home">
+      <a href="../index.html" class="nav-link" aria-label="Home">
+        <i class="fa-solid fa-home"></i>
+      </a>
+    </li>
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Reviewing Pull Requests</span></li>
+  </ul>
+</nav>
+</div>
+      
+    </div>
+  
+  
+</div>
+</div>
+              
+              
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <!---
+  Licensed to the Apache Software Foundation (ASF) under one
+  or more contributor license agreements.  See the NOTICE file
+  distributed with this work for additional information
+  regarding copyright ownership.  The ASF licenses this file
+  to you under the Apache License, Version 2.0 (the
+  "License"); you may not use this file except in compliance
+  with the License.  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing,
+  software distributed under the License is distributed on an
+  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, either express or implied.  See the License for the
+  specific language governing permissions and limitations
+  under the License.
+-->
+<section id="reviewing-pull-requests">
+<h1>Reviewing Pull Requests<a class="headerlink" href="#reviewing-pull-requests" title="Link to this heading">#</a></h1>
+<p>When reviewing PRs, our primary goal is to improve DataFusion and its community
+together. PR feedback should be constructive and help improve the code as well
+as the understanding of the contributor.</p>
+<p>Review bandwidth is currently our most limited resource, and reviews from the
+broader community are both welcomed and encouraged. Reviewing PRs is a great way
+to learn the codebase, and you do not need to be a committer to leave valuable
+review feedback. In fact, one of the best ways to become a committer is to
+thoughtfully review other PRs.</p>
+<p>Please ensure any comments you leave contain a rationale and suggested
+alternative – it is frustrating to be told “don’t do it this way” without any
+clear reason or alternative provided.</p>
+<p>The criteria in this guide are also a useful checklist when preparing your own
+PR for review.</p>
+<section id="pr-review-mechanics">
+<h2>PR Review Mechanics<a class="headerlink" href="#pr-review-mechanics" title="Link to this heading">#</a></h2>
+<p>Some helpful links:</p>
+<ul class="simple">
+<li><p><a class="reference external" href="https://github.com/apache/datafusion/pulls?q=is%3Apr+is%3Aopen+-review%3Aapproved+-is%3Adraft+">PRs Waiting for Review</a> on GitHub</p></li>
+<li><p><a class="reference external" href="https://github.com/apache/datafusion/pulls?q=is%3Apr+is%3Aopen+review%3Aapproved+-is%3Adraft">Approved PRs Waiting for Merge</a> on GitHub</p></li>
+</ul>
+<p>The overall PR lifecycle (CI triggering, approval, the 24-hour rule for
+“major” PRs, and merging) is described in the
+<a class="reference internal" href="index.html#pull-request-overview"><span class="std std-ref">Pull Request Overview</span></a> section of the
+contributor guide.</p>
+<p>Practical tips:</p>
+<ol class="arabic simple">
+<li><p>Check out the changes locally to explore them in your IDE or with an
+agent, e.g. <code class="docutils literal notranslate"><span class="pre">gh</span> <span class="pre">pr</span> <span class="pre">checkout</span> <span class="pre">&lt;PR</span> <span class="pre">number&gt;</span></code> using the <a class="reference external" href="https://cli.github.com/">GitHub CLI</a>.</p></li>
+<li><p>There is normally no need to rerun locally any tests that CI has already run.</p></li>
+<li><p>Leave comments on specific lines of the diff where possible, so the
+discussion has context.</p></li>
+<li><p>If you review a PR but don’t feel confident approving it, leaving comments
+is still valuable: a partial review (e.g. “I reviewed the tests and they
+look good”) helps the next reviewer focus their time.</p></li>
+<li><p>Anything that does not need to block the current PR can be noted as a
+potential follow-up (ideally by filing an issue), keeping the PR focused
+and quick to merge.</p></li>
+</ol>
+</section>
+<section id="review-the-pr-description">
+<h2>Review the PR Description<a class="headerlink" href="#review-the-pr-description" title="Link to this heading">#</a></h2>
+<p>The PR description is often what users and contributors will find when they have
+a question about the intention behind a change, or when the code itself is not
+clear. The PR description also becomes the extended commit message.</p>
+<p>Check that the description:</p>
+<ol class="arabic simple">
+<li><p>Concisely describes the <strong>problem being solved from the user’s point of
+view</strong>.</p></li>
+<li><p>Follows the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/.github/pull_request_template.md">PR template</a>, and answers the template’s questions.</p></li>
+<li><p>Accurately describes the content of the PR, including any relevant context or
+background.
+Great descriptions have a high signal-to-noise ratio, summarizing
+important implementation changes without repeating technical minutiae that
+are already present in the code itself.</p></li>
+<li><p>Explicitly calls out any user-facing or API changes (see
+<a class="reference internal" href="#review-the-code">Review the Code</a> below).</p></li>
+</ol>
+</section>
+<section id="review-the-code-comments">
+<h2>Review the Code Comments<a class="headerlink" href="#review-the-code-comments" title="Link to this heading">#</a></h2>
+<p>The goal of code comments is to help future readers of the code understand what
+is not obvious from reading the code itself. Great comments make the code easier
+to reason about for readers with the expected background, and help future
+maintainers.</p>
+<p>Some practical guidelines for reviewing comments:</p>
+<ol class="arabic simple">
+<li><p>The code has adequate comments focused on the <strong>rationale</strong> for any
+non-obvious change (the “why”), not a restatement of what the code does
+(the “what”), which is typically clear from reading the code itself.</p></li>
+<li><p>Comments do not narrate irrelevant internal implementation details or the
+history of how the change was developed (this is common in LLM-assisted
+code, e.g. “// changed to use a HashMap” or “// this handles the case
+mentioned above”). Such comments become irrelevant as soon as the PR merges.</p></li>
+<li><p>When comments refer to other structs, functions, or modules, they should use
+<a class="reference external" href="https://doc.rust-lang.org/rustdoc/write-documentation/linking-to-items-by-name.html">rustdoc intra-doc links</a> (e.g. <code class="docutils literal notranslate"><span class="pre">[`SessionContext`]</span></code>) rather than plain
+text names, so that <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">doc</span></code> link checking ensures the references stay
+valid as the code evolves.</p></li>
+<li><p>New public APIs have doc comments, including examples where appropriate
+(doc examples are also tested by CI, so they double as test coverage).</p></li>
+<li><p>When documenting modules, functions, or fields, start with simple examples
+and intuitive explanations, and optionally add formal, math-like
+definitions when necessary. This makes the implementation easier to reason
+about.</p></li>
+<li><p>When something is confusing on first read, treat that as a good
+opportunity to improve the comments.</p></li>
+</ol>
+</section>
+<section id="review-the-test-coverage">
+<h2>Review the Test Coverage<a class="headerlink" href="#review-the-test-coverage" title="Link to this heading">#</a></h2>
+<p>Check that the feature or fix is covered sufficiently with tests (see the
+<a class="reference internal" href="testing.html"><span class="std std-doc">Testing</span></a> guide for more details): the PR should include tests for
+any new functionality, and a bug fix should include a test that reproduces the
+reported problem.</p>
+<p>Guidelines for evaluating tests:</p>
+<ol class="arabic simple">
+<li><p>Prefer <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> (<code class="docutils literal notranslate"><span class="pre">.slt</span></code>) tests or DataFrame API tests where
+possible, as they exercise <strong>user-visible behavior</strong> and are less coupled
+to internal implementation details than unit tests.</p></li>
+<li><p>Verify tests cover edge cases and common failure scenarios, not just the
+common successful path. However, it is NOT necessary to test every possible
+error path, especially if it is difficult to trigger or unlikely to occur in
+practice.</p></li>
+<li><p>Verify test coverage of changed code using the <code class="docutils literal notranslate"><span class="pre">codecov</span></code> check on the PR,
+or by running <a class="reference external" href="https://github.com/taiki-e/cargo-llvm-cov"><code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">llvm-cov</span></code></a> locally for an HTML report. Use judgment
+about any uncovered lines – the goal is confidence in the change, not
+slavishly hitting some coverage number.</p></li>
+<li><p>Avoid tests with lots of repeated boilerplate: when many tests share
+near-identical setup, it is hard to understand what is different
+(and thus what is actually being tested) between them. Make the <em>difference</em>
+between cases obvious.</p></li>
+<li><p>Check that tests assert on specific expected values or plans (e.g. via
+<code class="docutils literal notranslate"><span class="pre">insta</span></code> snapshots or <code class="docutils literal notranslate"><span class="pre">.slt</span></code> expected output) rather than merely checking
+“no error occurred”.</p></li>
+<li><p>Verify tests actually cover the bug (“Ablation Testing”): For bug fixes, revert
+the fix locally and check that the new test fails without it (i.e. the test
+actually reproduces the bug or covers the new feature).</p></li>
+</ol>
+</section>
+<section id="review-the-code">
+<h2>Review the Code<a class="headerlink" href="#review-the-code" title="Link to this heading">#</a></h2>
+<p>Check that:</p>
+<ol class="arabic simple">
+<li><p>The code is clear and fits the style of the existing codebase.</p></li>
+<li><p>New functions and tests are placed near similar functions and
+tests. For example, helper functions should be defined close to where they are used,
+and new tests should be placed in the same module as the code they test.
+SLT tests should be placed in an existing .slt file with related functionality,
+unless the new tests are large enough to justify their own file.</p></li>
+<li><p>New APIs are consistent with existing public APIs and patterns; where a
+similar mechanism already exists, the PR should extend it rather than
+introduce a parallel one.</p></li>
+<li><p>Any changes to the public API follow the <a class="reference internal" href="api-health.html"><span class="std std-doc">API health policy</span></a>.</p></li>
+<li><p>The change is appropriately scoped: unrelated refactoring, formatting
+churn, or drive-by changes make review longer and are better as separate
+PRs.</p></li>
+<li><p>New errors are actionable, mention the offending item, and use
+the right error variant (e.g. <code class="docutils literal notranslate"><span class="pre">plan_err!</span></code> for user-triggerable errors vs
+<code class="docutils literal notranslate"><span class="pre">internal_err!</span></code> for invariant violations).</p></li>
+</ol>
+</section>
+<section id="review-the-performance">
+<h2>Review the Performance<a class="headerlink" href="#review-the-performance" title="Link to this heading">#</a></h2>
+<p>Performance is a key feature of DataFusion. See <a class="reference internal" href="index.html#performance-improvements"><span class="std std-ref">Performance Improvements</span></a>
+for the project policy: an improvement should be “enough” to justify any
+added code complexity, and performance PRs should come with benchmark
+results.</p>
+<p>When reviewing:</p>
+<ol class="arabic simple">
+<li><p>Find any relevant existing benchmarks and run them against <code class="docutils literal notranslate"><span class="pre">main</span></code>:
+the <a class="reference external" href="https://github.com/apache/datafusion/tree/main/benchmarks">system-level SQL benchmarks</a> are run with <code class="docutils literal notranslate"><span class="pre">bench.sh</span></code> (see the
+<a class="reference external" href="https://github.com/apache/datafusion/blob/main/benchmarks/README.md">benchmarks README</a>), and microbenchmarks (e.g. in
+<code class="docutils literal notranslate"><span class="pre">datafusion/functions/benches</span></code>) are run with <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">bench</span></code>.</p></li>
+<li><p>Be aware that benchmarking on a machine where other
+work is being done will make results hard to reproduce. Prefer a quiet,
+dedicated machine and repeated runs.</p></li>
+<li><p>If the PR claims a performance improvement, check that the reported
+results are reproducible and that the benchmark exercises the changed
+code path.</p></li>
+</ol>
+</section>
+<section id="best-practices-for-reviewers">
+<h2>Best Practices for Reviewers<a class="headerlink" href="#best-practices-for-reviewers" title="Link to this heading">#</a></h2>
+<p>Here are some suggested best practices to follow when reviewing PRs.</p>
+<section id="review-tone-thank-contributors-and-praise-good-work-specifically">
+<h3>Review Tone: Thank Contributors and Praise Good Work Specifically<a class="headerlink" href="#review-tone-thank-contributors-and-praise-good-work-specifically" title="Link to this heading">#</a></h3>
+<p>Open reviews by thanking the author by name, and when a PR is well done, say
+specifically what makes it good – positive feedback encourages people to keep
+contributing and helps them understand what is valued in the project.</p>
+</section>
+<section id="state-approval-conditions-explicitly">
+<h3>State Approval Conditions Explicitly<a class="headerlink" href="#state-approval-conditions-explicitly" title="Link to this heading">#</a></h3>
+<p>If you are not ready to approve, list concretely what you would need to see
+before approving (e.g. “benchmark results and an upgrade guide entry”) so
+the author has a clear path to merge.</p>
+</section>
+<section id="defer-non-blocking-work-to-follow-on-issues">
+<h3>Defer Non-Blocking Work to Follow-On Issues<a class="headerlink" href="#defer-non-blocking-work-to-follow-on-issues" title="Link to this heading">#</a></h3>
+<p>Explicitly defer non-critical suggestions to a follow-on PR and file
+(or ask the author to file) issues for them, so good PRs merge quickly
+without scope creep.</p>
+<p>Similarly, when a PR mixes refactoring with behavior changes or fixes a narrow
+problem with a broad mechanism, ask for it to be split or scoped down rather
+than reviewing it as-is.</p>
+</section>
+<section id="narrate-what-you-verified-when-approving">
+<h3>Narrate What You Verified When Approving<a class="headerlink" href="#narrate-what-you-verified-when-approving" title="Link to this heading">#</a></h3>
+<p>Rather than a bare “LGTM”, say what you actually checked (“traced the state
+transitions by hand”, “confirmed the hasher change cannot affect ordering”)
+so it is clear what was verified and what was not.</p>
+</section>
+<section id="invite-additional-committers-on-core-changes">
+<h3>Invite Additional Committers on Core Changes<a class="headerlink" href="#invite-additional-committers-on-core-changes" title="Link to this heading">#</a></h3>
+<p>For changes to core, widely shared code, leave the PR open for other
+committers to look at and cc those who know the area, even after you have
+approved.</p>
+</section>
+</section>
+</section>
+
+
+                </article>
+              
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="index.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">Introduction</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="communication.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Community Communication</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pr-review-mechanics">PR Review Mechanics</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#review-the-pr-description">Review the PR Description</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#review-the-code-comments">Review the Code Comments</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#review-the-test-coverage">Review the Test Coverage</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#review-the-code">Review the Code</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#review-the-performance">Review the Performance</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#best-practices-for-reviewers">Best Practices for Reviewers</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#review-tone-thank-contributors-and-praise-good-work-specifically">Review Tone: Thank Contributors and Praise Good Work Specifically</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#state-approval-conditions-explicitly">State Approval Conditions Explicitly</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#defer-non-blocking-work-to-follow-on-issues">Defer Non-Blocking Work to Follow-On Issues</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#narrate-what-you-verified-when-approving">Narrate What You Verified When Approving</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#invite-additional-committers-on-core-changes">Invite Additional Committers on Core Changes</a></li>
+</ul>
+</li>
+</ul>
+  </nav></div>
+
+  <div class="sidebar-secondary-item">
+
+  
+  <div class="tocsection editthispage">
+    <a href="https://github.com/apache/datafusion/edit/55.1.0/docs/source/contributor-guide/pr_review.md">
+      <i class="fa-solid fa-pencil"></i>
+      
+      
+        
+          Edit on GitHub
+        
+      
+    </a>
+  </div>
+</div>
+
+  <div class="sidebar-secondary-item">
+
+  <div class="tocsection sourcelink">
+    <a href="../_sources/contributor-guide/pr_review.md.txt">
+      <i class="fa-solid fa-file-lines"></i> Show Source
+    </a>
+  </div>
+</div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+          </footer>
+        
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9"></script>
+
+<!-- Based on pydata_sphinx_theme/footer.html -->
+<footer class="footer mt-5 mt-md-0">
+  <div class="container">
+    
+    <div class="footer-item">
+      <p>Apache DataFusion, Apache, the Apache feather logo, and the Apache DataFusion project logo</p>
+      <p>are either registered trademarks or trademarks of The Apache Software Foundation in the United States and other countries.</p>
+    </div>
+  </div>
+</footer>
+
+
+  </body>
+</html>

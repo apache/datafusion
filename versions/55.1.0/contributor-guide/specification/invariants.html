@@ -1,0 +1,954 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Invariants &#8212; Apache DataFusion 55.1.0 documentation</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../../_static/styles/theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
+<link href="../../_static/styles/pydata-sphinx-theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../../_static/theme_overrides.css?v=d08b24aa" />
+  
+  <!-- So that users can add custom icons -->
+  <script defer src="../../_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
+<link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
+
+    <script src="../../_static/documentation_options.js?v=ec4754ca"></script>
+    <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'contributor-guide/specification/invariants';</script>
+    <script>
+        DOCUMENTATION_OPTIONS.theme_version = '0.20.0';
+        DOCUMENTATION_OPTIONS.theme_switcher_json_url = 'https://datafusion.apache.org/_static/versions.json';
+        DOCUMENTATION_OPTIONS.theme_switcher_version_match = '55.1.0';
+        DOCUMENTATION_OPTIONS.show_version_warning_banner =
+            false;
+        </script>
+    <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
+    <link rel="canonical" href="https://datafusion.apache.org/versions/55.1.0/contributor-guide/specification/invariants.html" />
+    <link rel="icon" href="../../_static/favicon.svg"/>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Output field name semantics" href="output-field-name-semantic.html" />
+    <link rel="prev" title="Specifications" href="index.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="55.1.0" />
+  
+    
+    <script src="../../_static/searchtools.js"></script>
+    <script src="../../_static/language_data.js"></script>
+    <script src="../../searchindex.js"></script>
+  
+  </head>
+  <body data-default-mode="">
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+  
+  
+  
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header id="pst-header" class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class="col-lg-3 navbar-header-items__start">
+    
+      <div class="navbar-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../../_static/original.svg" class="logo__image only-light" alt="Apache DataFusion 55.1.0 documentation - Home"/>
+    <img src="../../_static/original_dark.svg" class="logo__image only-dark pst-js-only" alt="Apache DataFusion 55.1.0 documentation - Home"/>
+  
+  
+</a></div>
+    
+  </div>
+  
+  <div class="col-lg-9 navbar-header-items">
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+        <div class="navbar-item">
+<div class="version-switcher__container dropdown pst-js-only">
+  <button id="pst-version-switcher-button-2"
+    type="button"
+    class="version-switcher__button btn btn-sm dropdown-toggle"
+    data-bs-toggle="dropdown"
+    aria-haspopup="listbox"
+    aria-controls="pst-version-switcher-list-2"
+    aria-label="Version switcher list"
+  >
+    Choose version  <!-- this text may get changed later by javascript -->
+    <span class="caret"></span>
+  </button>
+  <div id="pst-version-switcher-list-2"
+    class="version-switcher__menu dropdown-menu list-group-flush py-0"
+    role="listbox" aria-labelledby="pst-version-switcher-button-2">
+    <!-- dropdown will be populated by javascript on page load -->
+  </div>
+</div></div>
+      
+        <div class="navbar-item">
+
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
+  </ul>
+</div></div>
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+      <div class="sidebar-header-items__end">
+        
+          <div class="navbar-item">
+<div class="version-switcher__container dropdown pst-js-only">
+  <button id="pst-version-switcher-button-3"
+    type="button"
+    class="version-switcher__button btn btn-sm dropdown-toggle"
+    data-bs-toggle="dropdown"
+    aria-haspopup="listbox"
+    aria-controls="pst-version-switcher-list-3"
+    aria-label="Version switcher list"
+  >
+    Choose version  <!-- this text may get changed later by javascript -->
+    <span class="caret"></span>
+  </button>
+  <div id="pst-version-switcher-list-3"
+    class="version-switcher__menu dropdown-menu list-group-flush py-0"
+    role="listbox" aria-labelledby="pst-version-switcher-button-3">
+    <!-- dropdown will be populated by javascript on page load -->
+  </div>
+</div></div>
+        
+          <div class="navbar-item">
+
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
+  </ul>
+</div></div>
+        
+      </div>
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item"><nav class="bd-links" id="bd-docs-nav" aria-label="Main navigation">
+
+  <div class="bd-toc-item active">
+    
+    <p aria-level="2" class="caption" role="heading"><span class="caption-text">ASF Links</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://apache.org">Apache Software Foundation</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/licenses/">License</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/foundation/sponsorship.html">Donate</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/foundation/thanks.html">Thanks</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/security/">Security</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Links</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://github.com/apache/datafusion">GitHub and Issue Tracker</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://crates.io/crates/datafusion">crates.io</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/">API Docs</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/blog/">Blog</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://github.com/apache/datafusion/blob/main/CODE_OF_CONDUCT.md">Code of conduct</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../download.html">Download</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">User Guide</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/example-usage.html">Example Usage</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/features.html">Features</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/concepts-readings-events.html">Concepts, Readings, Events</a></li>
+
+
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/crate-configuration.html">Crate Configuration</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../user-guide/cli/index.html">DataFusion CLI</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/cli/overview.html">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/cli/installation.html">Installation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/cli/usage.html">Usage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/cli/datasources.html">Local Files / Directories</a></li>
+
+
+
+
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/cli/functions.html">CLI Specific Functions</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/dataframe.html">DataFrame API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/arrow-introduction.html">Gentle Arrow Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/expressions.html">Expression API</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../user-guide/sql/index.html">SQL Reference</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/data_types.html">Data Types</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/struct_coercion.html">Struct Type Coercion and Field Mapping</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/select.html">SELECT syntax</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/subqueries.html">Subqueries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/ddl.html">DDL</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/dml.html">DML</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/explain.html">EXPLAIN</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/information_schema.html">Information Schema</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/operators.html">Operators and Literals</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/aggregate_functions.html">Aggregate Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/window_functions.html">Window Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/scalar_functions.html">Scalar Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/special_functions.html">Special Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/format_options.html">Format Options</a></li>
+
+<li class="toctree-l2"><a class="reference internal" href="../../user-guide/sql/prepared_statements.html">Prepared Statements</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/configs.html">Configuration Settings</a></li>
+
+
+
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/explain-usage.html">Reading Explain Plans</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/parquet-content-defined-chunking.html">Parquet Content-Defined Chunking</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/metrics.html">Metrics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../user-guide/faq.html">Frequently Asked Questions</a></li>
+
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Library User Guide</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/index.html">Introduction</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../library-user-guide/upgrading/index.html">Upgrade Guides</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../library-user-guide/upgrading/55.0.0.html">DataFusion 55.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../library-user-guide/upgrading/54.0.0.html">DataFusion 54.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../library-user-guide/upgrading/53.0.0.html">DataFusion 53.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../library-user-guide/upgrading/52.0.0.html">DataFusion 52.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../library-user-guide/upgrading/51.0.0.html">DataFusion 51.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../library-user-guide/upgrading/50.0.0.html">DataFusion 50.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../library-user-guide/upgrading/49.0.0.html">DataFusion 49.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../library-user-guide/upgrading/48.0.1.html">DataFusion 48.0.1</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../library-user-guide/upgrading/48.0.0.html">DataFusion 48.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../library-user-guide/upgrading/47.0.0.html">DataFusion 47.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../library-user-guide/upgrading/46.0.0.html">DataFusion 46.0.0</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/extensions.html">Extensions List</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/using-the-sql-api.html">Using the SQL API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/extending-sql.html">Extending SQL Syntax</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/working-with-exprs.html">Working with <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/using-the-dataframe-api.html">Using the DataFrame API</a></li>
+
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/building-logical-plans.html">Building Logical Plans</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/catalogs.html">Catalogs, Schemas, and Tables</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../library-user-guide/functions/index.html">Functions</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../library-user-guide/functions/adding-udfs.html">Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../library-user-guide/functions/spark.html">Spark Compatible Functions</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/custom-table-providers.html">Custom Table Provider</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/table-constraints.html">Table Constraint Enforcement</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/extending-operators.html">Extending Operators</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/profiling.html">Profiling Cookbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/query-optimizer.html">Query Optimizer</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Contributor Guide</span></p>
+<ul class="current nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../index.html">Introduction</a></li>
+
+<li class="toctree-l1"><a class="reference internal" href="../pr_review.html">Reviewing Pull Requests</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../communication.html">Community Communication</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../development_environment.html">Development Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../architecture.html">Architecture</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../architecture/dependency-graph.html">Workspace Dependency Graph</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../testing.html">Testing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../api-health.html">API health policy</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../howtos.html">HOWTOs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../release_management.html">Release Management</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../roadmap.html">Roadmap and Improvement Proposals</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../governance.html">Governance</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../inviting.html">Inviting New Committers and PMC Members</a></li>
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="index.html">Specifications</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2 current active"><a class="current reference internal" href="#">Invariants</a></li>
+<li class="toctree-l2"><a class="reference internal" href="output-field-name-semantic.html">Output field name semantics</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../gsoc/index.html">Google Summer of Code (GSOC)</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../gsoc/gsoc_application_guidelines_2025.html">GSoC Application Guidelines (2025)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../gsoc/gsoc_project_ideas_2025.html">GSoC Project Ideas (2025)</a></li>
+</ul>
+</details></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">DataFusion Subprojects</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/ballista/">DataFusion Ballista</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/comet/">DataFusion Comet</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/java/">DataFusion Java</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/python/">DataFusion Python</a></li>
+</ul>
+
+    
+  </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item">
+
+<nav aria-label="Breadcrumb" class="d-print-none">
+  <ul class="bd-breadcrumbs">
+    
+    <li class="breadcrumb-item breadcrumb-home">
+      <a href="../../index.html" class="nav-link" aria-label="Home">
+        <i class="fa-solid fa-home"></i>
+      </a>
+    </li>
+    
+    <li class="breadcrumb-item"><a href="index.html" class="nav-link">Specifications</a></li>
+    
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Invariants</span></li>
+  </ul>
+</nav>
+</div>
+      
+    </div>
+  
+  
+</div>
+</div>
+              
+              
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <!---
+  Licensed to the Apache Software Foundation (ASF) under one
+  or more contributor license agreements.  See the NOTICE file
+  distributed with this work for additional information
+  regarding copyright ownership.  The ASF licenses this file
+  to you under the Apache License, Version 2.0 (the
+  "License"); you may not use this file except in compliance
+  with the License.  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing,
+  software distributed under the License is distributed on an
+  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, either express or implied.  See the License for the
+  specific language governing permissions and limitations
+  under the License.
+-->
+<section id="invariants">
+<h1>Invariants<a class="headerlink" href="#invariants" title="Link to this heading">#</a></h1>
+<p>This document enumerates invariants of DataFusion’s logical and physical planes
+(functions, and nodes). Some of these invariants are currently not enforced.
+This document assumes that the reader is familiar with some of the codebase,
+including rust arrow’s RecordBatch and Array.</p>
+<section id="rational">
+<h2>Rational<a class="headerlink" href="#rational" title="Link to this heading">#</a></h2>
+<p>DataFusion’s computational model is built on top of a dynamically typed arrow
+object, Array, that offers the interface <code class="docutils literal notranslate"><span class="pre">Array::as_any</span></code> to downcast itself to
+its statically typed versions (e.g. <code class="docutils literal notranslate"><span class="pre">Int32Array</span></code>). DataFusion uses
+<code class="docutils literal notranslate"><span class="pre">Array::data_type</span></code> to perform the respective downcasting on its physical
+operations. DataFusion uses a dynamic type system because the queries being
+executed are not always known at compile time: they are only known during the
+runtime (or query time) of programs built with DataFusion. This document is
+built on top of this principle.</p>
+<p>In dynamically typed interfaces, it is up to developers to enforce type
+invariances. This document declares some of these invariants, so that users
+know what they can expect from a query in DataFusion, and DataFusion developers
+know what they need to enforce at the coding level.</p>
+</section>
+<section id="notation">
+<h2>Notation<a class="headerlink" href="#notation" title="Link to this heading">#</a></h2>
+<ul class="simple">
+<li><p>Field or physical field: the tuple name, <code class="docutils literal notranslate"><span class="pre">arrow::DataType</span></code> and nullability flag (a bool whether values can be null), represented in this document by <code class="docutils literal notranslate"><span class="pre">PF(name,</span> <span class="pre">type,</span> <span class="pre">nullable)</span></code></p></li>
+<li><p>Logical field: Field with a relation name. Represented in this document by <code class="docutils literal notranslate"><span class="pre">LF(relation,</span> <span class="pre">name,</span> <span class="pre">type,</span> <span class="pre">nullable)</span></code></p></li>
+<li><p>Projected plan: plan with projection as the root node.</p></li>
+<li><p>Logical schema: a vector of logical fields, used by logical plan.</p></li>
+<li><p>Physical schema: a vector of physical fields, used by both physical plan and Arrow record batch.</p></li>
+</ul>
+<section id="logical">
+<h3>Logical<a class="headerlink" href="#logical" title="Link to this heading">#</a></h3>
+<section id="function">
+<h4>Function<a class="headerlink" href="#function" title="Link to this heading">#</a></h4>
+<p>An object that knows its valid incoming logical fields and how to derive its
+output logical field from its arguments’ logical fields. A functions’ output
+field is itself a function of its input fields:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">logical_field</span><span class="p">(</span><span class="n">lf1</span><span class="p">:</span> <span class="n">LF</span><span class="p">,</span> <span class="n">lf2</span><span class="p">:</span> <span class="n">LF</span><span class="p">,</span> <span class="o">...</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">LF</span>
+</pre></div>
+</div>
+<p>Examples:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">plus(a,b)</span> <span class="pre">-&gt;</span> <span class="pre">LF(None,</span> <span class="pre">&quot;{a}</span> <span class="pre">Plus</span> <span class="pre">{b}&quot;,</span> <span class="pre">d(a.type,b.type),</span> <span class="pre">a.nullable</span> <span class="pre">|</span> <span class="pre">b.nullable)</span></code> where d is the function mapping input types to output type (<code class="docutils literal notranslate"><span class="pre">get_supertype</span></code> in our current implementation).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">length(a)</span> <span class="pre">-&gt;</span> <span class="pre">LF(None,</span> <span class="pre">&quot;length({a})&quot;,</span> <span class="pre">u32,</span> <span class="pre">a.nullable)</span></code></p></li>
+</ul>
+</section>
+<section id="plan">
+<h4>Plan<a class="headerlink" href="#plan" title="Link to this heading">#</a></h4>
+<p>A tree composed of other plans and functions (e.g. <code class="docutils literal notranslate"><span class="pre">Projection</span> <span class="pre">c1</span> <span class="pre">+</span> <span class="pre">c2,</span> <span class="pre">c1</span> <span class="pre">-</span> <span class="pre">c2</span> <span class="pre">AS</span> <span class="pre">sum12;</span> <span class="pre">Scan</span> <span class="pre">c1</span> <span class="pre">as</span> <span class="pre">u32,</span> <span class="pre">c2</span> <span class="pre">as</span> <span class="pre">u64</span></code>)
+that knows how to derive its schema.</p>
+<p>Certain plans have a frozen schema (e.g. Scan), while others derive their
+schema from their child nodes.</p>
+</section>
+<section id="column">
+<h4>Column<a class="headerlink" href="#column" title="Link to this heading">#</a></h4>
+<p>An identifier in a logical plan consists of field name and relation name.</p>
+</section>
+</section>
+<section id="physical">
+<h3>Physical<a class="headerlink" href="#physical" title="Link to this heading">#</a></h3>
+<section id="id1">
+<h4>Function<a class="headerlink" href="#id1" title="Link to this heading">#</a></h4>
+<p>An object that knows how to derive its physical field from its arguments’
+physical fields, and also how to actually perform the computation on data. A
+functions’ output physical field is a function of its input physical fields:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">physical_field</span><span class="p">(</span><span class="n">PF1</span><span class="p">,</span> <span class="n">PF2</span><span class="p">,</span> <span class="o">...</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">PF</span>
+</pre></div>
+</div>
+<p>Examples:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">plus(a,b)</span> <span class="pre">-&gt;</span> <span class="pre">PF(&quot;{a}</span> <span class="pre">Plus</span> <span class="pre">{b}&quot;,</span> <span class="pre">d(a.type,b.type),</span> <span class="pre">a.nullable</span> <span class="pre">|</span> <span class="pre">b.nullable)</span></code> where d is a complex function (<code class="docutils literal notranslate"><span class="pre">get_supertype</span></code> in our current implementation) whose computation is for each element in the columns, sum the two entries together and return it in the same type as the smallest type of both columns.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">length(&amp;str)</span> <span class="pre">-&gt;</span> <span class="pre">PF(&quot;length({a})&quot;,</span> <span class="pre">u32,</span> <span class="pre">a.nullable)</span></code> whose computation is “count number of bytes in the string”.</p></li>
+</ul>
+</section>
+<section id="id2">
+<h4>Plan<a class="headerlink" href="#id2" title="Link to this heading">#</a></h4>
+<p>A tree (e.g. <code class="docutils literal notranslate"><span class="pre">Projection</span> <span class="pre">c1</span> <span class="pre">+</span> <span class="pre">c2,</span> <span class="pre">c1</span> <span class="pre">-</span> <span class="pre">c2</span> <span class="pre">AS</span> <span class="pre">sum12;</span> <span class="pre">Scan</span> <span class="pre">c1</span> <span class="pre">as</span> <span class="pre">u32,</span> <span class="pre">c2</span> <span class="pre">as</span> <span class="pre">u64</span></code>)
+that knows how to derive its metadata and compute itself.</p>
+<p>Note how the physical plane does not know how to derive field names: field
+names are solely a property of the logical plane, as they are not needed in the
+physical plane.</p>
+</section>
+<section id="id3">
+<h4>Column<a class="headerlink" href="#id3" title="Link to this heading">#</a></h4>
+<p>A type of physical node in a physical plan consists of a field name and unique index.</p>
+</section>
+</section>
+<section id="data-sources-registry">
+<h3>Data Sources’ registry<a class="headerlink" href="#data-sources-registry" title="Link to this heading">#</a></h3>
+<p>A map of source name/relation -&gt; Schema plus associated properties necessary to read data from it (e.g. file path).</p>
+</section>
+<section id="functions-registry">
+<h3>Functions’ registry<a class="headerlink" href="#functions-registry" title="Link to this heading">#</a></h3>
+<p>A map of function name -&gt; logical + physical function.</p>
+</section>
+<section id="physical-planner">
+<h3>Physical Planner<a class="headerlink" href="#physical-planner" title="Link to this heading">#</a></h3>
+<p>A function that knows how to derive a physical plan from a logical plan:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">plan</span><span class="p">(</span><span class="n">LogicalPlan</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">PhysicalPlan</span>
+</pre></div>
+</div>
+</section>
+<section id="logical-optimizer">
+<h3>Logical Optimizer<a class="headerlink" href="#logical-optimizer" title="Link to this heading">#</a></h3>
+<p>A function that accepts a logical plan and returns an (optimized) logical plan
+which computes the same results, but in a more efficient manner:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">optimize</span><span class="p">(</span><span class="n">LogicalPlan</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">LogicalPlan</span>
+</pre></div>
+</div>
+</section>
+<section id="physical-optimizer">
+<h3>Physical Optimizer<a class="headerlink" href="#physical-optimizer" title="Link to this heading">#</a></h3>
+<p>A function that accepts a physical plan and returns an (optimized) physical
+plan which computes the same results, but may differ based on the actual
+hardware or execution environment being run:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">optimize</span><span class="p">(</span><span class="n">PhysicalPlan</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">PhysicalPlan</span>
+</pre></div>
+</div>
+</section>
+<section id="builder">
+<h3>Builder<a class="headerlink" href="#builder" title="Link to this heading">#</a></h3>
+<p>A function that knows how to build a new logical plan from an existing logical
+plan and some extra parameters.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">build</span><span class="p">(</span><span class="n">logical_plan</span><span class="p">,</span> <span class="n">params</span><span class="o">...</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">logical_plan</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="id4">
+<h2>Invariants<a class="headerlink" href="#id4" title="Link to this heading">#</a></h2>
+<p>The following subsections describe invariants. Since functions’ output schema
+depends on its arguments’ schema (e.g. min, plus), the resulting schema can
+only be derived based on a known set of input schemas (TableProvider).
+Likewise, schemas of functions depend on the specific registry of functions
+registered (e.g. does <code class="docutils literal notranslate"><span class="pre">my_op</span></code> return u32 or u64?). Thus, in this section, the
+wording “same schema” is understood to mean “same schema under a given registry
+of data sources and functions”.</p>
+<section id="relation-name-tuples-in-logical-fields-and-logical-columns-are-unique">
+<h3>(relation, name) tuples in logical fields and logical columns are unique<a class="headerlink" href="#relation-name-tuples-in-logical-fields-and-logical-columns-are-unique" title="Link to this heading">#</a></h3>
+<p>Every logical field’s (relation, name) tuple in a logical schema MUST be unique.
+Every logical column’s (relation, name) tuple in a logical plan MUST be unique.</p>
+<p>This invariant guarantees that <code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">t1.id,</span> <span class="pre">t2.id</span> <span class="pre">FROM</span> <span class="pre">t1</span> <span class="pre">JOIN</span> <span class="pre">t2...</span></code>
+unambiguously selects the field <code class="docutils literal notranslate"><span class="pre">t1.id</span></code> and <code class="docutils literal notranslate"><span class="pre">t2.id</span></code> in a logical schema in the
+logical plane.</p>
+<section id="responsibility">
+<h4>Responsibility<a class="headerlink" href="#responsibility" title="Link to this heading">#</a></h4>
+<p>It is the logical builder and optimizer’s responsibility to guarantee this
+invariant.</p>
+</section>
+<section id="validation">
+<h4>Validation<a class="headerlink" href="#validation" title="Link to this heading">#</a></h4>
+<p>Builder and optimizer MUST error if this invariant is violated on any logical
+node that creates a new schema (e.g. scan, projection, aggregation, join, etc.).</p>
+</section>
+</section>
+<section id="physical-schema-is-consistent-with-data">
+<h3>Physical schema is consistent with data<a class="headerlink" href="#physical-schema-is-consistent-with-data" title="Link to this heading">#</a></h3>
+<p>The contents of every Array in every RecordBatch in every partition returned by
+a physical plan MUST be consistent with RecordBatch’s schema, in that every
+Array in the RecordBatch must be downcastable to its corresponding type
+declared in the RecordBatch.</p>
+<section id="id5">
+<h4>Responsibility<a class="headerlink" href="#id5" title="Link to this heading">#</a></h4>
+<p>Physical functions MUST guarantee this invariant. This is particularly
+important in aggregate functions, whose aggregating type may be different from
+the intermediary types during calculations (e.g. sum(i32) -&gt; i64).</p>
+</section>
+<section id="id6">
+<h4>Validation<a class="headerlink" href="#id6" title="Link to this heading">#</a></h4>
+<p>Since the validation of this invariant is computationally expensive, execution
+contexts CAN validate this invariant. It is acceptable for physical nodes to
+<code class="docutils literal notranslate"><span class="pre">panic!</span></code> if their input does not satisfy this invariant.</p>
+</section>
+</section>
+<section id="physical-schema-is-consistent-in-physical-functions">
+<h3>Physical schema is consistent in physical functions<a class="headerlink" href="#physical-schema-is-consistent-in-physical-functions" title="Link to this heading">#</a></h3>
+<p>The schema of every Array returned by a physical function MUST match the
+DataType reported by the physical function itself.</p>
+<p>This ensures that when a physical function claims that it returns a type
+(e.g. Int32), users can safely downcast its resulting Array to the
+corresponding type (e.g. Int32Array), as well as to write data to formats that
+have a schema with nullability flag (e.g. parquet).</p>
+<section id="id7">
+<h4>Responsibility<a class="headerlink" href="#id7" title="Link to this heading">#</a></h4>
+<p>It is the responsibility of the developer that writes a physical function to
+guarantee this invariant.</p>
+<p>In particular:</p>
+<ul class="simple">
+<li><p>The derived DataType matches the code it uses to build the array for every branch of valid input type combinations.</p></li>
+<li><p>The nullability flag matches how the values are built.</p></li>
+</ul>
+</section>
+<section id="id8">
+<h4>Validation<a class="headerlink" href="#id8" title="Link to this heading">#</a></h4>
+<p>Since the validation of this invariant is computationally expensive, execution
+contexts CAN validate this invariant.</p>
+</section>
+</section>
+<section id="the-physical-schema-is-invariant-under-planning">
+<h3>The physical schema is invariant under planning<a class="headerlink" href="#the-physical-schema-is-invariant-under-planning" title="Link to this heading">#</a></h3>
+<p>The physical schema derived by a physical plan returned by the planner MUST be
+equivalent to the physical schema derived by the logical plan passed to the
+planner. Specifically:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">plan</span><span class="p">(</span><span class="n">logical_plan</span><span class="p">)</span><span class="o">.</span><span class="n">schema</span> <span class="o">===</span> <span class="n">logical_plan</span><span class="o">.</span><span class="n">physical_schema</span>
+</pre></div>
+</div>
+<p>Logical plan’s physical schema is defined as logical schema with relation
+qualifiers stripped for all logical fields:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">logical_plan</span><span class="o">.</span><span class="n">physical_schema</span> <span class="o">=</span> <span class="n">vector</span><span class="p">[</span> <span class="n">strip_relation</span><span class="p">(</span><span class="n">f</span><span class="p">)</span> <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">logical_plan</span><span class="o">.</span><span class="n">logical_fields</span> <span class="p">]</span>
+</pre></div>
+</div>
+<p>This is used to ensure that the physical schema of its (logical) plan is what
+it gets in record batches, so that users can rely on the optimized logical plan
+to know the resulting physical schema.</p>
+<p>Note that since a logical plan can be as simple as a single projection with a
+single function, <code class="docutils literal notranslate"><span class="pre">Projection</span> <span class="pre">f(c1,c2)</span></code>, a corollary of this is that the
+physical schema of every <code class="docutils literal notranslate"><span class="pre">logical</span> <span class="pre">function</span> <span class="pre">-&gt;</span> <span class="pre">physical</span> <span class="pre">function</span></code> must be
+invariant under planning.</p>
+<section id="id9">
+<h4>Responsibility<a class="headerlink" href="#id9" title="Link to this heading">#</a></h4>
+<p>Developers of physical and logical plans and planners MUST guarantee this
+invariant for every triplet (logical plan, physical plan, conversion rule).</p>
+</section>
+<section id="id10">
+<h4>Validation<a class="headerlink" href="#id10" title="Link to this heading">#</a></h4>
+<p>Planners MUST validate this invariant. In particular they MUST return an error
+when, during planning, a physical function’s derived schema does not match the
+logical functions’ derived schema.</p>
+</section>
+</section>
+<section id="the-output-schema-equals-the-physical-plan-schema">
+<h3>The output schema equals the physical plan schema<a class="headerlink" href="#the-output-schema-equals-the-physical-plan-schema" title="Link to this heading">#</a></h3>
+<p>The schema of every RecordBatch in every partition outputted by a physical plan
+MUST be equal to the schema of the physical plan. Specifically:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">physical_plan</span><span class="o">.</span><span class="n">evaluate</span><span class="p">(</span><span class="n">batch</span><span class="p">)</span><span class="o">.</span><span class="n">schema</span> <span class="o">=</span> <span class="n">physical_plan</span><span class="o">.</span><span class="n">schema</span>
+</pre></div>
+</div>
+<p>Together with other invariants, this ensures that the consumers of record
+batches do not need to know the output schema of the physical plan; they can
+safely rely on the record batch’s schema to perform downscaling and naming.</p>
+<section id="id11">
+<h4>Responsibility<a class="headerlink" href="#id11" title="Link to this heading">#</a></h4>
+<p>Physical nodes MUST guarantee this invariant.</p>
+</section>
+<section id="id12">
+<h4>Validation<a class="headerlink" href="#id12" title="Link to this heading">#</a></h4>
+<p>Execution Contexts CAN validate this invariant.</p>
+</section>
+</section>
+<section id="logical-schema-is-invariant-under-logical-optimization">
+<h3>Logical schema is invariant under logical optimization<a class="headerlink" href="#logical-schema-is-invariant-under-logical-optimization" title="Link to this heading">#</a></h3>
+<p>The logical schema derived by a projected logical plan returned by the logical
+optimizer MUST be equivalent to the logical schema derived by the logical plan
+passed to the planner:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">optimize</span><span class="p">(</span><span class="n">logical_plan</span><span class="p">)</span><span class="o">.</span><span class="n">schema</span> <span class="o">===</span> <span class="n">logical_plan</span><span class="o">.</span><span class="n">schema</span>
+</pre></div>
+</div>
+<p>This is used to ensure that plans can be optimized without jeopardizing future
+referencing logical columns (name and index) or assumptions about their
+schemas.</p>
+<section id="id13">
+<h4>Responsibility<a class="headerlink" href="#id13" title="Link to this heading">#</a></h4>
+<p>Logical optimizers MUST guarantee this invariant.</p>
+</section>
+<section id="id14">
+<h4>Validation<a class="headerlink" href="#id14" title="Link to this heading">#</a></h4>
+<p>Users of logical optimizers SHOULD validate this invariant.</p>
+</section>
+</section>
+<section id="physical-schema-is-invariant-under-physical-optimization">
+<h3>Physical schema is invariant under physical optimization<a class="headerlink" href="#physical-schema-is-invariant-under-physical-optimization" title="Link to this heading">#</a></h3>
+<p>The physical schema derived by a projected physical plan returned by the
+physical optimizer MUST match the physical schema derived by the physical plan
+passed to the planner:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">optimize</span><span class="p">(</span><span class="n">physical_plan</span><span class="p">)</span><span class="o">.</span><span class="n">schema</span> <span class="o">===</span> <span class="n">physical_plan</span><span class="o">.</span><span class="n">schema</span>
+</pre></div>
+</div>
+<p>This is used to ensure that plans can be optimized without jeopardizing future
+references of logical columns (name and index) or assumptions about their
+schemas.</p>
+<section id="id15">
+<h4>Responsibility<a class="headerlink" href="#id15" title="Link to this heading">#</a></h4>
+<p>Optimizers MUST guarantee this invariant.</p>
+</section>
+<section id="id16">
+<h4>Validation<a class="headerlink" href="#id16" title="Link to this heading">#</a></h4>
+<p>Users of optimizers SHOULD validate this invariant.</p>
+</section>
+</section>
+</section>
+</section>
+
+
+                </article>
+              
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="index.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">Specifications</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="output-field-name-semantic.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Output field name semantics</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rational">Rational</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#notation">Notation</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#logical">Logical</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#function">Function</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#plan">Plan</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#column">Column</a></li>
+</ul>
+</li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#physical">Physical</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">Function</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">Plan</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">Column</a></li>
+</ul>
+</li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#data-sources-registry">Data Sources’ registry</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#functions-registry">Functions’ registry</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#physical-planner">Physical Planner</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#logical-optimizer">Logical Optimizer</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#physical-optimizer">Physical Optimizer</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#builder">Builder</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">Invariants</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#relation-name-tuples-in-logical-fields-and-logical-columns-are-unique">(relation, name) tuples in logical fields and logical columns are unique</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#responsibility">Responsibility</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#validation">Validation</a></li>
+</ul>
+</li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#physical-schema-is-consistent-with-data">Physical schema is consistent with data</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">Responsibility</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">Validation</a></li>
+</ul>
+</li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#physical-schema-is-consistent-in-physical-functions">Physical schema is consistent in physical functions</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">Responsibility</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">Validation</a></li>
+</ul>
+</li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#the-physical-schema-is-invariant-under-planning">The physical schema is invariant under planning</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id9">Responsibility</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id10">Validation</a></li>
+</ul>
+</li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#the-output-schema-equals-the-physical-plan-schema">The output schema equals the physical plan schema</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id11">Responsibility</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id12">Validation</a></li>
+</ul>
+</li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#logical-schema-is-invariant-under-logical-optimization">Logical schema is invariant under logical optimization</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id13">Responsibility</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id14">Validation</a></li>
+</ul>
+</li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#physical-schema-is-invariant-under-physical-optimization">Physical schema is invariant under physical optimization</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id15">Responsibility</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id16">Validation</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+  </nav></div>
+
+  <div class="sidebar-secondary-item">
+
+  
+  <div class="tocsection editthispage">
+    <a href="https://github.com/apache/datafusion/edit/55.1.0/docs/source/contributor-guide/specification/invariants.md">
+      <i class="fa-solid fa-pencil"></i>
+      
+      
+        
+          Edit on GitHub
+        
+      
+    </a>
+  </div>
+</div>
+
+  <div class="sidebar-secondary-item">
+
+  <div class="tocsection sourcelink">
+    <a href="../../_sources/contributor-guide/specification/invariants.md.txt">
+      <i class="fa-solid fa-file-lines"></i> Show Source
+    </a>
+  </div>
+</div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+          </footer>
+        
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9"></script>
+<script defer src="../../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9"></script>
+
+<!-- Based on pydata_sphinx_theme/footer.html -->
+<footer class="footer mt-5 mt-md-0">
+  <div class="container">
+    
+    <div class="footer-item">
+      <p>Apache DataFusion, Apache, the Apache feather logo, and the Apache DataFusion project logo</p>
+      <p>are either registered trademarks or trademarks of The Apache Software Foundation in the United States and other countries.</p>
+    </div>
+  </div>
+</footer>
+
+
+  </body>
+</html>
