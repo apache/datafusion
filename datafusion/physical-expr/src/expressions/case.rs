@@ -1299,9 +1299,7 @@ fn case_result_field_metadata(
                         fields.push(BranchField {
                             data_type: cast.cast_type().clone(),
                             metadata: metadata.clone(),
-                            certainly_null: unwrap_certainly_null_expr(expr)
-                                .downcast_ref::<Literal>()
-                                .is_some_and(|literal| literal.value().is_null()),
+                            certainly_null: false,
                         });
                     } else {
                         work.push(Work::FinishCast(cast.cast_type()));
@@ -1312,11 +1310,7 @@ fn case_result_field_metadata(
                         fields.push(BranchField {
                             data_type: cast.cast_type().clone(),
                             metadata: metadata.clone(),
-                            certainly_null: unwrap_certainly_null_expr(
-                                cast.expr().as_ref(),
-                            )
-                            .downcast_ref::<Literal>()
-                            .is_some_and(|literal| literal.value().is_null()),
+                            certainly_null: false,
                         });
                     } else {
                         work.push(Work::FinishCast(cast.cast_type()));
@@ -1325,7 +1319,12 @@ fn case_result_field_metadata(
                 } else if let Some(negative) = expr.downcast_ref::<NegativeExpr>() {
                     work.push(Work::Visit(negative.arg().as_ref()));
                 } else if let Some(not) = expr.downcast_ref::<NotExpr>() {
-                    work.push(Work::Visit(not.arg().as_ref()));
+                    let field = not.return_field(input_schema)?;
+                    fields.push(BranchField {
+                        data_type: field.data_type().clone(),
+                        metadata: Metadata::new(),
+                        certainly_null: false,
+                    });
                 } else {
                     let field = expr.return_field(input_schema)?;
                     fields.push(BranchField {
@@ -1977,6 +1976,60 @@ mod tests {
             try_cast_case.return_field(&cast_schema)?.metadata(),
             &cast_metadata
         );
+        Ok(())
+    }
+
+    #[test]
+    fn case_not_does_not_inherit_input_metadata() -> Result<()> {
+        let metadata = HashMap::from([("logical".to_string(), "boolean".to_string())]);
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Boolean, false).with_metadata(metadata.clone()),
+            Field::new("b", DataType::Boolean, false).with_metadata(metadata),
+        ]);
+        let negated: Arc<dyn PhysicalExpr> = Arc::new(NotExpr::new(col("a", &schema)?));
+        let expr = case(None, vec![(lit(true), negated)], Some(col("b", &schema)?))?;
+        assert!(expr.return_field(&schema)?.metadata().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn case_explicitly_marked_null_cast_matches_logical_field() -> Result<()> {
+        let metadata = HashMap::from([(
+            EXTENSION_TYPE_NAME_KEY.to_string(),
+            "geoarrow.wkb".to_string(),
+        )]);
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::LargeBinary, false).with_metadata(metadata.clone()),
+        ]);
+        let target_field: FieldRef = Arc::new(
+            Field::new("marked_null", DataType::Binary, true).with_metadata(metadata),
+        );
+        let marked_nulls: [Arc<dyn PhysicalExpr>; 2] = [
+            Arc::new(CastExpr::new_with_target_field(
+                lit(ScalarValue::Null),
+                Arc::clone(&target_field),
+                None,
+            )),
+            Arc::new(TryCastExpr::new_with_target_field(
+                lit(ScalarValue::Null),
+                target_field,
+            )),
+        ];
+        for marked_null in marked_nulls {
+            let all_null = case(
+                None,
+                vec![(lit(true), marked_null)],
+                Some(lit(ScalarValue::Null)),
+            )?;
+            let type_only_cast: Arc<dyn PhysicalExpr> =
+                Arc::new(CastExpr::new(all_null, DataType::LargeBinary, None));
+            let outer = case(
+                None,
+                vec![(lit(true), type_only_cast)],
+                Some(col("a", &schema)?),
+            )?;
+            assert!(outer.return_field(&schema)?.metadata().is_empty());
+        }
         Ok(())
     }
 
