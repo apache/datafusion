@@ -20,13 +20,14 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Float32Array, Float64Array, RecordBatch, UInt32Array};
 use arrow::compute::{SortColumn, SortOptions, lexsort_to_indices, take_record_batch};
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{Result, exec_err, internal_datafusion_err, plan_err};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    ColumnarValue, Operator, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Operator, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, Volatility,
 };
 use datafusion_physical_expr::equivalence::{
     EquivalenceClass, ProjectionMapping, convert_to_orderings,
@@ -83,8 +84,21 @@ pub fn create_test_schema_2() -> Result<SchemaRef> {
 /// where
 /// Column [a=f] (e.g they are aliases).
 /// Column e is constant.
-pub fn create_random_schema(seed: u64) -> Result<(SchemaRef, EquivalenceProperties)> {
-    let test_schema = create_test_schema_2()?;
+///
+/// Columns are declared nullable only when `null_pct > 0.0`, so the schema
+/// tells `ordering_satisfy` whether `nulls_first` can matter for the data.
+pub fn create_random_schema(
+    seed: u64,
+    null_pct: f64,
+) -> Result<(SchemaRef, EquivalenceProperties)> {
+    let nullable = null_pct > 0.0;
+    let test_schema = Arc::new(Schema::new(
+        create_test_schema_2()?
+            .fields()
+            .iter()
+            .map(|field| field.as_ref().clone().with_nullable(nullable))
+            .collect::<Vec<_>>(),
+    ));
     let col_a = &col("a", &test_schema)?;
     let col_b = &col("b", &test_schema)?;
     let col_c = &col("c", &test_schema)?;
@@ -103,11 +117,6 @@ pub fn create_random_schema(seed: u64) -> Result<(SchemaRef, EquivalenceProperti
     let mut rng = StdRng::seed_from_u64(seed);
     let mut remaining_exprs = col_exprs[0..4].to_vec(); // only a, b, c, d are sorted
 
-    let options_asc = SortOptions {
-        descending: false,
-        nulls_first: false,
-    };
-
     while !remaining_exprs.is_empty() {
         let n_sort_expr = rng.random_range(1..remaining_exprs.len() + 1);
         remaining_exprs.shuffle(&mut rng);
@@ -117,13 +126,21 @@ pub fn create_random_schema(seed: u64) -> Result<(SchemaRef, EquivalenceProperti
                 .drain(0..n_sort_expr)
                 .map(|expr| PhysicalSortExpr {
                     expr: Arc::clone(expr),
-                    options: options_asc,
+                    options: random_sort_options(&mut rng),
                 });
 
         eq_properties.add_ordering(ordering);
     }
 
     Ok((test_schema, eq_properties))
+}
+
+/// Picks the direction and NULL placement of one sort key.
+pub fn random_sort_options(rng: &mut StdRng) -> SortOptions {
+    SortOptions {
+        descending: rng.random(),
+        nulls_first: rng.random(),
+    }
 }
 
 // Apply projection to the input_data, return projected equivalence properties and record batch
@@ -210,15 +227,29 @@ fn add_equal_conditions_test() -> Result<()> {
     Ok(())
 }
 
-/// Returns `true` if `expr` contains a `+` or `-` anywhere in its tree.
+/// Returns `true` if `expr` contains, anywhere in its tree, an operator whose
+/// ordering rule is deliberately conservative.
 ///
-/// The equivalence framework conservatively discards orderings derived from
-/// `+`/`-` expressions, because wrapping overflow can break them over the
-/// type's full domain even when a finite batch happens to remain sorted.
-pub fn contains_overflowable_arithmetic(expr: &Arc<dyn PhysicalExpr>) -> bool {
+/// The equivalence framework discards orderings in cases where a finite batch
+/// can still happen to be sorted, so a rejection is not conclusive:
+/// - `+`/`-`: wrapping overflow can break the ordering over the type's full
+///   domain.
+/// - comparisons, `AND`, `OR`: the rules keep an ordering only for specific
+///   NULL placements, without checking whether the operands can be NULL.
+pub fn contains_conservative_ordering_op(expr: &Arc<dyn PhysicalExpr>) -> bool {
     expr.exists(|e| {
         Ok(e.downcast_ref::<BinaryExpr>().is_some_and(|binary| {
-            matches!(binary.op(), Operator::Plus | Operator::Minus)
+            matches!(
+                binary.op(),
+                Operator::Plus
+                    | Operator::Minus
+                    | Operator::Gt
+                    | Operator::GtEq
+                    | Operator::Lt
+                    | Operator::LtEq
+                    | Operator::And
+                    | Operator::Or
+            )
         }))
     })
     .unwrap()
@@ -286,6 +317,34 @@ pub fn is_table_same_after_sort(
     let original_indices = UInt32Array::from_iter_values(0..n_row as u32);
 
     Ok(sorted_indices == original_indices)
+}
+
+/// Sorts `exprs` with random [`SortOptions`] and asserts that `eq_properties`
+/// never claims an ordering that `batch` does not have.
+///
+/// Only this direction is checked: a single batch cannot tell an underivable
+/// ordering from one that is sorted by coincidence, e.g. when NULLs of
+/// independently sorted columns end up in the same rows.
+pub fn assert_random_ordering_satisfy_is_sound(
+    eq_properties: &EquivalenceProperties,
+    exprs: &[&Arc<dyn PhysicalExpr>],
+    batch: &RecordBatch,
+    rng: &mut StdRng,
+    context: &str,
+) -> Result<()> {
+    let sort_exprs = exprs
+        .iter()
+        .map(|expr| PhysicalSortExpr::new(Arc::clone(expr), random_sort_options(rng)));
+    let Some(ordering) = LexOrdering::new(sort_exprs) else {
+        unreachable!("Test should always produce non-degenerate orderings");
+    };
+    if eq_properties.ordering_satisfy(ordering.clone())? {
+        assert!(
+            is_table_same_after_sort(ordering.clone(), batch)?,
+            "{context}, random requirement: {ordering:?}, eq_properties: {eq_properties}"
+        );
+    }
+    Ok(())
 }
 
 // If we already generated a random result for one of the
@@ -369,6 +428,7 @@ pub fn generate_table_for_eq_properties(
     eq_properties: &EquivalenceProperties,
     n_elem: usize,
     n_distinct: usize,
+    null_pct: f64,
 ) -> Result<RecordBatch> {
     let mut rng = StdRng::seed_from_u64(23);
 
@@ -377,10 +437,7 @@ pub fn generate_table_for_eq_properties(
 
     // Utility closure to generate random array
     let mut generate_random_array = |num_elems: usize, max_val: usize| -> ArrayRef {
-        let values: Vec<f64> = (0..num_elems)
-            .map(|_| rng.random_range(0..max_val) as f64 / 2.0)
-            .collect();
-        Arc::new(Float64Array::from_iter_values(values))
+        generate_random_f64_array(num_elems, max_val, null_pct, &mut rng)
     };
 
     // Fill constant columns
@@ -450,6 +507,7 @@ pub fn generate_table_for_orderings(
     schema: SchemaRef,
     n_elem: usize,
     n_distinct: usize,
+    null_pct: f64,
 ) -> Result<RecordBatch> {
     let mut rng = StdRng::seed_from_u64(23);
 
@@ -463,7 +521,7 @@ pub fn generate_table_for_orderings(
         .map(|field| {
             (
                 field.name(),
-                generate_random_f64_array(n_elem, n_distinct, &mut rng),
+                generate_random_f64_array(n_elem, n_distinct, null_pct, &mut rng),
             )
         })
         .collect::<Vec<_>>();
@@ -503,16 +561,25 @@ pub fn generate_table_for_orderings(
     Ok(batch)
 }
 
+pub const NULL_PCTS: &[f64] = &[0.0, 0.1, 0.5];
+
 // Utility function to generate random f64 array
 fn generate_random_f64_array(
     n_elems: usize,
     n_distinct: usize,
+    null_pct: f64,
     rng: &mut StdRng,
 ) -> ArrayRef {
-    let values: Vec<f64> = (0..n_elems)
-        .map(|_| rng.random_range(0..n_distinct) as f64 / 2.0)
-        .collect();
-    Arc::new(Float64Array::from_iter_values(values))
+    let values = (0..n_elems)
+        .map(|_| {
+            if rng.random::<f64>() < null_pct {
+                None
+            } else {
+                Some(rng.random_range(0..n_distinct) as f64 / 2.0)
+            }
+        })
+        .collect::<Float64Array>();
+    Arc::new(values)
 }
 
 // Helper function to get sort columns from a batch
@@ -560,6 +627,17 @@ impl ScalarUDFImpl for TestScalarUDF {
             DataType::Float32 => Ok(DataType::Float32),
             _ => Ok(DataType::Float64),
         }
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_field = &args.arg_fields[0];
+        let return_type = self.return_type(&[arg_field.data_type().clone()])?;
+        // floor maps NULL to NULL and never produces NULL otherwise.
+        Ok(Arc::new(Field::new(
+            self.name(),
+            return_type,
+            arg_field.is_nullable(),
+        )))
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
