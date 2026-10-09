@@ -435,6 +435,24 @@ impl ExprSchemable for Expr {
             Expr::ScalarSubquery(subquery) => Ok(scalar_subquery_nullable(subquery)),
             Expr::BinaryExpr(BinaryExpr { left, right, op }) => match op {
                 Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => Ok(false),
+                Operator::And => {
+                    if contains_is_not_null(left.as_ref(), right.as_ref()) {
+                        return Ok(false);
+                    }
+                    if contains_is_not_null(right.as_ref(), left.as_ref()) {
+                        return Ok(false);
+                    }
+                    Ok(left.nullable(input_schema)? || right.nullable(input_schema)?)
+                }
+                Operator::Or => {
+                    if contains_is_null(left.as_ref(), right.as_ref()) {
+                        return Ok(false);
+                    }
+                    if contains_is_null(right.as_ref(), left.as_ref()) {
+                        return Ok(false);
+                    }
+                    Ok(left.nullable(input_schema)? || right.nullable(input_schema)?)
+                }
                 _ => Ok(left.nullable(input_schema)? || right.nullable(input_schema)?),
             },
             Expr::Like(Like { expr, pattern, .. })
@@ -1622,4 +1640,24 @@ mod tests {
             }
         }
     }
+}
+
+fn contains_is_not_null(expr: &Expr, target: &Expr) -> bool {
+    if let Expr::IsNotNull(inner) = expr {
+        return inner.as_ref() == target;
+    }
+    if let Expr::BinaryExpr(BinaryExpr { left, right, op: Operator::And }) = expr {
+        return contains_is_not_null(left, target) || contains_is_not_null(right, target);
+    }
+    false
+}
+
+fn contains_is_null(expr: &Expr, target: &Expr) -> bool {
+    if let Expr::IsNull(inner) = expr {
+        return inner.as_ref() == target;
+    }
+    if let Expr::BinaryExpr(BinaryExpr { left, right, op: Operator::Or }) = expr {
+        return contains_is_null(left, target) || contains_is_null(right, target);
+    }
+    false
 }
