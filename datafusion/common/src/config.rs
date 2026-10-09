@@ -1492,14 +1492,12 @@ config_namespace! {
         /// either limit is reached, whichever comes first.
         pub max_row_group_size: usize, default =  1024 * 1024
 
-        /// (writing) Target maximum size of each row group in bytes. When set,
-        /// the writer flushes whenever either this limit or `max_row_group_size`
-        /// is reached, whichever comes first. Useful for bounding writer memory
-        /// on wide schemas where a row-count limit can map to very different
-        /// byte sizes. Matches the behavior of `parquet.block.size` in
-        /// parquet-mr. If `None` (the default), only the row-count limit
-        /// applies. Currently only honored when `allow_single_file_parallelism`
-        /// is `false`; by default the parallel file writer ignores this limit.
+        /// (writing) Target maximum estimated encoded size of each row group in bytes
+        /// (best effort). The writer flushes when either this target or
+        /// `max_row_group_size` is reached. Useful for controlling row-group sizes on
+        /// wide schemas. This is not a hard limit on writer memory, and enabling it may
+        /// reduce parallel write throughput. If `None` (the default), only the
+        /// row-count limit applies.
         pub max_row_group_bytes: Option<MaxRowGroupBytes>, default = None
 
         /// (writing) Sets "created by" property
