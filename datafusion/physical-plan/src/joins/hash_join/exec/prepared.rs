@@ -184,7 +184,7 @@ impl HashJoinExec {
         let count = MetricBuilder::new(&metrics_set)
             .counter(ARRAY_MAP_CREATED_COUNT_METRIC_NAME, 0);
         let reservation = MemoryConsumer::new("PreparedHashJoinBuild").register(&pool);
-        let data = collect_left_input(
+        let BuildSideOutcome::InMemory(data) = collect_left_input(
             self.random_state.random_state().clone(),
             input,
             self.on.iter().map(|(left, _)| Arc::clone(left)).collect(),
@@ -198,10 +198,14 @@ impl HashJoinExec {
             None,
             count,
             BuildMode::Prepared,
+            None,
         )
-        .await?;
+        .await?
+        else {
+            return internal_err!("A prepared hash-join build cannot fall back");
+        };
         Ok(Arc::new(PreparedHashJoinBuild {
-            build: data.build,
+            build: Arc::clone(&data.build),
             keys,
             null_equality: self.null_equality,
         }))
