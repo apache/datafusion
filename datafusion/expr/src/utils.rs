@@ -1020,6 +1020,20 @@ pub(crate) fn find_columns_referenced_by_expr(e: &Expr) -> Vec<Column> {
     exprs
 }
 
+/// Returns the index of the `schema` field that `expr` passes through
+/// unchanged, or `None` if `expr` computes a new value.
+///
+/// Only a column reference (possibly aliased) passes a field through. Use this
+/// instead of comparing [`Expr::schema_name`] with field names: different
+/// expressions can have the same name, e.g. `CAST(t.a AS INT)` is named `t.a`.
+pub fn passthrough_field_index(expr: &Expr, schema: &DFSchema) -> Option<usize> {
+    match expr {
+        Expr::Column(col) => schema.maybe_index_of_column(col),
+        Expr::Alias(alias) => passthrough_field_index(&alias.expr, schema),
+        _ => None,
+    }
+}
+
 /// Convert any `Expr` to an `Expr::Column`.
 pub fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
     match expr {

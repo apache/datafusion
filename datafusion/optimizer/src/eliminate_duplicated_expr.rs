@@ -22,6 +22,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Result, get_required_sort_exprs_indices, internal_err};
 use datafusion_expr::logical_plan::LogicalPlan;
+use datafusion_expr::utils::passthrough_field_index;
 use datafusion_expr::{Aggregate, Expr, Sort, SortExpr};
 use std::hash::{Hash, Hasher};
 
@@ -76,13 +77,15 @@ impl OptimizerRule for EliminateDuplicatedExpr {
                     .map(|wrapper| wrapper.0)
                     .collect();
 
-                let sort_expr_names = unique_exprs
+                let sort_input_indices = unique_exprs
                     .iter()
-                    .map(|sort_expr| sort_expr.expr.schema_name().to_string())
+                    .map(|sort_expr| {
+                        passthrough_field_index(&sort_expr.expr, sort.input.schema())
+                    })
                     .collect::<Vec<_>>();
                 let required_indices = get_required_sort_exprs_indices(
                     sort.input.schema().as_ref(),
-                    &sort_expr_names,
+                    &sort_input_indices,
                 );
 
                 let unique_exprs = if required_indices.len() < unique_exprs.len() {
