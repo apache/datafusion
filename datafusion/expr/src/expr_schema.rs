@@ -217,7 +217,7 @@ fn case_field_metadata(case: &Case, schema: &dyn ExprSchema) -> Result<FieldRef>
                     work.push(Work::Visit(&cast.expr));
                 }
                 Expr::Alias(alias)
-                    if alias.metadata.is_some()
+                    if alias.metadata.as_ref().is_some_and(|meta| !meta.is_empty())
                         && can_infer_exact_branch(expr, false)? =>
                 {
                     fields.push(BranchField {
@@ -1585,6 +1585,19 @@ mod tests {
         let coerced_null_else = when(lit(true), col("a"))
             .otherwise(lit(ScalarValue::Null).cast_to(&DataType::Int32, &schema)?)?;
         assert_eq!(coerced_null_else.to_field(&schema)?.1.metadata(), &shared);
+
+        let Expr::Alias(empty_metadata_alias) = lit(ScalarValue::Null)
+            .cast_to(&DataType::Int32, &schema)?
+            .alias("empty_metadata")
+        else {
+            unreachable!();
+        };
+        let empty_metadata_alias = Expr::Alias(
+            empty_metadata_alias.with_metadata(Some(FieldMetadata::default())),
+        );
+        let aliased_null_else =
+            when(lit(true), col("a")).otherwise(empty_metadata_alias)?;
+        assert_eq!(aliased_null_else.to_field(&schema)?.1.metadata(), &shared);
 
         let try_cast_null_else = when(lit(true), col("a")).otherwise(Expr::TryCast(
             TryCast::new(Box::new(lit(ScalarValue::Null)), DataType::Int32),
