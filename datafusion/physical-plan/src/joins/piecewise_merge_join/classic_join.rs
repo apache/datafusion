@@ -623,10 +623,8 @@ fn buffered_extreme(
 // compares to NULL, which is no match.
 //
 // This must agree exactly with the scan's `JoinKeyComparator`, or it would change which rows
-// match. For flat keys one vectorized `apply_cmp` does: it normalizes `-0.0` to `+0.0` as the
-// comparator does. For nested keys it does not -- `apply_cmp` orders NULL elements inside a
-// key ascending, while the comparator applies the sort options (descending for `<`/`<=`) at
-// every level -- so those are decided with the scan's own comparator.
+// match. One vectorized `apply_cmp` does, nested keys included: it normalizes `-0.0` to
+// `+0.0` as the comparator does, and orders NULL elements inside a nested key the same way.
 fn matchable_rows(
     stream_values: &ArrayRef,
     buffered_values: &ArrayRef,
@@ -639,14 +637,10 @@ fn matchable_rows(
         return Ok(BooleanArray::new(BooleanBuffer::new_unset(num_rows), None));
     };
 
-    // Nested keys are decided with the scan's own comparator, so they agree with it by
-    // construction rather than through `apply_cmp`'s nested ordering.
-    //
-    // Run-end encoded keys are decided here too: arrow's run-end comparison kernel overflows
-    // on an empty batch sliced past its first run, which the scan never reaches.
-    if stream_values.data_type().is_nested()
-        || matches!(stream_values.data_type(), DataType::RunEndEncoded(_, _))
-    {
+    // Run-end encoded keys are decided with the scan's own comparator: arrow's run-end
+    // comparison kernel overflows on an empty batch sliced past its first run, which the
+    // scan never reaches.
+    if matches!(stream_values.data_type(), DataType::RunEndEncoded(_, _)) {
         let match_on_equal = matches_on_equal(operator)?;
         let cmp = JoinKeyComparator::new(
             &[Arc::clone(stream_values)],
@@ -1388,20 +1382,54 @@ mod tests {
     /// `matchable_rows` against the scan's own definition of a match -- some non-NULL
     /// buffered row `idx` with `is_match(cmp.compare(row, idx))` under the scan's
     /// `JoinKeyComparator` -- for every operator and every kind of key it dispatches on:
-    /// flat keys through `apply_cmp` (incl. signed zeros, NaN, strings, dictionaries) and
-    /// nested keys with NULL elements through the comparator. Each is also checked against
+    /// keys through `apply_cmp` (incl. signed zeros, NaN, strings, dictionaries, and list,
+    /// list-of-list and struct keys with NULL elements) and run-end encoded keys through
+    /// the comparator. Each is also checked against
     /// an all-NULL and an empty buffered side.
     #[test]
     fn matchable_rows_agrees_with_scan() -> Result<()> {
         use arrow::array::{
             BinaryArray, BooleanArray, Decimal128Array, DictionaryArray, Float64Array,
-            Int32Array, ListArray, StringArray, StringViewArray,
-            TimestampMicrosecondArray,
+            Int32Array, Int32Builder, ListArray, ListBuilder, StringArray,
+            StringViewArray, StructArray, TimestampMicrosecondArray,
         };
-        use arrow::datatypes::Int32Type;
+        use arrow::buffer::NullBuffer;
+        use arrow::datatypes::{Fields, Int32Type};
 
         let strings =
             |v: &[Option<&str>]| Arc::new(StringArray::from(v.to_vec())) as ArrayRef;
+        type ListOfLists = Vec<Option<Vec<Option<Vec<Option<i32>>>>>>;
+        let list_of_lists = |v: ListOfLists| {
+            let mut builder = ListBuilder::new(ListBuilder::new(Int32Builder::new()));
+            for outer in v {
+                match outer {
+                    None => builder.append(false),
+                    Some(inner) => {
+                        for list in inner {
+                            builder.values().append_option(list);
+                        }
+                        builder.append(true);
+                    }
+                }
+            }
+            Arc::new(builder.finish()) as ArrayRef
+        };
+        // A struct of two nullable Int32 fields, with its own validity.
+        let structs =
+            |a: Vec<Option<i32>>, b: Vec<Option<i32>>, valid: Option<Vec<bool>>| {
+                let fields = Fields::from(vec![
+                    Field::new("a", DataType::Int32, true),
+                    Field::new("b", DataType::Int32, true),
+                ]);
+                Arc::new(StructArray::new(
+                    fields,
+                    vec![
+                        Arc::new(Int32Array::from(a)) as ArrayRef,
+                        Arc::new(Int32Array::from(b)) as ArrayRef,
+                    ],
+                    valid.map(NullBuffer::from),
+                )) as ArrayRef
+            };
         let cases: Vec<(&str, ArrayRef, ArrayRef)> = vec![
             (
                 "int32",
@@ -1626,6 +1654,36 @@ mod tests {
                     Some(vec![Some(1)]),
                     None,
                 ])),
+            ),
+            (
+                "list_of_list_null_elements",
+                list_of_lists(vec![
+                    Some(vec![Some(vec![Some(5)]), None]),
+                    Some(vec![Some(vec![Some(3), None])]),
+                    None,
+                ]),
+                list_of_lists(vec![
+                    Some(vec![None]),
+                    Some(vec![Some(vec![None])]),
+                    Some(vec![Some(vec![Some(3)])]),
+                    Some(vec![Some(vec![Some(3), None])]),
+                    Some(vec![Some(vec![Some(5)]), Some(vec![Some(1)])]),
+                    Some(vec![Some(vec![Some(7)])]),
+                    None,
+                ]),
+            ),
+            (
+                "struct_null_fields",
+                structs(
+                    vec![Some(5), Some(3), None, Some(3)],
+                    vec![Some(1), None, Some(2), Some(2)],
+                    Some(vec![true, true, true, false]),
+                ),
+                structs(
+                    vec![None, Some(3), Some(3), Some(4), Some(5), Some(7), None],
+                    vec![Some(1), None, Some(0), None, Some(2), Some(1), None],
+                    Some(vec![true, true, true, true, true, true, false]),
+                ),
             ),
         ];
 
