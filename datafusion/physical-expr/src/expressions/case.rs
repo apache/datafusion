@@ -1463,15 +1463,12 @@ impl PhysicalExpr for CaseExpr {
         let data_type = self.data_type(input_schema)?;
         let nullable = self.nullable(input_schema)?;
         if let Some((logical_type, logical_metadata)) = &self.logical_result_field {
-            let metadata = if logical_type == &data_type {
-                logical_metadata.to_hashmap()
+            let field = Field::new(format!("{self}"), data_type, nullable);
+            return Ok(Arc::new(if logical_type == field.data_type() {
+                field.with_metadata(logical_metadata.to_hashmap())
             } else {
-                Metadata::new()
-            };
-            return Ok(Arc::new(
-                Field::new(format!("{self}"), data_type, nullable)
-                    .with_metadata(metadata),
-            ));
+                field
+            }));
         }
         if let Some((_, first_result)) = self.body.when_then_expr.first()
             && (first_result.is::<Column>() || first_result.is::<Literal>())
