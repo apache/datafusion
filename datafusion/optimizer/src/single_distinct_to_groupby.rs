@@ -125,6 +125,7 @@ fn is_single_distinct_agg(
     aggr_expr: &[Expr],
     input_schema: &DFSchema,
     count_rollup: Option<&CountRollup>,
+    use_native_grouped_distinct: bool,
 ) -> Result<bool> {
     let mut fields_set = HashSet::new();
     let mut aggregate_count = 0;
@@ -167,8 +168,37 @@ fn is_single_distinct_agg(
     if aggregate_count != aggr_expr.len() || fields_set.len() != 1 {
         return Ok(false);
     }
+    // With one target partition, a native GroupsAccumulator avoids building an
+    // extra aggregate with a row per (group, distinct value) pair. With multiple
+    // partitions, the rewrite also distributes deduplication by both keys;
+    // keeping DISTINCT instead repartitions lists of values by group and merges
+    // them in the final accumulator. That can concentrate work on a few groups.
+    // Native accumulator support alone does not establish that this is cheaper.
+    if use_native_grouped_distinct
+        && distinct_aggs.len() == aggregate_count
+        && all_have_groups_accumulators(&distinct_aggs, input_schema)?
+    {
+        return Ok(false);
+    }
     if has_count_rollup && !rewrite_pays_for_count(&distinct_aggs, input_schema)? {
         return Ok(false);
+    }
+    Ok(true)
+}
+
+fn all_have_groups_accumulators(
+    distinct_aggs: &[(&Arc<AggregateUDF>, &[Expr])],
+    input_schema: &DFSchema,
+) -> Result<bool> {
+    for (func, args) in distinct_aggs {
+        let arg_types = args
+            .iter()
+            .map(|arg| arg.get_type(input_schema))
+            .collect::<Result<Vec<_>>>()?;
+        // An unknown answer must preserve the existing rewrite.
+        if func.groups_accumulator_supported_for_types(&arg_types, true) != Some(true) {
+            return Ok(false);
+        }
     }
     Ok(true)
 }
@@ -248,6 +278,8 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 &aggr_expr,
                 input.schema(),
                 count_rollup.as_ref(),
+                !group_expr.is_empty()
+                    && config.options().execution.target_partitions == 1,
             )? && !contains_grouping_set(&group_expr) =>
             {
                 let group_size = group_expr.len();
@@ -582,8 +614,11 @@ mod tests {
             let mut registry = MemoryFunctionRegistry::new();
             registry.register_udaf(count_udaf()).unwrap();
             registry.register_udaf(sum_udaf()).unwrap();
+            // Keep logical-plan snapshots independent of the available CPUs.
+            let mut options = OptimizerContext::new().options();
+            Arc::make_mut(&mut options).execution.target_partitions = 4;
             Self {
-                inner: OptimizerContext::new(),
+                inner: OptimizerContext::new_with_config_options(options),
                 registry,
             }
         }
@@ -756,7 +791,7 @@ mod tests {
             .aggregate(vec![col("a")], vec![count_distinct(col("b"))])?
             .build()?;
 
-        // Should work
+        // Multiple target partitions keep deduplication distributed by both keys.
         assert_optimized_plan_equal!(
             plan,
             @r"
