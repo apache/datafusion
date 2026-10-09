@@ -389,74 +389,10 @@ fn hash_array<T>(
     }
 }
 
-/// Hash a StringView or BytesView array
+/// Builds hash values for array views and writes them into `hashes_buffer`.
 ///
-/// Templated to optimize inner loop based on presence of nulls and external buffers.
-///
-/// HAS_NULLS: do we have to check null in the inner loop
-/// HAS_BUFFERS: if true, array has external buffers; if false, all strings are inlined/ less then 12 bytes
-/// REHASH: if true, combining with existing hash, otherwise initializing
-#[cfg(not(feature = "force_hash_collisions"))]
-#[inline(never)]
-fn hash_string_view_array_inner<
-    T: ByteViewType,
-    const HAS_NULLS: bool,
-    const HAS_BUFFERS: bool,
-    const REHASH: bool,
->(
-    array: &GenericByteViewArray<T>,
-    random_state: &impl HashState,
-    hashes_buffer: &mut [u64],
-) {
-    assert_eq!(
-        hashes_buffer.len(),
-        array.len(),
-        "hashes_buffer and array should be of equal length"
-    );
-
-    let buffers = array.data_buffers();
-    let view_bytes = |view_len: u32, view: u128| {
-        let view = ByteView::from(view);
-        let offset = view.offset as usize;
-        // SAFETY: view is a valid view as it came from the array
-        unsafe {
-            let data = buffers.get_unchecked(view.buffer_index as usize);
-            data.get_unchecked(offset..offset + view_len as usize)
-        }
-    };
-
-    let hashes_and_views = hashes_buffer.iter_mut().zip(array.views().iter());
-    for (i, (hash, &v)) in hashes_and_views.enumerate() {
-        if HAS_NULLS && array.is_null(i) {
-            continue;
-        }
-        let view_len = v as u32;
-        // all views are inlined, no need to access external buffers
-        if !HAS_BUFFERS || view_len <= 12 {
-            if REHASH {
-                let mut hasher = random_state.seeded_state(*hash).build_hasher();
-                v.hash_write(&mut hasher);
-                *hash = hasher.finish();
-            } else {
-                *hash = v.hash_one(random_state);
-            }
-            continue;
-        }
-        // view is not inlined, so we need to hash the bytes as well
-        let value = view_bytes(view_len, v);
-        if REHASH {
-            let mut hasher = random_state.seeded_state(*hash).build_hasher();
-            value.hash_write(&mut hasher);
-            *hash = hasher.finish();
-        } else {
-            *hash = value.hash_one(random_state);
-        }
-    }
-}
-
-/// Builds hash values for array views and writes them into `hashes_buffer`
-/// If `rehash==true` this combines the previous hash value in the buffer
-/// with the new hash using `combine_hashes`
+/// If `rehash==true` the previous hash is folded into the hasher state as a
+/// per-element seed, avoiding a separate combine step.
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_generic_byte_view_array<T: ByteViewType>(
     array: &GenericByteViewArray<T>,
@@ -464,56 +400,294 @@ fn hash_generic_byte_view_array<T: ByteViewType>(
     hashes_buffer: &mut [u64],
     rehash: bool,
 ) {
-    // instantiate the correct version based on presence of nulls and external buffers
-    match (
-        array.null_count() != 0,
-        !array.data_buffers().is_empty(),
-        rehash,
-    ) {
-        // no nulls or buffers ==> hash the inlined views directly
-        // don't call the inner function as Rust seems better able to inline this simpler code (2-3% faster)
-        (false, false, false) => {
-            for (hash, &view) in hashes_buffer.iter_mut().zip(array.views().iter()) {
-                *hash = view.hash_one(random_state);
+    assert_eq!(
+        hashes_buffer.len(),
+        array.len(),
+        "hashes_buffer and array should be of equal length"
+    );
+
+    let has_nulls = array.null_count() != 0;
+    let has_buffers = !array.data_buffers().is_empty();
+    let views: &[u128] = array.views();
+
+    match (has_nulls, has_buffers, rehash) {
+        (false, false, false) => hash_view_fresh(views, hashes_buffer, random_state),
+        (false, false, true) => hash_view_rehash(views, hashes_buffer, random_state),
+        (true, false, false) => hash_view_with_nulls::<_, false>(
+            views,
+            hashes_buffer,
+            array.nulls().unwrap(),
+            random_state,
+        ),
+        (true, false, true) => hash_view_with_nulls::<_, true>(
+            views,
+            hashes_buffer,
+            array.nulls().unwrap(),
+            random_state,
+        ),
+        (false, true, false) => {
+            hash_view_buffered::<T, _, false>(array, hashes_buffer, random_state)
+        }
+        (false, true, true) => {
+            hash_view_buffered::<T, _, true>(array, hashes_buffer, random_state)
+        }
+        (true, true, false) => hash_view_buffered_with_nulls::<T, _, false>(
+            array,
+            hashes_buffer,
+            random_state,
+        ),
+        (true, true, true) => hash_view_buffered_with_nulls::<T, _, true>(
+            array,
+            hashes_buffer,
+            random_state,
+        ),
+    }
+}
+
+// Narrower lanes than the primitive variants because each lane holds a u128
+// view (2 u64) — wider unrolls spill registers.
+#[cfg(not(feature = "force_hash_collisions"))]
+const VIEW_FRESH_LANES: usize = 8;
+#[cfg(not(feature = "force_hash_collisions"))]
+const VIEW_REHASH_LANES: usize = 4;
+#[cfg(not(feature = "force_hash_collisions"))]
+const VIEW_BLEND_LANES: usize = 4;
+
+// Unrolled u128-view fresh hash (used when all strings are inlined ≤ 12 bytes).
+#[cfg(not(feature = "force_hash_collisions"))]
+#[inline(always)]
+fn hash_view_fresh<S: HashState>(views: &[u128], hashes: &mut [u64], state: &S) {
+    debug_assert_eq!(views.len(), hashes.len());
+    let len = views.len();
+    let aligned_end = len & !(VIEW_FRESH_LANES - 1);
+    let mut idx = 0;
+    while idx < aligned_end {
+        // SAFETY: idx + VIEW_FRESH_LANES <= aligned_end <= views.len() == hashes.len()
+        unsafe {
+            let vals: [u128; VIEW_FRESH_LANES] =
+                std::array::from_fn(|lane| *views.get_unchecked(idx + lane));
+            let new_hashes: [u64; VIEW_FRESH_LANES] =
+                std::array::from_fn(|lane| vals[lane].hash_one(state));
+            for lane in 0..VIEW_FRESH_LANES {
+                *hashes.get_unchecked_mut(idx + lane) = new_hashes[lane];
             }
         }
-        (false, false, true) => {
-            for (hash, &view) in hashes_buffer.iter_mut().zip(array.views().iter()) {
-                let mut hasher = random_state.seeded_state(*hash).build_hasher();
-                view.hash_write(&mut hasher);
-                *hash = hasher.finish();
+        idx += VIEW_FRESH_LANES;
+    }
+    while idx < len {
+        unsafe {
+            *hashes.get_unchecked_mut(idx) = views.get_unchecked(idx).hash_one(state);
+        }
+        idx += 1;
+    }
+}
+
+// Narrower unroll than fresh: each lane keeps both `prev` and `view` live.
+#[cfg(not(feature = "force_hash_collisions"))]
+#[inline(always)]
+fn hash_view_rehash<S: HashState>(views: &[u128], hashes: &mut [u64], state: &S) {
+    debug_assert_eq!(views.len(), hashes.len());
+    let len = views.len();
+    let aligned_end = len & !(VIEW_REHASH_LANES - 1);
+    let mut idx = 0;
+    while idx < aligned_end {
+        // SAFETY: idx + VIEW_REHASH_LANES <= aligned_end <= views.len() == hashes.len()
+        unsafe {
+            let vals: [u128; VIEW_REHASH_LANES] =
+                std::array::from_fn(|lane| *views.get_unchecked(idx + lane));
+            let prevs: [u64; VIEW_REHASH_LANES] =
+                std::array::from_fn(|lane| *hashes.get_unchecked(idx + lane));
+            let new_hashes: [u64; VIEW_REHASH_LANES] =
+                std::array::from_fn(|lane| rehash_u128(state, prevs[lane], vals[lane]));
+            for lane in 0..VIEW_REHASH_LANES {
+                *hashes.get_unchecked_mut(idx + lane) = new_hashes[lane];
             }
         }
-        (false, true, false) => hash_string_view_array_inner::<T, false, true, false>(
-            array,
-            random_state,
-            hashes_buffer,
-        ),
-        (false, true, true) => hash_string_view_array_inner::<T, false, true, true>(
-            array,
-            random_state,
-            hashes_buffer,
-        ),
-        (true, false, false) => hash_string_view_array_inner::<T, true, false, false>(
-            array,
-            random_state,
-            hashes_buffer,
-        ),
-        (true, false, true) => hash_string_view_array_inner::<T, true, false, true>(
-            array,
-            random_state,
-            hashes_buffer,
-        ),
-        (true, true, false) => hash_string_view_array_inner::<T, true, true, false>(
-            array,
-            random_state,
-            hashes_buffer,
-        ),
-        (true, true, true) => hash_string_view_array_inner::<T, true, true, true>(
-            array,
-            random_state,
-            hashes_buffer,
-        ),
+        idx += VIEW_REHASH_LANES;
+    }
+    while idx < len {
+        unsafe {
+            let view = *views.get_unchecked(idx);
+            let prev = *hashes.get_unchecked(idx);
+            *hashes.get_unchecked_mut(idx) = rehash_u128(state, prev, view);
+        }
+        idx += 1;
+    }
+}
+
+#[cfg(not(feature = "force_hash_collisions"))]
+#[inline(always)]
+fn rehash_u128<S: HashState>(state: &S, prev: u64, view: u128) -> u64 {
+    let mut hasher = state.seeded_state(prev).build_hasher();
+    view.hash_write(&mut hasher);
+    hasher.finish()
+}
+
+// Walks the null bitmap in u64 strides so bitmap work is amortized across 64
+// rows instead of paid per valid row.
+#[cfg(not(feature = "force_hash_collisions"))]
+#[inline(always)]
+fn hash_view_with_nulls<S: HashState, const REHASH: bool>(
+    views: &[u128],
+    hashes: &mut [u64],
+    nulls: &arrow::buffer::NullBuffer,
+    state: &S,
+) {
+    debug_assert_eq!(views.len(), hashes.len());
+    debug_assert_eq!(views.len(), nulls.len());
+
+    let bit_chunks = nulls.inner().bit_chunks();
+    let mut row = 0;
+
+    for mask in bit_chunks.iter() {
+        if mask == u64::MAX {
+            // SAFETY: row + 64 <= nulls.len() == views.len() == hashes.len()
+            unsafe {
+                let vals = views.get_unchecked(row..row + 64);
+                let out = hashes.get_unchecked_mut(row..row + 64);
+                if REHASH {
+                    hash_view_rehash(vals, out, state);
+                } else {
+                    hash_view_fresh(vals, out, state);
+                }
+            }
+        } else if mask != 0 {
+            // SAFETY: same bound as above.
+            unsafe {
+                let vals = views.get_unchecked(row..row + 64);
+                let out = hashes.get_unchecked_mut(row..row + 64);
+                blend_view_chunk::<S, REHASH>(vals, out, mask, state);
+            }
+        }
+        row += 64;
+    }
+
+    let tail_len = bit_chunks.remainder_len();
+    if tail_len > 0 {
+        let tail_mask = (1u64 << tail_len) - 1;
+        let mut remaining = bit_chunks.remainder_bits() & tail_mask;
+        while remaining != 0 {
+            let idx = row + remaining.trailing_zeros() as usize;
+            unsafe {
+                let view = *views.get_unchecked(idx);
+                let prev = *hashes.get_unchecked(idx);
+                *hashes.get_unchecked_mut(idx) = if REHASH {
+                    rehash_u128(state, prev, view)
+                } else {
+                    view.hash_one(state)
+                };
+            }
+            remaining &= remaining - 1;
+        }
+    }
+}
+
+// Hashes every slot in a 64-row chunk and csel-blends against the mask bit.
+// The u128-view hash is cheap enough that computing+blending beats a
+// trailing_zeros scan at the null densities we see in practice.
+#[cfg(not(feature = "force_hash_collisions"))]
+#[inline(always)]
+fn blend_view_chunk<S: HashState, const REHASH: bool>(
+    views: &[u128],
+    hashes: &mut [u64],
+    mask: u64,
+    state: &S,
+) {
+    debug_assert_eq!(views.len(), 64);
+    debug_assert_eq!(hashes.len(), 64);
+    for offset in (0..64).step_by(VIEW_BLEND_LANES) {
+        // SAFETY: offset + VIEW_BLEND_LANES <= 64 == views.len() == hashes.len()
+        unsafe {
+            let vals: [u128; VIEW_BLEND_LANES] =
+                std::array::from_fn(|lane| *views.get_unchecked(offset + lane));
+            let prevs: [u64; VIEW_BLEND_LANES] =
+                std::array::from_fn(|lane| *hashes.get_unchecked(offset + lane));
+            let new_hashes: [u64; VIEW_BLEND_LANES] = std::array::from_fn(|lane| {
+                if REHASH {
+                    rehash_u128(state, prevs[lane], vals[lane])
+                } else {
+                    vals[lane].hash_one(state)
+                }
+            });
+            for lane in 0..VIEW_BLEND_LANES {
+                let valid = (mask >> (offset + lane)) & 1 != 0;
+                *hashes.get_unchecked_mut(offset + lane) =
+                    if valid { new_hashes[lane] } else { prevs[lane] };
+            }
+        }
+    }
+}
+
+#[cfg(not(feature = "force_hash_collisions"))]
+#[inline(always)]
+fn hash_one_view_buffered<T: ByteViewType, S: HashState, const REHASH: bool>(
+    buffers: &[arrow::buffer::Buffer],
+    view: u128,
+    prev_hash: u64,
+    state: &S,
+) -> u64 {
+    let view_len = view as u32;
+    if view_len <= 12 {
+        if REHASH {
+            rehash_u128(state, prev_hash, view)
+        } else {
+            view.hash_one(state)
+        }
+    } else {
+        let byte_view = ByteView::from(view);
+        let offset = byte_view.offset as usize;
+        // SAFETY: view came from the array; its buffer index and offset are valid.
+        let bytes = unsafe {
+            let data = buffers.get_unchecked(byte_view.buffer_index as usize);
+            data.get_unchecked(offset..offset + view_len as usize)
+        };
+        let _ = std::marker::PhantomData::<T>;
+        if REHASH {
+            let mut hasher = state.seeded_state(prev_hash).build_hasher();
+            bytes.hash_write(&mut hasher);
+            hasher.finish()
+        } else {
+            bytes.hash_one(state)
+        }
+    }
+}
+
+// Fresh/rehash with external buffers but no nulls. Can't branchless-blend
+// because the buffer-load path is unpredictable per row; just iterate.
+#[cfg(not(feature = "force_hash_collisions"))]
+#[inline(always)]
+fn hash_view_buffered<T: ByteViewType, S: HashState, const REHASH: bool>(
+    array: &GenericByteViewArray<T>,
+    hashes: &mut [u64],
+    state: &S,
+) {
+    let buffers = array.data_buffers();
+    let views: &[u128] = array.views();
+    debug_assert_eq!(views.len(), hashes.len());
+    for (hash, &view) in hashes.iter_mut().zip(views.iter()) {
+        *hash = hash_one_view_buffered::<T, S, REHASH>(buffers, view, *hash, state);
+    }
+}
+
+// Nullable + possibly-buffered: iterate every row and skip nulls with a
+// per-row bitmap lookup — same shape as the pre-refactor loop. Chunked
+// bitmap walking doesn't help because buffer-load latency dominates.
+#[cfg(not(feature = "force_hash_collisions"))]
+#[inline(always)]
+fn hash_view_buffered_with_nulls<T: ByteViewType, S: HashState, const REHASH: bool>(
+    array: &GenericByteViewArray<T>,
+    hashes: &mut [u64],
+    state: &S,
+) {
+    let buffers = array.data_buffers();
+    let views: &[u128] = array.views();
+    debug_assert_eq!(views.len(), hashes.len());
+
+    for (idx, (hash, &view)) in hashes.iter_mut().zip(views.iter()).enumerate() {
+        if array.is_null(idx) {
+            continue;
+        }
+        *hash = hash_one_view_buffered::<T, S, REHASH>(buffers, view, *hash, state);
     }
 }
 
