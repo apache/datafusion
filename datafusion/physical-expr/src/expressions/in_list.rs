@@ -122,7 +122,9 @@ fn try_evaluate_constant_list(
     // An item can read a column yet return a scalar on an empty batch (a CASE whose
     // WHEN matches all zero rows returns its THEN), so require literal leaves.
     for expr in list {
-        if expr.exists(|e| Ok(e.children().is_empty() && !e.is::<Literal>()))? {
+        if expr.exists(|e| {
+            Ok(e.is_volatile_node() || (e.children().is_empty() && !e.is::<Literal>()))
+        })? {
             return Ok(None);
         }
     }
