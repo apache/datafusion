@@ -316,5 +316,12 @@ SELECT id, c FROM inferred_partial;
 1 10
 2 NULL
 
+# With `c` wrongly inferred NOT NULL, the optimizer folds `c IS NULL` to false
+# and this returns no rows.
+query I
+SELECT id FROM inferred_partial WHERE c IS NULL;
+----
+2
+
 statement ok
 DROP TABLE inferred_partial;
