@@ -304,7 +304,11 @@ impl ExecutionPlan for CoalescePartitionsExec {
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
-        CardinalityEffect::Equal
+        if self.fetch.is_none() {
+            CardinalityEffect::Equal
+        } else {
+            CardinalityEffect::LowerEqual
+        }
     }
 
     /// Tries to swap `projection` with its input, which is known to be a
@@ -697,5 +701,22 @@ mod tests {
         assert_eq!(row_count, 400, "Should return exactly 400 rows");
 
         Ok(())
+    }
+
+    #[test]
+    fn test_cardinality_effect_with_fetch() {
+        let input = test::scan_partitioned(4);
+
+        let coalesce = CoalescePartitionsExec::new(Arc::clone(&input));
+        assert!(matches!(
+            coalesce.cardinality_effect(),
+            CardinalityEffect::Equal
+        ));
+
+        let coalesce = CoalescePartitionsExec::new(input).with_fetch(Some(10));
+        assert!(matches!(
+            coalesce.cardinality_effect(),
+            CardinalityEffect::LowerEqual
+        ));
     }
 }

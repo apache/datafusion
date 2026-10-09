@@ -29,6 +29,9 @@ for details on how to contribute to DataFusion.
 If you haven't reviewed the [architecture section in the docs][docs], it's a
 useful place to get the lay of the land before starting down a specific path.
 
+For guidance on running DataFusion with SQL from untrusted users, see
+[Securing DataFusion](securing-datafusion.md).
+
 DataFusion is designed to be extensible at all points, including
 
 - [x] User Defined Functions (UDFs)

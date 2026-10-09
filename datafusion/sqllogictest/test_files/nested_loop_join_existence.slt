@@ -1,0 +1,231 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Candidate pruning and early stopping for right semi/anti nested loop joins.
+statement ok
+SET datafusion.execution.target_partitions = 1
+
+statement ok
+SET datafusion.optimizer.join_reordering = false
+
+statement ok
+SET datafusion.execution.batch_size = 4
+
+statement ok
+CREATE TABLE existence_left AS
+SELECT CASE WHEN value = 0 OR value = 1 THEN 65
+            WHEN value = 2 THEN NULL
+            WHEN value = 3 OR value = 4 THEN 97
+            WHEN value = 5 THEN 114 ELSE 127 END AS threshold
+FROM range(20)
+
+statement ok
+SET datafusion.execution.batch_size = 256
+
+statement ok
+CREATE TABLE existence_right AS
+SELECT 1000 + value AS payload,
+       CASE WHEN (value * 2) % 129 = 128 THEN NULL ELSE (value * 2) % 129 END AS k,
+       'payload-' || value AS label
+FROM range(129)
+
+# The left side spans five batches. Single-row probes and the multi-row range
+# after compaction must resolve rows across those batch boundaries.
+# Multiple compactions must retain original right-row indices and payloads.
+# The noncontiguous survivors shrink from 129 to 64, 32, then 15 candidates.
+# With batch_size=256, 15 candidates trigger a multi-left-row range. Repeated
+# thresholds must not count an already matched candidate twice; NULL never matches.
+query IIII
+SELECT count(*), sum(r.payload), min(r.payload), max(r.payload)
+FROM existence_left l RIGHT SEMI JOIN existence_right r ON l.threshold > r.k
+----
+127 135064 1000 1127
+
+query IIT rowsort
+SELECT r.payload, r.k, r.label
+FROM existence_left l RIGHT ANTI JOIN existence_right r ON l.threshold > r.k
+----
+1064 NULL payload-64
+1128 127 payload-128
+
+# Assert the physical join directions as well as the SQL results.
+query TT
+EXPLAIN SELECT r.*
+FROM existence_left l RIGHT SEMI JOIN existence_right r ON l.threshold > r.k
+----
+logical_plan
+01)RightSemi Join:  Filter: l.threshold > r.k
+02)--SubqueryAlias: l
+03)----TableScan: existence_left projection=[threshold]
+04)--SubqueryAlias: r
+05)----TableScan: existence_right projection=[payload, k, label]
+physical_plan
+01)NestedLoopJoinExec: join_type=RightSemi, filter=threshold@0 > k@1
+02)--DataSourceExec: partitions=1, partition_sizes=[5]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN SELECT r.*
+FROM existence_left l RIGHT ANTI JOIN existence_right r ON l.threshold > r.k
+----
+logical_plan
+01)RightAnti Join:  Filter: l.threshold > r.k
+02)--SubqueryAlias: l
+03)----TableScan: existence_left projection=[threshold]
+04)--SubqueryAlias: r
+05)----TableScan: existence_right projection=[payload, k, label]
+physical_plan
+01)NestedLoopJoinExec: join_type=RightAnti, filter=threshold@0 > k@1
+02)--DataSourceExec: partitions=1, partition_sizes=[5]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Repeated matches within and across left ranges must only decrement remaining
+# once per right row. The last left row introduces a new match that must not be
+# skipped. Cover word-aligned (64), byte-aligned (72), and unaligned (65) segments.
+statement ok
+SET datafusion.execution.batch_size = 1024
+
+statement ok
+CREATE VIEW existence_duplicates AS
+SELECT CASE WHEN value = 99 THEN 2 ELSE 1 END AS threshold FROM range(100)
+
+query III
+SELECT count(*), min(r.value), max(r.value)
+FROM existence_duplicates l RIGHT SEMI JOIN range(64) r
+ON l.threshold > r.value
+----
+2 0 1
+
+query IIII
+SELECT count(*), min(r.value), max(r.value), sum(r.value)
+FROM existence_duplicates l RIGHT ANTI JOIN range(64) r
+ON l.threshold > r.value
+----
+62 2 63 2015
+
+query III
+SELECT count(*), min(r.value), max(r.value)
+FROM existence_duplicates l RIGHT SEMI JOIN range(72) r
+ON l.threshold > r.value
+----
+2 0 1
+
+query IIII
+SELECT count(*), min(r.value), max(r.value), sum(r.value)
+FROM existence_duplicates l RIGHT ANTI JOIN range(72) r
+ON l.threshold > r.value
+----
+70 2 71 2555
+
+query III
+SELECT count(*), min(r.value), max(r.value)
+FROM existence_duplicates l RIGHT SEMI JOIN range(65) r
+ON l.threshold > r.value
+----
+2 0 1
+
+query IIII
+SELECT count(*), min(r.value), max(r.value), sum(r.value)
+FROM existence_duplicates l RIGHT ANTI JOIN range(65) r
+ON l.threshold > r.value
+----
+63 2 64 2079
+
+# Skip NULL/FALSE-only ranges before a later range matches every candidate.
+# Duplicate matches in that range must not decrement remaining twice.
+statement ok
+CREATE VIEW existence_range_matches AS
+SELECT CASE WHEN value < 32 THEN NULL
+            WHEN value < 64 THEN 0 ELSE 65 END AS threshold
+FROM range(96)
+
+query III
+SELECT count(*), sum(r.value), max(r.value)
+FROM existence_range_matches l RIGHT SEMI JOIN range(65) r
+ON l.threshold > r.value
+----
+65 2080 64
+
+query I
+SELECT count(*)
+FROM existence_range_matches l RIGHT ANTI JOIN range(65) r
+ON l.threshold > r.value
+----
+0
+
+# Reset remaining, both match bitmaps, and the candidate mapping between right
+# batches: all matched, none matched, several compactions, then all matched again.
+statement ok
+SET datafusion.execution.batch_size = 64
+
+statement ok
+CREATE VIEW existence_batches AS
+SELECT value / 64 AS batch_id, 1000 + value AS payload,
+       CASE WHEN value < 64 THEN -1
+            WHEN value < 128 THEN 1000
+            WHEN value < 192 THEN value - 128 ELSE 0 END AS k
+FROM range(193)
+
+query IIIII rowsort
+SELECT r.batch_id, count(*), min(r.payload), max(r.payload), sum(r.payload)
+FROM (VALUES (32), (32), (48), (48), (56), (56)) l(threshold)
+RIGHT SEMI JOIN existence_batches r ON l.threshold > r.k
+GROUP BY r.batch_id
+----
+0 64 1000 1063 66016
+2 56 1128 1183 64708
+3 1 1192 1192 1192
+
+query IIIII rowsort
+SELECT r.batch_id, count(*), min(r.payload), max(r.payload), sum(r.payload)
+FROM (VALUES (32), (32), (48), (48), (56), (56)) l(threshold)
+RIGHT ANTI JOIN existence_batches r ON l.threshold > r.k
+GROUP BY r.batch_id
+----
+1 64 1064 1127 70112
+2 8 1184 1191 9500
+
+# Prove these are four separate right input batches, including the final short one.
+query TT
+EXPLAIN ANALYZE SELECT count(*)
+FROM (VALUES (32), (32), (48), (48), (56), (56)) l(threshold)
+RIGHT SEMI JOIN existence_batches r ON l.threshold > r.k
+----
+Plan with Metrics
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)], metrics=[<slt:ignore>]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1))], metrics=[<slt:ignore>]
+03)----NestedLoopJoinExec: join_type=RightSemi, filter=threshold@0 > k@1, projection=[], metrics=[output_rows=121, <slt:ignore> spill_count=0, <slt:ignore> input_batches=4, input_rows=193, <slt:ignore>]
+04)------ProjectionExec: expr=[column1@0 as threshold], metrics=[<slt:ignore>]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1], metrics=[<slt:ignore>]
+06)------ProjectionExec: expr=[CASE WHEN value@0 < 64 THEN -1 WHEN value@0 < 128 THEN 1000 WHEN value@0 < 192 THEN value@0 - 128 ELSE 0 END as k], metrics=[<slt:ignore>]
+07)--------LazyMemoryExec: partitions=1, batch_generators=[range: start=0, end=193, batch_size=64], metrics=[<slt:ignore>]
+
+# No right columns in the filter: the projected candidate batch has zero columns.
+query I
+SELECT count(*) FROM existence_left l RIGHT SEMI JOIN existence_right r ON TRUE
+----
+129
+
+# Restore the runner defaults.
+statement ok
+RESET datafusion.execution.batch_size
+
+statement ok
+SET datafusion.execution.target_partitions = 4
+
+statement ok
+RESET datafusion.optimizer.join_reordering
