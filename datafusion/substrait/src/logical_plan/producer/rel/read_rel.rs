@@ -18,7 +18,7 @@
 use crate::logical_plan::producer::{SubstraitProducer, to_substrait_named_struct};
 use datafusion::common::{DFSchema, ToDFSchema, substrait_datafusion_err};
 use datafusion::logical_expr::utils::conjunction;
-use datafusion::logical_expr::{EmptyRelation, Expr, TableScan, Values};
+use datafusion::logical_expr::{EmptyRelation, Expr, TableScan, Values, lit};
 use datafusion::scalar::ScalarValue;
 use std::sync::Arc;
 use substrait::proto::expression::MaskExpression;
@@ -26,7 +26,7 @@ use substrait::proto::expression::mask_expression::{StructItem, StructSelect};
 use substrait::proto::expression::nested::Struct as NestedStruct;
 use substrait::proto::read_rel::{NamedTable, ReadType, VirtualTable};
 use substrait::proto::rel::RelType;
-use substrait::proto::{ReadRel, Rel};
+use substrait::proto::{FetchRel, ReadRel, Rel, fetch_rel};
 
 /// Converts rows of arbitrary expressions into Substrait nested structs.
 ///
@@ -95,7 +95,7 @@ pub fn from_table_scan(
         Some(Box::new(filter_expr))
     };
 
-    Ok(Box::new(Rel {
+    let read = Box::new(Rel {
         rel_type: Some(RelType::Read(Box::new(ReadRel {
             common: None,
             base_schema: Some(base_schema),
@@ -107,6 +107,34 @@ pub fn from_table_scan(
                 names: scan.table_name.to_vec(),
                 advanced_extension: None,
             })),
+        }))),
+    });
+
+    // ReadRel cannot represent pushed-down offsets or limits. Keep them with
+    // the scan, even when there is no parent Limit or a Projection separates it.
+    if scan.skip.is_none() && scan.fetch.is_none() {
+        return Ok(read);
+    }
+    let empty_schema = Arc::new(DFSchema::empty());
+    let offset_mode = scan
+        .skip
+        .map(|skip| producer.handle_expr(&lit(skip as i64), &empty_schema))
+        .transpose()?
+        .map(Box::new)
+        .map(fetch_rel::OffsetMode::OffsetExpr);
+    let count_mode = scan
+        .fetch
+        .map(|fetch| producer.handle_expr(&lit(fetch as i64), &empty_schema))
+        .transpose()?
+        .map(Box::new)
+        .map(fetch_rel::CountMode::CountExpr);
+    Ok(Box::new(Rel {
+        rel_type: Some(RelType::Fetch(Box::new(FetchRel {
+            common: None,
+            input: Some(read),
+            offset_mode,
+            count_mode,
+            advanced_extension: None,
         }))),
     }))
 }
