@@ -727,6 +727,63 @@ async fn aggregate_grouping_sets_64_columns_repeated_is_rejected() -> Result<()>
     Ok(())
 }
 
+/// At 63 columns exactly one bit is left for the duplicate ordinal, so a
+/// second occurrence of the same set (ordinal `1`) is still representable.
+/// Unlike the 64-column cases above, executing this one does not hit the
+/// unrelated shift-amount panic in DataFusion's native aggregate execution
+/// (that panic is specifically `shift by 64`; a 63-bit shift is in range),
+/// so this checks real query results end to end.
+#[tokio::test]
+async fn aggregate_grouping_sets_63_columns_repeated_twice() -> Result<()> {
+    let ctx = create_context().await?;
+    let columns = (0..63)
+        .map(|offset| format!("a + {offset}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT GROUPING(a + 0) AS g0, avg(b) FROM data \
+         GROUP BY GROUPING SETS (({columns}), ({columns})) ORDER BY g0"
+    );
+    let plan = ctx.sql(&sql).await?.into_optimized_plan()?;
+    let expected = DataFrame::new(ctx.state(), plan.clone()).collect().await?;
+
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    let actual = DataFrame::new(ctx.state(), plan2).collect().await?;
+
+    assert_eq!(
+        format!("{}", pretty_format_batches(&expected)?),
+        format!("{}", pretty_format_batches(&actual)?)
+    );
+    Ok(())
+}
+
+/// A third occurrence of the same 63-column set needs ordinal `2`, which
+/// does not fit in the single bit left above the mask. The producer must
+/// reject it with a clean error, not silently collide it with the first
+/// occurrence's id.
+#[tokio::test]
+async fn aggregate_grouping_sets_63_columns_repeated_thrice_is_rejected() -> Result<()> {
+    let ctx = create_context().await?;
+    let columns = (0..63)
+        .map(|offset| format!("a + {offset}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT GROUPING(a + 0) AS g0, avg(b) FROM data \
+         GROUP BY GROUPING SETS (({columns}), ({columns}), ({columns})) ORDER BY g0"
+    );
+    let plan = ctx.sql(&sql).await?.into_optimized_plan()?;
+
+    let err = to_substrait_plan(&plan, &ctx.state()).unwrap_err();
+
+    assert!(
+        err.to_string().contains("cannot be repeated"),
+        "unexpected error: {err}"
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn aggregate_grouping_rollup() -> Result<()> {
     let plan = generate_plan_from_sql(

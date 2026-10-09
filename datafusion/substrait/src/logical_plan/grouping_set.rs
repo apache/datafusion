@@ -77,13 +77,18 @@ pub(crate) fn unique_grouping_set_index_name(schema: &DFSchema) -> String {
 /// The value is `(ordinal << group_count) | mask`: a bit is set in `mask` for
 /// every grouping column the set leaves out, counting from the last column, and
 /// `ordinal` counts the sets before this one holding the same columns. Both
-/// parts follow from the set alone, so no two sets share a value.
-///
-/// At `group_count == 64` the mask alone already fills every bit of the `u64`,
-/// leaving no room for an ordinal: `ordinal << 64` panics on the shift amount
-/// even when `ordinal` is `0`, and any `ordinal != 0` cannot be represented at
-/// all. The first set at that width is still representable - its ordinal is
-/// always `0` - so only a repeated set at exactly 64 columns is rejected.
+/// parts follow from the set alone, so no two sets share a value - *as long as
+/// `ordinal` fits in the `64 - group_count` bits above the mask*. `ordinal`
+/// grows with how many times a set is repeated, not with `group_count`, so a
+/// set repeated enough times can overflow those bits well before
+/// `group_count` reaches 64 on its own: with `group_count = 63` only one bit
+/// is left for the ordinal, so a third occurrence of the same set (ordinal
+/// `2`, i.e. `0b10`) would need to shift that single `1` bit out of the `u64`
+/// entirely, silently losing it (`2u64 << 63 == 0`, not an out-of-range
+/// shift) and colliding with the first occurrence's id. Checking the shift
+/// amount alone (`checked_shl`) does not catch this: `2u64.checked_shl(63)`
+/// still returns `Some(0)`, because the amount is in range - only the *value*
+/// overflows out of the type, which `checked_shl` does not consider.
 pub(crate) fn grouping_set_ids(
     columns: &[&Expr],
     sets: &[Vec<Expr>],
@@ -106,14 +111,26 @@ pub(crate) fn grouping_set_ids(
         }
         let ordinal = masks.iter().filter(|seen| **seen == mask).count() as u64;
         masks.push(mask);
-        let id = if group_count == 64 {
-            if ordinal != 0 {
-                return not_impl_err!(
-                    "A grouping set with 64 columns cannot be repeated: there are no bits left for a duplicate ordinal"
-                );
-            }
+        let id = if ordinal == 0 {
+            // No shift at all, so this is always representable, including
+            // the `group_count == 64` case where the mask alone already
+            // fills every bit and no ordinal bits are available.
             mask
         } else {
+            let ordinal_bits = 64 - group_count;
+            // `1u64 << 64` would itself be an out-of-range shift; at
+            // `ordinal_bits == 64` (`group_count == 0`) every `u64` ordinal
+            // is representable anyway, since shifting by 0 loses nothing.
+            let max_ordinal = if ordinal_bits >= 64 {
+                u64::MAX
+            } else {
+                (1u64 << ordinal_bits) - 1
+            };
+            if ordinal > max_ordinal {
+                return not_impl_err!(
+                    "A grouping set with {group_count} columns cannot be repeated more than {max_ordinal} time(s): the duplicate ordinal does not fit in the {ordinal_bits} bit(s) left above the mask"
+                );
+            }
             (ordinal << group_count) | mask
         };
         ids.push(id);
@@ -302,6 +319,76 @@ mod tests {
 
         assert!(
             err.to_string().contains("more than 64 columns"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// At 63 columns exactly one bit is left for the ordinal, so a second
+    /// occurrence of the same set (ordinal `1`) is representable: both ids
+    /// fit in the `u64` without losing any bits.
+    #[test]
+    fn grouping_set_ids_ordinal_fits_at_63_columns() -> datafusion::common::Result<()> {
+        let exprs = distinct_columns(63);
+        let columns: Vec<&Expr> = exprs.iter().collect();
+        let sets = vec![exprs.clone(), exprs.clone()];
+
+        let ids = grouping_set_ids(&columns, &sets)?;
+
+        assert_eq!(ids, vec![0u64, 1u64 << 63]);
+        Ok(())
+    }
+
+    /// A third occurrence of the same 63-column set needs ordinal `2`
+    /// (`0b10`), which does not fit in the single bit left above the mask:
+    /// `2u64 << 63` silently discards the bit instead of producing an
+    /// out-of-range-shift panic, so this must be a checked, clean error - not
+    /// a value that happens to collide with another set's id.
+    #[test]
+    fn grouping_set_ids_rejects_ordinal_overflow_at_63_columns() {
+        let exprs = distinct_columns(63);
+        let columns: Vec<&Expr> = exprs.iter().collect();
+        let sets = vec![exprs.clone(), exprs.clone(), exprs.clone()];
+
+        let err = grouping_set_ids(&columns, &sets).unwrap_err();
+
+        assert!(
+            err.to_string().contains("cannot be repeated"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// At 62 columns two bits are left for the ordinal, so up to four
+    /// occurrences (ordinals `0..=3`) of the same set are representable.
+    #[test]
+    fn grouping_set_ids_ordinal_fits_at_62_columns() -> datafusion::common::Result<()> {
+        let exprs = distinct_columns(62);
+        let columns: Vec<&Expr> = exprs.iter().collect();
+        let sets = vec![exprs.clone(), exprs.clone(), exprs.clone(), exprs.clone()];
+
+        let ids = grouping_set_ids(&columns, &sets)?;
+
+        assert_eq!(ids, vec![0u64, 1u64 << 62, 2u64 << 62, 3u64 << 62]);
+        Ok(())
+    }
+
+    /// A fifth occurrence at 62 columns needs ordinal `4` (`0b100`), which
+    /// overflows the two bits available.
+    #[test]
+    fn grouping_set_ids_rejects_ordinal_overflow_at_62_columns() {
+        let exprs = distinct_columns(62);
+        let columns: Vec<&Expr> = exprs.iter().collect();
+        let sets = vec![
+            exprs.clone(),
+            exprs.clone(),
+            exprs.clone(),
+            exprs.clone(),
+            exprs.clone(),
+        ];
+
+        let err = grouping_set_ids(&columns, &sets).unwrap_err();
+
+        assert!(
+            err.to_string().contains("cannot be repeated"),
             "unexpected error: {err}"
         );
     }
