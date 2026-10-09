@@ -4205,7 +4205,7 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 </section>
 <section id="array-distinct">
 <h3><code class="docutils literal notranslate"><span class="pre">array_distinct</span></code><a class="headerlink" href="#array-distinct" title="Link to this heading">#</a></h3>
-<p>Returns distinct values from the array after removing duplicates.</p>
+<p>Returns distinct values from the array after removing duplicates, in the order they first appear.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">array_distinct</span><span class="p">(</span><span class="nb">array</span><span class="p">)</span>
 </pre></div>
 </div>
@@ -4218,11 +4218,11 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <section id="id240">
 <h4>Example<a class="headerlink" href="#id240" title="Link to this heading">#</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_distinct</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]);</span>
-<span class="o">+</span><span class="c1">---------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">array_distinct</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">]))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">---------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span><span class="w">                    </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">---------------------------------+</span>
+<span class="o">+</span><span class="c1">---------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">array_distinct</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">4</span><span class="p">]))</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span><span class="w">                          </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------------------+</span>
 </pre></div>
 </div>
 </section>
