@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 
 use super::*;
+use arrow_schema::extension::EXTENSION_TYPE_NAME_KEY;
 use datafusion_common::{ParamValues, ScalarValue, metadata::ScalarAndMetadata};
 use insta::assert_snapshot;
 
@@ -390,10 +391,20 @@ async fn test_query_parameters_with_metadata() -> Result<()> {
 #[tokio::test]
 async fn test_sql_case_field_metadata() -> Result<()> {
     let ctx = SessionContext::new();
-    let metadata =
-        HashMap::from([("structured_type".to_string(), "ARRAY(NUMBER)".to_string())]);
-    let other_metadata =
-        HashMap::from([("structured_type".to_string(), "OBJECT".to_string())]);
+    let metadata = HashMap::from([
+        ("structured_type".to_string(), "ARRAY(NUMBER)".to_string()),
+        (
+            EXTENSION_TYPE_NAME_KEY.to_string(),
+            "example.case".to_string(),
+        ),
+    ]);
+    let other_metadata = HashMap::from([
+        ("structured_type".to_string(), "OBJECT".to_string()),
+        (
+            EXTENSION_TYPE_NAME_KEY.to_string(),
+            "example.other".to_string(),
+        ),
+    ]);
     let schema = Arc::new(Schema::new(vec![
         Field::new("flag", DataType::Boolean, false),
         Field::new("a", DataType::Int32, false).with_metadata(metadata.clone()),

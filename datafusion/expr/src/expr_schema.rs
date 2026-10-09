@@ -1805,6 +1805,79 @@ mod tests {
     }
 
     #[test]
+    fn test_case_field_metadata_higher_order_function() -> Result<()> {
+        #[derive(Debug, PartialEq, Eq, Hash)]
+        struct MetadataPassthrough {
+            signature: crate::HigherOrderSignature,
+        }
+
+        impl crate::HigherOrderUDFImpl for MetadataPassthrough {
+            fn name(&self) -> &str {
+                "metadata_passthrough"
+            }
+
+            fn signature(&self) -> &crate::HigherOrderSignature {
+                &self.signature
+            }
+
+            fn lambda_parameters(
+                &self,
+                _step: usize,
+                _fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
+            ) -> Result<crate::LambdaParametersProgress> {
+                Ok(crate::LambdaParametersProgress::Complete(vec![]))
+            }
+
+            fn return_field_from_args(
+                &self,
+                args: HigherOrderReturnFieldArgs,
+            ) -> Result<FieldRef> {
+                let ValueOrLambda::Value(field) = &args.arg_fields[0] else {
+                    unreachable!();
+                };
+                Ok(Arc::clone(field))
+            }
+
+            fn invoke_with_args(
+                &self,
+                _args: crate::HigherOrderFunctionArgs,
+            ) -> Result<crate::ColumnarValue> {
+                unreachable!()
+            }
+        }
+
+        let metadata = HashMap::from([("kind".to_string(), "marked".to_string())]);
+        let schema = DFSchema::from_unqualified_fields(
+            vec![
+                Field::new("a", DataType::Int32, false).with_metadata(metadata.clone()),
+                Field::new("b", DataType::Int32, false).with_metadata(metadata.clone()),
+            ]
+            .into(),
+            HashMap::new(),
+        )?;
+        let udf = Arc::new(crate::HigherOrderUDF::new_from_impl(MetadataPassthrough {
+            signature: crate::HigherOrderSignature::any(1, crate::Volatility::Immutable),
+        }));
+        let call = |arg| {
+            Expr::HigherOrderFunction(crate::expr::HigherOrderFunction::new(
+                Arc::clone(&udf),
+                vec![arg],
+            ))
+        };
+
+        let shallow = when(lit(true), call(col("a"))).otherwise(col("b"))?;
+        assert_eq!(shallow.to_field(&schema)?.1.metadata(), &metadata);
+
+        let mut deep = col("a");
+        for _ in 0..9 {
+            deep = call(deep);
+        }
+        let deep_case = when(lit(true), deep).otherwise(col("b"))?;
+        assert!(deep_case.to_field(&schema)?.1.metadata().is_empty());
+        Ok(())
+    }
+
+    #[test]
     fn test_alias_metadata_is_preserved_in_field_metadata() {
         let schema = MockExprSchema::new().with_data_type(DataType::Int32);
         let alias_metadata = FieldMetadata::from(HashMap::from([(
