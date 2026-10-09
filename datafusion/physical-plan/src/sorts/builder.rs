@@ -98,8 +98,8 @@ impl BatchBuilder {
         }
     }
 
-    /// Append a new batch in `stream_idx`
-    pub fn push_batch(&mut self, stream_idx: usize, batch: RecordBatch) -> Result<()> {
+    /// Append a new batch in `stream_idx`, returning its memory size
+    pub fn push_batch(&mut self, stream_idx: usize, batch: RecordBatch) -> Result<usize> {
         let size = get_record_batch_memory_size(&batch);
         self.batches_mem_used += size;
         // Only request additional memory from the pool when actual batch
@@ -112,7 +112,7 @@ impl BatchBuilder {
             batch_idx,
             row_idx: 0,
         };
-        Ok(())
+        Ok(size)
     }
 
     /// Append the next row from `stream_idx`

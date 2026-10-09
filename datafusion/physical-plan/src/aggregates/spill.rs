@@ -37,6 +37,16 @@ use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::spill_manager::SpillManager;
 use crate::{InputOrderMode, SendableRecordBatchStream};
 
+/// Target size in bytes of the batches that spilling writes and replay
+/// merges. A batch can be larger when it holds a larger group.
+///
+/// Replay holds the groups of the batch it merges in memory, and merging
+/// several spill files reserves memory for a few batches of each. A limit of
+/// `batch_size` rows alone does not bound the size of a batch: a few groups
+/// with large state, such as `array_agg` over a low-cardinality key, would fit
+/// in a single batch.
+const SPILL_BATCH_TARGET_BYTES: usize = 1024 * 1024;
+
 /// Spill configuration and accumulated runs of one grouped aggregation stream.
 ///
 /// Every aggregation stream that spills does so the same way. Each spill event
@@ -222,12 +232,18 @@ impl AggregateSpill {
             return Ok(());
         };
 
-        let max_batch_rows = state_batch.num_rows().min(self.batch_size);
+        let mut max_batch_rows = 0;
         let sorted_iter = IncrementalSortIterator::new(
             state_batch,
             self.spill_expr.clone(),
             self.batch_size,
-        );
+        )
+        .with_max_batch_bytes(SPILL_BATCH_TARGET_BYTES)
+        .inspect(|batch| {
+            if let Ok(batch) = batch {
+                max_batch_rows = max_batch_rows.max(batch.num_rows());
+            }
+        });
         let spill_file = self
             .spill_manager
             .spill_record_batch_iter_and_return_max_batch_memory(
@@ -280,6 +296,7 @@ impl AggregateSpill {
             .with_expressions(&spill_expr)
             .with_metrics(baseline_metrics.intermediate())
             .with_batch_size(batch_size)
+            .with_max_batch_bytes(Some(SPILL_BATCH_TARGET_BYTES))
             .with_reservation(merge_reservation)
             .with_replay_headroom()
             .with_intermediate_merge_sizing(Some(min_spill_batch_rows))

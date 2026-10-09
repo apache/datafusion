@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::sorts::cursor::{ArrayValues, CursorArray, RowValues};
+use crate::spill::spilled_row_sizes::SpilledRowSizes;
 use crate::{EmptyRecordBatchStream, SendableRecordBatchStream};
 use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::array::{Array, UInt32Array};
@@ -289,12 +290,13 @@ impl<T: CursorArray> PartitionedStream for FieldCursorStream<T> {
 /// peak memory to hold both the unsorted and sorted copies simultaneously).
 ///
 /// On the first call to `next()`, a sorted index array (`UInt32Array`) is
-/// computed via `lexsort_to_indices`. Subsequent calls yield chunks of
-/// `batch_size` rows by `take`-ing from the original batch using slices of
-/// this index array. Each `take` copies data for the chunk (not zero-copy),
-/// but only one chunk is live at a time since the caller consumes it before
-/// requesting the next. Once all rows have been yielded, the original batch
-/// and index array are dropped to free memory.
+/// computed via `lexsort_to_indices`. Subsequent calls yield chunks of up to
+/// `batch_size` rows, fewer if [`Self::with_max_batch_bytes`] is set, by
+/// `take`-ing from the original batch using slices of this index array. Each
+/// `take` copies data for the chunk (not zero-copy), but only one chunk is
+/// live at a time since the caller consumes it before requesting the next.
+/// Once all rows have been yielded, the original batch and index array are
+/// dropped to free memory.
 ///
 /// The caller must reserve `sizeof(batch) + sizeof(one chunk)` for this iterator,
 /// and free the reservation once the iterator is depleted.
@@ -302,7 +304,11 @@ pub(crate) struct IncrementalSortIterator {
     batch: RecordBatch,
     expressions: LexOrdering,
     batch_size: usize,
+    /// See [`Self::with_max_batch_bytes`].
+    max_batch_bytes: Option<usize>,
     indices: Option<UInt32Array>,
+    /// Row sizes of `batch`, measured with `indices` when `max_batch_bytes` is set
+    row_sizes: Option<SpilledRowSizes>,
     cursor: usize,
 }
 
@@ -316,9 +322,44 @@ impl IncrementalSortIterator {
             batch,
             expressions,
             batch_size,
+            max_batch_bytes: None,
             cursor: 0,
             indices: None,
+            row_sizes: None,
         }
+    }
+
+    /// Also limits each chunk to `max_batch_bytes`, by the size its rows take
+    /// once spilled (see [`SpilledRowSizes`]). A row larger than that is
+    /// returned on its own.
+    pub(crate) fn with_max_batch_bytes(mut self, max_batch_bytes: usize) -> Self {
+        self.max_batch_bytes = Some(max_batch_bytes);
+        self
+    }
+
+    /// Returns how many of the rows at `indices` fit in `max_batch_bytes`.
+    fn rows_within(&self, indices: &[u32]) -> usize {
+        let (Some(max_batch_bytes), Some(row_sizes)) =
+            (self.max_batch_bytes, &self.row_sizes)
+        else {
+            return indices.len();
+        };
+        if let Some(row_bytes) = row_sizes.fixed() {
+            return (max_batch_bytes / row_bytes.max(1))
+                .max(1)
+                .min(indices.len());
+        }
+        if row_sizes.max_row().saturating_mul(indices.len()) <= max_batch_bytes {
+            return indices.len();
+        }
+        let mut bytes = 0;
+        for (rows, &row) in indices.iter().enumerate() {
+            bytes += row_sizes.row(row as usize);
+            if rows > 0 && bytes > max_batch_bytes {
+                return rows;
+            }
+        }
+        indices.len()
     }
 }
 
@@ -347,12 +388,18 @@ impl Iterator for IncrementalSortIterator {
                     Err(e) => return Some(Err(e.into())),
                 };
                 self.indices = Some(indices);
+                if self.max_batch_bytes.is_some() {
+                    self.row_sizes = Some(SpilledRowSizes::new(&self.batch));
+                }
 
                 // Call again, this time it will hit the Some(indices) branch and return the first batch
                 self.next()
             }
             Some(indices) => {
                 let batch_size = self.batch_size.min(self.batch.num_rows() - self.cursor);
+                let batch_size = self.rows_within(
+                    &indices.values()[self.cursor..self.cursor + batch_size],
+                );
 
                 // Perform the take to produce the next batch
                 let new_batch_indices = indices.slice(self.cursor, batch_size);
@@ -368,6 +415,7 @@ impl Iterator for IncrementalSortIterator {
                     let schema = self.batch.schema();
                     let _ = mem::replace(&mut self.batch, RecordBatch::new_empty(schema));
                     self.indices = None;
+                    self.row_sizes = None;
                 }
 
                 // Return the new batch
@@ -382,7 +430,13 @@ impl Iterator for IncrementalSortIterator {
         let num_rows = self.batch.num_rows().saturating_sub(self.cursor);
         let batch_size = self.batch_size;
         let num_batches = num_rows.div_ceil(batch_size);
-        (num_batches, Some(num_batches))
+        // Limiting bytes can leave as few as one row per batch
+        let max_batches = if self.max_batch_bytes.is_some() {
+            num_rows
+        } else {
+            num_batches
+        };
+        (num_batches, Some(max_batches))
     }
 }
 
@@ -391,7 +445,7 @@ impl FusedIterator for IncrementalSortIterator {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{AsArray, Int32Array};
+    use arrow::array::{ArrayRef, AsArray, Int32Array, StringArray};
     use arrow::datatypes::{DataType, Field, Int32Type};
     use arrow_schema::SchemaRef;
     use datafusion_common::DataFusionError;
@@ -546,6 +600,57 @@ mod tests {
             assert!(matches!(poll, Poll::Ready(None)));
             assert_eq!(Arc::strong_count(&hold_ref), 1);
         }
+    }
+
+    #[test]
+    fn incremental_sort_iterator_limits_batch_bytes() -> Result<()> {
+        // Keys 100 down to 0. Keys 0..5 have 1000 byte values, the others 10
+        // bytes, so a row takes 1008 or 18 bytes with the Int32 key and the
+        // 4 byte offset.
+        let keys: Vec<i32> = (0..=100).rev().collect();
+        let values: Vec<String> = keys
+            .iter()
+            .map(|&key| "x".repeat(if key < 5 { 1000 } else { 10 }))
+            .collect();
+        let batch = RecordBatch::try_from_iter(vec![
+            ("key", Arc::new(Int32Array::from(keys)) as ArrayRef),
+            ("value", Arc::new(StringArray::from(values)) as ArrayRef),
+        ])?;
+        let expressions = LexOrdering::new(vec![PhysicalSortExpr::new_default(col(
+            "key",
+            &batch.schema(),
+        )?)])
+        .unwrap();
+
+        let chunk_lens = |iter: IncrementalSortIterator| -> Result<Vec<usize>> {
+            let mut next_key = 0;
+            iter.map(|chunk| {
+                let chunk = chunk?;
+                let keys = chunk.column(0).as_primitive::<Int32Type>();
+                for key in keys.values() {
+                    assert_eq!(*key, next_key, "rows must stay sorted");
+                    next_key += 1;
+                }
+                Ok(chunk.num_rows())
+            })
+            .collect()
+        };
+
+        let iter = IncrementalSortIterator::new(batch.clone(), expressions.clone(), 50);
+        assert_eq!(chunk_lens(iter)?, vec![50, 50, 1]);
+
+        // Two large rows fit in 2500 bytes. The last large row leaves room for
+        // many small rows, up to 50 rows per batch.
+        let iter = IncrementalSortIterator::new(batch.clone(), expressions.clone(), 50)
+            .with_max_batch_bytes(2500);
+        assert_eq!(chunk_lens(iter)?, vec![2, 2, 50, 47]);
+
+        // Without the values, every row takes the 4 bytes of its key
+        let keys = batch.project(&[0])?;
+        let iter =
+            IncrementalSortIterator::new(keys, expressions, 50).with_max_batch_bytes(100);
+        assert_eq!(chunk_lens(iter)?, vec![25, 25, 25, 25, 1]);
+        Ok(())
     }
 
     fn assert_iterator_size_hint(iter: &IncrementalSortIterator, expected_len: usize) {
