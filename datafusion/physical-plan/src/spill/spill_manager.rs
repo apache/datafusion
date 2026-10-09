@@ -22,6 +22,7 @@ use crate::coop::cooperative;
 use crate::{common::spawn_buffered, metrics::SpillMetrics};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::utils::memory::get_record_batch_memory_size;
 use datafusion_common::{DataFusionError, Result, config::SpillCompression};
 use datafusion_execution::SendableRecordBatchStream;
 use datafusion_execution::runtime_env::RuntimeEnv;
@@ -45,6 +46,9 @@ pub struct SpillManager {
     batch_read_buffer_capacity: usize,
     /// general-purpose compression options
     pub(crate) compression: SpillCompression,
+    /// Upper bound on the in-memory size of each batch written to a spill file, or
+    /// `None` for no bound. See [`Self::with_max_batch_bytes`].
+    pub(crate) max_batch_bytes: Option<usize>,
 }
 
 impl SpillManager {
@@ -55,6 +59,45 @@ impl SpillManager {
             schema,
             batch_read_buffer_capacity: 2,
             compression: SpillCompression::default(),
+            max_batch_bytes: None,
+        }
+    }
+
+    /// Bounds the in-memory size of each batch written to a spill file.
+    ///
+    /// A batch is bounded by `batch_size` rows, so with wide rows it can be very large in
+    /// bytes. A reader must decode each spilled batch whole, and a merge of spill files
+    /// reserves memory for the largest batch of each file (`max_record_batch_memory`).
+    /// When this is set, a larger batch is split into row ranges of at most this size
+    /// (best effort: one row, or a payload that no split divides, can be larger), and each
+    /// range is written as its own IPC message. Row order is kept, but one appended batch
+    /// can come back as several batches when the file is read.
+    ///
+    /// Only for readers that read a file until it ends. Readers that expect one batch
+    /// per append, such as [`crate::spill::spill_pool`] and the sort-merge join's
+    /// spilled buffered batches, must use a manager without a bound.
+    pub(crate) fn with_max_batch_bytes(mut self, max_batch_bytes: Option<usize>) -> Self {
+        self.max_batch_bytes = max_batch_bytes;
+        self
+    }
+
+    /// The size this manager records for `batch` when it writes it as one piece, the
+    /// same measure as the `max_record_batch_memory` it returns.
+    pub(crate) fn spilled_batch_size(&self, batch: &RecordBatch) -> Result<usize> {
+        match self.max_batch_bytes {
+            Some(_) => super::in_progress_spill_file::bounded_spill_size(batch),
+            None => super::gc_view_arrays(batch)?.get_sliced_size(),
+        }
+    }
+
+    /// The memory a batch read back from this manager's spill files holds, comparable
+    /// to [`Self::spilled_batch_size`]. A bounded manager records what the batch holds
+    /// after IPC decoding, where all buffers of a batch share one allocation, which
+    /// `get_sliced_size` would count once per view data buffer.
+    pub(crate) fn decoded_batch_size(&self, batch: &RecordBatch) -> Result<usize> {
+        match self.max_batch_bytes {
+            Some(_) => Ok(get_record_batch_memory_size(batch)),
+            None => batch.get_sliced_size(),
         }
     }
 
@@ -157,10 +200,12 @@ impl SpillManager {
 
             while let Some(batch) = stream.next().await {
                 let batch = batch?;
-                let gc_sliced_size = in_progress_file.append_batch_async(&batch).await?;
+                let (gc_sliced_size, rows) = in_progress_file
+                    .append_batch_async_with_stats(&batch)
+                    .await?;
 
                 max_record_batch_size = max_record_batch_size.max(gc_sliced_size);
-                max_batch_rows = max_batch_rows.max(batch.num_rows());
+                max_batch_rows = max_batch_rows.max(rows);
             }
 
             let file = in_progress_file.finish_async().await?;

@@ -26,6 +26,7 @@ mod nlj_spill_unmatched;
 mod repartition_mem_limit;
 mod union_nullable_spill;
 mod view_spill_compaction;
+mod wide_row_sort_spill;
 use arrow::array::{
     ArrayRef, DictionaryArray, Int32Array, Int64Array, Int64Builder, ListBuilder,
     RecordBatch, StringArray, StringViewArray, StructArray,

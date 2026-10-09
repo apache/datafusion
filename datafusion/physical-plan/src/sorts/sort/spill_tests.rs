@@ -20,7 +20,6 @@ use super::{
 };
 use crate::metrics::ExecutionPlanMetricsSet;
 use crate::spill::get_record_batch_memory_size;
-use crate::spill::spill_manager::GetSlicedSize;
 use arrow::array::{
     ArrayRef, Decimal128Array, DictionaryArray, Int8Array, Int64Array, StringArray,
     StringViewArray,
@@ -860,7 +859,9 @@ async fn check_final_spilled_merge_releases_unused_workspace(
             .iter()
             .all(|spill| spill.max_record_batch_memory == large_spill_bytes)
     );
-    let tail_spill_bytes = sort_batch(&tail, &ordering, None)?.get_sliced_size()?;
+    let tail_spill_bytes = crate::spill::in_progress_spill_file::bounded_spill_size(
+        &sort_batch(&tail, &ordering, None)?,
+    )?;
     let single_buffer_bytes = if intermediate {
         4 * large_spill_bytes // Two intermediate files remain for the final merge.
     } else {
