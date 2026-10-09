@@ -18,6 +18,7 @@
 use crate::logical_plan::consumer::SubstraitConsumer;
 use datafusion::arrow::datatypes::Field;
 use datafusion::common::{JoinType, NullEquality, not_impl_err, substrait_err};
+use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{
     Cast, Expr, LogicalPlan, LogicalPlanBuilder, requalify_sides_if_needed,
 };
@@ -38,7 +39,6 @@ pub async fn from_set_rel(
             SetOp::IntersectionPrimary => intersect_rel(
                 consumer.consume_rel(&set.inputs[0]).await?,
                 union_rels(consumer, &set.inputs[1..], true).await?,
-                false,
             ),
             SetOp::IntersectionMultiset => {
                 intersect_rels(consumer, &set.inputs, false).await
@@ -81,14 +81,24 @@ async fn intersect_rels(
     let mut rel = consumer.consume_rel(&rels[0]).await?;
 
     for input in &rels[1..] {
-        rel = intersect_rel(rel, consumer.consume_rel(input).await?, is_all)?;
+        let right = consumer.consume_rel(input).await?;
+        rel = if is_all {
+            LogicalPlanBuilder::intersect_all(
+                rel,
+                right,
+                &consumer.get_function_registry().udaf("count")?,
+                &consumer.get_function_registry().udf("range")?,
+            )?
+        } else {
+            intersect_rel(rel, right)?
+        };
     }
 
     Ok(rel)
 }
 
-/// Intersects two relations, giving the result the nullability the Substrait
-/// [Set Operation rules] prescribe.
+/// Intersects two relations with distinct (set) semantics, giving the result
+/// the nullability the Substrait [Set Operation rules] prescribe.
 ///
 /// [`LogicalPlanBuilder::intersect`] compiles an intersection into a left semi
 /// join, so on its own the result keeps the left input's nullability. The join
@@ -133,7 +143,6 @@ async fn intersect_rels(
 fn intersect_rel(
     left: LogicalPlan,
     right: LogicalPlan,
-    is_all: bool,
 ) -> datafusion::common::Result<LogicalPlan> {
     let left_fields = left.schema().fields();
     let right_fields = right.schema().fields();
@@ -152,14 +161,14 @@ fn intersect_rel(
 
     // `intersect` also reports inputs of different widths.
     if left_fields.len() != right_fields.len() || !from_right.contains(&true) {
-        return LogicalPlanBuilder::intersect(left, right, is_all);
+        return LogicalPlanBuilder::intersect(left, right, false);
     }
 
     let (left, right, _) = requalify_sides_if_needed(
         LogicalPlanBuilder::from(left),
         LogicalPlanBuilder::from(right),
     )?;
-    let left = if is_all { left } else { left.distinct()? };
+    let left = left.distinct()?;
     let right = right.distinct()?.build()?;
 
     let left_columns = left.schema().columns();
@@ -220,8 +229,17 @@ async fn except_rels(
     let mut rel = consumer.consume_rel(&rels[0]).await?;
 
     for input in &rels[1..] {
-        rel =
-            LogicalPlanBuilder::except(rel, consumer.consume_rel(input).await?, is_all)?;
+        let right = consumer.consume_rel(input).await?;
+        rel = if is_all {
+            LogicalPlanBuilder::except_all(
+                rel,
+                right,
+                &consumer.get_function_registry().udaf("count")?,
+                &consumer.get_function_registry().udf("range")?,
+            )?
+        } else {
+            LogicalPlanBuilder::except(rel, right, false)?
+        };
     }
 
     Ok(rel)
