@@ -24,7 +24,9 @@ use arrow::array::{Array, RecordBatch, new_null_array};
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::TableReference;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::tree_node::{TransformedResult, TreeNode, TreeNodeRecursion};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::{Column, DFSchema, Result, ScalarValue};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{Exists, InSubquery, SetComparison};
@@ -159,19 +161,33 @@ pub(crate) fn has_all_column_refs(
         == column_refs.len()
 }
 
+/// Requalify correlated columns in `expr` to the `SubqueryAlias` output
+/// column at the same position in `output_schema`.
+///
+/// `input_schema` is the schema passed to `SubqueryAlias::try_new`.
+/// `output_schema` is the schema it built, including dedup suffixes.
+/// Only columns listed in `cols` are rewritten. A listed column that is
+/// not in `input_schema` is an error: skipping it would drop that predicate.
 pub(crate) fn replace_qualified_name(
     expr: Expr,
     cols: &BTreeSet<Column>,
-    subquery_alias: &str,
+    input_schema: &DFSchema,
+    output_schema: &DFSchema,
 ) -> Result<Expr> {
-    let alias_cols: Vec<Column> = cols
-        .iter()
-        .map(|col| Column::new(Some(subquery_alias), &col.name))
-        .collect();
-    let replace_map: HashMap<&Column, &Column> =
-        cols.iter().zip(alias_cols.iter()).collect();
-
-    replace_col(expr, &replace_map)
+    expr.transform(|expr| {
+        if let Expr::Column(col) = &expr
+            && cols.contains(col)
+        {
+            let new_col = crate::decorrelate::alias_output_column(
+                col,
+                input_schema,
+                output_schema,
+            )?;
+            return Ok(Transformed::yes(Expr::Column(new_col)));
+        }
+        Ok(Transformed::no(expr))
+    })
+    .data()
 }
 
 /// Column reference to avoid copying string around
