@@ -1,0 +1,355 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for datafusion.execution.parquet.enable_rle_to_dictionary. The flag
+# applies only when DataFusion infers the table schema; explicit schemas are
+# not promoted.
+
+# Write with dictionary_enabled=true to guarantee RLE_DICTIONARY encoding.
+query I
+COPY (
+  SELECT column1 AS product_category, column2 AS status
+  FROM (VALUES
+    ('electronics', 'active'),
+    ('clothing',    'active'),
+    ('electronics', 'inactive'),
+    ('books',       'inactive'),
+    ('furniture',   'pending'),
+    ('books',       'active')
+  )
+)
+TO 'test_files/scratch/parquet_rle_to_dictionary/products.parquet'
+STORED AS PARQUET
+OPTIONS ('format.dictionary_enabled' true);
+----
+6
+
+statement ok
+set datafusion.execution.parquet.enable_rle_to_dictionary = false;
+
+statement ok
+CREATE EXTERNAL TABLE products_utf8
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_rle_to_dictionary/products.parquet';
+
+query TT
+SELECT DISTINCT arrow_typeof(product_category), arrow_typeof(status) FROM products_utf8;
+----
+Utf8View Utf8View
+
+query TI rowsort
+SELECT product_category, COUNT(*) FROM products_utf8 GROUP BY product_category;
+----
+books 2
+clothing 1
+electronics 2
+furniture 1
+
+statement ok
+DROP TABLE products_utf8;
+
+statement ok
+set datafusion.execution.parquet.enable_rle_to_dictionary = true;
+
+statement ok
+CREATE EXTERNAL TABLE products_dict
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_rle_to_dictionary/products.parquet';
+
+query TT
+SELECT DISTINCT arrow_typeof(product_category), arrow_typeof(status) FROM products_dict;
+----
+Dictionary(Int32, Utf8) Dictionary(Int32, Utf8)
+
+query TI rowsort
+SELECT product_category, COUNT(*) FROM products_dict GROUP BY product_category;
+----
+books 2
+clothing 1
+electronics 2
+furniture 1
+
+# Predicates and aggregates must work against dictionary scan output.
+query TT rowsort
+SELECT product_category, status FROM products_dict WHERE status = 'active';
+----
+books active
+clothing active
+electronics active
+
+query TI rowsort
+SELECT product_category, COUNT(*) FROM products_dict WHERE status != 'inactive' GROUP BY product_category;
+----
+books 1
+clothing 1
+electronics 1
+furniture 1
+
+query TT
+SELECT DISTINCT arrow_typeof(product_category), arrow_typeof(product_count)
+FROM (
+  SELECT product_category, COUNT(*) AS product_count
+  FROM products_dict
+  WHERE status != 'inactive'
+  GROUP BY product_category
+);
+----
+Dictionary(Int32, Utf8) Int64
+
+statement ok
+DROP TABLE products_dict;
+
+# Per-column writer options: only columns with dictionary pages are promoted.
+
+statement ok
+COPY (
+  SELECT column1 AS env, column2 AS region, column3 AS build
+  FROM (VALUES
+    ('prod',    'us-east', 'debug'),
+    ('staging', 'us-west', 'release'),
+    ('prod',    'us-east', 'debug')
+  )
+)
+TO 'test_files/scratch/parquet_rle_to_dictionary/selective.parquet'
+STORED AS PARQUET
+OPTIONS (
+  'format.dictionary_enabled' false,
+  'format.dictionary_enabled::env' true,
+  'format.dictionary_enabled::region' true
+);
+
+statement ok
+set datafusion.execution.parquet.enable_rle_to_dictionary = false;
+
+statement ok
+CREATE EXTERNAL TABLE selective_utf8
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_rle_to_dictionary/selective.parquet';
+
+query TTT
+SELECT DISTINCT arrow_typeof(env), arrow_typeof(region), arrow_typeof(build)
+FROM selective_utf8;
+----
+Utf8View Utf8View Utf8View
+
+statement ok
+DROP TABLE selective_utf8;
+
+statement ok
+set datafusion.execution.parquet.enable_rle_to_dictionary = true;
+
+statement ok
+CREATE EXTERNAL TABLE selective_dict
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_rle_to_dictionary/selective.parquet';
+
+query TTT
+SELECT DISTINCT arrow_typeof(env), arrow_typeof(region), arrow_typeof(build)
+FROM selective_dict;
+----
+Dictionary(Int32, Utf8) Dictionary(Int32, Utf8) Utf8View
+
+statement ok
+DROP TABLE selective_dict;
+
+# Cross-file mixed encoding: one file has dictionary pages and one is plain.
+# Schema inference must merge both as Dictionary(Int32, Utf8).
+
+statement ok
+COPY (SELECT column1 AS category FROM (VALUES ('electronics'), ('electronics')))
+TO 'test_files/scratch/parquet_rle_to_dictionary/mixed/rle.parquet'
+STORED AS PARQUET OPTIONS ('format.dictionary_enabled' true);
+
+statement ok
+COPY (SELECT column1 AS category FROM (VALUES ('books'), ('books')))
+TO 'test_files/scratch/parquet_rle_to_dictionary/mixed/plain.parquet'
+STORED AS PARQUET OPTIONS ('format.dictionary_enabled' false);
+
+statement ok
+set datafusion.execution.parquet.enable_rle_to_dictionary = true;
+
+statement ok
+CREATE EXTERNAL TABLE mixed_encoding
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_rle_to_dictionary/mixed/';
+
+query TI
+SELECT arrow_typeof(category), COUNT(*) FROM mixed_encoding GROUP BY arrow_typeof(category);
+----
+Dictionary(Int32, Utf8) 4
+
+statement ok
+DROP TABLE mixed_encoding;
+
+# Mixed encoding with high cardinality: the plain file contains more than 128
+# distinct values so a narrow (Int8) dictionary key would overflow. After the
+# fix, uniform_dict_schemas widens the shared key to at least Int32.
+# Both files must be scannable and return the correct row count.
+
+statement ok
+COPY (
+  SELECT v AS category
+  FROM (
+    VALUES
+      ('v000'),('v001'),('v002'),('v003'),('v004'),('v005'),('v006'),('v007'),
+      ('v008'),('v009'),('v010'),('v011'),('v012'),('v013'),('v014'),('v015'),
+      ('v016'),('v017'),('v018'),('v019'),('v020'),('v021'),('v022'),('v023'),
+      ('v024'),('v025'),('v026'),('v027'),('v028'),('v029'),('v030'),('v031'),
+      ('v032'),('v033'),('v034'),('v035'),('v036'),('v037'),('v038'),('v039'),
+      ('v040'),('v041'),('v042'),('v043'),('v044'),('v045'),('v046'),('v047'),
+      ('v048'),('v049'),('v050'),('v051'),('v052'),('v053'),('v054'),('v055'),
+      ('v056'),('v057'),('v058'),('v059'),('v060'),('v061'),('v062'),('v063'),
+      ('v064'),('v065'),('v066'),('v067'),('v068'),('v069'),('v070'),('v071'),
+      ('v072'),('v073'),('v074'),('v075'),('v076'),('v077'),('v078'),('v079'),
+      ('v080'),('v081'),('v082'),('v083'),('v084'),('v085'),('v086'),('v087'),
+      ('v088'),('v089'),('v090'),('v091'),('v092'),('v093'),('v094'),('v095'),
+      ('v096'),('v097'),('v098'),('v099'),('v100'),('v101'),('v102'),('v103'),
+      ('v104'),('v105'),('v106'),('v107'),('v108'),('v109'),('v110'),('v111'),
+      ('v112'),('v113'),('v114'),('v115'),('v116'),('v117'),('v118'),('v119'),
+      ('v120'),('v121'),('v122'),('v123'),('v124'),('v125'),('v126'),('v127'),
+      ('v128'),('v129')
+  ) AS t(v)
+)
+TO 'test_files/scratch/parquet_rle_to_dictionary/high_card/plain.parquet'
+STORED AS PARQUET OPTIONS ('format.dictionary_enabled' false);
+
+# Write rle.parquet with an explicit Dictionary(Int8, Utf8) Arrow schema so
+# that the file carries Int8 dictionary keys in its embedded Arrow schema
+# metadata. This exercises the real regression path: without the key-widening
+# fix, uniform_dict_schemas would select Int8 as the merged key type, which
+# cannot represent the 130 distinct values in the plain file.
+statement ok
+COPY (SELECT arrow_cast(column1, 'Dictionary(Int8, Utf8)') AS category FROM (VALUES ('rle_a'), ('rle_b'), ('rle_a')))
+TO 'test_files/scratch/parquet_rle_to_dictionary/high_card/rle.parquet'
+STORED AS PARQUET OPTIONS ('format.dictionary_enabled' true);
+
+statement ok
+set datafusion.execution.parquet.enable_rle_to_dictionary = true;
+
+# Verify that rle.parquet alone reads back as Dictionary(Int8, Utf8) —
+# confirming the Arrow schema metadata round-trips and was not widened on write.
+statement ok
+CREATE EXTERNAL TABLE rle_int8_only
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_rle_to_dictionary/high_card/rle.parquet';
+
+query T
+SELECT DISTINCT arrow_typeof(category) FROM rle_int8_only;
+----
+Dictionary(Int8, Utf8)
+
+statement ok
+DROP TABLE rle_int8_only;
+
+statement ok
+CREATE EXTERNAL TABLE high_card_mixed
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_rle_to_dictionary/high_card/';
+
+# Both files are scanned as Dictionary(Int32, Utf8) — uniform_dict_schemas
+# widens the Int8 key from rle.parquet to Int32 to avoid overflow for the
+# 130 distinct values in the plain file.
+query TI
+SELECT arrow_typeof(category), COUNT(*) FROM high_card_mixed GROUP BY arrow_typeof(category);
+----
+Dictionary(Int32, Utf8) 133
+
+statement ok
+DROP TABLE high_card_mixed;
+
+# Explicit-schema tables are not promoted.
+
+statement ok
+CREATE EXTERNAL TABLE explicit_schema (
+  product_category VARCHAR,
+  status VARCHAR
+)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_rle_to_dictionary/products.parquet';
+
+query TT
+SELECT DISTINCT arrow_typeof(product_category), arrow_typeof(status) FROM explicit_schema;
+----
+Utf8View Utf8View
+
+# Predicates must still compile against the explicit plain schema.
+query TT rowsort
+SELECT product_category, status FROM explicit_schema WHERE status = 'active';
+----
+books active
+clothing active
+electronics active
+
+statement ok
+DROP TABLE explicit_schema;
+
+# Family-compatibility safety: a plain Binary field must not be promoted to
+# Dictionary(Int32, Utf8). Schema inference should reject this mixed dataset.
+
+statement ok
+COPY (SELECT 'hello' AS payload FROM (VALUES (1), (2)))
+TO 'test_files/scratch/parquet_rle_to_dictionary/compat/utf8_rle.parquet'
+STORED AS PARQUET OPTIONS ('format.dictionary_enabled' true);
+
+statement ok
+COPY (SELECT arrow_cast(X'6865', 'Binary') AS payload FROM (VALUES (1), (2)))
+TO 'test_files/scratch/parquet_rle_to_dictionary/compat/binary_plain.parquet'
+STORED AS PARQUET OPTIONS ('format.dictionary_enabled' false);
+
+# Registering incompatible Dict Utf8 and plain Binary files must fail.
+statement error Arrow error: Schema error: Fail to merge schema field 'payload' because the from data_type = Dictionary\(Int32, Utf8\) does not equal Binary
+CREATE EXTERNAL TABLE mixed_str_binary
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_rle_to_dictionary/compat/';
+
+# binary_as_string + enable_rle_to_dictionary: Dictionary(_, Binary) value type
+# must be promoted to Utf8 so the binary_as_string contract holds regardless of
+# physical encoding.
+
+query I
+COPY (SELECT arrow_cast(X'6865', 'Binary') AS payload FROM (VALUES (1), (2)))
+TO 'test_files/scratch/parquet_rle_to_dictionary/binary_rle.parquet'
+STORED AS PARQUET OPTIONS ('format.dictionary_enabled' true);
+----
+2
+
+statement ok
+set datafusion.execution.parquet.enable_rle_to_dictionary = true;
+
+statement ok
+set datafusion.execution.parquet.binary_as_string = true;
+
+statement ok
+CREATE EXTERNAL TABLE binary_rle_as_string
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_rle_to_dictionary/binary_rle.parquet';
+
+# Dictionary(Int32, Binary) must be coerced to Dictionary(Int32, Utf8) when
+# binary_as_string is true, not left as Dictionary(Int32, Binary).
+query T
+SELECT DISTINCT arrow_typeof(payload) FROM binary_rle_as_string;
+----
+Dictionary(Int32, Utf8)
+
+statement ok
+DROP TABLE binary_rle_as_string;
+
+statement ok
+reset datafusion.execution.parquet.binary_as_string;
+
+statement ok
+reset datafusion.execution.parquet.enable_rle_to_dictionary;

@@ -25,6 +25,7 @@ use crate::error::{_config_datafusion_err, _config_err};
 use crate::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
 use crate::parquet_config::{
     DFParquetCompression, DFParquetStatistics, DFParquetWriterVersion,
+    RowGroupRangeAssignment,
 };
 use crate::parsers::{CompressionTypeVariant, CsvQuoteStyle};
 use crate::utils::get_available_parallelism;
@@ -942,7 +943,9 @@ config_namespace! {
 
         /// The default time zone
         ///
-        /// Some functions, e.g. `now` return timestamps in this time zone
+        /// Some functions, e.g. `now`, return timestamps in this time zone.
+        /// This is also used to interpret timezone-naive timestamps in
+        /// comparisons and subtraction with timezone-aware timestamps.
         pub time_zone: Option<ConfigTimeZone>, default = None
 
         /// Parquet options
@@ -1423,6 +1426,23 @@ config_namespace! {
         /// Defaults to 20.
         pub max_in_list_size: usize, default = 20
 
+        /// (reading) If true, top-level string and binary Parquet columns with
+        /// dictionary pages are inferred and scanned as
+        /// `Dictionary<Int32, Utf8>` / `Dictionary<Int32, Binary>` instead of
+        /// their plain value type.
+        ///
+        /// This applies only when DataFusion infers the table schema. Tables with
+        /// a user-supplied schema are not promoted because the Parquet footer is
+        /// not read at DDL time, so dictionary pages cannot be detected per column.
+        /// See <https://github.com/apache/datafusion/issues/24112>
+        pub enable_rle_to_dictionary: bool, default = false
+
+        /// (reading) Which byte range of a split file reads each row group.
+        /// `start_offset` picks the range containing the row group's start.
+        /// `midpoint` picks the range containing its midpoint, as Spark does,
+        /// which spreads large row groups more evenly across ranges.
+        pub row_group_range_assignment: RowGroupRangeAssignment, default = RowGroupRangeAssignment::StartOffset
+
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
 
@@ -1513,6 +1533,12 @@ config_namespace! {
         /// (writing) Sets bloom filter number of distinct values. If NULL, uses
         /// default parquet writer setting
         pub bloom_filter_ndv: Option<u64>, default = None
+
+        /// (writing) Write the number of distinct values (NDV) for each column
+        /// in row group statistics when creating parquet files. Enabling this
+        /// improves NDV-based query optimizations at the cost of hashing every
+        /// non-null value during write.
+        pub write_row_group_number_distinct_values: bool, default = false
 
         /// (writing) Controls whether DataFusion will attempt to speed up writing
         /// parquet files by serializing them in parallel. Each column
@@ -1789,7 +1815,9 @@ config_namespace! {
         /// rule. When set to false, any rules that produce errors will cause the query to fail
         pub skip_failed_rules: bool, default = false
 
-        /// Number of times that the optimizer will attempt to optimize the plan
+        /// The logical optimizer applies rules in order for up to `max_passes` passes,
+        /// stopping early if a pass leaves the plan unchanged or repeats an earlier plan.
+        /// The physical optimizer always runs in one pass.
         pub max_passes: usize, default = 3
 
         /// When set to true, the physical plan optimizer will run a top down

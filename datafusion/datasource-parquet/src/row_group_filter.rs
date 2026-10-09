@@ -25,6 +25,7 @@ use crate::pruning::build_inverted_predicate;
 use arrow::array::{ArrayRef, BooleanArray, UInt64Array};
 use arrow::compute::nullif;
 use arrow::datatypes::Schema;
+use datafusion_common::parquet_config::RowGroupRangeAssignment;
 use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::{Column, Result, ScalarValue};
 use datafusion_datasource::FileRange;
@@ -46,19 +47,32 @@ pub struct RowGroupAccessPlanFilter {
     access_plan: ParquetAccessPlan,
 }
 
-/// Returns true if this row group belongs to `range`.
+/// Returns true if `assignment` assigns this row group to `range`.
 ///
-/// A row group belongs to the range containing its first dictionary/data page,
-/// so the ranges a file is split into for parallelism partition its row groups
-/// with none shared and none left over.
+/// Each row group maps to a single offset, so the ranges a file is split into
+/// for parallelism partition its row groups with none shared and none left over.
 ///
 /// Note: don't use the location of metadata
 /// <https://github.com/apache/datafusion/issues/5995>
-pub(crate) fn row_group_in_range(metadata: &RowGroupMetaData, range: &FileRange) -> bool {
+pub(crate) fn row_group_in_range(
+    metadata: &RowGroupMetaData,
+    range: &FileRange,
+    assignment: RowGroupRangeAssignment,
+) -> bool {
     let col = metadata.column(0);
-    let offset = col
-        .dictionary_page_offset()
-        .unwrap_or_else(|| col.data_page_offset());
+    let data_page_offset = col.data_page_offset();
+    let offset = match assignment {
+        // The rule from before this option existed. Unlike `Midpoint`, it
+        // keeps a dictionary page offset that follows the first data page.
+        RowGroupRangeAssignment::StartOffset => {
+            col.dictionary_page_offset().unwrap_or(data_page_offset)
+        }
+        // Like parquet-java, ignore a dictionary page after the first data page
+        RowGroupRangeAssignment::Midpoint => col
+            .dictionary_page_offset()
+            .map_or(data_page_offset, |offset| offset.min(data_page_offset))
+            .saturating_add(metadata.compressed_size() / 2),
+    };
     range.contains(offset)
 }
 
@@ -243,20 +257,26 @@ impl RowGroupAccessPlanFilter {
         }
     }
 
-    /// Prune remaining row groups to only those  within the specified range.
+    /// Prune remaining row groups to only those that `assignment` assigns to
+    /// the specified range.
     ///
     /// Updates this set to mark row groups that should not be scanned
     ///
     /// # Panics
     /// if `groups.len() != self.len()`
-    pub fn prune_by_range(&mut self, groups: &[RowGroupMetaData], range: &FileRange) {
+    pub fn prune_by_range(
+        &mut self,
+        groups: &[RowGroupMetaData],
+        range: &FileRange,
+        assignment: RowGroupRangeAssignment,
+    ) {
         assert_eq!(groups.len(), self.access_plan.len());
         for (idx, metadata) in groups.iter().enumerate() {
             if !self.access_plan.should_scan(idx) {
                 continue;
             }
 
-            if !row_group_in_range(metadata, range) {
+            if !row_group_in_range(metadata, range, assignment) {
                 self.access_plan.skip(idx);
             }
         }
@@ -452,7 +472,8 @@ impl RowGroupAccessPlanFilter {
             }
 
             if self.access_plan.is_fully_matched(idx) {
-                metrics.row_groups_pruned_bloom_filter.add_matched(1);
+                // Statistics already proved every row matches. Bloom did not
+                // evaluate this group, so do not record a Bloom outcome.
                 continue;
             }
 
@@ -461,7 +482,6 @@ impl RowGroupAccessPlanFilter {
             // evaluation in that case: it runs once per row group and can be expensive for wide
             // predicates, a cost files written without bloom filters would pay for nothing.
             if stats.is_empty() {
-                metrics.row_groups_pruned_bloom_filter.add_matched(1);
                 continue;
             }
 
@@ -473,7 +493,7 @@ impl RowGroupAccessPlanFilter {
                         "Error evaluating row group predicate on bloom filter: {e}"
                     );
                     metrics.predicate_evaluation_errors.add(1);
-                    false
+                    continue;
                 }
             };
 
@@ -602,9 +622,12 @@ mod tests {
 
     use arrow::datatypes::DataType::Decimal128;
     use arrow::datatypes::{DataType, Field};
-    use datafusion_expr::{cast, col, lit};
-    use datafusion_physical_expr::PhysicalExpr;
+    use datafusion_expr::{Operator, cast, col, lit};
     use datafusion_physical_expr::planner::logical2physical;
+    use datafusion_physical_expr::{
+        PhysicalExpr,
+        expressions::{BinaryExpr, CastExpr, Column as PhysicalColumn, Literal},
+    };
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use datafusion_pruning::PruningPredicateBuilder;
     use parquet::arrow::ArrowSchemaConverter;
@@ -680,6 +703,104 @@ mod tests {
 
         filter.access_plan.skip(3);
         assert_eq!(filter.remaining_row_group_count(), 2);
+    }
+
+    /// A row group with one column chunk of `size` bytes at the given offsets
+    fn row_group_at(
+        dictionary_page_offset: Option<i64>,
+        data_page_offset: i64,
+        size: i64,
+    ) -> RowGroupMetaData {
+        let schema_descr = get_test_schema_descr(vec![PrimitiveTypeField::new(
+            "c1",
+            PhysicalType::INT32,
+        )]);
+        let column = ColumnChunkMetaData::builder(schema_descr.column(0))
+            .set_dictionary_page_offset(dictionary_page_offset)
+            .set_data_page_offset(data_page_offset)
+            .set_total_compressed_size(size)
+            .build()
+            .unwrap();
+        RowGroupMetaData::builder(schema_descr)
+            .set_column_metadata(vec![column])
+            .build()
+            .unwrap()
+    }
+
+    /// Indexes of the row groups that `assignment` gives to `[start, end)`
+    fn row_groups_in_range(
+        groups: &[RowGroupMetaData],
+        start: i64,
+        end: i64,
+        assignment: RowGroupRangeAssignment,
+    ) -> Vec<usize> {
+        let mut filter =
+            RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(groups.len()));
+        filter.prune_by_range(groups, &FileRange { start, end }, assignment);
+        filter.build().row_group_indexes()
+    }
+
+    /// Two row groups that both start before a 128MB split, as in
+    /// apache/datafusion-comet#3817
+    #[test]
+    fn prune_by_range_with_large_row_groups() {
+        use RowGroupRangeAssignment::{Midpoint, StartOffset};
+
+        const MB: i64 = 1024 * 1024;
+        let groups = [
+            row_group_at(None, 4, 122 * MB - 4),
+            row_group_at(None, 122 * MB, 67 * MB),
+        ];
+        let (split, end) = (128 * MB, 190 * MB);
+
+        assert_eq!(row_groups_in_range(&groups, 0, split, StartOffset), [0, 1]);
+        assert!(row_groups_in_range(&groups, split, end, StartOffset).is_empty());
+        assert_eq!(row_groups_in_range(&groups, 0, split, Midpoint), [0]);
+        assert_eq!(row_groups_in_range(&groups, split, end, Midpoint), [1]);
+    }
+
+    /// Wherever a file is split in two, each row group is read exactly once
+    #[test]
+    fn prune_by_range_assigns_each_row_group_once() {
+        let mut groups = vec![];
+        let mut start = 4;
+        for size in [100, 5, 300, 40] {
+            groups.push(row_group_at(None, start, size));
+            start += size;
+        }
+        let end = start + 60;
+        let all: Vec<usize> = (0..groups.len()).collect();
+
+        for assignment in [
+            RowGroupRangeAssignment::StartOffset,
+            RowGroupRangeAssignment::Midpoint,
+        ] {
+            for split in 0..=end {
+                let mut indexes = row_groups_in_range(&groups, 0, split, assignment);
+                indexes.extend(row_groups_in_range(&groups, split, end, assignment));
+                assert_eq!(indexes, all, "{assignment} split at {split}");
+            }
+        }
+    }
+
+    /// Like parquet-java, `Midpoint` ignores a dictionary page offset after the
+    /// first data page
+    #[test]
+    fn midpoint_ignores_dictionary_offset_after_first_data_page() {
+        let group = row_group_at(Some(1000), 100, 200);
+        let range = FileRange { start: 0, end: 500 };
+
+        // Midpoint is 100 + 200 / 2 = 200, start offset is 1000
+        assert!(row_group_in_range(
+            &group,
+            &range,
+            RowGroupRangeAssignment::Midpoint
+        ));
+        assert!(!row_group_in_range(
+            &group,
+            &range,
+            RowGroupRangeAssignment::StartOffset
+        ));
     }
 
     #[test]
@@ -1522,7 +1643,49 @@ mod tests {
         // the row group with a bloom filter is still evaluated and pruned.
         assert_pruned(row_groups, ExpectedPruning::Some(vec![0]));
         assert_eq!(metrics.row_groups_pruned_bloom_filter.pruned(), 1);
-        assert_eq!(metrics.row_groups_pruned_bloom_filter.matched(), 1);
+        assert_eq!(metrics.row_groups_pruned_bloom_filter.matched(), 0);
+    }
+
+    #[test]
+    fn bloom_filter_pruning_error_retains_row_group_without_match() {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
+        let cast_expr: Arc<dyn PhysicalExpr> = Arc::new(CastExpr::new(
+            Arc::new(PhysicalColumn::new("c1", 0)),
+            DataType::FixedSizeBinary(4),
+            None,
+        ));
+        let literal: Arc<dyn PhysicalExpr> = Arc::new(Literal::new(
+            ScalarValue::FixedSizeBinary(4, Some(vec![0, 0, 0, 1])),
+        ));
+        let expr = Arc::new(BinaryExpr::new(cast_expr, Operator::Eq, literal));
+        let pruning_predicate = PruningPredicateBuilder::new()
+            .with_file_schema(schema)
+            .try_build(expr)
+            .unwrap();
+
+        // A nonempty map bypasses the no-filter path. Evaluating the predicate
+        // then fails because Arrow cannot cast Int32 statistics to FixedSizeBinary.
+        let mut sbbf = Sbbf::new_with_ndv_fpp(10, 0.01).unwrap();
+        sbbf.insert(&1_i32);
+        let mut bloom_statistics = BloomFilterStatistics::new();
+        bloom_statistics.insert("loaded_filter", sbbf, PhysicalType::INT32, 4);
+        assert!(pruning_predicate.prune(&bloom_statistics).is_err());
+
+        let metrics = parquet_file_metrics();
+        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(1));
+        row_groups.prune_by_bloom_filters(
+            &pruning_predicate,
+            &metrics,
+            &[bloom_statistics],
+        );
+
+        // An evaluation failure is conservative: retain the row group, report
+        // the error separately, and do not call the result a Bloom match.
+        assert_pruned(row_groups, ExpectedPruning::Some(vec![0]));
+        assert_eq!(metrics.predicate_evaluation_errors.value(), 1);
+        assert_eq!(metrics.row_groups_pruned_bloom_filter.pruned(), 0);
+        assert_eq!(metrics.row_groups_pruned_bloom_filter.matched(), 0);
     }
 
     fn get_row_group_meta_data(
