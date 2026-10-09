@@ -57,6 +57,12 @@ SELECT arrow_cast('', 'Dictionary(Int32, Utf8)');
 #
 include ./string_query.slt.part
 
+# Scalar start/length preserves dict encoding end-to-end.
+query T
+SELECT DISTINCT arrow_typeof(substr(c1, 1, 3)) FROM test_substr;
+----
+Dictionary(Int32, Utf8)
+
 #
 # Clean up
 #
