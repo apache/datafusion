@@ -969,3 +969,33 @@ FROM (VALUES ('abc')) t(s);
 
 statement ok
 DROP VIEW guarded_cast;
+
+# Fixed-size binary operands use the literal lookup path without losing
+# first-match or NULL semantics.
+statement ok
+CREATE VIEW fixed_binary_case AS
+SELECT arrow_cast(x, 'FixedSizeBinary(1)') AS x
+FROM (VALUES (X'01'), (X'02'), (X'03'), (NULL)) t(x);
+
+query III rowsort
+SELECT CASE x
+         WHEN arrow_cast(X'01', 'FixedSizeBinary(1)') THEN 1
+         WHEN arrow_cast(X'02', 'FixedSizeBinary(1)') THEN 2
+         ELSE 3 END,
+       CASE x
+         WHEN arrow_cast(X'01', 'FixedSizeBinary(1)') THEN 1
+         WHEN arrow_cast(X'02', 'FixedSizeBinary(1)') THEN 2 END,
+       CASE x
+         WHEN arrow_cast(X'01', 'FixedSizeBinary(1)') THEN 1
+         WHEN arrow_cast(X'01', 'FixedSizeBinary(1)') THEN 9
+         WHEN arrow_cast(NULL, 'FixedSizeBinary(1)') THEN 8
+         ELSE 3 END
+FROM fixed_binary_case;
+----
+1 1 1
+2 2 3
+3 NULL 3
+3 NULL 3
+
+statement ok
+DROP VIEW fixed_binary_case;
