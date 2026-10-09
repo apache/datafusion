@@ -15,34 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Checks that the intermediate state produced by an aggregate's
-//! [`Accumulator`] and its [`GroupsAccumulator`] are interchangeable.
+//! Checks that the intermediate state of each built-in aggregate's
+//! `Accumulator` and `GroupsAccumulator` are interchangeable.
 //!
-//! # Built-in aggregate invariant
-//!
-//! DataFusion's own execution never mixes the two kinds of accumulator when
-//! merging state, so this is not a requirement of the `AggregateUDFImpl` API.
-//! It is, however, an invariant that every built-in aggregate function with a
-//! native [`GroupsAccumulator`] maintains, so that systems built on DataFusion
-//! can merge state produced by either kind with the other:
-//!
-//! * Each row of the state returned by `GroupsAccumulator::state` or
-//!   `GroupsAccumulator::convert_to_state` is accepted by
-//!   `Accumulator::merge_batch`.
-//! * `GroupsAccumulator::merge_batch` accepts state returned by
-//!   `Accumulator::state`.
-//! * Merging state from the other kind produces the same result as merging
-//!   the equivalent state from the same kind.
-//!
-//! The `builtin_accumulator_and_groups_accumulator_states_are_compatible` test
-//! below enforces this for every function in
-//! [`all_default_aggregate_functions`]. A new built-in function that the test
-//! cannot exercise must be added to its `NOT_EXERCISED` list with the reason.
-//!
-//! [`all_default_aggregate_functions`]: crate::all_default_aggregate_functions
-//! [`Accumulator`]: datafusion_expr::Accumulator
-//! [`GroupsAccumulator`]: datafusion_expr::GroupsAccumulator
+//! The `Accumulator::state` -> `Accumulator::merge_batch` result is the
+//! reference that every other combination of state producer and merger must
+//! match.
 
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
@@ -51,153 +31,57 @@ use arrow::array::{Array, ArrayRef, Int64Array, UInt32Array};
 use arrow::compute::{cast, concat, take};
 use arrow::datatypes::{DataType, Field, FieldRef, Schema, TimeUnit};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
-use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::type_coercion::functions::fields_with_udf;
 use datafusion_expr::{AggregateUDF, EmitTo};
+use datafusion_functions_aggregate::all_default_aggregate_functions;
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::{Column, Literal};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
-/// Checks that `udaf`'s [`Accumulator`] and [`GroupsAccumulator`] can each
-/// merge the intermediate state produced by the other.
-///
-/// DataFusion itself does not require this of user defined aggregates, since
-/// it never merges state produced by one kind of accumulator with the other.
-/// All built-in aggregate functions do maintain it, and this function can be
-/// used to check the same of an aggregate that is used in a system that
-/// relies on it.
-///
-/// # What is checked
-///
-/// The function is called with every argument shape its signature accepts
-/// (after the same coercion the planner applies), built from a fixed set of
-/// candidate argument types and literals, with up to three arguments. Each
-/// shape is tried with and without `DISTINCT` and, unless the function is
-/// order insensitive, with and without `ORDER BY`.
-///
-/// Cases for which the function provides a native [`GroupsAccumulator`]
-/// (`groups_accumulator_supported` returns true) are run over input split into
-/// groups of different sizes. For each case, the result of the ungrouped
-/// two-phase path (`Accumulator::state` -> `Accumulator::merge_batch`) is the
-/// reference, and the following must produce the same result:
-///
-/// * `GroupsAccumulator::state` -> `Accumulator::merge_batch`
-/// * `Accumulator::state` -> `GroupsAccumulator::merge_batch`
-/// * `GroupsAccumulator::state` -> `GroupsAccumulator::merge_batch`
-/// * `GroupsAccumulator::convert_to_state` -> both merges
-///
-/// Results must be equal, except that floating point results are compared
-/// with a small relative tolerance. Every state must also match the types
-/// declared by `state_fields`. Panics are caught and reported as failures.
-///
-/// # Returns
-///
-/// `Ok(())` if every check passes. This includes the case where the function
-/// has no native [`GroupsAccumulator`], since its [`Accumulator`] is then
-/// wrapped in a `GroupsAccumulatorAdapter` and the states agree by
-/// construction.
-///
-/// Otherwise returns an error listing every failure. It also returns an error
-/// if the signature accepts none of the candidate argument types, or if no
-/// case could exercise a native [`GroupsAccumulator`] that the function
-/// reports, since then nothing could be checked.
-///
-/// # Example
-///
-/// ```
-/// use datafusion_functions_aggregate::average::avg_udaf;
-/// use datafusion_functions_aggregate::testing::check_state_compatibility;
-///
-/// check_state_compatibility(&avg_udaf()).unwrap();
-/// ```
-///
-/// [`Accumulator`]: datafusion_expr::Accumulator
-/// [`GroupsAccumulator`]: datafusion_expr::GroupsAccumulator
-pub fn check_state_compatibility(udaf: &Arc<AggregateUDF>) -> Result<()> {
-    let name = udaf.name();
-    let (coverage, failures) = check_udaf(udaf);
-
-    if coverage.built == 0 {
-        return exec_err!(
-            "{name}: the signature accepts none of the candidate argument types, \
-             so state compatibility could not be checked"
-        );
-    }
-    if coverage.exercised == 0 && coverage.with_groups_accumulator > 0 {
-        return exec_err!(
-            "{name}: has a native GroupsAccumulator ({} case(s)) but no case could \
-             exercise it",
-            coverage.with_groups_accumulator
-        );
-    }
-    if !failures.is_empty() {
-        return exec_err!(
-            "{} state compatibility failure(s):\n{}",
-            failures.len(),
-            failures.join("\n")
-        );
-    }
-    Ok(())
+/// Why a registered function is not exercised.
+#[derive(Clone, Copy, Debug)]
+enum Reason {
+    NoGroupsAccumulator,
+    /// Replaced during planning, so `accumulator` always fails.
+    NoAccumulator,
 }
+
+/// Built-in functions that this test cannot exercise.
+const NOT_EXERCISED: &[(&str, Reason)] = &[
+    ("any_value", Reason::NoGroupsAccumulator),
+    ("approx_median", Reason::NoGroupsAccumulator),
+    ("approx_percentile_cont", Reason::NoGroupsAccumulator),
+    (
+        "approx_percentile_cont_with_weight",
+        Reason::NoGroupsAccumulator,
+    ),
+    ("covar_pop", Reason::NoGroupsAccumulator),
+    ("covar_samp", Reason::NoGroupsAccumulator),
+    ("grouping", Reason::NoAccumulator),
+    ("nth_value", Reason::NoGroupsAccumulator),
+    ("regr_avgx", Reason::NoGroupsAccumulator),
+    ("regr_avgy", Reason::NoGroupsAccumulator),
+    ("regr_count", Reason::NoGroupsAccumulator),
+    ("regr_intercept", Reason::NoGroupsAccumulator),
+    ("regr_r2", Reason::NoGroupsAccumulator),
+    ("regr_slope", Reason::NoGroupsAccumulator),
+    ("regr_sxx", Reason::NoGroupsAccumulator),
+    ("regr_sxy", Reason::NoGroupsAccumulator),
+    ("regr_syy", Reason::NoGroupsAccumulator),
+];
 
 /// What the candidate cases revealed about one function.
 #[derive(Default)]
 struct Coverage {
     /// Cases that built an `AggregateFunctionExpr`.
     built: usize,
-    /// Cases for which `create_accumulator` succeeded.
     with_accumulator: usize,
-    /// Cases for which `groups_accumulator_supported` returned true or
-    /// `create_groups_accumulator` returned something other than the trait's
-    /// default error.
+    /// Cases that report or create a native `GroupsAccumulator`.
     with_groups_accumulator: usize,
     /// Cases that were checked for state compatibility.
     exercised: usize,
-}
-
-/// Runs every candidate case for `udaf`, returning what was covered and a
-/// description of each failure.
-fn check_udaf(udaf: &Arc<AggregateUDF>) -> (Coverage, Vec<String>) {
-    let name = udaf.name();
-    let mut cov = Coverage::default();
-    let mut failures = vec![];
-
-    for case in candidate_cases(udaf) {
-        let Some(expr) = build_expr(udaf, &case) else {
-            continue;
-        };
-        cov.built += 1;
-
-        let has_accumulator = guard(|| expr.create_accumulator()).is_ok();
-        let supported =
-            guard(|| Ok(expr.groups_accumulator_supported())).unwrap_or(false);
-        let groups_accumulator = guard(|| expr.create_groups_accumulator());
-        if has_accumulator {
-            cov.with_accumulator += 1;
-        }
-        if supported || !is_default_groups_error(&groups_accumulator) {
-            cov.with_groups_accumulator += 1;
-        }
-
-        // Only aggregates with a native GroupsAccumulator are interesting:
-        // otherwise `GroupsAccumulatorAdapter` wraps the `Accumulator` and the
-        // state formats agree by construction.
-        if !(supported && has_accumulator && groups_accumulator.is_ok()) {
-            continue;
-        }
-
-        cov.exercised += 1;
-        let desc = case.describe(name);
-        let errors = guard(|| Ok(check_case(&expr, &case))).unwrap_or_else(|e| {
-            let mut errors = Errors::default();
-            errors.push(&format!("{e}"));
-            errors
-        });
-        failures.extend(errors.lines().into_iter().map(|e| format!("{desc}: {e}")));
-    }
-
-    (cov, failures)
 }
 
 /// Whether `result` is the error returned by the default implementation of
@@ -235,10 +119,10 @@ fn candidate_literals() -> Vec<ScalarValue> {
     ]
 }
 
-/// Number of rows in each group. Group 0 is intentionally empty.
+/// Rows per group, which vary widely because state encodings often depend on
+/// how much data a group has seen.
 const GROUP_SIZES: &[usize] = &[0, 1, 5, 300, 3000];
 
-/// Maximum number of arguments tried per function.
 const MAX_ARITY: usize = 3;
 
 #[derive(Clone, Debug)]
@@ -269,6 +153,128 @@ impl Case {
         let distinct = if self.distinct { "DISTINCT " } else { "" };
         let order_by = if self.ordered { " ORDER BY o" } else { "" };
         format!("{name}({distinct}{args}{order_by})")
+    }
+}
+
+#[test]
+fn accumulator_and_groups_accumulator_states_are_compatible() {
+    let mut failures: Vec<String> = vec![];
+    let mut coverage: BTreeMap<String, Coverage> = BTreeMap::new();
+
+    for udaf in all_default_aggregate_functions() {
+        let name = udaf.name().to_string();
+        let cov = coverage.entry(name.clone()).or_default();
+
+        for case in candidate_cases(&udaf) {
+            let Some(expr) = build_expr(&udaf, &case) else {
+                continue;
+            };
+            cov.built += 1;
+
+            let has_accumulator = guard(|| expr.create_accumulator()).is_ok();
+            let supported =
+                guard(|| Ok(expr.groups_accumulator_supported())).unwrap_or(false);
+            let groups_accumulator = guard(|| expr.create_groups_accumulator());
+            if has_accumulator {
+                cov.with_accumulator += 1;
+            }
+            if supported || !is_default_groups_error(&groups_accumulator) {
+                cov.with_groups_accumulator += 1;
+            }
+
+            // Without a native GroupsAccumulator, `GroupsAccumulatorAdapter`
+            // wraps the `Accumulator`, so the states agree by construction.
+            if !(supported && has_accumulator && groups_accumulator.is_ok()) {
+                continue;
+            }
+
+            cov.exercised += 1;
+            let desc = case.describe(&name);
+            let errors = guard(|| Ok(check_case(&expr, &case))).unwrap_or_else(|e| {
+                let mut errors = Errors::default();
+                errors.push(&format!("{e}"));
+                errors
+            });
+            failures.extend(errors.lines().into_iter().map(|e| format!("{desc}: {e}")));
+        }
+    }
+
+    let not_exercised: BTreeMap<&str, Reason> = NOT_EXERCISED.iter().copied().collect();
+    for (name, cov) in &coverage {
+        if let Some(msg) = check_coverage(cov, not_exercised.get(name.as_str())) {
+            failures.push(format!("{name}: {msg}"));
+        }
+    }
+    for name in not_exercised.keys() {
+        if !coverage.contains_key(*name) {
+            failures.push(format!(
+                "{name}: listed in NOT_EXERCISED but not registered"
+            ));
+        }
+    }
+
+    let summary = coverage
+        .iter()
+        .filter(|(_, cov)| cov.exercised > 0)
+        .map(|(name, cov)| format!("  {name}: {} case(s)", cov.exercised))
+        .collect::<Vec<_>>()
+        .join("\n");
+    println!("exercised:\n{summary}");
+
+    assert!(
+        failures.is_empty(),
+        "{} state compatibility failure(s):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// Checks a function's coverage against its `NOT_EXERCISED` entry, returning a
+/// failure message if they disagree.
+fn check_coverage(cov: &Coverage, reason: Option<&Reason>) -> Option<String> {
+    let Some(reason) = reason else {
+        if cov.exercised > 0 {
+            return None;
+        }
+        return Some(if cov.with_groups_accumulator > 0 {
+            format!(
+                "has a native GroupsAccumulator ({} case(s)) but no case exercised \
+                 it; extend the candidate types/literals",
+                cov.with_groups_accumulator
+            )
+        } else {
+            "no case exercised a native GroupsAccumulator; extend the candidate \
+             types/literals or add it to NOT_EXERCISED"
+                .to_string()
+        });
+    };
+
+    if cov.exercised > 0 {
+        return Some(format!(
+            "listed in NOT_EXERCISED as {reason:?} but {} case(s) were exercised; \
+             remove it from the list",
+            cov.exercised
+        ));
+    }
+    if cov.built == 0 {
+        return Some(format!(
+            "listed in NOT_EXERCISED as {reason:?} but no candidate case builds, \
+             so the reason cannot be checked"
+        ));
+    }
+    match reason {
+        Reason::NoGroupsAccumulator if cov.with_groups_accumulator > 0 => Some(format!(
+            "listed in NOT_EXERCISED as {reason:?} but {} case(s) report or \
+                 create a native GroupsAccumulator; remove it from the list and \
+                 extend the candidate types/literals so it is exercised",
+            cov.with_groups_accumulator
+        )),
+        Reason::NoAccumulator if cov.with_accumulator > 0 => Some(format!(
+            "listed in NOT_EXERCISED as {reason:?} but {} case(s) create an \
+             Accumulator",
+            cov.with_accumulator
+        )),
+        _ => None,
     }
 }
 
@@ -332,8 +338,6 @@ fn arg_shapes(first: &DataType, n: usize) -> Vec<Vec<ArgKind>> {
     shapes
 }
 
-/// Applies signature coercion, returning the coerced arguments or `None` if the
-/// function does not accept them.
 fn coerce(udaf: &AggregateUDF, args: &[ArgKind]) -> Option<Vec<ArgKind>> {
     let fields: Vec<FieldRef> = args
         .iter()
@@ -357,8 +361,6 @@ fn coerce(udaf: &AggregateUDF, args: &[ArgKind]) -> Option<Vec<ArgKind>> {
         .collect()
 }
 
-/// Builds the physical aggregate expression. Column arguments refer to columns
-/// `c0..cN` of a schema that contains only the column arguments.
 fn build_expr(udaf: &Arc<AggregateUDF>, case: &Case) -> Option<AggregateFunctionExpr> {
     let schema = Arc::new(input_schema(case));
     let mut col_idx = 0;
@@ -388,7 +390,6 @@ fn build_expr(udaf: &Arc<AggregateUDF>, case: &Case) -> Option<AggregateFunction
     guard(|| builder.build()).ok()
 }
 
-/// Name of the column used by `ORDER BY` cases.
 const ORDER_COLUMN: &str = "o";
 
 /// Column arguments `c0..cN`, followed by the ordering column if the case is
@@ -410,9 +411,7 @@ fn input_schema(case: &Case) -> Schema {
     Schema::new(fields)
 }
 
-/// Input data: one array per aggregate argument (literals included, as
-/// `AggregateExec` passes them) plus the group index of each row. Rows of
-/// different groups are interleaved.
+/// Input for one case, with the rows of different groups interleaved.
 struct Input {
     args: Vec<ArrayRef>,
     group_indices: Vec<usize>,
@@ -421,7 +420,6 @@ struct Input {
 
 impl Input {
     fn new(expr: &AggregateFunctionExpr, case: &Case) -> Result<Self> {
-        // Round-robin over the groups that still need rows.
         let mut remaining = GROUP_SIZES.to_vec();
         let mut group_indices = vec![];
         while remaining.iter().any(|r| *r > 0) {
@@ -433,8 +431,6 @@ impl Input {
             }
         }
 
-        // Every 7th row is null. Column k is scaled differently so that
-        // multi-column aggregates (covariance, correlation) see different inputs.
         let num_rows = group_indices.len();
         let schema = Arc::new(input_schema(case));
         let columns = schema
@@ -448,6 +444,8 @@ impl Input {
                             as ArrayRef,
                     );
                 }
+                // Scale each column differently so that multi-column
+                // aggregates such as `corr` see different inputs.
                 let values: Int64Array = (0..num_rows as i64)
                     .map(|i| (i % 7 != 3).then_some(i * (k as i64 + 1) % 1009))
                     .collect();
@@ -460,8 +458,7 @@ impl Input {
             &RecordBatchOptions::new().with_row_count(Some(num_rows)),
         )?;
 
-        // Evaluate the arguments the same way `AggregateExec` does: the
-        // argument expressions followed by the ordering expressions.
+        // `AggregateExec` passes the ordering columns after the arguments.
         let args = expr
             .expressions()
             .iter()
@@ -476,7 +473,6 @@ impl Input {
         })
     }
 
-    /// The indices of the rows of group `g`, in input order.
     fn rows_of(&self, g: usize) -> UInt32Array {
         self.group_indices
             .iter()
@@ -487,10 +483,9 @@ impl Input {
     }
 }
 
-/// Casts generated integers to the target type, going through `Utf8` for the
-/// binary types, which have no direct cast from integers.
 fn cast_values(values: &ArrayRef, dt: &DataType) -> Result<ArrayRef> {
     Ok(match dt {
+        // There is no direct cast from integers to binary types.
         DataType::Binary | DataType::LargeBinary | DataType::BinaryView => {
             cast(&cast(values, &DataType::Utf8)?, dt)?
         }
@@ -524,7 +519,6 @@ fn check_case(expr: &AggregateFunctionExpr, case: &Case) -> Errors {
     };
     let all_groups: Vec<usize> = (0..input.num_groups).collect();
 
-    // Reference: per-group Accumulator -> state -> Accumulator::merge_batch.
     let mut acc_states: Vec<Vec<ArrayRef>> = vec![];
     let mut expected: Vec<ScalarValue> = vec![];
     for g in 0..input.num_groups {
@@ -552,7 +546,6 @@ fn check_case(expr: &AggregateFunctionExpr, case: &Case) -> Errors {
         }
     }
 
-    // Accumulator::state -> GroupsAccumulator::merge_batch, all groups at once.
     errors.compare_all(
         "Accumulator::state -> GroupsAccumulator::merge_batch",
         guard(|| {
@@ -562,7 +555,6 @@ fn check_case(expr: &AggregateFunctionExpr, case: &Case) -> Errors {
         &expected,
     );
 
-    // GroupsAccumulator::state, emitted for all groups.
     let groups_state = guard(|| {
         let mut gacc = expr.create_groups_accumulator()?;
         gacc.update_batch(&input.args, &input.group_indices, None, input.num_groups)?;
@@ -683,8 +675,7 @@ fn guard<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
     })
 }
 
-/// Failures for one case. The same message for several groups is reported
-/// once, listing the groups.
+/// Failures for one case, deduplicated by message across groups.
 #[derive(Default)]
 struct Errors(Vec<(String, Vec<usize>)>);
 
@@ -791,227 +782,4 @@ fn floats_match(x: f64, y: f64) -> bool {
         return x.is_nan() && y.is_nan();
     }
     (x - y).abs() <= 1e-9 * x.abs().max(y.abs()).max(1.0)
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-
-    use arrow::datatypes::FieldRef;
-    use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-    use datafusion_expr::{
-        Accumulator, AggregateUDFImpl, GroupsAccumulator, Signature, Volatility,
-    };
-
-    use super::*;
-    use crate::all_default_aggregate_functions;
-    use crate::count::count_udaf;
-    use crate::sum::sum_udaf;
-
-    /// Why a built-in function is not exercised.
-    #[derive(Clone, Copy, Debug)]
-    enum Reason {
-        /// No native `GroupsAccumulator`: `groups_accumulator_supported`
-        /// returns false and `create_groups_accumulator` returns the trait's
-        /// default error.
-        NoGroupsAccumulator,
-        /// Replaced during planning, so `accumulator` always fails.
-        NoAccumulator,
-    }
-
-    /// Built-in functions that are not expected to be exercised, with the
-    /// reason.
-    const NOT_EXERCISED: &[(&str, Reason)] = &[
-        ("any_value", Reason::NoGroupsAccumulator),
-        ("approx_median", Reason::NoGroupsAccumulator),
-        ("approx_percentile_cont", Reason::NoGroupsAccumulator),
-        (
-            "approx_percentile_cont_with_weight",
-            Reason::NoGroupsAccumulator,
-        ),
-        ("covar_pop", Reason::NoGroupsAccumulator),
-        ("covar_samp", Reason::NoGroupsAccumulator),
-        ("grouping", Reason::NoAccumulator),
-        ("nth_value", Reason::NoGroupsAccumulator),
-        ("regr_avgx", Reason::NoGroupsAccumulator),
-        ("regr_avgy", Reason::NoGroupsAccumulator),
-        ("regr_count", Reason::NoGroupsAccumulator),
-        ("regr_intercept", Reason::NoGroupsAccumulator),
-        ("regr_r2", Reason::NoGroupsAccumulator),
-        ("regr_slope", Reason::NoGroupsAccumulator),
-        ("regr_sxx", Reason::NoGroupsAccumulator),
-        ("regr_sxy", Reason::NoGroupsAccumulator),
-        ("regr_syy", Reason::NoGroupsAccumulator),
-    ];
-
-    /// Checks every built-in aggregate function, and that each one is either
-    /// exercised or listed in `NOT_EXERCISED` for the right reason.
-    #[test]
-    fn builtin_accumulator_and_groups_accumulator_states_are_compatible() {
-        let mut failures: Vec<String> = vec![];
-        let mut coverage: BTreeMap<String, Coverage> = BTreeMap::new();
-        for udaf in all_default_aggregate_functions() {
-            let (cov, udaf_failures) = check_udaf(&udaf);
-            failures.extend(udaf_failures);
-            coverage.insert(udaf.name().to_string(), cov);
-        }
-
-        let not_exercised: BTreeMap<&str, Reason> =
-            NOT_EXERCISED.iter().copied().collect();
-        for (name, cov) in &coverage {
-            if let Some(msg) = check_coverage(cov, not_exercised.get(name.as_str())) {
-                failures.push(format!("{name}: {msg}"));
-            }
-        }
-        for name in not_exercised.keys() {
-            if !coverage.contains_key(*name) {
-                failures.push(format!(
-                    "{name}: listed in NOT_EXERCISED but not registered"
-                ));
-            }
-        }
-
-        let summary = coverage
-            .iter()
-            .filter(|(_, cov)| cov.exercised > 0)
-            .map(|(name, cov)| format!("  {name}: {} case(s)", cov.exercised))
-            .collect::<Vec<_>>()
-            .join("\n");
-        println!("exercised:\n{summary}");
-
-        assert!(
-            failures.is_empty(),
-            "{} state compatibility failure(s):\n{}",
-            failures.len(),
-            failures.join("\n")
-        );
-    }
-
-    /// Checks a function's coverage against its `NOT_EXERCISED` entry,
-    /// returning a failure message if they disagree.
-    fn check_coverage(cov: &Coverage, reason: Option<&Reason>) -> Option<String> {
-        let Some(reason) = reason else {
-            if cov.exercised > 0 {
-                return None;
-            }
-            return Some(if cov.with_groups_accumulator > 0 {
-                format!(
-                    "has a native GroupsAccumulator ({} case(s)) but no case \
-                     exercised it; extend the candidate types/literals",
-                    cov.with_groups_accumulator
-                )
-            } else {
-                "no case exercised a native GroupsAccumulator; extend the \
-                 candidate types/literals or add it to NOT_EXERCISED"
-                    .to_string()
-            });
-        };
-
-        if cov.exercised > 0 {
-            return Some(format!(
-                "listed in NOT_EXERCISED as {reason:?} but {} case(s) were \
-                 exercised; remove it from the list",
-                cov.exercised
-            ));
-        }
-        if cov.built == 0 {
-            return Some(format!(
-                "listed in NOT_EXERCISED as {reason:?} but no candidate case \
-                 builds, so the reason cannot be checked"
-            ));
-        }
-        match reason {
-            Reason::NoGroupsAccumulator if cov.with_groups_accumulator > 0 => {
-                Some(format!(
-                    "listed in NOT_EXERCISED as {reason:?} but {} case(s) report \
-                     or create a native GroupsAccumulator; remove it from the \
-                     list and extend the candidate types/literals so it is \
-                     exercised",
-                    cov.with_groups_accumulator
-                ))
-            }
-            Reason::NoAccumulator if cov.with_accumulator > 0 => Some(format!(
-                "listed in NOT_EXERCISED as {reason:?} but {} case(s) create an \
-                 Accumulator",
-                cov.with_accumulator
-            )),
-            _ => None,
-        }
-    }
-
-    /// An aggregate whose `Accumulator` is `count`'s but whose
-    /// `GroupsAccumulator` is `sum`'s, so their states are not interchangeable.
-    #[derive(Debug, PartialEq, Eq, Hash)]
-    struct Mismatched {
-        signature: Signature,
-    }
-
-    impl Mismatched {
-        fn udaf(arg_type: DataType) -> Arc<AggregateUDF> {
-            Arc::new(AggregateUDF::from(Self {
-                signature: Signature::exact(vec![arg_type], Volatility::Immutable),
-            }))
-        }
-    }
-
-    impl AggregateUDFImpl for Mismatched {
-        fn name(&self) -> &str {
-            "mismatched"
-        }
-
-        fn signature(&self) -> &Signature {
-            &self.signature
-        }
-
-        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-            Ok(DataType::Int64)
-        }
-
-        fn accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-            count_udaf().accumulator(args)
-        }
-
-        fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-            count_udaf().state_fields(args)
-        }
-
-        fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
-            true
-        }
-
-        fn create_groups_accumulator(
-            &self,
-            args: AccumulatorArgs,
-        ) -> Result<Box<dyn GroupsAccumulator>> {
-            sum_udaf().create_groups_accumulator(args)
-        }
-    }
-
-    #[test]
-    fn compatible_udaf_passes() {
-        check_state_compatibility(&crate::average::avg_udaf()).unwrap();
-    }
-
-    #[test]
-    fn incompatible_udaf_fails() {
-        let err = check_state_compatibility(&Mismatched::udaf(DataType::Int64))
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("GroupsAccumulator::state -> Accumulator::merge_batch"),
-            "{err}"
-        );
-    }
-
-    #[test]
-    fn unsupported_signature_fails() {
-        let err =
-            check_state_compatibility(&Mismatched::udaf(DataType::FixedSizeBinary(3)))
-                .unwrap_err()
-                .to_string();
-        assert!(
-            err.contains("accepts none of the candidate argument types"),
-            "{err}"
-        );
-    }
 }

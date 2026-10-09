@@ -91,8 +91,6 @@ pub mod sum;
 pub mod variance;
 
 pub mod planner;
-#[cfg(any(test, feature = "testing"))]
-pub mod testing;
 mod utils;
 
 use crate::approx_percentile_cont::approx_percentile_cont_udaf;

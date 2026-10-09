@@ -71,7 +71,7 @@ function types (e.g. scalar, nested, aggregate) are grouped together in the sing
 [`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udaf.rs
 [`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udwf.rs
 [`simple_udtf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/simple_udtf.rs
-[`state_compat.rs`]: https://github.com/apache/datafusion/blob/main/datafusion/functions-aggregate/src/testing/state_compat.rs
+[`state_compat.rs`]: https://github.com/apache/datafusion/blob/main/datafusion/functions-aggregate/tests/state_compat.rs
 [rust feature]: https://doc.rust-lang.org/cargo/reference/features.html
 
 **Testing**
