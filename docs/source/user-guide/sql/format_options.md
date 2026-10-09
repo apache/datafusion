@@ -78,6 +78,25 @@ In this example, we write the entire `source_table` out to a folder of Parquet f
 
 # Available Options
 
+## Arrow Format Options
+
+The following options are available when writing [Arrow IPC](https://arrow.apache.org/docs/format/Columnar.html#ipc-file-format) files. Note: If any unsupported option is specified, an error will be raised and the query will fail.
+
+| Option            | Description                                                                                                                                                            | Default Value |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| COMPRESSION       | Sets the compression codec used for the record batch bodies within the Arrow IPC file. Supported values are UNCOMPRESSED, LZ4_FRAME, and ZSTD.                         | LZ4_FRAME     |
+| COMPRESSION_LEVEL | Sets the compression level to use with the `ZSTD` codec. Not supported by `LZ4_FRAME` or `UNCOMPRESSED`. If not specified, the default zstd compression level is used. | None          |
+| ALIGNMENT         | Sets the byte alignment used to pad buffers when writing the Arrow IPC file. Must be one of 8, 16, 32, or 64.                                                          | 64            |
+
+**Example:**
+
+```sql
+COPY source_table
+  TO '/tmp/foo.arrow'
+  STORED AS ARROW
+  OPTIONS('COMPRESSION' 'zstd', 'COMPRESSION_LEVEL' '15');
+```
+
 ## JSON Format Options
 
 The following options are available when reading or writing JSON files. Note: If any unsupported option is specified, an error will be raised and the query will fail.
