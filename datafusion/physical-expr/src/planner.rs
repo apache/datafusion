@@ -371,6 +371,25 @@ pub fn create_physical_expr(
                     .zip(then_expr.iter())
                     .map(|(w, t)| (Arc::clone(w), Arc::clone(t)))
                     .collect();
+            // Match the logical CASE fast path without inferring its field twice.
+            let common_unmarked_branch =
+                match (case.when_then_expr.first(), when_then_expr.first()) {
+                    (Some((_, logical_result)), Some((_, physical_result)))
+                        if matches!(
+                            logical_result.as_ref(),
+                            Expr::Column(_) | Expr::Literal(_, _)
+                        ) =>
+                    {
+                        let field = physical_result.return_field(input_schema)?;
+                        !field.data_type().is_null()
+                            && !matches!(
+                                logical_result.as_ref(),
+                                Expr::Literal(value, _) if value.is_null()
+                            )
+                            && field.metadata().is_empty()
+                    }
+                    _ => false,
+                };
             let else_expr: Option<Arc<dyn PhysicalExpr>> =
                 if let Some(e) = &case.else_expr {
                     Some(create_physical_expr(
@@ -382,7 +401,16 @@ pub fn create_physical_expr(
                 } else {
                     None
                 };
-            Ok(expressions::case(expr, when_then_expr, else_expr)?)
+            let physical_case =
+                expressions::CaseExpr::try_new(expr, when_then_expr, else_expr)?;
+            if common_unmarked_branch {
+                Ok(Arc::new(physical_case))
+            } else {
+                Ok(Arc::new(
+                    physical_case
+                        .with_logical_result_field(&e.to_field(input_dfschema)?.1),
+                ))
+            }
         }
         Expr::Cast(Cast { expr, field }) => expressions::cast_with_target_field(
             create_physical_expr(expr, input_dfschema, execution_props, planning_ctx)?,
@@ -748,7 +776,7 @@ mod tests {
     use datafusion_expr::physical_planning_context::{
         ScalarSubqueryResults, SubqueryIndex,
     };
-    use datafusion_expr::{LogicalPlanBuilder, col, scalar_subquery};
+    use datafusion_expr::{LogicalPlanBuilder, col, scalar_subquery, when};
 
     use super::*;
 
@@ -764,6 +792,38 @@ mod tests {
             &ExecutionProps::new(),
             &PhysicalPlanningContext::default(),
         )
+    }
+
+    #[test]
+    fn case_metadata_matches_logical_field_after_alias_lowering() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let df_schema = DFSchema::try_from(schema.clone())?;
+        let mut aliased = col("a");
+        for _ in 0..10 {
+            aliased = aliased.alias("nested");
+        }
+        let marked = |arg| {
+            datafusion_functions::core::expr_fn::with_metadata(vec![
+                arg,
+                lit("source"),
+                lit("test"),
+            ])
+        };
+        let logical = when(lit(true), marked(aliased)).otherwise(marked(col("a")))?;
+        let logical_field = logical.to_field(&df_schema)?.1;
+        assert!(logical_field.metadata().is_empty());
+
+        let physical = create_physical_expr(
+            &logical,
+            &df_schema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        assert_eq!(
+            physical.return_field(&schema)?.metadata(),
+            logical_field.metadata()
+        );
+        Ok(())
     }
 
     fn as_planner_cast(physical: &Arc<dyn PhysicalExpr>) -> &expressions::CastExpr {

@@ -430,6 +430,26 @@ select arrow_metadata(with_metadata(id, 'unit', 'ms'), 'metadata_key') from tabl
 ----
 the id field
 
+# CASE must expose the same field metadata directly and through a projection.
+query T
+select arrow_metadata(
+    case when id = 1 then id
+         else with_metadata(id, 'metadata_key', 'the id field') end,
+    'metadata_key')
+from table_with_metadata where id = 1;
+----
+the id field
+
+query T
+select arrow_metadata(chosen, 'metadata_key')
+from (
+    select case when id = 1 then id
+                else with_metadata(id, 'metadata_key', 'the id field') end as chosen
+    from table_with_metadata where id = 1
+);
+----
+the id field
+
 # with_metadata: new keys overwrite existing on collision
 query T
 select arrow_metadata(with_metadata(id, 'metadata_key', 'overridden'), 'metadata_key') from table_with_metadata limit 1;

@@ -33,6 +33,7 @@ use arrow::datatypes::{
 use arrow::error::ArrowError;
 use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, assert_or_internal_err, exec_err,
     internal_datafusion_err, internal_err,
@@ -309,6 +310,8 @@ pub struct CaseExpr {
     body: CaseBody,
     /// Evaluation method to use
     eval_method: EvalMethod,
+    /// Logical result type and metadata inferred before physical lowering.
+    logical_result_field: Option<(DataType, FieldMetadata)>,
 }
 
 // eval_method is functionally derived from body, so excluding it from
@@ -317,12 +320,13 @@ pub struct CaseExpr {
 impl Hash for CaseExpr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.body.hash(state);
+        self.logical_result_field.hash(state);
     }
 }
 
 impl PartialEq for CaseExpr {
     fn eq(&self, other: &Self) -> bool {
-        self.body == other.body
+        self.body == other.body && self.logical_result_field == other.logical_result_field
     }
 }
 
@@ -709,7 +713,20 @@ impl CaseExpr {
 
         let eval_method = Self::find_best_eval_method(&body)?;
 
-        Ok(Self { body, eval_method })
+        Ok(Self {
+            body,
+            eval_method,
+            logical_result_field: None,
+        })
+    }
+
+    /// Preserve the logical CASE result metadata across physical lowering.
+    pub fn with_logical_result_field(mut self, field: &FieldRef) -> Self {
+        self.logical_result_field = Some((
+            field.data_type().clone(),
+            FieldMetadata::from(field.metadata().clone()),
+        ));
+        self
     }
 
     fn find_best_eval_method(body: &CaseBody) -> Result<EvalMethod> {
@@ -1445,6 +1462,17 @@ impl PhysicalExpr for CaseExpr {
     fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
         let data_type = self.data_type(input_schema)?;
         let nullable = self.nullable(input_schema)?;
+        if let Some((logical_type, logical_metadata)) = &self.logical_result_field {
+            let metadata = if logical_type == &data_type {
+                logical_metadata.to_hashmap()
+            } else {
+                Metadata::new()
+            };
+            return Ok(Arc::new(
+                Field::new(format!("{self}"), data_type, nullable)
+                    .with_metadata(metadata),
+            ));
+        }
         if let Some((_, first_result)) = self.body.when_then_expr.first()
             && (first_result.is::<Column>() || first_result.is::<Literal>())
         {
@@ -1598,11 +1626,15 @@ impl PhysicalExpr for CaseExpr {
                     ),
                     (false, false) => (None, &children[0..children.len()], None),
                 };
-            Ok(Arc::new(CaseExpr::try_new(
+            let mut rebuilt = CaseExpr::try_new(
                 expr.cloned(),
                 when_then_expr.iter().cloned().tuples().collect(),
                 else_expr.cloned(),
-            )?))
+            )?;
+            rebuilt
+                .logical_result_field
+                .clone_from(&self.logical_result_field);
+            Ok(Arc::new(rebuilt))
         }
     }
 
@@ -2008,6 +2040,32 @@ mod tests {
             try_cast_case.return_field(&cast_schema)?.metadata(),
             &cast_metadata
         );
+        Ok(())
+    }
+
+    #[test]
+    fn case_logical_field_survives_rewriting_children() -> Result<()> {
+        let metadata = HashMap::from([("source".to_string(), "physical".to_string())]);
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Binary, false).with_metadata(metadata.clone()),
+            Field::new("b", DataType::Binary, false).with_metadata(metadata),
+        ]);
+        let expr: Arc<dyn PhysicalExpr> = Arc::new(
+            CaseExpr::try_new(
+                None,
+                vec![(lit(true), col("a", &schema)?)],
+                Some(col("b", &schema)?),
+            )?
+            .with_logical_result_field(&Arc::new(Field::new(
+                "logical_case",
+                DataType::Binary,
+                true,
+            ))),
+        );
+        assert!(expr.return_field(&schema)?.metadata().is_empty());
+        let children = expr.children().into_iter().cloned().collect();
+        let rewritten = expr.with_new_children(children)?;
+        assert!(rewritten.return_field(&schema)?.metadata().is_empty());
         Ok(())
     }
 
