@@ -18,6 +18,8 @@
 //! Tests for parquet schema handling
 use std::{collections::HashMap, fs, path::Path};
 
+use arrow::array::ArrayRef;
+
 use tempfile::TempDir;
 
 use super::*;
@@ -185,6 +187,71 @@ async fn schema_merge_can_preserve_metadata() {
     assert_metadata(&actual, &expected_metadata);
 }
 
+/// A column that only some files carry must be inferred as nullable, because
+/// reading the files without it yields nulls, even when every file that has
+/// the column declares it required.
+#[tokio::test]
+async fn schema_merge_marks_partially_present_columns_nullable() {
+    let tmp_dir = TempDir::new().unwrap();
+    let table_dir = tmp_dir.path().join("parquet_test");
+
+    let id = Field::new("id", DataType::Int32, false);
+    let name = Field::new("name", DataType::Utf8, false);
+    let extra = Field::new("extra", DataType::Int32, false);
+    let opt = Field::new("opt", DataType::Int32, true);
+
+    let schemas = vec![
+        // required `extra` and nullable `opt` in the first file only
+        Schema::new(vec![id.clone(), name.clone(), extra.clone(), opt]),
+        // neither column
+        Schema::new(vec![id.clone(), name.clone()]),
+        // required `extra` again, in a different position
+        Schema::new(vec![extra, id, name]),
+    ];
+    write_files_with_columns(table_dir.as_path(), schemas);
+    let table_path = table_dir.to_str().unwrap().to_string();
+
+    for skip_metadata in [true, false] {
+        let options = ParquetReadOptions::default().skip_metadata(skip_metadata);
+        let ctx = SessionContext::new();
+        let df = ctx.read_parquet(&table_path, options).await.unwrap();
+
+        let nullability: Vec<(&str, bool)> = df
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| (f.name().as_str(), f.is_nullable()))
+            .collect();
+        assert_eq!(
+            nullability,
+            vec![
+                ("id", false),
+                ("name", false),
+                ("extra", true),
+                ("opt", true)
+            ],
+            "skip_metadata={skip_metadata}"
+        );
+
+        let actual = df.collect().await.unwrap();
+        let expected = [
+            "+----+------+-------+-----+",
+            "| id | name | extra | opt |",
+            "+----+------+-------+-----+",
+            "| 0  | test | 0     |     |",
+            "| 1  | test |       |     |",
+            "| 2  | test | 2     |     |",
+            "+----+------+-------+-----+",
+        ]
+        .join("\n");
+        assert_eq!(
+            batches_to_sort_string(&actual).trim(),
+            expected,
+            "skip_metadata={skip_metadata}"
+        );
+    }
+}
+
 fn make_meta(k: impl Into<String>, v: impl Into<String>) -> HashMap<String, String> {
     let mut meta = HashMap::new();
     meta.insert(k.into(), v.into());
@@ -208,6 +275,33 @@ fn write_files(table_path: &Path, schemas: Vec<Schema>) {
         let ids = Arc::new(Int32Array::from(vec![i as i32]));
         let names = Arc::new(StringArray::from(vec!["test"]));
         let rec_batch = RecordBatch::try_new(schema.clone(), vec![ids, names]).unwrap();
+
+        writer.write(&rec_batch).unwrap();
+        writer.close().unwrap();
+    }
+}
+
+/// Writes one file per schema, filling each column from its name: `id` and
+/// `extra` get the file index, `name` gets "test", anything else is null.
+fn write_files_with_columns(table_path: &Path, schemas: Vec<Schema>) {
+    fs::create_dir(table_path).expect("Error creating temp dir");
+
+    for (i, schema) in schemas.into_iter().enumerate() {
+        let schema = Arc::new(schema);
+        let path = table_path.join(format!("part-{i}.parquet"));
+        let file = fs::File::create(path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, schema.clone(), None).unwrap();
+
+        let columns: Vec<ArrayRef> = schema
+            .fields()
+            .iter()
+            .map(|field| match field.name().as_str() {
+                "id" | "extra" => Arc::new(Int32Array::from(vec![i as i32])) as ArrayRef,
+                "name" => Arc::new(StringArray::from(vec!["test"])),
+                _ => Arc::new(Int32Array::from(vec![None::<i32>])),
+            })
+            .collect();
+        let rec_batch = RecordBatch::try_new(schema, columns).unwrap();
 
         writer.write(&rec_batch).unwrap();
         writer.close().unwrap();
