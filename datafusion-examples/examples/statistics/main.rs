@@ -30,7 +30,7 @@
 //! - `all`: run all examples included in this module
 //!
 //! - `join_reorder`
-//!   (file: join_reorder.rs, desc: Supply and refine column statistics via a provider to flip a join order)
+//!   (file: join_reorder.rs, desc: Supply catalog column statistics via a provider to flip a join order)
 
 mod join_reorder;
 

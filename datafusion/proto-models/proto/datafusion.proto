@@ -103,6 +103,10 @@ message ListingTableScanNode {
     datafusion_common.ArrowFormat arrow = 16;
   }
   repeated SortExprNodeCollection file_sort_order = 13;
+  // Optional number of rows to read.
+  optional uint64 fetch = 17;
+  // Optional number of rows to skip.
+  optional uint64 skip = 18;
 }
 
 message ViewTableScanNode {
@@ -112,6 +116,10 @@ message ViewTableScanNode {
   datafusion_common.Schema schema = 3;
   ProjectionColumns projection = 4;
   string definition = 5;
+  // Optional number of rows to read.
+  optional uint64 fetch = 7;
+  // Optional number of rows to skip.
+  optional uint64 skip = 8;
 }
 
 // Logical Plan to Scan a CustomTableProvider registered at runtime
@@ -122,6 +130,10 @@ message CustomTableScanNode {
   datafusion_common.Schema schema = 3;
   repeated LogicalExprNode filters = 4;
   bytes custom_table_data = 5;
+  // Optional number of rows to read.
+  optional uint64 fetch = 7;
+  // Optional number of rows to skip.
+  optional uint64 skip = 8;
 }
 
 message ProjectionNode {
@@ -275,6 +287,10 @@ message JoinNode {
   datafusion_common.NullEquality null_equality = 7;
   LogicalExprNode filter = 8;
   bool null_aware = 9;
+  // Number of `NOT IN` value keys of a null-aware join (see
+  // `Join::null_aware_value_keys`). Messages predating this field decode it
+  // as 0, which is read as 1: they can only hold scalar `NOT IN` joins.
+  uint32 null_aware_value_keys = 10;
 }
 
 enum AsOfMatchOperator {
@@ -1093,7 +1109,13 @@ message PhysicalExprNode {
     PhysicalLambdaVariableExprNode lambda_variable = 26;
     PhysicalRangeExprNode range_expr = 27;
     PhysicalSqlSimilarToPatternNode sql_similar_to_pattern = 28;
+    PhysicalLiteralNode literal_with_metadata = 29;
   }
+}
+
+message PhysicalLiteralNode {
+  datafusion_common.ScalarValue value = 1;
+  map<string, string> metadata = 2;
 }
 
 message PhysicalDynamicFilterNode {
@@ -1413,6 +1435,11 @@ message HashJoinExecNode {
   // turning old plans into empty results. With `optional`, absent decodes to
   // `None`, which is the correct reading of an older message.
   optional uint64 fetch = 12;
+  // Number of `NOT IN` value keys of a null-aware join (see
+  // `HashJoinExec::null_aware_value_keys`). Messages predating this field
+  // decode it as 0, which is read as 1: they can only hold scalar `NOT IN`
+  // joins.
+  uint32 null_aware_value_keys = 13;
 }
 
 enum StreamPartitionMode {
@@ -1499,6 +1526,11 @@ message ProjectionExecNode {
   PhysicalPlanNode input = 1;
   repeated PhysicalExprNode expr = 2;
   repeated string expr_name = 3;
+  // Only field and schema metadata are used; output types are derived from expr.
+  // Present when the projection output has metadata or explicitly overrides
+  // inherited metadata, including an explicit clear. Absent for older plans
+  // and metadata-free projections.
+  datafusion_common.Schema schema = 4;
 }
 
 enum AggregateMode {
@@ -1621,7 +1653,12 @@ message PhysicalHashRepartition {
 
 message PhysicalRangePartitioning {
   repeated PhysicalSortExprNode sort_expr = 1;
+  // Effective split points. Kept for compatibility with older readers.
   repeated PhysicalRangeSplitPoint split_point = 2;
+  // Maximum-resolution sample points used to derive effective split points.
+  repeated PhysicalRangeSplitPoint sample_point = 3;
+  // Zero in legacy payloads means split_point.len() + 1.
+  uint64 partition_count = 4;
 }
 
 message PhysicalRangeSplitPoint {

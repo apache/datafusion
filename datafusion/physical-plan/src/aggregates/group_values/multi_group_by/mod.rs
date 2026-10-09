@@ -23,6 +23,8 @@ pub mod bytes_view;
 mod dictionary;
 mod fixed_size_binary;
 mod list;
+mod ordered;
+pub(super) use ordered::GroupValuesOrdered;
 pub mod primitive;
 pub mod row_backed;
 
@@ -36,17 +38,12 @@ use crate::aggregates::group_values::multi_group_by::{
     fixed_size_binary::FixedSizeBinaryGroupValueBuilder,
     primitive::PrimitiveGroupValueBuilder, row_backed::RowsGroupColumn,
 };
-use arrow::array::{Array, ArrayRef, BooleanBufferBuilder, new_empty_array};
+use arrow::array::{
+    Array, ArrayRef, BooleanBufferBuilder, downcast_primitive, new_empty_array,
+};
 use arrow::datatypes::{
-    BinaryViewType, DataType, Date32Type, Date64Type, Decimal32Type, Decimal64Type,
-    Decimal128Type, Decimal256Type, DurationMicrosecondType, DurationMillisecondType,
-    DurationNanosecondType, DurationSecondType, Field, Float16Type, Float32Type,
-    Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, IntervalDayTimeType,
-    IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, Schema, SchemaRef,
-    StringViewType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
-    Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type,
-    UInt64Type,
+    BinaryViewType, DataType, Field, Int8Type, Int16Type, Int32Type, Int64Type, Schema,
+    SchemaRef, StringViewType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
@@ -106,7 +103,7 @@ pub trait GroupColumn: Send + Sync {
         self.len() == 0
     }
 
-    /// Returns the number of bytes used by this [`GroupColumn`]
+    /// Returns this column's concrete owner descriptor and retained allocations.
     fn size(&self) -> usize;
 
     /// Builds a new array from all of the stored rows
@@ -275,6 +272,23 @@ impl VectorizedOperationBuffers {
         self.equal_to_row_indices.clear();
         self.equal_to_group_indices.clear();
         self.remaining_row_indices.clear();
+    }
+
+    fn clear_shrink(&mut self, num_rows: usize) {
+        self.clear();
+        self.append_row_indices.shrink_to(num_rows);
+        self.equal_to_row_indices.shrink_to(num_rows);
+        self.equal_to_group_indices.shrink_to(num_rows);
+        self.equal_to_results = BooleanBufferBuilder::new(num_rows);
+        self.remaining_row_indices.shrink_to(num_rows);
+    }
+
+    fn size(&self) -> usize {
+        self.append_row_indices.allocated_size()
+            + self.equal_to_row_indices.allocated_size()
+            + self.equal_to_group_indices.allocated_size()
+            + self.equal_to_results.capacity() / 8
+            + self.remaining_row_indices.allocated_size()
     }
 }
 
@@ -913,11 +927,11 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
 /// instantiates a [`PrimitiveGroupValueBuilder`] and pushes it into $v
 ///
 /// Arguments:
+/// `$t`: the primitive type of the builder
 /// `$v`: the vector to push the new builder into
 /// `$nullable`: whether the input can contains nulls
-/// `$t`: the primitive type of the builder
 macro_rules! instantiate_primitive {
-    ($nullable:expr, $t:ty, $data_type:ident) => {{
+    ($t:ty, $data_type:ident, $nullable:expr) => {{
         let builder: Box<dyn GroupColumn> = if $nullable {
             Box::new(PrimitiveGroupValueBuilder::<$t, true>::new(
                 $data_type.to_owned(),
@@ -959,95 +973,10 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
 fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
     let nullable = field.is_nullable();
     let data_type = field.data_type();
-    let builder: Option<Box<dyn GroupColumn>> = match data_type {
-        DataType::Int8 => instantiate_primitive!(nullable, Int8Type, data_type),
-        DataType::Int16 => instantiate_primitive!(nullable, Int16Type, data_type),
-        DataType::Int32 => instantiate_primitive!(nullable, Int32Type, data_type),
-        DataType::Int64 => instantiate_primitive!(nullable, Int64Type, data_type),
-        DataType::UInt8 => instantiate_primitive!(nullable, UInt8Type, data_type),
-        DataType::UInt16 => instantiate_primitive!(nullable, UInt16Type, data_type),
-        DataType::UInt32 => instantiate_primitive!(nullable, UInt32Type, data_type),
-        DataType::UInt64 => instantiate_primitive!(nullable, UInt64Type, data_type),
-        DataType::Float16 => instantiate_primitive!(nullable, Float16Type, data_type),
-        DataType::Float32 => instantiate_primitive!(nullable, Float32Type, data_type),
-        DataType::Float64 => instantiate_primitive!(nullable, Float64Type, data_type),
-        DataType::Date32 => instantiate_primitive!(nullable, Date32Type, data_type),
-        DataType::Date64 => instantiate_primitive!(nullable, Date64Type, data_type),
-        DataType::Time32(t) => match t {
-            TimeUnit::Second => {
-                instantiate_primitive!(nullable, Time32SecondType, data_type)
-            }
-            TimeUnit::Millisecond => {
-                instantiate_primitive!(nullable, Time32MillisecondType, data_type)
-            }
-            // Time32 with Microsecond / Nanosecond is not a valid Arrow type
-            // combination; reject explicitly.
-            _ => None,
-        },
-        DataType::Time64(t) => match t {
-            TimeUnit::Microsecond => {
-                instantiate_primitive!(nullable, Time64MicrosecondType, data_type)
-            }
-            TimeUnit::Nanosecond => {
-                instantiate_primitive!(nullable, Time64NanosecondType, data_type)
-            }
-            // Time64 with Second / Millisecond is not a valid Arrow type
-            // combination; reject explicitly.
-            _ => None,
-        },
-        DataType::Timestamp(t, _) => match t {
-            TimeUnit::Second => {
-                instantiate_primitive!(nullable, TimestampSecondType, data_type)
-            }
-            TimeUnit::Millisecond => {
-                instantiate_primitive!(nullable, TimestampMillisecondType, data_type)
-            }
-            TimeUnit::Microsecond => {
-                instantiate_primitive!(nullable, TimestampMicrosecondType, data_type)
-            }
-            TimeUnit::Nanosecond => {
-                instantiate_primitive!(nullable, TimestampNanosecondType, data_type)
-            }
-        },
-        DataType::Duration(t) => match t {
-            TimeUnit::Second => {
-                instantiate_primitive!(nullable, DurationSecondType, data_type)
-            }
-            TimeUnit::Millisecond => {
-                instantiate_primitive!(nullable, DurationMillisecondType, data_type)
-            }
-            TimeUnit::Microsecond => {
-                instantiate_primitive!(nullable, DurationMicrosecondType, data_type)
-            }
-            TimeUnit::Nanosecond => {
-                instantiate_primitive!(nullable, DurationNanosecondType, data_type)
-            }
-        },
-        // `IntervalUnit` has exactly three variants, so this match is exhaustive
-        // with no fallback arm (unlike Time32 / Time64).
-        DataType::Interval(u) => match u {
-            IntervalUnit::YearMonth => {
-                instantiate_primitive!(nullable, IntervalYearMonthType, data_type)
-            }
-            IntervalUnit::DayTime => {
-                instantiate_primitive!(nullable, IntervalDayTimeType, data_type)
-            }
-            IntervalUnit::MonthDayNano => {
-                instantiate_primitive!(nullable, IntervalMonthDayNanoType, data_type)
-            }
-        },
-        DataType::Decimal32(_, _) => {
-            instantiate_primitive!(nullable, Decimal32Type, data_type)
-        }
-        DataType::Decimal64(_, _) => {
-            instantiate_primitive!(nullable, Decimal64Type, data_type)
-        }
-        DataType::Decimal128(_, _) => {
-            instantiate_primitive!(nullable, Decimal128Type, data_type)
-        }
-        DataType::Decimal256(_, _) => {
-            instantiate_primitive!(nullable, Decimal256Type, data_type)
-        }
+
+    let builder: Option<Box<dyn GroupColumn>> = downcast_primitive! {
+        data_type => (instantiate_primitive, data_type, nullable),
+
         DataType::Utf8 => Some(Box::new(ByteGroupValueBuilder::<i32>::new(
             OutputType::Utf8,
         ))),
@@ -1155,8 +1084,25 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
     }
 
     fn size(&self) -> usize {
-        let group_values_size: usize = self.group_values.iter().map(|v| v.size()).sum();
-        group_values_size + self.map_size + self.hashes_buffer.allocated_size()
+        let group_values_size = self.group_values.allocated_size()
+            + self
+                .group_values
+                .iter()
+                .map(|value| value.size())
+                .sum::<usize>();
+        let group_index_lists_size = self.group_index_lists.allocated_size()
+            + self
+                .group_index_lists
+                .iter()
+                .map(VecAllocExt::allocated_size)
+                .sum::<usize>();
+        size_of::<Self>()
+            + group_values_size
+            + self.map_size
+            + group_index_lists_size
+            + self.emit_group_index_list_buffer.allocated_size()
+            + self.vectorized_operation_buffers.size()
+            + self.hashes_buffer.allocated_size()
     }
 
     fn is_empty(&self) -> bool {
@@ -1305,8 +1251,10 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
         // Such structures are only used in `non-streaming` case
         if !STREAMING {
             self.group_index_lists.clear();
+            self.group_index_lists.shrink_to(num_rows);
             self.emit_group_index_list_buffer.clear();
-            self.vectorized_operation_buffers.clear();
+            self.emit_group_index_list_buffer.shrink_to(num_rows);
+            self.vectorized_operation_buffers.clear_shrink(num_rows);
         }
     }
 }
@@ -1346,7 +1294,7 @@ mod tests {
         compute::{concat_batches, take},
         util::pretty::pretty_format_batches,
     };
-    use datafusion_common::utils::proxy::HashTableAllocExt;
+    use datafusion_common::{Result, utils::proxy::HashTableAllocExt};
     use datafusion_expr::{EmitTo, GroupSelection};
 
     use crate::aggregates::group_values::{
@@ -1356,6 +1304,79 @@ mod tests {
     use super::{
         GroupIndexView, group_column_supported_type, make_group_column, supported_schema,
     };
+
+    #[test]
+    fn collision_emit_and_vectorized_buffers_retain_capacity() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "group",
+            DataType::Int32,
+            false,
+        )]));
+        let mut group_values = GroupValuesColumn::<false>::try_new(schema).unwrap();
+        let input: ArrayRef = Arc::new(Int32Array::from_iter_values(0..32));
+        let baseline = group_values.size();
+
+        group_values.intern(&[Arc::clone(&input)], &mut vec![])?;
+        group_values.intern(&[input], &mut vec![])?;
+        assert!(
+            group_values
+                .vectorized_operation_buffers
+                .append_row_indices
+                .capacity()
+                > 0
+        );
+        assert!(
+            group_values
+                .vectorized_operation_buffers
+                .equal_to_row_indices
+                .capacity()
+                > 0
+        );
+        assert!(
+            group_values
+                .vectorized_operation_buffers
+                .equal_to_results
+                .capacity()
+                / 8
+                > 0
+        );
+        assert!(group_values.size() > baseline);
+
+        insert_non_inline_group_index_view(&mut group_values, u64::MAX, vec![1, 2]);
+        group_values.emit(EmitTo::First(1))?;
+        assert!(!group_values.group_index_lists.is_empty());
+        assert!(group_values.emit_group_index_list_buffer.capacity() > 0);
+        assert!(group_values.size() > baseline);
+
+        let input: ArrayRef = Arc::new(Int32Array::from_iter_values(0..32));
+        group_values.intern(&[input], &mut vec![])?;
+        assert!(group_values.size() > baseline);
+        Ok(())
+    }
+
+    #[test]
+    fn clear_shrink_releases_vectorized_and_emit_scratch_capacity() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "group",
+            DataType::Int32,
+            false,
+        )]));
+        let mut group_values = GroupValuesColumn::<false>::try_new(schema)?;
+        let baseline = group_values.size();
+        let buffers = &mut group_values.vectorized_operation_buffers;
+        buffers.append_row_indices.push(0);
+        buffers.equal_to_row_indices.push(0);
+        buffers.equal_to_group_indices.push(0);
+        buffers.equal_to_results.append(true);
+        buffers.remaining_row_indices.push(0);
+        group_values.emit_group_index_list_buffer.push(0);
+
+        assert!(group_values.size() > baseline);
+        group_values.clear_shrink(0);
+
+        assert_eq!(group_values.size(), baseline);
+        Ok(())
+    }
 
     /// A mixed group-by key of several native columns plus one nested column
     /// that has no type-specialized `GroupColumn`.
