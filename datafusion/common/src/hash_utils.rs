@@ -1489,6 +1489,11 @@ mod tests {
     use std::hash::{BuildHasherDefault, Hasher};
     use std::sync::Arc;
 
+    use arrow::array::*;
+    use arrow::buffer::{NullBuffer, ScalarBuffer};
+    #[cfg(not(feature = "force_hash_collisions"))]
+    use arrow::datatypes::*;
+
     use super::*;
 
     #[cfg(not(feature = "force_hash_collisions"))]
@@ -1992,8 +1997,6 @@ mod tests {
     #[test]
     #[cfg(not(feature = "force_hash_collisions"))]
     fn create_hashes_for_chunked_dict_arrays_match_strings() {
-        use arrow::buffer::{NullBuffer, ScalarBuffer};
-
         let random_state = RandomState::with_seed(0);
         let assert_matches = |case: &str,
                               dict_array: DictionaryArray<Int32Type>,
@@ -2130,8 +2133,6 @@ mod tests {
     // Tests actual values of hashes, which are different if forcing collisions
     #[cfg(not(feature = "force_hash_collisions"))]
     fn create_hashes_for_list_view_arrays() {
-        use arrow::buffer::{NullBuffer, ScalarBuffer};
-
         // Create values array: [0, 1, 2, 3, null, 5]
         let values = Arc::new(Int32Array::from(vec![
             Some(0),
@@ -2180,8 +2181,6 @@ mod tests {
     // Tests actual values of hashes, which are different if forcing collisions
     #[cfg(not(feature = "force_hash_collisions"))]
     fn create_hashes_for_large_list_view_arrays() {
-        use arrow::buffer::{NullBuffer, ScalarBuffer};
-
         // Create values array: [0, 1, 2, 3, null, 5]
         let values = Arc::new(Int32Array::from(vec![
             Some(0),
