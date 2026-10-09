@@ -64,7 +64,7 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::{
-    BinaryExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr, Literal, lit,
+    BinaryExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr, LikeExpr, Literal, lit,
 };
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::utils::collect_columns;
@@ -346,8 +346,8 @@ impl FilterExec {
     }
 
     /// Calculates `Statistics` for `FilterExec` by applying the filter's
-    /// selectivity (default, or estimated from interval analysis) to the input
-    /// statistics.
+    /// selectivity (estimated from interval analysis or string statistics, with
+    /// a configurable fallback) to the input statistics.
     ///
     /// The estimated output row count is used to keep the per-column statistics
     /// consistent with it:
@@ -405,15 +405,27 @@ impl FilterExec {
                 );
                 (selectivity, filtered_num_rows, cs)
             } else {
+                // String predicates cannot use interval analysis. Estimate them
+                // from distinct counts and pattern form when possible, then
+                // apply the row-count constraints implied by the predicate.
+                //
                 // Without interval boundaries, attempt a heuristic fallback for selectivities.
                 // For instance, an equality filter against an unresolved scalar subquery will
                 // fail `check_support`, but we can still estimate selectivity as `1.0 / NDV`.
-                let selectivity = compute_fallback_selectivity(
+                let default_selectivity_f64 = default_selectivity as f64 / 100.0;
+                let selectivity = string_selectivity(
                     predicate,
-                    &input_stats.column_statistics,
-                    default_selectivity,
-                );
-
+                    schema,
+                    &input_stats,
+                    default_selectivity_f64,
+                )
+                .unwrap_or_else(|| {
+                    compute_fallback_selectivity(
+                        predicate,
+                        &input_stats.column_statistics,
+                        default_selectivity,
+                    )
+                });
                 let filtered_num_rows =
                     input_num_rows.with_estimated_selectivity(selectivity);
                 let mut cs = input_stats.to_inexact().column_statistics;
@@ -1326,6 +1338,17 @@ fn collect_null_rejecting_columns(predicate: &Arc<dyn PhysicalExpr>) -> HashSet<
     let mut columns = HashSet::new();
 
     for expr in split_conjunction(predicate) {
+        // LIKE (including ILIKE and their negations) returns NULL if either
+        // operand is NULL.
+        if let Some(like) = expr.downcast_ref::<LikeExpr>() {
+            for operand in [like.expr(), like.pattern()] {
+                if let Some(col) = operand.downcast_ref::<Column>() {
+                    columns.insert(col.index());
+                }
+            }
+            continue;
+        }
+
         // `col IS NOT NULL` keeps only rows where `col` is non-null.
         if let Some(is_not_null) = expr.downcast_ref::<IsNotNullExpr>() {
             if let Some(col) = is_not_null.arg().downcast_ref::<Column>() {
@@ -1350,6 +1373,135 @@ fn collect_null_rejecting_columns(predicate: &Arc<dyn PhysicalExpr>) -> HashSet<
     }
 
     columns
+}
+
+/// Estimates a single string comparison against a literal. Compound predicates
+/// retain the fallback: multiplying estimates for predicates on the same column
+/// would count null rejection (and possibly the same restriction) repeatedly.
+fn string_selectivity(
+    predicate: &Arc<dyn PhysicalExpr>,
+    schema: &SchemaRef,
+    input_stats: &Statistics,
+    default_selectivity: f64,
+) -> Option<f64> {
+    let (column, literal, negated, like) =
+        if let Some(binary) = predicate.downcast_ref::<BinaryExpr>() {
+            if !matches!(binary.op(), Operator::Eq | Operator::NotEq) {
+                return None;
+            }
+            let operands = [
+                (binary.left(), binary.right()),
+                (binary.right(), binary.left()),
+            ];
+            let (column, literal) = operands.into_iter().find_map(|(left, right)| {
+                Some((
+                    left.downcast_ref::<Column>()?,
+                    right.downcast_ref::<Literal>()?,
+                ))
+            })?;
+            (column, literal, *binary.op() == Operator::NotEq, None)
+        } else {
+            let like = predicate.downcast_ref::<LikeExpr>()?;
+            (
+                like.expr().downcast_ref::<Column>()?,
+                like.pattern().downcast_ref::<Literal>()?,
+                like.negated(),
+                Some(like),
+            )
+        };
+
+    if !matches!(
+        schema.field(column.index()).data_type(),
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    ) {
+        return None;
+    }
+    let Some(value) = literal.value().try_as_str()? else {
+        // Both a comparison and its negation evaluate to NULL here.
+        return Some(0.0);
+    };
+    let column_stats = &input_stats.column_statistics[column.index()];
+    let equality_selectivity = column_stats
+        .distinct_count
+        .get_value()
+        .filter(|&&ndv| ndv > 0)
+        .map_or(default_selectivity, |&ndv| 1.0 / ndv as f64);
+    let positive_selectivity = match like {
+        Some(like) => like_selectivity(
+            value,
+            like.case_insensitive(),
+            equality_selectivity,
+            default_selectivity,
+        ),
+        None => equality_selectivity,
+    };
+    let selectivity = if negated {
+        1.0 - positive_selectivity
+    } else {
+        positive_selectivity
+    };
+
+    // Apply the complement within the non-null rows, not across all input
+    // rows. Unknown null counts use the usual assumption of no nulls.
+    match (
+        input_stats.num_rows.get_value(),
+        column_stats.null_count.get_value(),
+    ) {
+        (Some(&rows), Some(&nulls)) if rows > 0 => {
+            Some(rows.saturating_sub(nulls) as f64 * selectivity / rows as f64)
+        }
+        (Some(0), _) => Some(0.0),
+        _ => Some(selectivity),
+    }
+}
+
+/// Classifies a LIKE pattern without treating escaped wildcards as operators.
+/// In the absence of string histograms, wildcard patterns use the configured
+/// fallback, halved for each anchored end. Thus prefix/suffix patterns are
+/// estimated to match fewer rows than an unanchored contains pattern. These are
+/// heuristics, not bounds on the number of matches.
+fn like_selectivity(
+    pattern: &str,
+    case_insensitive: bool,
+    equality_selectivity: f64,
+    default_selectivity: f64,
+) -> f64 {
+    let mut chars = pattern.chars();
+    let mut has_wildcard = false;
+    let mut all_percent = !pattern.is_empty();
+    let mut starts_with_percent = false;
+    let mut ends_with_percent = false;
+    let mut first = true;
+    while let Some(ch) = chars.next() {
+        let percent = ch == '%';
+        if ch == '\\' {
+            // Arrow treats a trailing backslash as a literal backslash too.
+            chars.next();
+        } else if matches!(ch, '%' | '_') {
+            has_wildcard = true;
+        }
+        all_percent &= percent;
+        if first {
+            starts_with_percent = percent;
+            first = false;
+        }
+        ends_with_percent = percent;
+    }
+    if all_percent {
+        1.0
+    } else if !has_wildcard {
+        // Case folding may merge several distinct input values, so the raw
+        // NDV does not give the selectivity of a literal ILIKE pattern.
+        if case_insensitive {
+            default_selectivity
+        } else {
+            equality_selectivity
+        }
+    } else {
+        let start_factor = if starts_with_percent { 1.0 } else { 0.5 };
+        let end_factor = if ends_with_percent { 1.0 } else { 0.5 };
+        default_selectivity * start_factor * end_factor
+    }
 }
 
 /// Returns the checked column index, and whether the check is `IS NULL`, when
@@ -4342,6 +4494,173 @@ mod tests {
             Precision::Inexact(20)
         );
         Ok(())
+    }
+
+    #[test]
+    fn test_string_selectivity_non_string_literal() {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("name", DataType::Utf8, true)]));
+        let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("name", 0)),
+            Operator::Eq,
+            lit(42_i32),
+        ));
+        let statistics = Statistics::new_unknown(&schema);
+
+        // SQL coerces comparison operands, so exercise this defensive fallback directly.
+        assert_eq!(
+            string_selectivity(&predicate, &schema, &statistics, 0.2),
+            None
+        );
+    }
+
+    fn like_filter_statistics(
+        num_rows: Precision<usize>,
+        column: ColumnStatistics,
+        pattern: Option<&str>,
+        negated: bool,
+    ) -> Arc<Statistics> {
+        let schema = Schema::new(vec![Field::new("name", DataType::Utf8, true)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows,
+                total_byte_size: Precision::Absent,
+                column_statistics: vec![column],
+            },
+            schema.clone(),
+        ));
+        let predicate = Arc::new(LikeExpr::new(
+            negated,
+            false,
+            col("name", &schema).expect("name column exists"),
+            lit(ScalarValue::Utf8(pattern.map(str::to_owned))),
+        ));
+        let filter = FilterExec::try_new(predicate, input).expect("valid LIKE filter");
+        StatisticsContext::new()
+            .compute(&filter, &StatisticsArgs::new())
+            .expect("LIKE filter statistics")
+    }
+
+    #[test]
+    fn test_filter_statistics_like_literal_patterns() {
+        // SQL simplification rewrites these patterns before FilterExec sees
+        // them. Construct LIKE directly to exercise physical-plan callers too.
+        for (pattern, positive_rows, negative_rows) in [
+            (Some("%"), 800, 0),
+            (Some("%%%"), 800, 0),
+            (Some(""), 40, 760),
+            (Some(r"\%"), 40, 760),
+            (Some(r"\_"), 40, 760),
+            (Some(r"\%%"), 80, 720),
+            (Some(r"%\%"), 80, 720),
+            (None, 0, 0),
+        ] {
+            for (negated, expected_rows) in
+                [(false, positive_rows), (true, negative_rows)]
+            {
+                let statistics = like_filter_statistics(
+                    Precision::Exact(1000),
+                    ColumnStatistics {
+                        null_count: Precision::Exact(200),
+                        distinct_count: Precision::Exact(20),
+                        ..Default::default()
+                    },
+                    pattern,
+                    negated,
+                );
+                assert_eq!(
+                    statistics.num_rows,
+                    Precision::Inexact(expected_rows),
+                    "pattern={pattern:?}, negated={negated}"
+                );
+                assert_eq!(
+                    statistics.column_statistics[0].null_count,
+                    Precision::Exact(0)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_filter_statistics_like_missing_or_zero_counts() {
+        use Precision::{Absent, Exact, Inexact};
+
+        for (rows, nulls, distinct, positive_rows, negative_rows) in [
+            (Exact(1000), Absent, Exact(20), Inexact(50), Inexact(950)),
+            (
+                Exact(1000),
+                Exact(200),
+                Exact(0),
+                Inexact(160),
+                Inexact(640),
+            ),
+            (Exact(1000), Exact(1000), Exact(0), Inexact(0), Inexact(0)),
+            (Exact(0), Exact(0), Exact(0), Exact(0), Exact(0)),
+            (Inexact(0), Absent, Absent, Inexact(0), Inexact(0)),
+            (Absent, Absent, Exact(20), Absent, Absent),
+        ] {
+            for (negated, expected_rows) in
+                [(false, positive_rows), (true, negative_rows)]
+            {
+                let statistics = like_filter_statistics(
+                    rows,
+                    ColumnStatistics {
+                        null_count: nulls,
+                        distinct_count: distinct,
+                        ..Default::default()
+                    },
+                    Some(""),
+                    negated,
+                );
+                assert_eq!(
+                    statistics.num_rows, expected_rows,
+                    "rows={rows:?}, nulls={nulls:?}, distinct={distinct:?}, negated={negated}"
+                );
+                assert_eq!(statistics.column_statistics[0].null_count, Exact(0));
+            }
+        }
+    }
+
+    #[test]
+    fn test_filter_statistics_like_column_pattern_rejects_nulls() {
+        let schema = Schema::new(vec![
+            Field::new("name", DataType::Utf8, true),
+            Field::new("pattern", DataType::Utf8, true),
+        ]);
+        for negated in [false, true] {
+            let input = Arc::new(StatisticsExec::new(
+                Statistics {
+                    num_rows: Precision::Exact(1000),
+                    total_byte_size: Precision::Absent,
+                    column_statistics: [200, 300]
+                        .into_iter()
+                        .map(|nulls| ColumnStatistics {
+                            null_count: Precision::Exact(nulls),
+                            distinct_count: Precision::Exact(20),
+                            ..Default::default()
+                        })
+                        .collect(),
+                },
+                schema.clone(),
+            ));
+            let predicate = Arc::new(LikeExpr::new(
+                negated,
+                false,
+                col("name", &schema).expect("name column exists"),
+                col("pattern", &schema).expect("pattern column exists"),
+            ));
+            let filter =
+                FilterExec::try_new(predicate, input).expect("valid LIKE filter");
+            let statistics = StatisticsContext::new()
+                .compute(&filter, &StatisticsArgs::new())
+                .expect("LIKE filter statistics");
+            // A varying pattern retains the fallback estimate, but neither
+            // operand can be NULL in any surviving row.
+            assert_eq!(statistics.num_rows, Precision::Inexact(200));
+            for column in &statistics.column_statistics {
+                assert_eq!(column.null_count, Precision::Exact(0));
+            }
+        }
     }
 
     #[test]
