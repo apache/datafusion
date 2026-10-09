@@ -420,6 +420,10 @@ async fn test_sql_case_field_metadata() -> Result<()> {
             true,
         ),
         (
+            "SELECT CASE flag WHEN TRUE THEN a ELSE b END AS value FROM t",
+            true,
+        ),
+        (
             "SELECT CASE WHEN flag THEN a ELSE NULL END AS value FROM t",
             true,
         ),
