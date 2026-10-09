@@ -316,7 +316,8 @@ async fn test_static_filter_pushdown_through_hash_join() {
     );
 
     let join_schema = join.schema();
-    // Filter on build side column (preserved): should be pushed down
+    // Filter on the build side key (preserved): pushed down, and transferred
+    // across the join keys to prune the probe side too
     let left_filter = col_lit_predicate("a", "aa", &join_schema);
     // Filter on probe side column (not preserved): should NOT be pushed down
     let right_filter = col_lit_predicate("e", "ba", &join_schema);
@@ -340,7 +341,7 @@ async fn test_static_filter_pushdown_through_hash_join() {
           - FilterExec: e@4 = ba
           -   HashJoinExec: mode=Partitioned, join_type=Left, on=[(a@0, d@0)]
           -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = aa
-          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true, predicate=d@0 = aa
     "
     );
 }
@@ -2859,6 +2860,625 @@ async fn test_hashjoin_dynamic_filter_transferred_through_nested_join() {
     +----+----+-----+----+-----+
     ",
     );
+}
+
+// ==== Prune-only key transfer: Left, Right, LeftMark and RightMark joins ====
+//
+// These joins also emit unmatched rows of their preserved side, so a filter
+// over the preserved side's key, transferred to the other side, may only prune
+// that side's input. It never makes the filter hold for the join's output.
+
+/// The side of a [`prune_only_join`] whose rows the join type preserves.
+fn prune_only_preserved_side(join_type: JoinType) -> datafusion_common::JoinSide {
+    match join_type {
+        JoinType::Left | JoinType::LeftMark | JoinType::LeftAnti => {
+            datafusion_common::JoinSide::Left
+        }
+        JoinType::Right | JoinType::RightMark | JoinType::RightAnti => {
+            datafusion_common::JoinSide::Right
+        }
+        other => panic!("{other} has no single preserved side"),
+    }
+}
+
+/// Options of a [`prune_only_join`].
+#[derive(Clone, Copy)]
+struct PruneOnlyJoin {
+    join_type: JoinType,
+    null_equality: datafusion_common::NullEquality,
+    null_aware: bool,
+    /// Whether the left / right scan accepts pushed down filters.
+    left_support: bool,
+    right_support: bool,
+    /// Matching pairs must also satisfy `rv != 'r2'`.
+    join_filter: bool,
+}
+
+impl PruneOnlyJoin {
+    fn new(join_type: JoinType) -> Self {
+        Self {
+            join_type,
+            null_equality: datafusion_common::NullEquality::NullEqualsNothing,
+            null_aware: false,
+            left_support: false,
+            right_support: false,
+            join_filter: false,
+        }
+    }
+
+    fn with_support(mut self, left_support: bool, right_support: bool) -> Self {
+        self.left_support = left_support;
+        self.right_support = right_support;
+        self
+    }
+}
+
+/// `left(lk, lv) JOIN right(rk, rv) ON lk = rk` over NULL, duplicate and
+/// one-sided keys.
+fn prune_only_join(options: PruneOnlyJoin) -> Arc<HashJoinExec> {
+    let PruneOnlyJoin {
+        join_type,
+        null_equality,
+        null_aware,
+        left_support,
+        right_support,
+        join_filter,
+    } = options;
+    use datafusion_common::JoinSide;
+    use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
+
+    let left_schema = Arc::new(Schema::new(vec![
+        Field::new("lk", DataType::Utf8, true),
+        Field::new("lv", DataType::Utf8, false),
+    ]));
+    let left_scan = TestScanBuilder::new(Arc::clone(&left_schema))
+        .with_support(left_support)
+        .with_batches(vec![
+            record_batch!(
+                (
+                    "lk",
+                    Utf8,
+                    [Some("aa"), Some("aa"), Some("bb"), None, Some("cc")]
+                ),
+                ("lv", Utf8, ["l1", "l2", "l3", "l4", "l5"])
+            )
+            .unwrap(),
+        ])
+        .build();
+
+    let right_schema = Arc::new(Schema::new(vec![
+        Field::new("rk", DataType::Utf8, true),
+        Field::new("rv", DataType::Utf8, false),
+    ]));
+    let right_scan = TestScanBuilder::new(Arc::clone(&right_schema))
+        .with_support(right_support)
+        .with_batches(vec![
+            record_batch!(
+                (
+                    "rk",
+                    Utf8,
+                    [Some("aa"), Some("bb"), Some("bb"), None, Some("dd"), None]
+                ),
+                ("rv", Utf8, ["r1", "r2", "r3", "r4", "r5", "r6"])
+            )
+            .unwrap(),
+        ])
+        .build();
+
+    let filter = join_filter.then(|| {
+        let intermediate =
+            Arc::new(Schema::new(vec![Field::new("rv", DataType::Utf8, false)]));
+        JoinFilter::new(
+            Arc::new(BinaryExpr::new(
+                col("rv", &intermediate).unwrap(),
+                Operator::NotEq,
+                Arc::new(Literal::new(ScalarValue::from("r2"))),
+            )),
+            vec![ColumnIndex {
+                index: 1,
+                side: JoinSide::Right,
+            }],
+            intermediate,
+        )
+    });
+
+    Arc::new(
+        HashJoinExec::try_new(
+            left_scan,
+            right_scan,
+            vec![(
+                col("lk", &left_schema).unwrap(),
+                col("rk", &right_schema).unwrap(),
+            )],
+            filter,
+            &join_type,
+            None,
+            PartitionMode::CollectLeft,
+            null_equality,
+            null_aware,
+        )
+        .unwrap(),
+    )
+}
+
+/// Runs `FilterPushdown` with row-level pushdown on and collects the rows,
+/// one formatted string per row, sorted.
+async fn prune_only_run(
+    plan: Arc<dyn ExecutionPlan>,
+) -> (Arc<dyn ExecutionPlan>, Vec<String>) {
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    let optimized = FilterPushdown::new().optimize(plan, &config).unwrap();
+    let session_ctx = SessionContext::new();
+    session_ctx.register_object_store(
+        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+        Arc::new(InMemory::new()),
+    );
+    let batches = collect(Arc::clone(&optimized), session_ctx.task_ctx())
+        .await
+        .unwrap();
+    let formatted = pretty_format_batches(&batches).unwrap().to_string();
+    let mut rows: Vec<String> = formatted
+        .lines()
+        .filter(|line| line.starts_with('|'))
+        .skip(1) // header
+        .map(str::to_string)
+        .collect();
+    rows.sort();
+    (optimized, rows)
+}
+
+/// The `predicate=` of each scan in `plan`, left scan first.
+fn scan_predicates(plan: &Arc<dyn ExecutionPlan>) -> Vec<Option<String>> {
+    format_plan_for_test(plan)
+        .lines()
+        .filter(|line| line.contains("DataSourceExec"))
+        .map(|line| {
+            line.split_once("predicate=")
+                .map(|(_, predicate)| predicate.to_string())
+        })
+        .collect()
+}
+
+/// Predicates over the preserved side's key `k` that behave differently on
+/// NULL, which is where a transferred copy could go wrong.
+fn prune_only_predicates(
+    key: &str,
+    schema: &Schema,
+) -> Vec<(&'static str, Arc<dyn PhysicalExpr>)> {
+    use datafusion_physical_expr::expressions::NotExpr;
+    let eq = || col_lit_predicate(key, "aa", schema);
+    let is_null =
+        || Arc::new(IsNullExpr::new(col(key, schema).unwrap())) as Arc<dyn PhysicalExpr>;
+    vec![
+        ("k = aa", eq()),
+        ("k IS NULL", is_null()),
+        ("NOT (k = aa)", Arc::new(NotExpr::new(eq()))),
+        (
+            "k = aa OR k IS NULL",
+            Arc::new(BinaryExpr::new(eq(), Operator::Or, is_null())),
+        ),
+    ]
+}
+
+/// Whatever the scans accept, the rows are those of the plan in which no scan
+/// accepts anything: a transferred copy only prunes rows that cannot pair with
+/// a row passing the filter, and never stands in for the filter itself.
+#[tokio::test]
+async fn test_hashjoin_prune_only_transfer_differential() {
+    use datafusion_common::{JoinSide, NullEquality};
+
+    for join_type in [
+        JoinType::Left,
+        JoinType::Right,
+        JoinType::LeftMark,
+        JoinType::RightMark,
+    ] {
+        let key = match prune_only_preserved_side(join_type) {
+            JoinSide::Left => "lk",
+            _ => "rk",
+        };
+        for null_equality in [
+            NullEquality::NullEqualsNothing,
+            NullEquality::NullEqualsNull,
+        ] {
+            for join_filter in [false, true] {
+                let options = PruneOnlyJoin {
+                    null_equality,
+                    join_filter,
+                    ..PruneOnlyJoin::new(join_type)
+                };
+                let schema = prune_only_join(options).schema();
+                for (name, _) in prune_only_predicates(key, &schema) {
+                    let run = |left_support: bool, right_support: bool| {
+                        let join = prune_only_join(
+                            options.with_support(left_support, right_support),
+                        );
+                        let predicate = prune_only_predicates(key, &join.schema())
+                            .into_iter()
+                            .find(|(n, _)| *n == name)
+                            .unwrap()
+                            .1;
+                        prune_only_run(Arc::new(
+                            FilterExec::try_new(predicate, join).unwrap(),
+                        ))
+                    };
+                    let (_, expected) = run(false, false).await;
+                    for (left_support, right_support) in
+                        [(true, false), (false, true), (true, true)]
+                    {
+                        let (plan, rows) = run(left_support, right_support).await;
+                        assert_eq!(
+                            rows,
+                            expected,
+                            "{join_type} {null_equality:?} join_filter={join_filter} \
+                             `{name}` left_support={left_support} \
+                             right_support={right_support}\n{}",
+                            format_plan_for_test(&plan)
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The copy reaches the non-preserved scan, and it alone does not remove the
+/// filter: only the preserved side's scan accepting it does.
+#[tokio::test]
+async fn test_hashjoin_prune_only_transfer_keeps_parent_filter() {
+    use datafusion_common::JoinSide;
+
+    for join_type in [
+        JoinType::Left,
+        JoinType::Right,
+        JoinType::LeftMark,
+        JoinType::RightMark,
+    ] {
+        let preserved = prune_only_preserved_side(join_type);
+        let (key, other_key, preserved_idx) = match preserved {
+            JoinSide::Left => ("lk", "rk", 0),
+            _ => ("rk", "lk", 1),
+        };
+        let plan = |preserved_support: bool| {
+            let (left_support, right_support) = match preserved {
+                JoinSide::Left => (preserved_support, true),
+                _ => (true, preserved_support),
+            };
+            let join = prune_only_join(
+                PruneOnlyJoin::new(join_type).with_support(left_support, right_support),
+            );
+            let predicate = col_lit_predicate(key, "aa", &join.schema());
+            Arc::new(FilterExec::try_new(predicate, join).unwrap())
+                as Arc<dyn ExecutionPlan>
+        };
+
+        // Only the non-preserved scan accepts filters: it gets the copy, the
+        // filter stays.
+        let (optimized, _) = prune_only_run(plan(false)).await;
+        assert!(
+            optimized.downcast_ref::<FilterExec>().is_some(),
+            "{join_type}: the transferred copy must not remove the filter\n{}",
+            format_plan_for_test(&optimized)
+        );
+        let predicates = scan_predicates(&optimized);
+        assert_eq!(predicates[preserved_idx], None, "{join_type}");
+        assert_eq!(
+            predicates[1 - preserved_idx],
+            Some(format!("{other_key}@0 = aa")),
+            "{join_type}"
+        );
+
+        // Both scans accept: the preserved side applies the filter exactly,
+        // so it is gone, and the other side is pruned too.
+        let (optimized, _) = prune_only_run(plan(true)).await;
+        assert!(
+            optimized.downcast_ref::<HashJoinExec>().is_some(),
+            "{join_type}: the preserved side accepted the filter\n{}",
+            format_plan_for_test(&optimized)
+        );
+        let predicates = scan_predicates(&optimized);
+        assert_eq!(
+            predicates[preserved_idx],
+            Some(format!("{key}@0 = aa")),
+            "{join_type}"
+        );
+        assert_eq!(
+            predicates[1 - preserved_idx],
+            Some(format!("{other_key}@0 = aa")),
+            "{join_type}"
+        );
+    }
+}
+
+#[test]
+fn test_hashjoin_prune_only_transfer_left_join_plan() {
+    let join =
+        prune_only_join(PruneOnlyJoin::new(JoinType::Left).with_support(false, true));
+    let predicate = col_lit_predicate("lk", "aa", &join.schema());
+    let plan = Arc::new(FilterExec::try_new(predicate, join).unwrap());
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: lk@0 = aa
+        -   HashJoinExec: mode=CollectLeft, join_type=Left, on=[(lk@0, rk@0)]
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[lk, lv], file_type=test, pushdown_supported=false
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[rk, rv], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - FilterExec: lk@0 = aa
+          -   HashJoinExec: mode=CollectLeft, join_type=Left, on=[(lk@0, rk@0)]
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[lk, lv], file_type=test, pushdown_supported=false
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[rk, rv], file_type=test, pushdown_supported=true, predicate=rk@0 = aa
+    "
+    );
+}
+
+/// Nothing is transferred where it would be wrong: from the non-preserved
+/// side (its key is also NULL for unmatched rows, so `rk IS NULL` above a left
+/// join says nothing about `lk`), for non-key and mark columns, and for full,
+/// anti and null-aware joins.
+#[tokio::test]
+async fn test_hashjoin_prune_only_transfer_negative_cases() {
+    let is_null = |name: &str, schema: &Schema| {
+        Arc::new(IsNullExpr::new(col(name, schema).unwrap())) as Arc<dyn PhysicalExpr>
+    };
+    type Predicate = Box<dyn Fn(&Schema) -> Arc<dyn PhysicalExpr>>;
+    let cases: Vec<(&str, JoinType, bool, Predicate)> = vec![
+        (
+            "left join, non-preserved key",
+            JoinType::Left,
+            false,
+            Box::new(move |s| is_null("rk", s)),
+        ),
+        (
+            "right join, non-preserved key",
+            JoinType::Right,
+            false,
+            Box::new(move |s| is_null("lk", s)),
+        ),
+        (
+            "left join, non-key column",
+            JoinType::Left,
+            false,
+            Box::new(|s| col_lit_predicate("lv", "l1", s)),
+        ),
+        (
+            "left mark join, mark column",
+            JoinType::LeftMark,
+            false,
+            Box::new(|s| col_lit_predicate("mark", true, s)),
+        ),
+        (
+            "full join",
+            JoinType::Full,
+            false,
+            Box::new(|s| col_lit_predicate("lk", "aa", s)),
+        ),
+        (
+            "left anti join",
+            JoinType::LeftAnti,
+            false,
+            Box::new(|s| col_lit_predicate("lk", "aa", s)),
+        ),
+        (
+            "right anti join",
+            JoinType::RightAnti,
+            false,
+            Box::new(|s| col_lit_predicate("rk", "aa", s)),
+        ),
+        (
+            "null-aware left mark join",
+            JoinType::LeftMark,
+            true,
+            Box::new(|s| col_lit_predicate("lk", "aa", s)),
+        ),
+        (
+            "null-aware left anti join",
+            JoinType::LeftAnti,
+            true,
+            Box::new(|s| col_lit_predicate("lk", "aa", s)),
+        ),
+    ];
+
+    for (name, join_type, null_aware, predicate) in cases {
+        let run = |support: bool| {
+            let join = prune_only_join(
+                PruneOnlyJoin {
+                    null_aware,
+                    ..PruneOnlyJoin::new(join_type)
+                }
+                .with_support(support, support),
+            );
+            let predicate = predicate(&join.schema());
+            prune_only_run(Arc::new(FilterExec::try_new(predicate, join).unwrap()))
+        };
+        let (_, expected) = run(false).await;
+        let (optimized, rows) = run(true).await;
+        assert_eq!(
+            rows,
+            expected,
+            "{name}\n{}",
+            format_plan_for_test(&optimized)
+        );
+
+        // At most one scan holds the predicate: the side that owns its
+        // columns, never a transferred copy on the other side.
+        let holders = scan_predicates(&optimized)
+            .iter()
+            .filter(|predicate| predicate.is_some())
+            .count();
+        assert!(
+            holders <= 1,
+            "{name}: unexpected transfer\n{}",
+            format_plan_for_test(&optimized)
+        );
+    }
+}
+
+/// With a `fetch` on the join, pruning must not change which rows fill it.
+///
+/// The filter keeps `bb`, and both inputs start with `aa`, whose duplicate
+/// matches fill a small `fetch` before any `bb` row. Pruning an outer join's
+/// other side would collapse them into one NULL-extended row and let a `bb`
+/// row in, so Left and Right joins transfer nothing here. A mark join emits
+/// one row per preserved row either way, so it keeps the transfer.
+#[tokio::test]
+async fn test_hashjoin_prune_only_transfer_with_fetch() {
+    use datafusion_common::JoinSide;
+
+    for (join_type, transfers) in [
+        (JoinType::Left, false),
+        (JoinType::Right, false),
+        (JoinType::LeftMark, true),
+        (JoinType::RightMark, true),
+    ] {
+        let key = match prune_only_preserved_side(join_type) {
+            JoinSide::Left => "lk",
+            _ => "rk",
+        };
+        for fetch in 1..=6 {
+            let run = |support: bool| {
+                // Only the side that is not preserved accepts filters.
+                let (left_support, right_support) =
+                    match prune_only_preserved_side(join_type) {
+                        JoinSide::Left => (false, support),
+                        _ => (support, false),
+                    };
+                let join = prune_only_join(
+                    PruneOnlyJoin::new(join_type)
+                        .with_support(left_support, right_support),
+                );
+                let predicate = col_lit_predicate(key, "bb", &join.schema());
+                let join = join.with_fetch(Some(fetch)).unwrap();
+                prune_only_run(Arc::new(FilterExec::try_new(predicate, join).unwrap()))
+            };
+            let (_, expected) = run(false).await;
+            let (optimized, rows) = run(true).await;
+            let context = format!(
+                "{join_type} fetch={fetch}\n{}",
+                format_plan_for_test(&optimized)
+            );
+            assert_eq!(rows, expected, "{context}");
+            let transferred = scan_predicates(&optimized).iter().any(Option::is_some);
+            assert_eq!(transferred, transfers, "{context}");
+        }
+    }
+}
+
+/// An upper join's dynamic filter over the preserved key of a left join below
+/// it prunes that join's other input as well.
+///
+/// The preserved scan does not accept filters, so the left join's own dynamic
+/// filter still holds every `mid` key: the rows the bottom scan drops are
+/// dropped by the transferred filter alone. `ab` has no match below, so its
+/// row is NULL-extended with or without the pruning.
+#[tokio::test]
+async fn test_hashjoin_dynamic_filter_prune_only_through_left_join() {
+    let top_schema = Arc::new(Schema::new(vec![Field::new("t", DataType::Utf8, false)]));
+    let top_scan = TestScanBuilder::new(Arc::clone(&top_schema))
+        .with_support(true)
+        .with_batches(vec![record_batch!(("t", Utf8, ["aa", "ab"])).unwrap()])
+        .build();
+
+    let mid_schema = Arc::new(Schema::new(vec![
+        Field::new("m", DataType::Utf8, false),
+        Field::new("c", DataType::Float64, false),
+    ]));
+    let mid_scan = TestScanBuilder::new(Arc::clone(&mid_schema))
+        .with_support(false)
+        .with_batches(vec![
+            record_batch!(
+                ("m", Utf8, ["aa", "ab", "ac", "ad"]),
+                ("c", Float64, [1.0, 2.0, 3.0, 4.0])
+            )
+            .unwrap(),
+        ])
+        .build();
+
+    let bottom_schema = Arc::new(Schema::new(vec![
+        Field::new("x", DataType::Utf8, false),
+        Field::new("e", DataType::Float64, false),
+    ]));
+    let bottom_scan = TestScanBuilder::new(Arc::clone(&bottom_schema))
+        .with_support(true)
+        .with_batches(vec![
+            record_batch!(
+                ("x", Utf8, ["aa", "ac", "ad"]),
+                ("e", Float64, [1.0, 3.0, 4.0])
+            )
+            .unwrap(),
+        ])
+        .build();
+
+    let lower_join = Arc::new(
+        HashJoinExec::try_new(
+            mid_scan,
+            Arc::clone(&bottom_scan),
+            vec![(
+                col("m", &mid_schema).unwrap(),
+                col("x", &bottom_schema).unwrap(),
+            )],
+            None,
+            &JoinType::Left,
+            None,
+            PartitionMode::CollectLeft,
+            datafusion_common::NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    );
+    let lower_schema = lower_join.schema();
+    let upper_join = Arc::new(
+        HashJoinExec::try_new(
+            top_scan,
+            lower_join,
+            vec![(
+                col("t", &top_schema).unwrap(),
+                col("m", &lower_schema).unwrap(),
+            )],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            datafusion_common::NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    ) as Arc<dyn ExecutionPlan>;
+
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let (plan, batches) = optimize_and_collect_pushdown_plan(upper_join, config).await;
+
+    insta::assert_snapshot!(
+        format_plan_for_test(&plan),
+        @r"
+    - HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t@0, m@0)]
+    -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[t], file_type=test, pushdown_supported=true
+    -   HashJoinExec: mode=CollectLeft, join_type=Left, on=[(m@0, x@0)]
+    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[m, c], file_type=test, pushdown_supported=false
+    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[x, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ x@0 >= aa AND x@0 <= ad AND x@0 IN (SET) ([aa, ab, ac, ad]) ] AND DynamicFilter [ x@0 >= aa AND x@0 <= ab AND x@0 IN (SET) ([aa, ab]) ]
+    "
+    );
+
+    // The left join's own filter lets all three `bottom` rows through; the
+    // transferred filter from `top` keeps only `aa`.
+    assert_eq!(bottom_scan.metrics().unwrap().output_rows().unwrap(), 1);
+
+    #[rustfmt::skip]
+    let expected = [
+        "+----+----+-----+----+-----+",
+        "| t  | m  | c   | x  | e   |",
+        "+----+----+-----+----+-----+",
+        "| aa | aa | 1.0 | aa | 1.0 |",
+        "| ab | ab | 2.0 |    |     |",
+        "+----+----+-----+----+-----+",
+    ];
+    assert_batches_sorted_eq!(expected, &batches);
 }
 
 #[test]

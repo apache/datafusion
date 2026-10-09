@@ -116,6 +116,44 @@ JOIN dim d ON d.d_key = m.m_key;
 one 10 100
 three 30 300
 
+# With a left join below, `mid` is the preserved side and `fact` is not. The
+# `dim` filter over `m_key` still reaches the `fact` scan: there the copy only
+# prunes `fact` rows that cannot match a `mid` row the filter keeps, it never
+# stands in for the filter itself.
+query TT
+EXPLAIN SELECT d.d_val, m.m_c, f.f_e
+FROM mid m
+LEFT JOIN fact f ON m.m_key = f.f_key
+JOIN dim d ON d.d_key = m.m_key;
+----
+logical_plan
+01)Projection: d.d_val, m.m_c, f.f_e
+02)--Inner Join: m.m_key = d.d_key
+03)----Projection: m.m_key, m.m_c, f.f_e
+04)------Left Join: m.m_key = f.f_key
+05)--------SubqueryAlias: m
+06)----------TableScan: mid projection=[m_key, m_c]
+07)--------SubqueryAlias: f
+08)----------TableScan: fact projection=[f_key, f_e]
+09)----SubqueryAlias: d
+10)------TableScan: dim projection=[d_key, d_val]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(d_key@0, m_key@0)], projection=[d_val@1, m_c@3, f_e@4]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/join_dynamic_filter_transfer/dim.parquet]]}, projection=[d_key, d_val], file_type=parquet
+03)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)----HashJoinExec: mode=CollectLeft, join_type=Left, on=[(m_key@0, f_key@0)], projection=[m_key@0, m_c@1, f_e@3]
+05)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/join_dynamic_filter_transfer/mid.parquet]]}, projection=[m_key, m_c], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+06)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/join_dynamic_filter_transfer/fact.parquet]]}, projection=[f_key, f_e], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+
+query TII rowsort
+SELECT d.d_val, m.m_c, f.f_e
+FROM mid m
+LEFT JOIN fact f ON m.m_key = f.f_key
+JOIN dim d ON d.d_key = m.m_key;
+----
+one 10 100
+three 30 300
+
 statement ok
 DROP TABLE dim;
 
