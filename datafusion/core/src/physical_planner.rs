@@ -3555,10 +3555,12 @@ mod tests {
     use datafusion_catalog::CatalogProviderList;
     use datafusion_common::Statistics;
     use datafusion_common::config::{ConfigOptions, TableOptions};
+    use datafusion_common::stats::Precision;
     use datafusion_common::{
         DFSchemaRef, ScalarValue, SplitPoint, TableReference, ToDFSchema as _,
         assert_batches_eq, assert_contains,
     };
+    use datafusion_datasource::source::DataSourceExec;
     use datafusion_execution::TaskContext;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_expr::builder::subquery_alias;
@@ -3576,7 +3578,9 @@ mod tests {
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_physical_expr::EquivalenceProperties;
     use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
-    use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
+    use datafusion_physical_plan::operator_statistics::{
+        ClosureStatisticsProvider, StatisticsRegistry, StatisticsResult,
+    };
     use datafusion_physical_plan::statistics::StatisticsArgs;
     use datafusion_physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
     use datafusion_session::QueryPlanner;
@@ -3886,6 +3890,50 @@ mod tests {
         let recorded = recorded.lock();
         assert_eq!(recorded.len(), 2);
         assert!(Arc::ptr_eq(&recorded[0], &recorded[1]));
+        Ok(())
+    }
+
+    /// `AggregateStatistics` trusts an `Exact` row count from a registered
+    /// provider: it answers `COUNT(*)` without scanning
+    #[tokio::test]
+    async fn aggregate_statistics_consults_statistics_providers() -> Result<()> {
+        let provider = ClosureStatisticsProvider::with_matches(
+            |plan| plan.is::<DataSourceExec>(),
+            |plan, child_stats| {
+                let child_stats = child_stats
+                    .iter()
+                    .map(|c| Arc::clone(c.base_arc()))
+                    .collect::<Vec<_>>();
+                let mut stats = Arc::unwrap_or_clone(
+                    plan.statistics_from_inputs(&child_stats, &StatisticsArgs::new())?,
+                );
+                stats.num_rows = Precision::Exact(42);
+                Ok(StatisticsResult::Computed(stats.into()))
+            },
+        );
+        let state = SessionStateBuilder::new()
+            .with_default_features()
+            .with_statistics_registry(StatisticsRegistry::with_providers(vec![Arc::new(
+                provider,
+            )]))
+            .build();
+        let ctx = SessionContext::new_with_state(state);
+        ctx.sql("CREATE TABLE t AS VALUES (1), (2), (3)")
+            .await?
+            .collect()
+            .await?;
+
+        let batches = ctx.sql("SELECT COUNT(*) FROM t").await?.collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----------+",
+                "| count(*) |",
+                "+----------+",
+                "| 42       |",
+                "+----------+"
+            ],
+            &batches
+        );
         Ok(())
     }
 
