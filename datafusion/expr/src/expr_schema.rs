@@ -1687,6 +1687,19 @@ mod tests {
             when(lit(true), marked_call(col("a"))).otherwise(marked_call(col("b")))?;
         assert_eq!(marked_case.to_field(&schema)?.1.metadata(), &shared);
 
+        let mut deep_function = col("a");
+        for _ in 0..9 {
+            deep_function = marked_call(deep_function);
+        }
+        let deep_function_case = when(lit(true), deep_function).otherwise(col("b"))?;
+        assert!(
+            deep_function_case
+                .to_field(&schema)?
+                .1
+                .metadata()
+                .is_empty()
+        );
+
         let nested_arg = when(lit(true), col("a")).otherwise(col("b"))?;
         let nested_call = when(lit(true), marked_call(nested_arg)).otherwise(col("b"))?;
         assert_eq!(nested_call.to_field(&schema)?.1.metadata(), &shared);
