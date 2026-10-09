@@ -210,6 +210,7 @@ use itertools::Itertools;
 use topk::hash_table::is_supported_hash_key_type;
 use topk::heap::is_supported_heap_type;
 
+mod aggregate_argument;
 mod aggregate_hash_table;
 mod aggregate_stream;
 pub mod group_values;

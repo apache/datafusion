@@ -1987,6 +1987,22 @@ mod tests {
     }
 
     #[test]
+    fn test_passthrough_skips_coalesce_partitions_with_fetch() -> Result<()> {
+        use crate::coalesce_partitions::CoalescePartitionsExec;
+
+        let registry = StatisticsRegistry::with_providers(vec![Arc::new(
+            PassthroughStatisticsProvider,
+        )]);
+        let source = make_source(1000);
+        let coalesce: Arc<dyn ExecutionPlan> =
+            Arc::new(CoalescePartitionsExec::new(source).with_fetch(Some(10)));
+
+        let stats = compute(&registry, coalesce.as_ref())?;
+        assert_eq!(stats.base.num_rows, Precision::Exact(10));
+        Ok(())
+    }
+
+    #[test]
     fn test_chain_priority() -> Result<()> {
         let mut registry = StatisticsRegistry::new();
         registry.register(Arc::new(OverrideFilterProvider {

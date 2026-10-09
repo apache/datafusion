@@ -67,10 +67,12 @@ jobs:
         run: |
           set -x
           cd asf-site/
+          # don't delete old versions of the docs (see versions/ in asf-site)
           rsync \
             -a \
             --delete \
             --exclude '/.git/' \
+            --exclude '/versions/' \
             ../docs/build/html/ \
             ./
           cp ../.asf.yaml .
