@@ -1303,15 +1303,21 @@ fn case_result_field_metadata(
 
     enum Work<'a> {
         Visit(&'a dyn PhysicalExpr),
-        FinishCase(&'a CaseBody),
+        FinishCase(&'a CaseExpr),
         FinishCast(&'a DataType),
     }
 
-    fn schedule_case<'a>(case: &'a CaseBody, work: &mut Vec<Work<'a>>) {
+    fn schedule_case<'a>(case: &'a CaseExpr, work: &mut Vec<Work<'a>>) {
         work.push(Work::FinishCase(case));
-        work.extend(case.else_expr.iter().map(|expr| Work::Visit(expr.as_ref())));
         work.extend(
-            case.when_then_expr
+            case.body
+                .else_expr
+                .iter()
+                .map(|expr| Work::Visit(expr.as_ref())),
+        );
+        work.extend(
+            case.body
+                .when_then_expr
                 .iter()
                 .rev()
                 .map(|(_, expr)| Work::Visit(expr.as_ref())),
@@ -1320,12 +1326,12 @@ fn case_result_field_metadata(
 
     let mut work = Vec::new();
     let mut fields = Vec::new();
-    schedule_case(&case.body, &mut work);
+    schedule_case(case, &mut work);
     while let Some(item) = work.pop() {
         match item {
             Work::Visit(expr) => {
                 if let Some(nested) = expr.downcast_ref::<CaseExpr>() {
-                    schedule_case(&nested.body, &mut work);
+                    schedule_case(nested, &mut work);
                 } else if let Some(cast) = expr.downcast_ref::<CastExpr>() {
                     if let Some(metadata) = cast.target_metadata() {
                         fields.push(BranchField {
@@ -1393,8 +1399,8 @@ fn case_result_field_metadata(
                 fields.push(source);
             }
             Work::FinishCase(case) => {
-                let count =
-                    case.when_then_expr.len() + usize::from(case.else_expr.is_some());
+                let count = case.body.when_then_expr.len()
+                    + usize::from(case.body.else_expr.is_some());
                 if fields.len() < count {
                     return internal_err!("Missing CASE result fields");
                 }
@@ -1406,7 +1412,7 @@ fn case_result_field_metadata(
                 let mut conflict = false;
                 let mut certainly_null = true;
                 for (index, branch) in fields.drain(start..).enumerate() {
-                    if index < case.when_then_expr.len() {
+                    if index < case.body.when_then_expr.len() {
                         if then_type.is_null() && !branch.data_type.is_null() {
                             then_type = branch.data_type.clone();
                         }
@@ -1440,9 +1446,18 @@ fn case_result_field_metadata(
                 if conflict || marked_type.as_ref() != Some(&data_type) {
                     metadata = None;
                 }
+                let mut metadata = metadata.unwrap_or_default();
+                if let Some((logical_type, logical_metadata)) = &case.logical_result_field
+                {
+                    metadata = if logical_type == &data_type {
+                        logical_metadata.to_hashmap()
+                    } else {
+                        Metadata::new()
+                    };
+                }
                 fields.push(BranchField {
                     data_type,
-                    metadata: metadata.unwrap_or_default(),
+                    metadata,
                     certainly_null,
                 });
             }
@@ -1669,6 +1684,7 @@ impl PhysicalExpr for CaseExpr {
             body,
             // Derived from `body` by `try_new` on decode.
             eval_method: _,
+            logical_result_field: _,
         } = self;
         let CaseBody {
             expr,
@@ -1697,6 +1713,16 @@ impl PhysicalExpr for CaseExpr {
                         .as_ref()
                         .map(|expr| ctx.encode_child(expr).map(Box::new))
                         .transpose()?,
+                    logical_result_type: self
+                        .logical_result_field
+                        .as_ref()
+                        .map(|(data_type, _)| data_type.try_into())
+                        .transpose()?,
+                    logical_result_metadata: self
+                        .logical_result_field
+                        .as_ref()
+                        .map(|(_, metadata)| metadata.to_hashmap())
+                        .unwrap_or_default(),
                 },
             ))),
         }))
@@ -1722,9 +1748,11 @@ impl CaseExpr {
             expr,
             when_then_expr,
             else_expr,
+            logical_result_type,
+            logical_result_metadata,
         } = &**case;
 
-        Ok(Arc::new(CaseExpr::try_new(
+        let mut expr = CaseExpr::try_new(
             expr.as_deref().map(|expr| ctx.decode(expr)).transpose()?,
             when_then_expr
                 .iter()
@@ -1751,7 +1779,16 @@ impl CaseExpr {
                 .as_deref()
                 .map(|expr| ctx.decode(expr))
                 .transpose()?,
-        )?))
+        )?;
+        if let Some(logical_type) = logical_result_type {
+            expr.logical_result_field = Some((
+                logical_type.try_into()?,
+                FieldMetadata::from(logical_result_metadata.clone()),
+            ));
+        } else if !logical_result_metadata.is_empty() {
+            return internal_err!("CaseExpr logical metadata requires a result type");
+        }
+        Ok(Arc::new(expr))
     }
 }
 
@@ -4112,6 +4149,7 @@ mod proto_tests {
     use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
     use datafusion_proto_models::protobuf;
     use datafusion_proto_models::protobuf::{PhysicalExprNode, PhysicalWhenThen};
+    use std::collections::HashMap;
 
     fn proto_case_fixture() -> CaseExpr {
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, true)]);
@@ -4145,6 +4183,8 @@ mod proto_tests {
                     expr,
                     when_then_expr,
                     else_expr,
+                    logical_result_type: None,
+                    logical_result_metadata: Default::default(),
                 },
             ))),
         }
@@ -4171,6 +4211,37 @@ mod proto_tests {
         assert!(case_node.when_then_expr[0].when_expr.is_some());
         assert!(case_node.when_then_expr[0].then_expr.is_some());
         assert!(case_node.else_expr.is_some());
+        assert!(case_node.logical_result_type.is_none());
+        assert!(case_node.logical_result_metadata.is_empty());
+    }
+
+    #[test]
+    fn proto_preserves_logical_case_field() -> Result<()> {
+        let metadata = HashMap::from([("source".to_string(), "logical".to_string())]);
+        let case = proto_case_fixture().with_logical_result_field(&Arc::new(
+            Field::new("case", DataType::Int32, false).with_metadata(metadata.clone()),
+        ));
+        let encoder = StubEncoder::ok();
+        let encoded = case
+            .try_to_proto(&PhysicalExprEncodeCtx::new(&encoder))?
+            .expect("CaseExpr should encode");
+        let decoder = StubDecoder::ok();
+        let decoded = CaseExpr::try_from_proto(
+            &encoded,
+            &PhysicalExprDecodeCtx::new(&Schema::empty(), &decoder),
+        )?;
+        let decoded = decoded.downcast_ref::<CaseExpr>().expect("CaseExpr");
+        assert_eq!(decoded.logical_result_field, case.logical_result_field);
+        assert_eq!(
+            decoded
+                .logical_result_field
+                .as_ref()
+                .unwrap()
+                .1
+                .to_hashmap(),
+            metadata
+        );
+        Ok(())
     }
 
     #[test]
