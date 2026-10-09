@@ -21,7 +21,7 @@ use super::{Column, Literal};
 use crate::expressions::{
     CastExpr, LambdaVariable, NegativeExpr, NotExpr, TryCastExpr, lit, try_cast,
 };
-use crate::{PhysicalExpr, ScalarFunctionExpr};
+use crate::{HigherOrderFunctionExpr, PhysicalExpr, ScalarFunctionExpr};
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{
@@ -1263,6 +1263,21 @@ fn case_result_field_metadata(
     case: &CaseExpr,
     input_schema: &Schema,
 ) -> Result<(DataType, Metadata)> {
+    const MAX_EXACT_BRANCH_DEPTH: usize = 8;
+
+    fn can_infer_exact_function_branch(expr: &dyn PhysicalExpr) -> bool {
+        let mut work = vec![(expr, 1)];
+        while let Some((node, depth)) = work.pop() {
+            if depth > MAX_EXACT_BRANCH_DEPTH {
+                return false;
+            }
+            for child in node.children() {
+                work.push((child.as_ref(), depth + 1));
+            }
+        }
+        true
+    }
+
     struct BranchField {
         data_type: DataType,
         metadata: Metadata,
@@ -1318,11 +1333,26 @@ fn case_result_field_metadata(
                     }
                 } else if let Some(negative) = expr.downcast_ref::<NegativeExpr>() {
                     work.push(Work::Visit(negative.arg().as_ref()));
-                } else if let Some(not) = expr.downcast_ref::<NotExpr>() {
-                    let field = not.return_field(input_schema)?;
+                } else if expr.is::<NotExpr>() {
+                    fields.push(BranchField {
+                        data_type: DataType::Boolean,
+                        metadata: Metadata::new(),
+                        certainly_null: false,
+                    });
+                } else if expr.is::<ScalarFunctionExpr>()
+                    || expr.is::<HigherOrderFunctionExpr>()
+                {
+                    let field = expr.return_field(input_schema)?;
+                    let metadata = if field.metadata().is_empty()
+                        || can_infer_exact_function_branch(expr)
+                    {
+                        field.metadata().clone()
+                    } else {
+                        Metadata::new()
+                    };
                     fields.push(BranchField {
                         data_type: field.data_type().clone(),
-                        metadata: Metadata::new(),
+                        metadata,
                         certainly_null: false,
                     });
                 } else {
@@ -1777,6 +1807,7 @@ mod tests {
 
     std::thread_local! {
         static COUNTED_COLUMN_DISPLAYS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        static COUNTED_COLUMN_FIELDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     }
 
     #[derive(Debug, Hash, PartialEq, Eq)]
@@ -1803,6 +1834,7 @@ mod tests {
         }
 
         fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
+            COUNTED_COLUMN_FIELDS.with(|count| count.set(count.get() + 1));
             self.0.return_field(input_schema)
         }
 
@@ -1989,6 +2021,24 @@ mod tests {
         let negated: Arc<dyn PhysicalExpr> = Arc::new(NotExpr::new(col("a", &schema)?));
         let expr = case(None, vec![(lit(true), negated)], Some(col("b", &schema)?))?;
         assert!(expr.return_field(&schema)?.metadata().is_empty());
+
+        let column: Arc<dyn PhysicalExpr> = Arc::new(CountedColumn(Column::new("a", 0)));
+        for depth in [16, 64] {
+            let mut nested = Arc::clone(&column);
+            for _ in 0..depth {
+                nested = case(
+                    None,
+                    vec![(lit(true), Arc::new(NotExpr::new(nested)))],
+                    Some(col("b", &schema)?),
+                )?;
+            }
+            COUNTED_COLUMN_FIELDS.with(|count| count.set(0));
+            let nested_case = nested.downcast_ref::<CaseExpr>().ok_or_else(|| {
+                internal_datafusion_err!("Expected nested CASE expression")
+            })?;
+            super::case_result_field_metadata(nested_case, &schema)?;
+            assert_eq!(COUNTED_COLUMN_FIELDS.with(|count| count.get()), 0);
+        }
         Ok(())
     }
 
@@ -2029,6 +2079,47 @@ mod tests {
                 Some(col("a", &schema)?),
             )?;
             assert!(outer.return_field(&schema)?.metadata().is_empty());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn case_function_metadata_respects_logical_depth_limit() -> Result<()> {
+        let metadata = HashMap::from([("logical".to_string(), "binary".to_string())]);
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Binary, false).with_metadata(metadata.clone()),
+            Field::new("b", DataType::Binary, false).with_metadata(metadata.clone()),
+        ]);
+        let udf = Arc::new(datafusion_expr::expr_fn::create_udf(
+            "marked_identity",
+            vec![DataType::Binary],
+            DataType::Binary,
+            datafusion_expr::Volatility::Immutable,
+            Arc::new(|args| Ok(args[0].clone())),
+        ));
+        let function_field: FieldRef = Arc::new(
+            Field::new("marked_identity", DataType::Binary, true)
+                .with_metadata(metadata.clone()),
+        );
+        let options = Arc::new(datafusion_common::config::ConfigOptions::default());
+        for (depth, expected_marked) in [(2, true), (9, false)] {
+            let mut branch = col("a", &schema)?;
+            for _ in 0..depth {
+                branch = Arc::new(ScalarFunctionExpr::new(
+                    "marked_identity",
+                    Arc::clone(&udf),
+                    vec![branch],
+                    Arc::clone(&function_field),
+                    Arc::clone(&options),
+                ));
+            }
+            let expr = case(None, vec![(lit(true), branch)], Some(col("b", &schema)?))?;
+            let field = expr.return_field(&schema)?;
+            if expected_marked {
+                assert_eq!(field.metadata(), &metadata);
+            } else {
+                assert!(field.metadata().is_empty());
+            }
         }
         Ok(())
     }
