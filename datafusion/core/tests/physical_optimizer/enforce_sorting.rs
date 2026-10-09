@@ -3634,139 +3634,145 @@ impl ExecutionPlan for JoinOrderingSource {
 #[tokio::test]
 async fn test_join_suffix_unbounded_limit() -> Result<()> {
     // Either a unique probe row or a unique build match permits the build suffix.
-    for unique_probe in [true, false] {
-        for use_smj in [false, true] {
-            let build_values = if unique_probe { vec![1, 1] } else { vec![1, 2] };
-            let build_batch = record_batch!(
-                ("build_k", Int32, [1, 1]),
-                ("build_v", Int32, build_values),
-                ("payload", Int32, [10, 20])
-            )?;
-            let build_schema = build_batch.schema();
-            let build = DataSourceExec::new(Arc::new(
-                MemorySourceConfig::try_new(
-                    &[vec![build_batch]],
-                    Arc::clone(&build_schema),
-                    None,
-                )?
-                .try_with_sort_information(vec![
-                    LexOrdering::new([
-                        sort_expr("build_k", &build_schema),
-                        sort_expr("build_v", &build_schema),
-                    ])
-                    .unwrap(),
-                    LexOrdering::new([sort_expr("payload", &build_schema)]).unwrap(),
-                ])?,
-            ))
-            .with_constraints(Constraints::new_unverified(
-                if unique_probe {
-                    vec![]
-                } else {
-                    vec![Constraint::PrimaryKey(vec![0, 1])]
-                },
-            ));
-            let probe_batch = if unique_probe {
-                // UNIQUE permits repeated NULLs; ordinary equality excludes them.
-                record_batch!(
-                    ("probe_k", Int32, [None, None, Some(1)]),
-                    ("probe_v", Int32, [None, None, Some(1)]),
-                    ("extra", Int32, [1, 2, 3])
-                )?
+    for (unique_probe, computed_keys, use_smj) in [
+        (true, false, false),
+        (true, false, true),
+        (false, false, false),
+        (false, false, true),
+        // Modulo does not preserve the key ordering required by a streaming SMJ.
+        (false, true, false),
+    ] {
+        let build_values = if unique_probe { vec![1, 1] } else { vec![1, 2] };
+        let build_batch = record_batch!(
+            ("build_k", Int32, [1, 1]),
+            ("build_v", Int32, build_values),
+            ("payload", Int32, [10, 20])
+        )?;
+        let build_schema = build_batch.schema();
+        let build = DataSourceExec::new(Arc::new(
+            MemorySourceConfig::try_new(
+                &[vec![build_batch]],
+                Arc::clone(&build_schema),
+                None,
+            )?
+            .try_with_sort_information(vec![
+                LexOrdering::new([
+                    sort_expr("build_k", &build_schema),
+                    sort_expr("build_v", &build_schema),
+                ])
+                .unwrap(),
+                LexOrdering::new([sort_expr("payload", &build_schema)]).unwrap(),
+            ])?,
+        ))
+        .with_constraints(Constraints::new_unverified(if unique_probe {
+            vec![]
+        } else {
+            vec![Constraint::PrimaryKey(vec![0, 1])]
+        }));
+        let probe_batch = if unique_probe {
+            // UNIQUE permits repeated NULLs; ordinary equality excludes them.
+            record_batch!(
+                ("probe_k", Int32, [None, None, Some(1)]),
+                ("probe_v", Int32, [None, None, Some(1)]),
+                ("extra", Int32, [1, 2, 3])
+            )?
+        } else {
+            record_batch!(
+                ("probe_k", Int32, [1, 1]),
+                ("probe_v", Int32, [1, 1]),
+                ("extra", Int32, [1, 2])
+            )?
+        };
+        let probe_schema = probe_batch.schema();
+        assert!(probe_schema.field(0).is_nullable());
+        // The unrelated ordering must not obscure the sufficient prefix.
+        let orderings = ["extra", "probe_k", "probe_v"]
+            .map(|name| LexOrdering::new([sort_expr(name, &probe_schema)]).unwrap())
+            .to_vec();
+        let probe = Arc::new(JoinOrderingSource::new(
+            probe_batch,
+            orderings,
+            Constraints::new_unverified(if unique_probe {
+                vec![Constraint::Unique(vec![0])]
             } else {
-                record_batch!(
-                    ("probe_k", Int32, [1, 1]),
-                    ("probe_v", Int32, [1, 1]),
-                    ("extra", Int32, [1, 2])
-                )?
-            };
-            let probe_schema = probe_batch.schema();
-            assert!(probe_schema.field(0).is_nullable());
-            // The unrelated ordering must not obscure the sufficient prefix.
-            let orderings = ["extra", "probe_k", "probe_v"]
-                .map(|name| LexOrdering::new([sort_expr(name, &probe_schema)]).unwrap())
-                .to_vec();
-            let probe = Arc::new(JoinOrderingSource::new(
-                probe_batch,
-                orderings,
-                Constraints::new_unverified(if unique_probe {
-                    vec![Constraint::Unique(vec![0])]
-                } else {
-                    vec![]
-                }),
-            ));
-            let on = vec![
-                (
-                    col("build_k", &build_schema)?,
-                    col("probe_k", &probe_schema)?,
-                ),
-                (
-                    col("build_v", &build_schema)?,
-                    col("probe_v", &probe_schema)?,
-                ),
-            ];
-            let join: Arc<dyn ExecutionPlan> = if use_smj {
-                Arc::new(SortMergeJoinExec::try_new(
-                    probe,
-                    Arc::new(build),
-                    on.into_iter().map(|(b, p)| (p, b)).collect(),
-                    None,
-                    JoinType::Inner,
-                    vec![SortOptions::default(); 2],
-                    NullEquality::NullEqualsNothing,
-                )?)
+                vec![]
+            }),
+        ));
+        let probe_key = |name| -> Result<Arc<dyn PhysicalExpr>> {
+            let column = col(name, &probe_schema)?;
+            Ok(if computed_keys {
+                Arc::new(BinaryExpr::new(
+                    column,
+                    Operator::Modulo,
+                    datafusion_physical_expr::expressions::lit(2_i32),
+                ))
             } else {
-                Arc::new(
-                    HashJoinExecBuilder::new(Arc::new(build), probe, on, JoinType::Inner)
-                        .with_partition_mode(PartitionMode::CollectLeft)
-                        .build()?,
-                )
-            };
-            let mut required = vec![sort_expr("probe_k", &join.schema())];
-            if !unique_probe {
-                required.push(sort_expr("probe_v", &join.schema()));
-            }
-            required.push(sort_expr("payload", &join.schema()));
-            let mut plan: Arc<dyn ExecutionPlan> = Arc::new(
-                SortExec::new(LexOrdering::new(required).unwrap(), join)
-                    .with_fetch(Some(1)),
-            );
-            let ctx = SessionContext::new_with_config(
-                SessionConfig::new()
-                    .with_target_partitions(1)
-                    .with_batch_size(2),
-            );
-            let state = ctx.state();
-            for optimizer in state.physical_optimizers() {
-                plan = optimizer.optimize(plan, state.config_options())?;
-            }
-            let batches = tokio::time::timeout(
-                Duration::from_secs(2),
-                datafusion_physical_plan::collect(Arc::clone(&plan), ctx.task_ctx()),
+                column
+            })
+        };
+        let on = vec![
+            (col("build_k", &build_schema)?, probe_key("probe_k")?),
+            (col("build_v", &build_schema)?, probe_key("probe_v")?),
+        ];
+        let join: Arc<dyn ExecutionPlan> = if use_smj {
+            Arc::new(SortMergeJoinExec::try_new(
+                probe,
+                Arc::new(build),
+                on.into_iter().map(|(b, p)| (p, b)).collect(),
+                None,
+                JoinType::Inner,
+                vec![SortOptions::default(); 2],
+                NullEquality::NullEqualsNothing,
+            )?)
+        } else {
+            Arc::new(
+                HashJoinExecBuilder::new(Arc::new(build), probe, on, JoinType::Inner)
+                    .with_partition_mode(PartitionMode::CollectLeft)
+                    .build()?,
             )
-            .await
-            .unwrap_or_else(|_| {
-                panic!(
-                    "LIMIT waited for more probe rows (unique_probe={unique_probe}, smj={use_smj}):\n{}",
-                    displayable(plan.as_ref()).indent(true),
-                )
-            })?;
-            let payloads = batches
-                .iter()
-                .map(|batch| {
-                    batch.project(&[batch.schema().index_of("payload").unwrap()])
-                })
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-            assert_batches_eq!(
-                [
-                    "+---------+",
-                    "| payload |",
-                    "+---------+",
-                    "| 10      |",
-                    "+---------+",
-                ],
-                &payloads
-            );
+        };
+        let mut required = vec![sort_expr("probe_k", &join.schema())];
+        if !unique_probe {
+            required.push(sort_expr("probe_v", &join.schema()));
         }
+        required.push(sort_expr("payload", &join.schema()));
+        let mut plan: Arc<dyn ExecutionPlan> = Arc::new(
+            SortExec::new(LexOrdering::new(required).unwrap(), join).with_fetch(Some(1)),
+        );
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new()
+                .with_target_partitions(1)
+                .with_batch_size(2),
+        );
+        let state = ctx.state();
+        for optimizer in state.physical_optimizers() {
+            plan = optimizer.optimize(plan, state.config_options())?;
+        }
+        let batches = tokio::time::timeout(
+            Duration::from_secs(2),
+            datafusion_physical_plan::collect(Arc::clone(&plan), ctx.task_ctx()),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "LIMIT waited for more probe rows (unique_probe={unique_probe}, computed_keys={computed_keys}, smj={use_smj}):\n{}",
+                displayable(plan.as_ref()).indent(true),
+            )
+        })?;
+        let payloads = batches
+            .iter()
+            .map(|batch| batch.project(&[batch.schema().index_of("payload").unwrap()]))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        assert_batches_eq!(
+            [
+                "+---------+",
+                "| payload |",
+                "+---------+",
+                "| 10      |",
+                "+---------+",
+            ],
+            &payloads
+        );
     }
     Ok(())
 }

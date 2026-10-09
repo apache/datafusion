@@ -24,8 +24,10 @@ use crate::{
 };
 
 use arrow::datatypes::{Schema, SchemaRef};
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Constraint, JoinSide, JoinType, NullEquality, Result};
 use datafusion_physical_expr_common::physical_expr::is_volatile;
+use indexmap::IndexSet;
 
 /// Calculate ordering equivalence properties for the given join operation.
 #[expect(clippy::too_many_arguments)]
@@ -193,8 +195,48 @@ fn probe_ordering_candidates(
         }
         let (ordering, _) = probe.find_longest_permutation(&keys)?;
         orderings.extend(LexOrdering::new(ordering));
+        orderings.extend(probe_key_ordering(probe, &keys)?);
     }
     Ok(orderings)
+}
+
+/// Find a candidate probe ordering from join key subexpressions.
+fn probe_key_ordering(
+    probe: &EquivalenceProperties,
+    keys: &[PhysicalExprRef],
+) -> Result<Option<LexOrdering>> {
+    let keys = keys
+        .iter()
+        .map(|key| probe.eq_group().normalize_expr(Arc::clone(key)))
+        .collect::<Vec<_>>();
+    if keys.iter().all(|key| key.children().is_empty()) {
+        return Ok(None);
+    }
+    let mut expressions = IndexSet::new();
+    for key in keys {
+        key.apply(|expr| {
+            if probe.is_expr_constant(expr).is_some()
+                || !expressions.insert(Arc::clone(expr))
+            {
+                return Ok(TreeNodeRecursion::Jump);
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+    }
+    let expressions = expressions.into_iter().collect::<Vec<_>>();
+    let (ordering, _) = probe.find_longest_permutation(&expressions)?;
+    // The permutation can include computed keys made constant by earlier items.
+    // Remove them before appending the build suffix or joining equivalence groups.
+    let mut group = probe.eq_group().clone();
+    let mut prefix = Vec::with_capacity(ordering.len());
+    for sort in ordering {
+        if group.is_expr_constant(&sort.expr).is_some() {
+            continue;
+        }
+        group.add_constant(ConstExpr::from(Arc::clone(&sort.expr)));
+        prefix.push(sort);
+    }
+    Ok(LexOrdering::new(prefix))
 }
 
 fn constraint_columns(constraint: &Constraint, schema: &Schema) -> Vec<PhysicalExprRef> {
@@ -525,19 +567,24 @@ mod tests {
             [ordering(Arc::clone(&b_plus_one))],
         );
         probe.add_equal_conditions(Arc::clone(&a), b)?;
-        for join_type in [JoinType::Inner, JoinType::Left] {
-            let output = join_equivalence_properties(
-                probe.clone(),
-                build.clone(),
-                &join_type,
-                Arc::clone(&output_schema),
-                &[true, false],
-                Some(JoinSide::Left),
-                &[(Arc::clone(&a_plus_one), Arc::clone(&a))],
-                false,
-                NullEquality::NullEqualsNothing,
-            )?;
-            assert!(output.ordering_satisfy(required(Arc::clone(&b_plus_one)))?);
+        for probe_key in [
+            Arc::clone(&a_plus_one),
+            Arc::new(BinaryExpr::new(a_plus_one, Operator::Modulo, lit(2_i32))),
+        ] {
+            for join_type in [JoinType::Inner, JoinType::Left] {
+                let output = join_equivalence_properties(
+                    probe.clone(),
+                    build.clone(),
+                    &join_type,
+                    Arc::clone(&output_schema),
+                    &[true, false],
+                    Some(JoinSide::Left),
+                    &[(Arc::clone(&probe_key), Arc::clone(&a))],
+                    false,
+                    NullEquality::NullEqualsNothing,
+                )?;
+                assert!(output.ordering_satisfy(required(Arc::clone(&b_plus_one)))?);
+            }
         }
         Ok(())
     }
@@ -631,13 +678,9 @@ mod tests {
             Field::new("extra", DataType::Int32, false),
         ]));
         let sort = |name| PhysicalSortExpr::new_default(col(name, &schema).unwrap());
-        let probe = EquivalenceProperties::new_with_orderings(
-            Arc::clone(&schema),
-            [vec![sort("extra")], vec![sort("a")], vec![sort("b")]],
-        );
         let build = EquivalenceProperties::new_with_orderings(
             Arc::clone(&schema),
-            [vec![sort("v")]],
+            [vec![sort("a"), sort("b")], vec![sort("v")]],
         )
         .with_constraints(Constraints::new_unverified(vec![
             Constraint::PrimaryKey(vec![0, 1]),
@@ -650,28 +693,62 @@ mod tests {
                 .cloned()
                 .collect::<Vec<_>>(),
         ));
-        let output = join_equivalence_properties(
-            probe,
-            build,
-            &JoinType::Left,
-            output_schema,
-            &[true, false],
-            Some(JoinSide::Left),
-            &[
-                (col("a", &schema)?, col("a", &schema)?),
-                (col("b", &schema)?, col("b", &schema)?),
-            ],
-            false,
-            NullEquality::NullEqualsNothing,
-        )?;
-        let suffix = PhysicalSortExpr::new_default(Arc::new(Column::new("v", 6)));
-        for (first, second) in [("a", "b"), ("b", "a")] {
-            assert!(output.ordering_satisfy([
-                sort(first),
-                sort(second),
-                suffix.clone()
-            ])?);
-            assert!(!output.ordering_satisfy([sort(first), suffix.clone()])?);
+        for (join_type, computed_keys, computed_prefix) in [
+            (JoinType::Left, false, false),
+            (JoinType::Left, true, false),
+            (JoinType::Inner, true, false),
+            (JoinType::Inner, true, true),
+        ] {
+            let prefix_expr = |name| -> Result<PhysicalExprRef> {
+                let column = col(name, &schema)?;
+                Ok(if computed_prefix {
+                    Arc::new(BinaryExpr::new(column, Operator::Modulo, lit(4_i32)))
+                } else {
+                    column
+                })
+            };
+            let prefix_sort = |name| -> Result<PhysicalSortExpr> {
+                Ok(PhysicalSortExpr::new_default(prefix_expr(name)?))
+            };
+            let probe = EquivalenceProperties::new_with_orderings(
+                Arc::clone(&schema),
+                [
+                    vec![sort("extra")],
+                    vec![prefix_sort("a")?],
+                    vec![prefix_sort("b")?],
+                ],
+            );
+            let probe_key = |name| -> Result<PhysicalExprRef> {
+                let column = prefix_expr(name)?;
+                Ok(if computed_keys {
+                    Arc::new(BinaryExpr::new(column, Operator::Modulo, lit(2_i32)))
+                } else {
+                    column
+                })
+            };
+            let output = join_equivalence_properties(
+                probe.clone(),
+                build.clone(),
+                &join_type,
+                Arc::clone(&output_schema),
+                &[true, false],
+                Some(JoinSide::Left),
+                &[
+                    (probe_key("a")?, col("a", &schema)?),
+                    (probe_key("b")?, col("b", &schema)?),
+                ],
+                false,
+                NullEquality::NullEqualsNothing,
+            )?;
+            let suffix = PhysicalSortExpr::new_default(Arc::new(Column::new("v", 6)));
+            for (first, second) in [("a", "b"), ("b", "a")] {
+                assert!(output.ordering_satisfy([
+                    prefix_sort(first)?,
+                    prefix_sort(second)?,
+                    suffix.clone()
+                ])?);
+                assert!(!output.ordering_satisfy([prefix_sort(first)?, suffix.clone()])?);
+            }
         }
         Ok(())
     }
