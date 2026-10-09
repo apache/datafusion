@@ -19,6 +19,7 @@ use crate::config::SchemaSource;
 use crate::helpers::{
     expr_applicable_for_cols, filter_partitioned_file, pruned_partition_list,
 };
+use crate::range_pruning::prune_range_file_groups;
 use crate::{ListingOptions, ListingTableConfig};
 use arrow::datatypes::{Field, Metadata, Schema, SchemaBuilder, SchemaRef};
 use async_trait::async_trait;
@@ -668,9 +669,20 @@ impl ListingTable {
             file_groups: mut partitioned_file_lists,
             statistics,
             grouped_by_partition: partitioned_by_file_group,
-        } = self
-            .list_files_for_scan(state, &partition_filters, statistic_file_limit)
-            .await?;
+        } = if let Some(output_partitioning @ LogicalPartitioning::Range(_)) =
+            declared_output_partitioning
+        {
+            self.list_files_for_declared_output_partitioning(
+                state,
+                output_partitioning,
+                &partition_filters,
+                &filters,
+            )
+            .await?
+        } else {
+            self.list_files_for_scan(state, &partition_filters, statistic_file_limit)
+                .await?
+        };
 
         // if no files need to be read, return an `EmptyExec`
         if partitioned_file_lists.is_empty() {
@@ -926,6 +938,7 @@ impl ListingTable {
                 ctx,
                 output_partitioning,
                 filters,
+                &[],
             )
             .await
         } else {
@@ -1048,6 +1061,7 @@ impl ListingTable {
         ctx: &'a dyn Session,
         output_partitioning: &LogicalPartitioning,
         filters: &'a [Expr],
+        range_filters: &[Expr],
     ) -> datafusion_common::Result<ListFilesResult> {
         let Some(file_group_count) = output_partitioning.partition_count() else {
             return datafusion_common::not_impl_err!(
@@ -1075,8 +1089,17 @@ impl ListingTable {
         if !file_groups.is_empty() {
             file_groups.resize_with(file_group_count, || FileGroup::new(vec![]));
         }
-        let file_groups =
+        let mut file_groups =
             self.filter_declared_file_groups_by_partition_filters(file_groups, filters)?;
+
+        if let LogicalPartitioning::Range(range) = output_partitioning {
+            prune_range_file_groups(
+                &mut file_groups,
+                range,
+                range_filters,
+                &self.table_schema,
+            );
+        }
 
         self.list_files_result_from_groups(ctx, file_groups, inexact_stats, false)
     }
