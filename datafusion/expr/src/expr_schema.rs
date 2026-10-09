@@ -1598,6 +1598,39 @@ mod tests {
         let all_typed_null = when(lit(true), typed_null.clone()).otherwise(typed_null)?;
         assert_eq!(all_typed_null.to_field(&schema)?.1.metadata(), &shared);
 
+        let binary_metadata = HashMap::from([(
+            EXTENSION_TYPE_NAME_KEY.to_string(),
+            "geoarrow.wkb".to_string(),
+        )]);
+        let binary_schema = DFSchema::from_unqualified_fields(
+            vec![
+                Field::new("binary", DataType::LargeBinary, false)
+                    .with_metadata(binary_metadata.clone()),
+            ]
+            .into(),
+            HashMap::new(),
+        )?;
+        let target_field: FieldRef = Arc::new(
+            Field::new("", DataType::Binary, true).with_metadata(binary_metadata),
+        );
+        for marked_null in [
+            Expr::Cast(Cast::new_from_field(
+                Box::new(lit(ScalarValue::Null)),
+                Arc::clone(&target_field),
+            )),
+            Expr::TryCast(TryCast::new_from_field(
+                Box::new(lit(ScalarValue::Null)),
+                Arc::clone(&target_field),
+            )),
+        ] {
+            let nested_all_null =
+                when(lit(true), marked_null).otherwise(lit(ScalarValue::Null))?;
+            let type_only_cast =
+                Expr::Cast(Cast::new(Box::new(nested_all_null), DataType::LargeBinary));
+            let outer = when(lit(true), type_only_cast).otherwise(col("binary"))?;
+            assert!(outer.to_field(&binary_schema)?.1.metadata().is_empty());
+        }
+
         let mut nested = col("a");
         for _ in 0..128 {
             nested = when(lit(true), col("a")).otherwise(nested)?;
