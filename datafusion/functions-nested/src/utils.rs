@@ -338,7 +338,7 @@ pub(crate) fn get_map_entry_field(data_type: &DataType) -> Result<&Fields> {
                 }
             }
         }
-        _ => internal_err!("Expected a Map type, got {data_type}"),
+        _ => plan_err!("Expected a Map type, got {data_type}"),
     }
 }
 
