@@ -1094,3 +1094,30 @@ physical_plan
 
 statement ok
 DROP TABLE t22489;
+
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+CREATE TABLE src (a INT, b INT) AS VALUES (1, 3), (2, 1), (3, 2), (4, 3), (5, 1), (6, 2), (7, 3), (8, 1);
+
+statement ok
+CREATE TABLE t AS SELECT a, b FROM src UNION ALL SELECT a + 10, b FROM src
+  UNION ALL SELECT a + 20, b FROM src UNION ALL SELECT a + 30, b FROM src;
+
+query II
+SELECT * FROM (SELECT a, b FROM t ORDER BY b OFFSET 20) ORDER BY b, a;
+----
+1 3
+4 3
+7 3
+11 3
+14 3
+17 3
+21 3
+24 3
+27 3
+31 3
+34 3
+37 3
