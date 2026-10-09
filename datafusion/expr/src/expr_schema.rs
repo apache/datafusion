@@ -1718,6 +1718,47 @@ mod tests {
     }
 
     #[test]
+    fn test_case_field_metadata_leaf_branches() -> Result<()> {
+        let metadata = HashMap::from([("type".to_string(), "structured".to_string())]);
+        let field = Arc::new(
+            Field::new("value", DataType::Int32, false).with_metadata(metadata.clone()),
+        );
+        let schema = DFSchema::from_unqualified_fields(
+            vec![
+                Field::new("value", DataType::Int32, false)
+                    .with_metadata(metadata.clone()),
+            ]
+            .into(),
+            HashMap::new(),
+        )?;
+
+        let branches = [
+            Expr::OuterReferenceColumn(Arc::clone(&field), Column::from_name("outer")),
+            Expr::ScalarVariable(Arc::clone(&field), vec!["value".to_string()]),
+            Expr::Placeholder(Placeholder::new_with_field(
+                "$1".to_string(),
+                Some(Arc::clone(&field)),
+            )),
+            Expr::LambdaVariable(LambdaVariable::new("arg".into(), Some(field))),
+        ];
+        for branch in branches {
+            let case = when(lit(true), col("value")).otherwise(branch)?;
+            assert_eq!(case.to_field(&schema)?.1.metadata(), &metadata);
+        }
+
+        let null_first =
+            when(lit(true), lit(ScalarValue::Null)).otherwise(col("value"))?;
+        assert_eq!(null_first.to_field(&schema)?.1.metadata(), &metadata);
+
+        let wrong_type = when(lit(true), col("value")).otherwise(Expr::Literal(
+            ScalarValue::Boolean(Some(false)),
+            Some(FieldMetadata::from(metadata)),
+        ))?;
+        assert!(wrong_type.to_field(&schema)?.1.metadata().is_empty());
+        Ok(())
+    }
+
+    #[test]
     fn test_alias_metadata_is_preserved_in_field_metadata() {
         let schema = MockExprSchema::new().with_data_type(DataType::Int32);
         let alias_metadata = FieldMetadata::from(HashMap::from([(
