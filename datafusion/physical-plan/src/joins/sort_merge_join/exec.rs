@@ -574,6 +574,18 @@ impl ExecutionPlan for SortMergeJoinExec {
     }
 
     fn input_distribution_requirements(&self) -> InputDistributionRequirements {
+        // Null-aware NOT IN needs facts about the entire right input.
+        // Require a single partition on both sides to use the existing
+        // sort-merge join's partition pairing without cross-partition coordination.
+        //
+        // TODO: Allow multiple left partitions by sharing the right-side summary
+        // and providing each left partition with the right input for matching.
+        if self.null_aware {
+            return InputDistributionRequirements::new(vec![
+                Distribution::SinglePartition,
+                Distribution::SinglePartition,
+            ]);
+        }
         let (left_expr, right_expr) = self
             .on
             .iter()
