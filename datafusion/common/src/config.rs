@@ -2140,6 +2140,62 @@ config_namespace! {
 impl<'a> TryFrom<&'a FormatOptions> for arrow::util::display::FormatOptions<'a> {
     type Error = DataFusionError;
     fn try_from(options: &'a FormatOptions) -> Result<Self> {
+        for (name, format) in [
+            ("date_format", options.date_format.as_deref()),
+            ("datetime_format", options.datetime_format.as_deref()),
+            ("timestamp_format", options.timestamp_format.as_deref()),
+            (
+                "timestamp_tz_format",
+                options.timestamp_tz_format.as_deref(),
+            ),
+            ("time_format", options.time_format.as_deref()),
+        ] {
+            if let Some(format) = format {
+                let items = chrono::format::StrftimeItems::new(format).parse().map_err(
+                    |error| {
+                        DataFusionError::Configuration(format!(
+                            "Invalid datafusion.format.{name}: {error}"
+                        ))
+                    },
+                )?;
+
+                // Parsing validates directives, but some directives require fields
+                // that are absent from a particular temporal type (for example,
+                // `%H` for a date). Chrono reports those errors while formatting.
+                let mut rendered = String::new();
+                let result = match name {
+                    "date_format" => chrono::NaiveDate::from_ymd_opt(2001, 2, 3)
+                        .expect("valid sample date")
+                        .format_with_items(items.iter())
+                        .write_to(&mut rendered),
+                    "datetime_format" | "timestamp_format" => {
+                        chrono::NaiveDate::from_ymd_opt(2001, 2, 3)
+                            .expect("valid sample date")
+                            .and_hms_opt(4, 5, 6)
+                            .expect("valid sample time")
+                            .format_with_items(items.iter())
+                            .write_to(&mut rendered)
+                    }
+                    "timestamp_tz_format" => {
+                        chrono::DateTime::from_timestamp(981_173_106, 0)
+                            .expect("valid sample timestamp")
+                            .format_with_items(items.iter())
+                            .write_to(&mut rendered)
+                    }
+                    "time_format" => chrono::NaiveTime::from_hms_opt(4, 5, 6)
+                        .expect("valid sample time")
+                        .format_with_items(items.iter())
+                        .write_to(&mut rendered),
+                    _ => unreachable!("all temporal format names are handled above"),
+                };
+                if result.is_err() {
+                    return Err(DataFusionError::Configuration(format!(
+                        "Invalid datafusion.format.{name}: format is incompatible with its temporal type"
+                    )));
+                }
+            }
+        }
+
         Ok(Self::new()
             .with_display_error(options.safe)
             .with_null(&options.null)
@@ -4165,6 +4221,100 @@ mod tests {
         ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ExtensionOptions,
         Extensions, TableOptions,
     };
+
+    #[test]
+    fn invalid_temporal_format_is_rejected_before_rendering() {
+        use crate::config::FormatOptions;
+
+        let invalid_options = [
+            (
+                "date_format",
+                FormatOptions {
+                    date_format: Some("%".to_owned()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "datetime_format",
+                FormatOptions {
+                    datetime_format: Some("%".to_owned()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "timestamp_format",
+                FormatOptions {
+                    timestamp_format: Some("%".to_owned()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "timestamp_tz_format",
+                FormatOptions {
+                    timestamp_tz_format: Some("%".to_owned()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "time_format",
+                FormatOptions {
+                    time_format: Some("%".to_owned()),
+                    ..Default::default()
+                },
+            ),
+        ];
+
+        for (name, options) in invalid_options {
+            let error = arrow::util::display::FormatOptions::try_from(&options)
+                .expect_err("invalid format strings must be rejected before rendering");
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("datafusion.format.{name}")),
+                "unexpected validation error: {error}"
+            );
+        }
+
+        let incompatible_options = [
+            (
+                "time_format",
+                FormatOptions {
+                    time_format: Some("%Y".to_owned()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "date_format",
+                FormatOptions {
+                    date_format: Some("%H".to_owned()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "timestamp_format",
+                FormatOptions {
+                    timestamp_format: Some("%+".to_owned()),
+                    ..Default::default()
+                },
+            ),
+        ];
+
+        for (name, options) in incompatible_options {
+            let error = arrow::util::display::FormatOptions::try_from(&options)
+                .expect_err(
+                    "type-incompatible formats must be rejected before rendering",
+                );
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("datafusion.format.{name}")),
+                "unexpected validation error: {error}"
+            );
+        }
+
+        arrow::util::display::FormatOptions::try_from(&FormatOptions::default())
+            .expect("the default temporal formats must remain valid");
+    }
     use std::any::Any;
     use std::collections::HashMap;
 
