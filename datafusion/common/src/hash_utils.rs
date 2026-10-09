@@ -303,17 +303,8 @@ impl<S: HashState> ChildHashing for HashStateChildHashing<'_, S> {
 
 /// Builds hash values of PrimitiveArray and writes them into `hashes_buffer`.
 ///
-/// If `rehash==true` the previous hash in `hashes_buffer[i]` is folded into the
-/// hasher state as a per-element seed (which, for foldhash's fast tier, is
-/// still a single `folded_multiply`), avoiding a separate combine step.
-///
-/// Null-free hot loops are manually unrolled (16-way fresh, 8-way rehash):
-/// each iteration is a single 64×64→128 multiply + xor fold with no cross-row
-/// dependency, so unrolling exposes ILP to hide the ~3-cycle multiply latency.
-/// Nullable paths walk the null bitmap in 64-bit chunks: all-valid chunks
-/// dispatch to the unrolled hot loop; mixed chunks hash all 64 slots and
-/// branchlessly blend by mask bit (csel on aarch64), which is a win over a
-/// `trailing_zeros` per-bit scan at the null densities we care about.
+/// If `rehash==true` the previous hash is folded into the hasher state as a
+/// per-element seed, avoiding a separate combine step.
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_array_primitive<T>(
     array: &PrimitiveArray<T>,
@@ -333,19 +324,19 @@ fn hash_array_primitive<T>(
 
     if array.null_count() == 0 {
         if rehash {
-            hash_prim_rehash_unrolled(values, hashes_buffer, random_state);
+            hash_prim_rehash(values, hashes_buffer, random_state);
         } else {
-            hash_prim_fresh_unrolled(values, hashes_buffer, random_state);
+            hash_prim_fresh(values, hashes_buffer, random_state);
         }
     } else if rehash {
-        hash_prim_nulls_chunked::<_, _, true>(
+        hash_prim_with_nulls::<_, _, true>(
             values,
             hashes_buffer,
             array.nulls().unwrap(),
             random_state,
         );
     } else {
-        hash_prim_nulls_chunked::<_, _, false>(
+        hash_prim_with_nulls::<_, _, false>(
             values,
             hashes_buffer,
             array.nulls().unwrap(),
@@ -354,75 +345,78 @@ fn hash_array_primitive<T>(
     }
 }
 
-/// 16-way unrolled hash loop for the null-free, fresh-hash primitive path.
-///
-/// Each `hash_one` call is independent, so unrolling lets the backend keep
-/// multiple folded_multiply operations in flight.
+#[cfg(not(feature = "force_hash_collisions"))]
+const FRESH_LANES: usize = 16;
+#[cfg(not(feature = "force_hash_collisions"))]
+const REHASH_LANES: usize = 8;
+
 #[cfg(not(feature = "force_hash_collisions"))]
 #[inline(always)]
-fn hash_prim_fresh_unrolled<N, S>(values: &[N], out: &mut [u64], state: &S)
+fn hash_prim_fresh<N, S>(values: &[N], hashes: &mut [u64], state: &S)
 where
     N: HashValue + Copy,
     S: HashState,
 {
-    debug_assert_eq!(values.len(), out.len());
-    let n = values.len();
-    let main = n & !15;
-    // SAFETY: all get_unchecked indices below are < main <= n == out.len().
-    let mut i = 0;
-    while i < main {
+    debug_assert_eq!(values.len(), hashes.len());
+    let len = values.len();
+    let aligned_end = len & !(FRESH_LANES - 1);
+    let mut idx = 0;
+    while idx < aligned_end {
+        // SAFETY: idx + FRESH_LANES <= aligned_end <= values.len() == hashes.len()
         unsafe {
-            let v: [N; 16] = std::array::from_fn(|k| *values.get_unchecked(i + k));
-            let h: [u64; 16] = std::array::from_fn(|k| v[k].hash_one(state));
-            for k in 0..16 {
-                *out.get_unchecked_mut(i + k) = h[k];
+            let vals: [N; FRESH_LANES] =
+                std::array::from_fn(|lane| *values.get_unchecked(idx + lane));
+            let new_hashes: [u64; FRESH_LANES] =
+                std::array::from_fn(|lane| vals[lane].hash_one(state));
+            for lane in 0..FRESH_LANES {
+                *hashes.get_unchecked_mut(idx + lane) = new_hashes[lane];
             }
         }
-        i += 16;
+        idx += FRESH_LANES;
     }
-    while i < n {
+    while idx < len {
         unsafe {
-            let v = *values.get_unchecked(i);
-            *out.get_unchecked_mut(i) = v.hash_one(state);
+            *hashes.get_unchecked_mut(idx) = values.get_unchecked(idx).hash_one(state);
         }
-        i += 1;
+        idx += 1;
     }
 }
 
-/// 8-way unrolled hash loop for the null-free, rehash primitive path.
-///
-/// Narrower unroll than the fresh variant: each iteration keeps both `prev`
-/// and `value` live per lane, so 16-way spills registers on multi-column
-/// rehash and regresses `multiple, no nulls`.
+// Narrower unroll than `hash_prim_fresh`: each lane keeps both `prev` and
+// `value` live, so widening past 8 spills registers in the multi-column case.
 #[cfg(not(feature = "force_hash_collisions"))]
 #[inline(always)]
-fn hash_prim_rehash_unrolled<N, S>(values: &[N], out: &mut [u64], state: &S)
+fn hash_prim_rehash<N, S>(values: &[N], hashes: &mut [u64], state: &S)
 where
     N: HashValue + Copy,
     S: HashState,
 {
-    debug_assert_eq!(values.len(), out.len());
-    let n = values.len();
-    let main = n & !7;
-    let mut i = 0;
-    while i < main {
+    debug_assert_eq!(values.len(), hashes.len());
+    let len = values.len();
+    let aligned_end = len & !(REHASH_LANES - 1);
+    let mut idx = 0;
+    while idx < aligned_end {
+        // SAFETY: idx + REHASH_LANES <= aligned_end <= values.len() == hashes.len()
         unsafe {
-            let v: [N; 8] = std::array::from_fn(|k| *values.get_unchecked(i + k));
-            let p: [u64; 8] = std::array::from_fn(|k| *out.get_unchecked(i + k));
-            let h: [u64; 8] = std::array::from_fn(|k| rehash_one(state, p[k], v[k]));
-            for k in 0..8 {
-                *out.get_unchecked_mut(i + k) = h[k];
+            let vals: [N; REHASH_LANES] =
+                std::array::from_fn(|lane| *values.get_unchecked(idx + lane));
+            let prevs: [u64; REHASH_LANES] =
+                std::array::from_fn(|lane| *hashes.get_unchecked(idx + lane));
+            let new_hashes: [u64; REHASH_LANES] =
+                std::array::from_fn(|lane| rehash_one(state, prevs[lane], vals[lane]));
+            for lane in 0..REHASH_LANES {
+                *hashes.get_unchecked_mut(idx + lane) = new_hashes[lane];
             }
         }
-        i += 8;
+        idx += REHASH_LANES;
     }
-    while i < n {
+    while idx < len {
         unsafe {
-            let v = *values.get_unchecked(i);
-            let prev = *out.get_unchecked(i);
-            *out.get_unchecked_mut(i) = rehash_one(state, prev, v);
+            let value = *values.get_unchecked(idx);
+            let prev = *hashes.get_unchecked(idx);
+            *hashes.get_unchecked_mut(idx) = rehash_one(state, prev, value);
         }
-        i += 1;
+        idx += 1;
     }
 }
 
@@ -434,88 +428,79 @@ fn rehash_one<N: HashValue, S: HashState>(state: &S, prev: u64, value: N) -> u64
     hasher.finish()
 }
 
-/// Nullable primitive hash loop that walks the null bitmap in 64-bit chunks.
-///
-/// Per chunk:
-/// - all 64 bits set → run the unrolled no-null loop on this chunk
-/// - all 64 bits clear → skip (nothing to write)
-/// - mixed → hash all 64 slots and branchlessly blend by mask bit (csel)
-///
-/// The branchless blend wins over a `trailing_zeros`-based scan when the
-/// chunk is "mostly valid" (realistic null densities in these benches are
-/// a few percent). The u64 mask is already loaded, so there is no per-bit
-/// bitmap extract overhead to speak of — just one csel per slot.
+// Walks the null bitmap in u64 strides so bitmap work is amortized across 64
+// rows instead of paid per valid row (as `valid_indices()` does).
 #[cfg(not(feature = "force_hash_collisions"))]
 #[inline(always)]
-fn hash_prim_nulls_chunked<N, S, const REHASH: bool>(
+fn hash_prim_with_nulls<N, S, const REHASH: bool>(
     values: &[N],
-    out: &mut [u64],
+    hashes: &mut [u64],
     nulls: &arrow::buffer::NullBuffer,
     state: &S,
 ) where
     N: HashValue + Copy,
     S: HashState,
 {
-    debug_assert_eq!(values.len(), out.len());
+    debug_assert_eq!(values.len(), hashes.len());
     debug_assert_eq!(values.len(), nulls.len());
 
     let bit_chunks = nulls.inner().bit_chunks();
-    let mut row: usize = 0;
+    let mut row = 0;
 
     for mask in bit_chunks.iter() {
         if mask == u64::MAX {
-            // All 64 rows valid: dispatch to the unrolled no-null hasher.
-            // SAFETY: row + 64 <= bit_chunks.len() * 64 <= values.len() == out.len()
+            // SAFETY: row + 64 <= nulls.len() == values.len() == hashes.len()
             unsafe {
-                let v = values.get_unchecked(row..row + 64);
-                let o = out.get_unchecked_mut(row..row + 64);
+                let vals = values.get_unchecked(row..row + 64);
+                let out = hashes.get_unchecked_mut(row..row + 64);
                 if REHASH {
-                    hash_prim_rehash_unrolled(v, o, state);
+                    hash_prim_rehash(vals, out, state);
                 } else {
-                    hash_prim_fresh_unrolled(v, o, state);
+                    hash_prim_fresh(vals, out, state);
                 }
             }
         } else if mask != 0 {
-            // SAFETY: row + 64 <= values.len() == out.len()
+            // SAFETY: same bound as above.
             unsafe {
-                let v = values.get_unchecked(row..row + 64);
-                let o = out.get_unchecked_mut(row..row + 64);
-                hash_prim_blend_chunk::<N, S, REHASH>(v, o, mask, state);
+                let vals = values.get_unchecked(row..row + 64);
+                let out = hashes.get_unchecked_mut(row..row + 64);
+                blend_chunk::<N, S, REHASH>(vals, out, mask, state);
             }
         }
         row += 64;
     }
 
-    let rem_len = bit_chunks.remainder_len();
-    if rem_len > 0 {
-        let rem_mask = (1u64 << rem_len) - 1;
-        let mut m = bit_chunks.remainder_bits() & rem_mask;
-        while m != 0 {
-            let bit = m.trailing_zeros() as usize;
-            let i = row + bit;
-            let value = unsafe { *values.get_unchecked(i) };
-            let prev = unsafe { *out.get_unchecked(i) };
-            let new_hash = if REHASH {
-                rehash_one(state, prev, value)
-            } else {
-                value.hash_one(state)
-            };
-            unsafe { *out.get_unchecked_mut(i) = new_hash };
-            m &= m - 1;
+    let tail_len = bit_chunks.remainder_len();
+    if tail_len > 0 {
+        let tail_mask = (1u64 << tail_len) - 1;
+        let mut remaining = bit_chunks.remainder_bits() & tail_mask;
+        while remaining != 0 {
+            let idx = row + remaining.trailing_zeros() as usize;
+            unsafe {
+                let value = *values.get_unchecked(idx);
+                let prev = *hashes.get_unchecked(idx);
+                *hashes.get_unchecked_mut(idx) = if REHASH {
+                    rehash_one(state, prev, value)
+                } else {
+                    value.hash_one(state)
+                };
+            }
+            remaining &= remaining - 1;
         }
     }
 }
 
-/// Hashes a fixed 64-slot chunk and blends against a null mask with csel.
-///
-/// Each hash is independent, so the backend can keep multiple folded_multiply
-/// multiplies in flight; the mask shift+and+csel sits in a separate dependency
-/// chain and overlaps the hash work.
+#[cfg(not(feature = "force_hash_collisions"))]
+const BLEND_LANES: usize = 8;
+
+// Hashes every slot in a 64-row chunk and csel-blends against the mask bit.
+// Cheaper than a `trailing_zeros` scan at the null densities we see in practice
+// because there's no per-bit bitmap extract — the mask is already in a register.
 #[cfg(not(feature = "force_hash_collisions"))]
 #[inline(always)]
-fn hash_prim_blend_chunk<N, S, const REHASH: bool>(
+fn blend_chunk<N, S, const REHASH: bool>(
     values: &[N],
-    out: &mut [u64],
+    hashes: &mut [u64],
     mask: u64,
     state: &S,
 ) where
@@ -523,24 +508,25 @@ fn hash_prim_blend_chunk<N, S, const REHASH: bool>(
     S: HashState,
 {
     debug_assert_eq!(values.len(), 64);
-    debug_assert_eq!(out.len(), 64);
-    // 8-at-a-time unroll: wider (16) adds register pressure that hurts the
-    // multi-column rehash case; narrower (4) loses ILP on fresh single-column.
-    for base in (0..64).step_by(8) {
-        // SAFETY: base + 7 < 64 == values.len() == out.len()
+    debug_assert_eq!(hashes.len(), 64);
+    for offset in (0..64).step_by(BLEND_LANES) {
+        // SAFETY: offset + BLEND_LANES <= 64 == values.len() == hashes.len()
         unsafe {
-            let v: [N; 8] = std::array::from_fn(|k| *values.get_unchecked(base + k));
-            let p: [u64; 8] = std::array::from_fn(|k| *out.get_unchecked(base + k));
-            let h: [u64; 8] = std::array::from_fn(|k| {
+            let vals: [N; BLEND_LANES] =
+                std::array::from_fn(|lane| *values.get_unchecked(offset + lane));
+            let prevs: [u64; BLEND_LANES] =
+                std::array::from_fn(|lane| *hashes.get_unchecked(offset + lane));
+            let new_hashes: [u64; BLEND_LANES] = std::array::from_fn(|lane| {
                 if REHASH {
-                    rehash_one(state, p[k], v[k])
+                    rehash_one(state, prevs[lane], vals[lane])
                 } else {
-                    v[k].hash_one(state)
+                    vals[lane].hash_one(state)
                 }
             });
-            for k in 0..8 {
-                let valid = (mask >> (base + k)) & 1 != 0;
-                *out.get_unchecked_mut(base + k) = if valid { h[k] } else { p[k] };
+            for lane in 0..BLEND_LANES {
+                let valid = (mask >> (offset + lane)) & 1 != 0;
+                *hashes.get_unchecked_mut(offset + lane) =
+                    if valid { new_hashes[lane] } else { prevs[lane] };
             }
         }
     }
