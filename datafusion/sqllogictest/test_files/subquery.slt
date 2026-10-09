@@ -2907,6 +2907,10 @@ DROP TABLE metrics;
 # `GROUPING SETS ((k), ())`, turns into `GROUPING SETS ((k), (k, k))`. The empty
 # set is gone, and with it the grand total row the subquery returns for every
 # outer row, including the rows whose filter matches nothing.
+#
+# Follow-up (#25708): a non-empty set that leaves the correlated column out is
+# safe to extend when nothing above the aggregate reads that column, so those
+# queries decorrelate again below.
 statement ok
 CREATE TABLE gs_outer(k INT) AS VALUES (1), (2), (NULL), (4), (5);
 
@@ -2927,14 +2931,36 @@ SELECT gs_outer.k, EXISTS (SELECT 1 FROM gs_inner WHERE gs_inner.k = gs_outer.k 
 
 # A set that leaves out the correlated column fills it with NULL. The pull up
 # would turn `(j)` into `(j, k)`, and `k` would then carry a value in the rows
-# where the set fills it with NULL. Anything above the aggregate that reads `k`
-# sees the difference, so the subquery stays correlated.
-#
-# Known limitation: when nothing reads `k`, as here, the pull up was correct
-# before this guard and the query now fails to plan. Telling the two cases apart
-# needs the correlated column added to each set under an alias.
+# where the set fills it with NULL. Nothing above this `EXISTS` reads `k`
+# though (it only checks for a row), so the difference is invisible and the
+# subquery still decorrelates.
+query IB
+SELECT gs_outer.k, EXISTS (SELECT 1 FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY GROUPING SETS ((gs_inner.k), (gs_inner.j))) FROM gs_outer ORDER BY gs_outer.k;
+----
+1 true
+2 true
+4 false
+5 true
+NULL false
+
+# A filter above the grouping set `Aggregate`, through another `Aggregate`
+# stacked on top of it, reads the NULL filled column. `walk` must not stop at
+# the first `Aggregate` it finds (the outer `count(*)`) without recursing into
+# its input, or it never sees that read and wrongly decorrelates.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+SELECT gs_outer.k, (SELECT count(*) FROM (SELECT gs_inner.k AS kk FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY GROUPING SETS ((gs_inner.k), (gs_inner.j))) t WHERE t.kk IS NULL) FROM gs_outer ORDER BY gs_outer.k;
+
+# The same read, but in a later join input rather than directly above the
+# grouping set `Aggregate`. `walk` must visit every input, not stop once one
+# of them turns up a grouping set `Aggregate` below it.
 statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
-SELECT gs_outer.k, EXISTS (SELECT 1 FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY GROUPING SETS ((gs_inner.k), (gs_inner.j))) FROM gs_outer;
+SELECT gs_outer.k, EXISTS (SELECT 1 FROM (SELECT count(*) AS c FROM gs_inner) a JOIN (SELECT gs_inner.k FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY GROUPING SETS ((gs_inner.k), (gs_inner.j))) b ON a.c > 0 WHERE b.k IS NULL) FROM gs_outer ORDER BY gs_outer.k;
+
+# The same read, above a second, nested grouping set `Aggregate` stacked on
+# top of the first. `walk` must keep walking through a grouping set
+# `Aggregate` too, not only a plain one.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT gs_outer.k, EXISTS (SELECT 1 FROM (SELECT gs_inner.k AS kk, gs_inner.j AS jj FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY GROUPING SETS ((gs_inner.k), (gs_inner.j))) t GROUP BY GROUPING SETS ((t.kk), (t.kk, t.jj)) HAVING t.kk IS NULL) FROM gs_outer ORDER BY gs_outer.k;
 
 # The same sets with a HAVING that reads the NULL filled column. For k = 1 the
 # `(j)` set yields the row `(NULL, 10)`, which passes the HAVING, so EXISTS is
@@ -2942,6 +2968,13 @@ SELECT gs_outer.k, EXISTS (SELECT 1 FROM gs_inner WHERE gs_inner.k = gs_outer.k 
 # query answers false for every row.
 statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
 SELECT gs_outer.k, EXISTS (SELECT 1 FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY GROUPING SETS ((gs_inner.k), (gs_inner.j)) HAVING gs_inner.k IS NULL) FROM gs_outer;
+
+# The same sets with a `GROUPING(k)` read out of the aggregate itself: for the
+# `(j)` set it is 1 (k is not one of its columns) before the pull up, and 0
+# (k is now one of its columns in every set) after, so the subquery stays
+# correlated even though nothing above the aggregate reads `k` directly.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+SELECT gs_outer.k, (SELECT GROUPING(gs_inner.k) FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY GROUPING SETS ((gs_inner.k), (gs_inner.j)) LIMIT 1) FROM gs_outer;
 
 # The correlated column does not have to appear in the grouping set at all.
 statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
