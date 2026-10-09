@@ -566,12 +566,12 @@ fn scatter_dict_hashes_no_null_checks<
         let lane_hashes: [u64; DICT_SCATTER_LANES] = std::array::from_fn(|lane| unsafe {
             *dict_hashes.get_unchecked(key_group[lane].as_usize())
         });
-        for lane in 0..DICT_SCATTER_LANES {
+        for (lane, dict_hash) in lane_hashes.iter().copied().enumerate() {
             hash_group[lane] =
-                maybe_combine_dict_hash::<MULTI_COL>(hash_group[lane], lane_hashes[lane]);
+                maybe_combine_dict_hash::<MULTI_COL>(hash_group[lane], dict_hash);
         }
     }
-    // need to handle the remainder for non 64 byte multiples
+    // Handle the non-8-lane tail.
     for (key, hash) in keys_tail.iter().zip(hashes_tail.iter_mut()) {
         let dict_hash = unsafe { *dict_hashes.get_unchecked(key.as_usize()) };
         *hash = maybe_combine_dict_hash::<MULTI_COL>(*hash, dict_hash);
@@ -641,10 +641,9 @@ fn scatter_dict_hashes_in_masked_chunk<
             let clamped_idx = raw_idx.min(max_valid_idx);
             unsafe { *dict_hashes.get_unchecked(clamped_idx) }
         });
-        for lane_offset in 0..DICT_SCATTER_LANES {
+        for (lane_offset, dict_hash) in lane_hashes.iter().copied().enumerate() {
             let slot = unsafe { hashes.get_unchecked_mut(lane_base + lane_offset) };
-            let combined_hash =
-                maybe_combine_dict_hash::<MULTI_COL>(*slot, lane_hashes[lane_offset]);
+            let combined_hash = maybe_combine_dict_hash::<MULTI_COL>(*slot, dict_hash);
             let is_valid = ((mask >> (lane_base + lane_offset)) & 1) == 1;
             *slot = if is_valid { combined_hash } else { *slot };
         }
@@ -1988,6 +1987,95 @@ mod tests {
         // different strings should map to different hash values
         assert_ne!(strings[0], strings[2]);
         assert_ne!(dict_hashes[0], dict_hashes[2]);
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_chunked_dict_arrays_match_strings() {
+        use arrow::buffer::{NullBuffer, ScalarBuffer};
+
+        let random_state = RandomState::with_seed(0);
+        let assert_matches = |case: &str,
+                              dict_array: DictionaryArray<Int32Type>,
+                              strings: Vec<Option<&str>>| {
+            let string_array: ArrayRef =
+                Arc::new(strings.into_iter().collect::<StringArray>());
+            let dict_array: ArrayRef = Arc::new(dict_array);
+
+            let mut string_hashes = vec![0; string_array.len()];
+            create_hashes(&[string_array], &random_state, &mut string_hashes).unwrap();
+
+            let mut dict_hashes = vec![0; dict_array.len()];
+            create_hashes(&[dict_array], &random_state, &mut dict_hashes).unwrap();
+
+            assert_eq!(string_hashes, dict_hashes, "{case}");
+        };
+
+        let dense_values = [Some("zero"), Some("one"), Some("two"), Some("three")];
+        let dense_expected = (0..140)
+            .map(|i| dense_values[i % dense_values.len()])
+            .collect::<Vec<_>>();
+        let dense_keys = (0..140)
+            .map(|i| Some((i % dense_values.len()) as i32))
+            .collect::<Vec<_>>();
+        let dense_dict = DictionaryArray::<Int32Type>::try_new(
+            Int32Array::from(dense_keys),
+            Arc::new(dense_values.iter().cloned().collect::<StringArray>()),
+        )
+        .unwrap()
+        .slice(5, 130);
+        assert_matches(
+            "sliced dense keys",
+            dense_dict,
+            dense_expected[5..135].to_vec(),
+        );
+
+        let mixed_values = [Some("alpha"), Some("beta"), Some("gamma")];
+        let null_keys = [0, 7, 63, 64, 65, 127, 129];
+        let raw_keys = (0..130)
+            .map(|i| {
+                if null_keys.contains(&i) {
+                    10_000 + i as i32
+                } else {
+                    (i % mixed_values.len()) as i32
+                }
+            })
+            .collect::<Vec<_>>();
+        let valid_keys = (0..130)
+            .map(|i| !null_keys.contains(&i))
+            .collect::<Vec<_>>();
+        let mixed_dict = DictionaryArray::<Int32Type>::try_new(
+            Int32Array::new(
+                ScalarBuffer::from(raw_keys),
+                Some(NullBuffer::from(valid_keys)),
+            ),
+            Arc::new(mixed_values.iter().cloned().collect::<StringArray>()),
+        )
+        .unwrap();
+        let mixed_expected = (0..130)
+            .map(|i| {
+                if null_keys.contains(&i) {
+                    None
+                } else {
+                    mixed_values[i % mixed_values.len()]
+                }
+            })
+            .collect();
+        assert_matches("mixed key nulls", mixed_dict, mixed_expected);
+
+        let nullable_values = [Some("left"), None, Some("right")];
+        let nullable_keys = (0..130)
+            .map(|i| Some((i % nullable_values.len()) as i32))
+            .collect::<Vec<_>>();
+        let nullable_dict = DictionaryArray::<Int32Type>::try_new(
+            Int32Array::from(nullable_keys),
+            Arc::new(nullable_values.iter().cloned().collect::<StringArray>()),
+        )
+        .unwrap();
+        let nullable_expected = (0..130)
+            .map(|i| nullable_values[i % nullable_values.len()])
+            .collect();
+        assert_matches("nullable values", nullable_dict, nullable_expected);
     }
 
     #[test]
