@@ -185,6 +185,12 @@ impl LimitedBatchCoalescer {
         self.finished
     }
 
+    /// Return the number of bytes held by the buffered rows and any
+    /// completed batches that have not been taken yet
+    pub fn size(&self) -> usize {
+        self.inner.size()
+    }
+
     /// Return the next completed batch, if any
     pub fn next_completed_batch(&mut self) -> Option<RecordBatch> {
         self.inner.next_completed_batch()
