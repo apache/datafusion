@@ -1604,14 +1604,14 @@ fn pwmj_plan(
     join_type: JoinType,
 ) -> Arc<dyn ExecutionPlan> {
     // Matches `PiecewiseMergeJoinExec::required_input_ordering`: descending for `<`/`<=`,
-    // ascending for `>`/`>=`, NULLs first either way. Right existence joins require no
+    // ascending for `>`/`>=`, reversing NULL placement too. Right existence joins require no
     // ordering at all -- they only read the buffered side's min/max -- so they are fed the
     // left side unsorted, which is the input shape they will see in a real plan.
     let buffered = match join_type {
         JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => left,
         _ => {
             let sort_options = match op {
-                Operator::Lt | Operator::LtEq => SortOptions::new(true, true),
+                Operator::Lt | Operator::LtEq => SortOptions::new(true, false),
                 Operator::Gt | Operator::GtEq => SortOptions::new(false, true),
                 other => panic!("not a range operator: {other:?}"),
             };

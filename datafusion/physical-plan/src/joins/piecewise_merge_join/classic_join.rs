@@ -17,12 +17,12 @@
 
 //! Stream Implementation for PiecewiseMergeJoin's Classic Join (Left, Right, Full, Inner)
 
-use arrow::array::{Array, PrimitiveBuilder, new_null_array};
+use arrow::array::{PrimitiveBuilder, new_null_array};
 use arrow::compute::{BatchCoalescer, take};
 use arrow::datatypes::UInt32Type;
 use arrow::{
     array::{ArrayRef, RecordBatch, UInt32Array},
-    compute::{sort_to_indices, take_record_batch},
+    compute::{SortColumn, lexsort_to_indices, take_record_batch},
 };
 use arrow_schema::{Schema, SchemaRef, SortOptions};
 use datafusion_common::NullEquality;
@@ -37,7 +37,9 @@ use std::{sync::Arc, task::Poll};
 
 use crate::handle_state;
 use crate::joins::piecewise_merge_join::exec::{BufferedSide, BufferedSideReadyState};
-use crate::joins::piecewise_merge_join::utils::need_produce_result_in_final;
+use crate::joins::piecewise_merge_join::utils::{
+    need_produce_result_in_final, non_null_range, unmatched_buffered_batch,
+};
 use crate::joins::utils::JoinKeyComparator;
 use crate::joins::utils::{BuildProbeJoinMetrics, StatefulStreamResult};
 use crate::stream::EmptyRecordBatchStream;
@@ -244,9 +246,11 @@ impl ClassicPWMJStream {
                 self.join_metrics.input_rows.add(batch.num_rows());
 
                 // Sort stream values and change the streamed record batch accordingly
-                let indices = sort_to_indices(
-                    stream_values.as_ref(),
-                    Some(self.sort_option),
+                let indices = lexsort_to_indices(
+                    &[SortColumn {
+                        values: Arc::clone(&stream_values),
+                        options: Some(self.sort_option),
+                    }],
                     None,
                 )?;
                 let stream_batch = take_record_batch(&batch, &indices)?;
@@ -336,16 +340,11 @@ impl ClassicPWMJStream {
         let buffered_data = Arc::clone(&self.buffered_side.try_as_ready()?.buffered_data);
         let buffered_batch = buffered_data.batch();
 
-        // Every match marks the suffix `[k, buffered_len)`, so the buffered rows that were
-        // never matched are exactly the complementary prefix `[0, min_marked)` -- which
-        // includes the null-keyed rows, since nulls sort first and the scan starts past
-        // them. That makes the final pass a zero-copy slice instead of building an index
-        // array and running `take` over it.
-        let min_marked = buffered_data
-            .min_marked
-            .load(AtomicOrdering::SeqCst)
-            .min(buffered_batch.num_rows());
-        let new_buffered_batch = buffered_batch.slice(0, min_marked);
+        let (_, non_null_end) =
+            non_null_range(buffered_data.values().as_ref(), self.sort_option);
+        let min_marked = buffered_data.min_marked.load(AtomicOrdering::SeqCst);
+        let new_buffered_batch =
+            unmatched_buffered_batch(buffered_batch, min_marked, non_null_end)?;
         let mut buffered_columns = new_buffered_batch.columns().to_vec();
 
         let streamed_columns: Vec<ArrayRef> = self
@@ -444,7 +443,8 @@ fn resolve_classic_join(
     join_type: JoinType,
     batch_process_state: &mut BatchProcessState,
 ) -> Result<RecordBatch> {
-    let buffered_len = buffered_side.buffered_data.values().len();
+    let (buffered_start, buffered_len) =
+        non_null_range(buffered_side.buffered_data.values().as_ref(), sort_options);
     let stream_values = stream_batch.compare_key_values();
 
     // Build comparator once for the batch pair
@@ -459,26 +459,28 @@ fn resolve_classic_join(
     let mut stream_idx = batch_process_state.start_stream_idx;
 
     if !batch_process_state.processed_null_count {
-        let buffered_null_idx = buffered_side.buffered_data.values().null_count();
-        let stream_null_idx = stream_values[0].null_count();
-        buffer_idx = buffered_null_idx;
-        stream_idx = stream_null_idx;
+        let (stream_start, stream_end) =
+            non_null_range(stream_values[0].as_ref(), sort_options);
+        buffer_idx = buffered_start;
+        stream_idx = stream_start;
         batch_process_state.processed_null_count = true;
 
-        // The scan below starts past the streamed side's NULL-keyed rows, which
-        // sit at the front (`nulls_first`). A NULL join key never matches under
-        // `NullEqualsNothing`, so for `Right`/`Full` those rows are unmatched and
-        // must still be emitted; record them here since the scan will skip them.
+        // NULL keys never match, but outer joins must emit them on either end.
         if matches!(join_type, JoinType::Right | JoinType::Full) {
-            for row_idx in 0..stream_null_idx as u32 {
-                batch_process_state.unmatched_indices.append_value(row_idx);
+            for row_idx in
+                (0..stream_start).chain(stream_end..stream_batch.batch.num_rows())
+            {
+                batch_process_state
+                    .unmatched_indices
+                    .append_value(row_idx as u32);
             }
         }
     }
 
     // Our buffer_idx variable allows us to start probing on the buffered side where we last matched
     // in the previous stream row.
-    for row_idx in stream_idx..stream_batch.batch.num_rows() {
+    let (_, stream_end) = non_null_range(stream_values[0].as_ref(), sort_options);
+    for row_idx in stream_idx..stream_end {
         while buffer_idx < buffered_len {
             let compare = cmp.compare(row_idx, buffer_idx);
 
