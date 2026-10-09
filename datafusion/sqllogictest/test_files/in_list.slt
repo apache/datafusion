@@ -263,14 +263,17 @@ nulls NULL NULL NULL NULL NULL NULL
 query TT
 EXPLAIN SELECT i32 IN (arrow_cast(3, 'Int32'), arrow_cast(11, 'Int32')) AS i32_in_two,
                i64 NOT IN (arrow_cast(3, 'Int64'), arrow_cast(4, 'Int64'), arrow_cast(11, 'Int64')) AS i64_not_in_three,
-               u64 IN (arrow_cast(3, 'UInt64'), arrow_cast(4, 'UInt64'), arrow_cast(11, 'UInt64')) AS u64_in_three
+               u64 IN (arrow_cast(3, 'UInt64'), arrow_cast(4, 'UInt64'), arrow_cast(11, 'UInt64')) AS u64_in_three,
+               i64 IN (arrow_cast(1, 'Int64')) AS i64_in_one,
+               i64 IN (arrow_cast(3, 'Int64'), i32) AS i64_in_column,
+               i64 NOT IN (arrow_cast(3, 'Int64'), i32) AS i64_not_in_column
 FROM in_list_ints_nullable;
 ----
 logical_plan
-01)Projection: in_list_ints_nullable.i32 IN ([Int32(3), Int32(11)]) AS i32_in_two, in_list_ints_nullable.i64 NOT IN ([Int64(3), Int64(4), Int64(11)]) AS i64_not_in_three, in_list_ints_nullable.u64 IN ([UInt64(3), UInt64(4), UInt64(11)]) AS u64_in_three
+01)Projection: in_list_ints_nullable.i32 IN ([Int32(3), Int32(11)]) AS i32_in_two, in_list_ints_nullable.i64 NOT IN ([Int64(3), Int64(4), Int64(11)]) AS i64_not_in_three, in_list_ints_nullable.u64 IN ([UInt64(3), UInt64(4), UInt64(11)]) AS u64_in_three, in_list_ints_nullable.i64 = Int64(1) AS i64_in_one, in_list_ints_nullable.i64 = Int64(3) OR in_list_ints_nullable.i64 = CAST(in_list_ints_nullable.i32 AS Int64) AS i64_in_column, in_list_ints_nullable.i64 != Int64(3) AND in_list_ints_nullable.i64 != CAST(in_list_ints_nullable.i32 AS Int64) AS i64_not_in_column
 02)--TableScan: in_list_ints_nullable projection=[i32, i64, u64]
 physical_plan
-01)ProjectionExec: expr=[i32@0 IN (SET) ([3, 11]) as i32_in_two, i64@1 NOT IN (SET) ([3, 4, 11]) as i64_not_in_three, u64@2 IN (SET) ([3, 4, 11]) as u64_in_three]
+01)ProjectionExec: expr=[i32@0 IN (SET) ([3, 11]) as i32_in_two, i64@1 NOT IN (SET) ([3, 4, 11]) as i64_not_in_three, u64@2 IN (SET) ([3, 4, 11]) as u64_in_three, i64@1 = 1 as i64_in_one, i64@1 = 3 OR i64@1 = CAST(i32@0 AS Int64) as i64_in_column, i64@1 != 3 AND i64@1 != CAST(i32@0 AS Int64) as i64_not_in_column]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Null input values return NULL when the IN list has no nulls.
