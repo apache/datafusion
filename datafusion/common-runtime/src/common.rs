@@ -16,11 +16,17 @@
 // under the License.
 
 use std::{
+    any::Any,
+    fmt,
     future::Future,
+    panic::AssertUnwindSafe,
     pin::Pin,
-    task::{Context, Poll},
+    sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError},
+    task::{Context, Poll, ready},
 };
 
+use futures::future::BoxFuture;
+use tokio::runtime::Handle;
 use tokio::task::{JoinError, JoinHandle};
 
 use crate::trace_utils::{trace_block, trace_future};
@@ -30,10 +36,13 @@ use crate::trace_utils::{trace_block, trace_future};
 /// Note that if the task was spawned with `spawn_blocking`, it will only be
 /// aborted if it hasn't started yet.
 ///
-/// Technically, it's just a wrapper of a `JoinHandle` overriding drop.
+/// Technically, it's just a wrapper of a `JoinHandle` overriding drop, which
+/// for tasks spawned with [`Self::spawn_reclaimable`] also drops the future.
 #[derive(Debug)]
 pub struct SpawnedTask<R> {
     inner: JoinHandle<R>,
+    /// Set for tasks spawned with [`Self::spawn_reclaimable`]
+    reclaim: Option<ReclaimHandle<R>>,
 }
 
 impl<R: 'static> SpawnedTask<R> {
@@ -46,7 +55,36 @@ impl<R: 'static> SpawnedTask<R> {
         // Ok to use spawn here as SpawnedTask handles aborting/cancelling the task on Drop
         #[expect(clippy::disallowed_methods)]
         let inner = tokio::task::spawn(trace_future(task));
-        Self { inner }
+        Self {
+            inner,
+            reclaim: None,
+        }
+    }
+
+    /// Like [`Self::spawn`], but dropping the handle also drops the task's
+    /// future right away, on the dropping thread, so everything the task owns
+    /// is released by the time `drop` returns. A task that a worker is polling
+    /// at that moment is aborted as usual, and its future is dropped when that
+    /// poll returns.
+    ///
+    /// The future's destructor then runs inside the task's runtime but outside
+    /// the task itself, where [`tokio::task::try_id`] returns `None` or the ID
+    /// of the task that dropped the handle. Use this for futures whose
+    /// destructors do not depend on the task they run in, such as tasks that
+    /// drive a plan's streams. A [`JoinSetTracer`](crate::JoinSetTracer) wraps
+    /// the task, not the future, so the tracer is still dropped inside it.
+    pub fn spawn_reclaimable<T>(task: T) -> Self
+    where
+        T: Future<Output = R>,
+        T: Send + 'static,
+        R: Send,
+    {
+        let slot = TaskSlot::new(Box::pin(task));
+        // Ok to use spawn here as SpawnedTask handles aborting/cancelling the task on Drop
+        #[expect(clippy::disallowed_methods)]
+        let inner = tokio::task::spawn(trace_future(SlotFuture(Arc::clone(&slot))));
+        let reclaim = Some(ReclaimHandle::new(slot, Handle::current()));
+        Self { inner, reclaim }
     }
 
     pub fn spawn_blocking<T>(task: T) -> Self
@@ -58,7 +96,10 @@ impl<R: 'static> SpawnedTask<R> {
         // Ok to use spawn_blocking here as SpawnedTask handles aborting/cancelling the task on Drop
         #[expect(clippy::disallowed_methods)]
         let inner = tokio::task::spawn_blocking(trace_block(task));
-        Self { inner }
+        Self {
+            inner,
+            reclaim: None,
+        }
     }
 
     /// Joins the task, returning the result of join (`Result<R, JoinError>`).
@@ -107,7 +148,135 @@ impl<R> Future for SpawnedTask<R> {
 
 impl<R> Drop for SpawnedTask<R> {
     fn drop(&mut self) {
+        // Before aborting, so a worker cannot pick the cancelled task up and drop the future itself
+        if let Some(reclaim) = &self.reclaim {
+            reclaim.reclaim();
+        }
         self.inner.abort();
+    }
+}
+
+/// The future of a reclaimable task, shared by the task and its handle so
+/// that whichever is done with it first drops it
+pub(crate) struct TaskSlot<R>(Mutex<SlotState<R>>);
+
+struct SlotState<R> {
+    future: Option<BoxFuture<'static, R>>,
+    /// Panic from the future's destructor when its handle dropped it, raised
+    /// again when tokio drops the task so that joining reports it as tokio would
+    destructor_panic: Option<Box<dyn Any + Send>>,
+}
+
+impl<R> TaskSlot<R> {
+    pub(crate) fn new(future: BoxFuture<'static, R>) -> Arc<Self> {
+        Arc::new(Self(Mutex::new(SlotState {
+            future: Some(future),
+            destructor_panic: None,
+        })))
+    }
+
+    fn lock(&self) -> MutexGuard<'_, SlotState<R>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn try_lock(&self) -> Option<MutexGuard<'_, SlotState<R>>> {
+        match self.0.try_lock() {
+            Ok(state) => Some(state),
+            Err(TryLockError::Poisoned(state)) => Some(state.into_inner()),
+            Err(TryLockError::WouldBlock) => None,
+        }
+    }
+}
+
+impl<R> fmt::Debug for TaskSlot<R> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TaskSlot").finish_non_exhaustive()
+    }
+}
+
+/// The future tokio runs for a task with a [`TaskSlot`]
+pub(crate) struct SlotFuture<R>(pub(crate) Arc<TaskSlot<R>>);
+
+impl<R> Future for SlotFuture<R> {
+    type Output = R;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<R> {
+        // The handle is taking the future, and aborts the task right after
+        let Some(mut state) = self.0.try_lock() else {
+            return Poll::Pending;
+        };
+        // Reclaimed, and the task aborted
+        let Some(future) = state.future.as_mut() else {
+            return Poll::Pending;
+        };
+        let output = ready!(future.as_mut().poll(cx));
+        let finished = state.future.take();
+        drop(state);
+        drop(finished);
+        Poll::Ready(output)
+    }
+}
+
+impl<R> Drop for SlotFuture<R> {
+    fn drop(&mut self) {
+        // The handle locks the slot only to take the future or record its
+        // destructor's panic, never while that destructor runs
+        let mut state = self.0.lock();
+        let future = state.future.take();
+        let destructor_panic = state.destructor_panic.take();
+        drop(state);
+        drop(future);
+        if let Some(panic) = destructor_panic
+            && !std::thread::panicking()
+        {
+            std::panic::resume_unwind(panic);
+        }
+    }
+}
+
+/// The handle side of a [`TaskSlot`]
+#[derive(Debug)]
+pub(crate) struct ReclaimHandle<R> {
+    slot: Arc<TaskSlot<R>>,
+    runtime: Handle,
+}
+
+impl<R> ReclaimHandle<R> {
+    pub(crate) fn new(slot: Arc<TaskSlot<R>>, runtime: Handle) -> Self {
+        Self { slot, runtime }
+    }
+
+    /// Drops the task's future on this thread, unless a worker is polling it,
+    /// in which case the task drops it once aborted and that poll returns.
+    pub(crate) fn reclaim(&self) {
+        // A panicking destructor would abort the process while this thread unwinds
+        if std::thread::panicking() {
+            return;
+        }
+        let Some(future) = self
+            .slot
+            .try_lock()
+            .and_then(|mut state| state.future.take())
+        else {
+            return;
+        };
+        // Tokio drops a cancelled task's future inside its runtime, and some
+        // destructors need it (timers, spawning)
+        let _runtime = self.runtime.enter();
+        // Recorded before the caller aborts the task, whose drop raises it again
+        if let Err(panic) =
+            std::panic::catch_unwind(AssertUnwindSafe(move || drop(future)))
+        {
+            self.slot.lock().destructor_panic = Some(panic);
+        }
+    }
+
+    /// Waits until no worker is polling the task
+    #[cfg(test)]
+    pub(crate) fn wait_until_idle(&self) {
+        while self.slot.0.try_lock().is_err() {
+            std::thread::yield_now();
+        }
     }
 }
 
@@ -185,5 +354,127 @@ mod tests {
 
         // The sender was dropped so we receive `None`.
         assert!(receiver.recv().await.is_none());
+    }
+
+    fn wait_until_idle<R>(task: &SpawnedTask<R>) {
+        task.reclaim.as_ref().unwrap().wait_until_idle();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn drop_releases_idle_task_in_place() {
+        let owned = Arc::new(());
+        let released = Arc::downgrade(&owned);
+        let (started_tx, started_rx) = oneshot::channel();
+        let task = SpawnedTask::spawn_reclaimable(async move {
+            started_tx.send(()).unwrap();
+            pending::<()>().await;
+            drop(owned);
+        });
+        started_rx.await.unwrap();
+        wait_until_idle(&task);
+
+        drop(task);
+        assert_eq!(released.strong_count(), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn drop_during_poll_releases_after_the_poll() {
+        let owned = Arc::new(());
+        let released = Arc::downgrade(&owned);
+        let (polling_tx, polling_rx) = std::sync::mpsc::channel();
+        let (resume_tx, resume_rx) = std::sync::mpsc::channel::<()>();
+        let task = SpawnedTask::spawn_reclaimable(async move {
+            polling_tx.send(()).unwrap();
+            // Keeps the worker inside this poll until the test resumes it
+            resume_rx.recv().unwrap();
+            pending::<()>().await;
+            drop(owned);
+        });
+        polling_rx.recv().unwrap();
+
+        drop(task);
+        assert_eq!(released.strong_count(), 1);
+
+        resume_tx.send(()).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while released.strong_count() > 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    type DropContext = (std::thread::ThreadId, bool, Option<tokio::task::Id>);
+
+    struct RecordDropContext(std::sync::mpsc::Sender<DropContext>);
+
+    impl Drop for RecordDropContext {
+        fn drop(&mut self) {
+            let in_runtime = Handle::try_current().is_ok();
+            let context = (
+                std::thread::current().id(),
+                in_runtime,
+                tokio::task::try_id(),
+            );
+            self.0.send(context).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn spawn_drops_its_future_inside_the_task() {
+        let (dropped_tx, dropped_rx) = std::sync::mpsc::channel();
+        let record = RecordDropContext(dropped_tx);
+        let (id_tx, id_rx) = oneshot::channel();
+        let task = SpawnedTask::spawn(async move {
+            let _record = record;
+            id_tx.send(tokio::task::id()).unwrap();
+            pending::<()>().await;
+        });
+        let id = id_rx.await.unwrap();
+
+        drop(task);
+        tokio::task::yield_now().await;
+        assert_eq!(dropped_rx.recv().unwrap().2, Some(id));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reclaimed_future_drops_in_the_runtime_outside_its_task() {
+        let (dropped_tx, dropped_rx) = std::sync::mpsc::channel();
+        let record = RecordDropContext(dropped_tx);
+        let (started_tx, started_rx) = oneshot::channel();
+        let task = SpawnedTask::spawn_reclaimable(async move {
+            let _record = record;
+            started_tx.send(()).unwrap();
+            pending::<()>().await;
+        });
+        started_rx.await.unwrap();
+        wait_until_idle(&task);
+
+        let dropper = std::thread::spawn(move || {
+            drop(task);
+            std::thread::current().id()
+        })
+        .join()
+        .unwrap();
+        assert_eq!(dropped_rx.recv().unwrap(), (dropper, true, None));
+    }
+
+    #[tokio::test]
+    async fn drop_contains_destructor_panics() {
+        struct PanicOnDrop;
+        impl Drop for PanicOnDrop {
+            fn drop(&mut self) {
+                panic!("destructor panic");
+            }
+        }
+        let task = SpawnedTask::spawn_reclaimable(async move {
+            let _panics = PanicOnDrop;
+            pending::<()>().await;
+        });
+        // Lets the task start and park
+        tokio::task::yield_now().await;
+
+        drop(task);
     }
 }
