@@ -790,10 +790,8 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Projection: test.a, corr(alias1,alias1) AS corr(DISTINCT test.b,test.b) [a:UInt32, corr(DISTINCT test.b,test.b):Float64;N]
-          Aggregate: groupBy=[[test.a]], aggr=[[corr(alias1, alias1)]] [a:UInt32, corr(alias1,alias1):Float64;N]
-            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]
-              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        Aggregate: groupBy=[[test.a]], aggr=[[corr(DISTINCT test.b, test.b)]] [a:UInt32, corr(DISTINCT test.b,test.b):Float64;N]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
