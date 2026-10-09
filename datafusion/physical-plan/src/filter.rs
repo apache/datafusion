@@ -1926,11 +1926,11 @@ mod tests {
     }
 
     /// An equality on a column that holds each value once matches one row at most,
-    /// including on a type interval analysis cannot read, where the default
-    /// selectivity would otherwise apply.
+    /// including on a type neither interval analysis nor the string estimates can
+    /// read, where the default selectivity would otherwise apply.
     #[tokio::test]
     async fn test_filter_statistics_equality_on_a_unique_column() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("id", DataType::Utf8, true)]);
+        let schema = Schema::new(vec![Field::new("id", DataType::Binary, true)]);
         let unique = ColumnStatistics {
             null_count: Precision::Exact(0),
             distinct_count: Precision::Exact(100),
@@ -1945,8 +1945,12 @@ mod tests {
                 },
                 schema.clone(),
             ));
-            let predicate =
-                binary(col("id", &schema)?, Operator::Eq, lit("seven"), &schema)?;
+            let predicate = binary(
+                col("id", &schema)?,
+                Operator::Eq,
+                lit(ScalarValue::Binary(Some(b"seven".to_vec()))),
+                &schema,
+            )?;
             let filter: Arc<dyn ExecutionPlan> =
                 Arc::new(FilterExec::try_new(predicate, input)?);
             Ok(StatisticsContext::new()
@@ -1970,6 +1974,15 @@ mod tests {
         assert_eq!(
             rows(ColumnStatistics {
                 distinct_count: Precision::Absent,
+                ..unique.clone()
+            })?,
+            Precision::Inexact(20)
+        );
+
+        // Nor without a null count.
+        assert_eq!(
+            rows(ColumnStatistics {
+                null_count: Precision::Absent,
                 ..unique
             })?,
             Precision::Inexact(20)
@@ -1978,87 +1991,17 @@ mod tests {
         Ok(())
     }
 
-    /// Asking a unique column for three values matches three rows at most.
+    /// Asking a unique column for N distinct values matches N rows at most.
     #[tokio::test]
     async fn test_filter_statistics_in_list_on_a_unique_column() -> Result<()> {
         use datafusion_physical_expr::expressions::in_list;
 
-        let schema = Schema::new(vec![Field::new("id", DataType::Utf8, true)]);
-        let rows = |list: Vec<&str>, negated: bool| -> Result<Precision<usize>> {
-            let input = Arc::new(StatisticsExec::new(
-                Statistics {
-                    num_rows: Precision::Exact(100),
-                    total_byte_size: Precision::Exact(800),
-                    column_statistics: vec![ColumnStatistics {
-                        null_count: Precision::Exact(0),
-                        distinct_count: Precision::Exact(100),
-                        ..Default::default()
-                    }],
-                },
-                schema.clone(),
-            ));
-            let predicate = in_list(
-                col("id", &schema)?,
-                list.into_iter().map(|value| lit(value) as _).collect(),
-                &negated,
-                &schema,
-            )?;
-            let filter: Arc<dyn ExecutionPlan> =
-                Arc::new(FilterExec::try_new(predicate, input)?);
-            Ok(StatisticsContext::new()
-                .compute(filter.as_ref(), &StatisticsArgs::new())?
-                .num_rows)
-        };
-
-        assert_eq!(rows(vec!["a", "b", "c"], false)?, Precision::Inexact(3));
-        // Repeats ask for the same row twice.
-        assert_eq!(rows(vec!["a", "b", "a"], false)?, Precision::Inexact(2));
-        // `NOT IN` selects nearly everything, so the default applies.
-        assert_eq!(rows(vec!["a", "b", "c"], true)?, Precision::Inexact(20));
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_filter_statistics_large_in_list() -> Result<()> {
-        use datafusion_physical_expr::expressions::in_list;
+        let null = || lit(ScalarValue::Utf8(None));
 
         let schema = Schema::new(vec![Field::new("id", DataType::Utf8, true)]);
-        let distinct_values = 4096;
-        let values: Vec<Arc<dyn PhysicalExpr>> = (0..distinct_values)
-            .map(|i| lit(format!("value_{i}")) as _)
-            .collect();
-        // Non-adjacent duplicates and NULLs must not increase the row cap.
-        let repeated_values = values
-            .iter()
-            .chain(values.iter().rev())
-            .cloned()
-            .chain(std::iter::repeat_n(lit(ScalarValue::Utf8(None)) as _, 32))
-            .collect();
-        let cases = [
-            ("distinct values", values, false, distinct_values),
-            (
-                "duplicates and nulls",
-                repeated_values,
-                false,
-                distinct_values,
-            ),
-            (
-                "only nulls",
-                vec![lit(ScalarValue::Utf8(None)); 32],
-                false,
-                0,
-            ),
-            (
-                "non-literal list member",
-                vec![lit("value_0"), col("id", &schema)?],
-                false,
-                20_000,
-            ),
-            ("negated list", vec![lit("value_0")], true, 20_000),
-        ];
-
-        for (description, list, negated, expected_rows) in cases {
+        let rows = |list: Vec<Arc<dyn PhysicalExpr>>,
+                    negated: bool|
+         -> Result<Precision<usize>> {
             let input = Arc::new(StatisticsExec::new(
                 Statistics {
                     num_rows: Precision::Exact(100_000),
@@ -2072,20 +2015,60 @@ mod tests {
                 schema.clone(),
             ));
             let predicate = in_list(col("id", &schema)?, list, &negated, &schema)?;
-            let filter = FilterExec::try_new(predicate, input)?;
-            let statistics =
-                StatisticsContext::new().compute(&filter, &StatisticsArgs::new())?;
-            assert_eq!(
-                statistics.num_rows,
-                Precision::Inexact(expected_rows),
-                "{description}"
-            );
-        }
+            let filter: Arc<dyn ExecutionPlan> =
+                Arc::new(FilterExec::try_new(predicate, input)?);
+            Ok(StatisticsContext::new()
+                .compute(filter.as_ref(), &StatisticsArgs::new())?
+                .num_rows)
+        };
+
+        assert_eq!(
+            rows(vec![lit("a"), lit("b"), lit("c")], false)?,
+            Precision::Inexact(3)
+        );
+        // Repeats ask for the same row twice.
+        assert_eq!(
+            rows(vec![lit("a"), lit("b"), lit("a")], false)?,
+            Precision::Inexact(2)
+        );
+        // NULL matches nothing.
+        assert_eq!(rows(vec![null(); 32], false)?, Precision::Inexact(0));
+        // `NOT IN` selects nearly everything, so the default applies.
+        assert_eq!(
+            rows(vec![lit("a"), lit("b"), lit("c")], true)?,
+            Precision::Inexact(20_000)
+        );
+        // A list member that is not a literal leaves the set open.
+        assert_eq!(
+            rows(vec![lit("a"), col("id", &schema)?], false)?,
+            Precision::Inexact(20_000)
+        );
+
+        // A large list, with non-adjacent repeats and NULLs that must not raise the
+        // cap.
+        let distinct_values = 4096;
+        let values: Vec<_> = (0..distinct_values)
+            .map(|i| lit(format!("value_{i}")))
+            .collect();
+        let repeated_values = values
+            .iter()
+            .chain(values.iter().rev())
+            .cloned()
+            .chain(std::iter::repeat_n(null(), 32))
+            .collect();
+        assert_eq!(rows(values, false)?, Precision::Inexact(distinct_values));
+        assert_eq!(
+            rows(repeated_values, false)?,
+            Precision::Inexact(distinct_values)
+        );
+
         Ok(())
     }
 
+    /// An IN list caps the estimate only when the column it restricts holds each
+    /// value once; a unique column elsewhere in the table does not count.
     #[test]
-    fn test_filter_statistics_in_list_uniqueness_precheck() -> Result<()> {
+    fn test_filter_statistics_in_list_requires_unique_target_column() -> Result<()> {
         use datafusion_physical_expr::expressions::in_list;
 
         let schema = Schema::new(vec![
@@ -2102,38 +2085,6 @@ mod tests {
             ..unique.clone()
         };
         let cases = [
-            (
-                "no unique columns",
-                vec![non_unique.clone(), non_unique.clone()],
-                20_000,
-            ),
-            (
-                "unknown statistics",
-                vec![ColumnStatistics::new_unknown(); 2],
-                20_000,
-            ),
-            (
-                "missing distinct count",
-                vec![
-                    non_unique.clone(),
-                    ColumnStatistics {
-                        distinct_count: Precision::Absent,
-                        ..unique.clone()
-                    },
-                ],
-                20_000,
-            ),
-            (
-                "missing null count",
-                vec![
-                    non_unique.clone(),
-                    ColumnStatistics {
-                        null_count: Precision::Absent,
-                        ..unique.clone()
-                    },
-                ],
-                20_000,
-            ),
             (
                 "only an unrelated column is unique",
                 vec![unique.clone(), non_unique.clone()],
