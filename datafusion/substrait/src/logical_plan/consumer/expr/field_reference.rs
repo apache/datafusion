@@ -164,6 +164,34 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn unsupported_outer_reference_forms_are_rejected() {
+        use substrait::proto::expression::field_reference::{
+            OuterReference, outer_reference::OuterReferenceType,
+        };
+
+        let extensions = Extensions::default();
+        let session_state = SessionContext::new().state();
+        let consumer = DefaultSubstraitConsumer::new(&extensions, &session_state);
+        for (reference_type, message) in [
+            (
+                Some(OuterReferenceType::RelReference(1)),
+                "by relation reference is not supported",
+            ),
+            (None, "without a reference type"),
+        ] {
+            let mut reference = lambda_field_ref(0, 0);
+            reference.root_type = Some(RootType::OuterReference(OuterReference {
+                outer_reference_type: reference_type,
+            }));
+            let error =
+                from_field_reference(&consumer, &reference, DFSchema::empty_ref())
+                    .await
+                    .unwrap_err();
+            assert_contains!(error.to_string(), message);
+        }
+    }
+
     fn lambda_field_ref(field: i32, steps_out: u32) -> FieldReference {
         FieldReference {
             reference_type: Some(field_reference::ReferenceType::DirectReference(

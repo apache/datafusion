@@ -16,17 +16,17 @@
 // under the License.
 
 use crate::logical_plan::producer::{
-    SubstraitProducer, to_substrait_literal_expr, to_substrait_type,
-    to_substrait_type_from_field,
+    SubstraitProducer, to_substrait_type, to_substrait_type_from_field,
 };
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::datatype::FieldExt;
 use datafusion::common::{
-    DFSchemaRef, ScalarValue, internal_datafusion_err, not_impl_err, substrait_err,
+    DFSchemaRef, internal_datafusion_err, not_impl_err, substrait_err,
 };
 use datafusion::logical_expr::{
     Between, BinaryExpr, Expr, ExprSchemable, Like, Operator, expr,
 };
+use substrait::proto::FunctionOption;
 use substrait::proto::expression::{RexType, ScalarFunction};
 use substrait::proto::function_argument::ArgType;
 use substrait::proto::{Expression, FunctionArgument, Type};
@@ -230,6 +230,11 @@ pub fn from_binary_expr(
     ))
 }
 
+/// The option `like` uses to carry case sensitivity, and the value that asks
+/// for the case insensitive form. Defined in `functions_string.yaml`.
+pub(crate) const CASE_SENSITIVITY_OPTION: &str = "case_sensitivity";
+pub(crate) const CASE_INSENSITIVE: &str = "CASE_INSENSITIVE";
+
 pub fn from_like(
     producer: &mut impl SubstraitProducer,
     like: &Like,
@@ -242,11 +247,14 @@ pub fn from_like(
         escape_char,
         case_insensitive,
     } = like;
-    let function_anchor = if *case_insensitive {
-        producer.register_function("ilike".to_string())
-    } else {
-        producer.register_function("like".to_string())
-    };
+    // `like` takes two arguments and carries case sensitivity as an option;
+    // the extensions define no `ilike` and no escape character, so an escape
+    // has no encoding here and is rejected rather than emitted as a third
+    // argument that a consumer would bind to a parameter the function does
+    // not have.
+    if escape_char.is_some() {
+        return not_impl_err!("Substrait does not define an escape character for `like`");
+    }
     // Substrait documents `output_type` as "Must be set to the return type of
     // the function, exactly as derived using the declaration in the extension",
     // and a consumer that reads it rejects the call when it is unset. The type
@@ -254,30 +262,34 @@ pub fn from_like(
     // derives, rather than being restated here.
     let (_, output_field) = Expr::Like(like.clone()).to_field(schema)?;
     let output_type = to_substrait_type_from_field(producer, &output_field)?;
-    let expr = producer.handle_expr(expr, schema)?;
-    let pattern = producer.handle_expr(pattern, schema)?;
-    let escape_char = to_substrait_literal_expr(
-        producer,
-        &ScalarValue::Utf8(escape_char.map(|c| c.to_string())),
-    )?;
+
+    let function_anchor = producer.register_function("like".to_string());
+    let substrait_expr = producer.handle_expr(expr, schema)?;
+    let substrait_pattern = producer.handle_expr(pattern, schema)?;
     let arguments = vec![
         FunctionArgument {
-            arg_type: Some(ArgType::Value(expr)),
+            arg_type: Some(ArgType::Value(substrait_expr)),
         },
         FunctionArgument {
-            arg_type: Some(ArgType::Value(pattern)),
-        },
-        FunctionArgument {
-            arg_type: Some(ArgType::Value(escape_char)),
+            arg_type: Some(ArgType::Value(substrait_pattern)),
         },
     ];
+    // An unset option leaves the default, which is `CASE_SENSITIVE`.
+    let options = if *case_insensitive {
+        vec![FunctionOption {
+            name: CASE_SENSITIVITY_OPTION.to_string(),
+            preference: vec![CASE_INSENSITIVE.to_string()],
+        }]
+    } else {
+        vec![]
+    };
 
     let substrait_like = Expression {
         rex_type: Some(RexType::ScalarFunction(ScalarFunction {
             function_reference: function_anchor,
             arguments,
             output_type: Some(output_type.clone()),
-            options: vec![],
+            options,
         })),
     };
 
@@ -427,6 +439,7 @@ pub fn operator_to_name(op: Operator) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use super::{CASE_INSENSITIVE, CASE_SENSITIVITY_OPTION};
     use crate::logical_plan::producer::{
         DefaultSubstraitProducer, SubstraitProducer, to_substrait_type,
     };
@@ -436,8 +449,87 @@ mod tests {
     use datafusion::logical_expr::{Expr, Like};
     use datafusion::prelude::{col, lit};
     use substrait::proto::Expression;
+    use substrait::proto::FunctionOption;
     use substrait::proto::expression::{RexType, ScalarFunction};
     use substrait::proto::function_argument::ArgType;
+
+    /// `like` takes two arguments and carries case sensitivity as an option,
+    /// so `ILIKE` is that option rather than a separate function.
+    #[tokio::test]
+    async fn like_emits_case_sensitivity_option() -> datafusion::common::Result<()> {
+        let state = SessionStateBuilder::default().build();
+        let schema =
+            DFSchemaRef::new(DFSchema::try_from(Schema::new(vec![Field::new(
+                "s",
+                DataType::Utf8,
+                true,
+            )]))?);
+
+        for (case_insensitive, expected_options) in [
+            (false, vec![]),
+            (
+                true,
+                vec![FunctionOption {
+                    name: CASE_SENSITIVITY_OPTION.to_string(),
+                    preference: vec![CASE_INSENSITIVE.to_string()],
+                }],
+            ),
+        ] {
+            let mut producer = DefaultSubstraitProducer::new(&state);
+            let like = Like::new(
+                false,
+                Box::new(col("s")),
+                Box::new(lit("a%")),
+                None,
+                case_insensitive,
+            );
+            let expr = producer.handle_expr(&Expr::Like(like), &schema)?;
+
+            let Some(RexType::ScalarFunction(call)) = expr.rex_type else {
+                panic!("Substrait ScalarFunction expected")
+            };
+            assert_eq!(
+                producer
+                    .get_extensions()
+                    .functions
+                    .get(&call.function_reference),
+                Some(&"like".to_string()),
+                "case_insensitive = {case_insensitive}"
+            );
+            assert_eq!(call.arguments.len(), 2, "no escape argument is emitted");
+            assert_eq!(call.options, expected_options);
+        }
+
+        Ok(())
+    }
+
+    /// The extensions define no escape character, so there is nothing to emit.
+    #[tokio::test]
+    async fn like_with_escape_is_rejected() -> datafusion::common::Result<()> {
+        let state = SessionStateBuilder::default().build();
+        let schema =
+            DFSchemaRef::new(DFSchema::try_from(Schema::new(vec![Field::new(
+                "s",
+                DataType::Utf8,
+                true,
+            )]))?);
+        let mut producer = DefaultSubstraitProducer::new(&state);
+
+        let like = Like::new(
+            false,
+            Box::new(col("s")),
+            Box::new(lit("a!%")),
+            Some('!'),
+            false,
+        );
+        let err = producer
+            .handle_expr(&Expr::Like(like), &schema)
+            .expect_err("an escape character must be rejected")
+            .to_string();
+        assert!(err.contains("escape character"), "unexpected error: {err}");
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn binary_expr_output_type() -> datafusion::common::Result<()> {

@@ -263,4 +263,43 @@ mod tests {
             WindowFrameBound::Preceding(ScalarValue::UInt64(Some(3)))
         );
     }
+
+    #[test]
+    fn following_offset_expression_overrides_the_legacy_distance() {
+        for (distance, expected) in [
+            (0, WindowFrameBound::CurrentRow),
+            (3, WindowFrameBound::Following(ScalarValue::UInt64(Some(3)))),
+        ] {
+            #[expect(deprecated)]
+            let bound = Bound {
+                kind: Some(BoundKind::Following(Box::new(SubstraitBound::Following {
+                    offset: 7,
+                    offset_expr: Some(Box::new(i64_literal(distance))),
+                }))),
+            };
+            assert_eq!(from_substrait_bound(Some(&bound), false).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn non_int64_offset_expression_is_rejected() {
+        #[expect(deprecated)]
+        let bound = Bound {
+            kind: Some(BoundKind::Preceding(Box::new(SubstraitBound::Preceding {
+                offset: 7,
+                offset_expr: Some(Box::new(Expression {
+                    rex_type: Some(RexType::Literal(Literal {
+                        literal_type: Some(LiteralType::I32(3)),
+                        ..Default::default()
+                    })),
+                })),
+            }))),
+        };
+        let error = from_substrait_bound(Some(&bound), true).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("offsets other than int64 literals")
+        );
+    }
 }
