@@ -144,10 +144,12 @@ fn case_field_metadata(case: &Case, schema: &dyn ExprSchema) -> Result<FieldRef>
     // `to_field` can revisit nested aliases; delegate only shallow branches.
     const MAX_EXACT_BRANCH_DEPTH: usize = 8;
 
-    fn can_infer_exact_branch(expr: &Expr) -> Result<bool> {
+    fn can_infer_exact_branch(expr: &Expr, allow_nested_case: bool) -> Result<bool> {
         let mut work = vec![(expr, 1)];
         while let Some((node, depth)) = work.pop() {
-            if matches!(node, Expr::Case(_)) || depth > MAX_EXACT_BRANCH_DEPTH {
+            if (!allow_nested_case && matches!(node, Expr::Case(_)))
+                || depth > MAX_EXACT_BRANCH_DEPTH
+            {
                 return Ok(false);
             }
             node.apply_children(|child| {
@@ -190,7 +192,7 @@ fn case_field_metadata(case: &Case, schema: &dyn ExprSchema) -> Result<FieldRef>
                 Expr::Case(nested) => schedule_case(nested, &mut work),
                 Expr::Cast(cast)
                     if !cast.field.metadata().is_empty()
-                        && can_infer_exact_branch(expr)? =>
+                        && can_infer_exact_branch(expr, false)? =>
                 {
                     fields.push(BranchField {
                         field: expr.to_field(schema)?.1,
@@ -203,7 +205,7 @@ fn case_field_metadata(case: &Case, schema: &dyn ExprSchema) -> Result<FieldRef>
                 }
                 Expr::TryCast(cast)
                     if !cast.field.metadata().is_empty()
-                        && can_infer_exact_branch(expr)? =>
+                        && can_infer_exact_branch(expr, false)? =>
                 {
                     fields.push(BranchField {
                         field: expr.to_field(schema)?.1,
@@ -215,7 +217,8 @@ fn case_field_metadata(case: &Case, schema: &dyn ExprSchema) -> Result<FieldRef>
                     work.push(Work::Visit(&cast.expr));
                 }
                 Expr::Alias(alias)
-                    if alias.metadata.is_some() && can_infer_exact_branch(expr)? =>
+                    if alias.metadata.is_some()
+                        && can_infer_exact_branch(expr, false)? =>
                 {
                     fields.push(BranchField {
                         field: expr.to_field(schema)?.1,
@@ -228,7 +231,7 @@ fn case_field_metadata(case: &Case, schema: &dyn ExprSchema) -> Result<FieldRef>
                 }
                 Expr::Negative(inner) => work.push(Work::Visit(inner)),
                 Expr::ScalarFunction(_) | Expr::HigherOrderFunction(_)
-                    if can_infer_exact_branch(expr)? =>
+                    if can_infer_exact_branch(expr, true)? =>
                 {
                     fields.push(BranchField {
                         field: expr.to_field(schema)?.1,
@@ -1633,7 +1636,15 @@ mod tests {
 
         let nested_arg = when(lit(true), col("a")).otherwise(col("b"))?;
         let nested_call = when(lit(true), marked_call(nested_arg)).otherwise(col("b"))?;
-        assert!(nested_call.to_field(&schema)?.1.metadata().is_empty());
+        assert_eq!(nested_call.to_field(&schema)?.1.metadata(), &shared);
+
+        let mut deep_nested_arg = when(lit(true), col("a")).otherwise(col("b"))?;
+        for _ in 0..8 {
+            deep_nested_arg = deep_nested_arg.alias("nested");
+        }
+        let deep_nested_call =
+            when(lit(true), marked_call(deep_nested_arg)).otherwise(col("b"))?;
+        assert!(deep_nested_call.to_field(&schema)?.1.metadata().is_empty());
 
         let binary = col("d") + lit(1);
         let Expr::Alias(alias) = binary.clone().alias("marked") else {
