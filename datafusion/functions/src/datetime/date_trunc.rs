@@ -644,7 +644,7 @@ const DAYS_PER_ERA: i64 = 146_097;
 /// This is a port of Howard Hinnant's `civil_from_days`, which documents the
 /// derivation of the constants and the March-based year used below:
 /// <https://howardhinnant.github.io/date_algorithms.html#civil_from_days>
-fn civil_from_days(days: i64) -> (i64, i64, i64) {
+pub(super) fn civil_from_days(days: i64) -> (i64, i64, i64) {
     let z = days + DAYS_EPOCH_SHIFT;
     let era = z.div_euclid(DAYS_PER_ERA);
     let day_of_era = z.rem_euclid(DAYS_PER_ERA);
@@ -671,7 +671,7 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
 /// This is a port of Howard Hinnant's `days_from_civil`, which documents the
 /// derivation of the constants and the March-based year used below:
 /// <https://howardhinnant.github.io/date_algorithms.html#days_from_civil>
-fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+pub(super) fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let year = year - i64::from(month <= 2);
     let era = year.div_euclid(400);
     let year_of_era = year.rem_euclid(400);
