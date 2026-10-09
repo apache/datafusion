@@ -1053,13 +1053,15 @@ async fn roundtrip_listing_table_with_schema_metadata() -> Result<()> {
     roundtrip_test(plan)
 }
 
-fn roundtrip_file_scan_config(scan_config: FileScanConfig) -> Result<FileScanConfig> {
+fn roundtrip_file_scan_config_with_context(
+    scan_config: FileScanConfig,
+    ctx: &SessionContext,
+) -> Result<FileScanConfig> {
     let exec_plan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(scan_config);
-    let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
     let proto_converter = DefaultPhysicalProtoConverter {};
     let result_plan =
-        roundtrip_test_and_return(exec_plan, &ctx, &codec, &proto_converter)?;
+        roundtrip_test_and_return(exec_plan, ctx, &codec, &proto_converter)?;
 
     let data_source_exec = result_plan
         .downcast_ref::<DataSourceExec>()
@@ -1069,6 +1071,34 @@ fn roundtrip_file_scan_config(scan_config: FileScanConfig) -> Result<FileScanCon
         .downcast_ref::<FileScanConfig>()
         .expect("Expected FileScanConfig");
     Ok(file_scan_config.clone())
+}
+
+fn roundtrip_file_scan_config(scan_config: FileScanConfig) -> Result<FileScanConfig> {
+    roundtrip_file_scan_config_with_context(scan_config, &SessionContext::new())
+}
+
+#[test]
+fn roundtrip_file_scan_config_preserves_object_store_userinfo() -> Result<()> {
+    let object_store_url =
+        ObjectStoreUrl::parse("abfss://container:secret@account.dfs.core.windows.net")?;
+    let file_schema =
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Int32, false)]));
+    let file_source = Arc::new(ParquetSource::new(file_schema));
+    let scan_config =
+        FileScanConfigBuilder::new(object_store_url.clone(), file_source).build();
+
+    let ctx = SessionContext::new();
+    ctx.register_object_store(
+        object_store_url.as_ref(),
+        Arc::new(object_store::memory::InMemory::new()),
+    );
+    let roundtripped = roundtrip_file_scan_config_with_context(scan_config, &ctx)?;
+    assert_eq!(roundtripped.object_store_url, object_store_url);
+    assert_eq!(
+        roundtripped.object_store_url.as_str(),
+        "abfss://container:secret@account.dfs.core.windows.net/"
+    );
+    Ok(())
 }
 
 #[test]
