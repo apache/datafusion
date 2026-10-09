@@ -34,9 +34,7 @@ impl<'a> ShortenInListSimplifier<'a> {
         Self { schema }
     }
 
-    /// The paired `in_list_rewrite` benchmark favors membership for these
-    /// representations. For integers, prefer the gains on mixed and miss-heavy
-    /// batches despite the comparison chain's advantage on first-item matches.
+    /// Keep short literal lists for types with efficient membership filters.
     fn should_retain_short_inlist(&self, expr: &Expr, list: &[Expr]) -> bool {
         let Ok(data_type) = expr.get_type(self.schema) else {
             return false;

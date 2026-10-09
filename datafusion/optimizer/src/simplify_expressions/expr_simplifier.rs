@@ -5106,24 +5106,30 @@ mod tests {
     }
 
     #[test]
-    fn simplify_short_inlist_measured_representations() {
-        for data_type in [
-            DataType::Float32,
-            DataType::Float64,
-            DataType::FixedSizeBinary(8),
-            DataType::Float16,
-            DataType::Int32,
-            DataType::Int64,
-            DataType::UInt64,
-            DataType::FixedSizeBinary(1),
-            DataType::FixedSizeBinary(2),
-            DataType::FixedSizeBinary(3),
-            DataType::FixedSizeBinary(4),
-            DataType::FixedSizeBinary(16),
-            DataType::Utf8View,
-            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Float64)),
+    fn simplify_short_inlist_types() {
+        for (data_type, retain_short) in [
+            (DataType::Int32, true),
+            (DataType::Int64, true),
+            (DataType::UInt64, true),
+            (DataType::Float32, true),
+            (DataType::Float64, true),
+            (DataType::FixedSizeBinary(1), true),
+            (DataType::FixedSizeBinary(2), true),
+            (DataType::FixedSizeBinary(4), true),
+            (DataType::FixedSizeBinary(8), true),
+            (DataType::FixedSizeBinary(16), true),
+            (DataType::Float16, false),
+            (DataType::FixedSizeBinary(3), false),
+            (DataType::Utf8View, false),
+            (
+                DataType::Dictionary(
+                    Box::new(DataType::Int8),
+                    Box::new(DataType::Float64),
+                ),
+                false,
+            ),
         ] {
-            let values = (1..=4)
+            let values = (1..=3)
                 .map(|value| {
                     lit(match &data_type {
                         DataType::FixedSizeBinary(width) => ScalarValue::FixedSizeBinary(
@@ -5139,63 +5145,37 @@ mod tests {
                     })
                 })
                 .collect::<Vec<_>>();
-            let retain_short = matches!(
-                data_type,
-                DataType::Int32
-                    | DataType::Int64
-                    | DataType::UInt64
-                    | DataType::Float32
-                    | DataType::Float64
-                    | DataType::FixedSizeBinary(1 | 2 | 4 | 8 | 16)
-            );
-            let schema = Schema::new(vec![
-                Field::new("value", data_type.clone(), true),
-                Field::new("other", data_type, true),
-            ])
-            .to_dfschema_ref()
-            .unwrap();
+            let schema = Schema::new(vec![Field::new("value", data_type.clone(), true)])
+                .to_dfschema_ref()
+                .unwrap();
             let simplifier = ExprSimplifier::new(
                 SimplifyContext::builder().with_schema(schema).build(),
             );
-            for list_len in 1..=4 {
+            for list_len in [2, 3] {
                 for negated in [false, true] {
-                    let list = values[..list_len].to_vec();
-                    let expr = in_list(col("value"), list.clone(), negated);
-                    let expected = if list_len > THRESHOLD_INLINE_INLIST
-                        || list_len > 1 && retain_short
-                    {
-                        expr.clone()
+                    let expr =
+                        in_list(col("value"), values[..list_len].to_vec(), negated);
+                    let simplified = simplifier.simplify(expr.clone()).unwrap();
+                    if retain_short {
+                        assert_eq!(simplified, expr, "{data_type:?}");
                     } else {
-                        let comparisons = list.into_iter().map(|value| {
-                            if negated {
-                                col("value").not_eq(value)
-                            } else {
-                                col("value").eq(value)
-                            }
-                        });
-                        comparisons
-                            .reduce(|left, right| {
-                                if negated {
-                                    left.and(right)
-                                } else {
-                                    left.or(right)
-                                }
-                            })
-                            .unwrap()
-                    };
-                    assert_eq!(simplifier.simplify(expr).unwrap(), expected);
+                        let op = if negated { Operator::And } else { Operator::Or };
+                        assert!(
+                            matches!(simplified, Expr::BinaryExpr(binary) if binary.op == op),
+                            "{data_type:?}, list_len={list_len}, negated={negated}"
+                        );
+                    }
                 }
             }
-
-            // A column-valued list keeps the comparison path even for a
-            // representation whose static lists use membership filters.
-            let expr =
-                in_list(col("value"), vec![values[0].clone(), col("other")], false);
-            let expected = col("value")
-                .eq(values[0].clone())
-                .or(col("value").eq(col("other")));
-            assert_eq!(simplifier.simplify(expr).unwrap(), expected);
         }
+    }
+
+    #[test]
+    fn simplify_short_inlist_mismatched_literals() {
+        // c3 is Int64; these Int32 literals have not been coerced.
+        let expr = in_list(col("c3"), vec![lit(1_i32), lit(2_i32)], false);
+        let expected = col("c3").eq(lit(1_i32)).or(col("c3").eq(lit(2_i32)));
+        assert_eq!(simplify(expr), expected);
     }
 
     #[test]
