@@ -225,6 +225,7 @@ fn join(
     join_type: JoinType,
 ) -> Result<SortMergeJoinExec> {
     let sort_options = vec![SortOptions::default(); on.len()];
+    let null_aware = is_join_type_null_aware(join_type);
     SortMergeJoinExec::try_new(
         left,
         right,
@@ -233,6 +234,7 @@ fn join(
         join_type,
         sort_options,
         NullEquality::NullEqualsNothing,
+        null_aware,
     )
 }
 
@@ -244,6 +246,7 @@ fn join_with_options(
     sort_options: Vec<SortOptions>,
     null_equality: NullEquality,
 ) -> Result<SortMergeJoinExec> {
+    let null_aware = matches!(join_type, LeftAnti);
     SortMergeJoinExec::try_new(
         left,
         right,
@@ -252,6 +255,7 @@ fn join_with_options(
         join_type,
         sort_options,
         null_equality,
+        null_aware,
     )
 }
 
@@ -264,6 +268,7 @@ fn join_with_filter(
     sort_options: Vec<SortOptions>,
     null_equality: NullEquality,
 ) -> Result<SortMergeJoinExec> {
+    let null_aware = matches!(join_type, LeftAnti);
     SortMergeJoinExec::try_new(
         left,
         right,
@@ -272,6 +277,7 @@ fn join_with_filter(
         join_type,
         sort_options,
         null_equality,
+        null_aware,
     )
 }
 
@@ -371,6 +377,7 @@ fn join_and_projection_for_pushdown(
         Arc::new(Column::new("b1", 1)) as _,
         Arc::new(Column::new("b2", 1)) as _,
     )];
+    let null_aware = false;
     let join = Arc::new(SortMergeJoinExec::try_new(
         left,
         right,
@@ -379,6 +386,7 @@ fn join_and_projection_for_pushdown(
         Inner,
         vec![SortOptions::default()],
         NullEquality::NullEqualsNothing,
+        null_aware,
     )?);
     let input: Arc<dyn ExecutionPlan> = Arc::clone(&join) as _;
     let projection = ProjectionExec::try_new(
@@ -404,6 +412,10 @@ fn join_and_projection_for_pushdown(
     )?;
 
     Ok((join, projection))
+}
+
+fn is_join_type_null_aware(join_type: JoinType) -> bool {
+    matches!(join_type, LeftAnti)
 }
 
 /// `c1 < c2`, referencing the last column of each child.
@@ -4579,6 +4591,8 @@ async fn join_get_stream_and_get_expected(
         prepare_record_batches_for_cmp(batches)
     };
 
+    let null_aware = is_join_type_null_aware(LeftAnti);
+
     let join = SortMergeJoinExec::try_new(
         left,
         right,
@@ -4587,6 +4601,7 @@ async fn join_get_stream_and_get_expected(
         join_type,
         sort_options,
         null_equality,
+        null_aware,
     )?;
 
     let stream = join.execute(0, task_ctx)?;
@@ -6486,6 +6501,7 @@ async fn bitwise_spill_with_filter() -> Result<()> {
                     .with_runtime(Arc::clone(&runtime)),
             );
 
+            let null_aware = is_join_type_null_aware(LeftAnti);
             let join = SortMergeJoinExec::try_new(
                 Arc::clone(&left),
                 Arc::clone(&right),
@@ -6494,6 +6510,7 @@ async fn bitwise_spill_with_filter() -> Result<()> {
                 join_type,
                 sort_options.clone(),
                 NullEquality::NullEqualsNothing,
+                null_aware,
             )?;
             let stream = join.execute(0, task_ctx)?;
             let spilled_result = common::collect(stream).await.unwrap();
@@ -6535,6 +6552,8 @@ async fn bitwise_spill_with_filter() -> Result<()> {
             let task_ctx_no_spill = Arc::new(
                 TaskContext::default().with_session_config(session_config.clone()),
             );
+
+            let null_aware = is_join_type_null_aware(LeftAnti);
             let join_no_spill = SortMergeJoinExec::try_new(
                 Arc::clone(&left),
                 Arc::clone(&right),
@@ -6543,6 +6562,7 @@ async fn bitwise_spill_with_filter() -> Result<()> {
                 join_type,
                 sort_options.clone(),
                 NullEquality::NullEqualsNothing,
+                null_aware,
             )?;
             let stream = join_no_spill.execute(0, task_ctx_no_spill)?;
             let no_spill_result = common::collect(stream).await.unwrap();
@@ -6596,6 +6616,7 @@ async fn bitwise_filtered_no_spill() -> Result<()> {
                 .with_runtime(Arc::clone(&runtime)),
         );
 
+        let null_aware = is_join_type_null_aware(LeftAnti);
         let join = SortMergeJoinExec::try_new(
             Arc::clone(&left),
             Arc::clone(&right),
@@ -6604,6 +6625,7 @@ async fn bitwise_filtered_no_spill() -> Result<()> {
             join_type,
             sort_options.clone(),
             NullEquality::NullEqualsNothing,
+            null_aware,
         )?;
         let stream = join.execute(0, task_ctx)?;
         let err = common::collect(stream).await.unwrap_err();
@@ -6881,6 +6903,7 @@ async fn bitwise_multi_spill_inner_key_group() -> Result<()> {
                 (&left, &right)
             };
 
+        let null_aware = is_join_type_null_aware(join_type);
         let join = SortMergeJoinExec::try_new(
             Arc::clone(join_left),
             Arc::clone(join_right),
@@ -6889,6 +6912,7 @@ async fn bitwise_multi_spill_inner_key_group() -> Result<()> {
             join_type,
             sort_options.clone(),
             NullEquality::NullEqualsNothing,
+            null_aware,
         )?;
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
@@ -6986,14 +7010,17 @@ async fn bitwise_spill_null_key_group() -> Result<()> {
             .with_runtime(runtime),
     );
 
+    let join_type = LeftSemi;
+    let null_aware = is_join_type_null_aware(join_type);
     let join = SortMergeJoinExec::try_new(
         left,
         right,
         on,
         Some(filter),
-        LeftSemi,
+        join_type,
         sort_options,
         NullEquality::NullEqualsNull,
+        null_aware,
     )?;
     let stream = join.execute(0, task_ctx)?;
     let batches = common::collect(stream).await?;
@@ -7656,6 +7683,7 @@ async fn bitwise_spill_pending_stream() -> Result<()> {
     for join_type in [LeftSemi, LeftAnti, RightSemi, RightAnti] {
         let task_ctx =
             Arc::new(TaskContext::default().with_runtime(Arc::clone(&runtime)));
+        let null_aware = is_join_type_null_aware(join_type);
         let join = SortMergeJoinExec::try_new(
             Arc::clone(&left),
             Arc::clone(&right),
@@ -7664,6 +7692,7 @@ async fn bitwise_spill_pending_stream() -> Result<()> {
             join_type,
             sort_options.clone(),
             NullEquality::NullEqualsNothing,
+            null_aware,
         )?;
         let stream = join.execute(0, task_ctx)?;
         let spilled_result = common::collect(stream).await.unwrap();
@@ -7675,6 +7704,7 @@ async fn bitwise_spill_pending_stream() -> Result<()> {
         );
 
         let task_ctx_no_spill = Arc::new(TaskContext::default());
+        let null_aware = is_join_type_null_aware(join_type);
         let join_no_spill = SortMergeJoinExec::try_new(
             Arc::clone(&left),
             Arc::clone(&right),
@@ -7683,6 +7713,7 @@ async fn bitwise_spill_pending_stream() -> Result<()> {
             join_type,
             sort_options.clone(),
             NullEquality::NullEqualsNothing,
+            null_aware,
         )?;
         let stream = join_no_spill.execute(0, task_ctx_no_spill)?;
         let no_spill_result = common::collect(stream).await.unwrap();
@@ -7714,15 +7745,19 @@ async fn swap_inputs_swaps_the_projection() -> Result<()> {
         Arc::new(Column::new("a1", 0)) as _,
         Arc::new(Column::new("a2", 0)) as _,
     )];
+
+    let join_type = Inner;
+    let null_aware = is_join_type_null_aware(join_type);
     // One column from each side, in an order that tells the two sides apart.
     let join = SortMergeJoinExec::try_new(
         left,
         right,
         on,
         None,
-        Inner,
+        join_type,
         vec![SortOptions::default()],
         NullEquality::NullEqualsNothing,
+        null_aware,
     )?
     .with_projection(Some(vec![4, 2]))?;
 
@@ -7786,6 +7821,8 @@ async fn swap_inputs_swaps_the_filter() -> Result<()> {
     for join_type in [
         Inner, Left, Right, Full, LeftSemi, LeftAnti, RightSemi, RightAnti,
     ] {
+        let null_aware = is_join_type_null_aware(join_type);
+
         let join = SortMergeJoinExec::try_new(
             Arc::clone(&left),
             Arc::clone(&right),
@@ -7794,6 +7831,7 @@ async fn swap_inputs_swaps_the_filter() -> Result<()> {
             join_type,
             vec![SortOptions::default()],
             NullEquality::NullEqualsNothing,
+            null_aware,
         )?;
 
         let swapped = join.swap_inputs()?;
@@ -7835,14 +7873,18 @@ async fn an_empty_projection_keeps_the_rows() -> Result<()> {
         Arc::new(Column::new("a1", 0)) as _,
         Arc::new(Column::new("a2", 0)) as _,
     )];
+
+    let join_type = Inner;
+    let null_aware = is_join_type_null_aware(join_type);
     let join = SortMergeJoinExec::try_new(
         left,
         right,
         on,
         None,
-        Inner,
+        join_type,
         vec![SortOptions::default()],
         NullEquality::NullEqualsNothing,
+        null_aware,
     )?
     .with_projection(Some(vec![]))?;
 
@@ -7925,6 +7967,7 @@ async fn collect_streamed_keys(
         Arc::new(Schema::new(vec![Field::new("x", DataType::Int32, true)])),
     );
 
+    let null_aware = is_join_type_null_aware(join_type);
     let join = SortMergeJoinExec::try_new(
         left,
         right,
@@ -7933,6 +7976,7 @@ async fn collect_streamed_keys(
         join_type,
         vec![SortOptions::default()],
         NullEquality::NullEqualsNothing,
+        null_aware,
     )?;
 
     // A small batch size keeps the gate firing often enough to interleave the
