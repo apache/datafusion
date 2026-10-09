@@ -52,7 +52,7 @@ make_higher_order_function_expr_and_func!(
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "filters the values of an array using a boolean lambda",
+    description = "filters the values of an array using a boolean lambda. Lambda expressions require a dialect that supports them; set `datafusion.sql_parser.dialect` to `DuckDB` because the default dialect does not parse the `->` syntax.",
     syntax_example = "array_filter(array, x -> x > 2)",
     sql_example = r#"```sql
 > select array_filter([1, 2, 3, 4, 5], x -> x > 2);
