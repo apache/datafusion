@@ -196,14 +196,10 @@ fn rewrite_pays(
         if func.distinct_handling() == datafusion_expr::DistinctHandling::Unsupported {
             return true;
         }
-        let mut arg_types = Vec::with_capacity(args.len());
-        for arg in *args {
-            if let Ok(dt) = arg.get_type(input_schema) {
-                arg_types.push(dt);
-            } else {
-                return true; // if we can't determine the type, assume it's natively supported and don't rewrite
-            }
-        }
+        let arg_types: Vec<_> = args
+            .iter()
+            .map(|arg| arg.get_type(input_schema).unwrap_or(arrow::datatypes::DataType::Null))
+            .collect();
         if func.groups_accumulator_supported_for_types(&arg_types, true) == Some(false) {
             return true;
         }
@@ -1293,6 +1289,38 @@ mod tests {
             plan,
             @r"
         Aggregate: groupBy=[[test.a]], aggr=[[count(Int64(1)), count(DISTINCT test.b)]] [a:UInt32, count(Int64(1)):Int64, count(DISTINCT test.b):Int64]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        ",
+        )
+    }
+
+    #[test]
+    fn test_unsupported_distinct_handling_is_not_rewritten() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // approx_median returns DistinctHandling::Unsupported
+        let aggr_expr = Expr::AggregateFunction(AggregateFunction::new_udf(
+            datafusion_functions_aggregate::approx_median::approx_median_udaf(),
+            vec![col("b")],
+            true,
+            None,
+            vec![],
+            None,
+        ));
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a")], vec![aggr_expr])?
+            .build()?;
+
+        // The rule should abort rewriting since it is Unsupported, 
+        // falling back to the default distinct execution logic
+        let rule: Arc<dyn OptimizerRule + Send + Sync> =
+            Arc::new(SingleDistinctToGroupBy::new());
+        assert_optimized_plan_eq_display_indent_snapshot!(
+            rule,
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.a]], aggr=[[approx_median(DISTINCT test.b)]] [a:UInt32, approx_median(DISTINCT test.b):UInt32;N]
           TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         ",
         )
