@@ -19,11 +19,12 @@ use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
     coalesce_partitions_exec, global_limit_exec, hash_join_exec, local_limit_exec,
-    sort_exec, sort_preserving_merge_exec, stream_exec,
+    parquet_exec, sort_exec, sort_preserving_merge_exec, stream_exec,
 };
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::datasource::source::DataSourceExec;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_expr::{JoinType, Operator};
@@ -36,6 +37,7 @@ use datafusion_physical_optimizer::limit_pushdown::LimitPushdown;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::NestedLoopJoinExec;
+use datafusion_physical_plan::limit::GlobalLimitExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::{ExecutionPlan, get_plan_string};
@@ -157,6 +159,129 @@ fn transforms_streaming_table_exec_into_fetching_version_and_keeps_the_global_li
     GlobalLimitExec: skip=2, fetch=5
       StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true, fetch=7
     "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn preserves_required_ordering_when_reinserting_global_limit() -> Result<()> {
+    let schema = create_schema();
+    let projection =
+        projection_exec(Arc::clone(&schema), empty_exec(Arc::clone(&schema)))?;
+    let ordering = LexOrdering::new([PhysicalSortExpr::new(
+        col("c1", schema.as_ref())?,
+        SortOptions::default(),
+    )])
+    .unwrap();
+
+    let mut limit = GlobalLimitExec::new(projection, 2, Some(5));
+    limit.set_required_ordering(Some(ordering.clone()));
+
+    let optimized =
+        LimitPushdown::new().optimize(Arc::new(limit), &ConfigOptions::new())?;
+    let limit = optimized
+        .as_ref()
+        .downcast_ref::<ProjectionExec>()
+        .unwrap()
+        .input()
+        .as_ref()
+        .downcast_ref::<GlobalLimitExec>()
+        .unwrap();
+
+    assert_eq!(limit.required_ordering().as_ref(), Some(&ordering));
+    Ok(())
+}
+
+#[test]
+fn preserves_required_ordering_when_reinserting_local_limit() -> Result<()> {
+    let schema = create_schema();
+    let projection =
+        projection_exec(Arc::clone(&schema), empty_exec(Arc::clone(&schema)))?;
+    let repartition = repartition_exec(projection)?;
+    let ordering = LexOrdering::new([PhysicalSortExpr::new(
+        col("c1", schema.as_ref())?,
+        SortOptions::default(),
+    )])
+    .unwrap();
+
+    let mut limit = datafusion_physical_plan::limit::LocalLimitExec::new(repartition, 5);
+    limit.set_required_ordering(Some(ordering.clone()));
+
+    let optimized =
+        LimitPushdown::new().optimize(Arc::new(limit), &ConfigOptions::new())?;
+    let limit = optimized
+        .as_ref()
+        .downcast_ref::<datafusion_physical_plan::limit::LocalLimitExec>()
+        .unwrap();
+
+    assert_eq!(limit.required_ordering().as_ref(), Some(&ordering));
+    Ok(())
+}
+
+/// Regression test for #24215: a lost `required_ordering` is not just an
+/// unused metadata field. `FileScanConfig::create_sibling_state` (the hook
+/// that decides whether sibling partition streams may steal each other's
+/// file-reading work at runtime) only disables that work-stealing when
+/// `preserve_order` is `true`. `LimitPushdown` derives `preserve_order` from
+/// `required_ordering` when it absorbs a fetch into a scan
+/// (`with_preserve_order(required_ordering.is_some())`), so a limit that
+/// reaches this rule with its ordering already lost will leave work-stealing
+/// enabled on the scan beneath it — the exact mechanism by which a multi-file
+/// scan can read files out of order under an `ORDER BY ... LIMIT`.
+///
+/// This test does not race the scheduler (that would be flaky); it proves
+/// the deterministic precondition: whether `required_ordering` reaches this
+/// rule controls whether the resulting scan disables work-stealing.
+#[test]
+fn required_ordering_disables_scan_work_stealing() -> Result<()> {
+    let mut work_stealing_enabled = ConfigOptions::new();
+    work_stealing_enabled
+        .execution
+        .enable_file_stream_work_stealing = true;
+
+    let schema = create_schema();
+    let ordering = LexOrdering::new([PhysicalSortExpr::new(
+        col("c1", schema.as_ref())?,
+        SortOptions::default(),
+    )])
+    .unwrap();
+
+    // Ordering intact: the fix threads `required_ordering` through to the
+    // scan, so work-stealing must stay disabled.
+    let mut limit_with_ordering =
+        GlobalLimitExec::new(parquet_exec(Arc::clone(&schema)), 0, Some(5));
+    limit_with_ordering.set_required_ordering(Some(ordering));
+    let optimized_with_ordering = LimitPushdown::new()
+        .optimize(Arc::new(limit_with_ordering), &ConfigOptions::new())?;
+    let scan_with_ordering = optimized_with_ordering
+        .as_ref()
+        .downcast_ref::<DataSourceExec>()
+        .expect("fetch should have been absorbed into the scan");
+    assert!(
+        scan_with_ordering
+            .data_source()
+            .create_sibling_state(&work_stealing_enabled)
+            .is_none(),
+        "an order-sensitive limit must disable work-stealing on the scan it reaches"
+    );
+
+    // Ordering absent (simulating the pre-fix loss): work-stealing is free to
+    // reorder file reads under the limit, which is the wrong-results bug.
+    let limit_without_ordering = GlobalLimitExec::new(parquet_exec(schema), 0, Some(5));
+    let optimized_without_ordering = LimitPushdown::new()
+        .optimize(Arc::new(limit_without_ordering), &ConfigOptions::new())?;
+    let scan_without_ordering = optimized_without_ordering
+        .as_ref()
+        .downcast_ref::<DataSourceExec>()
+        .expect("fetch should have been absorbed into the scan");
+    assert!(
+        scan_without_ordering
+            .data_source()
+            .create_sibling_state(&work_stealing_enabled)
+            .is_some(),
+        "a lost required_ordering leaves work-stealing enabled, allowing files \
+         to be read out of order under the limit"
     );
 
     Ok(())
