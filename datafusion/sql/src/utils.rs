@@ -27,7 +27,7 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{
     Column, DFSchemaRef, Diagnostic, HashMap, HashSet, Result, ScalarValue,
-    assert_or_internal_err, exec_datafusion_err, exec_err, internal_err, plan_err,
+    exec_datafusion_err, exec_err, internal_err, plan_err,
 };
 use datafusion_expr::builder::get_struct_unnested_columns;
 use datafusion_expr::expr::{
@@ -489,10 +489,11 @@ impl RecursiveUnnestRewriter<'_> {
 
         match data_type {
             DataType::Struct(inner_fields) => {
-                assert_or_internal_err!(
-                    struct_allowed,
-                    "unnest on struct can only be applied at the root level of select expression"
-                );
+                if !struct_allowed {
+                    return plan_err!(
+                        "unnest on struct can only be applied at the root level of select expression"
+                    );
+                }
                 self.inner_projection_exprs
                     .push(expr_in_unnest.clone().alias(placeholder_name.clone()));
                 self.columns_unnestings
