@@ -1020,6 +1020,26 @@ pub(crate) fn find_columns_referenced_by_expr(e: &Expr) -> Vec<Column> {
     exprs
 }
 
+/// Returns the index of the `schema` field that `expr` passes through
+/// unchanged, or `None` if `expr` computes a new value.
+///
+/// Only a column reference (possibly aliased) passes a field through. Use this
+/// instead of comparing [`Expr::schema_name`] with field names: different
+/// expressions can have the same name, e.g. `CAST(t.a AS INT)` is named `t.a`.
+///
+/// A column is resolved like any other column reference, so an ambiguous
+/// unqualified name (e.g. `id` over `a.id` and `b.id`) passes nothing through.
+pub fn passthrough_field_index(expr: &Expr, schema: &DFSchema) -> Option<usize> {
+    match expr {
+        Expr::Column(col) => {
+            let (_, field) = schema.qualified_field_from_column(col).ok()?;
+            schema.fields().iter().position(|f| std::ptr::eq(f, field))
+        }
+        Expr::Alias(alias) => passthrough_field_index(&alias.expr, schema),
+        _ => None,
+    }
+}
+
 /// Convert any `Expr` to an `Expr::Column`.
 pub fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
     match expr {
@@ -1564,8 +1584,30 @@ mod tests {
         expr_vec_fmt, grouping_set, lit, rollup,
         test::function_stub::{max_udaf, min_udaf, sum_udaf},
     };
-    use arrow::datatypes::{UnionFields, UnionMode};
+    use arrow::datatypes::{Metadata, UnionFields, UnionMode};
     use datafusion_expr_common::signature::Volatility;
+
+    #[test]
+    fn passthrough_field_index_resolves_like_a_column_reference() -> Result<()> {
+        let field = |name| Arc::new(Field::new(name, DataType::Int32, false));
+        let schema = DFSchema::new_with_metadata(
+            vec![
+                (Some("a".into()), field("id")),
+                (Some("b".into()), field("id")),
+                (Some("b".into()), field("v")),
+            ],
+            Metadata::default(),
+        )?;
+        let index = |e: Expr| passthrough_field_index(&e, &schema);
+
+        assert_eq!(index(col("b.id")), Some(1));
+        assert_eq!(index(col("v").alias("w")), Some(2));
+        // ambiguous: `a.id` or `b.id`
+        assert_eq!(index(col("id")), None);
+        // computed, even though it is named `b.id`
+        assert_eq!(index(crate::cast(col("b.id"), DataType::Int64)), None);
+        Ok(())
+    }
 
     #[test]
     fn test_group_window_expr_by_sort_keys_empty_case() -> Result<()> {
