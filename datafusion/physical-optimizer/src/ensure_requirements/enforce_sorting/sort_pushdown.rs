@@ -49,7 +49,10 @@ use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::tree_node::PlanContext;
-use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use datafusion_physical_plan::{
+    ChildrenPropertiesMode, ExecutionPlan, ExecutionPlanProperties,
+    ReplaceChildrenOptions,
+};
 
 /// "Data class" used by sort pushdown (now driven from `EnsureRequirements`)
 /// to push down [`SortExec`] in the plan. In some cases the total
@@ -993,6 +996,7 @@ fn handle_custom_pushdown(
 
     // Collect all unique column indices used in the parent-required sorting
     // expression:
+    let output_requirement = parent_required.first().clone();
     let requirement = parent_required.into_single();
     let all_indices: HashSet<usize> = requirement
         .iter()
@@ -1056,7 +1060,10 @@ fn handle_custom_pushdown(
                     .data;
                 Ok(PhysicalSortRequirement::new(updated_columns, req.options))
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>>>();
+        let Ok(updated_parent_req) = updated_parent_req else {
+            return Ok(None);
+        };
 
         // Prepare the result, populating with the updated requirements for children that maintain order
         let result = maintains_input_order
@@ -1069,7 +1076,56 @@ fn handle_custom_pushdown(
                     None
                 }
             })
-            .collect();
+            .collect::<Vec<_>>();
+
+        // Row order preservation does not establish an output-to-input column
+        // mapping. Prove that this candidate ordering survives the operator's
+        // value transformations before removing the sort above it.
+        let mut sorted_children = Vec::with_capacity(plan_children.len());
+        for (child, required) in plan_children.into_iter().zip(&result) {
+            let sorted: Arc<dyn ExecutionPlan> = if let Some(required) = required {
+                let ordering = LexOrdering::from(required.first().clone());
+                let schema = child.schema();
+                if ordering.iter().any(|sort| {
+                    collect_columns(&sort.expr)
+                        .iter()
+                        .any(|column| column.index() >= schema.fields().len())
+                        || sort.expr.data_type(&schema).is_err()
+                }) {
+                    return Ok(None);
+                }
+                // SortExec::new assumes valid property derivation. Check its
+                // fallible steps first; invalid candidates leave the outer sort.
+                let mut properties = child.equivalence_properties().clone();
+                if properties
+                    .extract_common_sort_prefix(ordering.clone())
+                    .is_err()
+                    || properties.reorder(ordering.clone()).is_err()
+                {
+                    return Ok(None);
+                }
+                Arc::new(
+                    SortExec::new(ordering, Arc::clone(child))
+                        .with_preserve_partitioning(true),
+                )
+            } else {
+                Arc::clone(child)
+            };
+            sorted_children.push(sorted);
+        }
+        let Ok(candidate) = Arc::clone(plan).replace_children(
+            sorted_children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        ) else {
+            return Ok(None);
+        };
+        if !candidate
+            .equivalence_properties()
+            .ordering_satisfy_requirement(output_requirement)
+            .unwrap_or(false)
+        {
+            return Ok(None);
+        }
 
         Ok(Some(result))
     } else {
@@ -1234,7 +1290,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_expr::Operator;
     use datafusion_physical_expr::PhysicalExpr;
-    use datafusion_physical_expr::expressions::{BinaryExpr, col};
+    use datafusion_physical_expr::expressions::{BinaryExpr, NegativeExpr, col, lit};
     use datafusion_physical_plan::empty::EmptyExec;
     use datafusion_physical_plan::limit::GlobalLimitExec;
 
@@ -1350,6 +1406,96 @@ mod tests {
 
     fn lex(reqs: impl IntoIterator<Item = PhysicalSortRequirement>) -> LexRequirement {
         LexRequirement::new(reqs).unwrap()
+    }
+
+    // Exercise the custom-operator fallback directly with ProjectionExec's
+    // property derivation. The SQL tests cover dispatch through a custom plan.
+    #[test]
+    fn custom_pushdown_accepts_renamed_columns() -> Result<()> {
+        let child = child_schema();
+        let input = Arc::new(EmptyExec::new(Arc::clone(&child)));
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+            [
+                (col("a", &child)?, "first".to_string()),
+                (col("b", &child)?, "second".to_string()),
+            ],
+            input,
+        )?);
+        let output = plan.schema();
+        let required = OrderingRequirements::new(lex([
+            req("first", &output, ASC),
+            req("second", &output, DESC),
+        ]));
+        let expected = OrderingRequirements::new(lex([
+            req("a", &child, ASC),
+            req("b", &child, DESC),
+        ]));
+
+        assert_eq!(
+            handle_custom_pushdown(&plan, required, &[true])?,
+            Some(vec![Some(expected)])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn custom_pushdown_rejects_reordered_columns() -> Result<()> {
+        let plan: Arc<dyn ExecutionPlan> = reordering_projection();
+        let required =
+            OrderingRequirements::new(lex([req("score", &plan.schema(), ASC)]));
+
+        assert!(handle_custom_pushdown(&plan, required, &[true])?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn custom_pushdown_rejects_changed_values_with_same_schema() -> Result<()> {
+        let schema = child_schema();
+        let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        let negative =
+            Arc::new(NegativeExpr::new(col("a", &schema)?)) as Arc<dyn PhysicalExpr>;
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+            [
+                (negative, "a".to_string()),
+                (col("b", &schema)?, "b".to_string()),
+                (col("c", &schema)?, "c".to_string()),
+            ],
+            input,
+        )?);
+        assert_eq!(plan.schema(), schema);
+        let required = OrderingRequirements::new(lex([req("a", &schema, ASC)]));
+
+        assert!(handle_custom_pushdown(&plan, required, &[true])?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn custom_pushdown_rejects_incompatible_child_expression() -> Result<()> {
+        let schema = child_schema();
+        let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        let flag = Arc::new(BinaryExpr::new(
+            col("a", &schema)?,
+            Operator::Gt,
+            lit(0_i32),
+        )) as Arc<dyn PhysicalExpr>;
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+            [(flag, "flag".to_string())],
+            input,
+        )?);
+        // Valid against Boolean output, but remapping flag@0 to a@0 would
+        // produce Int32 AND Boolean in the child schema.
+        let ordering = Arc::new(BinaryExpr::new(
+            col("flag", &plan.schema())?,
+            Operator::And,
+            lit(true),
+        ));
+        let required = OrderingRequirements::new(lex([PhysicalSortRequirement::new(
+            ordering,
+            Some(ASC),
+        )]));
+
+        assert!(handle_custom_pushdown(&plan, required, &[true])?.is_none());
+        Ok(())
     }
 
     #[test]
