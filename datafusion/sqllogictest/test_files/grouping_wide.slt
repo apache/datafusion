@@ -1,0 +1,170 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# 64 semantic bits fit UInt64 when no duplicate-ordinal bits are needed.
+# Real NULL keys must remain distinct from rolled-up NULLs.
+statement ok
+CREATE TABLE wide_keys (
+  c0 INTEGER,
+  c1 INTEGER,
+  c2 INTEGER,
+  c3 INTEGER,
+  c4 INTEGER,
+  c5 INTEGER,
+  c6 INTEGER,
+  c7 INTEGER,
+  c8 INTEGER,
+  c9 INTEGER,
+  c10 INTEGER,
+  c11 INTEGER,
+  c12 INTEGER,
+  c13 INTEGER,
+  c14 INTEGER,
+  c15 INTEGER,
+  c16 INTEGER,
+  c17 INTEGER,
+  c18 INTEGER,
+  c19 INTEGER,
+  c20 INTEGER,
+  c21 INTEGER,
+  c22 INTEGER,
+  c23 INTEGER,
+  c24 INTEGER,
+  c25 INTEGER,
+  c26 INTEGER,
+  c27 INTEGER,
+  c28 INTEGER,
+  c29 INTEGER,
+  c30 INTEGER,
+  c31 INTEGER,
+  c32 INTEGER,
+  c33 INTEGER,
+  c34 INTEGER,
+  c35 INTEGER,
+  c36 INTEGER,
+  c37 INTEGER,
+  c38 INTEGER,
+  c39 INTEGER,
+  c40 INTEGER,
+  c41 INTEGER,
+  c42 INTEGER,
+  c43 INTEGER,
+  c44 INTEGER,
+  c45 INTEGER,
+  c46 INTEGER,
+  c47 INTEGER,
+  c48 INTEGER,
+  c49 INTEGER,
+  c50 INTEGER,
+  c51 INTEGER,
+  c52 INTEGER,
+  c53 INTEGER,
+  c54 INTEGER,
+  c55 INTEGER,
+  c56 INTEGER,
+  c57 INTEGER,
+  c58 INTEGER,
+  c59 INTEGER,
+  c60 INTEGER,
+  c61 INTEGER,
+  c62 INTEGER,
+  c63 INTEGER,
+  c64 INTEGER
+);
+
+statement ok
+INSERT INTO wide_keys VALUES
+(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65),
+(NULL, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, NULL, 165);
+
+statement ok
+SET datafusion.execution.enable_migration_aggregate = false;
+
+query IIIII rowsort
+SELECT c0, c63, grouping(c0) AS g0, grouping(c63) AS g63, count(*) AS n
+FROM wide_keys
+GROUP BY GROUPING SETS ((c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19, c20, c21, c22, c23, c24, c25, c26, c27, c28, c29, c30, c31, c32, c33, c34, c35, c36, c37, c38, c39, c40, c41, c42, c43, c44, c45, c46, c47, c48, c49, c50, c51, c52, c53, c54, c55, c56, c57, c58, c59, c60, c61, c62, c63), (c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19, c20, c21, c22, c23, c24, c25, c26, c27, c28, c29, c30, c31, c32, c33, c34, c35, c36, c37, c38, c39, c40, c41, c42, c43, c44, c45, c46, c47, c48, c49, c50, c51, c52, c53, c54, c55, c56, c57, c58, c59, c60, c61, c62, c63), (c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19, c20, c21, c22, c23, c24, c25, c26, c27, c28, c29, c30, c31, c32, c33, c34, c35, c36, c37, c38, c39, c40, c41, c42, c43, c44, c45, c46, c47, c48, c49, c50, c51, c52, c53, c54, c55, c56, c57, c58, c59, c60, c61, c62), ());
+----
+1 64 0 0 1
+1 NULL 0 1 1
+NULL 64 1 0 1
+NULL NULL 0 0 1
+NULL NULL 0 1 1
+NULL NULL 1 0 1
+NULL NULL 1 1 2
+
+# 63 semantic bits plus one duplicate-ordinal bit still fit UInt64.
+query IIIII rowsort
+SELECT c0, c62, grouping(c0), grouping(c62), count(*)
+FROM wide_keys
+GROUP BY GROUPING SETS ((c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19, c20, c21, c22, c23, c24, c25, c26, c27, c28, c29, c30, c31, c32, c33, c34, c35, c36, c37, c38, c39, c40, c41, c42, c43, c44, c45, c46, c47, c48, c49, c50, c51, c52, c53, c54, c55, c56, c57, c58, c59, c60, c61, c62), (), (c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19, c20, c21, c22, c23, c24, c25, c26, c27, c28, c29, c30, c31, c32, c33, c34, c35, c36, c37, c38, c39, c40, c41, c42, c43, c44, c45, c46, c47, c48, c49, c50, c51, c52, c53, c54, c55, c56, c57, c58, c59, c60, c61, c62), ());
+----
+1 63 0 0 1
+1 63 0 0 1
+NULL 163 0 0 1
+NULL 163 0 0 1
+NULL NULL 1 1 2
+NULL NULL 1 1 2
+
+# A duplicate at 64 keys still needs 65 bits and must return an error.
+statement error require 65 bits, which exceeds 64
+SELECT count(*) FROM wide_keys
+GROUP BY GROUPING SETS ((c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19, c20, c21, c22, c23, c24, c25, c26, c27, c28, c29, c30, c31, c32, c33, c34, c35, c36, c37, c38, c39, c40, c41, c42, c43, c44, c45, c46, c47, c48, c49, c50, c51, c52, c53, c54, c55, c56, c57, c58, c59, c60, c61, c62, c63), (), (c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19, c20, c21, c22, c23, c24, c25, c26, c27, c28, c29, c30, c31, c32, c33, c34, c35, c36, c37, c38, c39, c40, c41, c42, c43, c44, c45, c46, c47, c48, c49, c50, c51, c52, c53, c54, c55, c56, c57, c58, c59, c60, c61, c62, c63));
+
+# More than 64 distinct keys remain outside the native representation.
+statement error Grouping sets with more than 64 columns are not supported
+SELECT count(*) FROM wide_keys
+GROUP BY GROUPING SETS ((c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19, c20, c21, c22, c23, c24, c25, c26, c27, c28, c29, c30, c31, c32, c33, c34, c35, c36, c37, c38, c39, c40, c41, c42, c43, c44, c45, c46, c47, c48, c49, c50, c51, c52, c53, c54, c55, c56, c57, c58, c59, c60, c61, c62, c63, c64), ());
+
+statement ok
+SET datafusion.execution.enable_migration_aggregate = true;
+
+query IIIII rowsort
+SELECT c0, c63, grouping(c0) AS g0, grouping(c63) AS g63, count(*) AS n
+FROM wide_keys
+GROUP BY GROUPING SETS ((c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19, c20, c21, c22, c23, c24, c25, c26, c27, c28, c29, c30, c31, c32, c33, c34, c35, c36, c37, c38, c39, c40, c41, c42, c43, c44, c45, c46, c47, c48, c49, c50, c51, c52, c53, c54, c55, c56, c57, c58, c59, c60, c61, c62, c63), (c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19, c20, c21, c22, c23, c24, c25, c26, c27, c28, c29, c30, c31, c32, c33, c34, c35, c36, c37, c38, c39, c40, c41, c42, c43, c44, c45, c46, c47, c48, c49, c50, c51, c52, c53, c54, c55, c56, c57, c58, c59, c60, c61, c62, c63), (c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19, c20, c21, c22, c23, c24, c25, c26, c27, c28, c29, c30, c31, c32, c33, c34, c35, c36, c37, c38, c39, c40, c41, c42, c43, c44, c45, c46, c47, c48, c49, c50, c51, c52, c53, c54, c55, c56, c57, c58, c59, c60, c61, c62), ());
+----
+1 64 0 0 1
+1 NULL 0 1 1
+NULL 64 1 0 1
+NULL NULL 0 0 1
+NULL NULL 0 1 1
+NULL NULL 1 0 1
+NULL NULL 1 1 2
+
+# 63 semantic bits plus one duplicate-ordinal bit still fit UInt64.
+query IIIII rowsort
+SELECT c0, c62, grouping(c0), grouping(c62), count(*)
+FROM wide_keys
+GROUP BY GROUPING SETS ((c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19, c20, c21, c22, c23, c24, c25, c26, c27, c28, c29, c30, c31, c32, c33, c34, c35, c36, c37, c38, c39, c40, c41, c42, c43, c44, c45, c46, c47, c48, c49, c50, c51, c52, c53, c54, c55, c56, c57, c58, c59, c60, c61, c62), (), (c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19, c20, c21, c22, c23, c24, c25, c26, c27, c28, c29, c30, c31, c32, c33, c34, c35, c36, c37, c38, c39, c40, c41, c42, c43, c44, c45, c46, c47, c48, c49, c50, c51, c52, c53, c54, c55, c56, c57, c58, c59, c60, c61, c62), ());
+----
+1 63 0 0 1
+1 63 0 0 1
+NULL 163 0 0 1
+NULL 163 0 0 1
+NULL NULL 1 1 2
+NULL NULL 1 1 2
+
+# A duplicate at 64 keys still needs 65 bits and must return an error.
+statement error require 65 bits, which exceeds 64
+SELECT count(*) FROM wide_keys
+GROUP BY GROUPING SETS ((c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19, c20, c21, c22, c23, c24, c25, c26, c27, c28, c29, c30, c31, c32, c33, c34, c35, c36, c37, c38, c39, c40, c41, c42, c43, c44, c45, c46, c47, c48, c49, c50, c51, c52, c53, c54, c55, c56, c57, c58, c59, c60, c61, c62, c63), (), (c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19, c20, c21, c22, c23, c24, c25, c26, c27, c28, c29, c30, c31, c32, c33, c34, c35, c36, c37, c38, c39, c40, c41, c42, c43, c44, c45, c46, c47, c48, c49, c50, c51, c52, c53, c54, c55, c56, c57, c58, c59, c60, c61, c62, c63));
+
+# More than 64 distinct keys remain outside the native representation.
+statement error Grouping sets with more than 64 columns are not supported
+SELECT count(*) FROM wide_keys
+GROUP BY GROUPING SETS ((c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19, c20, c21, c22, c23, c24, c25, c26, c27, c28, c29, c30, c31, c32, c33, c34, c35, c36, c37, c38, c39, c40, c41, c42, c43, c44, c45, c46, c47, c48, c49, c50, c51, c52, c53, c54, c55, c56, c57, c58, c59, c60, c61, c62, c63, c64), ());
