@@ -1136,6 +1136,38 @@ config_namespace! {
         /// aggregation ratio check and trying to switch to skipping aggregation mode
         pub skip_partial_aggregation_probe_rows_threshold: usize, default = 100_000
 
+        /// (experimental) Number of groups above which a final hash aggregation
+        /// stops growing a single hash table, so that its tables stay small
+        /// enough to be cache friendly. When nonzero, also enables partial
+        /// aggregation to emit its table and start over at 2 MiB of allocated
+        /// memory, as long as repeated-group detection permits flushing.
+        /// A final aggregation splits the groups seen so
+        /// far and all further input into hash buckets, which are aggregated
+        /// one after another and can be spilled and released independently;
+        /// it does so at a quarter of this number when its input holds about
+        /// one row per group. Aggregations of millions of groups per partition
+        /// run faster and with less memory. Moving rows into buckets has a
+        /// cost of its own, so aggregations that end at a few times this
+        /// number of groups, string keys in particular, can run a few percent
+        /// slower, and input that repeats its groups can use more memory.
+        /// Set to 0 to disable.
+        pub hash_aggregate_bucket_threshold: usize, default = 0
+
+        /// (experimental) Compact buffered aggregate buckets before final merging.
+        /// Only applies when hash_aggregate_bucket_threshold is nonzero and
+        /// hash_aggregate_final_buckets is enabled.
+        pub hash_aggregate_bucket_compaction: bool, default = true
+
+        /// (experimental) Detect recurring groups and stop Partial threshold
+        /// flushing when they recur. Set to false to skip detection and keep
+        /// flushing at the allocated-byte threshold.
+        pub hash_aggregate_detect_repeated_groups: bool, default = true
+
+        /// (experimental) Enable Final aggregate buckets when
+        /// hash_aggregate_bucket_threshold is nonzero. Set to false to use
+        /// ordinary Final aggregation while preserving Partial threshold flushing.
+        pub hash_aggregate_final_buckets: bool, default = true
+
         /// Should DataFusion use row number estimates at the input to decide
         /// whether increasing parallelism is beneficial or not. By default,
         /// only exact row numbers (not estimates) are used for this decision.
