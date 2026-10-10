@@ -4573,6 +4573,133 @@ SELECT '2000-12-01 04:04:12' AT TIME ZONE 'America/New York';
 statement error
 SELECT '2023-03-12 02:00:00' AT TIME ZONE 'EDT';
 
+##########
+## AT TIME ZONE applied to a timezone-*aware* timestamp
+##
+## https://github.com/apache/datafusion/issues/12218
+##
+## PostgreSQL (and DuckDB) semantics are asymmetric:
+##
+##   * `<tz-naive timestamp> AT TIME ZONE zone` reads the value as a wall clock
+##     in `zone` and returns the matching tz-*aware* instant, and
+##   * `<tz-aware timestamp> AT TIME ZONE zone` returns the wall clock that the
+##     instant has in `zone`, as a tz-*naive* timestamp.
+##
+## Every result below was checked against PostgreSQL 17.
+##########
+
+statement ok
+SET datafusion.execution.time_zone = 'UTC';
+
+statement ok
+CREATE TABLE at_tz_t AS
+SELECT
+  '2024-01-01T12:00:00Z'::timestamptz AS tstz,
+  '2024-01-01 12:00:00'::timestamp AS tsn;
+
+# The tz-naive column is unaffected by this issue: noon-in-Denver is the same
+# instant PostgreSQL reports (`2024-01-01 19:00:00+00`).
+query TP
+SELECT arrow_typeof(tsn AT TIME ZONE 'America/Denver'), tsn AT TIME ZONE 'America/Denver' FROM at_tz_t;
+----
+Timestamp(ns, "America/Denver") 2024-01-01T12:00:00-07:00
+
+# The tz-aware column: PostgreSQL returns `timestamp` (naive) `2024-01-01 05:00:00`.
+query TP
+SELECT arrow_typeof(tstz AT TIME ZONE 'America/Denver'), tstz AT TIME ZONE 'America/Denver' FROM at_tz_t;
+----
+Timestamp(ns) 2024-01-01T05:00:00
+
+# The exact reproducer from #12218. PostgreSQL returns `2024-01-01 05:00:00`.
+query P
+SELECT (tstz AT TIME ZONE 'America/Denver')::timestamp FROM at_tz_t;
+----
+2024-01-01T05:00:00
+
+# Chained. PostgreSQL: `timestamptz` `2024-01-01 04:00:00+00`, i.e. the Denver
+# wall clock (05:00) re-read as a Brussels wall clock.
+query TP
+SELECT
+  arrow_typeof(tstz AT TIME ZONE 'America/Denver' AT TIME ZONE 'Europe/Brussels'),
+  tstz AT TIME ZONE 'America/Denver' AT TIME ZONE 'Europe/Brussels'
+FROM at_tz_t;
+----
+Timestamp(ns, "Europe/Brussels") 2024-01-01T05:00:00+01:00
+
+# Fixed offset. Note DataFusion follows the arrow/ISO-8601 sign convention here
+# (`+05:30` is 5h30m *east* of UTC), while PostgreSQL applies the POSIX
+# convention to offsets spelled as strings. That difference is pre-existing and
+# is not what #12218 is about; only the result *type* changes below.
+query TP
+SELECT arrow_typeof(tstz AT TIME ZONE '+05:30'), tstz AT TIME ZONE '+05:30' FROM at_tz_t;
+----
+Timestamp(ns) 2024-01-01T17:30:00
+
+# `AT TIME ZONE` preserves the precision of its input.
+query T
+SELECT arrow_typeof(arrow_cast('2024-01-01T12:00:00Z', 'Timestamp(Microsecond, Some("UTC"))') AT TIME ZONE 'America/Denver');
+----
+Timestamp(µs)
+
+query T
+SELECT arrow_typeof(arrow_cast('2024-01-01T12:00:00', 'Timestamp(Microsecond, None)') AT TIME ZONE 'America/Denver');
+----
+Timestamp(µs, "America/Denver")
+
+# A typed NULL takes the dispatch of its type. PostgreSQL:
+# `NULL::timestamp AT TIME ZONE zone` is a NULL `timestamptz`, and
+# `NULL::timestamptz AT TIME ZONE zone` is a NULL `timestamp`.
+query TP
+SELECT arrow_typeof(NULL::timestamp AT TIME ZONE 'America/Denver'), NULL::timestamp AT TIME ZONE 'America/Denver';
+----
+Timestamp(ns, "America/Denver") NULL
+
+query TP
+SELECT arrow_typeof(NULL::timestamptz AT TIME ZONE 'America/Denver'), NULL::timestamptz AT TIME ZONE 'America/Denver';
+----
+Timestamp(ns) NULL
+
+# A real (multi-row) tz-aware column, spanning both DST transitions in
+# America/Denver.
+statement ok
+CREATE TABLE at_tz_dst(ts timestamptz) AS VALUES
+  (arrow_cast('2024-01-01T12:00:00Z', 'Timestamp(Nanosecond, Some("UTC"))')),
+  (arrow_cast('2024-03-10T08:59:00Z', 'Timestamp(Nanosecond, Some("UTC"))')),
+  (arrow_cast('2024-03-10T09:00:00Z', 'Timestamp(Nanosecond, Some("UTC"))')),
+  (arrow_cast('2024-07-01T12:00:00Z', 'Timestamp(Nanosecond, Some("UTC"))')),
+  (arrow_cast('2024-11-03T07:59:00Z', 'Timestamp(Nanosecond, Some("UTC"))')),
+  (arrow_cast('2024-11-03T08:00:00Z', 'Timestamp(Nanosecond, Some("UTC"))'));
+
+query PPT
+SELECT
+  ts,
+  ts AT TIME ZONE 'America/Denver' AS denver,
+  arrow_typeof(ts AT TIME ZONE 'America/Denver') AS denver_type
+FROM at_tz_dst ORDER BY ts;
+----
+2024-01-01T12:00:00Z 2024-01-01T05:00:00 Timestamp(ns)
+2024-03-10T08:59:00Z 2024-03-10T01:59:00 Timestamp(ns)
+2024-03-10T09:00:00Z 2024-03-10T03:00:00 Timestamp(ns)
+2024-07-01T12:00:00Z 2024-07-01T06:00:00 Timestamp(ns)
+2024-11-03T07:59:00Z 2024-11-03T01:59:00 Timestamp(ns)
+2024-11-03T08:00:00Z 2024-11-03T01:00:00 Timestamp(ns)
+
+# `now()` is tz-aware whenever `datafusion.execution.time_zone` is set.
+query T
+SELECT arrow_typeof(now() AT TIME ZONE 'America/Denver');
+----
+Timestamp(ns)
+
+statement ok
+DROP TABLE at_tz_dst;
+
+statement ok
+DROP TABLE at_tz_t;
+
+statement ok
+RESET datafusion.execution.time_zone;
+
+
 # Test current_time without parentheses
 query B
 select current_time = current_time;
@@ -4619,7 +4746,7 @@ statement error DataFusion error: Error during planning: Function 'to_local_time
 select to_local_time('2024-04-01T00:00:20Z');
 
 # invalid timezone
-statement error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Parser error: Invalid timezone "Europe/timezone": failed to parse timezone
+statement error DataFusion error: Arrow error: Parser error: Invalid timezone "Europe/timezone": failed to parse timezone
 select to_local_time('2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/timezone');
 
 # valid query
@@ -4822,10 +4949,14 @@ SELECT column1 FROM t_utc WHERE column1 < '2024-02-01T00:00:00' AT TIME ZONE 'Am
 2024-01-01T00:00:01Z
 2024-02-01T00:00:01Z
 
+# No row matches: the row `2024-02-01T00:00:01+01:00` is 2024-01-31T23:00:01Z,
+# and the literal is 2024-02-01T00:00:01Z. DuckDB also returns no row. Before
+# `AT TIME ZONE` became the `timezone` function, it was a `CAST`, and
+# `unwrap_cast_in_comparison` relabelled the literal instead of converting it
+# (https://github.com/apache/datafusion/issues/25095), so this row matched.
 query P
 SELECT column1 FROM t_europe WHERE column1 = '2024-01-31T16:00:01' AT TIME ZONE 'America/Los_Angeles';
 ----
-2024-02-01T00:00:01+01:00
 
 query P
 SELECT column1 FROM t_europe WHERE column1 BETWEEN '2020-01-01T00:00:00' AT TIME ZONE 'Australia/Brisbane' AND '2024-02-01T00:00:00' AT TIME ZONE 'America/Los_Angeles';
@@ -6053,3 +6184,162 @@ query P
 SELECT date_bin(NULL, TIMESTAMP '2023-01-01 12:30:00', TIMESTAMP '2023-01-01 12:00:00')
 ----
 NULL
+
+# `AT TIME ZONE` chooses its behaviour from the input type AFTER type
+# coercion. Each input below is `Timestamp(ns, "UTC")` once coerced, even when
+# the first CASE arm or the first UNION branch is naive. PostgreSQL 17 gives the
+# naive `2024-01-01 05:00:00` for all of them.
+statement ok
+CREATE TABLE at_tz_case AS
+SELECT arrow_cast('2024-01-01T12:00:00Z', 'Timestamp(Nanosecond, Some("UTC"))') AS aware,
+       arrow_cast('2024-01-01T12:00:00', 'Timestamp(Nanosecond, None)') AS naive,
+       arrow_cast('2024-01-01T12:00:00.123456789Z', 'Timestamp(Nanosecond, Some("UTC"))') AS aware_frac,
+       arrow_cast('2024-01-01T12:00:00.123456789', 'Timestamp(Nanosecond, None)') AS naive_frac,
+       arrow_cast('2024-01-01T12:00:00Z', 'Timestamp(Second, Some("UTC"))') AS aware_s,
+       arrow_cast('2024-01-01T12:00:00', 'Timestamp(Second, None)') AS naive_s,
+       true AS b
+
+# both CASE expressions have the same type
+query TT
+SELECT arrow_typeof(CASE WHEN b THEN naive ELSE aware END),
+       arrow_typeof(CASE WHEN b THEN aware ELSE naive END)
+FROM at_tz_case
+----
+Timestamp(ns, "UTC") Timestamp(ns, "UTC")
+
+# so AT TIME ZONE agrees on them, whatever the order of the arms
+query TPTP
+SELECT arrow_typeof((CASE WHEN b THEN naive ELSE aware END) AT TIME ZONE 'America/Denver'),
+       (CASE WHEN b THEN naive ELSE aware END) AT TIME ZONE 'America/Denver',
+       arrow_typeof((CASE WHEN b THEN aware ELSE naive END) AT TIME ZONE 'America/Denver'),
+       (CASE WHEN b THEN aware ELSE naive END) AT TIME ZONE 'America/Denver'
+FROM at_tz_case
+----
+Timestamp(ns) 2024-01-01T05:00:00 Timestamp(ns) 2024-01-01T05:00:00
+
+# CTE / derived-table column over such a CASE
+query TP
+WITH c AS (SELECT CASE WHEN b THEN naive ELSE aware END AS x FROM at_tz_case)
+SELECT arrow_typeof(x AT TIME ZONE 'America/Denver'), x AT TIME ZONE 'America/Denver' FROM c
+----
+Timestamp(ns) 2024-01-01T05:00:00
+
+# UNION ALL with the naive branch first
+query TP
+SELECT arrow_typeof(x AT TIME ZONE 'America/Denver'), x AT TIME ZONE 'America/Denver'
+FROM (SELECT naive AS x FROM at_tz_case UNION ALL SELECT aware FROM at_tz_case)
+----
+Timestamp(ns) 2024-01-01T05:00:00
+Timestamp(ns) 2024-01-01T05:00:00
+
+# aggregate over such a CASE
+query TP
+SELECT arrow_typeof(max(CASE WHEN b THEN naive ELSE aware END) AT TIME ZONE 'America/Denver'),
+       max(CASE WHEN b THEN naive ELSE aware END) AT TIME ZONE 'America/Denver'
+FROM at_tz_case
+----
+Timestamp(ns) 2024-01-01T05:00:00
+
+# The time unit also comes from the coerced type. Here the first arm or branch
+# has second precision, but the coerced type has nanosecond precision, so the
+# fraction of a second is kept.
+query TPTP
+SELECT arrow_typeof((CASE WHEN NOT b THEN naive_s ELSE aware_frac END) AT TIME ZONE 'UTC'),
+       (CASE WHEN NOT b THEN naive_s ELSE aware_frac END) AT TIME ZONE 'UTC',
+       arrow_typeof((CASE WHEN NOT b THEN aware_s ELSE naive_frac END) AT TIME ZONE 'UTC'),
+       (CASE WHEN NOT b THEN aware_s ELSE naive_frac END) AT TIME ZONE 'UTC'
+FROM at_tz_case
+----
+Timestamp(ns) 2024-01-01T12:00:00.123456789 Timestamp(ns) 2024-01-01T12:00:00.123456789
+
+query TP rowsort
+SELECT arrow_typeof(x AT TIME ZONE 'UTC'), x AT TIME ZONE 'UTC'
+FROM (SELECT naive_s AS x FROM at_tz_case UNION ALL SELECT naive_frac FROM at_tz_case)
+----
+Timestamp(ns, "UTC") 2024-01-01T12:00:00.123456789Z
+Timestamp(ns, "UTC") 2024-01-01T12:00:00Z
+
+# A dictionary-encoded timestamp follows its value type
+query TP
+SELECT arrow_typeof(d AT TIME ZONE 'America/Denver'), d AT TIME ZONE 'America/Denver'
+FROM (SELECT arrow_cast(aware, 'Dictionary(Int32, Timestamp(Nanosecond, Some("UTC")))') AS d FROM at_tz_case)
+----
+Timestamp(ns) 2024-01-01T05:00:00
+
+query TP
+SELECT arrow_typeof(d AT TIME ZONE 'America/Denver'), d AT TIME ZONE 'America/Denver'
+FROM (SELECT arrow_cast(naive, 'Dictionary(Int32, Timestamp(Nanosecond, None))') AS d FROM at_tz_case)
+----
+Timestamp(ns, "America/Denver") 2024-01-01T12:00:00-07:00
+
+# `PREPARE` runs the optimizer before type coercion, and an untyped placeholder
+# has no type until `EXECUTE`. The branch is still chosen from the final type.
+statement ok
+PREPARE at_tz_p AS SELECT arrow_typeof($1 AT TIME ZONE 'America/Denver'), $1 AT TIME ZONE 'America/Denver'
+
+query TP
+EXECUTE at_tz_p(arrow_cast('2024-01-01T12:00:00Z', 'Timestamp(Nanosecond, Some("UTC"))'))
+----
+Timestamp(ns) 2024-01-01T05:00:00
+
+query TP
+EXECUTE at_tz_p(arrow_cast('2024-01-01T12:00:00', 'Timestamp(Nanosecond, None)'))
+----
+Timestamp(ns, "America/Denver") 2024-01-01T12:00:00-07:00
+
+statement ok
+DEALLOCATE at_tz_p
+
+statement ok
+PREPARE at_tz_case_p(boolean) AS
+SELECT arrow_typeof((CASE WHEN b THEN naive ELSE aware END) AT TIME ZONE 'America/Denver'),
+       (CASE WHEN b THEN naive ELSE aware END) AT TIME ZONE 'America/Denver'
+FROM at_tz_case WHERE b = $1
+
+query TP
+EXECUTE at_tz_case_p(true)
+----
+Timestamp(ns) 2024-01-01T05:00:00
+
+statement ok
+DEALLOCATE at_tz_case_p
+
+# A view over such a CASE
+statement ok
+CREATE VIEW at_tz_case_v AS SELECT CASE WHEN b THEN naive ELSE aware END AS x FROM at_tz_case
+
+query TP
+SELECT arrow_typeof(x AT TIME ZONE 'America/Denver'), x AT TIME ZONE 'America/Denver' FROM at_tz_case_v
+----
+Timestamp(ns) 2024-01-01T05:00:00
+
+statement ok
+DROP VIEW at_tz_case_v
+
+# `AT TIME ZONE` stays a `timezone` call in the plan. It is not rewritten into
+# a `CAST` during planning, because the type at that point is not always final.
+# The column is named with the operator syntax.
+query TT
+EXPLAIN SELECT (CASE WHEN b THEN naive ELSE aware END) AT TIME ZONE 'America/Denver', naive AT TIME ZONE 'America/Denver' FROM at_tz_case
+----
+logical_plan
+01)Projection: timezone(Utf8("America/Denver"), CASE WHEN at_tz_case.b THEN CAST(at_tz_case.naive AS Timestamp(ns, "UTC")) ELSE at_tz_case.aware END), timezone(Utf8("America/Denver"), at_tz_case.naive)
+02)--TableScan: at_tz_case projection=[aware, naive, b]
+physical_plan
+01)ProjectionExec: expr=[timezone(America/Denver, CASE WHEN b@2 THEN CAST(naive@1 AS Timestamp(ns, "UTC")) ELSE aware@0 END) as CASE WHEN at_tz_case.b THEN at_tz_case.naive ELSE at_tz_case.aware END AT TIME ZONE 'America/Denver', timezone(America/Denver, naive@1) as at_tz_case.naive AT TIME ZONE 'America/Denver']
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# `timezone(zone, expression)` is the function form, as in PostgreSQL and DuckDB
+query TPTP
+SELECT arrow_typeof(timezone('America/Denver', aware)), timezone('America/Denver', aware),
+       arrow_typeof(timezone('America/Denver', naive)), timezone('America/Denver', naive)
+FROM at_tz_case
+----
+Timestamp(ns) 2024-01-01T05:00:00 Timestamp(ns, "America/Denver") 2024-01-01T12:00:00-07:00
+
+# The zone decides the result type, so it must be a constant
+statement error timezone requires its first argument \(the timezone\) to be a constant, non-empty string
+SELECT timezone(arrow_cast(b, 'Utf8'), aware) FROM at_tz_case
+
+statement ok
+DROP TABLE at_tz_case

@@ -46,6 +46,7 @@ use datafusion_sql::{
 
 use crate::common::{CustomExprPlanner, CustomTypePlanner, MockSessionState};
 use datafusion_functions::core::planner::CoreFunctionPlanner;
+use datafusion_functions::datetime::{self, planner::DatetimeFunctionPlanner};
 use datafusion_functions_aggregate::{
     approx_median::approx_median_udaf,
     average::avg_udaf,
@@ -4052,6 +4053,44 @@ fn plan_merge_into_rejects_invalid_actions_and_structure(
     let err = logical_plan(sql).unwrap_err();
     assert!(
         err.strip_backtrace().contains(expected),
+        "unexpected error: {err}"
+    );
+}
+
+/// With the `DatetimeFunctionPlanner`, `AT TIME ZONE` plans as the `timezone`
+/// function for every input type. The function picks the result type after
+/// type coercion, so the SQL planner does not need the input type.
+#[test]
+fn plan_at_time_zone_with_datetime_planner() {
+    let state = MockSessionState::default()
+        .with_expr_planner(Arc::new(DatetimeFunctionPlanner))
+        .with_scalar_function(datetime::timezone());
+    let plan = logical_plan_from_state(
+        "SELECT birth_date AT TIME ZONE 'America/Denver' FROM person",
+        &GenericDialect {},
+        ParserOptions::default(),
+        state,
+    )
+    .unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: timezone(Utf8("America/Denver"), person.birth_date)
+      TableScan: person
+    "#
+    );
+}
+
+/// Without an `ExprPlanner` for `AT TIME ZONE`, planning fails for every input,
+/// as for `EXTRACT`. The SQL planner does not know the input type after type
+/// coercion, so it cannot choose a lowering on its own.
+#[test]
+fn plan_at_time_zone_without_planner() {
+    let err = logical_plan("SELECT birth_date AT TIME ZONE 'America/Denver' FROM person")
+        .unwrap_err();
+    assert!(
+        err.strip_backtrace()
+            .contains("AT TIME ZONE needs an ExprPlanner"),
         "unexpected error: {err}"
     );
 }
