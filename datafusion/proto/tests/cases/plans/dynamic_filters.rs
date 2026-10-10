@@ -1124,3 +1124,61 @@ fn extension_codec_expr_participates_in_deduplication() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn partitioned_dynamic_filter_roundtrip_preserves_routing_and_views() -> Result<()> {
+    use datafusion_common::{ScalarValue, SplitPoint};
+    use datafusion_physical_expr::{Partitioning, RangePartitioning};
+
+    let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+    let key: Arc<dyn PhysicalExpr> = Arc::new(Column::new("k", 0));
+    let layouts = [
+        Partitioning::Hash(vec![Arc::clone(&key)], 2),
+        Partitioning::Range(RangePartitioning::try_new(
+            [PhysicalSortExpr::new_default(Arc::clone(&key))].into(),
+            vec![SplitPoint::new(vec![ScalarValue::Int64(Some(10))])],
+        )?),
+    ];
+    for partitioning in layouts {
+        let filter = Arc::new(DynamicFilterPhysicalExpr::new_partitioned(
+            vec![Arc::clone(&key)],
+            partitioning.clone(),
+            lit(true),
+        )?);
+        filter.update_partitioned(
+            partitioning.clone(),
+            vec![lit(true), lit(false)],
+            lit(true),
+        )?;
+        let view: Arc<dyn PhysicalExpr> = Arc::new(filter.for_partition(1)?);
+        let producer: Arc<dyn PhysicalExpr> = filter;
+        // Decode in both orders: a cached partition view must not replace the
+        // global producer, nor vice versa.
+        for (left, right) in [
+            (Arc::clone(&producer), Arc::clone(&view)),
+            (Arc::clone(&view), Arc::clone(&producer)),
+        ] {
+            let expected_left = left.snapshot()?.unwrap().to_string();
+            let expected_right = right.snapshot()?.unwrap().to_string();
+            let (left, right) =
+                roundtrip_dynamic_filter_expr_pair(left, right, Arc::clone(&schema))?;
+            let left = left.downcast_ref::<DynamicFilterPhysicalExpr>().unwrap();
+            let right = right.downcast_ref::<DynamicFilterPhysicalExpr>().unwrap();
+            assert_eq!(left.partitioning()?, Some(partitioning.clone()));
+            assert_eq!(right.partitioning()?, Some(partitioning.clone()));
+            assert_eq!(left.current()?.to_string(), expected_left);
+            assert_eq!(right.current()?.to_string(), expected_right);
+            left.update_partitioned(
+                partitioning.clone(),
+                vec![lit(false), lit(true)],
+                lit(false),
+            )?;
+            assert_eq!(left.snapshot_generation(), right.snapshot_generation());
+            assert_ne!(left.current()?.to_string(), expected_left);
+            assert_ne!(right.current()?.to_string(), expected_right);
+            left.mark_complete();
+            assert!(right.is_complete());
+        }
+    }
+    Ok(())
+}

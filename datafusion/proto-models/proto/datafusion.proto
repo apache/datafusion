@@ -1124,6 +1124,10 @@ message PhysicalDynamicFilterNode {
   uint64 generation = 3;
   PhysicalExprNode inner_expr = 4;
   bool is_complete = 5;
+  // The total expression above remains usable by consumers without partition metadata.
+  Partitioning partitioning = 6;
+  repeated PhysicalExprNode partition_filters = 7;
+  optional uint64 partition_index = 8;
 }
 
 message PhysicalSqlSimilarToPatternNode {
