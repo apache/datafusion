@@ -42,22 +42,22 @@ SELECT next_day('2015-01-14'::DATE, ' MO '::string);
 ----
 NULL
 
-query error Failed to coerce arguments to satisfy a call to 'next_day' function
+query error Function 'next_day' expects 2 arguments but received 1
 SELECT next_day('2015-07-27'::DATE);
 
-query error Failed to coerce arguments to satisfy a call to 'next_day' function
+query error Function 'next_day' expects 2 arguments but received 1
 SELECT next_day('Sun'::string);
 
 query error 'next_day' does not support zero arguments
 SELECT next_day();
 
-query error Failed to coerce arguments to satisfy a call to 'next_day' function
+query error Function 'next_day' requires Date, but received Int32
 SELECT next_day(1::int, 'Sun'::string);
 
-query error Failed to coerce arguments to satisfy a call to 'next_day' function
+query error Function 'next_day' expects 2 arguments but received 3
 SELECT next_day('2015-07-27'::DATE, 'Sat'::string, 'Sun'::string);
 
-query error Failed to coerce arguments to satisfy a call to 'next_day' function
+query error Cannot cast string 'invalid_date' to value of Date32 type
 SELECT next_day('invalid_date'::string, 'Mon'::string);
 
 query D
@@ -100,3 +100,52 @@ query I
 SELECT arrow_cast(next_day(arrow_cast(95026230, 'Date32'), 'Tue'::string), 'Int32');
 ----
 95026237
+
+# https://github.com/apache/datafusion/issues/23889
+# Spark casts the start date to DATE, so STRING and TIMESTAMP are accepted
+query D
+SELECT next_day('2015-07-23'::string, 'Mon'::string);
+----
+2015-07-27
+
+query D
+SELECT next_day('2015-07-23 12:12:12'::string, 'Mon'::string);
+----
+2015-07-27
+
+query D
+SELECT next_day('2015-07-23 12:12:12'::timestamp, 'Mon'::string);
+----
+2015-07-27
+
+query D
+SELECT next_day(a, 'Mon'::string)
+FROM VALUES
+    ('2015-07-23'::string),
+    (NULL::string) as t(a);
+----
+2015-07-27
+NULL
+
+# Timestamp column with a day-of-week column
+query D
+SELECT next_day(a, b)
+FROM VALUES
+    ('2015-07-23 12:12:12'::timestamp, 'Mon'::string),
+    ('2015-07-23 23:59:59'::timestamp, 'Fri'::string),
+    (NULL::timestamp, 'Mon'::string) as t(a, b);
+----
+2015-07-27
+2015-07-24
+NULL
+
+# String start date and LargeUtf8 / Utf8View day-of-week
+query D
+SELECT next_day('2015-07-23', arrow_cast('Mon', 'LargeUtf8'));
+----
+2015-07-27
+
+query D
+SELECT next_day('2015-07-23', arrow_cast('Mon', 'Utf8View'));
+----
+2015-07-27
