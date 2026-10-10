@@ -32,6 +32,7 @@ use arrow::array::{
     cast::AsArray, downcast_dictionary_array,
 };
 use arrow::datatypes::{DataType, Schema};
+use arrow::temporal_conversions::{date32_to_datetime, date64_to_datetime};
 use datafusion_common::cast::{
     as_boolean_array, as_date32_array, as_date64_array, as_float16_array,
     as_float32_array, as_float64_array, as_int8_array, as_int16_array, as_int32_array,
@@ -43,7 +44,6 @@ use datafusion_common::{
 };
 use datafusion_common_runtime::SpawnedTask;
 
-use chrono::NaiveDate;
 use datafusion_execution::TaskContext;
 use futures::StreamExt;
 use object_store::path::Path;
@@ -410,8 +410,6 @@ fn compute_partition_keys_by_row<'a>(
 ) -> Result<Vec<Vec<Cow<'a, str>>>> {
     let mut all_partition_values = vec![];
 
-    const EPOCH_DAYS_FROM_CE: i32 = 719_163;
-
     // For the purposes of writing partitioned data, we can rely on schema inference
     // to determine the type of the partition cols in order to provide a more ergonomic
     // UI which does not require specifying DataTypes manually. So, we ignore the
@@ -462,13 +460,13 @@ fn compute_partition_keys_by_row<'a>(
                 // ISO-8601/RFC3339 format - yyyy-mm-dd
                 let format = "%Y-%m-%d";
                 for i in 0..rb.num_rows() {
-                    let date = NaiveDate::from_num_days_from_ce_opt(
-                        EPOCH_DAYS_FROM_CE + array.value(i),
-                    )
-                    .unwrap()
-                    .format(format)
-                    .to_string();
-                    partition_values.push(Cow::from(date));
+                    let value = array.value(i);
+                    let date = date32_to_datetime(value).ok_or_else(|| {
+                        exec_datafusion_err!(
+                            "Date32 value {value} of partition column '{col}' is out of range for a date"
+                        )
+                    })?;
+                    partition_values.push(Cow::from(date.format(format).to_string()));
                 }
             }
             DataType::Date64 => {
@@ -476,13 +474,13 @@ fn compute_partition_keys_by_row<'a>(
                 // ISO-8601/RFC3339 format - yyyy-mm-dd
                 let format = "%Y-%m-%d";
                 for i in 0..rb.num_rows() {
-                    let date = NaiveDate::from_num_days_from_ce_opt(
-                        EPOCH_DAYS_FROM_CE + (array.value(i) / 86_400_000) as i32,
-                    )
-                    .unwrap()
-                    .format(format)
-                    .to_string();
-                    partition_values.push(Cow::from(date));
+                    let value = array.value(i);
+                    let date = date64_to_datetime(value).ok_or_else(|| {
+                        exec_datafusion_err!(
+                            "Date64 value {value} of partition column '{col}' is out of range for a date"
+                        )
+                    })?;
+                    partition_values.push(Cow::from(date.format(format).to_string()));
                 }
             }
             DataType::Int8 => {
