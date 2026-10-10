@@ -166,7 +166,7 @@ fn is_single_distinct_agg(
     if aggregate_count != aggr_expr.len() || fields_set.len() != 1 {
         return Ok(false);
     }
-    if !rewrite_pays(&distinct_aggs, input_schema)? {
+    if !rewrite_pays(&distinct_aggs, input_schema) {
         return Ok(false);
     }
     Ok(true)
@@ -191,20 +191,24 @@ fn is_single_distinct_agg(
 fn rewrite_pays(
     distinct_aggs: &[(&Arc<AggregateUDF>, &[Expr])],
     input_schema: &DFSchema,
-) -> Result<bool> {
+) -> bool {
     for (func, args) in distinct_aggs {
         if func.distinct_handling() == datafusion_expr::DistinctHandling::Unsupported {
-            return Ok(true);
+            return true;
         }
-        let arg_types = args
-            .iter()
-            .map(|arg| arg.get_type(input_schema))
-            .collect::<Result<Vec<_>>>()?;
+        let mut arg_types = Vec::with_capacity(args.len());
+        for arg in *args {
+            if let Ok(dt) = arg.get_type(input_schema) {
+                arg_types.push(dt);
+            } else {
+                return true; // if we can't determine the type, assume it's natively supported and don't rewrite
+            }
+        }
         if func.groups_accumulator_supported_for_types(&arg_types, true) == Some(false) {
-            return Ok(true);
+            return true;
         }
     }
-    Ok(false)
+    false
 }
 
 /// Check if the first expr is [Expr::GroupingSet].
