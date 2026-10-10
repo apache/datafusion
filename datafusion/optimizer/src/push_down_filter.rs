@@ -1135,10 +1135,13 @@ impl OptimizerRule for PushDownFilter {
                 // multiple window functions, each with potentially different partition keys.
                 // Therefore, we need to ensure that any potential partition key returned is used in
                 // ALL window functions. Otherwise, filters cannot be pushed by through that column.
+                #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr hashing ignores Arrow buffer reservation tracking.
                 fn extract_partition_keys(func: &WindowFunction) -> HashSet<&Expr> {
                     func.params.partition_by.iter().collect()
                 }
 
+                #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
+                // Expr hashing ignores Arrow buffer reservation tracking.
                 let potential_partition_keys = window
                     .window_expr
                     .iter()
@@ -1601,6 +1604,7 @@ fn with_filters(predicates: Vec<Expr>, plan: LogicalPlan) -> LogicalPlan {
 ///
 /// A predicate containing a subquery is never pushed: what the subquery reads is
 /// not visible from the expression tree.
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr hashing ignores Arrow buffer reservation tracking.
 fn reads_only_partition_keys(
     expr: &Expr,
     partition_keys: &HashSet<&Expr>,
