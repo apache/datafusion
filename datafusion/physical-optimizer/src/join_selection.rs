@@ -184,10 +184,15 @@ fn can_swap_hash_join(hash_join: &HashJoinExec) -> bool {
 
 /// Tries to create a [`HashJoinExec`] in [`PartitionMode::CollectLeft`] when possible.
 ///
-/// This function will first consider the given join type and check whether the
-/// `CollectLeft` mode is applicable. Otherwise, it will try to swap the join sides.
-/// When the `ignore_threshold` is false, this function will also check left
-/// and right sizes in bytes or rows.
+/// This function will first check whether the join inputs already satisfy the
+/// distribution requirements for [`PartitionMode::Partitioned`]. If so, it returns
+/// `None` to allow the caller to preserve or select [`PartitionMode::Partitioned`]
+/// (task-local join with 0 shuffle) rather than degrading to broadcast (`CollectLeft`).
+///
+/// Otherwise, it will consider the given join type and check whether the
+/// `CollectLeft` mode is applicable. It will also try to swap the join sides if beneficial.
+/// When the `ignore_threshold` is false, this function will check left
+/// and right sizes in bytes or rows against the configured thresholds.
 ///
 /// Used configurations
 /// - `optimizer.hash_join_single_partition_threshold`: byte threshold for `CollectLeft`
@@ -198,6 +203,10 @@ pub(crate) fn try_collect_left(
     ignore_threshold: bool,
     context: &dyn PhysicalOptimizerContext,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    if hash_join.inputs_satisfy_partitioned_requirements()? {
+        return Ok(None);
+    }
+
     let left = hash_join.left();
     let right = hash_join.right();
     let optimizer_config = &context.config_options().optimizer;
