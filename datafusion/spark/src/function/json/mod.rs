@@ -39,16 +39,10 @@ pub mod expr_fn {
 
     /// Serializes a struct value to a JSON string (Spark-compatible `to_json`).
     ///
-    /// input is either a struct-valued [`Expr`] or a list of column names,
-    /// which are packed into a struct keyed by their unqualified names first.
-    /// See [`IntoJsonStruct`].
-    ///
-    ///
-    /// // existing struct column
-    /// df.with_column("json", to_json(col("event")))?;
-    /// // pack columns into a struct, then serialize
-    /// df.with_column("json", to_json(&["foo", "bar"]))?;
-    ///
+    /// The input is either an expression that evaluates to a struct,
+    /// or a slice of column names that are packed into a struct first.
+    /// The result is a regular expression and can be used anywhere an expression is accepted,
+    /// for example in `DataFrame::with_column`.
     pub fn to_json(input: impl IntoJsonStruct) -> Expr {
         super::to_json().call(vec![input.into_struct_expr()])
     }
