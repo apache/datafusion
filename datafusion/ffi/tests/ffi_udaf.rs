@@ -23,7 +23,7 @@ mod tests {
 
     use arrow::array::{Float64Array, record_batch};
     use datafusion::error::Result;
-    use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl};
+    use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, DistinctHandling};
     use datafusion::prelude::{SessionContext, col};
     use datafusion_catalog::MemTable;
     use datafusion_expr::{ScalarUDF, ScalarUDFImpl};
@@ -78,6 +78,27 @@ mod tests {
         let ffi_sum_func = (module.create_sum_udaf)();
         let foreign_sum_func: Arc<dyn AggregateUDFImpl> = (&ffi_sum_func).into();
         assert!(!foreign_sum_func.supports_null_handling_clause());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_distinct_handling() -> Result<()> {
+        let module = get_module()?;
+
+        let ffi_stddev_func = (module.create_stddev_udaf)();
+        let foreign_stddev_func: Arc<dyn AggregateUDFImpl> = (&ffi_stddev_func).into();
+        assert_eq!(
+            foreign_stddev_func.distinct_handling(),
+            DistinctHandling::Unsupported
+        );
+
+        let ffi_sum_func = (module.create_sum_udaf)();
+        let foreign_sum_func: Arc<dyn AggregateUDFImpl> = (&ffi_sum_func).into();
+        assert_eq!(
+            foreign_sum_func.distinct_handling(),
+            DistinctHandling::Sensitive
+        );
 
         Ok(())
     }
