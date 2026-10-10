@@ -490,16 +490,16 @@ across crate boundaries.</p></li>
 <p>Do not expose internal APIs solely for tests or microbenchmarks. Some legacy code
 does so, but new tests and benchmarks should exercise observable behavior to
 simplify maintenance.</p>
-<p>For APIs intended only for internal use, add <code class="docutils literal notranslate"><span class="pre">#[doc(hidden)]</span></code> and a doc comment
-section headed <code class="docutils literal notranslate"><span class="pre">#</span> <span class="pre">Public</span> <span class="pre">Only</span> <span class="pre">for</span> <span class="pre">Internal</span> <span class="pre">Use:</span></code>. Name the crate or component
-that requires access and explain why the API is not intended for downstream use.
-For example:</p>
+<p>For APIs intended only for internal use, add <code class="docutils literal notranslate"><span class="pre">#[doc(hidden)]</span></code> and use the
+following doc comment format, including the API policy link:</p>
 <div class="highlight-txt notranslate"><div class="highlight"><pre><span></span>impl HashTableLookupExpr {
     /// ...
     ///
     /// # Public Only for Internal Use:
-    /// `datafusion-proto` tests require this constructor, but it is not part of
-    /// the supported public API.
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
     #[doc(hidden)]
     pub fn new(...) {...}
 }
