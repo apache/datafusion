@@ -71,23 +71,23 @@ fn requires_unsigned_byte_array_order(column: &ColumnDescriptor) -> bool {
 /// Arrow's string and binary comparisons. Even the modern bounds cannot be
 /// interpreted without the corresponding footer `column_orders` entry.
 /// Signed logical types, such as decimals, retain their existing behavior.
-/// Columns with undefined sort orders, such as `INT96`, never have usable
-/// min/max bounds regardless of their physical type. The `INT96` check is
-/// defensive because parquet-rs does not currently expose those bounds.
+/// Columns with undefined sort orders never have usable min/max bounds.
+/// `INT96` timestamp bounds require an explicit `INT96_TIMESTAMP_ORDER`
+/// footer entry; the schema's timestamp sort order alone is not sufficient.
 pub(crate) fn has_untrusted_min_max_order(
     parquet_schema: &SchemaDescriptor,
     column_orders: Option<&[ColumnOrder]>,
     parquet_column_index: usize,
 ) -> bool {
     let column = parquet_schema.column(parquet_column_index);
-    // As of arrow 60, INT96 columns report `SortOrder::INT96_TIMESTAMP`
-    // rather than `UNDEFINED`; keep treating their min/max as untrusted.
-    // until <https://github.com/apache/datafusion/issues/25484>
-    if matches!(
-        column.sort_order(),
-        SortOrder::UNDEFINED | SortOrder::INT96_TIMESTAMP
-    ) {
+    if column.sort_order() == SortOrder::UNDEFINED {
         return true;
+    }
+    if column.sort_order() == SortOrder::INT96_TIMESTAMP {
+        return column_orders
+            .and_then(|orders| orders.get(parquet_column_index))
+            .copied()
+            != Some(ColumnOrder::INT96_TIMESTAMP_ORDER);
     }
     requires_unsigned_byte_array_order(&column)
         && (column.sort_order() != SortOrder::UNSIGNED
@@ -231,7 +231,7 @@ impl<'a> DFParquetMetadata<'a> {
     }
 
     /// Set the [`TimeUnit`] that INT96 timestamp columns should be coerced
-    /// to when reading the schema.
+    /// to when reading the schema and statistics.
     ///
     /// INT96 in Parquet has no defined unit or timezone, so leaving this
     /// `None` reads INT96 columns as nanosecond timestamps with no timezone
@@ -535,7 +535,12 @@ impl<'a> DFParquetMetadata<'a> {
     /// the statistics in the metadata using [`Self::statistics_from_parquet_metadata`]
     pub async fn fetch_statistics(&self, table_schema: &SchemaRef) -> Result<Statistics> {
         let metadata = self.fetch_metadata().await?;
-        Self::statistics_from_parquet_metadata(&metadata, table_schema)
+        Self::statistics_from_parquet_metadata_with_coercion(
+            &metadata,
+            table_schema,
+            self.coerce_int96,
+            self.coerce_int96_tz.clone(),
+        )
     }
 
     /// Convert statistics in [`ParquetMetaData`] into [`Statistics`] using [`StatisticsConverter`]
@@ -570,6 +575,10 @@ impl<'a> DFParquetMetadata<'a> {
     ///     2. The column is in arrow schema, but not in parquet schema due to schema revolution, min/max values are set to Precision::Exact(null)
     /// - Null counts are set to Precision::Exact(num_rows) (conservatively assuming all values could be null)
     ///
+    /// INT96 timestamps use the reader's default nanosecond resolution. Use
+    /// [`Self::fetch_statistics`] with [`Self::with_coerce_int96`] when the
+    /// reader is configured to decode INT96 at another resolution.
+    ///
     /// # Byte Size Calculation:
     ///
     /// - For primitive types with known fixed size, exact byte size is calculated as (byte width * number of rows)
@@ -578,6 +587,21 @@ impl<'a> DFParquetMetadata<'a> {
     pub fn statistics_from_parquet_metadata(
         metadata: &ParquetMetaData,
         logical_file_schema: &SchemaRef,
+    ) -> Result<Statistics> {
+        Self::statistics_from_parquet_metadata_with_coercion(
+            metadata,
+            logical_file_schema,
+            None,
+            None,
+        )
+    }
+
+    /// Convert statistics using the same INT96 settings as the data reader.
+    pub(crate) fn statistics_from_parquet_metadata_with_coercion(
+        metadata: &ParquetMetaData,
+        logical_file_schema: &SchemaRef,
+        coerce_int96: Option<TimeUnit>,
+        coerce_int96_tz: Option<Arc<str>>,
     ) -> Result<Statistics> {
         let row_groups_metadata = metadata.row_groups();
 
@@ -611,6 +635,21 @@ impl<'a> DFParquetMetadata<'a> {
             physical_file_schema = merged;
         }
 
+        // Match the reader's configured INT96 resolution, rather than assuming
+        // that the table's timestamp type is the type physically read. In
+        // particular, converting through nanoseconds can wrap wider timestamps.
+        if let Some(unit) = coerce_int96
+            && let Some(coerced) = Int96Coercer::new(
+                file_metadata.schema_descr(),
+                &physical_file_schema,
+                &unit,
+            )
+            .with_timezone(coerce_int96_tz)
+            .coerce()
+        {
+            physical_file_schema = coerced;
+        }
+
         statistics.column_statistics =
             if has_statistics {
                 let (mut max_accs, mut min_accs) =
@@ -638,11 +677,21 @@ impl<'a> DFParquetMetadata<'a> {
                                 stats_converter.with_missing_null_counts_as_zero(false);
                             let parquet_index = stats_converter.parquet_column_index();
                             if parquet_index.is_some_and(|index| {
-                                has_untrusted_min_max_order(
-                                    file_metadata.schema_descr(),
-                                    file_metadata.column_orders().map(Vec::as_slice),
-                                    index,
-                                )
+                                // A schema cast is not an INT96 read coercion.
+                                // Keep bounds unknown if the actual reader unit
+                                // differs from the table's timestamp type.
+                                (file_metadata
+                                    .schema_descr()
+                                    .column(index)
+                                    .physical_type()
+                                    == PhysicalType::INT96
+                                    && stats_converter.arrow_field().data_type()
+                                        != field.data_type())
+                                    || has_untrusted_min_max_order(
+                                        file_metadata.schema_descr(),
+                                        file_metadata.column_orders().map(Vec::as_slice),
+                                        index,
+                                    )
                             }) || has_untrusted_byte_array_stats(
                                 file_metadata.schema_descr(),
                                 parquet_index,

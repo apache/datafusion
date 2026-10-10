@@ -444,6 +444,19 @@ impl FileFormat for ParquetFormat {
             .with_metadata_size_hint(self.metadata_size_hint())
             .with_decryption_properties(file_decryption_properties)
             .with_file_metadata_cache(Some(file_metadata_cache))
+            .with_coerce_int96(
+                self.coerce_int96()
+                    .map(|unit| parse_coerce_int96_string(&unit))
+                    .transpose()?,
+            )
+            .with_coerce_int96_tz(
+                self.options
+                    .global
+                    .coerce_int96_tz
+                    .as_deref()
+                    .map(parse_coerce_int96_tz_string)
+                    .transpose()?,
+            )
             .fetch_statistics(&table_schema)
             .await
     }
@@ -487,10 +500,20 @@ impl FileFormat for ParquetFormat {
             .with_file_metadata_cache(Some(file_metadata_cache))
             .fetch_metadata()
             .await?;
-        let statistics = DFParquetMetadata::statistics_from_parquet_metadata(
-            &metadata,
-            &table_schema,
-        )?;
+        let statistics =
+            DFParquetMetadata::statistics_from_parquet_metadata_with_coercion(
+                &metadata,
+                &table_schema,
+                self.coerce_int96()
+                    .map(|unit| parse_coerce_int96_string(&unit))
+                    .transpose()?,
+                self.options
+                    .global
+                    .coerce_int96_tz
+                    .as_deref()
+                    .map(parse_coerce_int96_tz_string)
+                    .transpose()?,
+            )?;
         let ordering =
             crate::metadata::ordering_from_parquet_metadata(&metadata, &table_schema)?;
         Ok(
