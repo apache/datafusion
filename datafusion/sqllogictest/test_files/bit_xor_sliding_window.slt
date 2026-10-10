@@ -1,0 +1,66 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# A populated frame containing only NULLs must return NULL after its last
+# non-null input leaves. Zero remains a valid result for cancelling values.
+statement ok
+SET datafusion.execution.batch_size = 2;
+
+statement ok
+CREATE TABLE bit_xor_window(id INT, v BIGINT) AS VALUES
+    (1, 7), (2, NULL), (3, NULL), (4, 0), (5, 7), (6, 7);
+
+# Exercise every integer accumulator type across batch boundaries.
+query IIIIIIIII
+SELECT id,
+    bit_xor(arrow_cast(v, 'Int8')) OVER w,
+    bit_xor(arrow_cast(v, 'Int16')) OVER w,
+    bit_xor(arrow_cast(v, 'Int32')) OVER w,
+    bit_xor(v) OVER w,
+    bit_xor(arrow_cast(v, 'UInt8')) OVER w,
+    bit_xor(arrow_cast(v, 'UInt16')) OVER w,
+    bit_xor(arrow_cast(v, 'UInt32')) OVER w,
+    bit_xor(arrow_cast(v, 'UInt64')) OVER w
+FROM bit_xor_window
+WINDOW w AS (ORDER BY id ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING)
+ORDER BY id;
+----
+1 7 7 7 7 7 7 7 7
+2 NULL NULL NULL NULL NULL NULL NULL NULL
+3 0 0 0 0 0 0 0 0
+4 7 7 7 7 7 7 7 7
+5 0 0 0 0 0 0 0 0
+6 7 7 7 7 7 7 7 7
+
+# Empty and all-null frames also differ from a one-row frame containing zero.
+query II
+SELECT id, bit_xor(v) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND 1 PRECEDING)
+FROM bit_xor_window
+ORDER BY id;
+----
+1 NULL
+2 7
+3 NULL
+4 NULL
+5 0
+6 7
+
+statement ok
+DROP TABLE bit_xor_window;
+
+statement ok
+RESET datafusion.execution.batch_size;
