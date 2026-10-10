@@ -192,6 +192,12 @@ impl CrossJoinExec {
     ///
     /// This is not a public API and is for internal use only; see [API policy] for details.
     ///
+    /// Direct use of this API in downstream projects is discouraged because
+    /// correctness depends on strict preconditions. See the notes above for
+    /// correct usage.
+    ///
+    /// This API may change frequently as internal join optimizations evolve.
+    ///
     /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
     #[doc(hidden)]
     pub fn swap_inputs(&self) -> Result<Arc<dyn ExecutionPlan>> {
