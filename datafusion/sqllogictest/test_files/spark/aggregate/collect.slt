@@ -20,6 +20,12 @@ SELECT collect_list(a) FROM (VALUES (1), (2), (3)) AS t(a);
 ----
 [1, 2, 3]
 
+# collect_list drops null inputs, so its element field is non-nullable
+query T
+SELECT arrow_typeof(collect_list(a)) FROM (VALUES (1)) AS t(a);
+----
+List(non-null Int64)
+
 query ?
 SELECT collect_list(a) FROM (VALUES (1), (2), (2), (3), (1)) AS t(a);
 ----
@@ -58,6 +64,12 @@ query ?
 SELECT array_sort(collect_set(a)) FROM (VALUES (1), (2), (3)) AS t(a);
 ----
 [1, 2, 3]
+
+# collect_set drops null inputs, so its element field is non-nullable
+query T
+SELECT arrow_typeof(collect_set(a)) FROM (VALUES (1)) AS t(a);
+----
+List(non-null Int64)
 
 query ?
 SELECT array_sort(collect_set(a)) FROM (VALUES (1), (2), (2), (3), (1)) AS t(a);
