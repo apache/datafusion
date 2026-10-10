@@ -175,6 +175,7 @@ datafusion-doc = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
 datafusion-macros = { workspace = true }
 datafusion-physical-optimizer = { workspace = true }
+datafusion-spark = { workspace = true }
 doc-comment = { workspace = true }
 bytes = { workspace = true }
 env_logger = { workspace = true }

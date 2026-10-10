@@ -35,6 +35,7 @@ use arrow::util::pretty::pretty_format_batches;
 use arrow_schema::{SortOptions, TimeUnit};
 use datafusion::{assert_batches_eq, dataframe};
 use datafusion_common::metadata::FieldMetadata;
+use datafusion_functions::core::expr_fn::named_struct;
 use datafusion_functions_aggregate::count::{count_all, count_all_window};
 use datafusion_functions_aggregate::expr_fn::{
     array_agg, avg, avg_distinct, count, count_distinct, max, median, min, sum,
@@ -43,6 +44,7 @@ use datafusion_functions_aggregate::expr_fn::{
 use datafusion_functions_nested::expr_fn::{array_filter, array_transform, make_array};
 use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::expr_fn::{first_value, lead, row_number};
+use datafusion_spark::expr_fn::to_json;
 use insta::assert_snapshot;
 use object_store::local::LocalFileSystem;
 use rstest::rstest;
@@ -202,6 +204,252 @@ async fn with_column_window_functions() -> DataFusionResult<()> {
 
         assert_eq!(2, df_schema.columns().len());
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn with_column_to_json() -> Result<()> {
+    let df = test_table()
+        .await?
+        .select_columns(&["c1", "c2", "c3"])?
+        .filter(col("c2").eq(lit(3)).and(col("c1").eq(lit("a"))))?
+        .with_column("json", to_json(&["c1", "c2", "c3"]))?;
+
+    // check that the new column is a nullable string
+    let json_field = df.schema().field_with_unqualified_name("json")?;
+    assert_eq!(json_field.data_type(), &DataType::Utf8);
+
+    // check that new column added
+    let df_results = df.clone().collect().await?;
+
+    assert_snapshot!(
+        batches_to_sort_string(&df_results),
+        @r#"
+    +----+----+-----+----------------------------+
+    | c1 | c2 | c3  | json                       |
+    +----+----+-----+----------------------------+
+    | a  | 3  | -12 | {"c1":"a","c2":3,"c3":-12} |
+    | a  | 3  | -72 | {"c1":"a","c2":3,"c3":-72} |
+    | a  | 3  | 13  | {"c1":"a","c2":3,"c3":13}  |
+    | a  | 3  | 13  | {"c1":"a","c2":3,"c3":13}  |
+    | a  | 3  | 14  | {"c1":"a","c2":3,"c3":14}  |
+    | a  | 3  | 17  | {"c1":"a","c2":3,"c3":17}  |
+    +----+----+-----+----------------------------+
+    "#
+    );
+
+    // check that a column with the same name is overwritten, which folds the
+    // source columns into a single JSON column
+    let df_results_overwrite = df
+        .clone()
+        .with_column("c3", to_json(&["c2", "c3"]))?
+        .collect()
+        .await?;
+
+    assert_snapshot!(
+        batches_to_sort_string(&df_results_overwrite),
+        @r#"
+    +----+----+-------------------+----------------------------+
+    | c1 | c2 | c3                | json                       |
+    +----+----+-------------------+----------------------------+
+    | a  | 3  | {"c2":3,"c3":-12} | {"c1":"a","c2":3,"c3":-12} |
+    | a  | 3  | {"c2":3,"c3":-72} | {"c1":"a","c2":3,"c3":-72} |
+    | a  | 3  | {"c2":3,"c3":13}  | {"c1":"a","c2":3,"c3":13}  |
+    | a  | 3  | {"c2":3,"c3":13}  | {"c1":"a","c2":3,"c3":13}  |
+    | a  | 3  | {"c2":3,"c3":14}  | {"c1":"a","c2":3,"c3":14}  |
+    | a  | 3  | {"c2":3,"c3":17}  | {"c1":"a","c2":3,"c3":17}  |
+    +----+----+-------------------+----------------------------+
+    "#
+    );
+
+    // check that an existing struct column can be serialized with col(..),
+    // and that it gives the same result as packing the columns by name
+    let df_struct_col = df
+        .clone()
+        .with_column(
+            "s",
+            named_struct(vec![
+                lit("c1"),
+                col("c1"),
+                lit("c2"),
+                col("c2"),
+                lit("c3"),
+                col("c3"),
+            ]),
+        )?
+        .with_column("json_from_struct", to_json(col("s")))?
+        .select(vec![
+            col("c1"),
+            col("c2"),
+            col("c3"),
+            col("json_from_struct"),
+        ])?
+        .with_column_renamed("json_from_struct", "json")?;
+
+    assert_eq!(
+        batches_to_sort_string(&df_struct_col.collect().await?),
+        batches_to_sort_string(&df_results)
+    );
+
+    // check that a non-struct argument is rejected when the plan is built
+    let err = df
+        .with_column("bad", to_json(col("c1")))
+        .unwrap_err()
+        .to_string();
+    assert_contains!(err, "to_json expects a struct argument");
+
+    // check that the same result is produced through SQL: to_json is a
+    // regular scalar UDF, so once registered it works on any struct expression
+    let ctx = SessionContext::new();
+    ctx.register_udf((*datafusion_spark::function::json::to_json()).clone());
+    register_aggregate_csv(&ctx, "aggregate_test_100").await?;
+
+    let sql_results = ctx
+        .sql(
+            "SELECT c1, c2, c3, \
+                    to_json(named_struct('c1', c1, 'c2', c2, 'c3', c3)) AS json \
+             FROM aggregate_test_100 \
+             WHERE c2 = 3 AND c1 = 'a'",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(
+        batches_to_sort_string(&sql_results),
+        batches_to_sort_string(&df_results)
+    );
+
+    // the SQL path rejects a non-struct argument at plan time as well
+    let err = ctx
+        .sql("SELECT to_json(c1) FROM aggregate_test_100")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert_contains!(err, "to_json expects a struct argument");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn with_column_to_json_edge_cases() -> Result<()> {
+    // NULL fields are omitted from the object (Spark ignoreNullFields
+    // default), so a row whose fields are all NULL becomes an empty object
+    let df = dataframe!(
+        "a" => [Some(1_i32), None],
+        "b" => [None, None::<&str>],
+    )?
+    .with_column("json", to_json(&["a", "b"]))?;
+
+    assert_snapshot!(
+        batches_to_sort_string(&df.collect().await?),
+        @r#"
+    +---+---+---------+
+    | a | b | json    |
+    +---+---+---------+
+    |   |   | {}      |
+    | 1 |   | {"a":1} |
+    +---+---+---------+
+    "#
+    );
+
+    // a constant struct is evaluated once at plan time (scalar path) and
+    // broadcast to every row
+    let df = dataframe!("id" => [1_i32, 2])?
+        .with_column("json", to_json(named_struct(vec![lit("a"), lit(1)])))?;
+
+    assert_snapshot!(
+        batches_to_sort_string(&df.collect().await?),
+        @r#"
+    +----+---------+
+    | id | json    |
+    +----+---------+
+    | 1  | {"a":1} |
+    | 2  | {"a":1} |
+    +----+---------+
+    "#
+    );
+
+    // nested structs and lists are serialized recursively
+    let df = dataframe!("a" => [1_i32, 2])?.with_column(
+        "json",
+        to_json(named_struct(vec![
+            lit("n"),
+            named_struct(vec![lit("x"), col("a")]),
+            lit("l"),
+            make_array(vec![col("a"), lit(9)]),
+        ])),
+    )?;
+
+    assert_snapshot!(
+        batches_to_sort_string(&df.collect().await?),
+        @r#"
+    +---+-------------------------+
+    | a | json                    |
+    +---+-------------------------+
+    | 1 | {"n":{"x":1},"l":[1,9]} |
+    | 2 | {"n":{"x":2},"l":[2,9]} |
+    +---+-------------------------+
+    "#
+    );
+
+    // string values are JSON-escaped; non-ASCII is emitted as-is
+    let df = dataframe!("s" => [r#"he said "hi""#, r"a\b", "π"])?
+        .with_column("json", to_json(&["s"]))?;
+
+    assert_snapshot!(
+        batches_to_sort_string(&df.collect().await?),
+        @r#"
+    +--------------+------------------------+
+    | s            | json                   |
+    +--------------+------------------------+
+    | a\b          | {"s":"a\\b"}           |
+    | he said "hi" | {"s":"he said \"hi\""} |
+    | π            | {"s":"π"}              |
+    +--------------+------------------------+
+    "#
+    );
+
+    // a qualified column name is resolved as such, but the JSON key is the
+    // bare column name
+    let df = test_table()
+        .await?
+        .filter(col("c2").eq(lit(3)).and(col("c1").eq(lit("a"))))?
+        .with_column("json", to_json(&["aggregate_test_100.c1", "c2"]))?
+        .select(vec![col("json")])?
+        .distinct()?;
+
+    assert_snapshot!(
+        batches_to_sort_string(&df.collect().await?),
+        @r#"
+    +-------------------+
+    | json              |
+    +-------------------+
+    | {"c1":"a","c2":3} |
+    +-------------------+
+    "#
+    );
+
+    // an empty input produces no rows but still carries the new column
+    let df = test_table()
+        .await?
+        .filter(col("c2").eq(lit(999)))?
+        .with_column("json", to_json(&["c1"]))?;
+
+    assert_eq!(
+        df.schema().field_with_unqualified_name("json")?.data_type(),
+        &DataType::Utf8
+    );
+    assert_eq!(df.count().await?, 0);
+
+    // an empty column list cannot build a struct and fails when planning
+    // (rejected by the named_struct signature check)
+    let err = dataframe!("a" => [1_i32])?
+        .with_column("json", to_json(&[] as &[&str]))
+        .unwrap_err()
+        .to_string();
+    assert_contains!(err, "'named_struct' does not support zero arguments");
 
     Ok(())
 }
