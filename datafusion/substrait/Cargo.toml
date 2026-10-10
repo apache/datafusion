@@ -49,11 +49,16 @@ url = { workspace = true }
 tokio = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
+criterion = { workspace = true, features = ["async_tokio"] }
 datafusion = { workspace = true, features = ["nested_expressions", "unicode_expressions"] }
 datafusion-functions-aggregate = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 insta = { workspace = true }
+
+[[bench]]
+harness = false
+name = "consume_wide_read"
 
 [features]
 default = ["physical"]

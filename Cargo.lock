@@ -2755,6 +2755,7 @@ dependencies = [
  "async-recursion",
  "async-trait",
  "chrono",
+ "criterion",
  "datafusion",
  "datafusion-functions-aggregate",
  "half",
