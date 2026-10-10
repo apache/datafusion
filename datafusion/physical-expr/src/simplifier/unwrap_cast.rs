@@ -37,8 +37,8 @@ use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{Result, ScalarValue, tree_node::Transformed};
 use datafusion_expr::Operator;
 use datafusion_expr_common::casts::{
-    is_date_narrowing_cast, is_timestamp_precision_narrowing_cast,
-    try_cast_literal_to_type,
+    is_date_narrowing_cast, is_integer_narrowing_cast,
+    is_timestamp_precision_narrowing_cast, try_cast_literal_to_type,
 };
 
 use crate::PhysicalExpr;
@@ -63,7 +63,7 @@ fn try_unwrap_cast_binary(
     schema: &Schema,
 ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
     // Case 1: cast(left_expr) op literal
-    if let (Some((inner_expr, cast_type)), Some(literal)) = (
+    if let (Some((inner_expr, cast_type, is_try_cast)), Some(literal)) = (
         extract_cast_info(binary.left()),
         binary.right().downcast_ref::<Literal>(),
     ) && binary.op().supports_propagation()
@@ -71,6 +71,7 @@ fn try_unwrap_cast_binary(
             Arc::clone(inner_expr),
             literal.value(),
             cast_type,
+            is_try_cast,
             *binary.op(),
             schema,
         )?
@@ -79,7 +80,7 @@ fn try_unwrap_cast_binary(
     }
 
     // Case 2: literal op cast(right_expr)
-    if let (Some(literal), Some((inner_expr, cast_type))) = (
+    if let (Some(literal), Some((inner_expr, cast_type, is_try_cast))) = (
         binary.left().downcast_ref::<Literal>(),
         extract_cast_info(binary.right()),
     ) {
@@ -90,6 +91,7 @@ fn try_unwrap_cast_binary(
                 Arc::clone(inner_expr),
                 literal.value(),
                 cast_type,
+                is_try_cast,
                 swapped_op,
                 schema,
             )?
@@ -106,14 +108,15 @@ fn try_unwrap_cast_binary(
 /// Extract cast information from a physical expression
 ///
 /// If the expression is a CAST(expr, datatype) or TRY_CAST(expr, datatype),
-/// returns Some((inner_expr, target_datatype)). Otherwise returns None.
+/// returns the inner expression, target datatype, and whether the cast is a
+/// TRY_CAST. Otherwise returns None.
 fn extract_cast_info(
     expr: &Arc<dyn PhysicalExpr>,
-) -> Option<(&Arc<dyn PhysicalExpr>, &DataType)> {
+) -> Option<(&Arc<dyn PhysicalExpr>, &DataType, bool)> {
     if let Some(cast) = expr.downcast_ref::<CastExpr>() {
-        Some((cast.expr(), cast.cast_type()))
+        Some((cast.expr(), cast.cast_type(), false))
     } else if let Some(try_cast) = expr.downcast_ref::<TryCastExpr>() {
-        Some((try_cast.expr(), try_cast.cast_type()))
+        Some((try_cast.expr(), try_cast.cast_type(), true))
     } else {
         None
     }
@@ -124,6 +127,7 @@ fn try_unwrap_cast_comparison(
     inner_expr: Arc<dyn PhysicalExpr>,
     literal_value: &ScalarValue,
     cast_type: &DataType,
+    is_try_cast: bool,
     op: Operator,
     schema: &Schema,
 ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
@@ -132,6 +136,7 @@ fn try_unwrap_cast_comparison(
 
     if is_timestamp_precision_narrowing_cast(&inner_type, cast_type)
         || is_date_narrowing_cast(&inner_type, cast_type)
+        || (is_try_cast && is_integer_narrowing_cast(&inner_type, cast_type))
     {
         return Ok(None);
     }
@@ -463,6 +468,20 @@ mod tests {
         let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
 
         // Should NOT be transformed (string to int cast not supported)
+        assert!(!result.transformed);
+    }
+
+    #[test]
+    fn test_no_unwrap_narrowing_integer_try_cast() {
+        let schema = Schema::new(vec![Field::new("int_col", DataType::Int64, false)]);
+
+        let column_expr = col("int_col", &schema).unwrap();
+        let try_cast_expr = Arc::new(TryCastExpr::new(column_expr, DataType::Int32));
+        let literal_expr = lit(1i32);
+        let binary_expr =
+            Arc::new(BinaryExpr::new(try_cast_expr, Operator::Gt, literal_expr));
+
+        let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
         assert!(!result.transformed);
     }
 
