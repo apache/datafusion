@@ -22,6 +22,7 @@ use datafusion::common::{DFSchemaRef, ScalarValue, not_impl_err};
 use datafusion::logical_expr::expr::{WindowFunction, WindowFunctionParams};
 use datafusion::logical_expr::{Expr, ExprSchemable};
 use datafusion::logical_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
+use substrait::proto::AggregationPhase;
 use substrait::proto::aggregate_function::AggregationInvocation;
 use substrait::proto::expression::RexType;
 use substrait::proto::expression::WindowFunction as SubstraitWindowFunction;
@@ -99,7 +100,7 @@ pub fn from_window_function(
             sorts: order_by,
             options: vec![],
             output_type: Some(output_type),
-            phase: 0, // default to AGGREGATION_PHASE_UNSPECIFIED
+            phase: AggregationPhase::InitialToResult as i32,
             invocation: if *distinct {
                 AggregationInvocation::Distinct as i32
             } else {
