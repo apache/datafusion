@@ -49,10 +49,6 @@ impl ExtractEquijoinPredicate {
 }
 
 impl OptimizerRule for ExtractEquijoinPredicate {
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     fn name(&self) -> &str {
         "extract_equijoin_predicate"
     }
