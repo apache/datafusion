@@ -117,6 +117,10 @@ pub struct ExprSimplifier {
     max_simplifier_cycles: u32,
 }
 
+/// Largest `IN` list considered for expansion into binary comparisons.
+///
+/// The final decision also accounts for the measured performance of the column
+/// representation and whether the list values are literals.
 pub const THRESHOLD_INLINE_INLIST: usize = 3;
 pub const DEFAULT_MAX_SIMPLIFIER_CYCLES: u32 = 3;
 
@@ -199,7 +203,8 @@ impl ExprSimplifier {
         let mut simplifier = Simplifier::new(&self.info);
         let config_options = Some(Arc::clone(self.info.config_options()));
         let mut const_evaluator = ConstEvaluator::try_new(config_options)?;
-        let mut shorten_in_list_simplifier = ShortenInListSimplifier::new();
+        let mut shorten_in_list_simplifier =
+            ShortenInListSimplifier::new(self.info.schema());
         let guarantees_map: HashMap<&Expr, &NullableInterval> =
             self.guarantees.iter().map(|(k, v)| (k, v)).collect();
 
@@ -5005,6 +5010,8 @@ mod tests {
             };
             let left_list = literals(&[0.0, 1.0, 2.0, 3.0])?;
             let right_list = literals(&[-0.0, 4.0, 5.0, 6.0])?;
+            let retains_short_lists =
+                matches!(data_type, DataType::Float32 | DataType::Float64);
             let schema = Arc::new(Schema::new(vec![Field::new("x", data_type, false)]));
             let batch = RecordBatch::try_new(schema, vec![values])?;
             let schema = batch.schema().to_dfschema_ref()?;
@@ -5029,7 +5036,7 @@ mod tests {
                     (left(true).or(right(true)), vec![false, false]),
                 ] {
                     let simplified = simplifier.simplify(expr.clone())?;
-                    if list_len > THRESHOLD_INLINE_INLIST {
+                    if list_len > THRESHOLD_INLINE_INLIST || retains_short_lists {
                         // Floating-point literals must bypass structural set rewrites.
                         assert_eq!(simplified, expr);
                     } else {
@@ -5096,6 +5103,79 @@ mod tests {
             };
             assert_eq!(simplify_no_canonicalize(expr.clone()), expr);
         }
+    }
+
+    #[test]
+    fn simplify_short_inlist_types() {
+        for (data_type, retain_short) in [
+            (DataType::Int32, true),
+            (DataType::Int64, true),
+            (DataType::UInt64, true),
+            (DataType::Float32, true),
+            (DataType::Float64, true),
+            (DataType::FixedSizeBinary(1), true),
+            (DataType::FixedSizeBinary(2), true),
+            (DataType::FixedSizeBinary(4), true),
+            (DataType::FixedSizeBinary(8), true),
+            (DataType::FixedSizeBinary(16), true),
+            (DataType::Float16, false),
+            (DataType::FixedSizeBinary(3), false),
+            (DataType::Utf8View, false),
+            (
+                DataType::Dictionary(
+                    Box::new(DataType::Int8),
+                    Box::new(DataType::Float64),
+                ),
+                false,
+            ),
+        ] {
+            let values = (1..=3)
+                .map(|value| {
+                    lit(match &data_type {
+                        DataType::FixedSizeBinary(width) => ScalarValue::FixedSizeBinary(
+                            *width,
+                            Some(vec![value; *width as usize]),
+                        ),
+                        DataType::Utf8View => {
+                            ScalarValue::Utf8View(Some(value.to_string()))
+                        }
+                        _ => ScalarValue::Int32(Some(i32::from(value)))
+                            .cast_to(&data_type)
+                            .unwrap(),
+                    })
+                })
+                .collect::<Vec<_>>();
+            let schema = Schema::new(vec![Field::new("value", data_type.clone(), true)])
+                .to_dfschema_ref()
+                .unwrap();
+            let simplifier = ExprSimplifier::new(
+                SimplifyContext::builder().with_schema(schema).build(),
+            );
+            for list_len in [2, 3] {
+                for negated in [false, true] {
+                    let expr =
+                        in_list(col("value"), values[..list_len].to_vec(), negated);
+                    let simplified = simplifier.simplify(expr.clone()).unwrap();
+                    if retain_short {
+                        assert_eq!(simplified, expr, "{data_type:?}");
+                    } else {
+                        let op = if negated { Operator::And } else { Operator::Or };
+                        assert!(
+                            matches!(simplified, Expr::BinaryExpr(binary) if binary.op == op),
+                            "{data_type:?}, list_len={list_len}, negated={negated}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn simplify_short_inlist_mismatched_literals() {
+        // c3 is Int64; these Int32 literals have not been coerced.
+        let expr = in_list(col("c3"), vec![lit(1_i32), lit(2_i32)], false);
+        let expected = col("c3").eq(lit(1_i32)).or(col("c3").eq(lit(2_i32)));
+        assert_eq!(simplify(expr), expected);
     }
 
     #[test]
