@@ -48,10 +48,12 @@ use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_functions::core::file_row_index::FileRowIndexFunc;
+use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr::expressions::{Column, DynamicFilterTracking};
+use datafusion_physical_expr::filter::{FilterConjunct, PhysicalFilter};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::split_conjunction;
-use datafusion_physical_expr::{EquivalenceProperties, conjunction};
 use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
 use datafusion_physical_expr_adapter::rewrite::{
     expr_references_scalar_udf, rewrite_file_row_index_projection,
@@ -64,10 +66,8 @@ use datafusion_physical_expr_common::sort_expr::{
 };
 use datafusion_physical_plan::DisplayFormatType;
 use datafusion_physical_plan::SortOrderPushdownResult;
+use datafusion_physical_plan::filter_pushdown::FilterPushdownPropagation;
 use datafusion_physical_plan::filter_pushdown::PushedDown;
-use datafusion_physical_plan::filter_pushdown::{
-    FilterPushdownPropagation, PushedDownPredicate,
-};
 use datafusion_physical_plan::metrics::Count;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use log::warn;
@@ -303,8 +303,9 @@ pub struct ParquetSource {
     /// In particular, this is the schema of the table without partition columns,
     /// *not* the physical schema of the file.
     pub(crate) table_schema: TableSchema,
-    /// Optional predicate for row filtering during parquet scan
-    pub(crate) predicate: Option<Arc<dyn PhysicalExpr>>,
+    /// Filter for pruning and row filtering during the parquet scan. Each
+    /// conjunct keeps its properties (for example, the optional flag).
+    pub(crate) filter: PhysicalFilter,
     /// Optional user defined parquet file reader factory
     pub(crate) parquet_file_reader_factory: Option<Arc<dyn ParquetFileReaderFactory>>,
     /// Optional policy for deriving each file's Arrow schema after footer loading.
@@ -342,7 +343,7 @@ impl ParquetSource {
             table_schema,
             table_parquet_options: TableParquetOptions::default(),
             metrics: ExecutionPlanMetricsSet::new(),
-            predicate: None,
+            filter: PhysicalFilter::default(),
             parquet_file_reader_factory: None,
             schema_provider: None,
             batch_size: None,
@@ -377,13 +378,19 @@ impl ParquetSource {
     /// Set predicate information.
     ///
     /// Predicates referencing virtual columns must go through
-    /// [`Self::try_pushdown_filters`]. Passing them here with pushdown
+    /// [`FileSource::try_pushdown_filter`]. Passing them here with pushdown
     /// enabled trips a debug assert in the opener.
     #[expect(clippy::needless_pass_by_value)]
     pub fn with_predicate(&self, predicate: Arc<dyn PhysicalExpr>) -> Self {
         let mut conf = self.clone();
-        conf.predicate = Some(Arc::clone(&predicate));
+        conf.filter = PhysicalFilter::from_expr(Arc::clone(&predicate));
         conf
+    }
+
+    /// The `AND` of all conjuncts of the filter, or `None` if there is no
+    /// filter.
+    fn predicate(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        self.filter.to_expr_opt()
     }
 
     /// Set the encryption factory to use to generate file decryption properties
@@ -644,7 +651,7 @@ impl FileSource for ParquetSource {
         let virtual_state = build_virtual_columns_state(
             self.table_schema.virtual_columns(),
             self.table_schema.file_schema(),
-            self.predicate.as_ref(),
+            self.predicate().as_ref(),
             self.pushdown_filters(),
         )?;
 
@@ -656,7 +663,7 @@ impl FileSource for ParquetSource {
                 .expect("Batch size must set before creating ParquetMorselizer"),
             limit: base_config.limit,
             preserve_order: base_config.preserve_order,
-            predicate: self.predicate.clone(),
+            predicate: self.predicate(),
             table_schema: self.table_schema.clone(),
             metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics().clone(),
@@ -708,7 +715,11 @@ impl FileSource for ParquetSource {
     }
 
     fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
-        self.predicate.clone()
+        self.predicate()
+    }
+
+    fn physical_filter(&self) -> PhysicalFilter {
+        self.filter.clone()
     }
 
     /// The predicate is applied to every row only when filter pushdown is
@@ -718,9 +729,9 @@ impl FileSource for ParquetSource {
         if !self.pushdown_filters() {
             return None;
         }
-        let predicate = self.predicate.as_ref()?;
+        let predicate = self.predicate()?;
         let pushable_schema = self.table_schema.schema_without_virtual_columns();
-        let exact = split_conjunction(predicate)
+        let exact = split_conjunction(&predicate)
             .into_iter()
             .filter(|expr| can_expr_be_pushed_down_with_schemas(expr, pushable_schema))
             .cloned()
@@ -830,7 +841,7 @@ impl FileSource for ParquetSource {
                 // the actual predicates are built in reference to the physical schema of
                 // each file, which we do not have at this point and hence cannot use.
                 // Instead, we use the logical schema of the file (the table schema without partition columns).
-                if let Some(predicate) = &self.predicate {
+                if let Some(predicate) = &self.predicate() {
                     let predicate_creation_errors = Count::new();
                     if let Some(pruning_predicate) = build_pruning_predicates(
                         Some(predicate),
@@ -867,6 +878,15 @@ impl FileSource for ParquetSource {
         filters: Vec<Arc<dyn PhysicalExpr>>,
         config: &ConfigOptions,
     ) -> datafusion_common::Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
+        let filter = filters.into_iter().map(FilterConjunct::required).collect();
+        self.try_pushdown_filter(filter, config)
+    }
+
+    fn try_pushdown_filter(
+        &self,
+        filter: PhysicalFilter,
+        config: &ConfigOptions,
+    ) -> datafusion_common::Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
         // Use the schema excluding virtual columns: virtual columns (e.g.
         // Parquet `row_number`) are produced by the reader itself and cannot
         // be referenced inside a RowFilter, so predicates that reference them
@@ -885,54 +905,47 @@ impl FileSource for ParquetSource {
         let pushdown_filters = table_pushdown_enabled || config_pushdown_enabled;
 
         let mut source = self.clone();
-        let filters: Vec<PushedDownPredicate> = filters
-            .into_iter()
-            .map(|filter| {
-                if can_expr_be_pushed_down_with_schemas(&filter, pushable_schema) {
-                    PushedDownPredicate::supported(filter)
+        let conjuncts = filter.into_conjuncts();
+        let discriminants = conjuncts
+            .iter()
+            .map(|c| {
+                if can_expr_be_pushed_down_with_schemas(c.expr(), pushable_schema) {
+                    PushedDown::Yes
                 } else {
-                    PushedDownPredicate::unsupported(filter)
+                    PushedDown::No
                 }
             })
-            .collect();
-        if filters
-            .iter()
-            .all(|f| matches!(f.discriminant, PushedDown::No))
-        {
+            .collect_vec();
+        if discriminants.iter().all(|d| matches!(d, PushedDown::No)) {
             // No filters can be pushed down, so we can just return the remaining filters
             // and avoid replacing the source in the physical plan.
             return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
-                vec![PushedDown::No; filters.len()],
+                discriminants,
             ));
         }
-        let allowed_filters = filters
-            .iter()
-            .filter_map(|f| match f.discriminant {
-                PushedDown::Yes => Some(Arc::clone(&f.predicate)),
-                PushedDown::No => None,
-            })
-            .collect_vec();
-        let predicate = match source.predicate {
-            Some(predicate) => {
-                conjunction(std::iter::once(predicate).chain(allowed_filters))
-            }
-            None => conjunction(allowed_filters),
-        };
-        source.predicate = Some(predicate);
+        // Keep each accepted conjunct with its properties. The consumer
+        // (the opener) decides how to apply optional conjuncts.
+        source.filter.extend(
+            conjuncts
+                .into_iter()
+                .zip(&discriminants)
+                .filter(|(_, d)| matches!(d, PushedDown::Yes))
+                .map(|(c, _)| c),
+        );
         source = source.with_pushdown_filters(pushdown_filters);
         let source = Arc::new(source);
         // If pushdown_filters is false we tell our parents that they still have to handle the filters,
         // even if we updated the predicate to include the filters (they will only be used for stats pruning).
         if !pushdown_filters {
             return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
-                vec![PushedDown::No; filters.len()],
+                vec![PushedDown::No; discriminants.len()],
             )
             .with_updated_node(source));
         }
-        Ok(FilterPushdownPropagation::with_parent_pushdown_result(
-            filters.iter().map(|f| f.discriminant).collect(),
+        Ok(
+            FilterPushdownPropagation::with_parent_pushdown_result(discriminants)
+                .with_updated_node(source),
         )
-        .with_updated_node(source))
     }
 
     /// Try to optimize the scan to produce data in the requested sort order.
@@ -1109,8 +1122,9 @@ impl FileSource for ParquetSource {
             &Arc<dyn PhysicalExpr>,
         ) -> datafusion_common::Result<TreeNodeRecursion>,
     ) -> datafusion_common::Result<TreeNodeRecursion> {
+        let predicate = self.predicate();
         datafusion_physical_plan::apply_expression_roots(
-            self.predicate
+            predicate
                 .iter()
                 .chain(self.projection.iter().map(|proj_expr| &proj_expr.expr)),
             f,
@@ -1136,7 +1150,9 @@ impl FileSource for ParquetSource {
             metrics: _,
             // Carried by `base`.
             table_schema: _,
-            predicate,
+            // Encoded as `predicate` (the AND of all conjuncts) and one
+            // optional flag for each term.
+            filter,
             // Rebuilt from the decode context.
             parquet_file_reader_factory: _,
             // Requires a custom codec for serialization.
@@ -1157,10 +1173,17 @@ impl FileSource for ParquetSource {
             return Ok(None);
         }
 
-        let predicate = predicate
-            .as_ref()
-            .map(|pred| ctx.encode_expr(pred))
+        let predicate = filter
+            .to_expr_opt()
+            .map(|pred| ctx.encode_expr(&pred))
             .transpose()?;
+        // Write the flags only if a conjunct is optional, so that a filter
+        // with only required conjuncts has the same encoding as before.
+        let optional_predicate_conjuncts = if filter.optional().next().is_some() {
+            filter.split_optional_flags()
+        } else {
+            vec![]
+        };
         let sort_order_for_reorder = sort_order_for_reorder
             .as_ref()
             .map(|ordering| -> datafusion_common::Result<_> {
@@ -1183,6 +1206,7 @@ impl FileSource for ParquetSource {
             sort_order_for_reorder,
             reverse_row_groups: *reverse_row_groups,
             metadata_size_hint,
+            optional_predicate_conjuncts,
         };
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::ParquetScan(node)),
@@ -1224,6 +1248,7 @@ impl ParquetSource {
             sort_order_for_reorder,
             reverse_row_groups,
             metadata_size_hint,
+            optional_predicate_conjuncts,
         } = scan;
 
         let base_conf = base_conf.as_ref().ok_or_else(|| {
@@ -1306,7 +1331,8 @@ impl ParquetSource {
         source.metadata_size_hint = metadata_size_hint;
 
         if let Some(predicate) = predicate {
-            source = source.with_predicate(predicate);
+            source.filter =
+                PhysicalFilter::from_split_flags(predicate, optional_predicate_conjuncts);
         }
         let base_config =
             FileScanConfig::try_from_proto(base_conf, ctx, Arc::new(source))?;
@@ -2172,7 +2198,7 @@ mod tests {
     #[test]
     fn test_try_pushdown_filters_rejects_virtual_column_refs() {
         // Virtual columns are produced by the reader and cannot be referenced
-        // inside a RowFilter. `try_pushdown_filters` must report such filters
+        // inside a RowFilter. `try_pushdown_filter` must report such filters
         // as `PushedDown::No` so the FilterExec above the scan stays in
         // place — otherwise the scan would silently drop the predicate and
         // produce wrong results.
@@ -2221,9 +2247,12 @@ mod tests {
         .expect("file_row_index should rewrite to the row_number virtual column");
 
         let config = ConfigOptions::default();
+        let filter = PhysicalFilter::new(
+            [pushable, virtual_only, mixed, row_index].map(FilterConjunct::required),
+        );
         let prop = source
-            .try_pushdown_filters(vec![pushable, virtual_only, mixed, row_index], &config)
-            .expect("try_pushdown_filters must not error");
+            .try_pushdown_filter(filter, &config)
+            .expect("try_pushdown_filter must not error");
 
         assert_eq!(prop.filters.len(), 4);
         assert!(
@@ -2243,6 +2272,63 @@ mod tests {
             matches!(prop.filters[3], PushedDown::No),
             "file_row_index() rewrites to a virtual column and must not be \
              pushed down"
+        );
+    }
+
+    /// `try_pushdown_filter` keeps the optional flag of each accepted
+    /// conjunct, and the scan predicate is the same as with
+    /// `try_pushdown_filters`.
+    #[test]
+    fn try_pushdown_filter_keeps_optional_flag() {
+        use arrow::datatypes::{DataType, Field, Schema};
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_datasource::TableSchema;
+        use datafusion_expr::{col, lit as logical_lit};
+        use datafusion_physical_expr::planner::logical2physical;
+
+        let file_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+        ]));
+        let source = ParquetSource::new(TableSchema::builder(file_schema).build())
+            .with_pushdown_filters(true);
+        let schema = source.table_schema.table_schema();
+        let required = logical2physical(&col("a").gt(logical_lit(1i64)), schema);
+        let optional = logical2physical(&col("b").lt(logical_lit(9i64)), schema);
+
+        let config = ConfigOptions::default();
+        let filter = PhysicalFilter::new([
+            FilterConjunct::required(Arc::clone(&required)),
+            FilterConjunct::optional(Arc::clone(&optional)),
+        ]);
+        let prop = source.try_pushdown_filter(filter, &config).unwrap();
+        assert!(matches!(
+            prop.filters[..],
+            [PushedDown::Yes, PushedDown::Yes]
+        ));
+        let new_source = prop.updated_node.unwrap();
+        let new_source = new_source.downcast_ref::<ParquetSource>().unwrap();
+        let optional_conjuncts: Vec<_> = new_source
+            .physical_filter()
+            .optional()
+            .map(|c| c.to_string())
+            .collect();
+        assert_eq!(optional_conjuncts, vec!["b@1 < 9"]);
+
+        // Same predicate as the deprecated expression-only entry point.
+        #[expect(deprecated)]
+        let legacy = source
+            .try_pushdown_filters(vec![required, optional], &config)
+            .unwrap()
+            .updated_node
+            .unwrap();
+        assert_eq!(
+            new_source.filter().unwrap().to_string(),
+            legacy.filter().unwrap().to_string()
+        );
+        assert_eq!(
+            new_source.filter().unwrap().to_string(),
+            "a@0 > 1 AND b@1 < 9"
         );
     }
 }

@@ -39,6 +39,7 @@ use crate::{
     ChildrenPropertiesMode, DisplayFormatType, ExecutionPlan, Partitioning,
     ReplaceChildrenOptions, validate_child_count,
 };
+use datafusion_physical_expr::filter::FilterConjunct;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
 use datafusion_common::config::ConfigOptions;
@@ -362,7 +363,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
     fn gather_filters_for_pushdown(
         &self,
         _phase: FilterPushdownPhase,
-        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        parent_filters: Vec<FilterConjunct>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
         FilterDescription::from_children(parent_filters, &self.children())

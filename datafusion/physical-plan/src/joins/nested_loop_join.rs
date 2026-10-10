@@ -82,6 +82,7 @@ use datafusion_physical_expr::equivalence::{
     ProjectionMapping, join_equivalence_properties,
 };
 use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
+use datafusion_physical_expr::filter::FilterConjunct;
 
 use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use futures::future::{BoxFuture, Shared};
@@ -819,7 +820,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
     fn gather_filters_for_pushdown(
         &self,
         phase: FilterPushdownPhase,
-        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        parent_filters: Vec<FilterConjunct>,
         config: &ConfigOptions,
     ) -> Result<FilterDescription> {
         if phase != FilterPushdownPhase::Post
@@ -878,8 +879,8 @@ impl ExecutionPlan for NestedLoopJoinExec {
                 .iter()
                 .zip(&mut child_description.parent_filters)
             {
-                if !filter.is::<DynamicFilterPhysicalExpr>() {
-                    *pushed = PushedDownPredicate::unsupported(Arc::clone(filter));
+                if !filter.expr().is::<DynamicFilterPhysicalExpr>() {
+                    *pushed = PushedDownPredicate::unsupported(filter.clone());
                 }
             }
             description = description.with_child(child_description);
@@ -4322,7 +4323,7 @@ pub(crate) mod tests {
                     let filters = join
                         .gather_filters_for_pushdown(
                             FilterPushdownPhase::Post,
-                            vec![Arc::clone(&source) as _],
+                            vec![FilterConjunct::optional(Arc::clone(&source) as _)],
                             &ConfigOptions::default(),
                         )?
                         .parent_filters();
@@ -4357,11 +4358,12 @@ pub(crate) mod tests {
                         );
                         if accepted {
                             assert_eq!(
-                                child[0].predicate.expression_id(),
+                                child[0].predicate.expr().expression_id(),
                                 source.expression_id()
                             );
                             let values = child[0]
                                 .predicate
+                                .expr()
                                 .evaluate(&batch)?
                                 .into_array(batch.num_rows())?;
                             assert_eq!(
@@ -4404,8 +4406,11 @@ pub(crate) mod tests {
         ] {
             let mut config = ConfigOptions::default();
             config.optimizer.enable_join_dynamic_filter_pushdown = enabled;
-            let description =
-                join.gather_filters_for_pushdown(phase, filters, &config)?;
+            let description = join.gather_filters_for_pushdown(
+                phase,
+                filters.into_iter().map(FilterConjunct::from).collect(),
+                &config,
+            )?;
             assert!(
                 description
                     .parent_filters()

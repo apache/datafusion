@@ -166,6 +166,94 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
     Ok(())
 }
 
+/// The optional flag of each predicate conjunct survives a round trip. A
+/// reader that does not know the flags (simulated by clearing them) applies
+/// all conjuncts as required.
+#[test]
+fn roundtrip_parquet_exec_optional_predicate_conjuncts() -> Result<()> {
+    use datafusion::datasource::physical_plan::FileSource;
+    use datafusion::physical_expr::filter::{FilterConjunct, PhysicalFilter};
+    use datafusion_common::config::ConfigOptions;
+
+    let file_schema =
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+    let col_eq_1 = Arc::new(BinaryExpr::new(
+        Arc::new(Column::new("col", 0)),
+        Operator::Eq,
+        lit("1"),
+    ));
+    let col_gt_0 = Arc::new(BinaryExpr::new(
+        Arc::new(Column::new("col", 0)),
+        Operator::Gt,
+        lit("0"),
+    ));
+    let mut options = TableParquetOptions::new();
+    options.global.pushdown_filters = true;
+    let file_source = ParquetSource::new(Arc::clone(&file_schema))
+        .with_table_parquet_options(options)
+        .try_pushdown_filter(
+            PhysicalFilter::new([
+                FilterConjunct::required(col_eq_1),
+                FilterConjunct::optional(col_gt_0),
+            ]),
+            &ConfigOptions::default(),
+        )?
+        .updated_node
+        .unwrap();
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+                "/path/to/file.parquet".to_string(),
+                1024,
+            )])])
+            .build();
+    let plan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(scan_config);
+    let conjuncts = |plan: &Arc<dyn ExecutionPlan>| {
+        plan.downcast_ref::<DataSourceExec>()
+            .unwrap()
+            .data_source()
+            .downcast_ref::<FileScanConfig>()
+            .unwrap()
+            .file_source()
+            .downcast_ref::<ParquetSource>()
+            .unwrap()
+            .physical_filter()
+            .conjuncts()
+            .iter()
+            .map(|c| (c.to_string(), c.is_optional()))
+            .collect::<Vec<_>>()
+    };
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let result =
+        roundtrip_test_and_return(Arc::clone(&plan), &ctx, &codec, &proto_converter)?;
+    assert_eq!(
+        conjuncts(&result),
+        vec![
+            ("col@0 = 1".to_string(), false),
+            ("col@0 > 0".to_string(), true)
+        ]
+    );
+
+    // A reader that does not know `optional_predicate_conjuncts`.
+    let mut node = PhysicalPlanNode::try_from_physical_plan(plan, &codec)?;
+    let Some(protobuf::physical_plan_node::PhysicalPlanType::ParquetScan(scan)) =
+        &mut node.physical_plan_type
+    else {
+        return internal_err!("Expected ParquetScan node");
+    };
+    assert_eq!(scan.optional_predicate_conjuncts, vec![false, true]);
+    scan.optional_predicate_conjuncts.clear();
+    let result = node.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
+    assert_eq!(
+        conjuncts(&result),
+        vec![("col@0 = 1 AND col@0 > 0".to_string(), false)]
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn roundtrip_parquet_exec_with_sort_pushdown() -> Result<()> {
     let ctx = all_types_context().await?;
