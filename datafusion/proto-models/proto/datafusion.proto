@@ -1792,7 +1792,6 @@ message SortMergeJoinExecNode {
   repeated SortExprNode sort_options = 6;
   datafusion_common.NullEquality null_equality = 7;
   repeated uint32 projection = 8;
-  bool null_aware = 9;
 }
 
 message PiecewiseMergeJoinExecNode {

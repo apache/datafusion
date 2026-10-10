@@ -213,7 +213,6 @@ impl SortMergeJoinExec {
     /// The inputs are sorted using `sort_options` are applied to the columns in the `on`
     /// # Error
     /// This function errors when it is not possible to join the left and right sides on keys `on`.
-    #[expect(clippy::too_many_arguments)]
     pub fn try_new(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
@@ -222,7 +221,6 @@ impl SortMergeJoinExec {
         join_type: JoinType,
         sort_options: Vec<SortOptions>,
         null_equality: NullEquality,
-        null_aware: bool,
     ) -> Result<Self> {
         let left_schema = left.schema();
         let right_schema = right.schema();
@@ -278,10 +276,21 @@ impl SortMergeJoinExec {
             right_sort_exprs,
             sort_options,
             null_equality,
-            null_aware,
+            null_aware: false,
             projection: None,
             cache: Arc::new(cache),
         })
+    }
+
+    /// Enables or disables null-aware (`NOT IN`) semantics.
+    ///
+    /// Enabling requires an uncorrelated `LeftAnti` join with one key, no
+    /// filter, [`NullEquality::NullEqualsNothing`], and NULLS FIRST ordering.
+    /// Both inputs must have a single partition when executed.
+    pub fn with_null_aware(mut self, null_aware: bool) -> Result<Self> {
+        self.null_aware = null_aware;
+        self.null_aware_mode()?;
+        Ok(self)
     }
 
     /// Returns this join emitting only the columns in `projection`, in that order.
@@ -439,8 +448,8 @@ impl SortMergeJoinExec {
             self.join_type().swap(),
             self.sort_options.clone(),
             self.null_equality,
-            self.null_aware,
         )?
+        .with_null_aware(self.null_aware)?
         .with_projection(swap_join_projection(
             left.schema().fields().len(),
             right.schema().fields().len(),
@@ -648,8 +657,8 @@ impl ExecutionPlan for SortMergeJoinExec {
                         self.join_type,
                         self.sort_options.clone(),
                         self.null_equality,
-                        self.null_aware,
                     )?
+                    .with_null_aware(self.null_aware)?
                     .with_projection(self.projection.clone())?,
                 )),
                 _ => internal_err!("SortMergeJoin wrong number of children"),
@@ -808,16 +817,18 @@ impl ExecutionPlan for SortMergeJoinExec {
             self.filter().as_ref(),
             &column_indices,
         )? {
-            Ok(Some(Arc::new(SortMergeJoinExec::try_new(
-                Arc::new(projected_left_child),
-                Arc::new(projected_right_child),
-                join_on,
-                join_filter,
-                self.join_type,
-                self.sort_options.clone(),
-                self.null_equality,
-                self.null_aware,
-            )?)))
+            Ok(Some(Arc::new(
+                SortMergeJoinExec::try_new(
+                    Arc::new(projected_left_child),
+                    Arc::new(projected_right_child),
+                    join_on,
+                    join_filter,
+                    self.join_type,
+                    self.sort_options.clone(),
+                    self.null_equality,
+                )?
+                .with_null_aware(self.null_aware)?,
+            )))
         } else {
             try_embed_projection(projection, self)
         }
@@ -830,6 +841,14 @@ impl ExecutionPlan for SortMergeJoinExec {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
 
+        // The existing protobuf node cannot represent null-aware semantics.
+        // Reject encoding rather than silently decoding as an ordinary anti join.
+        if self.null_aware {
+            return datafusion_common::not_impl_err!(
+                "Serializing null-aware SortMergeJoinExec is not supported"
+            );
+        }
+
         // Destructure exhaustively (no `..`) so that a newly added field is a
         // compile error here instead of being silently left out of the proto.
         let Self {
@@ -840,7 +859,7 @@ impl ExecutionPlan for SortMergeJoinExec {
             join_type,
             sort_options,
             null_equality,
-            null_aware,
+            null_aware: _,
             projection,
             // derived from the children's schemas by `try_new` on decode
             schema: _,
@@ -868,7 +887,6 @@ impl ExecutionPlan for SortMergeJoinExec {
 
         let join_type = crate::joins::proto::join_type_to_proto(*join_type);
         let null_equality = crate::joins::proto::null_equality_to_proto(*null_equality);
-        let null_aware = *null_aware;
         let filter = filter
             .as_ref()
             .map(|filter| crate::joins::proto::join_filter_to_proto(filter, ctx))
@@ -907,7 +925,6 @@ impl ExecutionPlan for SortMergeJoinExec {
                                 indices.iter().map(|index| *index as u32).collect()
                             }
                         },
-                        null_aware,
                     },
                 )),
             ),
@@ -944,7 +961,6 @@ impl SortMergeJoinExec {
             sort_options,
             null_equality,
             projection,
-            null_aware,
         } = &**sort_join;
 
         let left =
@@ -978,8 +994,6 @@ impl SortMergeJoinExec {
             *null_equality,
             "SortMergeJoinExec",
         )?;
-
-        let null_aware = *null_aware;
 
         let filter = filter
             .as_ref()
@@ -1015,7 +1029,6 @@ impl SortMergeJoinExec {
                 join_type,
                 sort_options,
                 null_equality,
-                null_aware,
             )?
             .with_projection(projection)?,
         ))
