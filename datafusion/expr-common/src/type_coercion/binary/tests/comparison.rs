@@ -890,6 +890,24 @@ fn test_type_union_coercion_prefers_string() {
     );
 }
 
+/// Tests that `type_union_resolution` uses union semantics for numeric and
+/// string types rather than comparison semantics.
+#[test]
+fn test_type_union_resolution_prefers_string() {
+    assert_eq!(
+        type_union_resolution(&[DataType::Int64, DataType::Utf8]),
+        Some(DataType::Utf8)
+    );
+    assert_eq!(
+        type_union_resolution(&[DataType::Float64, DataType::LargeUtf8]),
+        Some(DataType::LargeUtf8)
+    );
+    assert_eq!(
+        type_union_resolution(&[DataType::Utf8View, DataType::Int16]),
+        Some(DataType::Utf8View)
+    );
+}
+
 #[test]
 fn test_type_union_coercion_prefers_finer_timestamp_unit() {
     assert_eq!(
