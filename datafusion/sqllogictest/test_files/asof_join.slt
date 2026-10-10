@@ -138,8 +138,7 @@ ORDER BY l.id;
 6 NULL NULL
 7 A NULL
 
-# SELECT * exposes the USING key once, keeping the key whose qualifier sorts
-# first (`l` < `r` keeps the left key).
+# SELECT * exposes the USING key once, keeping the left key in schema order.
 query ITPPT
 SELECT *
 FROM asof_left l
@@ -156,9 +155,8 @@ ORDER BY l.id;
 6 NULL 2024-01-01T09:00:03 NULL NULL
 7 A NULL NULL NULL
 
-# With the right alias sorting first, SELECT * keeps the right key, which is
-# NULL for unmatched left rows.
-query IPTPT
+# Reversing alias order still keeps the left key, including unmatched rows.
+query ITPPT
 SELECT *
 FROM asof_left x
 ASOF JOIN asof_right a
@@ -167,8 +165,8 @@ USING (grp)
 WHERE x.id IN (1, 2)
 ORDER BY x.id;
 ----
-1 2024-01-01T09:00:01 NULL NULL NULL
-2 2024-01-01T09:00:04 A 2024-01-01T09:00:04 a4
+1 A 2024-01-01T09:00:01 NULL NULL
+2 A 2024-01-01T09:00:04 2024-01-01T09:00:04 a4
 
 # Equality keys are optional.
 query IT

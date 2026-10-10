@@ -22,14 +22,15 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use crate::conditional_expressions::CaseBuilder;
 use crate::expr::{Alias, Sort, Unnest};
 use crate::logical_plan::Projection;
-use crate::{Expr, ExprSchemable, LogicalPlan};
+use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
 
 use datafusion_common::TableReference;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{Column, DFSchema, Result};
+use datafusion_common::{Column, DFSchema, JoinType, Result};
 
 mod guarantees;
 pub use guarantees::GuaranteeRewriter;
@@ -65,6 +66,10 @@ pub trait FunctionRewrite: Debug {
 }
 
 /// Recursively normalize all [`Column`] expressions in the `expr` expression tree.
+///
+/// An unqualified reference to the merged key of a `USING` / `NATURAL` join is
+/// resolved to a reserved internal merged-key expression via
+/// [`merged_using_key_or_column`].
 pub fn normalize_col(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
     ColumnNormalizer::new(plan).normalize(expr)
 }
@@ -74,6 +79,7 @@ pub fn normalize_col(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
 pub(crate) struct ColumnNormalizer<'a> {
     plan: &'a LogicalPlan,
     context: Option<(Vec<&'a DFSchema>, Vec<HashSet<Column>>)>,
+    merged_keys: Option<Vec<(Column, Column, JoinType)>>,
 }
 
 impl<'a> ColumnNormalizer<'a> {
@@ -81,6 +87,7 @@ impl<'a> ColumnNormalizer<'a> {
         Self {
             plan,
             context: None,
+            merged_keys: None,
         }
     }
 
@@ -105,13 +112,74 @@ impl<'a> ColumnNormalizer<'a> {
 
     pub(crate) fn normalize(&mut self, expr: Expr) -> Result<Expr> {
         expr.transform(|expr| match expr {
-            Expr::Column(column) => self
-                .normalize_column(column)
-                .map(|column| Transformed::yes(Expr::Column(column))),
+            Expr::Column(column) => {
+                let was_unqualified = column.relation.is_none();
+                let column = self.normalize_column(column)?;
+                let expr = if was_unqualified {
+                    let merged_keys = match &mut self.merged_keys {
+                        Some(keys) => keys,
+                        keys @ None => keys.insert(self.plan.using_key_pairs()?),
+                    };
+                    merged_using_key_or_column(column, true, merged_keys)?
+                } else {
+                    Expr::Column(column)
+                };
+                Ok(Transformed::yes(expr))
+            }
             _ => Ok(Transformed::no(expr)),
         })
         .data()
     }
+}
+
+fn alias_merged_key(expr: Expr, name: &str) -> Expr {
+    expr.alias_qualified(
+        Some(TableReference::bare(
+            LogicalPlanBuilder::MERGED_KEY_QUALIFIER,
+        )),
+        name,
+    )
+}
+
+/// Resolve a normalized column to itself, or -- when it is the merged key of a
+/// `USING` / `NATURAL` join referenced *unqualified* -- to the merged key
+/// expression with a reserved internal qualifier.
+///
+/// `merged_keys` carries the `(left, right, join_type)` triples of the plan's
+/// USING / NATURAL joins. The merged key resolves to the left key for
+/// left-preserving joins, the right key for right-preserving joins, and
+/// `COALESCE(left, right)` for `FULL`. The COALESCE is built as
+/// `CASE WHEN left IS NOT NULL THEN left ELSE right END` (the form `coalesce`
+/// is simplified to, buildable here without depending on the functions crate).
+pub fn merged_using_key_or_column(
+    col: Column,
+    was_unqualified: bool,
+    merged_keys: &[(Column, Column, JoinType)],
+) -> Result<Expr> {
+    if was_unqualified
+        && let Some((l, r, join_type)) =
+            merged_keys.iter().find(|(l, r, _)| l == &col || r == &col)
+    {
+        let name = col.name.clone();
+        let expr = match join_type {
+            // The left key is NULL-padded on right-only rows; the right key is
+            // always present, so the merged key is just the right column.
+            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
+                Expr::Column(r.clone())
+            }
+            // Either side may be NULL-padded; coalesce to the present one.
+            JoinType::Full => CaseBuilder::new(
+                None,
+                vec![Expr::Column(l.clone()).is_not_null()],
+                vec![Expr::Column(l.clone())],
+                Some(Box::new(Expr::Column(r.clone()))),
+            )
+            .end()?,
+            _ => Expr::Column(l.clone()),
+        };
+        return Ok(alias_merged_key(expr, &name));
+    }
+    Ok(Expr::Column(col))
 }
 
 /// See [`Column::normalize_with_schemas_and_ambiguity_check`] for usage
@@ -136,9 +204,9 @@ pub fn normalize_col_with_schemas_and_ambiguity_check(
     expr.transform(|expr| {
         Ok({
             if let Expr::Column(c) = expr {
-                let col =
-                    c.normalize_with_schemas_and_ambiguity_check(schemas, using_columns)?;
-                Transformed::yes(Expr::Column(col))
+                Transformed::yes(Expr::Column(
+                    c.normalize_with_schemas_and_ambiguity_check(schemas, using_columns)?,
+                ))
             } else {
                 Transformed::no(expr)
             }
@@ -561,18 +629,24 @@ mod test {
         let right =
             crate::logical_plan::table_scan(Some("right"), &schema, None)?.build()?;
         let plan = crate::logical_plan::table_scan(Some("left"), &schema, None)?
-            .join_using(right, crate::JoinType::Inner, vec![Column::from_name("a")])?
+            .join_using(right, JoinType::Inner, vec![Column::from_name("a")])?
             .build()?;
+        let merged_key = col("left.a").alias_qualified(
+            Some(TableReference::bare(
+                LogicalPlanBuilder::MERGED_KEY_QUALIFIER,
+            )),
+            "a",
+        );
         assert_eq!(
             super::normalize_cols([col("a"), col("a") + col("right.a")], &plan)?,
-            vec![col("left.a"), col("left.a") + col("right.a")]
+            vec![merged_key.clone(), merged_key.clone() + col("right.a")]
         );
         let projected = LogicalPlanBuilder::from(plan.clone())
             .project([col("a").alias("key"), col("left.b").alias("value")])?
             .build()?;
         assert_eq!(
             projected.expressions(),
-            vec![col("left.a").alias("key"), col("left.b").alias("value")]
+            vec![merged_key.alias("key"), col("left.b").alias("value")]
         );
         let err = super::normalize_cols([col("a"), col("b"), col("missing")], &plan)
             .unwrap_err();
@@ -589,7 +663,7 @@ mod test {
         let right =
             crate::logical_plan::table_scan(Some("right"), &schema, None)?.build()?;
         let mut plan = crate::logical_plan::table_scan(Some("left"), &schema, None)?
-            .join_using(right, crate::JoinType::Inner, vec![Column::from_name("a")])?
+            .join_using(right, JoinType::Inner, vec![Column::from_name("a")])?
             .build()?;
         // Invalid USING keys must only be inspected when an unqualified column
         // needs normalization, just as with a single expression.
