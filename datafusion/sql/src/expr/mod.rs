@@ -996,8 +996,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let mut keys = vec![];
-        let mut values = vec![];
+        let mut keys = Vec::with_capacity(fields.len());
+        let mut values = Vec::with_capacity(fields.len());
         for field in fields {
             let key = lit(field.key.value);
             let value =
@@ -1027,7 +1027,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<Expr> {
         let mut exprs: Vec<_> = entries
             .into_iter()
-            .flat_map(|entry| vec![entry.key, entry.value].into_iter())
+            .flat_map(|entry| [entry.key, entry.value])
             .map(|expr| self.sql_expr_to_logical_expr(*expr, schema, planner_context))
             .collect::<Result<Vec<_>>>()?;
         for planner in self.context_provider.get_expr_planners() {

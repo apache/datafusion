@@ -194,7 +194,7 @@ fn try_simplify_join(join: &Join, predicate: &Expr) -> Option<LogicalPlan> {
 /// purposes). Therefore, function volatility and `MoveTowardsLeafNodes`
 /// placement can be ignored here.
 fn inline_through_projection(predicate: Expr, p: &Projection) -> Result<Expr> {
-    let mut map: HashMap<String, Expr> = HashMap::new();
+    let mut map: HashMap<String, Expr> = HashMap::with_capacity(p.expr.len());
     for ((qualifier, field), expr) in p.schema.iter().zip(p.expr.iter()) {
         map.insert(
             qualified_name(qualifier, field.name()),

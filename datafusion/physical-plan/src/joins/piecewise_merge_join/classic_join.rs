@@ -619,13 +619,12 @@ fn build_matched_indices_and_mark_buffered(
         .buffered_data
         .batch()
         .slice(buffered_range.0, buffered_range.1);
-    let mut buffered_columns = new_buffered_batch.columns().to_vec();
+    let mut buffered_columns = Vec::with_capacity(join_schema.fields().len());
+    buffered_columns.extend_from_slice(new_buffered_batch.columns());
 
     let indices = UInt32Array::from_value(streamed_range.0 as u32, streamed_range.1);
     let new_stream_batch = take_record_batch(&stream_batch.batch, &indices)?;
-    let streamed_columns = new_stream_batch.columns().to_vec();
-
-    buffered_columns.extend(streamed_columns);
+    buffered_columns.extend_from_slice(new_stream_batch.columns());
 
     Ok(RecordBatch::try_new(
         Arc::clone(join_schema),

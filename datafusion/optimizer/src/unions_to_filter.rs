@@ -108,7 +108,7 @@ fn try_rewrite_distinct_union(plan: LogicalPlan) -> Result<Option<LogicalPlan>> 
     // Use a Vec instead of HashMap: union branches are typically 2-10 entries,
     // so a linear scan with PartialEq is faster than recursively hashing entire
     // LogicalPlan subtrees (O(N * tree_size) hashing for every insert/lookup).
-    let mut grouped: Vec<(GroupKey, Vec<Expr>)> = Vec::new();
+    let mut grouped: Vec<(GroupKey, Vec<Expr>)> = Vec::with_capacity(inputs.len());
     let mut transformed = false;
 
     for input in inputs {

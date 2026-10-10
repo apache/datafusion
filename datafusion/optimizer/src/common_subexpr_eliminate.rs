@@ -333,7 +333,9 @@ impl CommonSubexprEliminate {
                             .map(|(expr, expr_alias)| expr.alias(expr_alias))
                             .collect::<Vec<_>>();
 
-                        let mut proj_exprs = vec![];
+                        let mut proj_exprs = Vec::with_capacity(
+                            new_group_expr.len() + rewritten_aggr_expr.len(),
+                        );
                         for expr in &new_group_expr {
                             extract_expressions(expr, &mut proj_exprs)
                         }

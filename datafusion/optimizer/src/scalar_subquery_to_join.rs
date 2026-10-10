@@ -219,7 +219,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                     }
                 }
 
-                let mut proj_exprs = vec![];
+                let mut proj_exprs = Vec::with_capacity(projection.expr.len());
                 for (expr, new_expr) in projection.expr.iter().zip(rewrite_exprs) {
                     let old_expr_name = expr.schema_name().to_string();
                     let new_expr_name = new_expr.schema_name().to_string();

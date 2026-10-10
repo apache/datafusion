@@ -450,7 +450,8 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
         let any_interned = group_by_metrics.time_group_key_preparation(|| {
             let max_ordinal = max_duplicate_ordinal(state.group_by.groups());
-            let mut ordinals: HashMap<&[bool], usize> = HashMap::new();
+            let mut ordinals: HashMap<&[bool], usize> =
+                HashMap::with_capacity(state.group_by.groups().len());
             let group_schema = state.group_by.group_schema(&self.input_schema)?;
             let n_expr = state.group_by.expr().len();
             let mut any_interned = false;
