@@ -666,10 +666,16 @@ fn matchable_rows(
     )?
     .into_array(num_rows)?;
     let result = result.as_boolean();
-    Ok(if result.null_count() > 0 {
+    let matchable = if result.null_count() > 0 {
         prep_null_mask_filter(result)
     } else {
         result.clone()
+    };
+    // The nested `apply_cmp` masks only physical NULLs, so a dictionary key pointing at a
+    // NULL nested value would pass.
+    Ok(match stream_values.logical_nulls() {
+        Some(nulls) => BooleanArray::new(matchable.values() & nulls.inner(), None),
+        None => matchable,
     })
 }
 
@@ -1336,7 +1342,7 @@ mod tests {
     /// run-end encoded, `Null`-typed and dictionary keys, which have no physical NULL there.
     #[test]
     fn buffered_extreme_is_none_for_logically_null_keys() -> Result<()> {
-        use arrow::array::{DictionaryArray, Int32Array, NullArray, RunArray};
+        use arrow::array::{DictionaryArray, Int32Array, ListArray, NullArray, RunArray};
         use arrow::datatypes::Int32Type;
 
         let null_keys: Vec<(&str, ArrayRef)> = vec![
@@ -1353,6 +1359,16 @@ mod tests {
                 Arc::new(DictionaryArray::<Int32Type>::try_new(
                     Int32Array::from(vec![0, 0]),
                     Arc::new(Int32Array::from(vec![None::<i32>])),
+                )?),
+            ),
+            (
+                // `matchable_rows` relies on this: the nested `apply_cmp` would not mask it.
+                "dictionary_list_null_value",
+                Arc::new(DictionaryArray::<Int32Type>::try_new(
+                    Int32Array::from(vec![0, 0]),
+                    Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                        None::<Vec<Option<i32>>>,
+                    ])),
                 )?),
             ),
         ];
@@ -1684,6 +1700,27 @@ mod tests {
                     vec![Some(1), None, Some(0), None, Some(2), Some(1), None],
                     Some(vec![true, true, true, true, true, true, false]),
                 ),
+            ),
+            (
+                // A valid key pointing at a NULL list: logically NULL, physically valid.
+                "dictionary_list_null_values",
+                Arc::new(DictionaryArray::<Int32Type>::new(
+                    Int32Array::from(vec![0, 1, 2]),
+                    Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                        Some(vec![Some(5)]),
+                        None,
+                        Some(vec![Some(1)]),
+                    ])),
+                )),
+                Arc::new(DictionaryArray::<Int32Type>::new(
+                    Int32Array::from(vec![Some(0), Some(1), Some(2), Some(3), None]),
+                    Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                        Some(vec![Some(2)]),
+                        None,
+                        Some(vec![Some(6)]),
+                        Some(vec![Some(0)]),
+                    ])),
+                )),
             ),
         ];
 
