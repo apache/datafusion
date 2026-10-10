@@ -1382,12 +1382,14 @@ pub(crate) fn build_batch_from_indices(
 /// For correlated scalar `NOT IN`, `null_indices_bitmap` carries the same UNKNOWN
 /// decision per build row, scoped by the correlated equality keys.
 ///
+/// When present, `build_key_nulls` is indexed by the original build row number.
+///
 /// This is the helper equivalent of the paper's "null bucket" and `hadNull` handling.
 /// It is intentionally scoped to scalar null-aware mark joins.
 pub(crate) fn build_null_aware_left_mark_column(
     build_indices: &UInt64Array,
     probe_indices: &UInt32Array,
-    build_key_column: &dyn Array,
+    build_key_nulls: Option<&NullBuffer>,
     null_indices_bitmap: Option<&BooleanBufferBuilder>,
     probe_side_has_null: bool,
     probe_side_non_empty: bool,
@@ -1397,7 +1399,9 @@ pub(crate) fn build_null_aware_left_mark_column(
     // uncorrelated rules are cases 1-4 in the doc above.
     let unmatched_mark_is_null = |build_idx: usize| match null_indices_bitmap {
         Some(bitmap) => bitmap.get_bit(build_idx),
-        None if build_key_column.is_null(build_idx) => probe_side_non_empty,
+        None if build_key_nulls.is_some_and(|nulls| nulls.is_null(build_idx)) => {
+            probe_side_non_empty
+        }
         None => probe_side_has_null,
     };
 
