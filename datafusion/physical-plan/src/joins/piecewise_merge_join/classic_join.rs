@@ -17,28 +17,31 @@
 
 //! Stream Implementation for PiecewiseMergeJoin's Classic Join (Left, Right, Full, Inner)
 
-use arrow::array::{PrimitiveBuilder, new_null_array};
-use arrow::compute::{BatchCoalescer, take};
-use arrow::datatypes::UInt32Type;
+use arrow::array::{Array, AsArray, new_null_array};
+use arrow::buffer::BooleanBuffer;
+use arrow::compute::{BatchCoalescer, filter, not, prep_null_mask_filter, take};
 use arrow::{
-    array::{ArrayRef, RecordBatch, UInt32Array},
-    compute::{SortColumn, lexsort_to_indices, take_record_batch},
+    array::{ArrayRef, BooleanArray, RecordBatch, UInt32Array},
+    compute::{SortColumn, filter_record_batch, lexsort_to_indices, take_record_batch},
 };
-use arrow_schema::{Schema, SchemaRef, SortOptions};
+use arrow_schema::{DataType, Schema, SchemaRef, SortOptions};
 use datafusion_common::NullEquality;
-use datafusion_common::{Result, internal_err};
+use datafusion_common::utils::normalize_float_zero;
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
-use datafusion_expr::{JoinType, Operator};
+use datafusion_expr::{ColumnarValue, JoinType, Operator};
 use datafusion_physical_expr::PhysicalExprRef;
+use datafusion_physical_expr_common::datum::apply_cmp;
 use futures::{Stream, StreamExt};
 use std::sync::atomic::Ordering as AtomicOrdering;
-use std::{cmp::Ordering, task::ready};
+use std::task::ready;
 use std::{sync::Arc, task::Poll};
 
 use crate::handle_state;
 use crate::joins::piecewise_merge_join::exec::{BufferedSide, BufferedSideReadyState};
 use crate::joins::piecewise_merge_join::utils::{
-    need_produce_result_in_final, non_null_range, unmatched_buffered_batch,
+    first_match, is_match, matches_on_equal, need_produce_result_in_final,
+    non_null_range, unmatched_buffered_batch,
 };
 use crate::joins::utils::JoinKeyComparator;
 use crate::joins::utils::{BuildProbeJoinMetrics, StatefulStreamResult};
@@ -114,6 +117,10 @@ pub(super) struct ClassicPWMJStream {
     join_metrics: BuildProbeJoinMetrics,
     // Tracking incremental state for emitting record batches
     batch_process_state: BatchProcessState,
+    // The last buffered key, which every match set contains (see `matchable_rows`), or
+    // `None` when no buffered key is non-null and nothing can match. Set once the buffered
+    // side is ready.
+    buffered_extreme: Option<ColumnarValue>,
 }
 
 impl RecordBatchStream for ClassicPWMJStream {
@@ -160,6 +167,7 @@ impl ClassicPWMJStream {
             sort_option,
             join_metrics,
             batch_process_state: BatchProcessState::new(schema, batch_size),
+            buffered_extreme: None,
         }
     }
 
@@ -199,6 +207,9 @@ impl ClassicPWMJStream {
                 .get_shared(cx)
         )?;
         build_timer.done();
+
+        self.buffered_extreme =
+            buffered_extreme(buffered_data.values(), self.sort_option)?;
 
         // We will start fetching stream batches for classic joins
         self.state = PiecewiseMergeJoinStreamState::FetchStreamBatch;
@@ -245,19 +256,53 @@ impl ClassicPWMJStream {
                 self.join_metrics.input_batches.add(1);
                 self.join_metrics.input_rows.add(batch.num_rows());
 
-                // Sort stream values and change the streamed record batch accordingly
-                let indices = lexsort_to_indices(
+                // Rows that can match no buffered row are settled before the sort (see
+                // `split_off_never_matching`); only the rest are sorted and scanned.
+                let buffered_values =
+                    self.buffered_side.try_as_ready()?.buffered_data.values();
+                let matchable = matchable_rows(
+                    &stream_values,
+                    buffered_values,
+                    self.buffered_extreme.as_ref(),
+                    self.operator,
+                    self.sort_option,
+                )?;
+                let candidates = split_off_never_matching(
+                    &matchable,
+                    self.join_type,
+                    &self.schema,
+                    &batch,
+                    &stream_values,
+                    &mut self.batch_process_state.output_batches,
+                )?;
+
+                // Sort the candidates' keys, and gather the batch once: when rows were split
+                // off, the sort indices are mapped back to positions in `batch` first.
+                let (keys, positions) = match candidates {
+                    None => (stream_values, None),
+                    Some((positions, keys)) => (keys, Some(positions)),
+                };
+                let sorted = lexsort_to_indices(
                     &[SortColumn {
-                        values: Arc::clone(&stream_values),
+                        values: Arc::clone(&keys),
                         options: Some(self.sort_option),
                     }],
                     None,
                 )?;
-                let stream_batch = take_record_batch(&batch, &indices)?;
-                let stream_values = take(stream_values.as_ref(), &indices, None)?;
+                let stream_batch = match positions {
+                    None => take_record_batch(&batch, &sorted)?,
+                    Some(positions) => take_record_batch(
+                        &batch,
+                        take(&positions, &sorted, None)?.as_ref(),
+                    )?,
+                };
+                let stream_values = take(keys.as_ref(), &sorted, None)?;
 
-                // Reset BatchProcessState before processing a new stream batch
+                // Reset BatchProcessState before processing a new stream batch. NULL keys
+                // never match, so the scan starts past any buffered ones at the front.
                 self.batch_process_state.reset();
+                self.batch_process_state.start_buffer_idx =
+                    non_null_range(buffered_values.as_ref(), self.sort_option).0;
                 self.state = PiecewiseMergeJoinStreamState::ProcessStreamBatch(
                     SortedStreamBatch::new(stream_batch, vec![stream_values]),
                 );
@@ -369,20 +414,14 @@ impl ClassicPWMJStream {
 struct BatchProcessState {
     // Used to pick up from the last index on the stream side
     output_batches: Box<BatchCoalescer>,
-    // Used to store the unmatched stream indices for `JoinType::Right` and `JoinType::Full`
-    unmatched_indices: PrimitiveBuilder<UInt32Type>,
     // Used to store the start index on the buffered side; used to resume processing on the correct
     // row
     start_buffer_idx: usize,
     // Used to store the start index on the stream side; used to resume processing on the correct
     // row
     start_stream_idx: usize,
-    // Signals if we found a match for the current stream row
-    found: bool,
     // Signals to continue processing the current stream batch
     continue_process: bool,
-    // Skip nulls
-    processed_null_count: bool,
     // Smallest buffered index marked while scanning the current stream batch, or
     // `usize::MAX` if nothing has been marked yet. Because `buffer_idx` only moves forward
     // within a batch, this lets all but the batch's first match skip the shared atomic.
@@ -393,23 +432,17 @@ impl BatchProcessState {
     pub(crate) fn new(schema: Arc<Schema>, batch_size: usize) -> Self {
         Self {
             output_batches: Box::new(BatchCoalescer::new(schema, batch_size)),
-            unmatched_indices: PrimitiveBuilder::new(),
             start_buffer_idx: 0,
             start_stream_idx: 0,
-            found: false,
             continue_process: true,
-            processed_null_count: false,
             batch_min_marked: usize::MAX,
         }
     }
 
     pub(crate) fn reset(&mut self) {
-        self.unmatched_indices = PrimitiveBuilder::new();
         self.start_buffer_idx = 0;
         self.start_stream_idx = 0;
-        self.found = false;
         self.continue_process = true;
-        self.processed_null_count = false;
         self.batch_min_marked = usize::MAX;
     }
 
@@ -443,7 +476,9 @@ fn resolve_classic_join(
     join_type: JoinType,
     batch_process_state: &mut BatchProcessState,
 ) -> Result<RecordBatch> {
-    let (buffered_start, buffered_len) =
+    // Buffered NULL keys sort to one end and never match, so the scan stops before any
+    // trailing ones; `start_buffer_idx` already starts it past any leading ones.
+    let (_, buffered_len) =
         non_null_range(buffered_side.buffered_data.values().as_ref(), sort_options);
     let stream_values = stream_batch.compare_key_values();
 
@@ -456,128 +491,55 @@ fn resolve_classic_join(
     )?;
 
     let mut buffer_idx = batch_process_state.start_buffer_idx;
-    let mut stream_idx = batch_process_state.start_stream_idx;
+    let stream_idx = batch_process_state.start_stream_idx;
 
-    if !batch_process_state.processed_null_count {
-        let (stream_start, stream_end) =
-            non_null_range(stream_values[0].as_ref(), sort_options);
-        buffer_idx = buffered_start;
-        stream_idx = stream_start;
-        batch_process_state.processed_null_count = true;
-
-        // NULL keys never match, but outer joins must emit them on either end.
-        if matches!(join_type, JoinType::Right | JoinType::Full) {
-            for row_idx in
-                (0..stream_start).chain(stream_end..stream_batch.batch.num_rows())
-            {
-                batch_process_state
-                    .unmatched_indices
-                    .append_value(row_idx as u32);
-            }
-        }
+    // Streamed NULL keys are settled before the sort (see `split_off_never_matching`). One
+    // that got here would sort before every buffered key and match all of them. Logical, as a
+    // run-end encoded NULL has no physical null buffer.
+    if stream_values[0].logical_null_count() > 0 {
+        return internal_err!(
+            "PiecewiseMergeJoin: streamed NULL keys must be settled before the scan"
+        );
     }
 
-    // Our buffer_idx variable allows us to start probing on the buffered side where we last matched
-    // in the previous stream row.
-    let (_, stream_end) = non_null_range(stream_values[0].as_ref(), sort_options);
-    for row_idx in stream_idx..stream_end {
-        while buffer_idx < buffered_len {
-            let compare = cmp.compare(row_idx, buffer_idx);
+    let match_on_equal = matches_on_equal(operator)?;
 
-            // If we find a match we append all indices and move to the next stream row index
-            match operator {
-                Operator::Gt | Operator::Lt => {
-                    if compare == Ordering::Less {
-                        batch_process_state.found = true;
-                        let count = buffered_len - buffer_idx;
-
-                        let batch = build_matched_indices_and_mark_buffered(
-                            (buffer_idx, count),
-                            (row_idx, count),
-                            buffered_side,
-                            stream_batch,
-                            join_type,
-                            join_schema,
-                            &mut batch_process_state.batch_min_marked,
-                        )?;
-
-                        batch_process_state.output_batches.push_batch(batch)?;
-
-                        // Flush batch and update pointers if we have a completed batch
-                        if let Some(batch) =
-                            batch_process_state.output_batches.next_completed_batch()
-                        {
-                            batch_process_state.found = false;
-                            batch_process_state.start_buffer_idx = buffer_idx;
-                            batch_process_state.start_stream_idx = row_idx + 1;
-                            return Ok(batch);
-                        }
-
-                        break;
-                    }
-                }
-                Operator::GtEq | Operator::LtEq => {
-                    if matches!(compare, Ordering::Equal | Ordering::Less) {
-                        batch_process_state.found = true;
-                        let count = buffered_len - buffer_idx;
-                        let batch = build_matched_indices_and_mark_buffered(
-                            (buffer_idx, count),
-                            (row_idx, count),
-                            buffered_side,
-                            stream_batch,
-                            join_type,
-                            join_schema,
-                            &mut batch_process_state.batch_min_marked,
-                        )?;
-
-                        // Flush batch and update pointers if we have a completed batch
-                        batch_process_state.output_batches.push_batch(batch)?;
-                        if let Some(batch) =
-                            batch_process_state.output_batches.next_completed_batch()
-                        {
-                            batch_process_state.found = false;
-                            batch_process_state.start_buffer_idx = buffer_idx;
-                            batch_process_state.start_stream_idx = row_idx + 1;
-                            return Ok(batch);
-                        }
-
-                        break;
-                    }
-                }
-                _ => {
-                    return internal_err!(
-                        "PiecewiseMergeJoin should not contain operator, {}",
-                        operator
-                    );
-                }
-            }
-
-            // Increment buffer_idx after every row
-            buffer_idx += 1;
+    // `buffer_idx` resumes where the previous stream row's first match was: rows are sorted
+    // so that each one's first match is at or after the previous one's, which bounds the
+    // search below to `[buffer_idx, buffered_len)`.
+    //
+    // Every row here matches the last buffered row, as `matchable_rows` kept only those.
+    for row_idx in stream_idx..stream_batch.batch.num_rows() {
+        buffer_idx = first_match(buffer_idx, buffered_len, |idx| {
+            is_match(cmp.compare(row_idx, idx), match_on_equal)
+        });
+        // A row with no match would emit nothing here, and for `Right`/`Full` would never
+        // be emitted as unmatched either.
+        if buffer_idx >= buffered_len {
+            return internal_err!(
+                "PiecewiseMergeJoin: streamed row {row_idx} reached the scan without a match"
+            );
         }
+        let count = buffered_len - buffer_idx;
 
-        // If a match was not found for the current stream row index the stream indice is appended
-        // to the unmatched indices to be flushed later.
-        if matches!(join_type, JoinType::Right | JoinType::Full)
-            && !batch_process_state.found
-        {
-            batch_process_state
-                .unmatched_indices
-                .append_value(row_idx as u32);
-        }
-
-        batch_process_state.found = false;
-    }
-
-    // Flushed all unmatched indices on the streamed side
-    if matches!(join_type, JoinType::Right | JoinType::Full) {
-        let batch = create_unmatched_batch(
-            &mut batch_process_state.unmatched_indices,
+        let batch = build_matched_indices_and_mark_buffered(
+            (buffer_idx, count),
+            (row_idx, count),
+            buffered_side,
             stream_batch,
+            join_type,
             join_schema,
+            &mut batch_process_state.batch_min_marked,
         )?;
 
         batch_process_state.output_batches.push_batch(batch)?;
+
+        // Flush batch and update pointers if we have a completed batch
+        if let Some(batch) = batch_process_state.output_batches.next_completed_batch() {
+            batch_process_state.start_buffer_idx = buffer_idx;
+            batch_process_state.start_stream_idx = row_idx + 1;
+            return Ok(batch);
+        }
     }
 
     batch_process_state.continue_process = false;
@@ -633,18 +595,127 @@ fn build_matched_indices_and_mark_buffered(
     )?)
 }
 
-// Creates a record batch from the unmatched indices on the streamed side
-fn create_unmatched_batch(
-    streamed_indices: &mut PrimitiveBuilder<UInt32Type>,
-    stream_batch: &SortedStreamBatch,
+// The last non-null key of the sorted buffered side, or `None` when it is empty or every key
+// is NULL. NULLs sort last for `<`/`<=`, so this is not simply the last key. Logical, as a
+// run-end encoded or `Null`-typed NULL has no physical null buffer.
+fn buffered_extreme(
+    values: &ArrayRef,
+    sort_options: SortOptions,
+) -> Result<Option<ColumnarValue>> {
+    let (start, end) = non_null_range(values.as_ref(), sort_options);
+    if start == end {
+        return Ok(None);
+    }
+    let last = values.slice(end - 1, 1);
+    // `apply_cmp` normalizes `-0.0` only in flat float scalars, not inside a
+    // `ScalarValue::Dictionary`, so normalize the key before taking it.
+    let extreme = normalize_float_zero(&last);
+    Ok(Some(ColumnarValue::Scalar(ScalarValue::try_from_array(
+        &extreme, 0,
+    )?)))
+}
+
+// Which rows of `stream_values` can match at least one buffered row.
+//
+// Every match set is a suffix `[k, non_null_end)` of the sorted buffered side's non-null keys,
+// so a streamed row matches anything at all iff it matches the last of them, `buffered_extreme`
+// (`None` when no buffered key is non-null, so nothing can match). A NULL on either side
+// compares to NULL, which is no match.
+//
+// This must agree exactly with the scan's `JoinKeyComparator`, or it would change which rows
+// match. One vectorized `apply_cmp` does, nested keys included: it normalizes `-0.0` to
+// `+0.0` as the comparator does, and orders NULL elements inside a nested key the same way.
+fn matchable_rows(
+    stream_values: &ArrayRef,
+    buffered_values: &ArrayRef,
+    buffered_extreme: Option<&ColumnarValue>,
+    operator: Operator,
+    sort_options: SortOptions,
+) -> Result<BooleanArray> {
+    let num_rows = stream_values.len();
+    let Some(extreme) = buffered_extreme else {
+        return Ok(BooleanArray::new(BooleanBuffer::new_unset(num_rows), None));
+    };
+
+    // Run-end encoded keys are decided with the scan's own comparator: arrow's run-end
+    // comparison kernel overflows on an empty batch sliced past its first run, which the
+    // scan never reaches.
+    if matches!(stream_values.data_type(), DataType::RunEndEncoded(_, _)) {
+        let match_on_equal = matches_on_equal(operator)?;
+        let cmp = JoinKeyComparator::new(
+            &[Arc::clone(stream_values)],
+            &[Arc::clone(buffered_values)],
+            &[sort_options],
+            NullEquality::NullEqualsNothing,
+        )?;
+        let last = non_null_range(buffered_values.as_ref(), sort_options).1 - 1;
+        // Logical NULLs: a run-end encoded NULL has no physical null buffer.
+        let nulls = stream_values.logical_nulls();
+        let matchable = BooleanBuffer::collect_bool(num_rows, |row| {
+            nulls.as_ref().is_none_or(|nulls| nulls.is_valid(row))
+                && is_match(cmp.compare(row, last), match_on_equal)
+        });
+        return Ok(BooleanArray::new(matchable, None));
+    }
+
+    // The predicate is oriented `buffered OP streamed`.
+    let result = apply_cmp(
+        operator,
+        extreme,
+        &ColumnarValue::Array(Arc::clone(stream_values)),
+    )?
+    .into_array(num_rows)?;
+    let result = result.as_boolean();
+    let matchable = if result.null_count() > 0 {
+        prep_null_mask_filter(result)
+    } else {
+        result.clone()
+    };
+    // The nested `apply_cmp` masks only physical NULLs, so a dictionary key pointing at a
+    // NULL nested value would pass.
+    Ok(match stream_values.logical_nulls() {
+        Some(nulls) => BooleanArray::new(matchable.values() & nulls.inner(), None),
+        None => matchable,
+    })
+}
+
+// Settles the rows of `batch` that `matchable` rules out: pushed to `output_batches` as
+// unmatched rows for `Right`/`Full`, dropped for `Inner`/`Left`, as they produce nothing and
+// mark nothing. Returns `None` when every row is a candidate, otherwise the candidates'
+// positions in `batch` and their compare keys.
+fn split_off_never_matching(
+    matchable: &BooleanArray,
+    join_type: JoinType,
+    join_schema: &SchemaRef,
+    batch: &RecordBatch,
+    stream_values: &ArrayRef,
+    output_batches: &mut BatchCoalescer,
+) -> Result<Option<(UInt32Array, ArrayRef)>> {
+    if matchable.true_count() == batch.num_rows() {
+        return Ok(None);
+    }
+
+    if matches!(join_type, JoinType::Right | JoinType::Full) {
+        let unmatched = filter_record_batch(batch, &not(matchable)?)?;
+        output_batches
+            .push_batch(null_padded_streamed_batch(&unmatched, join_schema)?)?;
+    }
+
+    let positions =
+        UInt32Array::from_iter_values(matchable.values().set_indices().map(|i| i as u32));
+    let keys = filter(stream_values.as_ref(), matchable)?;
+    Ok(Some((positions, keys)))
+}
+
+// Joins streamed rows with NULLs for every buffered column.
+fn null_padded_streamed_batch(
+    streamed_batch: &RecordBatch,
     join_schema: &SchemaRef,
 ) -> Result<RecordBatch> {
-    let streamed_indices = streamed_indices.finish();
-    let new_stream_batch = take_record_batch(&stream_batch.batch, &streamed_indices)?;
-    let streamed_columns = new_stream_batch.columns().to_vec();
+    let streamed_columns = streamed_batch.columns().to_vec();
     let buffered_cols_len = join_schema.fields().len() - streamed_columns.len();
 
-    let num_rows = new_stream_batch.num_rows();
+    let num_rows = streamed_batch.num_rows();
     let mut buffered_columns: Vec<ArrayRef> = join_schema
         .fields()
         .iter()
@@ -671,7 +742,7 @@ mod tests {
         test::{TestMemoryExec, assert_join_metrics, build_table_i32},
     };
     use arrow::array::{Date32Array, Date64Array};
-    use arrow_schema::{DataType, Field};
+    use arrow_schema::Field;
     use datafusion_common::instant::Instant;
     use datafusion_common::test_util::batches_to_string;
     use datafusion_common::tree_node::TreeNodeRecursion;
@@ -1021,8 +1092,8 @@ mod tests {
         +----+----+-----+----+----+-----+
         | a1 | b1 | c1  | a2 | b1 | c2  |
         +----+----+-----+----+----+-----+
-        | 2  | 2  | 200 | 20 | 2  | 400 |
         |    |    |     | 10 | 3  | 300 |
+        | 2  | 2  | 200 | 20 | 2  | 400 |
         | 1  | 1  | 100 |    |    |     |
         +----+----+-----+----+----+-----+
         ");
@@ -1124,10 +1195,10 @@ mod tests {
         +----+----+----+----+----+----+
         | a1 | b1 | c1 | a2 | b1 | c2 |
         +----+----+----+----+----+----+
+        |    |    |    | 10 | 5  | 70 |
         | 2  | 3  | 8  | 30 | 2  | 90 |
         | 3  | 4  | 9  | 30 | 2  | 90 |
         | 3  | 4  | 9  | 20 | 3  | 80 |
-        |    |    |    | 10 | 5  | 70 |
         +----+----+----+----+----+----+
         ");
 
@@ -1184,6 +1255,532 @@ mod tests {
         ");
 
         assert_join_metrics!(metrics, 5);
+        Ok(())
+    }
+
+    /// An empty streamed batch of run-end encoded keys, sliced past the first run, must not
+    /// reach arrow's run-end comparison kernel, which overflows on it. The streamed NULL key
+    /// (`a2 = 0`) is a logical NULL with no physical null buffer, and must come out unmatched
+    /// rather than join every buffered row.
+    #[tokio::test]
+    async fn join_right_run_end_encoded_keys_empty_sliced_batch() -> Result<()> {
+        use arrow::array::{Int32Array, RunArray};
+        use arrow::datatypes::Int32Type;
+
+        let ree_exec = |ids: &str,
+                        keys: &str,
+                        run_ends: Vec<i32>,
+                        values: Vec<Option<i32>>,
+                        slices: &[(usize, usize)]|
+         -> Result<Arc<dyn ExecutionPlan>> {
+            let keys_array = RunArray::<Int32Type>::try_new(
+                &Int32Array::from(run_ends),
+                &Int32Array::from(values),
+            )?;
+            let schema = Arc::new(Schema::new(vec![
+                Field::new(ids, DataType::Int32, false),
+                Field::new(keys, keys_array.data_type().clone(), true),
+            ]));
+            let len = keys_array.len() as i32;
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from((0..len).collect::<Vec<_>>())),
+                    Arc::new(keys_array),
+                ],
+            )?;
+            let batches = slices
+                .iter()
+                .map(|&(offset, len)| batch.slice(offset, len))
+                .collect::<Vec<_>>();
+            Ok(TestMemoryExec::try_new_exec(&[batches], schema, None)?)
+        };
+        // Buffered keys sorted for `<` (descending, NULLs last): {5, 5, 1, 1, NULL}.
+        let left = ree_exec(
+            "a1",
+            "b1",
+            vec![2, 4, 5],
+            vec![Some(5), Some(1), None],
+            &[(0, 5)],
+        )?;
+        // Streamed keys {NULL, 2, 2, 0, 6}, as batches of 3, 0 and 2 rows. The empty one
+        // starts at offset 3, past the end of the first run.
+        let right = ree_exec(
+            "a2",
+            "b2",
+            vec![1, 3, 4, 5],
+            vec![None, Some(2), Some(0), Some(6)],
+            &[(0, 3), (3, 0), (3, 2)],
+        )?;
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+        );
+
+        let (_, batches, _) =
+            join_collect(left, right, on, Operator::Lt, JoinType::Right).await?;
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+----+----+----+
+        | a1 | b1 | a2 | b2 |
+        +----+----+----+----+
+        |    |    | 0  |    |
+        | 2  | 1  | 1  | 2  |
+        | 3  | 1  | 1  | 2  |
+        | 2  | 1  | 2  | 2  |
+        | 3  | 1  | 2  | 2  |
+        |    |    | 3  | 0  |
+        | 0  | 5  | 4  | 6  |
+        | 1  | 5  | 4  | 6  |
+        | 2  | 1  | 4  | 6  |
+        | 3  | 1  | 4  | 6  |
+        +----+----+----+----+
+        ");
+        Ok(())
+    }
+
+    /// `buffered_extreme` is `None` when the last buffered key is logically NULL, including
+    /// run-end encoded, `Null`-typed and dictionary keys, which have no physical NULL there.
+    #[test]
+    fn buffered_extreme_is_none_for_logically_null_keys() -> Result<()> {
+        use arrow::array::{DictionaryArray, Int32Array, ListArray, NullArray, RunArray};
+        use arrow::datatypes::Int32Type;
+
+        let null_keys: Vec<(&str, ArrayRef)> = vec![
+            ("null", Arc::new(NullArray::new(3))),
+            (
+                "run_end_encoded",
+                Arc::new(RunArray::<Int32Type>::try_new(
+                    &Int32Array::from(vec![3]),
+                    &Int32Array::from(vec![None::<i32>]),
+                )?),
+            ),
+            (
+                "dictionary_null_value",
+                Arc::new(DictionaryArray::<Int32Type>::try_new(
+                    Int32Array::from(vec![0, 0]),
+                    Arc::new(Int32Array::from(vec![None::<i32>])),
+                )?),
+            ),
+            (
+                // `matchable_rows` relies on this: the nested `apply_cmp` would not mask it.
+                "dictionary_list_null_value",
+                Arc::new(DictionaryArray::<Int32Type>::try_new(
+                    Int32Array::from(vec![0, 0]),
+                    Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                        None::<Vec<Option<i32>>>,
+                    ])),
+                )?),
+            ),
+        ];
+        // NULLs sort first for `>`/`>=` and last for `<`/`<=`.
+        let nulls_first = SortOptions::new(false, true);
+        let nulls_last = SortOptions::new(true, false);
+        for (name, values) in null_keys {
+            for sort_options in [nulls_first, nulls_last] {
+                assert!(buffered_extreme(&values, sort_options)?.is_none(), "{name}");
+            }
+        }
+
+        // The last non-null key, wherever the NULLs sort.
+        for (values, sort_options) in [
+            (vec![None, Some(1), Some(3)], nulls_first),
+            (vec![Some(5), Some(3), None], nulls_last),
+        ] {
+            let values: ArrayRef = Arc::new(Int32Array::from(values));
+            assert!(matches!(
+                buffered_extreme(&values, sort_options)?,
+                Some(ColumnarValue::Scalar(ScalarValue::Int32(Some(3))))
+            ));
+        }
+        Ok(())
+    }
+
+    /// `matchable_rows` against the scan's own definition of a match -- some non-NULL
+    /// buffered row `idx` with `is_match(cmp.compare(row, idx))` under the scan's
+    /// `JoinKeyComparator` -- for every operator and every kind of key it dispatches on:
+    /// keys through `apply_cmp` (incl. signed zeros, NaN, strings, dictionaries, and list,
+    /// list-of-list and struct keys with NULL elements) and run-end encoded keys through
+    /// the comparator. Each is also checked against
+    /// an all-NULL and an empty buffered side.
+    #[test]
+    fn matchable_rows_agrees_with_scan() -> Result<()> {
+        use arrow::array::{
+            BinaryArray, BooleanArray, Decimal128Array, DictionaryArray, Float64Array,
+            Int32Array, Int32Builder, ListArray, ListBuilder, StringArray,
+            StringViewArray, StructArray, TimestampMicrosecondArray,
+        };
+        use arrow::buffer::NullBuffer;
+        use arrow::datatypes::{Fields, Int32Type};
+
+        let strings =
+            |v: &[Option<&str>]| Arc::new(StringArray::from(v.to_vec())) as ArrayRef;
+        type ListOfLists = Vec<Option<Vec<Option<Vec<Option<i32>>>>>>;
+        let list_of_lists = |v: ListOfLists| {
+            let mut builder = ListBuilder::new(ListBuilder::new(Int32Builder::new()));
+            for outer in v {
+                match outer {
+                    None => builder.append(false),
+                    Some(inner) => {
+                        for list in inner {
+                            builder.values().append_option(list);
+                        }
+                        builder.append(true);
+                    }
+                }
+            }
+            Arc::new(builder.finish()) as ArrayRef
+        };
+        // A struct of two nullable Int32 fields, with its own validity.
+        let structs =
+            |a: Vec<Option<i32>>, b: Vec<Option<i32>>, valid: Option<Vec<bool>>| {
+                let fields = Fields::from(vec![
+                    Field::new("a", DataType::Int32, true),
+                    Field::new("b", DataType::Int32, true),
+                ]);
+                Arc::new(StructArray::new(
+                    fields,
+                    vec![
+                        Arc::new(Int32Array::from(a)) as ArrayRef,
+                        Arc::new(Int32Array::from(b)) as ArrayRef,
+                    ],
+                    valid.map(NullBuffer::from),
+                )) as ArrayRef
+            };
+        let cases: Vec<(&str, ArrayRef, ArrayRef)> = vec![
+            (
+                "int32",
+                Arc::new(Int32Array::from(vec![
+                    Some(5),
+                    None,
+                    Some(1),
+                    Some(9),
+                    Some(3),
+                ])),
+                Arc::new(Int32Array::from(vec![
+                    Some(0),
+                    Some(1),
+                    Some(2),
+                    Some(3),
+                    Some(5),
+                    Some(9),
+                    Some(10),
+                    None,
+                ])),
+            ),
+            (
+                "float64",
+                Arc::new(Float64Array::from(vec![
+                    Some(0.0),
+                    Some(-0.0),
+                    Some(1.5),
+                    Some(f64::NAN),
+                    None,
+                ])),
+                Arc::new(Float64Array::from(vec![
+                    Some(-0.0),
+                    Some(0.0),
+                    Some(1.5),
+                    Some(f64::NAN),
+                    Some(-1.0),
+                    Some(2.0),
+                    Some(f64::INFINITY),
+                    Some(f64::NEG_INFINITY),
+                    None,
+                ])),
+            ),
+            (
+                "utf8",
+                strings(&[Some("b"), Some(""), Some("d"), None]),
+                strings(&[
+                    Some(""),
+                    Some("a"),
+                    Some("b"),
+                    Some("c"),
+                    Some("d"),
+                    Some("e"),
+                    None,
+                ]),
+            ),
+            (
+                "utf8_view",
+                Arc::new(StringViewArray::from(vec![
+                    Some("b"),
+                    Some(""),
+                    Some("d"),
+                    None,
+                ])),
+                Arc::new(StringViewArray::from(vec![
+                    Some(""),
+                    Some("a"),
+                    Some("b"),
+                    Some("d"),
+                    Some("e"),
+                    None,
+                ])),
+            ),
+            (
+                "binary",
+                Arc::new(BinaryArray::from(vec![Some(&b"b"[..]), Some(b""), None])),
+                Arc::new(BinaryArray::from(vec![
+                    Some(&b""[..]),
+                    Some(b"a"),
+                    Some(b"b"),
+                    Some(b"c"),
+                    None,
+                ])),
+            ),
+            (
+                "dictionary",
+                Arc::new(
+                    vec![Some("b"), None, Some("d"), Some("b")]
+                        .into_iter()
+                        .collect::<DictionaryArray<Int32Type>>(),
+                ),
+                Arc::new(
+                    vec![Some("a"), Some("b"), Some("c"), Some("d"), Some("e"), None]
+                        .into_iter()
+                        .collect::<DictionaryArray<Int32Type>>(),
+                ),
+            ),
+            (
+                // `-0.0` as the buffered extreme inside a dictionary: the smallest
+                // key for `<`/`<=`, the largest for `>`/`>=`.
+                "dictionary_float64_neg_zero_min",
+                Arc::new(DictionaryArray::<Int32Type>::new(
+                    Int32Array::from(vec![0, 1]),
+                    Arc::new(Float64Array::from(vec![-0.0, 0.5])),
+                )),
+                Arc::new(DictionaryArray::<Int32Type>::new(
+                    Int32Array::from(vec![0, 1, 2]),
+                    Arc::new(Float64Array::from(vec![0.0, -0.0, 0.25])),
+                )),
+            ),
+            (
+                "dictionary_float64_neg_zero_max",
+                Arc::new(DictionaryArray::<Int32Type>::new(
+                    Int32Array::from(vec![0, 1]),
+                    Arc::new(Float64Array::from(vec![-1.0, -0.0])),
+                )),
+                Arc::new(DictionaryArray::<Int32Type>::new(
+                    Int32Array::from(vec![0, 1, 2]),
+                    Arc::new(Float64Array::from(vec![0.0, -0.0, -0.5])),
+                )),
+            ),
+            (
+                // NULL *values* behind valid dictionary keys, on both sides.
+                "dictionary_null_values",
+                Arc::new(DictionaryArray::<Int32Type>::new(
+                    Int32Array::from(vec![0, 1, 2]),
+                    Arc::new(StringArray::from(vec![Some("b"), None, Some("d")])),
+                )),
+                Arc::new(DictionaryArray::<Int32Type>::new(
+                    Int32Array::from(vec![0, 1, 2, 3, 1]),
+                    Arc::new(StringArray::from(vec![
+                        Some("a"),
+                        None,
+                        Some("c"),
+                        Some("e"),
+                    ])),
+                )),
+            ),
+            (
+                "decimal128",
+                Arc::new(
+                    Decimal128Array::from(vec![Some(150), None, Some(-25)])
+                        .with_precision_and_scale(10, 2)?,
+                ),
+                Arc::new(
+                    Decimal128Array::from(vec![
+                        Some(-26),
+                        Some(-25),
+                        Some(0),
+                        Some(150),
+                        Some(151),
+                        None,
+                    ])
+                    .with_precision_and_scale(10, 2)?,
+                ),
+            ),
+            (
+                "date32",
+                Arc::new(Date32Array::from(vec![Some(10), None, Some(20)])),
+                Arc::new(Date32Array::from(vec![
+                    Some(9),
+                    Some(10),
+                    Some(15),
+                    Some(20),
+                    Some(21),
+                    None,
+                ])),
+            ),
+            (
+                "timestamp_us",
+                Arc::new(TimestampMicrosecondArray::from(vec![
+                    Some(-5),
+                    Some(7),
+                    None,
+                ])),
+                Arc::new(TimestampMicrosecondArray::from(vec![
+                    Some(-6),
+                    Some(-5),
+                    Some(7),
+                    Some(8),
+                    None,
+                ])),
+            ),
+            (
+                "boolean",
+                Arc::new(BooleanArray::from(vec![Some(true), None])),
+                Arc::new(BooleanArray::from(vec![Some(false), Some(true), None])),
+            ),
+            (
+                "list_with_null_elements",
+                Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                    Some(vec![Some(5)]),
+                    Some(vec![None]),
+                    Some(vec![Some(1), Some(2)]),
+                    Some(vec![]),
+                    None,
+                ])),
+                Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                    Some(vec![None]),
+                    Some(vec![Some(7)]),
+                    Some(vec![Some(1)]),
+                    Some(vec![Some(5)]),
+                    Some(vec![]),
+                    Some(vec![None, Some(1)]),
+                    Some(vec![Some(5), None]),
+                    None,
+                ])),
+            ),
+            (
+                // No empty list, so the extreme key has a first element to compare
+                // against the streamed NULL elements.
+                "list_null_elements_vs_extreme",
+                Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                    Some(vec![Some(5)]),
+                    Some(vec![Some(3)]),
+                    None,
+                ])),
+                Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                    Some(vec![None]),
+                    Some(vec![Some(3), None]),
+                    Some(vec![Some(4)]),
+                    Some(vec![Some(7)]),
+                    Some(vec![Some(1)]),
+                    None,
+                ])),
+            ),
+            (
+                "list_of_list_null_elements",
+                list_of_lists(vec![
+                    Some(vec![Some(vec![Some(5)]), None]),
+                    Some(vec![Some(vec![Some(3), None])]),
+                    None,
+                ]),
+                list_of_lists(vec![
+                    Some(vec![None]),
+                    Some(vec![Some(vec![None])]),
+                    Some(vec![Some(vec![Some(3)])]),
+                    Some(vec![Some(vec![Some(3), None])]),
+                    Some(vec![Some(vec![Some(5)]), Some(vec![Some(1)])]),
+                    Some(vec![Some(vec![Some(7)])]),
+                    None,
+                ]),
+            ),
+            (
+                "struct_null_fields",
+                structs(
+                    vec![Some(5), Some(3), None, Some(3)],
+                    vec![Some(1), None, Some(2), Some(2)],
+                    Some(vec![true, true, true, false]),
+                ),
+                structs(
+                    vec![None, Some(3), Some(3), Some(4), Some(5), Some(7), None],
+                    vec![Some(1), None, Some(0), None, Some(2), Some(1), None],
+                    Some(vec![true, true, true, true, true, true, false]),
+                ),
+            ),
+            (
+                // A valid key pointing at a NULL list: logically NULL, physically valid.
+                "dictionary_list_null_values",
+                Arc::new(DictionaryArray::<Int32Type>::new(
+                    Int32Array::from(vec![0, 1, 2]),
+                    Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                        Some(vec![Some(5)]),
+                        None,
+                        Some(vec![Some(1)]),
+                    ])),
+                )),
+                Arc::new(DictionaryArray::<Int32Type>::new(
+                    Int32Array::from(vec![Some(0), Some(1), Some(2), Some(3), None]),
+                    Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                        Some(vec![Some(2)]),
+                        None,
+                        Some(vec![Some(6)]),
+                        Some(vec![Some(0)]),
+                    ])),
+                )),
+            ),
+        ];
+
+        for (name, buffered, streamed) in cases {
+            let all_null = new_null_array(buffered.data_type(), 3);
+            let empty = buffered.slice(0, 0);
+            for (side, buffered) in
+                [("full", buffered), ("all_null", all_null), ("empty", empty)]
+            {
+                for operator in
+                    [Operator::Lt, Operator::LtEq, Operator::Gt, Operator::GtEq]
+                {
+                    // As `PiecewiseMergeJoinExec::try_new` sorts both sides.
+                    let sort_options = match operator {
+                        Operator::Lt | Operator::LtEq => SortOptions::new(true, false),
+                        _ => SortOptions::new(false, true),
+                    };
+                    let indices = lexsort_to_indices(
+                        &[SortColumn {
+                            values: Arc::clone(&buffered),
+                            options: Some(sort_options),
+                        }],
+                        None,
+                    )?;
+                    let sorted = take(buffered.as_ref(), &indices, None)?;
+                    let extreme = buffered_extreme(&sorted, sort_options)?;
+
+                    let actual = matchable_rows(
+                        &streamed,
+                        &sorted,
+                        extreme.as_ref(),
+                        operator,
+                        sort_options,
+                    )?;
+
+                    let match_on_equal = matches_on_equal(operator)?;
+                    let cmp = JoinKeyComparator::new(
+                        &[Arc::clone(&streamed)],
+                        &[Arc::clone(&sorted)],
+                        &[sort_options],
+                        NullEquality::NullEqualsNothing,
+                    )?;
+                    // Logical NULLs, so a dictionary key whose *value* is NULL counts as one.
+                    let nulls = streamed.logical_nulls();
+                    let buffered_nulls = sorted.logical_nulls();
+                    for row in 0..streamed.len() {
+                        let expected = nulls.as_ref().is_none_or(|n| n.is_valid(row))
+                            && (0..sorted.len()).any(|idx| {
+                                buffered_nulls.as_ref().is_none_or(|n| n.is_valid(idx))
+                                    && is_match(cmp.compare(row, idx), match_on_equal)
+                            });
+                        assert_eq!(
+                            actual.value(row),
+                            expected,
+                            "{name}/{side} {operator}: streamed row {row}"
+                        );
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
@@ -1594,8 +2191,8 @@ mod tests {
         +-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+
         | a1                      | b1                  | c1                      | a2                      | b1                  | c2                      |
         +-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+
-        | 1970-01-01T00:00:00.002 | 2022-04-23T08:44:01 | 1970-01-01T00:00:00.008 | 1970-01-01T00:00:00.020 | 2022-04-25T16:17:21 | 1970-01-01T00:00:00.090 |
         |                         |                     |                         | 1970-01-01T00:00:00.010 | 2022-04-23T08:44:01 | 1970-01-01T00:00:00.080 |
+        | 1970-01-01T00:00:00.002 | 2022-04-23T08:44:01 | 1970-01-01T00:00:00.008 | 1970-01-01T00:00:00.020 | 2022-04-25T16:17:21 | 1970-01-01T00:00:00.090 |
         +-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+
         ");
 

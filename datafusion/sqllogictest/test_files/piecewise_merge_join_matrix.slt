@@ -164,6 +164,444 @@ SELECT l.lid, l.lv, r.rid, r.rv FROM cj_dup_l l JOIN cj_dup_r r ON l.lv < r.rv;
 2 1 1 2
 2 1 2 2
 
+# Float key with negative zero on an outer side: -0.0 and +0.0 compare equal in
+# SQL, so `-0.0 < 0.0` is false and `-0.0 <= 0.0` is true. Streamed rows that
+# match no buffered row are set aside before the sort, and that check must agree
+# with the scan's comparator, which normalizes the sign of zero.
+statement ok
+CREATE TABLE cj_fl(lid INT, lv DOUBLE);
+
+statement ok
+INSERT INTO cj_fl VALUES (1, -0.0);
+
+statement ok
+CREATE TABLE cj_fr(rid INT, rv DOUBLE);
+
+statement ok
+INSERT INTO cj_fr VALUES (1, 0.0), (2, -1.0);
+
+query IRIR rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_fl l RIGHT JOIN cj_fr r ON l.lv < r.rv;
+----
+NULL NULL 1 0
+NULL NULL 2 -1
+
+query IRIR rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_fl l RIGHT JOIN cj_fr r ON l.lv <= r.rv;
+----
+1 0 1 0
+NULL NULL 2 -1
+
+query IRIR rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_fl l FULL JOIN cj_fr r ON l.lv < r.rv;
+----
+1 0 NULL NULL
+NULL NULL 1 0
+NULL NULL 2 -1
+
+# The same signed-zero agreement with dictionary-encoded float keys, whose
+# values are normalized one level down. -0.0 is the smallest buffered key for
+# `<` and the largest for `>=`.
+statement ok
+CREATE TABLE cj_dfl(lid INT, lv DOUBLE);
+
+statement ok
+INSERT INTO cj_dfl VALUES (1, -0.0), (2, 0.5);
+
+statement ok
+CREATE TABLE cj_dfr(rid INT, rv DOUBLE);
+
+statement ok
+INSERT INTO cj_dfr VALUES (1, 0.0), (2, 0.25);
+
+query I?I? rowsort
+SELECT l.lid, l.lv, r.rid, r.rv
+FROM (SELECT lid, arrow_cast(lv, 'Dictionary(Int32, Float64)') AS lv FROM cj_dfl) l
+JOIN (SELECT rid, arrow_cast(rv, 'Dictionary(Int32, Float64)') AS rv FROM cj_dfr) r
+  ON l.lv < r.rv;
+----
+1 0 2 0.25
+
+statement ok
+CREATE TABLE cj_dfl2(lid INT, lv DOUBLE);
+
+statement ok
+INSERT INTO cj_dfl2 VALUES (1, -1.0), (2, -0.0);
+
+statement ok
+CREATE TABLE cj_dfr2(rid INT, rv DOUBLE);
+
+statement ok
+INSERT INTO cj_dfr2 VALUES (1, 0.0);
+
+query I?I? rowsort
+SELECT l.lid, l.lv, r.rid, r.rv
+FROM (SELECT lid, arrow_cast(lv, 'Dictionary(Int32, Float64)') AS lv FROM cj_dfl2) l
+RIGHT JOIN (SELECT rid, arrow_cast(rv, 'Dictionary(Int32, Float64)') AS rv FROM cj_dfr2) r
+  ON l.lv >= r.rv;
+----
+2 0 1 0
+
+# One unsorted streamed batch mixing matching, non-matching and NULL keys. The
+# non-matching and NULL rows are set aside before the sort, and the rest are
+# sorted and mapped back to their rows in the batch. Against cj_l.lv = {1,3,5,
+# NULL} with `<`: rv=4 matches lv 1 and 3, rv=6 matches 1, 3 and 5, rv=2
+# matches 1; rv=0, rv=1 and the NULLs match nothing.
+statement ok
+CREATE TABLE cj_mix_r(rid INT, rv INT);
+
+statement ok
+INSERT INTO cj_mix_r VALUES (1, 4), (2, NULL), (3, 0), (4, 6), (5, 2), (6, NULL), (7, 1);
+
+query IIII rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_l l JOIN cj_mix_r r ON l.lv < r.rv;
+----
+1 1 1 4
+1 1 4 6
+1 1 5 2
+2 3 1 4
+2 3 4 6
+3 5 4 6
+
+query IIII rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_l l RIGHT JOIN cj_mix_r r ON l.lv < r.rv;
+----
+1 1 1 4
+1 1 4 6
+1 1 5 2
+2 3 1 4
+2 3 4 6
+3 5 4 6
+NULL NULL 2 NULL
+NULL NULL 3 0
+NULL NULL 6 NULL
+NULL NULL 7 1
+
+query IIII rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_l l FULL JOIN cj_mix_r r ON l.lv < r.rv;
+----
+1 1 1 4
+1 1 4 6
+1 1 5 2
+2 3 1 4
+2 3 4 6
+3 5 4 6
+4 NULL NULL NULL
+NULL NULL 2 NULL
+NULL NULL 3 0
+NULL NULL 6 NULL
+NULL NULL 7 1
+
+# The streamed side arrives in several batches, and the first one has no
+# matchable row: it is settled whole, and the scan sees an empty batch.
+statement ok
+CREATE TABLE cj_mb_r(rid INT, rv INT);
+
+statement ok
+INSERT INTO cj_mb_r VALUES (1, 0), (2, 1);
+
+statement ok
+INSERT INTO cj_mb_r VALUES (3, 4), (4, NULL), (5, 6);
+
+statement ok
+INSERT INTO cj_mb_r VALUES (6, NULL);
+
+query IIII rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_l l JOIN cj_mb_r r ON l.lv < r.rv;
+----
+1 1 3 4
+1 1 5 6
+2 3 3 4
+2 3 5 6
+3 5 5 6
+
+query IIII rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_l l FULL JOIN cj_mb_r r ON l.lv < r.rv;
+----
+1 1 3 4
+1 1 5 6
+2 3 3 4
+2 3 5 6
+3 5 5 6
+4 NULL NULL NULL
+NULL NULL 1 0
+NULL NULL 2 1
+NULL NULL 4 NULL
+NULL NULL 6 NULL
+
+# A buffered side whose keys are all NULL has no key to match against, so every
+# streamed row is settled as unmatched.
+statement ok
+CREATE TABLE cj_alln(lid INT, lv INT);
+
+statement ok
+INSERT INTO cj_alln VALUES (1, NULL), (2, NULL);
+
+query IIII rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_alln l JOIN cj_r r ON l.lv < r.rv;
+----
+
+query IIII rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_alln l RIGHT JOIN cj_r r ON l.lv < r.rv;
+----
+NULL NULL 1 3
+NULL NULL 2 5
+NULL NULL 3 NULL
+
+query IIII rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_alln l FULL JOIN cj_r r ON l.lv >= r.rv;
+----
+1 NULL NULL NULL
+2 NULL NULL NULL
+NULL NULL 1 3
+NULL NULL 2 5
+NULL NULL 3 NULL
+
+# Keys of type Null (columns built only from NULL literals) match nothing.
+statement ok
+CREATE TABLE cj_nl AS SELECT * FROM (VALUES (1, NULL), (2, NULL)) AS t(lid, lv);
+
+statement ok
+CREATE TABLE cj_nr AS SELECT * FROM (VALUES (10, NULL), (20, NULL)) AS t(rid, rv);
+
+query I?I? rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_nl l JOIN cj_nr r ON l.lv < r.rv;
+----
+
+query I?I? rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_nl l LEFT JOIN cj_nr r ON l.lv <= r.rv;
+----
+1 NULL NULL NULL
+2 NULL NULL NULL
+
+query I?I? rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_nl l RIGHT JOIN cj_nr r ON l.lv > r.rv;
+----
+NULL NULL 10 NULL
+NULL NULL 20 NULL
+
+query I?I? rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_nl l FULL JOIN cj_nr r ON l.lv >= r.rv;
+----
+1 NULL NULL NULL
+2 NULL NULL NULL
+NULL NULL 10 NULL
+NULL NULL 20 NULL
+
+# List keys, checked against the buffered extreme with the same vectorized
+# comparison as flat keys. A NULL list on the streamed side must still come out
+# unmatched.
+statement ok
+CREATE TABLE cj_ll AS SELECT * FROM (VALUES (1, make_array(1, 2)), (2, make_array(3)), (3, NULL)) AS t(lid, lv);
+
+statement ok
+CREATE TABLE cj_lr AS SELECT * FROM (VALUES (1, make_array(2)), (2, make_array(1, 2)), (3, make_array(0)), (4, NULL)) AS t(rid, rv);
+
+query I?I? rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_ll l RIGHT JOIN cj_lr r ON l.lv < r.rv;
+----
+1 [1, 2] 1 [2]
+NULL NULL 2 [1, 2]
+NULL NULL 3 [0]
+NULL NULL 4 NULL
+
+query I?I? rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_ll l FULL JOIN cj_lr r ON l.lv <= r.rv;
+----
+1 [1, 2] 1 [2]
+1 [1, 2] 2 [1, 2]
+2 [3] NULL NULL
+3 NULL NULL NULL
+NULL NULL 3 [0]
+NULL NULL 4 NULL
+
+query I?I? rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_ll l RIGHT JOIN cj_lr r ON l.lv >= r.rv;
+----
+1 [1, 2] 2 [1, 2]
+1 [1, 2] 3 [0]
+2 [3] 1 [2]
+2 [3] 2 [1, 2]
+2 [3] 3 [0]
+NULL NULL 4 NULL
+
+# Struct keys, also checked against the buffered extreme with the vectorized
+# comparison. Structs compare field by field, so where `x` ties the NULLable `y`
+# decides. cj_sl.lv = {{1,2}, {3,1}, {3,NULL}, NULL}; cj_sr.rv mixes keys that
+# tie a buffered key on `x` or on both fields, fall below or above every
+# buffered key, have a NULL `y`, or are NULL themselves.
+statement ok
+CREATE TABLE cj_sl AS SELECT * FROM (VALUES
+  (1, named_struct('x', 1, 'y', CAST(2 AS BIGINT))),
+  (2, named_struct('x', 3, 'y', CAST(1 AS BIGINT))),
+  (3, named_struct('x', 3, 'y', CAST(NULL AS BIGINT))),
+  (4, NULL)
+) AS t(lid, lv);
+
+statement ok
+CREATE TABLE cj_sr AS SELECT * FROM (VALUES
+  (1, named_struct('x', 3, 'y', CAST(0 AS BIGINT))),
+  (2, named_struct('x', 3, 'y', CAST(2 AS BIGINT))),
+  (3, named_struct('x', 1, 'y', CAST(NULL AS BIGINT))),
+  (4, named_struct('x', 5, 'y', CAST(0 AS BIGINT))),
+  (5, named_struct('x', 0, 'y', CAST(9 AS BIGINT))),
+  (6, NULL),
+  (7, named_struct('x', 3, 'y', CAST(1 AS BIGINT)))
+) AS t(rid, rv);
+
+query I?I? rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_sl l RIGHT JOIN cj_sr r ON l.lv < r.rv;
+----
+1 {x: 1, y: 2} 1 {x: 3, y: 0}
+1 {x: 1, y: 2} 2 {x: 3, y: 2}
+1 {x: 1, y: 2} 4 {x: 5, y: 0}
+1 {x: 1, y: 2} 7 {x: 3, y: 1}
+2 {x: 3, y: 1} 2 {x: 3, y: 2}
+2 {x: 3, y: 1} 4 {x: 5, y: 0}
+3 {x: 3, y: NULL} 1 {x: 3, y: 0}
+3 {x: 3, y: NULL} 2 {x: 3, y: 2}
+3 {x: 3, y: NULL} 4 {x: 5, y: 0}
+3 {x: 3, y: NULL} 7 {x: 3, y: 1}
+NULL NULL 3 {x: 1, y: NULL}
+NULL NULL 5 {x: 0, y: 9}
+NULL NULL 6 NULL
+
+query I?I? rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_sl l FULL JOIN cj_sr r ON l.lv <= r.rv;
+----
+1 {x: 1, y: 2} 1 {x: 3, y: 0}
+1 {x: 1, y: 2} 2 {x: 3, y: 2}
+1 {x: 1, y: 2} 4 {x: 5, y: 0}
+1 {x: 1, y: 2} 7 {x: 3, y: 1}
+2 {x: 3, y: 1} 2 {x: 3, y: 2}
+2 {x: 3, y: 1} 4 {x: 5, y: 0}
+2 {x: 3, y: 1} 7 {x: 3, y: 1}
+3 {x: 3, y: NULL} 1 {x: 3, y: 0}
+3 {x: 3, y: NULL} 2 {x: 3, y: 2}
+3 {x: 3, y: NULL} 4 {x: 5, y: 0}
+3 {x: 3, y: NULL} 7 {x: 3, y: 1}
+4 NULL NULL NULL
+NULL NULL 3 {x: 1, y: NULL}
+NULL NULL 5 {x: 0, y: 9}
+NULL NULL 6 NULL
+
+query I?I? rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_sl l RIGHT JOIN cj_sr r ON l.lv > r.rv;
+----
+1 {x: 1, y: 2} 3 {x: 1, y: NULL}
+1 {x: 1, y: 2} 5 {x: 0, y: 9}
+2 {x: 3, y: 1} 1 {x: 3, y: 0}
+2 {x: 3, y: 1} 3 {x: 1, y: NULL}
+2 {x: 3, y: 1} 5 {x: 0, y: 9}
+3 {x: 3, y: NULL} 3 {x: 1, y: NULL}
+3 {x: 3, y: NULL} 5 {x: 0, y: 9}
+NULL NULL 2 {x: 3, y: 2}
+NULL NULL 4 {x: 5, y: 0}
+NULL NULL 6 NULL
+NULL NULL 7 {x: 3, y: 1}
+
+query I?I? rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_sl l FULL JOIN cj_sr r ON l.lv >= r.rv;
+----
+1 {x: 1, y: 2} 3 {x: 1, y: NULL}
+1 {x: 1, y: 2} 5 {x: 0, y: 9}
+2 {x: 3, y: 1} 1 {x: 3, y: 0}
+2 {x: 3, y: 1} 3 {x: 1, y: NULL}
+2 {x: 3, y: 1} 5 {x: 0, y: 9}
+2 {x: 3, y: 1} 7 {x: 3, y: 1}
+3 {x: 3, y: NULL} 3 {x: 1, y: NULL}
+3 {x: 3, y: NULL} 5 {x: 0, y: 9}
+4 NULL NULL NULL
+NULL NULL 2 {x: 3, y: 2}
+NULL NULL 4 {x: 5, y: 0}
+NULL NULL 6 NULL
+
+# Lists of structs: the struct ordering, NULL fields included, one level down.
+# No empty list or NULL element on the buffered side, so its smallest key,
+# [{3,NULL}], ends in a NULL field that decides the streamed rows against it.
+statement ok
+CREATE TABLE cj_lsl AS SELECT * FROM (VALUES
+  (1, make_array(named_struct('x', 5, 'y', CAST(1 AS BIGINT)))),
+  (2, make_array(named_struct('x', 3, 'y', CAST(NULL AS BIGINT)), named_struct('x', 1, 'y', CAST(1 AS BIGINT)))),
+  (3, make_array(named_struct('x', 3, 'y', CAST(NULL AS BIGINT)))),
+  (4, NULL)
+) AS t(lid, lv);
+
+statement ok
+CREATE TABLE cj_lsr AS SELECT * FROM (VALUES
+  (1, make_array(named_struct('x', 3, 'y', CAST(0 AS BIGINT)))),
+  (2, make_array(named_struct('x', 3, 'y', CAST(NULL AS BIGINT)))),
+  (3, make_array(named_struct('x', 3, 'y', CAST(NULL AS BIGINT)), named_struct('x', 1, 'y', CAST(2 AS BIGINT)))),
+  (4, make_array(named_struct('x', 2, 'y', CAST(9 AS BIGINT)))),
+  (5, make_array(named_struct('x', 7, 'y', CAST(NULL AS BIGINT)))),
+  (6, NULL),
+  (7, make_array(named_struct('x', 5, 'y', CAST(1 AS BIGINT))))
+) AS t(rid, rv);
+
+query I?I? rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_lsl l RIGHT JOIN cj_lsr r ON l.lv < r.rv;
+----
+1 [{x: 5, y: 1}] 5 [{x: 7, y: NULL}]
+2 [{x: 3, y: NULL}, {x: 1, y: 1}] 1 [{x: 3, y: 0}]
+2 [{x: 3, y: NULL}, {x: 1, y: 1}] 3 [{x: 3, y: NULL}, {x: 1, y: 2}]
+2 [{x: 3, y: NULL}, {x: 1, y: 1}] 5 [{x: 7, y: NULL}]
+2 [{x: 3, y: NULL}, {x: 1, y: 1}] 7 [{x: 5, y: 1}]
+3 [{x: 3, y: NULL}] 1 [{x: 3, y: 0}]
+3 [{x: 3, y: NULL}] 3 [{x: 3, y: NULL}, {x: 1, y: 2}]
+3 [{x: 3, y: NULL}] 5 [{x: 7, y: NULL}]
+3 [{x: 3, y: NULL}] 7 [{x: 5, y: 1}]
+NULL NULL 2 [{x: 3, y: NULL}]
+NULL NULL 4 [{x: 2, y: 9}]
+NULL NULL 6 NULL
+
+query I?I? rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_lsl l FULL JOIN cj_lsr r ON l.lv <= r.rv;
+----
+1 [{x: 5, y: 1}] 5 [{x: 7, y: NULL}]
+1 [{x: 5, y: 1}] 7 [{x: 5, y: 1}]
+2 [{x: 3, y: NULL}, {x: 1, y: 1}] 1 [{x: 3, y: 0}]
+2 [{x: 3, y: NULL}, {x: 1, y: 1}] 3 [{x: 3, y: NULL}, {x: 1, y: 2}]
+2 [{x: 3, y: NULL}, {x: 1, y: 1}] 5 [{x: 7, y: NULL}]
+2 [{x: 3, y: NULL}, {x: 1, y: 1}] 7 [{x: 5, y: 1}]
+3 [{x: 3, y: NULL}] 1 [{x: 3, y: 0}]
+3 [{x: 3, y: NULL}] 2 [{x: 3, y: NULL}]
+3 [{x: 3, y: NULL}] 3 [{x: 3, y: NULL}, {x: 1, y: 2}]
+3 [{x: 3, y: NULL}] 5 [{x: 7, y: NULL}]
+3 [{x: 3, y: NULL}] 7 [{x: 5, y: 1}]
+4 NULL NULL NULL
+NULL NULL 4 [{x: 2, y: 9}]
+NULL NULL 6 NULL
+
+query I?I? rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_lsl l RIGHT JOIN cj_lsr r ON l.lv > r.rv;
+----
+1 [{x: 5, y: 1}] 1 [{x: 3, y: 0}]
+1 [{x: 5, y: 1}] 2 [{x: 3, y: NULL}]
+1 [{x: 5, y: 1}] 3 [{x: 3, y: NULL}, {x: 1, y: 2}]
+1 [{x: 5, y: 1}] 4 [{x: 2, y: 9}]
+2 [{x: 3, y: NULL}, {x: 1, y: 1}] 2 [{x: 3, y: NULL}]
+2 [{x: 3, y: NULL}, {x: 1, y: 1}] 4 [{x: 2, y: 9}]
+3 [{x: 3, y: NULL}] 4 [{x: 2, y: 9}]
+NULL NULL 5 [{x: 7, y: NULL}]
+NULL NULL 6 NULL
+NULL NULL 7 [{x: 5, y: 1}]
+
+query I?I? rowsort
+SELECT l.lid, l.lv, r.rid, r.rv FROM cj_lsl l FULL JOIN cj_lsr r ON l.lv >= r.rv;
+----
+1 [{x: 5, y: 1}] 1 [{x: 3, y: 0}]
+1 [{x: 5, y: 1}] 2 [{x: 3, y: NULL}]
+1 [{x: 5, y: 1}] 3 [{x: 3, y: NULL}, {x: 1, y: 2}]
+1 [{x: 5, y: 1}] 4 [{x: 2, y: 9}]
+1 [{x: 5, y: 1}] 7 [{x: 5, y: 1}]
+2 [{x: 3, y: NULL}, {x: 1, y: 1}] 2 [{x: 3, y: NULL}]
+2 [{x: 3, y: NULL}, {x: 1, y: 1}] 4 [{x: 2, y: 9}]
+3 [{x: 3, y: NULL}] 2 [{x: 3, y: NULL}]
+3 [{x: 3, y: NULL}] 4 [{x: 2, y: 9}]
+4 NULL NULL NULL
+NULL NULL 5 [{x: 7, y: NULL}]
+NULL NULL 6 NULL
+
 # ==================================================================
 # Part 2: Existence joins (LeftSemi / LeftAnti; Right/Mark fall back to NLJ)
 # ==================================================================
