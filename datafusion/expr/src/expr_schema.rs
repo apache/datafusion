@@ -264,12 +264,9 @@ fn case_field_metadata(case: &Case, schema: &dyn ExprSchema) -> Result<FieldRef>
                     && target.metadata().is_empty()
                     && !field.metadata().is_empty()
                 {
-                    field = Arc::new(
-                        field
-                            .as_ref()
-                            .clone()
-                            .with_metadata(arrow_schema::Metadata::default()),
-                    );
+                    field = Arc::new(field.as_ref().clone().with_metadata(
+                        std::collections::HashMap::<String, String>::new(),
+                    ));
                 }
                 fields.push(BranchField {
                     field,
