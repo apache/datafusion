@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::regex::{compile_and_cache_regex, compile_regex, start_to_byte_offset};
+use crate::regex::{RegexCache, compile_regex, start_to_byte_offset};
 use arrow::array::{Array, ArrayRef, AsArray, Datum, Int64Array, StringArrayType};
 use arrow::datatypes::{DataType, Int64Type};
 use arrow::datatypes::{
@@ -29,7 +29,6 @@ use datafusion_expr::{
 use datafusion_macros::user_doc;
 use itertools::izip;
 use regex::Regex;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 #[user_doc(
@@ -297,7 +296,7 @@ where
         None
     };
 
-    let mut regex_cache = HashMap::new();
+    let mut regex_cache = RegexCache::new("regexp_count");
 
     match (regex_scalar, is_start_scalar, is_flags_scalar) {
         (Some(regex), true, true) => {
@@ -329,12 +328,7 @@ where
                             return Ok(None);
                         };
 
-                        let pattern = compile_and_cache_regex(
-                            "regexp_count",
-                            regex,
-                            Some(flags),
-                            &mut regex_cache,
-                        )?;
+                        let pattern = regex_cache.get_or_compile(regex, Some(flags))?;
                         count_matches(value, pattern, start_scalar)
                     })
                     .collect::<Result<Int64Array>>()?,
@@ -374,12 +368,7 @@ where
                         return Ok(None);
                     };
 
-                    let pattern = compile_and_cache_regex(
-                        "regexp_count",
-                        regex,
-                        Some(flags),
-                        &mut regex_cache,
-                    )?;
+                    let pattern = regex_cache.get_or_compile(regex, Some(flags))?;
 
                     count_matches(value, pattern, start)
                 })
@@ -404,12 +393,7 @@ where
                             return Ok(None);
                         };
 
-                        let pattern = compile_and_cache_regex(
-                            "regexp_count",
-                            regex,
-                            flags_scalar,
-                            &mut regex_cache,
-                        )?;
+                        let pattern = regex_cache.get_or_compile(regex, flags_scalar)?;
                         count_matches(value, pattern, start_scalar)
                     })
                     .collect::<Result<Int64Array>>()?,
@@ -440,12 +424,7 @@ where
                             return Ok(None);
                         };
 
-                        let pattern = compile_and_cache_regex(
-                            "regexp_count",
-                            regex,
-                            Some(flags),
-                            &mut regex_cache,
-                        )?;
+                        let pattern = regex_cache.get_or_compile(regex, Some(flags))?;
 
                         count_matches(value, pattern, start_scalar)
                     })
@@ -477,12 +456,7 @@ where
                             return Ok(None);
                         };
 
-                        let pattern = compile_and_cache_regex(
-                            "regexp_count",
-                            regex,
-                            flags_scalar,
-                            &mut regex_cache,
-                        )?;
+                        let pattern = regex_cache.get_or_compile(regex, flags_scalar)?;
                         count_matches(value, pattern, start)
                     })
                     .collect::<Result<Int64Array>>()?,
@@ -527,12 +501,7 @@ where
                         return Ok(None);
                     };
 
-                    let pattern = compile_and_cache_regex(
-                        "regexp_count",
-                        regex,
-                        Some(flags),
-                        &mut regex_cache,
-                    )?;
+                    let pattern = regex_cache.get_or_compile(regex, Some(flags))?;
                     count_matches(value, pattern, start)
                 })
                 .collect::<Result<Int64Array>>()?,

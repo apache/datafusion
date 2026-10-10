@@ -24,12 +24,14 @@
 
 use criterion::criterion_main;
 
+mod cache;
 mod regexp_count;
 mod regexp_instr;
 mod regexp_match;
 mod regx;
 
 criterion_main!(
+    cache::benches,
     regexp_count::benches,
     regexp_instr::benches,
     regexp_match::benches,
