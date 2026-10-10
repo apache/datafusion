@@ -5941,20 +5941,15 @@ impl ExecutionPlan for CountingStatsExec {
 /// recurse to the leaf. With one `StatisticsContext` shared across the pass the
 /// leaf is computed once; with a fresh context per node it is recomputed once
 /// per ancestor. This directly detects a regression where the cache is not
-/// actually shared (e.g. reset on every node), which no plan-output assertion
-/// can catch because the optimized plan is identical either way.
+/// actually shared (for example, by allocating a context per node), which no
+/// plan-output assertion can catch because the optimized plan is identical either
+/// way.
 #[test]
 fn ensure_distribution_shares_statistics_cache() -> Result<()> {
     // Count how many times a leaf's statistics are computed over a stack of
     // `depth` pass-through operators sitting on top of it. Each ancestor's
     // distribution enforcement inspects its child's statistics, which recurse to
     // the leaf.
-    //
-    // The measured arm drives the real `EnsureRequirements` rule, so the sharing
-    // and the cache-reset condition under test are the ones the rule actually
-    // uses — reimplementing them here would keep passing even if the rule
-    // stopped sharing. The baseline arm allocates a fresh `StatisticsContext`
-    // per node, reproducing the behavior before this change.
     fn deep_plan(depth: usize, calls: &Arc<AtomicUsize>) -> Arc<dyn ExecutionPlan> {
         let mut plan: Arc<dyn ExecutionPlan> =
             Arc::new(CountingStatsExec::new(parquet_exec(), Arc::clone(calls)));
@@ -5967,8 +5962,8 @@ fn ensure_distribution_shares_statistics_cache() -> Result<()> {
     fn config() -> ConfigOptions {
         let mut config = ConfigOptions::new();
         config.execution.target_partitions = 10;
-        // Keep the plan a fixpoint so no node is rebuilt and the shared cache is
-        // never reset; statistics are still computed for the round-robin decision.
+        // Keep the plan a fixpoint; statistics are still computed for the
+        // round-robin decision.
         config.optimizer.enable_round_robin_repartition = false;
         config
     }
@@ -5999,8 +5994,8 @@ fn ensure_distribution_shares_statistics_cache() -> Result<()> {
     let (shared_shallow, fresh_shallow) = (via_rule(4)?, per_node_context(4)?);
     let (shared_deep, fresh_deep) = (via_rule(12)?, per_node_context(12)?);
 
-    // Sharing strictly reduces statistics recomputation at any depth. A rule that
-    // stopped sharing (or reset the cache on every node) would make these equal.
+    // Sharing strictly reduces statistics recomputation at any depth. A rule
+    // that stopped sharing would make these equal.
     assert!(
         shared_shallow < fresh_shallow && shared_deep < fresh_deep,
         "shared cache must recompute less: shallow {shared_shallow} vs {fresh_shallow}, \
