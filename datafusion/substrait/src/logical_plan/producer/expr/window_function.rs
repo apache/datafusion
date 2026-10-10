@@ -18,16 +18,18 @@
 use crate::logical_plan::producer::SubstraitProducer;
 use crate::logical_plan::producer::to_substrait_type_from_field;
 use crate::logical_plan::producer::utils::substrait_sort_field;
+use crate::variation_const::DEFAULT_TYPE_VARIATION_REF;
 use datafusion::common::{DFSchemaRef, ScalarValue, not_impl_err};
 use datafusion::logical_expr::expr::{WindowFunction, WindowFunctionParams};
 use datafusion::logical_expr::{Expr, ExprSchemable};
 use datafusion::logical_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 use substrait::proto::aggregate_function::AggregationInvocation;
-use substrait::proto::expression::RexType;
 use substrait::proto::expression::WindowFunction as SubstraitWindowFunction;
+use substrait::proto::expression::literal::LiteralType;
 use substrait::proto::expression::window_function::bound as SubstraitBound;
 use substrait::proto::expression::window_function::bound::Kind as BoundKind;
 use substrait::proto::expression::window_function::{Bound, BoundsType};
+use substrait::proto::expression::{Literal, RexType};
 use substrait::proto::function_argument::ArgType;
 use substrait::proto::{Expression, FunctionArgument};
 
@@ -90,9 +92,8 @@ pub fn from_window_function(
         Expr::WindowFunction(Box::new(window_fn.clone())).to_field(schema)?;
     let output_type = to_substrait_type_from_field(producer, &output_field)?;
 
-    #[expect(deprecated)]
     Ok(Expression {
-        rex_type: Some(RexType::WindowFunction(SubstraitWindowFunction {
+        rex_type: Some(RexType::WindowFunction(Box::new(SubstraitWindowFunction {
             function_reference: function_anchor,
             arguments,
             partitions: partition_by,
@@ -105,11 +106,10 @@ pub fn from_window_function(
             } else {
                 AggregationInvocation::All as i32
             },
-            lower_bound: Some(bounds.0),
-            upper_bound: Some(bounds.1),
-            args: vec![],
+            lower_bound: Some(Box::new(bounds.0)),
+            upper_bound: Some(Box::new(bounds.1)),
             bounds_type: bound_type as i32,
-        })),
+        }))),
     })
 }
 
@@ -143,16 +143,56 @@ fn to_substrait_bound(bound: &WindowFrameBound) -> datafusion::common::Result<Bo
         WindowFrameBound::CurrentRow => Ok(Bound {
             kind: Some(BoundKind::CurrentRow(SubstraitBound::CurrentRow {})),
         }),
-        WindowFrameBound::Preceding(s) => Ok(Bound {
-            kind: Some(BoundKind::Preceding(SubstraitBound::Preceding {
-                offset: to_substrait_bound_offset(s)?,
-            })),
-        }),
-        WindowFrameBound::Following(s) => Ok(Bound {
-            kind: Some(BoundKind::Following(SubstraitBound::Following {
-                offset: to_substrait_bound_offset(s)?,
-            })),
-        }),
+        WindowFrameBound::Preceding(s) => {
+            let offset = to_substrait_bound_offset(s)?;
+            if offset == 0 {
+                // A zero distance is equivalent to CurrentRow, and `offset`
+                // cannot represent zero, so the specification asks producers to
+                // emit CurrentRow instead of a zero bound.
+                return Ok(Bound {
+                    kind: Some(BoundKind::CurrentRow(SubstraitBound::CurrentRow {})),
+                });
+            }
+            #[expect(deprecated)]
+            Ok(Bound {
+                kind: Some(BoundKind::Preceding(Box::new(SubstraitBound::Preceding {
+                    // `offset` carries the int64-literal equivalent for
+                    // consumers that do not read `offset_expr` yet.
+                    offset,
+                    offset_expr: Some(Box::new(bound_offset_expr(offset))),
+                }))),
+            })
+        }
+        WindowFrameBound::Following(s) => {
+            let offset = to_substrait_bound_offset(s)?;
+            if offset == 0 {
+                // A zero distance is equivalent to CurrentRow, and `offset`
+                // cannot represent zero, so the specification asks producers to
+                // emit CurrentRow instead of a zero bound.
+                return Ok(Bound {
+                    kind: Some(BoundKind::CurrentRow(SubstraitBound::CurrentRow {})),
+                });
+            }
+            #[expect(deprecated)]
+            Ok(Bound {
+                kind: Some(BoundKind::Following(Box::new(SubstraitBound::Following {
+                    offset,
+                    offset_expr: Some(Box::new(bound_offset_expr(offset))),
+                }))),
+            })
+        }
+    }
+}
+
+/// Builds the int64 literal expression that a window frame bound offset carries
+/// in `offset_expr`.
+fn bound_offset_expr(offset: i64) -> Expression {
+    Expression {
+        rex_type: Some(RexType::Literal(Literal {
+            nullable: false,
+            type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+            literal_type: Some(LiteralType::I64(offset)),
+        })),
     }
 }
 
@@ -239,6 +279,25 @@ mod tests {
     }
 
     #[test]
+    fn zero_distance_bounds_become_current_row() {
+        // `offset` cannot represent zero and the specification asks producers to
+        // emit CurrentRow rather than a zero bound, so neither field is written.
+        let frame = WindowFrame::new_bounds(
+            WindowFrameUnits::Rows,
+            WindowFrameBound::Preceding(ScalarValue::UInt64(Some(0))),
+            WindowFrameBound::Following(ScalarValue::UInt64(Some(0))),
+        );
+        let (lower, upper) = to_substrait_bounds(&frame).unwrap();
+        for bound in [lower, upper] {
+            assert_eq!(
+                bound.kind,
+                Some(BoundKind::CurrentRow(SubstraitBound::CurrentRow {}))
+            );
+        }
+    }
+
+    #[test]
+    #[expect(deprecated)]
     fn window_frame_offsets() {
         for value in [
             ScalarValue::UInt8(Some(1)),
@@ -258,9 +317,10 @@ mod tests {
             let (_, bound) = to_substrait_bounds(&frame).unwrap();
             assert_eq!(
                 bound.kind,
-                Some(BoundKind::Following(SubstraitBound::Following {
-                    offset: 1
-                }))
+                Some(BoundKind::Following(Box::new(SubstraitBound::Following {
+                    offset: 1,
+                    offset_expr: Some(Box::new(bound_offset_expr(1))),
+                })))
             );
         }
 
