@@ -32,7 +32,7 @@ use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::Result;
 use datafusion_common::utils::{
-    ListCoercion, base_type, coerced_type_with_base_type_only, offset_span_len,
+    base_type, coerced_fixed_size_list_to_list, offset_span_len,
 };
 use datafusion_common::{
     cast::as_generic_list_array,
@@ -292,45 +292,14 @@ impl ScalarUDFImpl for ArrayConcat {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let mut max_dims = 0;
-        let mut large_list = false;
-        let mut element_types = Vec::with_capacity(arg_types.len());
-        for arg_type in arg_types {
-            match arg_type {
-                DataType::Null | DataType::List(_) | DataType::FixedSizeList(..) => (),
-                DataType::LargeList(_) => large_list = true,
-                arg_type => {
-                    return plan_err!("{} does not support type {arg_type}", self.name());
-                }
-            }
-
-            max_dims = max_dims.max(list_ndims(arg_type));
-            element_types.push(base_type(arg_type))
-        }
-
-        if max_dims == 0 {
-            Ok(DataType::Null)
-        } else if let Some(mut return_type) = type_union_resolution(&element_types) {
-            for _ in 1..max_dims {
-                return_type = DataType::new_list(return_type, true)
-            }
-
-            if large_list {
-                Ok(DataType::new_large_list(return_type, true))
-            } else {
-                Ok(DataType::new_list(return_type, true))
-            }
-        } else {
-            plan_err!(
-                "Failed to unify argument types of {}: [{}]",
-                self.name(),
-                arg_types.iter().join(", ")
-            )
-        }
+        array_concat_return_type(self.name(), arg_types)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(array_concat_inner)(&args.args)
+        let return_type = args.return_field.data_type().clone();
+        make_scalar_function(|args: &[ArrayRef]| {
+            array_concat_with_return_type(args, &return_type)
+        })(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -339,25 +308,19 @@ impl ScalarUDFImpl for ArrayConcat {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         let return_type = self.return_type(arg_types)?;
-        let base_type = base_type(&return_type);
-        let coercion = Some(&ListCoercion::FixedSizedListToList);
-        // When the return type is a `LargeList`, the outer container of every
-        // input must be widened to `LargeList` as well. Otherwise
-        // `array_concat_inner` would later try to downcast a `List` argument
-        // to `GenericListArray<i64>` and fail.
-        let promote_to_large_list = matches!(return_type, DataType::LargeList(_));
-        let arg_types = arg_types.iter().map(|arg_type| {
-            let coerced =
-                coerced_type_with_base_type_only(arg_type, &base_type, coercion);
-            match coerced {
-                DataType::List(field) if promote_to_large_list => {
-                    DataType::LargeList(field)
-                }
-                other => other,
-            }
-        });
+        let return_ndims = list_ndims(&return_type);
 
-        Ok(arg_types.collect())
+        Ok(arg_types
+            .iter()
+            .map(|arg_type| {
+                let arg_ndims = list_ndims(arg_type);
+                if arg_ndims == 0 {
+                    return_type.clone()
+                } else {
+                    peel_list_type(&return_type, return_ndims - arg_ndims)
+                }
+            })
+            .collect())
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -365,18 +328,116 @@ impl ScalarUDFImpl for ArrayConcat {
     }
 }
 
+fn array_concat_return_type(name: &str, arg_types: &[DataType]) -> Result<DataType> {
+    let mut max_dims = 0;
+    let wrap_with_large_list = arg_types
+        .iter()
+        .any(|arg_type| matches!(arg_type, DataType::LargeList(_)));
+    let mut aligned_types = Vec::with_capacity(arg_types.len());
+
+    for arg_type in arg_types {
+        match arg_type {
+            DataType::Null
+            | DataType::List(_)
+            | DataType::FixedSizeList(..)
+            | DataType::LargeList(_) => (),
+            arg_type => {
+                return plan_err!("{name} does not support type {arg_type}");
+            }
+        }
+
+        max_dims = max_dims.max(list_ndims(arg_type));
+    }
+
+    if max_dims == 0 {
+        return Ok(DataType::Null);
+    }
+
+    if max_dims == 1 {
+        let element_types: Vec<DataType> = arg_types.iter().map(base_type).collect();
+        let Some(element_type) = type_union_resolution(&element_types) else {
+            return plan_err!(
+                "Failed to unify argument types of {name}: [{}]",
+                arg_types.iter().join(", ")
+            );
+        };
+        return Ok(if wrap_with_large_list {
+            DataType::new_large_list(element_type, true)
+        } else {
+            DataType::new_list(element_type, true)
+        });
+    }
+
+    for arg_type in arg_types {
+        aligned_types.push(align_type_dimensions(
+            arg_type,
+            max_dims,
+            wrap_with_large_list,
+        ));
+    }
+
+    if let Some(return_type) = type_union_resolution(&aligned_types) {
+        Ok(return_type)
+    } else {
+        plan_err!(
+            "Failed to unify argument types of {name}: [{}]",
+            arg_types.iter().join(", ")
+        )
+    }
+}
+
+fn align_type_dimensions(
+    data_type: &DataType,
+    max_dims: u64,
+    wrap_with_large_list: bool,
+) -> DataType {
+    let mut aligned_type = coerced_fixed_size_list_to_list(data_type);
+
+    for _ in list_ndims(data_type)..max_dims {
+        aligned_type = if wrap_with_large_list {
+            DataType::new_large_list(aligned_type, true)
+        } else {
+            DataType::new_list(aligned_type, true)
+        };
+    }
+
+    aligned_type
+}
+
+fn peel_list_type(data_type: &DataType, levels: u64) -> DataType {
+    let mut peeled_type = data_type.clone();
+
+    for _ in 0..levels {
+        peeled_type = match peeled_type {
+            DataType::List(field)
+            | DataType::LargeList(field)
+            | DataType::FixedSizeList(field, _) => field.data_type().clone(),
+            other => other,
+        };
+    }
+
+    peeled_type
+}
+
 pub fn array_concat_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let arg_types: Vec<DataType> =
+        args.iter().map(|arg| arg.data_type().clone()).collect();
+    let return_type = array_concat_return_type("array_concat", &arg_types)?;
+    array_concat_with_return_type(args, &return_type)
+}
+
+fn array_concat_with_return_type(
+    args: &[ArrayRef],
+    return_type: &DataType,
+) -> Result<ArrayRef> {
     if args.is_empty() {
         return exec_err!("array_concat expects at least one argument");
     }
 
     let mut all_null = true;
-    let mut large_list = false;
     for arg in args {
-        match arg.data_type() {
-            DataType::Null => continue,
-            DataType::LargeList(_) => large_list = true,
-            _ => (),
+        if arg.data_type() == &DataType::Null {
+            continue;
         }
         if arg.null_count() < arg.len() {
             all_null = false;
@@ -384,21 +445,17 @@ pub fn array_concat_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 
     if all_null {
-        // Return a null array with the same type as the first non-null-type argument
-        let return_type = args
-            .iter()
-            .map(|arg| arg.data_type())
-            .find_or_first(|d| !d.is_null())
-            .unwrap(); // Safe because args is non-empty
-
         Ok(arrow::array::make_array(ArrayData::new_null(
             return_type,
             args[0].len(),
         )))
-    } else if large_list {
-        concat_internal::<i64>(args, None)
     } else {
-        concat_internal::<i32>(args, None)
+        let field = list_inner_field("array_concat", return_type)?;
+        match return_type {
+            DataType::List(_) => concat_internal::<i32>(args, Some(&field)),
+            DataType::LargeList(_) => concat_internal::<i64>(args, Some(&field)),
+            arg_type => exec_err!("array_concat does not support type {arg_type}"),
+        }
     }
 }
 
@@ -419,11 +476,8 @@ fn append_prepend_return_type(
 
 /// Concatenates the list arrays in `args` row-wise.
 ///
-/// `field` is the list field the output must carry. `array_concat` passes `None`
-/// because its `return_type` derives a fresh field from the unified element
-/// types, which is what deriving the field from the aligned inputs reproduces.
-/// `array_append` / `array_prepend` promise their input's field verbatim and so
-/// must pass it in explicitly.
+/// `field` is the list field the output must carry when it differs from the
+/// aligned inputs' first field.
 fn concat_internal<O: OffsetSizeTrait>(
     args: &[ArrayRef],
     field: Option<&FieldRef>,
