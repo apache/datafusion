@@ -123,6 +123,7 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 
 use crate::EmptyRecordBatchStream;
+use crate::joins::sort_merge_join::exec::NullAwareMode;
 use crate::joins::utils::{JoinFilter, JoinKeyComparator, compare_join_arrays};
 use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, Time,
@@ -198,6 +199,22 @@ fn find_key_group_end(cmp: &JoinKeyComparator, from: usize, len: usize) -> usize
     lo
 }
 
+/// State of the right-side subquery used by a null-aware `LeftAnti` join.
+///
+/// Determined before emitting left rows, using a single right partition
+/// sorted with NULLS FIRST.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SubqueryState {
+    /// The right input has not been inspected yet.
+    Pending,
+    /// The right input contains no rows.
+    Empty,
+    /// The right input contains rows but no NULL keys.
+    NonEmptyNoNull,
+    /// The right input contains at least one NULL key.
+    HasNull,
+}
+
 /// Sort-Merge join stream for Semi/Anti/Mark joins.
 ///
 /// Named "bitwise" because it tracks outer-row matches via a per-batch
@@ -246,6 +263,8 @@ pub(crate) struct BitwiseSortMergeJoinStream {
     filter: Option<JoinFilter>,
     sort_options: Vec<SortOptions>,
     null_equality: NullEquality,
+    null_aware: Option<NullAwareMode>,
+    subquery_state: SubqueryState,
     // Decomposed from JoinType: when RightSemi/RightAnti, outer=right,
     // inner=left, so we swap sides when building the filter batch.
     outer_is_left: bool,
@@ -290,6 +309,7 @@ impl BitwiseSortMergeJoinStream {
         schema: SchemaRef,
         sort_options: Vec<SortOptions>,
         null_equality: NullEquality,
+        null_aware: Option<NullAwareMode>,
         outer: SendableRecordBatchStream,
         inner: SendableRecordBatchStream,
         on_outer: Vec<PhysicalExprRef>,
@@ -328,6 +348,22 @@ impl BitwiseSortMergeJoinStream {
         let peak_mem_used =
             MetricBuilder::new(metrics).peak_memory_usage("peak_mem_used", partition);
 
+        if let Some(mode) = null_aware {
+            let validated = NullAwareMode::try_new(
+                join_type,
+                on_outer.len(),
+                filter.is_some(),
+                null_equality,
+                &sort_options,
+            )?;
+
+            if mode != validated {
+                return internal_err!(
+                    "null-aware mode does not match the join configuration"
+                );
+            }
+        }
+
         let mut state = Self {
             join_type,
             outer,
@@ -345,6 +381,8 @@ impl BitwiseSortMergeJoinStream {
             filter,
             sort_options,
             null_equality,
+            null_aware,
+            subquery_state: SubqueryState::Pending,
             outer_is_left,
             coalescer: BatchCoalescer::new(Arc::clone(&schema), batch_size)
                 .with_biggest_coalesce_batch_size(Some(batch_size / 2)),
@@ -1103,12 +1141,55 @@ impl BitwiseSortMergeJoinStream {
         }
     }
 
+    /// Initializes the inner input's empty/NULL summary for null-aware joins.
+    async fn initialized_null_aware(&mut self) -> Result<()> {
+        if self.subquery_state != SubqueryState::Pending {
+            return Ok(());
+        }
+
+        match self.null_aware {
+            None => return Ok(()),
+            Some(NullAwareMode::LeftAnti) => {}
+        }
+
+        if !self.next_inner_batch().await? {
+            self.subquery_state = SubqueryState::Empty;
+            return Ok(());
+        }
+
+        // Keep the first nonempty inner batch at offset 0 for the merge scan.
+        // The complete right input need to be sorted with NULLS FIRST.
+        let first_batch_has_null = self.inner_key_arrays[0]
+            .logical_nulls()
+            .is_some_and(|null_keys| null_keys.is_null(0));
+
+        self.subquery_state = if first_batch_has_null {
+            SubqueryState::HasNull
+        } else {
+            SubqueryState::NonEmptyNoNull
+        };
+
+        Ok(())
+    }
+
     /// Main loop: a classic merge-scan over the two sorted inputs, emitting
     /// output batches as they complete.
     async fn join(
         &mut self,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
+        self.initialized_null_aware().await?;
+        match self.null_aware {
+            None => {}
+            Some(NullAwareMode::LeftAnti) => {
+                // NOT IN cannot be TRUE for any outer row when the inner
+                // input contains a NULL key. (following NOT IN semetic)
+                if self.subquery_state == SubqueryState::HasNull {
+                    return Ok(());
+                }
+            }
+        }
+
         // The `has_current_*` / `has_completed_batch` fast paths keep async
         // state machinery out of the per-key-group hot path; the awaiting
         // helpers are only entered at batch boundaries.

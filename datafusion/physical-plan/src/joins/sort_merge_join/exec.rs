@@ -64,6 +64,61 @@ use datafusion_physical_expr_common::physical_expr::{PhysicalExprRef, fmt_sql};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 use futures::StreamExt;
 
+/// Null-aware (`NOT IN`) semantics of a soft merge join, derived from
+/// [`SortMergeJoinExec::null_aware`] and the join type.
+///
+/// Only these combinations are legal (see [`Self::try_new`]), so the
+/// stream matches on this instead of re-checking `null_aware && join_type == ..`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NullAwareMode {
+    /// `left.key NOT IN (right.key)`: emits left rows.
+    LeftAnti,
+}
+
+impl NullAwareMode {
+    /// Validates that `null_aware` may be set for this join and returns its mode.
+    pub(crate) fn try_new(
+        join_type: JoinType,
+        num_keys: usize,
+        has_filter: bool,
+        null_equality: NullEquality,
+        sort_options: &[SortOptions],
+    ) -> Result<Self> {
+        if num_keys != 1 || has_filter {
+            return plan_err!("null-aware SortMergeJoin requires one key and no filter");
+        }
+
+        // NULL keys must not match each other.
+        // The null-aware execution path handles UNKNOWN results separately.
+        // UNKNOWN happens when `WHERE x NOT IN (NULL)`
+        if null_equality != NullEquality::NullEqualsNothing {
+            return plan_err!("null-aware SortMergeJoin requires NullEqualsNothing");
+        }
+
+        let mode = match join_type {
+            JoinType::LeftAnti => Self::LeftAnti,
+            _ => {
+                return plan_err!(
+                    "null-aware SortMergeJoin only supports LeftAnti, got {join_type}"
+                );
+            }
+        };
+
+        match mode {
+            Self::LeftAnti => {
+                // With a single right-side partition and NULLS FIRST,
+                // the first row reveals whether the subquery contains NULL.
+                if sort_options.len() != 1 || !sort_options[0].nulls_first {
+                    return plan_err!(
+                        "null-aware {join_type} SortMergeJoin requires NULLS FIRST ordering"
+                    );
+                }
+                Ok(mode)
+            }
+        }
+    }
+}
+
 /// Join execution plan that executes equi-join predicates on multiple partitions using Sort-Merge
 /// join algorithm and applies an optional filter post join. Can be used to join arbitrarily large
 /// inputs where one or both of the inputs don't fit in the available memory.
@@ -134,6 +189,19 @@ pub struct SortMergeJoinExec {
     pub sort_options: Vec<SortOptions>,
     /// Defines the null equality for the join.
     pub null_equality: NullEquality,
+    /// Flag to indicate if this join uses null-aware equality semantics.
+    ///
+    /// Currently supported only for uncorrelated `LeftAnti` joins with one
+    /// join key, no join filter, and [`NullEquality::NullEqualsNothing`].
+    ///
+    /// Both inputs must have a single partition and be sorted with NULLS FIRST.
+    /// This lets the join determine whether the entire right input is empty
+    /// or contains a NULL key before emitting any left rows.
+    ///
+    /// An empty right input preserves all left rows, including NULL keys.
+    /// A right input containing a NULL key produces no rows.
+    /// Otherwise, only unmatched left rows with non-NULL keys are emitted.
+    pub null_aware: bool,
     /// The columns of `schema` to emit, in order. `None` emits all of them.
     pub projection: Option<Vec<usize>>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
@@ -208,9 +276,21 @@ impl SortMergeJoinExec {
             right_sort_exprs,
             sort_options,
             null_equality,
+            null_aware: false,
             projection: None,
             cache: Arc::new(cache),
         })
+    }
+
+    /// Enables or disables null-aware (`NOT IN`) semantics.
+    ///
+    /// Enabling requires an uncorrelated `LeftAnti` join with one key, no
+    /// filter, [`NullEquality::NullEqualsNothing`], and NULLS FIRST ordering.
+    /// Both inputs must have a single partition when executed.
+    pub fn with_null_aware(mut self, null_aware: bool) -> Result<Self> {
+        self.null_aware = null_aware;
+        self.null_aware_mode()?;
+        Ok(self)
     }
 
     /// Returns this join emitting only the columns in `projection`, in that order.
@@ -306,6 +386,11 @@ impl SortMergeJoinExec {
         self.null_equality
     }
 
+    /// Null aware
+    pub fn null_aware(&self) -> bool {
+        self.null_aware
+    }
+
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         left: &Arc<dyn ExecutionPlan>,
@@ -377,6 +462,7 @@ impl SortMergeJoinExec {
             self.sort_options.clone(),
             self.null_equality,
         )?
+        .with_null_aware(self.null_aware)?
         .with_projection(swap_join_projection(
             left.schema().fields().len(),
             right.schema().fields().len(),
@@ -400,6 +486,23 @@ impl SortMergeJoinExec {
         } else {
             reorder_output_after_swap(Arc::new(new_join), &left.schema(), &right.schema())
         }
+    }
+
+    /// The null-aware semantics of this join, if [`Self::null_aware`] is set.
+    ///
+    /// Errors if `null_aware` is set on a join that does not support it.
+    pub(super) fn null_aware_mode(&self) -> Result<Option<NullAwareMode>> {
+        self.null_aware
+            .then(|| {
+                NullAwareMode::try_new(
+                    self.join_type,
+                    self.on.len(),
+                    self.filter.is_some(),
+                    self.null_equality(),
+                    self.sort_options(),
+                )
+            })
+            .transpose()
     }
 }
 
@@ -493,6 +596,18 @@ impl ExecutionPlan for SortMergeJoinExec {
     }
 
     fn input_distribution_requirements(&self) -> InputDistributionRequirements {
+        // Null-aware NOT IN needs facts about the entire right input.
+        // Require a single partition on both sides to use the existing
+        // sort-merge join's partition pairing without cross-partition coordination.
+        //
+        // TODO: Allow multiple left partitions by sharing the right-side summary
+        // and providing each left partition with the right input for matching.
+        if self.null_aware {
+            return InputDistributionRequirements::new(vec![
+                Distribution::SinglePartition,
+                Distribution::SinglePartition,
+            ]);
+        }
         let (left_expr, right_expr) = self
             .on
             .iter()
@@ -556,6 +671,7 @@ impl ExecutionPlan for SortMergeJoinExec {
                         self.sort_options.clone(),
                         self.null_equality,
                     )?
+                    .with_null_aware(self.null_aware)?
                     .with_projection(self.projection.clone())?,
                 )),
                 _ => internal_err!("SortMergeJoin wrong number of children"),
@@ -596,6 +712,20 @@ impl ExecutionPlan for SortMergeJoinExec {
             "Invalid SortMergeJoinExec, partition count mismatch {left_partitions}!={right_partitions},\
                  consider using RepartitionExec"
         );
+
+        let null_aware = self.null_aware_mode()?;
+
+        // Null-aware execution requires a single partition on both sides.
+        // Validate this at execution time because callers may bypass the
+        // optimizer or modify the public null_aware flag after planning.
+        if null_aware.is_some()
+            && (partition != 0 || left_partitions != 1 || right_partitions != 1)
+        {
+            return internal_err!(
+                "null-aware SortMergeJoin requires partition 0 and single-partition inputs"
+            );
+        }
+
         // execute children plans
         let left = self.left.execute(partition, Arc::clone(&context))?;
         let right = self.right.execute(partition, Arc::clone(&context))?;
@@ -606,6 +736,7 @@ impl ExecutionPlan for SortMergeJoinExec {
                 schema: Arc::clone(&self.schema),
                 sort_options: self.sort_options.clone(),
                 null_equality: self.null_equality,
+                null_aware,
                 left,
                 right,
                 on_left,
@@ -699,15 +830,18 @@ impl ExecutionPlan for SortMergeJoinExec {
             self.filter().as_ref(),
             &column_indices,
         )? {
-            Ok(Some(Arc::new(SortMergeJoinExec::try_new(
-                Arc::new(projected_left_child),
-                Arc::new(projected_right_child),
-                join_on,
-                join_filter,
-                self.join_type,
-                self.sort_options.clone(),
-                self.null_equality,
-            )?)))
+            Ok(Some(Arc::new(
+                SortMergeJoinExec::try_new(
+                    Arc::new(projected_left_child),
+                    Arc::new(projected_right_child),
+                    join_on,
+                    join_filter,
+                    self.join_type,
+                    self.sort_options.clone(),
+                    self.null_equality,
+                )?
+                .with_null_aware(self.null_aware)?,
+            )))
         } else {
             try_embed_projection(projection, self)
         }
@@ -720,6 +854,14 @@ impl ExecutionPlan for SortMergeJoinExec {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
 
+        // The existing protobuf node cannot represent null-aware semantics.
+        // Reject encoding rather than silently decoding as an ordinary anti join.
+        if self.null_aware {
+            return datafusion_common::not_impl_err!(
+                "Serializing null-aware SortMergeJoinExec is not supported"
+            );
+        }
+
         // Destructure exhaustively (no `..`) so that a newly added field is a
         // compile error here instead of being silently left out of the proto.
         let Self {
@@ -730,6 +872,7 @@ impl ExecutionPlan for SortMergeJoinExec {
             join_type,
             sort_options,
             null_equality,
+            null_aware: _,
             projection,
             // derived from the children's schemas by `try_new` on decode
             schema: _,
@@ -864,6 +1007,7 @@ impl SortMergeJoinExec {
             *null_equality,
             "SortMergeJoinExec",
         )?;
+
         let filter = filter
             .as_ref()
             .map(|filter| {
@@ -912,6 +1056,7 @@ pub(crate) struct SortMergeJoinInputs {
     /// Sort options of the join keys, one per key, that both inputs are sorted with
     pub(crate) sort_options: Vec<SortOptions>,
     pub(crate) null_equality: NullEquality,
+    pub(crate) null_aware: Option<NullAwareMode>,
     /// Left input, sorted on `on_left` with `sort_options`
     pub(crate) left: SendableRecordBatchStream,
     /// Right input, sorted on `on_right` with `sort_options`
@@ -940,6 +1085,7 @@ pub(crate) fn sort_merge_join_stream(
         schema,
         sort_options,
         null_equality,
+        null_aware,
         left,
         right,
         on_left,
@@ -983,6 +1129,7 @@ pub(crate) fn sort_merge_join_stream(
             schema,
             sort_options,
             null_equality,
+            null_aware,
             streamed,
             buffered,
             on_streamed,
