@@ -30,7 +30,9 @@
 use super::utils::{is_false, is_null};
 use datafusion_common::utils::normalize_float_zero_scalar;
 use datafusion_common::{Column, DataFusionError, Result, ScalarValue, internal_err};
-use datafusion_expr::utils::{conjunction, split_conjunction_owned};
+use datafusion_expr::utils::{
+    conjunction, disjunction, split_binary_owned, split_conjunction_owned,
+};
 use datafusion_expr::{BinaryExpr, Expr, Operator, lit};
 use indexmap::IndexSet;
 use std::cmp::Ordering;
@@ -119,14 +121,15 @@ fn simplify_disjunction(
     depth: usize,
     remaining: &mut usize,
 ) -> Result<Expr> {
-    let Expr::BinaryExpr(BinaryExpr {
-        left,
-        op: Operator::Or,
-        right,
-    }) = predicate
-    else {
+    if !matches!(
+        predicate,
+        Expr::BinaryExpr(BinaryExpr {
+            op: Operator::Or,
+            ..
+        })
+    ) {
         return Ok(predicate);
-    };
+    }
     let mut simplify_branch = |branch| {
         let original = split_conjunction_owned(branch);
         let predicates =
@@ -144,15 +147,15 @@ fn simplify_disjunction(
         };
         Ok::<_, DataFusionError>(conjunction(predicates).unwrap_or_else(|| lit(true)))
     };
-    let left = simplify_branch(*left)?;
-    let right = simplify_branch(*right)?;
-    Ok(if is_false(&left) {
-        right
-    } else if is_false(&right) {
-        left
-    } else {
-        left.or(right)
-    })
+    // Flatten OR chains so the depth limit counts AND/OR nesting, not disjuncts.
+    let mut branches = Vec::new();
+    for branch in split_binary_owned(predicate, Operator::Or) {
+        let branch = simplify_branch(branch)?;
+        if !is_false(&branch) {
+            branches.push(branch);
+        }
+    }
+    Ok(disjunction(branches).unwrap_or_else(|| lit(false)))
 }
 
 fn is_column_comparison(expr: &Expr) -> bool {

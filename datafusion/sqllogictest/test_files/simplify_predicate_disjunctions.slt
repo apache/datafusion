@@ -31,6 +31,159 @@ WHERE x >= 10 AND ((x >= 1 AND x < 3) OR (x >= 5 AND x < 7));
 ----
 logical_plan EmptyRelation: rows=0
 
+# A flat chain of 120 disjoint ranges must not consume the AND/OR nesting limit.
+# Every range is below the outer bound, so all branches can be removed.
+statement ok
+CREATE VIEW many_disjoint_ranges AS
+SELECT x FROM disjoint_ranges WHERE
+  (x >= 0 AND x < 2)
+  OR (x >= 10 AND x < 12)
+  OR (x >= 20 AND x < 22)
+  OR (x >= 30 AND x < 32)
+  OR (x >= 40 AND x < 42)
+  OR (x >= 50 AND x < 52)
+  OR (x >= 60 AND x < 62)
+  OR (x >= 70 AND x < 72)
+  OR (x >= 80 AND x < 82)
+  OR (x >= 90 AND x < 92)
+  OR (x >= 100 AND x < 102)
+  OR (x >= 110 AND x < 112)
+  OR (x >= 120 AND x < 122)
+  OR (x >= 130 AND x < 132)
+  OR (x >= 140 AND x < 142)
+  OR (x >= 150 AND x < 152)
+  OR (x >= 160 AND x < 162)
+  OR (x >= 170 AND x < 172)
+  OR (x >= 180 AND x < 182)
+  OR (x >= 190 AND x < 192)
+  OR (x >= 200 AND x < 202)
+  OR (x >= 210 AND x < 212)
+  OR (x >= 220 AND x < 222)
+  OR (x >= 230 AND x < 232)
+  OR (x >= 240 AND x < 242)
+  OR (x >= 250 AND x < 252)
+  OR (x >= 260 AND x < 262)
+  OR (x >= 270 AND x < 272)
+  OR (x >= 280 AND x < 282)
+  OR (x >= 290 AND x < 292)
+  OR (x >= 300 AND x < 302)
+  OR (x >= 310 AND x < 312)
+  OR (x >= 320 AND x < 322)
+  OR (x >= 330 AND x < 332)
+  OR (x >= 340 AND x < 342)
+  OR (x >= 350 AND x < 352)
+  OR (x >= 360 AND x < 362)
+  OR (x >= 370 AND x < 372)
+  OR (x >= 380 AND x < 382)
+  OR (x >= 390 AND x < 392)
+  OR (x >= 400 AND x < 402)
+  OR (x >= 410 AND x < 412)
+  OR (x >= 420 AND x < 422)
+  OR (x >= 430 AND x < 432)
+  OR (x >= 440 AND x < 442)
+  OR (x >= 450 AND x < 452)
+  OR (x >= 460 AND x < 462)
+  OR (x >= 470 AND x < 472)
+  OR (x >= 480 AND x < 482)
+  OR (x >= 490 AND x < 492)
+  OR (x >= 500 AND x < 502)
+  OR (x >= 510 AND x < 512)
+  OR (x >= 520 AND x < 522)
+  OR (x >= 530 AND x < 532)
+  OR (x >= 540 AND x < 542)
+  OR (x >= 550 AND x < 552)
+  OR (x >= 560 AND x < 562)
+  OR (x >= 570 AND x < 572)
+  OR (x >= 580 AND x < 582)
+  OR (x >= 590 AND x < 592)
+  OR (x >= 600 AND x < 602)
+  OR (x >= 610 AND x < 612)
+  OR (x >= 620 AND x < 622)
+  OR (x >= 630 AND x < 632)
+  OR (x >= 640 AND x < 642)
+  OR (x >= 650 AND x < 652)
+  OR (x >= 660 AND x < 662)
+  OR (x >= 670 AND x < 672)
+  OR (x >= 680 AND x < 682)
+  OR (x >= 690 AND x < 692)
+  OR (x >= 700 AND x < 702)
+  OR (x >= 710 AND x < 712)
+  OR (x >= 720 AND x < 722)
+  OR (x >= 730 AND x < 732)
+  OR (x >= 740 AND x < 742)
+  OR (x >= 750 AND x < 752)
+  OR (x >= 760 AND x < 762)
+  OR (x >= 770 AND x < 772)
+  OR (x >= 780 AND x < 782)
+  OR (x >= 790 AND x < 792)
+  OR (x >= 800 AND x < 802)
+  OR (x >= 810 AND x < 812)
+  OR (x >= 820 AND x < 822)
+  OR (x >= 830 AND x < 832)
+  OR (x >= 840 AND x < 842)
+  OR (x >= 850 AND x < 852)
+  OR (x >= 860 AND x < 862)
+  OR (x >= 870 AND x < 872)
+  OR (x >= 880 AND x < 882)
+  OR (x >= 890 AND x < 892)
+  OR (x >= 900 AND x < 902)
+  OR (x >= 910 AND x < 912)
+  OR (x >= 920 AND x < 922)
+  OR (x >= 930 AND x < 932)
+  OR (x >= 940 AND x < 942)
+  OR (x >= 950 AND x < 952)
+  OR (x >= 960 AND x < 962)
+  OR (x >= 970 AND x < 972)
+  OR (x >= 980 AND x < 982)
+  OR (x >= 990 AND x < 992)
+  OR (x >= 1000 AND x < 1002)
+  OR (x >= 1010 AND x < 1012)
+  OR (x >= 1020 AND x < 1022)
+  OR (x >= 1030 AND x < 1032)
+  OR (x >= 1040 AND x < 1042)
+  OR (x >= 1050 AND x < 1052)
+  OR (x >= 1060 AND x < 1062)
+  OR (x >= 1070 AND x < 1072)
+  OR (x >= 1080 AND x < 1082)
+  OR (x >= 1090 AND x < 1092)
+  OR (x >= 1100 AND x < 1102)
+  OR (x >= 1110 AND x < 1112)
+  OR (x >= 1120 AND x < 1122)
+  OR (x >= 1130 AND x < 1132)
+  OR (x >= 1140 AND x < 1142)
+  OR (x >= 1150 AND x < 1152)
+  OR (x >= 1160 AND x < 1162)
+  OR (x >= 1170 AND x < 1172)
+  OR (x >= 1180 AND x < 1182)
+  OR (x >= 1190 AND x < 1192);
+
+query TT
+EXPLAIN SELECT x FROM many_disjoint_ranges WHERE x >= 5000;
+----
+logical_plan EmptyRelation: rows=0
+
+# Pruning the entire chain must not depend on repeated optimizer passes.
+statement ok
+SET datafusion.optimizer.max_passes = 1;
+
+query TT
+EXPLAIN SELECT x FROM many_disjoint_ranges WHERE x >= 5000;
+----
+logical_plan
+01)SubqueryAlias: many_disjoint_ranges
+02)--Projection: disjoint_ranges.x
+03)----EmptyRelation: rows=0
+
+# A surviving range still returns its matching rows and excludes NULL.
+query I
+SELECT x FROM many_disjoint_ranges WHERE x >= 10 ORDER BY x;
+----
+10
+11
+
+statement ok
+SET datafusion.optimizer.max_passes = 3;
+
 # The request lies in the gap between intervals.
 query TT
 EXPLAIN SELECT x FROM disjoint_ranges
