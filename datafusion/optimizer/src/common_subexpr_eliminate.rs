@@ -30,7 +30,10 @@ use datafusion_common::alias::AliasGenerator;
 use datafusion_common::cse::{CSE, CSEController, FoundCommonNodes};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, qualified_name};
-use datafusion_expr::expr::{Alias, HigherOrderFunction, ScalarFunction};
+use datafusion_expr::expr::{
+    AggregateFunction, AggregateFunctionParams, Alias, HigherOrderFunction,
+    ScalarFunction, WindowFunction, WindowFunctionParams,
+};
 use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
@@ -695,6 +698,57 @@ impl CSEController for ExprCSEController<'_> {
                     .chain(else_expr.iter().map(|e| e.as_ref()))
                     .collect(),
             )),
+
+            // An aggregate function with a `FILTER` clause evaluates the filter for
+            // every input row, but it evaluates its arguments only for the rows that
+            // pass the filter. Extracting an argument subexpression into a projection
+            // below the aggregate would evaluate it for the rejected rows too, which
+            // can raise an error (for example a failed cast or a division by zero)
+            // that the filter must prevent. The `ORDER BY` expressions of the
+            // aggregate are conservatively handled like the arguments.
+            Expr::AggregateFunction(AggregateFunction {
+                params:
+                    AggregateFunctionParams {
+                        args,
+                        filter: Some(filter),
+                        order_by,
+                        ..
+                    },
+                ..
+            }) => Some((
+                vec![filter.as_ref()],
+                args.iter()
+                    .chain(order_by.iter().map(|sort| &sort.expr))
+                    .collect(),
+            )),
+
+            // The same applies to the arguments of a window function with a `FILTER`
+            // clause. The `PARTITION BY` and `ORDER BY` expressions of the window are
+            // evaluated for every input row.
+            Expr::WindowFunction(window_function) => {
+                let WindowFunction {
+                    params:
+                        WindowFunctionParams {
+                            args,
+                            partition_by,
+                            order_by,
+                            filter: Some(filter),
+                            ..
+                        },
+                    ..
+                } = window_function.as_ref()
+                else {
+                    return None;
+                };
+                Some((
+                    partition_by
+                        .iter()
+                        .chain(order_by.iter().map(|sort| &sort.expr))
+                        .chain([filter.as_ref()])
+                        .collect(),
+                    args.iter().collect(),
+                ))
+            }
             _ => None,
         }
     }
@@ -846,9 +900,9 @@ mod test {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_expr::logical_plan::{JoinType, table_scan};
     use datafusion_expr::{
-        AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ScalarFunctionArgs,
-        ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF, Volatility,
-        grouping_set, is_null, not,
+        AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ExprFunctionExt,
+        ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF,
+        Volatility, WindowFunctionDefinition, grouping_set, is_null, not,
     };
     use datafusion_expr::{lit, logical_plan::builder::LogicalPlanBuilder};
 
@@ -857,7 +911,7 @@ mod test {
     use crate::optimizer::OptimizerContext;
     use crate::test::udfs::leaf_udf_expr;
     use crate::test::*;
-    use datafusion_expr::test::function_stub::{avg, sum};
+    use datafusion_expr::test::function_stub::{avg, count, sum, sum_udaf};
     use datafusion_functions_window::row_number::row_number_udwf;
 
     macro_rules! assert_optimized_plan_equal {
@@ -950,7 +1004,7 @@ mod test {
         let return_type = DataType::UInt32;
         let accumulator: AccumulatorFactoryFunction = Arc::new(|_| unimplemented!());
         let udf_agg = |inner: Expr| {
-            Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+            Expr::AggregateFunction(AggregateFunction::new_udf(
                 Arc::new(AggregateUDF::from(SimpleAggregateUDF::new_with_signature(
                     "my_agg",
                     Signature::exact(vec![DataType::UInt32], Volatility::Stable),
@@ -1949,6 +2003,164 @@ mod test {
             @r"
         WindowAggr: windowExpr=[[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS aliased]]
           EmptyRelation: rows=1
+        "
+        )
+    }
+
+    #[test]
+    fn test_aggregate_filter_arguments() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // An aggregate evaluates its arguments only for the rows that pass its
+        // `FILTER`. Thus `a + b` must stay in the aggregates. The filter `c > 0` is
+        // evaluated for every row and is extracted.
+        let filter = col("c").gt(lit(0));
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .aggregate(
+                iter::empty::<Expr>(),
+                vec![
+                    sum(col("a") + col("b")).filter(filter.clone()).build()?,
+                    count(col("a") + col("b")).filter(filter.clone()).build()?,
+                ],
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ "
+        Aggregate: groupBy=[[]], aggr=[[sum(test.a + test.b) FILTER (WHERE __common_expr_1 AS test.c > Int32(0)) AS sum(test.a + test.b) FILTER (WHERE test.c > Int32(0)), COUNT(test.a + test.b) FILTER (WHERE __common_expr_1 AS test.c > Int32(0)) AS COUNT(test.a + test.b) FILTER (WHERE test.c > Int32(0))]]
+          Projection: test.c > Int32(0) AS __common_expr_1, test.a, test.b, test.c
+            TableScan: test
+        "
+        )?;
+
+        // `a + b` is surely evaluated by the aggregate without a `FILTER`, so it is
+        // extracted.
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .aggregate(
+                iter::empty::<Expr>(),
+                vec![
+                    sum(col("a") + col("b")).filter(filter.clone()).build()?,
+                    count(col("a") + col("b")),
+                ],
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ "
+        Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS test.a + test.b) FILTER (WHERE test.c > Int32(0)), COUNT(__common_expr_1 AS test.a + test.b)]]
+          Projection: test.a + test.b AS __common_expr_1, test.a, test.b, test.c
+            TableScan: test
+        "
+        )?;
+
+        // `a + b` is surely evaluated by the filter, so it is extracted.
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .aggregate(
+                iter::empty::<Expr>(),
+                vec![
+                    sum(col("a") + col("b"))
+                        .filter((col("a") + col("b")).gt(lit(0)))
+                        .build()?,
+                ],
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ "
+        Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS test.a + test.b) FILTER (WHERE __common_expr_1 AS test.a + test.b > Int32(0)) AS sum(test.a + test.b) FILTER (WHERE test.a + test.b > Int32(0))]]
+          Projection: test.a + test.b AS __common_expr_1, test.a, test.b, test.c
+            TableScan: test
+        "
+        )?;
+
+        // Identical aggregates with a `FILTER` are still deduplicated.
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                iter::empty::<Expr>(),
+                vec![
+                    sum(col("a") + col("b"))
+                        .filter(filter.clone())
+                        .build()?
+                        .alias("s1"),
+                    sum(col("a") + col("b")).filter(filter).build()?.alias("s2"),
+                ],
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ "
+        Projection: __common_expr_2 AS s1, __common_expr_2 AS s2
+          Aggregate: groupBy=[[]], aggr=[[sum(test.a + test.b) FILTER (WHERE __common_expr_1) AS __common_expr_2]]
+            Projection: test.c > Int32(0) AS __common_expr_1, test.a, test.b, test.c
+              TableScan: test
+        "
+        )
+    }
+
+    #[test]
+    fn test_aggregate_filter_order_by() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // The `ORDER BY` expressions of an aggregate with a `FILTER` are handled
+        // like its arguments, so `a + b` is not extracted.
+        let filter = col("c").gt(lit(0));
+        let order_by = vec![(col("a") + col("b")).sort(true, false)];
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                iter::empty::<Expr>(),
+                vec![
+                    sum(col("a"))
+                        .order_by(order_by.clone())
+                        .filter(filter.clone())
+                        .build()?,
+                    sum(col("b")).order_by(order_by).filter(filter).build()?,
+                ],
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ "
+        Aggregate: groupBy=[[]], aggr=[[sum(test.a) FILTER (WHERE __common_expr_1 AS test.c > Int32(0)) ORDER BY [test.a + test.b ASC NULLS LAST] AS sum(test.a) FILTER (WHERE test.c > Int32(0)) ORDER BY [test.a + test.b ASC NULLS LAST], sum(test.b) FILTER (WHERE __common_expr_1 AS test.c > Int32(0)) ORDER BY [test.a + test.b ASC NULLS LAST] AS sum(test.b) FILTER (WHERE test.c > Int32(0)) ORDER BY [test.a + test.b ASC NULLS LAST]]]
+          Projection: test.c > Int32(0) AS __common_expr_1, test.a, test.b, test.c
+            TableScan: test
+        "
+        )
+    }
+
+    #[test]
+    fn test_window_filter_arguments() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // The arguments of a window function with a `FILTER` are conditionally
+        // evaluated. The `PARTITION BY` expressions and the filter are not.
+        let window_sum = |arg: Expr| {
+            Expr::from(WindowFunction::new(
+                WindowFunctionDefinition::AggregateUDF(sum_udaf()),
+                vec![arg],
+            ))
+            .partition_by(vec![col("a") * col("b")])
+            .filter(col("c").gt(lit(0)))
+            .build()
+        };
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![
+                window_sum(col("a") + col("b"))?,
+                window_sum((col("a") + col("b")) * lit(2))?,
+            ])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ "
+        Projection: test.a, test.b, test.c, sum(test.a + test.b) FILTER (WHERE test.c > Int32(0)) PARTITION BY [test.a * test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, sum(test.a + test.b * Int32(2)) FILTER (WHERE test.c > Int32(0)) PARTITION BY [test.a * test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+          WindowAggr: windowExpr=[[sum(test.a + test.b) FILTER (WHERE __common_expr_2 AS test.c > Int32(0)) PARTITION BY [__common_expr_1 AS test.a * test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS sum(test.a + test.b) FILTER (WHERE test.c > Int32(0)) PARTITION BY [test.a * test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, sum((test.a + test.b) * Int32(2)) FILTER (WHERE __common_expr_2 AS test.c > Int32(0)) PARTITION BY [__common_expr_1 AS test.a * test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS sum(test.a + test.b * Int32(2)) FILTER (WHERE test.c > Int32(0)) PARTITION BY [test.a * test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+            Projection: test.a * test.b AS __common_expr_1, test.c > Int32(0) AS __common_expr_2, test.a, test.b, test.c
+              TableScan: test
         "
         )
     }
