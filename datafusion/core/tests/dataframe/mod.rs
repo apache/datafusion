@@ -59,7 +59,7 @@ use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::{ColumnarValue, Volatility};
-use datafusion::prelude::{CsvReadOptions, JoinType, ParquetReadOptions};
+use datafusion::prelude::{CsvReadOptions, JoinType, ParquetReadOptions, array_col};
 use datafusion::test_util::{
     parquet_test_data, populate_csv_partitions, register_aggregate_csv, test_table,
     test_table_with_cache_factory, test_table_with_name,
@@ -7360,6 +7360,133 @@ async fn test_dataframe_macro() -> Result<()> {
     assert_eq!(df_empty.schema().fields().len(), 0);
     assert_eq!(df_empty.count().await?, 0);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dataframe_with_column_array_col() -> Result<()> {
+    let df = dataframe!("id" => [1_i32, 2, 3])?;
+
+    let bools: ArrayRef = Arc::new(BooleanArray::from(vec![true, false, true]));
+    let i8s: ArrayRef = Arc::new(Int8Array::from(vec![-1, 0, 1]));
+    let i16s: ArrayRef = Arc::new(Int16Array::from(vec![-1, 0, 1]));
+    let i32s: ArrayRef = Arc::new(Int32Array::from(vec![-1, 0, 1]));
+    let i64s: ArrayRef = Arc::new(Int64Array::from(vec![-1, 0, 1]));
+    let u8s: ArrayRef = Arc::new(UInt8Array::from(vec![0, 1, 2]));
+    let u16s: ArrayRef = Arc::new(UInt16Array::from(vec![0, 1, 2]));
+    let u32s: ArrayRef = Arc::new(UInt32Array::from(vec![0, 1, 2]));
+    let u64s: ArrayRef = Arc::new(UInt64Array::from(vec![0, 1, 2]));
+    let f16s: ArrayRef = Arc::new(Float16Array::from(vec![
+        half::f16::from_f64(1.0),
+        half::f16::from_f64(2.0),
+        half::f16::from_f64(3.0),
+    ]));
+    let f32s: ArrayRef = Arc::new(Float32Array::from(vec![1.0, 2.0, 3.0]));
+    let f64s: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0]));
+    let strings: ArrayRef =
+        Arc::new(StringArray::from(vec![Some("foo"), Some("bar"), None]));
+
+    let df = df
+        .with_column("bool", array_col(bools))?
+        .with_column("i8", array_col(i8s))?
+        .with_column("i16", array_col(i16s))?
+        .with_column("i32", array_col(i32s))?
+        .with_column("i64", array_col(i64s))?
+        .with_column("u8", array_col(u8s))?
+        .with_column("u16", array_col(u16s))?
+        .with_column("u32", array_col(u32s))?
+        .with_column("u64", array_col(u64s))?
+        .with_column("f16", array_col(f16s))?
+        .with_column("f32", array_col(f32s))?
+        .with_column("f64", array_col(f64s))?
+        .with_column("str", array_col(strings))?;
+
+    let expected_types = [
+        ("id", DataType::Int32),
+        ("bool", DataType::Boolean),
+        ("i8", DataType::Int8),
+        ("i16", DataType::Int16),
+        ("i32", DataType::Int32),
+        ("i64", DataType::Int64),
+        ("u8", DataType::UInt8),
+        ("u16", DataType::UInt16),
+        ("u32", DataType::UInt32),
+        ("u64", DataType::UInt64),
+        ("f16", DataType::Float16),
+        ("f32", DataType::Float32),
+        ("f64", DataType::Float64),
+        ("str", DataType::Utf8),
+    ];
+
+    assert_eq!(df.schema().fields().len(), expected_types.len());
+    assert_eq!(df.clone().count().await?, 3);
+
+    let schema = df.schema();
+    for (name, data_type) in &expected_types {
+        assert_eq!(schema.field_with_name(None, name)?.data_type(), data_type);
+    }
+
+    let rows = df.sort(vec![col("id").sort(true, true)])?;
+    assert_batches_eq!(
+        &[
+            "+----+-------+----+-----+-----+-----+----+-----+-----+-----+-----+-----+-----+-----+",
+            "| id | bool  | i8 | i16 | i32 | i64 | u8 | u16 | u32 | u64 | f16 | f32 | f64 | str |",
+            "+----+-------+----+-----+-----+-----+----+-----+-----+-----+-----+-----+-----+-----+",
+            "| 1  | true  | -1 | -1  | -1  | -1  | 0  | 0   | 0   | 0   | 1   | 1.0 | 1.0 | foo |",
+            "| 2  | false | 0  | 0   | 0   | 0   | 1  | 1   | 1   | 1   | 2   | 2.0 | 2.0 | bar |",
+            "| 3  | true  | 1  | 1   | 1   | 1   | 2  | 2   | 2   | 2   | 3   | 3.0 | 3.0 |     |",
+            "+----+-------+----+-----+-----+-----+----+-----+-----+-----+-----+-----+-----+-----+",
+        ],
+        &rows.collect().await?
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dataframe_with_column_array_col_then_filter() -> Result<()> {
+    let df = dataframe!("id" => [1, 2, 3], "data" => [42, 43, 44])?;
+    let new_col: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar", "baz"]));
+
+    let df = df
+        .with_column("new_col", array_col(new_col))?
+        .filter(col("id").gt(lit(1)))?;
+
+    assert_eq!(
+        df.schema().field_with_name(None, "new_col")?.data_type(),
+        &DataType::Utf8
+    );
+    assert_eq!(df.clone().count().await?, 2);
+    assert_batches_eq!(
+        &[
+            "+----+------+---------+",
+            "| id | data | new_col |",
+            "+----+------+---------+",
+            "| 2  | 43   | bar     |",
+            "| 3  | 44   | baz     |",
+            "+----+------+---------+",
+        ],
+        &df.collect().await?
+    );
+    Ok(())
+}
+
+#[test]
+fn test_dataframe_with_column_array_col_duplicate_name() -> Result<()> {
+    let df = dataframe!("id" => [1, 2, 3])?;
+    let id: ArrayRef = Arc::new(Int32Array::from(vec![4, 5, 6]));
+    let err = df.with_column("id", array_col(id)).unwrap_err();
+    assert!(err.to_string().contains("already exists"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dataframe_with_column_array_col_length_mismatch() -> Result<()> {
+    let df = dataframe!("id" => [1, 2, 3])?;
+    let too_short: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
+    let df = df.with_column("extra", array_col(too_short))?;
+    let err = df.collect().await.unwrap_err();
+    assert!(err.to_string().contains("rows"));
     Ok(())
 }
 
