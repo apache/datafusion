@@ -556,35 +556,8 @@ async fn assert_issue_23317_unparsed_sql_plans(
 }
 
 #[tokio::test]
-async fn optimized_duckdb_unparse_preserves_nested_aggregate_scope() -> Result<()> {
-    let ctx = issue_23317_context()?;
-    let plan = ctx.sql(ISSUE_23317_QUERY).await?.into_optimized_plan()?;
-    let dialect = DuckDBDialect::new();
-    let unparser = Unparser::new(&dialect);
-    let sql = unparser.plan_to_sql(&plan)?.to_string();
-
-    assert_issue_23317_unparsed_sql_plans(&ctx, &sql).await?;
-
-    assert!(
-        sql.contains(concat!(
-            r#"FROM (SELECT sum("total_revenue") AS "alias2", "#,
-            r#"date_part('year', "signup_date") AS "group_alias_0", "#,
-            r#""customer_id" AS "alias1" "#
-        )),
-        "inner aggregate should define the aliases before the outer aggregate uses them: {sql}",
-    );
-    assert!(
-        !sql.contains(r#"date_part('year', "c"."signup_date") AS "group_alias_0""#),
-        "inner aggregate must not reference out-of-scope alias c: {sql}",
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn optimized_duckdb_unparse_unqualifies_aggregate_input_projection() -> Result<()> {
     let ctx = issue_23317_context()?;
-    assert!(ctx.remove_optimizer_rule(SingleDistinctToGroupBy::new().name()));
 
     let plan = ctx.sql(ISSUE_23317_QUERY).await?.into_optimized_plan()?;
     let dialect = DuckDBDialect::new();

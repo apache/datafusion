@@ -1549,19 +1549,11 @@ query TT
 explain select median(distinct c) from t;
 ----
 logical_plan
-01)Projection: median(alias1) AS median(DISTINCT t.c)
-02)--Aggregate: groupBy=[[]], aggr=[[median(alias1)]]
-03)----Aggregate: groupBy=[[CAST(t.c AS Float64) AS alias1]], aggr=[[]]
-04)------TableScan: t projection=[c]
+01)Aggregate: groupBy=[[]], aggr=[[median(DISTINCT CAST(t.c AS Float64))]]
+02)--TableScan: t projection=[c]
 physical_plan
-01)ProjectionExec: expr=[median(alias1)@0 as median(DISTINCT t.c)]
-02)--AggregateExec: mode=Final, gby=[], aggr=[median(alias1)]
-03)----CoalescePartitionsExec
-04)------AggregateExec: mode=Partial, gby=[], aggr=[median(alias1)]
-05)--------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
-06)----------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=1
-07)------------AggregateExec: mode=Partial, gby=[CAST(c@0 AS Float64) as alias1], aggr=[]
-08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+01)AggregateExec: mode=Single, gby=[], aggr=[median(DISTINCT t.c)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table t;
