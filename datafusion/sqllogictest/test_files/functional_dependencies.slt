@@ -401,8 +401,38 @@ SELECT CAST(x AS INT) k, y FROM t_cast GROUP BY CAST(x AS INT), y ORDER BY k, y;
 query error DataFusion error: Error during planning: Column in SELECT must be in GROUP BY or an aggregate function
 SELECT y, count(*) FROM t_cast GROUP BY CAST(x AS INT);
 
+# 6.5 Only the key column itself carries the dependency, even when the cast
+# keeps distinct values distinct. PostgreSQL and DuckDB reject this too.
+query error DataFusion error: Error during planning: Column in SELECT must be in GROUP BY or an aggregate function
+SELECT y, count(*) FROM t_cast GROUP BY CAST(x AS VARCHAR);
+
 statement ok
 drop table t_cast;
+
+# 6.6 The same with `TRY_CAST` over a `UNIQUE NOT NULL` key: 'bad-a' and
+# 'bad-b' both cast to NULL.
+statement ok
+CREATE TABLE t_try_cast (x VARCHAR NOT NULL UNIQUE, y VARCHAR) AS VALUES ('bad-a', 'b'), ('bad-b', 'a'), ('1', 'c');
+
+query TT
+SELECT x, y FROM t_try_cast ORDER BY TRY_CAST(x AS INT), y;
+----
+1 c
+bad-b a
+bad-a b
+
+query IT rowsort
+SELECT TRY_CAST(x AS INT) k, y FROM t_try_cast GROUP BY TRY_CAST(x AS INT), y;
+----
+1 c
+NULL a
+NULL b
+
+query error DataFusion error: Error during planning: Column in SELECT must be in GROUP BY or an aggregate function
+SELECT y, count(*) FROM t_try_cast GROUP BY TRY_CAST(x AS INT);
+
+statement ok
+drop table t_try_cast;
 
 ##########
 ## Cleanup
