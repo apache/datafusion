@@ -535,76 +535,85 @@ fn roundtrip_csv_scan_preserves_format_options() -> Result<()> {
 
     let file_schema =
         Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
-    let table_schema = TableSchema::from(&file_schema);
-    let file_source =
-        Arc::new(CsvSource::new(table_schema).with_csv_options(CsvOptions {
-            has_header: Some(false),
-            delimiter: b'|',
-            quote: b'\'',
-            escape: Some(b'\\'),
-            comment: Some(b'#'),
-            terminator: Some(0xff),
-            newlines_in_values: Some(true),
-            truncated_rows: Some(true),
-            ..Default::default()
-        }));
+    for newlines_in_values in [Some(true), Some(false), None] {
+        let table_schema = TableSchema::from(&file_schema);
+        let file_source =
+            Arc::new(CsvSource::new(table_schema).with_csv_options(CsvOptions {
+                has_header: Some(false),
+                delimiter: b'|',
+                quote: b'\'',
+                escape: Some(b'\\'),
+                comment: Some(b'#'),
+                terminator: Some(0xff),
+                newlines_in_values,
+                truncated_rows: Some(true),
+                ..Default::default()
+            }));
 
-    let scan_config =
-        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
-            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
-                "/path/to/file.csv.gz".to_string(),
-                1024,
-            )])])
-            .with_file_compression_type(FileCompressionType::GZIP)
-            .build();
+        let scan_config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+                    "/path/to/file.csv.gz".to_string(),
+                    1024,
+                )])])
+                .with_file_compression_type(FileCompressionType::GZIP)
+                .build();
 
-    let ctx = SessionContext::new();
-    let codec = DefaultPhysicalExtensionCodec {};
-    let plan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(scan_config);
-    let roundtripped = roundtrip_test_and_return(
-        Arc::clone(&plan),
-        &ctx,
-        &codec,
-        &DefaultPhysicalProtoConverter {},
-    )?;
-    let data_source = roundtripped
-        .downcast_ref::<DataSourceExec>()
-        .ok_or_else(|| internal_datafusion_err!("Expected DataSourceExec"))?;
-    let file_scan = data_source
-        .data_source()
-        .downcast_ref::<FileScanConfig>()
-        .ok_or_else(|| internal_datafusion_err!("Expected FileScanConfig"))?;
-    let csv_source = file_scan
-        .file_source()
-        .downcast_ref::<CsvSource>()
-        .ok_or_else(|| internal_datafusion_err!("Expected CsvSource"))?;
+        let ctx = SessionContext::new();
+        let codec = DefaultPhysicalExtensionCodec {};
+        let plan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(scan_config);
+        let roundtripped = roundtrip_test_and_return(
+            Arc::clone(&plan),
+            &ctx,
+            &codec,
+            &DefaultPhysicalProtoConverter {},
+        )?;
+        let data_source = roundtripped
+            .downcast_ref::<DataSourceExec>()
+            .ok_or_else(|| internal_datafusion_err!("Expected DataSourceExec"))?;
+        let file_scan = data_source
+            .data_source()
+            .downcast_ref::<FileScanConfig>()
+            .ok_or_else(|| internal_datafusion_err!("Expected FileScanConfig"))?;
+        let csv_source = file_scan
+            .file_source()
+            .downcast_ref::<CsvSource>()
+            .ok_or_else(|| internal_datafusion_err!("Expected CsvSource"))?;
 
-    assert!(!csv_source.has_header());
-    assert_eq!(csv_source.delimiter(), b'|');
-    assert_eq!(csv_source.quote(), b'\'');
-    assert_eq!(csv_source.escape(), Some(b'\\'));
-    assert_eq!(csv_source.comment(), Some(b'#'));
-    assert_eq!(csv_source.terminator(), Some(0xff));
-    assert!(csv_source.newlines_in_values());
-    assert!(csv_source.truncate_rows());
-    assert_eq!(file_scan.file_compression_type, FileCompressionType::GZIP);
-
-    for invalid_terminator in [vec![], vec![b'\r', b'\n']] {
-        let mut node =
-            PhysicalPlanNode::try_from_physical_plan(Arc::clone(&plan), &codec)?;
-        match node.physical_plan_type.as_mut() {
+        assert!(!csv_source.has_header());
+        assert_eq!(csv_source.delimiter(), b'|');
+        assert_eq!(csv_source.quote(), b'\'');
+        assert_eq!(csv_source.escape(), Some(b'\\'));
+        assert_eq!(csv_source.comment(), Some(b'#'));
+        assert_eq!(csv_source.terminator(), Some(0xff));
+        let node =
+            PhysicalPlanNode::try_from_physical_plan(Arc::clone(&roundtripped), &codec)?;
+        match node.physical_plan_type {
             Some(protobuf::physical_plan_node::PhysicalPlanType::CsvScan(scan)) => {
-                scan.terminator = Some(invalid_terminator);
+                assert_eq!(scan.newlines_in_values, newlines_in_values.unwrap_or(false));
             }
             other => return internal_err!("Expected CsvScan node, got {other:?}"),
         }
-        let err = node
-            .try_into_physical_plan(ctx.task_ctx().as_ref(), &codec)
-            .expect_err("invalid terminator length must fail");
-        assert!(
-            err.to_string().contains("expected exactly one byte"),
-            "unexpected error: {err}"
-        );
+        assert!(csv_source.truncate_rows());
+        assert_eq!(file_scan.file_compression_type, FileCompressionType::GZIP);
+
+        for invalid_terminator in [vec![], vec![b'\r', b'\n']] {
+            let mut node =
+                PhysicalPlanNode::try_from_physical_plan(Arc::clone(&plan), &codec)?;
+            match node.physical_plan_type.as_mut() {
+                Some(protobuf::physical_plan_node::PhysicalPlanType::CsvScan(scan)) => {
+                    scan.terminator = Some(invalid_terminator);
+                }
+                other => return internal_err!("Expected CsvScan node, got {other:?}"),
+            }
+            let err = node
+                .try_into_physical_plan(ctx.task_ctx().as_ref(), &codec)
+                .expect_err("invalid terminator length must fail");
+            assert!(
+                err.to_string().contains("expected exactly one byte"),
+                "unexpected error: {err}"
+            );
+        }
     }
     Ok(())
 }
