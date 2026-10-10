@@ -416,9 +416,10 @@ struct MinMaxBytesState {
     min_max: Vec<Option<Vec<u8>>>,
     /// The data type of the array
     data_type: DataType,
-    /// The total bytes of the string data (for pre-allocating the final array,
-    /// and tracking memory usage)
+    /// The total length of the string data, for pre-allocating the final array.
     total_data_bytes: usize,
+    /// The retained inner vector capacities, cached to keep `size()` O(1).
+    total_data_capacity: usize,
 }
 
 /// Implement the MinMaxBytesAccumulator with a comparison function
@@ -433,6 +434,7 @@ impl MinMaxBytesState {
             min_max: vec![],
             data_type,
             total_data_bytes: 0,
+            total_data_capacity: 0,
         }
     }
 
@@ -440,15 +442,19 @@ impl MinMaxBytesState {
     fn set_value(&mut self, group_index: usize, new_val: &[u8]) {
         match self.min_max[group_index].as_mut() {
             None => {
-                self.min_max[group_index] = Some(new_val.to_vec());
+                let value = new_val.to_vec();
+                self.total_data_capacity += value.capacity();
+                self.min_max[group_index] = Some(value);
                 self.total_data_bytes += new_val.len();
             }
             Some(existing_val) => {
                 // Copy data over to avoid re-allocating
                 self.total_data_bytes -= existing_val.len();
                 self.total_data_bytes += new_val.len();
+                self.total_data_capacity -= existing_val.capacity();
                 existing_val.clear();
                 existing_val.extend_from_slice(new_val);
+                self.total_data_capacity += existing_val.capacity();
             }
         }
     }
@@ -516,6 +522,7 @@ impl MinMaxBytesState {
     fn emit_to(&mut self, emit_to: EmitTo) -> (usize, Vec<Option<Vec<u8>>>) {
         match emit_to {
             EmitTo::All => {
+                self.total_data_capacity = 0;
                 (
                     std::mem::take(&mut self.total_data_bytes), // reset total bytes and min_max
                     std::mem::take(&mut self.min_max),
@@ -528,13 +535,20 @@ impl MinMaxBytesState {
                     .map(|opt| opt.as_ref().map(|s| s.len()).unwrap_or(0))
                     .sum();
                 self.total_data_bytes -= first_data_capacity;
+                self.total_data_capacity -= first_min_maxes
+                    .iter()
+                    .flatten()
+                    .map(Vec::capacity)
+                    .sum::<usize>();
                 (first_data_capacity, first_min_maxes)
             }
         }
     }
 
     fn size(&self) -> usize {
-        self.total_data_bytes + self.min_max.len() * size_of::<Option<Vec<u8>>>()
+        // Only retained heap allocations: the outer slots already include the
+        // inline Option<Vec<u8>> descriptors.
+        self.total_data_capacity + self.min_max.capacity() * size_of::<Option<Vec<u8>>>()
     }
 }
 
@@ -542,6 +556,103 @@ impl MinMaxBytesState {
 mod tests {
     use super::*;
     use arrow::array::StringArray;
+
+    #[test]
+    fn size_counts_outer_capacity() {
+        let mut state = MinMaxBytesState::new(DataType::Utf8);
+        assert_eq!(state.size(), 0);
+
+        state.min_max = Vec::with_capacity(16);
+        state.min_max.resize(3, None);
+        assert_eq!(
+            state.size(),
+            state.min_max.capacity() * size_of::<Option<Vec<u8>>>()
+        );
+    }
+
+    #[test]
+    fn size_retains_inner_capacity() -> Result<()> {
+        for is_min in [true, false] {
+            let mut accumulator = if is_min {
+                MinMaxBytesAccumulator::new_min(DataType::Utf8)
+            } else {
+                MinMaxBytesAccumulator::new_max(DataType::Utf8)
+            };
+            let long = if is_min {
+                "z".repeat(128)
+            } else {
+                "a".repeat(128)
+            };
+            let short = if is_min { "a" } else { "z" };
+            let values: ArrayRef = Arc::new(StringArray::from(vec![long.as_str(), "m"]));
+            accumulator.update_batch(&[values], &[0, 1], None, 2)?;
+            let outer_bytes =
+                accumulator.inner.min_max.capacity() * size_of::<Option<Vec<u8>>>();
+            let inner_bytes: usize = accumulator
+                .inner
+                .min_max
+                .iter()
+                .flatten()
+                .map(Vec::capacity)
+                .sum();
+            assert_eq!(accumulator.size(), outer_bytes + inner_bytes);
+
+            let values: ArrayRef = Arc::new(StringArray::from(vec![short]));
+            accumulator.update_batch(&[values], &[0], None, 2)?;
+            assert_eq!(accumulator.inner.total_data_bytes, short.len() + 1);
+            assert_eq!(accumulator.size(), outer_bytes + inner_bytes);
+
+            let emitted_capacity =
+                accumulator.inner.min_max[0].as_ref().unwrap().capacity();
+            let emitted = accumulator.evaluate(EmitTo::First(1))?;
+            assert_eq!(emitted.as_string::<i32>(), &StringArray::from(vec![short]));
+            assert_eq!(
+                accumulator.size(),
+                accumulator.inner.min_max.capacity() * size_of::<Option<Vec<u8>>>()
+                    + inner_bytes
+                    - emitted_capacity
+            );
+
+            let (data_bytes, emitted) = accumulator.inner.emit_to(EmitTo::All);
+            assert_eq!(data_bytes, 1);
+            assert_eq!(emitted[0].as_deref(), Some(b"m".as_slice()));
+            assert_eq!(accumulator.size(), 0);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn size_tracks_growth_and_emit_reuse() -> Result<()> {
+        let mut state = MinMaxBytesState::new(DataType::Binary);
+        state.min_max.resize(3, None);
+        state.set_value(0, b"a");
+        state.set_value(0, &[b'z'; 128]);
+        state.set_value(1, b"b");
+        let inner_bytes: usize = state.min_max.iter().flatten().map(Vec::capacity).sum();
+        assert_eq!(
+            state.size(),
+            state.min_max.capacity() * size_of::<Option<Vec<u8>>>() + inner_bytes
+        );
+
+        // Emit the larger side, which replaces the outer allocation.
+        let (data_bytes, emitted) = state.emit_to(EmitTo::First(2));
+        assert_eq!(data_bytes, 129);
+        assert_eq!(emitted.len(), 2);
+        assert_eq!(
+            state.size(),
+            state.min_max.capacity() * size_of::<Option<Vec<u8>>>()
+        );
+
+        state.emit_to(EmitTo::All);
+        assert_eq!(state.size(), 0);
+        state.update_batch([Some(b"x".as_slice())], &[0], 1, |a, b| a < b)?;
+        assert_eq!(
+            state.size(),
+            state.min_max.capacity() * size_of::<Option<Vec<u8>>>()
+                + state.min_max[0].as_ref().unwrap().capacity()
+        );
+        Ok(())
+    }
 
     #[test]
     fn preserving_selected_min_values() -> Result<()> {
