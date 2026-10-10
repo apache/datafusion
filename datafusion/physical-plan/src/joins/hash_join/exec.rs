@@ -1496,6 +1496,19 @@ impl HashJoinExec {
     /// physical optimizer rule to determine a good join order, which is
     /// executed before the `EnforceDistribution` rule (the rule that may
     /// insert `RepartitionExec` operators).
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// Direct use of this API in downstream projects is discouraged because
+    /// correctness depends on strict preconditions. See the notes above for
+    /// correct usage.
+    ///
+    /// This API may change frequently as internal join optimizations evolve.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
     pub fn swap_inputs(
         &self,
         partition_mode: PartitionMode,

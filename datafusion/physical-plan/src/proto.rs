@@ -81,9 +81,11 @@ use crate::ExecutionPlan;
 /// Implemented by `datafusion-proto`. Plan authors never name this trait; they
 /// call methods on [`ExecutionPlanEncodeCtx`] instead.
 ///
-/// **Not public API.** `pub` only because the implementors live in another
-/// crate; `#[doc(hidden)]` records that, so encoding primitives can be added
-/// here as the serialization hooks grow without breaking downstream code.
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
 #[doc(hidden)]
 pub trait ExecutionPlanEncode {
     /// Serialize a child execution plan (recursing through the central
@@ -111,9 +113,11 @@ pub trait ExecutionPlanEncode {
 /// Implemented by `datafusion-proto`. Plan authors never name this trait; they
 /// call methods on [`ExecutionPlanDecodeCtx`] instead.
 ///
-/// **Not public API.** `pub` only because the implementors live in another
-/// crate; `#[doc(hidden)]` records that, so decoding primitives can be added
-/// here as the serialization hooks grow without breaking downstream code.
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
 #[doc(hidden)]
 pub trait ExecutionPlanDecode {
     /// Deserialize a child execution plan (recursing through the central
