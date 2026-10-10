@@ -356,6 +356,7 @@ datafusion.runtime.metadata_cache_limit 50M
 datafusion.runtime.temp_directory NULL
 datafusion.spark.map_key_dedup_policy EXCEPTION
 datafusion.sql_parser.collect_spans false
+datafusion.sql_parser.column_labels false
 datafusion.sql_parser.default_null_ordering nulls_max
 datafusion.sql_parser.dialect generic
 datafusion.sql_parser.enable_ident_normalization true
@@ -521,6 +522,7 @@ datafusion.runtime.metadata_cache_limit 50M Maximum memory to use for file metad
 datafusion.runtime.temp_directory NULL The path to the temporary file directory.
 datafusion.spark.map_key_dedup_policy EXCEPTION Policy for handling duplicate keys in Spark-compatible map-construction functions (`map_from_arrays`, `map_from_entries`, `str_to_map`). Mirrors Spark's [`spark.sql.mapKeyDedupPolicy`](https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961): - `EXCEPTION` (default): raise `[DUPLICATED_MAP_KEY]` at runtime on any duplicate key. - `LAST_WIN`: keep the last occurrence of each duplicate key. Values are case-insensitive.
 datafusion.sql_parser.collect_spans false When set to true, the source locations relative to the original SQL query (i.e. [`Span`](https://docs.rs/sqlparser/latest/sqlparser/tokenizer/struct.Span.html)) will be collected and recorded in the logical plan nodes.
+datafusion.sql_parser.column_labels false When set to true, each unaliased output column of a top-level SQL query gets a readable label, such as `a + 1` for a column named `t.a + Int64(1)`. Labels leave out type wrappers and table qualifiers, and window functions use `OVER (...)` syntax without default parts. The label is stored in the field metadata key `datafusion.label`, and `DataFrame::show` and `datafusion-cli` table output display it as the column header. Column names don't change, so name resolution and code that reads columns by name work as before. Columns that you name in the outermost `SELECT` list, and statements that store column names (`CREATE VIEW`, `CREATE TABLE AS`, `INSERT`, `COPY`), get no labels.
 datafusion.sql_parser.default_null_ordering nulls_max Specifies the default null ordering for query results. There are 4 options: - `nulls_max`: Nulls appear last in ascending order. - `nulls_min`: Nulls appear first in ascending order. - `nulls_first`: Nulls always be first in any order. - `nulls_last`: Nulls always be last in any order. By default, `nulls_max` is used to follow Postgres's behavior. postgres rule: <https://www.postgresql.org/docs/current/queries-order.html>
 datafusion.sql_parser.dialect generic Configure the SQL dialect used by DataFusion's parser; supported values include: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks, Spark.
 datafusion.sql_parser.enable_ident_normalization true When set to true, SQL parser will normalize ident (convert ident to lowercase when not quoted)

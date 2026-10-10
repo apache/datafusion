@@ -17,7 +17,8 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
-use arrow::datatypes::{DataType, Field, FieldRef, Metadata};
+use arrow::array::{RecordBatch, RecordBatchOptions};
+use arrow::datatypes::{DataType, Field, FieldRef, Metadata, Schema, SchemaRef};
 use hashbrown::HashMap;
 
 use crate::{DataFusionError, ScalarValue, error::_plan_err};
@@ -133,6 +134,84 @@ pub fn format_type_and_metadata(
         }
         _ => data_type.to_string(),
     }
+}
+
+/// Field metadata key for the readable label of a query result column, such
+/// as `a + 1` for a column named `t.a + Int64(1)`.
+///
+/// The SQL planner adds this key when `datafusion.sql_parser.column_labels`
+/// is enabled. Tools that display results show the label instead of the
+/// column name. See [`display_name`].
+pub const COLUMN_LABEL_KEY: &str = "datafusion.label";
+
+/// Field metadata key for the column name that [`COLUMN_LABEL_KEY`] labels.
+///
+/// Field metadata follows a column through later aliases, so a renamed
+/// column can still carry an old label. The label applies only while the
+/// field name equals this value.
+pub const COLUMN_LABEL_OF_KEY: &str = "datafusion.label_of";
+
+/// Returns the metadata that labels the column `name` with `label`.
+pub fn column_label_metadata(label: &str, name: &str) -> FieldMetadata {
+    FieldMetadata::from(BTreeMap::from([
+        (COLUMN_LABEL_KEY.to_string(), label.to_string()),
+        (COLUMN_LABEL_OF_KEY.to_string(), name.to_string()),
+    ]))
+}
+
+/// Returns the name to display for `field`: its label (see
+/// [`COLUMN_LABEL_KEY`]) when the label applies to the field's current name,
+/// and the field name otherwise.
+pub fn display_name(field: &Field) -> &str {
+    let metadata = field.metadata();
+    match (
+        metadata.get(COLUMN_LABEL_KEY),
+        metadata.get(COLUMN_LABEL_OF_KEY),
+    ) {
+        (Some(label), Some(label_of)) if label_of == field.name() => label,
+        _ => field.name(),
+    }
+}
+
+/// Returns `schema` with each field renamed to its [`display_name`].
+pub fn schema_with_display_names(schema: &SchemaRef) -> SchemaRef {
+    if schema
+        .fields()
+        .iter()
+        .all(|field| display_name(field) == field.name())
+    {
+        return Arc::clone(schema);
+    }
+    let fields: Vec<FieldRef> = schema
+        .fields()
+        .iter()
+        .map(|field| Arc::new(field.as_ref().clone().with_name(display_name(field))))
+        .collect();
+    Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()))
+}
+
+/// Returns `batches` with each column renamed to its [`display_name`], for
+/// printing. The arrays are shared, not copied.
+pub fn batches_with_display_names(
+    batches: &[RecordBatch],
+) -> Result<Vec<RecordBatch>, DataFusionError> {
+    batches
+        .iter()
+        .map(|batch| {
+            let schema = schema_with_display_names(&batch.schema());
+            if Arc::ptr_eq(&schema, &batch.schema()) {
+                return Ok(batch.clone());
+            }
+            // Keep the row count so zero-column batches survive the rebuild.
+            let options =
+                RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+            Ok(RecordBatch::try_new_with_options(
+                schema,
+                batch.columns().to_vec(),
+                &options,
+            )?)
+        })
+        .collect()
 }
 
 /// Literal metadata
@@ -390,5 +469,74 @@ impl From<&HashMap<String, String>> for FieldMetadata {
         Self {
             inner: map.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn labeled_field(name: &str, label: &str, label_of: &str) -> Field {
+        let metadata = column_label_metadata(label, label_of);
+        metadata.add_to_field(Field::new(name, DataType::Int64, true))
+    }
+
+    #[test]
+    fn display_name_uses_label_for_its_column() {
+        let field = labeled_field("t.a + Int64(1)", "a + 1", "t.a + Int64(1)");
+        assert_eq!(display_name(&field), "a + 1");
+    }
+
+    #[test]
+    fn display_name_ignores_label_after_rename() {
+        let field = labeled_field("total", "sum(a)", "sum(t.a)");
+        assert_eq!(display_name(&field), "total");
+    }
+
+    #[test]
+    fn display_name_without_label() {
+        let field = Field::new("a", DataType::Int64, true);
+        assert_eq!(display_name(&field), "a");
+    }
+
+    #[test]
+    fn schema_with_display_names_keeps_unlabeled_schema() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+        assert!(Arc::ptr_eq(&schema_with_display_names(&schema), &schema));
+    }
+
+    #[test]
+    fn batches_with_display_names_keeps_zero_column_rows() {
+        let options = RecordBatchOptions::new().with_row_count(Some(3));
+        let batch = RecordBatch::try_new_with_options(
+            Arc::new(Schema::empty()),
+            vec![],
+            &options,
+        )
+        .unwrap();
+        let out = batches_with_display_names(&[batch]).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].num_columns(), 0);
+        assert_eq!(out[0].num_rows(), 3);
+    }
+
+    #[test]
+    fn batches_with_display_names_keeps_unlabeled_schema_arc() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+        let batch = RecordBatch::new_empty(Arc::clone(&schema));
+        let out = batches_with_display_names(&[batch]).unwrap();
+        assert!(Arc::ptr_eq(&out[0].schema(), &schema));
+    }
+
+    #[test]
+    fn batches_with_display_names_relabels_labeled_columns() {
+        let field = labeled_field("t.a + Int64(1)", "a + 1", "t.a + Int64(1)");
+        let schema = Arc::new(Schema::new(vec![field]));
+        let column: arrow::array::ArrayRef =
+            Arc::new(arrow::array::Int64Array::from(vec![1, 2]));
+        let batch = RecordBatch::try_new(schema, vec![column]).unwrap();
+        let out = batches_with_display_names(&[batch]).unwrap();
+        assert_eq!(out[0].schema().field(0).name(), "a + 1");
+        assert_eq!(out[0].num_rows(), 2);
     }
 }

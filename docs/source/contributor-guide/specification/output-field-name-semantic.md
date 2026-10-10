@@ -40,6 +40,43 @@ DataFusion queries planned from both SQL queries and Dataframe APIs.
 - Function arguments MUST be separated by a comma `,` and a space.
   - `SELECT f(c1,c2)` and `df.select(vec![f.udf("f")?.call(vec![col("c1"), col("c2")])])` SHOULD result in field name: `f(table.c1, table.c2)`
 
+### Column labels
+
+When `datafusion.sql_parser.column_labels` is `true`, each unaliased output
+column of a top-level SQL query gets a readable label in its field metadata.
+Field names still follow the rules above. The field metadata keys are:
+
+- `datafusion.label`: the label, such as `a + 1`.
+- `datafusion.label_of`: the field name that the label applies to, such as
+  `t.a + Int64(1)`. A tool that displays results MUST show the label only
+  when the field name equals this value, because metadata stays on a field
+  after it's renamed.
+
+Labels follow these rules, which differ from the field name rules above:
+
+- Labels MUST NOT contain a relation/table qualifier.
+  - `SELECT foo + bar` SHOULD result in label: `foo + bar`
+- Literals MUST NOT contain a type wrapper.
+  - `SELECT 1` SHOULD result in label: `1`
+- String literals MUST be quoted as in SQL.
+  - `SELECT 'foo'` SHOULD result in label: `'foo'`
+- Operator expressions MUST be wrapped with parentheses only where operator
+  precedence needs them.
+  - `SELECT 1+2` SHOULD result in label: `1 + 2`
+  - `SELECT (a+b)*c` SHOULD result in label: `(a + b) * c`
+- Negation is wrapped with parentheses, and so is a negated operator
+  expression.
+  - `SELECT -a` SHOULD result in label: `(- a)`
+  - `SELECT -(a+b)` SHOULD result in label: `(- (a + b))`
+- Window functions use SQL `OVER (...)` syntax, without the parts that equal
+  their defaults.
+  - `SELECT row_number() OVER (ORDER BY a)` SHOULD result in label:
+    `row_number() OVER (ORDER BY a)`
+
+A column gets no label when its label equals its field name, or when it is a
+column reference typed in the outermost `SELECT` list. Two columns can have
+the same label.
+
 ## Appendices
 
 ### Examples and comparison with other systems

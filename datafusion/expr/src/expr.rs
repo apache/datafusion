@@ -1069,6 +1069,61 @@ impl Sort {
             nulls_first: self.nulls_first,
         }
     }
+
+    /// Human readable display formatting for this sort expression, in SQL
+    /// syntax. `ASC` and the default null ordering for the sort direction
+    /// (`ASC NULLS LAST`, `DESC NULLS FIRST`) are left out.
+    ///
+    /// See [`Expr::human_display`] for details.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_expr::col;
+    /// assert_eq!(col("a").sort(true, false).human_display().to_string(), "a");
+    /// assert_eq!(col("a").sort(false, false).human_display().to_string(), "a DESC NULLS LAST");
+    /// ```
+    pub fn human_display(&self) -> impl Display + '_ {
+        SortSqlDisplay(self)
+    }
+}
+
+/// A helper struct for displaying a `Sort` as an SQL-like string.
+struct SortSqlDisplay<'a>(&'a Sort);
+
+impl Display for SortSqlDisplay<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let Sort {
+            expr,
+            asc,
+            nulls_first,
+        } = self.0;
+        write!(f, "{}", SqlDisplay(expr))?;
+        if !asc {
+            write!(f, " DESC")?;
+        }
+        // The default is NULLS LAST for ASC and NULLS FIRST for DESC
+        if *asc == *nulls_first {
+            let nulls = if *nulls_first { "FIRST" } else { "LAST" };
+            write!(f, " NULLS {nulls}")?;
+        }
+        Ok(())
+    }
+}
+
+/// Formats a list of [`Sort`] expressions, separated by `", "`, using
+/// [`Sort::human_display`].
+pub struct SortListDisplay<'a>(pub &'a [Sort]);
+
+impl Display for SortListDisplay<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        for (i, sort) in self.0.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{}", sort.human_display())?;
+        }
+        Ok(())
+    }
 }
 
 impl Display for Sort {
@@ -3372,7 +3427,11 @@ struct SqlDisplay<'a>(&'a Expr);
 impl Display for SqlDisplay<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.0 {
-            Expr::Literal(scalar, _) => scalar.fmt(f),
+            Expr::Literal(scalar, _) => match scalar.try_as_str() {
+                // Quote strings as SQL does, so `'1'` doesn't read as `1`
+                Some(Some(s)) => write!(f, "'{}'", s.replace('\'', "''")),
+                _ => scalar.fmt(f),
+            },
             Expr::Alias(Alias { name, .. }) => write!(f, "{name}"),
             Expr::Between(Between {
                 expr,
@@ -3390,7 +3449,32 @@ impl Display for SqlDisplay<'_> {
                 )
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                write!(f, "{} {op} {}", SqlDisplay(left), SqlDisplay(right))
+                // Parenthesize a child binary expression only when operator
+                // precedence requires it. A right child with the same
+                // precedence needs parentheses, e.g. `a - (b - c)`.
+                fn write_child(
+                    f: &mut Formatter<'_>,
+                    expr: &Expr,
+                    precedence: u8,
+                    is_right: bool,
+                ) -> fmt::Result {
+                    match expr {
+                        Expr::BinaryExpr(child) => {
+                            let p = child.op.precedence();
+                            if p == 0 || p < precedence || (is_right && p == precedence) {
+                                write!(f, "({})", SqlDisplay(expr))
+                            } else {
+                                write!(f, "{}", SqlDisplay(expr))
+                            }
+                        }
+                        _ => write!(f, "{}", SqlDisplay(expr)),
+                    }
+                }
+
+                let precedence = op.precedence();
+                write_child(f, left, precedence, false)?;
+                write!(f, " {op} ")?;
+                write_child(f, right, precedence, true)
             }
             Expr::Case(Case {
                 expr,
@@ -3423,7 +3507,7 @@ impl Display for SqlDisplay<'_> {
             }) => {
                 write!(
                     f,
-                    "{}{} IN {}",
+                    "{}{} IN ({})",
                     SqlDisplay(expr),
                     if *negated { " NOT" } else { "" },
                     ExprListDisplay::comma_separated(list.as_slice())
@@ -3432,7 +3516,7 @@ impl Display for SqlDisplay<'_> {
             Expr::GroupingSet(GroupingSet::Cube(exprs)) => {
                 write!(
                     f,
-                    "ROLLUP ({})",
+                    "CUBE ({})",
                     ExprListDisplay::comma_separated(exprs.as_slice())
                 )
             }
@@ -3489,13 +3573,25 @@ impl Display for SqlDisplay<'_> {
                 )?;
 
                 if let Some(char) = escape_char {
-                    write!(f, " CHAR '{char}'")?;
+                    write!(f, " ESCAPE '{char}'")?;
                 }
 
                 Ok(())
             }
-            Expr::Negative(expr) => write!(f, "(- {})", SqlDisplay(expr)),
-            Expr::Not(expr) => write!(f, "NOT {}", SqlDisplay(expr)),
+            // Keep a binary operand grouped: `-(a + b)` is not `-a + b`
+            Expr::Negative(expr) => match expr.as_ref() {
+                Expr::BinaryExpr(_) => write!(f, "(- ({}))", SqlDisplay(expr)),
+                _ => write!(f, "(- {})", SqlDisplay(expr)),
+            },
+            // NOT binds tighter than AND and OR, so group those operands
+            Expr::Not(expr) => match expr.as_ref() {
+                Expr::BinaryExpr(BinaryExpr { op, .. })
+                    if op.precedence() <= Operator::And.precedence() =>
+                {
+                    write!(f, "NOT ({})", SqlDisplay(expr))
+                }
+                _ => write!(f, "NOT {}", SqlDisplay(expr)),
+            },
             Expr::Unnest(Unnest { expr, outer }) => {
                 let name = if *outer { "UNNEST_OUTER" } else { "UNNEST" };
                 write!(f, "{name}({})", SqlDisplay(expr))
@@ -3519,10 +3615,18 @@ impl Display for SqlDisplay<'_> {
                     SqlDisplay(pattern),
                 )?;
                 if let Some(char) = escape_char {
-                    write!(f, " CHAR '{char}'")?;
+                    write!(f, " ESCAPE '{char}'")?;
                 }
 
                 Ok(())
+            }
+            Expr::ScalarFunction(ScalarFunction { func, args }) => {
+                write!(
+                    f,
+                    "{}({})",
+                    func.name(),
+                    ExprListDisplay::comma_separated(args.as_slice())
+                )
             }
             Expr::AggregateFunction(AggregateFunction { func, params }) => {
                 match func.human_display(params) {
@@ -4293,6 +4397,135 @@ mod test {
         assert_eq!("Decimal128(NULL,10,2)", format!("{null_expr}"));
         assert_eq!("Decimal128(NULL,10,2)", null_expr.schema_name().to_string());
         assert_eq!("NULL", null_expr.human_display().to_string());
+    }
+
+    #[test]
+    fn human_display_binary_expr_precedence() {
+        let expr = (col("a") + col("b")) * col("c");
+        assert_eq!("(a + b) * c", expr.human_display().to_string());
+
+        let expr = col("a") + col("b") * col("c");
+        assert_eq!("a + b * c", expr.human_display().to_string());
+
+        let expr = col("a") + col("b") + col("c");
+        assert_eq!("a + b + c", expr.human_display().to_string());
+
+        let expr = col("a") - (col("b") - col("c"));
+        assert_eq!("a - (b - c)", expr.human_display().to_string());
+    }
+
+    #[test]
+    fn human_display_scalar_function() {
+        #[derive(Debug, PartialEq, Eq, Hash)]
+        struct Coalesce {
+            signature: Signature,
+        }
+        impl ScalarUDFImpl for Coalesce {
+            fn name(&self) -> &str {
+                "coalesce"
+            }
+
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+
+            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+                Ok(DataType::Int64)
+            }
+
+            fn invoke_with_args(
+                &self,
+                _args: ScalarFunctionArgs,
+            ) -> Result<ColumnarValue> {
+                unimplemented!()
+            }
+        }
+        let udf = Arc::new(ScalarUDF::from(Coalesce {
+            signature: Signature::variadic_any(Volatility::Immutable),
+        }));
+        let expr = udf.call(vec![lit(ScalarValue::Null), lit(1i64) + col("a")]);
+        assert_eq!("coalesce(NULL, 1 + a)", expr.human_display().to_string());
+    }
+
+    #[test]
+    fn human_display_cube() {
+        let expr = Expr::GroupingSet(GroupingSet::Cube(vec![col("a"), col("b")]));
+        assert_eq!("CUBE (a, b)", expr.human_display().to_string());
+    }
+
+    #[test]
+    fn human_display_sort() {
+        assert_eq!("a", col("a").sort(true, false).human_display().to_string());
+        assert_eq!(
+            "a NULLS FIRST",
+            col("a").sort(true, true).human_display().to_string()
+        );
+        assert_eq!(
+            "a DESC",
+            col("a").sort(false, true).human_display().to_string()
+        );
+        assert_eq!(
+            "a + 1 DESC NULLS LAST",
+            (col("a") + lit(1i64))
+                .sort(false, false)
+                .human_display()
+                .to_string()
+        );
+    }
+
+    #[test]
+    fn human_display_not_and_negative_keep_grouping() {
+        let expr = !(col("a").gt(lit(1i64)).and(col("b").gt(lit(2i64))));
+        assert_eq!("NOT (a > 1 AND b > 2)", expr.human_display().to_string());
+
+        let expr = !col("a").gt(lit(1i64));
+        assert_eq!("NOT a > 1", expr.human_display().to_string());
+
+        let expr = Expr::Negative(Box::new(col("a") + col("b")));
+        assert_eq!("(- (a + b))", expr.human_display().to_string());
+
+        let expr = Expr::Negative(Box::new(col("a")));
+        assert_eq!("(- a)", expr.human_display().to_string());
+    }
+
+    #[test]
+    fn human_display_quotes_string_literals() {
+        assert_eq!("'x'", lit("x").human_display().to_string());
+        assert_eq!("'it''s'", lit("it's").human_display().to_string());
+        assert_eq!("1", lit(1i64).human_display().to_string());
+    }
+
+    #[test]
+    fn human_display_in_list_and_escape() {
+        let expr = col("a").in_list(vec![lit(1i64), lit(2i64)], false);
+        assert_eq!("a IN (1, 2)", expr.human_display().to_string());
+
+        let expr = col("a").in_list(vec![lit(1i64)], true);
+        assert_eq!("a NOT IN (1)", expr.human_display().to_string());
+
+        let expr = Expr::Like(Like::new(
+            false,
+            Box::new(col("s")),
+            Box::new(lit("x\\%")),
+            Some('\\'),
+            false,
+        ));
+        assert_eq!(
+            "s LIKE 'x\\%' ESCAPE '\\'",
+            expr.human_display().to_string()
+        );
+
+        let expr = Expr::SimilarTo(Like::new(
+            false,
+            Box::new(col("s")),
+            Box::new(lit("x")),
+            Some('!'),
+            false,
+        ));
+        assert_eq!(
+            "s SIMILAR TO 'x' ESCAPE '!'",
+            expr.human_display().to_string()
+        );
     }
 
     #[test]

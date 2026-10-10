@@ -28,6 +28,7 @@ use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches_with_options;
 use datafusion::config::FormatOptions;
 use datafusion::error::Result;
+use datafusion_common::metadata::batches_with_display_names;
 
 /// Allow records to be printed in different formats
 #[derive(Debug, PartialEq, Eq, clap::ValueEnum, Clone, Copy)]
@@ -183,6 +184,9 @@ impl PrintFormat {
                 if maxrows == MaxRows::Limited(0) {
                     return Ok(());
                 }
+                // Only the table format shows column labels. Programs parse the
+                // other formats, which keep column names.
+                let batches = batches_with_display_names(&batches)?;
                 format_batches_with_maxrows(writer, &batches, maxrows, format_options)
             }
             Self::Json => batches_to_json!(ArrayWriter, writer, &batches),
@@ -204,8 +208,9 @@ impl PrintFormat {
                     format_options.try_into()?;
 
                 let empty_batch = RecordBatch::new_empty(schema);
+                let batches = batches_with_display_names(&[empty_batch])?;
                 let formatted =
-                    pretty_format_batches_with_options(&[empty_batch], &format_options)?;
+                    pretty_format_batches_with_options(&batches, &format_options)?;
                 writeln!(writer, "{formatted}")?;
             }
             _ => {}
@@ -502,6 +507,29 @@ mod tests {
         assert_eq!(output, "")
     }
 
+    #[test]
+    fn test_print_batches_zero_column_batch_with_rows() {
+        let options = arrow::array::RecordBatchOptions::new().with_row_count(Some(2));
+        let batch = RecordBatch::try_new_with_options(
+            Arc::new(Schema::empty()),
+            vec![],
+            &options,
+        )
+        .unwrap();
+
+        // Table format must not fail on a batch that has rows but no columns
+        let output = PrintBatchesTest::new()
+            .with_format(PrintFormat::Table)
+            .with_schema(Arc::new(Schema::empty()))
+            .with_batches(vec![batch])
+            .run();
+        assert_snapshot!(output, @r"
+        ++
+        ++
+        ++
+        ");
+    }
+
     #[derive(Debug)]
     struct PrintBatchesTest {
         format: PrintFormat,
@@ -649,6 +677,72 @@ mod tests {
         | .                                               |
         +----+----+----+----+----+----+----+----+----+----+
         ");
+    }
+
+    #[test]
+    fn print_column_labels() {
+        let output = PrintBatchesTest::new()
+            .with_format(PrintFormat::Table)
+            .with_schema(labeled_schema())
+            .with_batches(vec![labeled_batch()])
+            .run();
+        assert_snapshot!(output, @r"
+        +-------+---+
+        | a + 1 | b |
+        +-------+---+
+        | 1     |   |
+        | 2     |   |
+        | 3     |   |
+        +-------+---+
+        ");
+
+        let output = PrintBatchesTest::new()
+            .with_format(PrintFormat::Table)
+            .with_schema(labeled_schema())
+            .with_batches(vec![])
+            .run();
+        assert_snapshot!(output, @r"
+        +-------+---+
+        | a + 1 | b |
+        +-------+---+
+        +-------+---+
+        ");
+
+        // Formats that programs parse keep column names
+        let output = PrintBatchesTest::new()
+            .with_format(PrintFormat::Csv)
+            .with_batches(vec![labeled_batch()])
+            .with_header(WithHeader::Yes)
+            .run();
+        assert_snapshot!(output, @r#"
+        t.a + Int64(1),b
+        1,
+        2,
+        3,
+        "#);
+    }
+
+    /// Return a schema whose first column has a label
+    fn labeled_schema() -> SchemaRef {
+        let name = "t.a + Int64(1)";
+        let labeled = datafusion_common::metadata::column_label_metadata("a + 1", name)
+            .add_to_field(Field::new(name, DataType::Int32, false));
+        Arc::new(Schema::new(vec![
+            labeled,
+            Field::new("b", DataType::Int32, true),
+        ]))
+    }
+
+    /// Return a batch for [`labeled_schema`] with three rows
+    fn labeled_batch() -> RecordBatch {
+        RecordBatch::try_new(
+            labeled_schema(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(Int32Array::from(vec![None, None, None])),
+            ],
+        )
+        .unwrap()
     }
 
     /// return a schema with many columns (to exercise wide table formatting)

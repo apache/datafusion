@@ -1064,10 +1064,39 @@ pub fn remove_unnecessary_projections(
         if is_projection_removable(projection) {
             return Ok(Transformed::yes(Arc::clone(projection.input())));
         }
-        // Swapping a projection with observable metadata can change query results
-        // by changing the metadata visible to its child expressions.
+        // Swapping a projection with observable metadata as is can change query
+        // results by changing the metadata visible to its child expressions.
         if projection.overrides_metadata() {
-            return Ok(Transformed::no(plan));
+            // Split it instead when that lets the computation move: compute the
+            // expressions in a projection that keeps derived metadata, push it
+            // down like any other, and apply the metadata in a column-only
+            // projection on top.
+            if is_identity_projection(projection) {
+                return Ok(Transformed::no(plan));
+            }
+            let inner = ProjectionExec::try_new(
+                projection.expr().to_vec(),
+                Arc::clone(projection.input()),
+            )?;
+            let Some(pushed) = inner.input().try_swapping_with_projection(&inner)? else {
+                return Ok(Transformed::no(plan));
+            };
+            let columns = inner
+                .schema()
+                .fields()
+                .iter()
+                .enumerate()
+                .map(|(index, field)| ProjectionExpr {
+                    expr: Arc::new(Column::new(field.name(), index)) as _,
+                    alias: field.name().clone(),
+                })
+                .collect::<Vec<_>>();
+            let outer = ProjectionExec::try_new_with_schema_metadata(
+                columns,
+                pushed,
+                &projection.schema(),
+            )?;
+            return Ok(Transformed::yes(Arc::new(outer)));
         }
         // Otherwise, check if we can push it under its child(ren):
         projection
@@ -1085,6 +1114,14 @@ pub fn remove_unnecessary_projections(
 /// For example, if the input schema is `a, b`, `SELECT a, b` is removable,
 /// but `SELECT b, a` and `SELECT a+1, b` and `SELECT a AS c, b` are not.
 fn is_projection_removable(projection: &ProjectionExec) -> bool {
+    is_identity_projection(projection)
+        && projection.schema() == projection.input().schema()
+}
+
+/// Returns true if `projection` passes every input column through unchanged,
+/// in order and under the same name. Its output can still differ from its
+/// input in metadata.
+fn is_identity_projection(projection: &ProjectionExec) -> bool {
     let exprs = projection.expr();
     exprs.iter().enumerate().all(|(idx, proj_expr)| {
         let Some(col) = proj_expr.expr.downcast_ref::<Column>() else {
@@ -1092,7 +1129,6 @@ fn is_projection_removable(projection: &ProjectionExec) -> bool {
         };
         col.name() == proj_expr.alias && col.index() == idx
     }) && exprs.len() == projection.input().schema().fields().len()
-        && projection.schema() == projection.input().schema()
 }
 
 /// Given the expression set of a projection, checks if the projection causes
@@ -1874,6 +1910,118 @@ mod tests {
             batches.iter().map(|batch| batch.num_rows()).sum::<usize>(),
             100
         );
+        Ok(())
+    }
+
+    fn labeled_projection(
+        input: Arc<dyn ExecutionPlan>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Narrows the 3-column input `i, j, k` to `i` (labeled) and `j + 1`.
+        let metadata_schema = Schema::new(vec![
+            Field::new("i", DataType::Int32, true).with_metadata(HashMap::from([(
+                "label".to_string(),
+                "Label I".to_string(),
+            )])),
+            Field::new("b", DataType::Int32, true),
+        ]);
+        Ok(Arc::new(ProjectionExec::try_new_with_schema_metadata(
+            [
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("i", 0)),
+                    alias: "i".to_string(),
+                },
+                ProjectionExpr {
+                    expr: Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("j", 1)),
+                        Operator::Plus,
+                        lit(1_i32),
+                    )),
+                    alias: "b".to_string(),
+                },
+            ],
+            input,
+            &metadata_schema,
+        )?))
+    }
+
+    fn three_column_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("i", DataType::Int32, true),
+            Field::new("j", DataType::Int32, true),
+            Field::new("k", DataType::Int32, true),
+        ]))
+    }
+
+    #[test]
+    fn test_metadata_projection_is_split_and_pushed() -> Result<()> {
+        let scan = test::scan_partitioned(1);
+        // The scan has the single column `i`; repeat it as `i, j, k`
+        let column = |name: &str| ProjectionExpr {
+            expr: Arc::new(Column::new("i", 0)),
+            alias: name.to_string(),
+        };
+        let widened: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+            [column("i"), column("j"), column("k")],
+            scan,
+        )?);
+        let predicate = binary(
+            col("i", &widened.schema())?,
+            Operator::Gt,
+            lit(ScalarValue::Int32(Some(-1))),
+            &widened.schema(),
+        )?;
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, widened)?);
+        let projection = labeled_projection(filter)?;
+        assert!(
+            projection
+                .downcast_ref::<ProjectionExec>()
+                .unwrap()
+                .overrides_metadata()
+        );
+        let expected_schema = projection.schema();
+
+        let optimized = remove_unnecessary_projections(Arc::clone(&projection))?;
+
+        assert!(optimized.transformed);
+        let optimized = optimized.data;
+        assert_eq!(optimized.schema(), expected_schema);
+        // A column-only projection re-applies the metadata on top; the
+        // computation moved below the filter.
+        let outer = optimized
+            .downcast_ref::<ProjectionExec>()
+            .expect("metadata projection should remain on top");
+        assert!(all_alias_free_columns(outer.expr()));
+        assert!(outer.overrides_metadata());
+        assert!(outer.input().downcast_ref::<FilterExec>().is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn test_identity_metadata_projection_is_unchanged() -> Result<()> {
+        let projection = identity_projection_with_metadata(
+            test::scan_partitioned(1),
+            HashMap::from([("event_field".to_string(), "true".to_string())]),
+            HashMap::new(),
+        )?;
+
+        let optimized = remove_unnecessary_projections(Arc::clone(&projection))?;
+
+        assert!(!optimized.transformed);
+        assert!(Arc::ptr_eq(&optimized.data, &projection));
+        Ok(())
+    }
+
+    #[test]
+    fn test_metadata_projection_unchanged_when_input_cannot_swap() -> Result<()> {
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(three_column_schema()));
+        let projection = labeled_projection(input)?;
+
+        let optimized = remove_unnecessary_projections(Arc::clone(&projection))?;
+
+        assert!(!optimized.transformed);
+        assert!(Arc::ptr_eq(&optimized.data, &projection));
         Ok(())
     }
 
