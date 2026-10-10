@@ -301,32 +301,40 @@ fn statistical_join_selection_subrule(
     context: &dyn PhysicalOptimizerContext,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     let transformed = if let Some(hash_join) = plan.downcast_ref::<HashJoinExec>() {
-        match hash_join.partition_mode() {
-            PartitionMode::Auto => try_collect_left(hash_join, false, context)?
-                .map_or_else(
-                    || partitioned_hash_join(hash_join, context).map(Some),
-                    |v| Ok(Some(v)),
-                )?,
-            PartitionMode::CollectLeft => try_collect_left(hash_join, true, context)?
-                .map_or_else(
-                    || partitioned_hash_join(hash_join, context).map(Some),
-                    |v| Ok(Some(v)),
-                )?,
-            PartitionMode::Partitioned => {
-                let left = hash_join.left();
-                let right = hash_join.right();
-                if can_swap_hash_join(hash_join)
-                    && should_swap_join_order(&**left, &**right, context)?
-                {
-                    // Null-aware RightAnti only supports CollectLeft
-                    let partition_mode = if hash_join.null_aware {
-                        PartitionMode::CollectLeft
+        if !hash_join.dynamic_expressions_produced().is_empty() {
+            // Once a HashJoinExec carries a dynamic filter, its build side
+            // has already been determined and the dynamic filter has been wired
+            // to the probe side. Reordering inputs would invalidate the dynamic
+            // filter, so skip this join and leave it unchanged.
+            None
+        } else {
+            match hash_join.partition_mode() {
+                PartitionMode::Auto => try_collect_left(hash_join, false, context)?
+                    .map_or_else(
+                        || partitioned_hash_join(hash_join, context).map(Some),
+                        |v| Ok(Some(v)),
+                    )?,
+                PartitionMode::CollectLeft => try_collect_left(hash_join, true, context)?
+                    .map_or_else(
+                        || partitioned_hash_join(hash_join, context).map(Some),
+                        |v| Ok(Some(v)),
+                    )?,
+                PartitionMode::Partitioned => {
+                    let left = hash_join.left();
+                    let right = hash_join.right();
+                    if can_swap_hash_join(hash_join)
+                        && should_swap_join_order(&**left, &**right, context)?
+                    {
+                        // Null-aware RightAnti only supports CollectLeft
+                        let partition_mode = if hash_join.null_aware {
+                            PartitionMode::CollectLeft
+                        } else {
+                            PartitionMode::Partitioned
+                        };
+                        hash_join.swap_inputs(partition_mode).map(Some)?
                     } else {
-                        PartitionMode::Partitioned
-                    };
-                    hash_join.swap_inputs(partition_mode).map(Some)?
-                } else {
-                    None
+                        None
+                    }
                 }
             }
         }
@@ -524,6 +532,7 @@ pub fn hash_join_swap_subrule(
     _config_options: &ConfigOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     if let Some(hash_join) = input.downcast_ref::<HashJoinExec>()
+        && hash_join.dynamic_expressions_produced().is_empty()
         && hash_join.left.boundedness().is_unbounded()
         && !hash_join.right.boundedness().is_unbounded()
         && !hash_join.null_aware // Don't swap null-aware anti joins
