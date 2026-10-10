@@ -1773,6 +1773,7 @@ dependencies = [
  "datafusion-physical-optimizer",
  "datafusion-physical-plan",
  "datafusion-session",
+ "datafusion-spark",
  "datafusion-sql",
  "doc-comment",
  "env_logger",
