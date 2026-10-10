@@ -597,6 +597,10 @@ fn roundtrip_csv_scan_preserves_format_options() -> Result<()> {
         assert!(csv_source.truncate_rows());
         assert_eq!(file_scan.file_compression_type, FileCompressionType::GZIP);
 
+        // Terminator validation is independent of the newline setting.
+        if newlines_in_values != Some(true) {
+            continue;
+        }
         for invalid_terminator in [vec![], vec![b'\r', b'\n']] {
             let mut node =
                 PhysicalPlanNode::try_from_physical_plan(Arc::clone(&plan), &codec)?;
