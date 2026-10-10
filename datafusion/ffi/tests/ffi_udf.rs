@@ -25,7 +25,9 @@ mod tests {
     use datafusion::error::Result;
     use datafusion::logical_expr::{ExpressionPlacement, ScalarUDF, ScalarUDFImpl};
     use datafusion::prelude::{SessionContext, col};
+    use datafusion::scalar::ScalarValue;
     use datafusion_execution::config::SessionConfig;
+    use datafusion_expr::interval_arithmetic::Interval;
     use datafusion_expr::lit;
     use datafusion_expr::sort_properties::ExprProperties;
     use datafusion_ffi::tests::create_record_batch;
@@ -118,6 +120,11 @@ mod tests {
 
         assert!(foreign_func.preserves_lex_ordering(std::slice::from_ref(&preserves))?);
         assert!(!foreign_func.preserves_lex_ordering(&[preserves, does_not_preserve])?);
+
+        let interval =
+            Interval::try_new(ScalarValue::Int64(Some(2)), ScalarValue::Int64(Some(8)))?;
+        assert_eq!(foreign_func.evaluate_bounds(&[&interval])?, interval);
+        assert!(foreign_func.evaluate_bounds(&[]).is_err());
 
         Ok(())
     }
