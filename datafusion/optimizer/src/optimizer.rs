@@ -93,12 +93,6 @@ pub trait OptimizerRule: Debug {
         None
     }
 
-    /// Does this rule support rewriting owned plans (rather than by reference)?
-    #[deprecated(since = "47.0.0", note = "This method is no longer used")]
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     /// Try to rewrite `plan` to an optimized form, returning [`Transformed::yes`]
     /// if the plan was rewritten and [`Transformed::no`] if it was not.
     ///
@@ -995,10 +989,6 @@ mod tests {
             "bad rule"
         }
 
-        fn supports_rewrite(&self) -> bool {
-            true
-        }
-
         fn rewrite(
             &self,
             _plan: LogicalPlan,
@@ -1015,10 +1005,6 @@ mod tests {
     impl OptimizerRule for GetTableScanRule {
         fn name(&self) -> &str {
             "get table_scan rule"
-        }
-
-        fn supports_rewrite(&self) -> bool {
-            true
         }
 
         fn rewrite(
@@ -1043,10 +1029,6 @@ mod tests {
 
         fn apply_order(&self) -> Option<ApplyOrder> {
             Some(ApplyOrder::TopDown)
-        }
-
-        fn supports_rewrite(&self) -> bool {
-            true
         }
 
         fn rewrite(
@@ -1090,10 +1072,6 @@ mod tests {
 
         fn apply_order(&self) -> Option<ApplyOrder> {
             Some(ApplyOrder::TopDown)
-        }
-
-        fn supports_rewrite(&self) -> bool {
-            true
         }
 
         fn rewrite(

@@ -62,10 +62,6 @@ impl PushDownLimit {
 
 /// Push down Limit.
 impl OptimizerRule for PushDownLimit {
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     fn rewrite(
         &self,
         plan: LogicalPlan,

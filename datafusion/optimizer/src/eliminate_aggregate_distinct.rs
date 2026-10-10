@@ -68,10 +68,6 @@ impl OptimizerRule for EliminateAggregateDistinct {
         Some(ApplyOrder::BottomUp)
     }
 
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     fn rewrite(
         &self,
         plan: LogicalPlan,
