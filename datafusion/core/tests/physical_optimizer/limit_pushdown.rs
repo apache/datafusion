@@ -19,13 +19,16 @@ use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
     coalesce_partitions_exec, global_limit_exec, hash_join_exec, local_limit_exec,
-    sort_exec, sort_preserving_merge_exec, stream_exec,
+    parquet_exec, parquet_exec_with_sort, sort_exec, sort_preserving_merge_exec,
+    sort_preserving_merge_exec_with_fetch, stream_exec,
 };
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
+use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_expr::{JoinType, Operator};
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr::expressions::{BinaryExpr, col, lit};
@@ -401,6 +404,64 @@ fn pushes_global_limit_into_multiple_fetch_plans() -> Result<()> {
             StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true
     "
     );
+
+    Ok(())
+}
+
+#[test]
+fn preserves_order_when_pushing_fetch_from_sort_preserving_merge() -> Result<()> {
+    let schema = create_schema();
+    let ordering: LexOrdering = [PhysicalSortExpr {
+        expr: col("c1", &schema)?,
+        options: SortOptions::default(),
+    }]
+    .into();
+    let scan = parquet_exec_with_sort(schema, vec![ordering.clone()]);
+    let local_limit = local_limit_exec(scan, 10);
+    let plan = sort_preserving_merge_exec_with_fetch(ordering, local_limit, 5);
+
+    let optimized = LimitPushdown::new().optimize(plan, &ConfigOptions::new())?;
+    let scan = optimized.children().swap_remove(0);
+    let scan = scan
+        .downcast_ref::<DataSourceExec>()
+        .expect("fetch should be pushed into the scan");
+    let config = scan
+        .data_source()
+        .downcast_ref::<FileScanConfig>()
+        .expect("parquet scan should use FileScanConfig");
+
+    assert_eq!(config.limit, Some(5));
+    assert!(config.preserve_order);
+
+    Ok(())
+}
+
+#[test]
+fn does_not_preserve_order_for_independent_limit_below_sort() -> Result<()> {
+    let schema = create_schema();
+    let ordering: LexOrdering = [PhysicalSortExpr {
+        expr: col("c1", &schema)?,
+        options: SortOptions::default(),
+    }]
+    .into();
+    let scan = parquet_exec(schema);
+    let local_limit = local_limit_exec(scan, 10);
+    let sort = sort_exec(ordering.clone(), local_limit);
+    let plan = sort_preserving_merge_exec_with_fetch(ordering, sort, 5);
+
+    let optimized = LimitPushdown::new().optimize(plan, &ConfigOptions::new())?;
+    let sort = optimized.children().swap_remove(0);
+    let scan = sort.children().swap_remove(0);
+    let scan = scan
+        .downcast_ref::<DataSourceExec>()
+        .expect("inner fetch should be pushed into the scan");
+    let config = scan
+        .data_source()
+        .downcast_ref::<FileScanConfig>()
+        .expect("parquet scan should use FileScanConfig");
+
+    assert_eq!(config.limit, Some(10));
+    assert!(!config.preserve_order);
 
     Ok(())
 }
