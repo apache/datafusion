@@ -52,8 +52,8 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
-    Column, DFSchema, Result, assert_eq_or_internal_err, internal_err, plan_err,
-    qualified_name,
+    Column, DFSchema, Result, ScalarValue, assert_eq_or_internal_err, internal_err,
+    plan_err, qualified_name,
 };
 use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::expr_rewriter::replace_col;
@@ -62,7 +62,7 @@ use datafusion_expr::utils::{
     conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
 };
 use datafusion_expr::{
-    BinaryExpr, Distinct, Expr, Filter, Operator, Projection,
+    BinaryExpr, Distinct, EmptyRelation, Expr, Filter, Operator, Projection,
     TableProviderFilterPushDown, and, or,
 };
 
@@ -892,8 +892,25 @@ impl OptimizerRule for PushDownFilter {
         // predicates on rows that have already been filtered out.
         let (new_predicates, reorder_changed) = reorder_predicates(new_predicates);
 
-        let count_changed = old_predicate_len != new_predicates.len();
-        if count_changed || reorder_changed {
+        // An OR branch can change without changing the number of conjuncts.
+        // Ignore permutations from grouping comparisons by column: the cost
+        // reordering above decides when to change predicate evaluation order.
+        let predicates_changed = if old_predicate_len != new_predicates.len() {
+            true
+        } else {
+            let old_predicates = split_conjunction(&filter.predicate);
+            new_predicates
+                .iter()
+                .zip(&old_predicates)
+                .any(|(new, old)| new != *old)
+                && {
+                    let new_predicates: IndexSet<_> = new_predicates.iter().collect();
+                    old_predicates
+                        .iter()
+                        .any(|old| !new_predicates.contains(old))
+                }
+        };
+        if predicates_changed || reorder_changed {
             let Some(new_predicate) = conjunction(new_predicates) else {
                 // new_predicates is empty - remove the filter entirely
                 // Return the child plan without the filter
@@ -902,14 +919,32 @@ impl OptimizerRule for PushDownFilter {
             filter.predicate = new_predicate;
         }
 
+        // A provider accepting Exact pushdown would absorb FALSE into its scan,
+        // hiding the contradiction from EliminateFilter and still invoking scan().
+        if matches!(
+            filter.predicate,
+            Expr::Literal(ScalarValue::Boolean(Some(false)), _)
+        ) {
+            return Ok(Transformed::yes(LogicalPlan::EmptyRelation(
+                EmptyRelation {
+                    produce_one_row: false,
+                    schema: Arc::clone(filter.input.schema()),
+                },
+            )));
+        }
+
         // If the child has a fetch (limit) or skip (offset), pushing a filter
         // below it would change semantics: the limit/offset should apply before
         // the filter, not after.
         if filter.input.fetch()?.is_some() || filter.input.skip()?.is_some() {
-            return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+            return Ok(Transformed::new(
+                LogicalPlan::Filter(filter),
+                predicates_changed || reorder_changed,
+                TreeNodeRecursion::Continue,
+            ));
         }
 
-        match Arc::unwrap_or_clone(filter.input) {
+        let result = match Arc::unwrap_or_clone(filter.input) {
             LogicalPlan::Filter(mut child_filter) => {
                 // Child filters first to preserve execution order.
                 // Use IndexSet to remove duplicates while preserving predicate order.
@@ -1026,7 +1061,11 @@ impl OptimizerRule for PushDownFilter {
                 // If no non-unnest predicates exist, early return
                 if non_unnest_predicates.is_empty() {
                     filter.input = Arc::new(LogicalPlan::Unnest(unnest));
-                    return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                    return Ok(Transformed::new(
+                        LogicalPlan::Filter(filter),
+                        predicates_changed || reorder_changed,
+                        TreeNodeRecursion::Continue,
+                    ));
                 }
 
                 // Push down non-unnest filter predicate
@@ -1305,7 +1344,11 @@ impl OptimizerRule for PushDownFilter {
                     .all(|res| res == &TableProviderFilterPushDown::Unsupported)
                 {
                     filter.input = Arc::new(LogicalPlan::TableScan(scan));
-                    return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                    return Ok(Transformed::new(
+                        LogicalPlan::Filter(filter),
+                        predicates_changed || reorder_changed,
+                        TreeNodeRecursion::Continue,
+                    ));
                 }
 
                 // Compose scan filters from non-volatile filters of `Exact` or `Inexact` pushdown type
@@ -1331,7 +1374,11 @@ impl OptimizerRule for PushDownFilter {
                     && scan.filters == new_scan_filters
                 {
                     filter.input = Arc::new(LogicalPlan::TableScan(scan));
-                    return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                    return Ok(Transformed::new(
+                        LogicalPlan::Filter(filter),
+                        predicates_changed || reorder_changed,
+                        TreeNodeRecursion::Continue,
+                    ));
                 } else {
                     scan.filters = new_scan_filters;
                 }
@@ -1356,7 +1403,11 @@ impl OptimizerRule for PushDownFilter {
                 // so we return the original Filter unchanged.
                 if extension_plan.node.inputs().is_empty() {
                     filter.input = Arc::new(LogicalPlan::Extension(extension_plan));
-                    return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                    return Ok(Transformed::new(
+                        LogicalPlan::Filter(filter),
+                        predicates_changed || reorder_changed,
+                        TreeNodeRecursion::Continue,
+                    ));
                 }
                 let prevent_cols =
                     extension_plan.node.prevent_predicate_push_down_columns();
@@ -1373,7 +1424,11 @@ impl OptimizerRule for PushDownFilter {
                 // all predicates are kept, no changes needed
                 if predicate_push_or_keep.iter().all(|&x| !x) {
                     filter.input = Arc::new(LogicalPlan::Extension(extension_plan));
-                    return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                    return Ok(Transformed::new(
+                        LogicalPlan::Filter(filter),
+                        predicates_changed || reorder_changed,
+                        TreeNodeRecursion::Continue,
+                    ));
                 }
 
                 // going to push some predicates down, so split the predicates
@@ -1412,9 +1467,17 @@ impl OptimizerRule for PushDownFilter {
             }
             child => {
                 filter.input = Arc::new(child);
-                Ok(Transformed::no(LogicalPlan::Filter(filter)))
+                Ok(Transformed::new(
+                    LogicalPlan::Filter(filter),
+                    predicates_changed || reorder_changed,
+                    TreeNodeRecursion::Continue,
+                ))
             }
-        }
+        };
+        result.map(|mut result| {
+            result.transformed |= predicates_changed || reorder_changed;
+            result
+        })
     }
 }
 
@@ -4653,14 +4716,8 @@ mod tests {
           TestUserNode
         ",
         );
-        // Check that the filter is pushed down to the user-defined node
-        assert_optimized_plan_equal!(
-            plan,
-            @r"
-        Filter: Boolean(false)
-          TestUserNode
-        "
-        )
+        // An impossible filter eliminates even a leaf extension before pushdown.
+        assert_optimized_plan_equal!(plan, @"EmptyRelation: rows=0")
     }
 
     /// Test that filters are NOT pushed through MoveTowardsLeafNodes projections.
