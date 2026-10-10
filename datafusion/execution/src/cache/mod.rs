@@ -91,6 +91,66 @@ pub trait Cache<K: CacheKey, V: CacheValue>: Send + Sync {
     /// Snapshot of all current entries with per-entry metadata (size, hits,
     /// expiration) for diagnostics and observability.
     fn list_entries(&self) -> HashMap<K, CacheEntryInfo<V>>;
+
+    /// Aggregate counters describing how this cache has behaved so far, or
+    /// `None` if the implementation does not track them.
+    ///
+    /// Unlike [`Cache::list_entries`], which only describes entries that are
+    /// currently resident, these counters cover the whole lifetime of the cache
+    /// and therefore survive eviction. They are what makes a thrashing cache
+    /// (0% hit rate because the working set does not fit the byte budget)
+    /// diagnosable.
+    ///
+    /// The default implementation returns `None` so that existing external
+    /// implementations of this trait keep compiling; `None` means
+    /// "not instrumented", which a reporting tool can distinguish from an
+    /// instrumented cache that is genuinely all zeros.
+    fn statistics(&self) -> Option<CacheStatistics> {
+        None
+    }
+}
+
+/// Aggregate, lifetime counters for a [`Cache`].
+///
+/// Obtained via [`Cache::statistics`]. All counters are monotonic for the
+/// lifetime of the cache: they are not reset by [`Cache::clear`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CacheStatistics {
+    /// Lookups ([`Cache::get`]) that returned a value.
+    pub hits: u64,
+    /// Lookups ([`Cache::get`]) that did not return a value, either because the
+    /// key was absent or because the entry had expired.
+    pub misses: u64,
+    /// Entries dropped to stay within the memory budget.
+    ///
+    /// This counts only capacity-driven eviction (including eviction triggered
+    /// by lowering the limit via [`Cache::update_cache_limit`]). Explicit
+    /// invalidation through [`Cache::remove`], [`Cache::clear`] or
+    /// [`Cache::drop_table_entries`], and replacing an entry with a new value
+    /// for the same key, are not evictions.
+    pub evictions: u64,
+    /// Total size, in bytes, of the entries counted by `evictions`.
+    pub bytes_evicted: u64,
+    /// Inserts rejected because the entry on its own was larger than the whole
+    /// cache limit.
+    ///
+    /// A non-zero value means the cache can never hold that entry, no matter
+    /// how much of it is free — a distinct failure mode from ordinary eviction
+    /// pressure, and one that is worth surfacing on its own.
+    pub inserts_rejected_too_large: u64,
+}
+
+impl CacheStatistics {
+    /// Total number of lookups, i.e. `hits + misses`.
+    pub fn lookups(&self) -> u64 {
+        self.hits.saturating_add(self.misses)
+    }
+
+    /// Fraction of lookups that were hits, or `None` if there were no lookups.
+    pub fn hit_rate(&self) -> Option<f64> {
+        let lookups = self.lookups();
+        (lookups > 0).then(|| self.hits as f64 / lookups as f64)
+    }
 }
 
 /// Key type for entries stored in a [`Cache`].
@@ -222,6 +282,83 @@ impl Hash for SchemaFingerprint {
 impl DFHeapSize for SchemaFingerprint {
     fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
         self.columns.heap_size(ctx)
+    }
+}
+
+#[cfg(test)]
+mod cache_statistics_tests {
+    use super::*;
+
+    #[derive(Clone)]
+    struct Unit;
+
+    impl CacheValue for Unit {
+        fn size(&self) -> usize {
+            0
+        }
+    }
+
+    /// A [`Cache`] implementation that does not override [`Cache::statistics`],
+    /// standing in for an external implementation written before the counters
+    /// existed. It must keep compiling, and report that it is uninstrumented.
+    struct UninstrumentedCache;
+
+    impl Cache<Path, Unit> for UninstrumentedCache {
+        fn get(&self, _key: &Path) -> Option<Unit> {
+            None
+        }
+        fn put(&self, _key: &Path, _value: Unit) -> Option<Unit> {
+            None
+        }
+        fn remove(&self, _k: &Path) -> Option<Unit> {
+            None
+        }
+        fn contains_key(&self, _k: &Path) -> bool {
+            false
+        }
+        fn len(&self) -> usize {
+            0
+        }
+        fn clear(&self) {}
+        fn name(&self) -> String {
+            "UninstrumentedCache".to_string()
+        }
+        fn cache_limit(&self) -> usize {
+            0
+        }
+        fn update_cache_limit(&self, _limit: usize) {}
+        fn cache_ttl(&self) -> Option<Duration> {
+            None
+        }
+        fn update_cache_ttl(&self, _ttl: Option<Duration>) {}
+        fn drop_table_entries(
+            &self,
+            _table_ref: &TableReference,
+        ) -> datafusion_common::Result<()> {
+            Ok(())
+        }
+        fn list_entries(&self) -> HashMap<Path, CacheEntryInfo<Unit>> {
+            HashMap::new()
+        }
+    }
+
+    #[test]
+    fn uninstrumented_cache_reports_no_statistics() {
+        assert_eq!(UninstrumentedCache.statistics(), None);
+    }
+
+    #[test]
+    fn hit_rate_and_lookups() {
+        assert_eq!(CacheStatistics::default().hit_rate(), None);
+        assert_eq!(CacheStatistics::default().lookups(), 0);
+
+        let stats = CacheStatistics {
+            hits: 1,
+            misses: 3,
+            ..Default::default()
+        };
+        assert_eq!(stats.lookups(), 4);
+        assert_eq!(stats.hit_rate(), Some(0.25));
     }
 }
 
