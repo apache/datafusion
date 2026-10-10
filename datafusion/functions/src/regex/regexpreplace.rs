@@ -18,6 +18,7 @@
 //! Regex expressions
 use memchr::memchr;
 
+use crate::utils::transform_leaf_type_preserving_encoding;
 use arrow::array::ArrayDataBuilder;
 use arrow::array::BufferBuilder;
 use arrow::array::GenericStringArray;
@@ -25,13 +26,14 @@ use arrow::array::StringViewBuilder;
 use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
 use arrow::array::{ArrayAccessor, StringViewArray};
 use arrow::array::{ArrayIter, AsArray, new_null_array};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::ScalarValue;
 use datafusion_common::cast::{
     as_large_string_array, as_string_array, as_string_view_array,
 };
 use datafusion_common::exec_err;
 use datafusion_common::plan_err;
+use datafusion_common::types::logical_string;
 use datafusion_common::{
     DataFusionError, Result, cast::as_generic_string_array, internal_err,
 };
@@ -39,7 +41,8 @@ use datafusion_expr::ColumnarValue;
 use datafusion_expr::TypeSignature;
 use datafusion_expr::function::Hint;
 use datafusion_expr::{
-    Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    Coercion, Documentation, EncodingPreservation, ReturnFieldArgs, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 use regex::{CaptureLocations, Regex};
@@ -94,13 +97,36 @@ impl Default for RegexpReplaceFunc {
 
 impl RegexpReplaceFunc {
     pub fn new() -> Self {
-        use DataType::*;
-        use TypeSignature::*;
+        let string_with_dict = || {
+            Coercion::new_exact(TypeSignatureClass::Native(logical_string()))
+                .with_encoding_preservation(EncodingPreservation::dictionary())
+        };
+        let string = || Coercion::new_exact(TypeSignatureClass::Native(logical_string()));
         Self {
+            // Coercible preserves dict encoding on arg[0]; the Uniform fallback
+            // keeps backwards compatibility for non-string inputs that used to
+            // coerce to Utf8 (e.g. Boolean) under the original Uniform signature.
             signature: Signature::one_of(
                 vec![
-                    Uniform(3, vec![Utf8View, LargeUtf8, Utf8]),
-                    Uniform(4, vec![Utf8View, LargeUtf8, Utf8]),
+                    TypeSignature::Coercible(vec![
+                        string_with_dict(),
+                        string(),
+                        string(),
+                    ]),
+                    TypeSignature::Coercible(vec![
+                        string_with_dict(),
+                        string(),
+                        string(),
+                        string(),
+                    ]),
+                    TypeSignature::Uniform(
+                        3,
+                        vec![DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View],
+                    ),
+                    TypeSignature::Uniform(
+                        4,
+                        vec![DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View],
+                    ),
                 ],
                 Volatility::Immutable,
             ),
@@ -118,33 +144,54 @@ impl ScalarUDFImpl for RegexpReplaceFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        use DataType::*;
-        Ok(match &arg_types[0] {
-            LargeUtf8 | LargeBinary => LargeUtf8,
-            Utf8 | Binary => Utf8,
-            Utf8View | BinaryView => Utf8View,
-            Null => Null,
-            Dictionary(_, t) => match **t {
-                LargeUtf8 | LargeBinary => LargeUtf8,
-                Utf8 | Binary => Utf8,
-                Null => Null,
-                _ => {
-                    return plan_err!(
-                        "the regexp_replace can only accept strings but got {:?}",
-                        **t
-                    );
-                }
-            },
-            other => {
-                return plan_err!(
-                    "The regexp_replace function can only accept strings. Got {other}"
-                );
+        transform_leaf_type_preserving_encoding(&arg_types[0], &regexp_leaf_type)
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let input = &args.arg_fields[0];
+        let others_all_scalar = args.scalar_arguments.iter().skip(1).all(Option::is_some);
+        // Dict can only round-trip when the remaining args are scalars; otherwise
+        // `invoke_with_args` materializes the dict and returns the value type.
+        let output_type = match input.data_type() {
+            DataType::Dictionary(_, value_type) if !others_all_scalar => {
+                regexp_leaf_type(value_type.as_ref())?
             }
-        })
+            other => self.return_type(std::slice::from_ref(other))?,
+        };
+        Ok(Arc::new(Field::new(self.name(), output_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let args = &args.args;
+        // Unwrap a scalar dict input so dispatch sees a plain string type;
+        // re-wrap the scalar result afterwards to keep the dict wrapper that
+        // `return_type` promised.
+        let (scalar_dict_key, mut args) = match args.args.first() {
+            Some(ColumnarValue::Scalar(ScalarValue::Dictionary(key_type, value))) => {
+                let key_type = key_type.clone();
+                let mut inner = args.args.clone();
+                inner[0] = ColumnarValue::Scalar(value.as_ref().clone());
+                (Some(key_type), inner)
+            }
+            _ => (None, args.args),
+        };
+
+        // If arg[0] is a dict array but any of args 1..N are arrays, we cannot
+        // reuse the dict keys — flatten the dict to its value type.
+        if let ColumnarValue::Array(array) = &args[0]
+            && let DataType::Dictionary(_, value_type) = array.data_type().clone()
+            && args[1..]
+                .iter()
+                .any(|a| matches!(a, ColumnarValue::Array(_)))
+        {
+            let flat = arrow::compute::cast(array, &value_type)?;
+            args[0] = ColumnarValue::Array(flat);
+        }
+
+        // The Coercible signature allows each arg to coerce independently, so
+        // the string types across args 0..N may differ. The generic dispatch
+        // in `specialize_regexp_replace` requires uniform string types, so cast
+        // args 1..N to match arg[0]'s string type.
+        unify_string_args(&mut args)?;
 
         let len = args
             .iter()
@@ -154,14 +201,25 @@ impl ScalarUDFImpl for RegexpReplaceFunc {
             });
 
         let is_scalar = len.is_none();
-        let result = regexp_replace_func(args);
-        if is_scalar {
+        let result = regexp_replace_func(&args);
+        let result = if is_scalar {
             // If all inputs are scalar, keeps output as scalar
-            let result = result.and_then(|arr| ScalarValue::try_from_array(&arr, 0));
-            result.map(ColumnarValue::Scalar)
+            result
+                .and_then(|arr| ScalarValue::try_from_array(&arr, 0))
+                .map(ColumnarValue::Scalar)
         } else {
             result.map(ColumnarValue::Array)
+        }?;
+
+        if let (Some(key_type), ColumnarValue::Scalar(scalar)) =
+            (scalar_dict_key, &result)
+        {
+            return Ok(ColumnarValue::Scalar(ScalarValue::Dictionary(
+                key_type,
+                Box::new(scalar.clone()),
+            )));
         }
+        Ok(result)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -169,15 +227,71 @@ impl ScalarUDFImpl for RegexpReplaceFunc {
     }
 }
 
+/// Maps the input leaf type to the regexp_replace output leaf type. Shared
+/// between `return_type` and `return_field_from_args`.
+fn regexp_leaf_type(data_type: &DataType) -> Result<DataType> {
+    use DataType::*;
+    Ok(match data_type {
+        LargeUtf8 | LargeBinary => LargeUtf8,
+        Utf8 | Binary => Utf8,
+        Utf8View | BinaryView => Utf8View,
+        Null => Null,
+        other => {
+            return plan_err!(
+                "The regexp_replace function can only accept strings. Got {other}"
+            );
+        }
+    })
+}
+
+/// Casts the pattern/replacement/flags args to match the source arg's string
+/// type. The generic dispatch in `specialize_regexp_replace` only handles
+/// uniform string types; without this step a mixed set like
+/// `(Utf8View, Utf8View, Utf8, Utf8View)` would fail to dispatch.
+fn unify_string_args(args: &mut [ColumnarValue]) -> Result<()> {
+    let target = match args[0].data_type() {
+        DataType::Dictionary(_, value_type) => value_type.as_ref().clone(),
+        other => other,
+    };
+    for arg in args.iter_mut().skip(1) {
+        if arg.data_type() == target {
+            continue;
+        }
+        *arg = match arg {
+            ColumnarValue::Array(a) => {
+                ColumnarValue::Array(arrow::compute::cast(a, &target)?)
+            }
+            ColumnarValue::Scalar(s) => ColumnarValue::Scalar(s.cast_to(&target)?),
+        };
+    }
+    Ok(())
+}
+
 fn regexp_replace_func(args: &[ColumnarValue]) -> Result<ArrayRef> {
     match args[0].data_type() {
         DataType::Utf8 => specialize_regexp_replace::<i32>(args),
         DataType::LargeUtf8 => specialize_regexp_replace::<i64>(args),
         DataType::Utf8View => specialize_regexp_replace::<i32>(args),
+        DataType::Dictionary(_, _) => regexp_replace_dictionary(args),
         other => {
             internal_err!("Unsupported data type {other:?} for function regexp_replace")
         }
     }
+}
+
+/// Runs regexp_replace over the dict's unique values and reuses the keys,
+/// avoiding materializing the input column.
+fn regexp_replace_dictionary(args: &[ColumnarValue]) -> Result<ArrayRef> {
+    let ColumnarValue::Array(array) = &args[0] else {
+        return internal_err!(
+            "regexp_replace: dictionary scalar input should be unwrapped by invoke_with_args"
+        );
+    };
+    let dictionary = array.as_any_dictionary();
+    let mut inner_args = args.to_vec();
+    inner_args[0] = ColumnarValue::Array(Arc::clone(dictionary.values()));
+    let converted = regexp_replace_func(&inner_args)?;
+    Ok(dictionary.with_values(converted))
 }
 
 /// replace POSIX capture groups (like \1 or \\1) with Rust Regex group (like ${1})
@@ -474,17 +588,15 @@ where
 /// Get the first argument from the given string array.
 ///
 /// Note: If the array is empty or the first argument is null,
-/// then aborts early.
+/// then aborts early with a null array of `$OUTPUT_DT` (the input column's
+/// type). Using the input column's type keeps the return value consistent
+/// with `return_type`, which also keys off the input column.
 macro_rules! fetch_string_arg {
-    ($ARG:expr, $NAME:expr, $ARRAY_SIZE:expr) => {{
+    ($ARG:expr, $NAME:expr, $ARRAY_SIZE:expr, $OUTPUT_DT:expr) => {{
         let string_array_type = ($ARG).data_type();
         match string_array_type {
-            dt if $ARG.len() == 0 || $ARG.is_null(0) => {
-                // Mimicking the existing behavior of regexp_replace, if any of the scalar arguments
-                // are actually null, then the result will be an array of the same size as the first argument with all nulls.
-                //
-                // Also acts like an early abort mechanism when the input array is empty.
-                return Ok(new_null_array(dt, $ARRAY_SIZE));
+            _ if $ARG.len() == 0 || $ARG.is_null(0) => {
+                return Ok(new_null_array($OUTPUT_DT, $ARRAY_SIZE));
             }
             DataType::Utf8 => {
                 let array = as_string_array($ARG)?;
@@ -515,11 +627,12 @@ fn regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
     let array_size = args[0].len();
-    let pattern = fetch_string_arg!(&args[1], "pattern", array_size);
-    let replacement = fetch_string_arg!(&args[2], "replacement", array_size);
+    let output_dt = args[0].data_type();
+    let pattern = fetch_string_arg!(&args[1], "pattern", array_size, output_dt);
+    let replacement = fetch_string_arg!(&args[2], "replacement", array_size, output_dt);
     let flags = match args.len() {
         3 => None,
-        4 => Some(fetch_string_arg!(&args[3], "flags", array_size)),
+        4 => Some(fetch_string_arg!(&args[3], "flags", array_size, output_dt)),
         other => {
             return exec_err!(
                 "regexp_replace was called with {other} arguments. It requires at least 3 and at most 4."

@@ -118,6 +118,25 @@ SELECT regexp_replace(arrow_cast('foobar', 'Dictionary(Int32, Utf8)'), 'bar', 'x
 ----
 fooxx
 
+# Dict column with scalar pattern/replacement preserves dictionary encoding.
+statement ok
+CREATE TABLE regexp_replace_dict AS
+SELECT arrow_cast(column1, 'Dictionary(Int32, Utf8)') AS url
+FROM (VALUES
+    ('https://www.example.com/path'),
+    ('http://test.org/foo/bar'),
+    ('https://example.com/')
+) AS t(column1);
+
+query T
+SELECT DISTINCT arrow_typeof(regexp_replace(url, '^https?://(?:www\.)?([^/]+)/.*$', '\1'))
+FROM regexp_replace_dict;
+----
+Dictionary(Int32, Utf8)
+
+statement ok
+DROP TABLE regexp_replace_dict;
+
 query TTT
 select
     regexp_replace(col, NULL, 'c'),
