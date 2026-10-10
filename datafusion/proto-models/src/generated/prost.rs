@@ -1928,6 +1928,13 @@ pub struct PhysicalCaseNode {
     pub when_then_expr: ::prost::alloc::vec::Vec<PhysicalWhenThen>,
     #[prost(message, optional, boxed, tag = "3")]
     pub else_expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+    #[prost(message, optional, tag = "4")]
+    pub logical_result_type: ::core::option::Option<super::datafusion_common::ArrowType>,
+    #[prost(map = "string, string", tag = "5")]
+    pub logical_result_metadata: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalTryCastNode {

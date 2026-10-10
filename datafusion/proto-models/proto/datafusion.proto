@@ -1245,6 +1245,8 @@ message PhysicalCaseNode {
   PhysicalExprNode expr = 1;
   repeated PhysicalWhenThen when_then_expr = 2;
   PhysicalExprNode else_expr = 3;
+  datafusion_common.ArrowType logical_result_type = 4;
+  map<string, string> logical_result_metadata = 5;
 }
 
 message PhysicalTryCastNode {
