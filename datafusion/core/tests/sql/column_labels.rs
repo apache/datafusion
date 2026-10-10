@@ -88,6 +88,10 @@ async fn column_labels_expressions() -> Result<()> {
         "SELECT CASE WHEN a > 0 THEN 'pos' ELSE 'neg' END FROM t",
         // CAST is left out of labels, as it is of names
         "SELECT CAST(a AS DOUBLE) + 1 FROM t",
+        // Grouping that the label must keep
+        "SELECT NOT (a > 1 AND b > 2), -(a + b) FROM t",
+        "SELECT a IN (1, 2), a NOT IN (3) FROM t",
+        r"SELECT 'ab' LIKE 'a\%' ESCAPE '\', concat('it''s', ',') FROM t",
         // Plain columns and explicit aliases need no label
         "SELECT * FROM t",
         "SELECT a + 1 AS x FROM t",
@@ -95,7 +99,7 @@ async fn column_labels_expressions() -> Result<()> {
     assert_snapshot!(labels(&ctx, &queries).await?, @r#"
     SELECT 1, 'foo'
       Int64(1) => 1
-      Utf8("foo") => foo
+      Utf8("foo") => 'foo'
     SELECT 1 + 2
       Int64(1) + Int64(2) => 1 + 2
     SELECT (a + b) * c FROM t
@@ -105,9 +109,18 @@ async fn column_labels_expressions() -> Result<()> {
     SELECT coalesce(NULL, 1)
       coalesce(NULL,Int64(1)) => coalesce(NULL, 1)
     SELECT CASE WHEN a > 0 THEN 'pos' ELSE 'neg' END FROM t
-      CASE WHEN t.a > Int64(0) THEN Utf8("pos") ELSE Utf8("neg") END => CASE WHEN a > 0 THEN pos ELSE neg END
+      CASE WHEN t.a > Int64(0) THEN Utf8("pos") ELSE Utf8("neg") END => CASE WHEN a > 0 THEN 'pos' ELSE 'neg' END
     SELECT CAST(a AS DOUBLE) + 1 FROM t
       t.a + Int64(1) => a + 1
+    SELECT NOT (a > 1 AND b > 2), -(a + b) FROM t
+      NOT t.a > Int64(1) AND t.b > Int64(2) => NOT (a > 1 AND b > 2)
+      (- t.a + t.b) => (- (a + b))
+    SELECT a IN (1, 2), a NOT IN (3) FROM t
+      t.a IN Int64(1), Int64(2) => a IN (1, 2)
+      t.a NOT IN Int64(3) => a NOT IN (3)
+    SELECT 'ab' LIKE 'a\%' ESCAPE '\', concat('it''s', ',') FROM t
+      Utf8("ab") LIKE Utf8("a\%") CHAR '\' => 'ab' LIKE 'a\%' ESCAPE '\'
+      concat(Utf8("it's"),Utf8(",")) => concat('it''s', ',')
     SELECT * FROM t
       a
       b
@@ -316,28 +329,29 @@ async fn column_labels_can_repeat() -> Result<()> {
     let ctx = labels_ctx().await?;
     let queries = [
         "SELECT t.a + 1, t2.a + 1 FROM t JOIN t2 ON t.a = t2.a",
-        "SELECT 1, '1'",
         r#"SELECT a + 1, b AS "a + 1" FROM t"#,
     ];
     assert_snapshot!(labels(&ctx, &queries).await?, @r#"
     SELECT t.a + 1, t2.a + 1 FROM t JOIN t2 ON t.a = t2.a
       t.a + Int64(1) => a + 1
       t2.a + Int64(1) => a + 1
-    SELECT 1, '1'
-      Int64(1) => 1
-      Utf8("1") => 1
     SELECT a + 1, b AS "a + 1" FROM t
       t.a + Int64(1) => a + 1
       a + 1
     "#);
 
-    let results = ctx.sql("SELECT 1, '1'").await?.to_string().await?;
+    let results = ctx
+        .sql("SELECT t.a + 1, t2.a + 1 FROM t JOIN t2 ON t.a = t2.a ORDER BY 1")
+        .await?
+        .to_string()
+        .await?;
     assert_snapshot!(results, @r"
-    +---+---+
-    | 1 | 1 |
-    +---+---+
-    | 1 | 1 |
-    +---+---+
+    +-------+-------+
+    | a + 1 | a + 1 |
+    +-------+-------+
+    | 2     | 2     |
+    | 5     | 5     |
+    +-------+-------+
     ");
     Ok(())
 }
