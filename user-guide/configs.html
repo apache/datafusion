@@ -536,6 +536,22 @@ example, to configure <code class="docutils literal notranslate"><span class="pr
 <td><p>0.15</p></td>
 <td><p>The minimum required density of join keys on the build side to consider a perfect hash join (see <code class="docutils literal notranslate"><span class="pre">HashJoinExec</span></code> for more details). Density is calculated as: <code class="docutils literal notranslate"><span class="pre">(number</span> <span class="pre">of</span> <span class="pre">rows)</span> <span class="pre">/</span> <span class="pre">(max_key</span> <span class="pre">-</span> <span class="pre">min_key</span> <span class="pre">+</span> <span class="pre">1)</span></code>. A perfect hash join may be used if the actual key density &gt; this value. Currently only supports cases where build_side.num_rows() &lt; u32::MAX. Support for build_side.num_rows() &gt;= u32::MAX will be added in the future.</p></td>
 </tr>
+<tr class="row-odd"><td><p>datafusion.execution.enable_join_integer_prefilter</p></td>
+<td><p>false</p></td>
+<td><p>Enable an exact integer membership prefilter for hash joins with a single integer key when the build side uses a hash table and the join is not null-aware. It skips lookups for absent keys while retaining NULLs and probe rows for the original join logic.</p></td>
+</tr>
+<tr class="row-even"><td><p>datafusion.execution.join_integer_prefilter_max_key_range</p></td>
+<td><p>262144</p></td>
+<td><p>Maximum number of integer values covered by the join prefilter bitmap (<code class="docutils literal notranslate"><span class="pre">max_key</span> <span class="pre">-</span> <span class="pre">min_key</span> <span class="pre">+</span> <span class="pre">1</span></code>). Zero disables bitmap construction. Larger ranges fall back to normal hash table lookups.</p></td>
+</tr>
+<tr class="row-odd"><td><p>datafusion.execution.join_integer_prefilter_min_pruning_ratio</p></td>
+<td><p>0.5</p></td>
+<td><p>The integer prefilter must prune more than this fraction of all sampled probe rows, including NULLs, to keep filtering. Must be finite and in [0, 1], validated when executing the join.</p></td>
+</tr>
+<tr class="row-even"><td><p>datafusion.execution.join_integer_prefilter_sample_rows</p></td>
+<td><p>12288</p></td>
+<td><p>Minimum input probe rows in each integer prefilter sampling window, including NULLs. Must be greater than zero. Windows end at batch boundaries. Unprofitable samples initially pause for 10 times this many input rows; consecutive failures double the pause up to 128 times. A profitable sample resets the pause to 10 times this many rows.</p></td>
+</tr>
 <tr class="row-odd"><td><p>datafusion.execution.coalesce_batches</p></td>
 <td><p>true</p></td>
 <td><p>When set to true, record batches will be examined between each operator and small batches will be coalesced into larger batches. This is helpful when there are highly selective filters or joins that could produce tiny output batches. The target batch size is determined by the configuration setting</p></td>
