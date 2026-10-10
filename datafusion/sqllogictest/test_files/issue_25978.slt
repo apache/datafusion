@@ -1,0 +1,48 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+# Regression test for https://github.com/apache/datafusion/issues/25978
+# A GROUP BY aggregate over a UNION ALL fails to plan when one branch
+# projects coalesce(<nullable boolean expression>, FALSE).
+# The CSE optimizer rewrites this into an AND/OR pattern whose
+# nullability was incorrectly reported, causing a physical vs logical
+# schema mismatch.
+##########
+
+statement ok
+CREATE TABLE a (k VARCHAR NOT NULL, x VARCHAR) AS VALUES ('k1', 'y'), ('k2', NULL);
+
+statement ok
+CREATE TABLE b (k VARCHAR NOT NULL) AS VALUES ('k3');
+
+query TB rowsort
+SELECT k, bool_or(f) AS f FROM (
+  SELECT k, coalesce(x = 'y', FALSE) AS f FROM a
+  UNION ALL
+  SELECT k, TRUE AS f FROM b
+) u GROUP BY k;
+----
+k1 true
+k2 false
+k3 true
+
+statement ok
+DROP TABLE a;
+
+statement ok
+DROP TABLE b;
