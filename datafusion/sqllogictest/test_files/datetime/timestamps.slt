@@ -4822,8 +4822,14 @@ SELECT column1 FROM t_utc WHERE column1 < '2024-02-01T00:00:00' AT TIME ZONE 'Am
 2024-01-01T00:00:01Z
 2024-02-01T00:00:01Z
 
+# Brussels midnight is 23:00Z; Los Angeles 16:00 is 00:00Z, one hour later.
 query P
 SELECT column1 FROM t_europe WHERE column1 = '2024-01-31T16:00:01' AT TIME ZONE 'America/Los_Angeles';
+----
+
+# Los Angeles 15:00 is the same instant as Brussels midnight.
+query P
+SELECT column1 FROM t_europe WHERE column1 = '2024-01-31T15:00:01' AT TIME ZONE 'America/Los_Angeles';
 ----
 2024-02-01T00:00:01+01:00
 
