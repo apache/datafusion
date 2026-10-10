@@ -54,3 +54,13 @@ GROUP BY a
 ORDER BY a;
 ----
 0 0
+
+# avg ignores ORDER BY, so the ORDER BY column must not reach its accumulators
+query IR
+SELECT a % 2 AS g, avg(a ORDER BY b)
+FROM (VALUES (40, 1), (23, 2), (17, 3), (40, 4), (30, 5)) AS t(a, b)
+GROUP BY g
+ORDER BY g;
+----
+0 36.666666666666664
+1 20

@@ -378,10 +378,10 @@ pub fn aggregate_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
     let schema = input.schema();
     Arc::new(
         AggregateExec::try_new(
-            AggregateMode::Final,
+            AggregateMode::Single,
             PhysicalGroupBy::default(),
-            vec![],
-            vec![],
+            vec![Arc::new(TestAggregate::CountStar.count_expr(&schema))],
+            vec![None],
             input,
             schema,
         )

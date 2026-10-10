@@ -294,6 +294,30 @@ physical_plan
 01)ProjectionExec: expr=[CAST(a@0 AS Int64) as cast_statistics.a], statistics=[Rows=Exact(2), Bytes=Exact(16), [(Col[0]: Null=Exact(1))]]
 02)--DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(2), Bytes=Exact(176), [(Col[0]: Null=Exact(1))]]
 
+# A TopK that preserves partitioning keeps up to `fetch` rows from each of its
+# partitions, so its estimate must count all of them, while the merge above it
+# keeps the global limit.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+CREATE TABLE topk_statistics AS SELECT value % 100 AS k, value AS v FROM generate_series(1, 1000);
+
+query TT
+EXPLAIN SELECT k, sum(v) AS s FROM topk_statistics GROUP BY k ORDER BY s DESC LIMIT 10;
+----
+physical_plan
+01)SortPreservingMergeExec: [s@1 DESC], fetch=10, statistics=[Rows=Inexact(10), Bytes=Inexact(160), [(Col[0]:),(Col[1]:)]]
+02)--ProjectionExec: expr=[k@0 as k, sum(topk_statistics.v)@1 as s], statistics=[Rows=Inexact(40), Bytes=Inexact(640), [(Col[0]:),(Col[1]:)]]
+03)----SortExec: TopK(fetch=10), expr=[sum(topk_statistics.v)@1 DESC], preserve_partitioning=[true], statistics=[Rows=Inexact(40), Bytes=Inexact(2949), [(Col[0]:),(Col[1]:)]]
+04)------AggregateExec: mode=FinalPartitioned, gby=[k@0 as k], aggr=[sum(topk_statistics.v)], statistics=[Rows=Inexact(1000), Bytes=Inexact(73728), [(Col[0]:),(Col[1]:)]]
+05)--------RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=4, statistics=[Rows=Inexact(1000), Bytes=Inexact(73728), [(Col[0]:),(Col[1]:)]]
+06)----------AggregateExec: mode=Partial, gby=[k@0 as k], aggr=[sum(topk_statistics.v)], statistics=[Rows=Inexact(1000), Bytes=Inexact(73728), [(Col[0]:),(Col[1]:)]]
+07)------------DataSourceExec: partitions=4, partition_sizes=[1, 0, 0, 0], statistics=[Rows=Exact(1000), Bytes=Exact(73728), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
+
+statement ok
+DROP TABLE topk_statistics;
+
 # CSV scan with empty statistics
 query TT
 EXPLAIN SELECT a, b, c FROM simple_explain_test limit 10;

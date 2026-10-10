@@ -330,7 +330,7 @@ impl PiecewiseMergeJoinExec {
         // Take the operator and enforce a sort order on the streamed + buffered side based on
         // the operator type.
         let sort_options = match operator {
-            Operator::Lt | Operator::LtEq => SortOptions::new(true, true),
+            Operator::Lt | Operator::LtEq => SortOptions::new(true, false),
             Operator::Gt | Operator::GtEq => SortOptions::new(false, true),
             _ => {
                 return internal_err!(
@@ -1034,14 +1034,14 @@ pub(super) struct BufferedSideData {
     pub(super) batch: RecordBatch,
     values: ArrayRef,
     pub(super) remaining_partitions: AtomicUsize,
-    /// The start of the matched suffix of the buffered side, or `usize::MAX` before the
-    /// first match. `[min_marked, len)` *is* the matched set and `[0, min_marked)` the
-    /// unmatched one -- no bitmap is allocated.
+    /// The start of the matched non-null suffix, or `usize::MAX` before the
+    /// first match. `[min_marked, non_null_end)` is the matched set; the prefix
+    /// and any trailing NULL keys are unmatched. No bitmap is allocated.
     ///
     /// Both stream kinds only ever mark a suffix, which is what makes one index enough:
-    ///  - `ExistencePWMJStream` marks `[k, len)` for the first buffered row `k` matching
+    ///  - `ExistencePWMJStream` marks `[k, non_null_end)` for the first row `k` matching
     ///    a streamed batch's extreme key.
-    ///  - `ClassicPWMJStream` emits `buffered[k..] x streamed_row` on each match, so the
+    ///  - `ClassicPWMJStream` emits `buffered[k..non_null_end] x streamed_row`, so the
     ///    rows it marks are exactly that same suffix.
     ///
     /// Shared so each partition benefits from what the others have marked; it only ever

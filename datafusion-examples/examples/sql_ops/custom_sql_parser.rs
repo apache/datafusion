@@ -44,8 +44,10 @@ use datafusion::catalog::{
     CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, SchemaProvider,
     TableProviderFactory,
 };
+use datafusion::common::{DFSchema, TableReference, plan_datafusion_err, plan_err};
 use datafusion::datasource::listing_table_factory::ListingTableFactory;
 use datafusion::error::{DataFusionError, Result};
+use datafusion::logical_expr::CreateExternalTable;
 use datafusion::prelude::SessionContext;
 use datafusion::sql::{
     parser::{DFParser, DFParserBuilder, Statement},
@@ -55,8 +57,6 @@ use datafusion::sql::{
         tokenizer::Token,
     },
 };
-use datafusion_common::{DFSchema, TableReference, plan_datafusion_err, plan_err};
-use datafusion_expr::CreateExternalTable;
 use futures::StreamExt;
 use insta::assert_snapshot;
 use object_store::ObjectStore;
