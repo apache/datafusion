@@ -70,14 +70,14 @@ use futures::StreamExt;
 /// Only these combinations are legal (see [`Self::try_new`]), so the
 /// stream matches on this instead of re-checking `null_aware && join_type == ..`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum NullAwareMode {
+pub(crate) enum NullAwareMode {
     /// `left.key NOT IN (right.key)`: emits left rows.
     LeftAnti,
 }
 
 impl NullAwareMode {
     /// Validates that `null_aware` may be set for this join and returns its mode.
-    pub(super) fn try_new(
+    pub(crate) fn try_new(
         join_type: JoinType,
         num_keys: usize,
         has_filter: bool,
@@ -690,6 +690,20 @@ impl ExecutionPlan for SortMergeJoinExec {
             "Invalid SortMergeJoinExec, partition count mismatch {left_partitions}!={right_partitions},\
                  consider using RepartitionExec"
         );
+
+        let null_aware = self.null_aware_mode()?;
+
+        // Null-aware execution requires a single partition on both sides.
+        // Validate this at execution time because callers may bypass the
+        // optimizer or modify the public null_aware flag after planning.
+        if null_aware.is_some()
+            && (partition != 0 || left_partitions != 1 || right_partitions != 1)
+        {
+            return internal_err!(
+                "null-aware SortMergeJoin requires partition 0 and single-partition inputs"
+            );
+        }
+
         // execute children plans
         let left = self.left.execute(partition, Arc::clone(&context))?;
         let right = self.right.execute(partition, Arc::clone(&context))?;
@@ -700,6 +714,7 @@ impl ExecutionPlan for SortMergeJoinExec {
                 schema: Arc::clone(&self.schema),
                 sort_options: self.sort_options.clone(),
                 null_equality: self.null_equality,
+                null_aware,
                 left,
                 right,
                 on_left,
@@ -1015,6 +1030,7 @@ pub(crate) struct SortMergeJoinInputs {
     /// Sort options of the join keys, one per key, that both inputs are sorted with
     pub(crate) sort_options: Vec<SortOptions>,
     pub(crate) null_equality: NullEquality,
+    pub(crate) null_aware: Option<NullAwareMode>,
     /// Left input, sorted on `on_left` with `sort_options`
     pub(crate) left: SendableRecordBatchStream,
     /// Right input, sorted on `on_right` with `sort_options`
@@ -1043,6 +1059,7 @@ pub(crate) fn sort_merge_join_stream(
         schema,
         sort_options,
         null_equality,
+        null_aware,
         left,
         right,
         on_left,
@@ -1086,6 +1103,7 @@ pub(crate) fn sort_merge_join_stream(
             schema,
             sort_options,
             null_equality,
+            null_aware,
             streamed,
             buffered,
             on_streamed,
