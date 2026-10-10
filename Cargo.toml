@@ -371,7 +371,7 @@ unused_qualifications = "deny"
 # `CARGO_PROFILE_DEV_DEBUG=2 cargo build` when you need to step through code in a
 # debugger.
 [profile.dev]
-debug = "line-tables-only"
+#debug = "line-tables-only"
 
 [profile.release]
 codegen-units = 1

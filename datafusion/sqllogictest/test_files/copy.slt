@@ -661,6 +661,86 @@ select * from validate_arrow;
 1 Foo
 2 Bar
 
+# Copy to arrow file with zstd compression
+query I
+COPY source_table to 'test_files/scratch/copy/table_zstd.arrow' STORED AS ARROW OPTIONS ('format.compression' 'zstd');
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE validate_arrow_zstd
+STORED AS arrow
+LOCATION 'test_files/scratch/copy/table_zstd.arrow';
+
+query IT
+select * from validate_arrow_zstd;
+----
+1 Foo
+2 Bar
+
+# Copy to arrow file with no compression
+query I
+COPY source_table to 'test_files/scratch/copy/table_uncompressed.arrow' STORED AS ARROW OPTIONS ('format.compression' 'uncompressed');
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE validate_arrow_uncompressed
+STORED AS arrow
+LOCATION 'test_files/scratch/copy/table_uncompressed.arrow';
+
+query IT
+select * from validate_arrow_uncompressed;
+----
+1 Foo
+2 Bar
+
+# Copy to arrow file with an invalid compression codec
+query error DataFusion error: Invalid or Unsupported Configuration: Invalid Arrow IPC compression type: snappy\. Expected one of: uncompressed, lz4_frame, zstd
+COPY source_table to 'test_files/scratch/copy/table_invalid_compression.arrow' STORED AS ARROW OPTIONS ('format.compression' 'snappy');
+
+# Copy to arrow file with zstd compression and an explicit compression level
+query I
+COPY source_table to 'test_files/scratch/copy/table_zstd_level.arrow' STORED AS ARROW OPTIONS ('format.compression' 'zstd', 'format.compression_level' '15');
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE validate_arrow_zstd_level
+STORED AS arrow
+LOCATION 'test_files/scratch/copy/table_zstd_level.arrow';
+
+query IT
+select * from validate_arrow_zstd_level;
+----
+1 Foo
+2 Bar
+
+# compression_level is not supported outside of zstd
+query error DataFusion error: Arrow error: Invalid argument error: LZ4 Frame compression does not support configurable compression levels
+COPY source_table to 'test_files/scratch/copy/table_lz4_level.arrow' STORED AS ARROW OPTIONS ('format.compression' 'lz4_frame', 'format.compression_level' '5');
+
+# Copy to arrow file with a non-default byte alignment
+query I
+COPY source_table to 'test_files/scratch/copy/table_alignment.arrow' STORED AS ARROW OPTIONS ('format.alignment' '32');
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE validate_arrow_alignment
+STORED AS arrow
+LOCATION 'test_files/scratch/copy/table_alignment.arrow';
+
+query IT
+select * from validate_arrow_alignment;
+----
+1 Foo
+2 Bar
+
+# alignment must be one of 8, 16, 32, or 64
+query error DataFusion error: Arrow error: Invalid argument error: Alignment should be 8, 16, 32, or 64\.
+COPY source_table to 'test_files/scratch/copy/table_bad_alignment.arrow' STORED AS ARROW OPTIONS ('format.alignment' '10');
+
 # Format Options Support without the 'format.' prefix
 
 # Copy with format options for Parquet without the 'format.' prefix

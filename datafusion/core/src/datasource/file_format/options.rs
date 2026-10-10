@@ -821,7 +821,8 @@ impl ReadOptions<'_> for ArrowReadOptions<'_> {
         _config: &SessionConfig,
         _table_options: TableOptions,
     ) -> ListingOptions {
-        let file_format = ArrowFormat;
+        // There are no read options for Arrow, so we can ignore the `TableOptions`
+        let file_format = ArrowFormat::default();
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)

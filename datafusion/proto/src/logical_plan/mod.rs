@@ -649,7 +649,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             }
                         }
                         FileFormatType::Arrow(..) => {
-                            Arc::new(ArrowFormat)
+                            Arc::new(ArrowFormat::default())
                         }
                     };
 
