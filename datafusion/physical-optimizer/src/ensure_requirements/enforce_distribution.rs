@@ -1210,6 +1210,19 @@ fn enforce_distribution_relationships(
             }
         };
 
+        // Reject a reference when another child in the co-partitioned group
+        // is strictly larger, allowing standard hash partitioning instead.
+        let best_satisfied_child = best_satisfied_child.filter(|(ref_idx, _)| {
+            let reference_size =
+                PlanSize::from_plan(children[*ref_idx].context.plan.as_ref());
+
+            !unsatisfied_children.iter().any(|&child_idx| {
+                child_idx != *ref_idx
+                    && PlanSize::from_plan(children[child_idx].context.plan.as_ref())
+                        > reference_size
+            })
+        });
+
         // Validate that best_satisfied_child can be adapted across all unsatisfied children in the group
         let best_satisfied_child =
             best_satisfied_child.filter(|(ref_idx, ref_partitioning)| {
