@@ -2650,6 +2650,30 @@ mod tests {
             Operator::Eq,
             &ScalarValue::Int64(Some(123)),
         );
+        // Increasing scale while narrowing integer capacity can overflow for
+        // valid source values, even when this particular literal round-trips.
+        let source_type = DataType::Decimal128(38, 2);
+        let target_type = DataType::Decimal128(38, 15);
+        let target_literal = ScalarValue::Decimal128(Some(4 * 10_i128.pow(15)), 38, 15);
+        assert_eq!(
+            try_cast_literal_to_type(&target_literal, &source_type),
+            Some(ScalarValue::Decimal128(Some(400), 38, 2)),
+        );
+        assert_preimage_none(&source_type, &target_type, Operator::Eq, &target_literal);
+        let overflowing_source = ScalarValue::Decimal128(Some(10_i128.pow(37)), 38, 2);
+        let array = overflowing_source.to_array_of_size(1).unwrap();
+        assert!(
+            cast_with_options(
+                &array,
+                &target_type,
+                &CastOptions {
+                    safe: false,
+                    ..Default::default()
+                },
+            )
+            .is_err()
+        );
+
         // decimal scale narrowing
         assert_preimage_none(
             &DataType::Decimal128(18, 2),

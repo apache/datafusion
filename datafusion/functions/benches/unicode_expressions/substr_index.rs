@@ -30,6 +30,7 @@ use rand::distr::{Alphanumeric, Uniform};
 use rand::prelude::Distribution;
 use rand::rngs::StdRng;
 
+const BATCH_SIZE: usize = 8192;
 const ARRAY_DATA_SEED: u64 = 0x5EED_AAAA;
 const SCALAR_DATA_SEED: u64 = 0x5EED_BBBB;
 
@@ -101,20 +102,17 @@ fn random_token<R: Rng + ?Sized>(rng: &mut R, len: usize) -> String {
         .collect()
 }
 
-fn array_data(
-    batch_size: usize,
-    single_char_delimiter: bool,
-) -> (Vec<String>, Vec<String>, Vec<i64>) {
+fn array_data(single_char_delimiter: bool) -> (Vec<String>, Vec<String>, Vec<i64>) {
     let count_dist = Filter {
         dist: Uniform::new(-4, 5).expect("valid count distribution"),
         test: |x: &i64| x != &0,
     };
     let mut rng = StdRng::seed_from_u64(ARRAY_DATA_SEED);
-    let mut strings = Vec::with_capacity(batch_size);
-    let mut delimiters = Vec::with_capacity(batch_size);
-    let mut counts = Vec::with_capacity(batch_size);
+    let mut strings = Vec::with_capacity(BATCH_SIZE);
+    let mut delimiters = Vec::with_capacity(BATCH_SIZE);
+    let mut counts = Vec::with_capacity(BATCH_SIZE);
 
-    for _ in 0..batch_size {
+    for _ in 0..BATCH_SIZE {
         let length = rng.random_range(20..50);
         let base = random_token(&mut rng, length);
 
@@ -146,11 +144,11 @@ fn array_data(
     (strings, delimiters, counts)
 }
 
-fn scalar_data(batch_size: usize, delimiter: &str) -> Vec<String> {
+fn scalar_data(delimiter: &str) -> Vec<String> {
     let mut rng = StdRng::seed_from_u64(SCALAR_DATA_SEED);
-    let mut strings = Vec::with_capacity(batch_size);
+    let mut strings = Vec::with_capacity(BATCH_SIZE);
 
-    for _ in 0..batch_size {
+    for _ in 0..BATCH_SIZE {
         let left_len = rng.random_range(12..24);
         let middle_len = rng.random_range(12..24);
         let right_len = rng.random_range(12..24);
@@ -167,7 +165,6 @@ fn run_benchmark(
     b: &mut criterion::Bencher,
     args: &[ColumnarValue],
     return_type: &DataType,
-    number_rows: usize,
 ) {
     let arg_fields = args
         .iter()
@@ -184,7 +181,7 @@ fn run_benchmark(
                 .invoke_with_args(ScalarFunctionArgs {
                     args: args.to_vec(),
                     arg_fields: arg_fields.clone(),
-                    number_rows,
+                    number_rows: BATCH_SIZE,
                     return_field: Field::new("f", return_type.clone(), true).into(),
                     config_options: Arc::clone(&config_options),
                 })
@@ -195,61 +192,50 @@ fn run_benchmark(
 
 fn criterion_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("substr_index");
-    let batch_sizes = [100, 1000, 10_000];
+    for rep in [StringRep::Utf8, StringRep::Utf8View] {
+        let rep_name = rep.name();
 
-    for batch_size in batch_sizes {
-        for rep in [StringRep::Utf8, StringRep::Utf8View] {
-            let rep_name = rep.name();
+        group.bench_function(
+            format!("substr_index_{rep_name}_array_single_delimiter"),
+            |b| {
+                let (strings, delimiters, counts) = array_data(true);
+                let args = vec![
+                    ColumnarValue::Array(rep.array(&strings)),
+                    ColumnarValue::Array(rep.array(&delimiters)),
+                    ColumnarValue::Array(Arc::new(Int64Array::from(counts)) as ArrayRef),
+                ];
+                run_benchmark(b, &args, &rep.data_type());
+            },
+        );
 
-            group.bench_function(
-                format!("substr_index_{rep_name}_{batch_size}_array_single_delimiter"),
-                |b| {
-                    let (strings, delimiters, counts) = array_data(batch_size, true);
-                    let args = vec![
-                        ColumnarValue::Array(rep.array(&strings)),
-                        ColumnarValue::Array(rep.array(&delimiters)),
-                        ColumnarValue::Array(
-                            Arc::new(Int64Array::from(counts)) as ArrayRef
-                        ),
-                    ];
-                    run_benchmark(b, &args, &rep.data_type(), batch_size);
-                },
-            );
+        group.bench_function(
+            format!("substr_index_{rep_name}_array_long_delimiter"),
+            |b| {
+                let (strings, delimiters, counts) = array_data(false);
+                let args = vec![
+                    ColumnarValue::Array(rep.array(&strings)),
+                    ColumnarValue::Array(rep.array(&delimiters)),
+                    ColumnarValue::Array(Arc::new(Int64Array::from(counts)) as ArrayRef),
+                ];
+                run_benchmark(b, &args, &rep.data_type());
+            },
+        );
 
-            group.bench_function(
-                format!("substr_index_{rep_name}_{batch_size}_array_long_delimiter"),
-                |b| {
-                    let (strings, delimiters, counts) = array_data(batch_size, false);
-                    let args = vec![
-                        ColumnarValue::Array(rep.array(&strings)),
-                        ColumnarValue::Array(rep.array(&delimiters)),
-                        ColumnarValue::Array(
-                            Arc::new(Int64Array::from(counts)) as ArrayRef
-                        ),
-                    ];
-                    run_benchmark(b, &args, &rep.data_type(), batch_size);
-                },
-            );
-
-            for (name, delimiter, count) in [
-                ("single_delimiter_pos", ".", 1_i64),
-                ("single_delimiter_neg", ".", -1_i64),
-                ("long_delimiter_pos", "|||", 1_i64),
-                ("long_delimiter_neg", "|||", -1_i64),
-            ] {
-                group.bench_function(
-                    format!("substr_index_{rep_name}_{batch_size}_scalar_{name}"),
-                    |b| {
-                        let strings = scalar_data(batch_size, delimiter);
-                        let args = vec![
-                            ColumnarValue::Array(rep.array(&strings)),
-                            ColumnarValue::Scalar(rep.scalar(delimiter)),
-                            ColumnarValue::Scalar(ScalarValue::Int64(Some(count))),
-                        ];
-                        run_benchmark(b, &args, &rep.data_type(), batch_size);
-                    },
-                );
-            }
+        for (name, delimiter, count) in [
+            ("single_delimiter_pos", ".", 1_i64),
+            ("single_delimiter_neg", ".", -1_i64),
+            ("long_delimiter_pos", "|||", 1_i64),
+            ("long_delimiter_neg", "|||", -1_i64),
+        ] {
+            group.bench_function(format!("substr_index_{rep_name}_scalar_{name}"), |b| {
+                let strings = scalar_data(delimiter);
+                let args = vec![
+                    ColumnarValue::Array(rep.array(&strings)),
+                    ColumnarValue::Scalar(rep.scalar(delimiter)),
+                    ColumnarValue::Scalar(ScalarValue::Int64(Some(count))),
+                ];
+                run_benchmark(b, &args, &rep.data_type());
+            });
         }
     }
 
