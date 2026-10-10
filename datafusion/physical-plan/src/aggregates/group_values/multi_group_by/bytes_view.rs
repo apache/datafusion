@@ -29,9 +29,10 @@ use datafusion_common::Result;
 use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_expr::GroupSelection;
 use std::marker::PhantomData;
-use std::mem::{replace, size_of};
+use std::mem::{self, replace, size_of};
 use std::sync::Arc;
 
+const BYTE_VIEW_STARTING_BLOCK_SIZE: usize = 8 * 1024;
 const BYTE_VIEW_MAX_BLOCK_SIZE: usize = 2 * 1024 * 1024;
 
 /// An implementation of [`GroupColumn`] for binary view and utf8 view types.
@@ -55,19 +56,16 @@ pub struct ByteViewGroupValueBuilder<B: ByteViewType> {
     /// The progressing block
     ///
     /// New values will be inserted into it until its capacity
-    /// is not enough(detail can see `max_block_size`).
+    /// cannot hold the next value.
     in_progress: Vec<u8>,
 
     /// The completed blocks
     completed: Vec<Buffer>,
 
-    /// The max size of `in_progress`
-    ///
-    /// `in_progress` will be flushed into `completed`, and create new `in_progress`
-    /// when found its remaining capacity(`max_block_size` - `len(in_progress)`),
-    /// is no enough to store the appended value.
-    ///
-    /// Currently it is fixed at 2MB.
+    /// Allocation target, doubled for each new payload block.
+    block_size: usize,
+
+    /// Maximum allocation target. A single larger value gets its own block.
     max_block_size: usize,
 
     /// Nulls
@@ -89,6 +87,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             views: Vec::new(),
             in_progress: Vec::new(),
             completed: Vec::new(),
+            block_size: BYTE_VIEW_STARTING_BLOCK_SIZE,
             max_block_size: BYTE_VIEW_MAX_BLOCK_SIZE,
             nulls: NullBufferBuilder::empty(),
             _phantom: PhantomData {},
@@ -98,6 +97,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
     /// Set the max block size
     fn with_max_block_size(mut self, max_block_size: usize) -> Self {
         self.max_block_size = max_block_size;
+        self.block_size = self.block_size.min(max_block_size);
         self
     }
 
@@ -236,16 +236,12 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
     fn ensure_in_progress_big_enough(&mut self, value_len: usize) {
         debug_assert!(value_len > 12);
-        let require_cap = self.in_progress.len() + value_len;
-
-        // If current block isn't big enough, flush it and create a new in progress block
-        if require_cap > self.max_block_size {
-            let flushed_block = replace(
-                &mut self.in_progress,
-                Vec::with_capacity(self.max_block_size),
-            );
-            let buffer = Buffer::from_vec(flushed_block);
-            self.completed.push(buffer);
+        if value_len > self.in_progress.capacity() - self.in_progress.len() {
+            if !self.in_progress.is_empty() {
+                self.flush_in_progress();
+            }
+            self.block_size = (self.block_size * 2).min(self.max_block_size);
+            self.in_progress = Vec::with_capacity(value_len.max(self.block_size));
         }
     }
 
@@ -564,10 +560,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
     }
 
     fn flush_in_progress(&mut self) {
-        let flushed_block = replace(
-            &mut self.in_progress,
-            Vec::with_capacity(self.max_block_size),
-        );
+        let flushed_block = mem::take(&mut self.in_progress);
         let buffer = Buffer::from_vec(flushed_block);
         self.completed.push(buffer);
     }
@@ -624,6 +617,14 @@ impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
 
     fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize]) -> Result<()> {
         self.vectorized_append_inner(array, rows)
+    }
+
+    fn reserve_groups(&mut self, capacity: usize) {
+        self.views
+            .reserve_exact(capacity.saturating_sub(self.views.len()));
+        if self.nulls.is_empty() {
+            self.nulls = NullBufferBuilder::new(capacity);
+        }
     }
 
     fn len(&self) -> usize {

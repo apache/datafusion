@@ -823,6 +823,11 @@ impl GroupsAccumulator for CountGroupsAccumulator {
 
         Ok(vec![state_array])
     }
+    fn reserve_groups(&mut self, capacity: usize) {
+        self.counts
+            .reserve_exact(capacity.saturating_sub(self.counts.len()));
+    }
+
     fn size(&self) -> usize {
         self.counts.heap_size(&mut DFHeapSizeCtx::default())
     }

@@ -78,6 +78,18 @@ impl GroupValues for GroupValuesBytesView {
         Ok(())
     }
 
+    fn reserve_groups(&mut self, capacity: usize) {
+        self.map.reserve_groups(capacity);
+    }
+
+    fn emit_with_capacity(
+        &mut self,
+        capacity: usize,
+    ) -> datafusion_common::Result<Vec<ArrayRef>> {
+        self.num_groups = 0;
+        Ok(vec![self.map.take_with_capacity(capacity)])
+    }
+
     fn size(&self) -> usize {
         self.map.size() + size_of::<Self>()
     }

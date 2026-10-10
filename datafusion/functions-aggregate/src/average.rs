@@ -1247,6 +1247,13 @@ where
 
         Ok(vec![Arc::new(counts) as ArrayRef, Arc::new(sums)])
     }
+    fn reserve_groups(&mut self, capacity: usize) {
+        self.counts
+            .reserve_exact(capacity.saturating_sub(self.counts.len()));
+        self.sums
+            .reserve_exact(capacity.saturating_sub(self.sums.len()));
+    }
+
     fn size(&self) -> usize {
         // Heap buffers
         self.counts.capacity() * size_of::<u64>()

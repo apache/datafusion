@@ -381,6 +381,10 @@ pub trait GroupsAccumulator: Send + std::any::Any {
     ///
     /// May be expensive; check the implementation before calling on hot paths.
     fn size(&self) -> usize;
+
+    /// Reserves row-addressed state for `capacity` groups where supported.
+    /// This hint must not change the logical number of groups.
+    fn reserve_groups(&mut self, _capacity: usize) {}
 }
 
 #[cfg(test)]
