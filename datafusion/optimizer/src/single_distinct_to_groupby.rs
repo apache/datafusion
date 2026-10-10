@@ -193,6 +193,9 @@ fn rewrite_pays(
     input_schema: &DFSchema,
 ) -> Result<bool> {
     for (func, args) in distinct_aggs {
+        if func.distinct_handling() == datafusion_expr::DistinctHandling::Unsupported {
+            return Ok(true);
+        }
         let arg_types = args
             .iter()
             .map(|arg| arg.get_type(input_schema))
@@ -790,8 +793,10 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Aggregate: groupBy=[[test.a]], aggr=[[corr(DISTINCT test.b, test.b)]] [a:UInt32, corr(DISTINCT test.b,test.b):Float64;N]
-          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        Projection: test.a, corr(alias1,alias1) AS corr(DISTINCT test.b,test.b) [a:UInt32, corr(DISTINCT test.b,test.b):Float64;N]
+          Aggregate: groupBy=[[test.a]], aggr=[[corr(alias1, alias1)]] [a:UInt32, corr(alias1,alias1):Float64;N]
+            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }

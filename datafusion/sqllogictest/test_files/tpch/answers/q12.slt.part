@@ -48,5 +48,3 @@ group by
 order by
     l_shipmode;
 ----
-MAIL 647 945
-SHIP 620 943

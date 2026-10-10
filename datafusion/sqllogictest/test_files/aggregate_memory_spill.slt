@@ -112,9 +112,13 @@ FROM (
   GROUP BY (v * 7) % 100000
 )
 ----
-<slt:ignore>
-04)------AggregateExec: mode=Single, gby=[group_alias_0@0 as group_alias_0], aggr=[count(alias1)], metrics=[<slt:ignore>spill_count=7,<slt:ignore>]
-<slt:ignore>
+Plan with Metrics
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*), sum(d)@1 as sum(d)], metrics=[output_rows=1, elapsed_compute=1.60µs, output_bytes=16.0 B, output_batches=1, expr_0_eval_time=200ns, expr_1_eval_time=200ns]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1)), sum(d)], metrics=[output_rows=1, elapsed_compute=3.65ms, output_bytes=16.0 B, output_batches=1, agg_expr_0_arguments_time=1.00ms, agg_expr_0_evaluate_time=100ns, agg_expr_0_update_time=143.00µs, agg_expr_1_arguments_time=287.90µs, agg_expr_1_evaluate_time=2.80µs, agg_expr_1_update_time=913.70µs, output_rows_skew=0%]
+03)----ProjectionExec: expr=[count(DISTINCT t.v)@1 as d], metrics=[output_rows=100.0 K, elapsed_compute=1.57ms, output_bytes=787.4 KB, output_batches=783, expr_0_eval_time=175.70µs]
+04)------AggregateExec: mode=Single, gby=[v@0 * 7 % 100000 as t.v * Int64(7) % Int64(100000)], aggr=[count(DISTINCT t.v)], metrics=[output_rows=100.0 K, elapsed_compute=338.13ms, output_bytes=2.3 MB, output_batches=783, spill_count=7, spilled_bytes=2.1 MB, spilled_rows=100.0 K, agg_expr_0_arguments_time=1.43ms, agg_expr_0_evaluate_time=4.78ms, agg_expr_0_merge_time=47.01ms, agg_expr_0_state_time=6.22ms, agg_expr_0_update_time=48.56ms, aggregate_arguments_time=3.19ms, aggregation_time=96.54ms, emitting_time=28.83ms, time_calculating_group_ids=82.10ms, output_rows_skew=0%]
+05)--------ProjectionExec: expr=[value@0 as v], metrics=[output_rows=100.0 K, elapsed_compute=970.80µs, output_bytes=782.0 KB, output_batches=782, expr_0_eval_time=107.98µs]
+06)----------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=128], metrics=[output_rows=100.0 K, elapsed_compute=4.74ms, output_bytes=782.0 KB, output_batches=782]
 
 # --- Case D: multiple aggregates (sum/min/max) under memory limit ---
 # Each group holds a single v, so min(v) = max(v) = v within the group.
