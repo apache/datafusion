@@ -1312,16 +1312,18 @@ mod tests {
             .aggregate(vec![col("a")], vec![aggr_expr])?
             .build()?;
 
-        // The rule should abort rewriting since it is Unsupported, 
-        // falling back to the default distinct execution logic
+        // The rule should rewrite the plan because approx_median doesn't support DISTINCT natively,
+        // so it requires SingleDistinctToGroupBy to deduplicate the input.
         let rule: Arc<dyn OptimizerRule + Send + Sync> =
             Arc::new(SingleDistinctToGroupBy::new());
         assert_optimized_plan_eq_display_indent_snapshot!(
             rule,
             plan,
             @r"
-        Aggregate: groupBy=[[test.a]], aggr=[[approx_median(DISTINCT test.b)]] [a:UInt32, approx_median(DISTINCT test.b):UInt32;N]
-          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        Projection: test.a, approx_median(alias1) AS approx_median(DISTINCT test.b) [a:UInt32, approx_median(DISTINCT test.b):Float64;N]
+          Aggregate: groupBy=[[test.a]], aggr=[[approx_median(alias1)]] [a:UInt32, approx_median(alias1):Float64;N]
+            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         ",
         )
     }
