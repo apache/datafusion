@@ -332,16 +332,107 @@ fn hash_array_primitive<T>(
             }
         }
     } else if rehash {
-        for i in array.nulls().unwrap().valid_indices() {
-            let value = unsafe { array.value_unchecked(i) };
-            let mut hasher = random_state.seeded_state(hashes_buffer[i]).build_hasher();
-            value.hash_write(&mut hasher);
-            hashes_buffer[i] = hasher.finish();
-        }
+        hash_prim_nulls::<_, _, true>(
+            array.values(),
+            hashes_buffer,
+            array.nulls().unwrap(),
+            random_state,
+        );
     } else {
-        for i in array.nulls().unwrap().valid_indices() {
-            let value = unsafe { array.value_unchecked(i) };
-            hashes_buffer[i] = value.hash_one(random_state);
+        hash_prim_nulls::<_, _, false>(
+            array.values(),
+            hashes_buffer,
+            array.nulls().unwrap(),
+            random_state,
+        );
+    }
+}
+
+#[cfg(not(feature = "force_hash_collisions"))]
+#[inline(always)]
+fn hash_prim_one<N: HashValue, S: HashState, const REHASH: bool>(
+    state: &S,
+    prev_hash: u64,
+    value: N,
+) -> u64 {
+    if REHASH {
+        let mut hasher = state.seeded_state(prev_hash).build_hasher();
+        value.hash_write(&mut hasher);
+        hasher.finish()
+    } else {
+        value.hash_one(state)
+    }
+}
+
+/// Hash a nullable `PrimitiveArray` into `hashes` by walking the null buffer in
+/// 64-row chunks: dense chunks hash 8 rows at a time to overlap work in the
+/// pipeline, mixed chunks bit-walk only the set bits via `trailing_zeros`.
+/// All indices are proven in-bounds by the asserts below, so bounds checks are
+/// elided with `get_unchecked`.
+#[cfg(not(feature = "force_hash_collisions"))]
+fn hash_prim_nulls<N, S, const REHASH: bool>(
+    values: &[N],
+    hashes: &mut [u64],
+    nulls: &arrow::buffer::NullBuffer,
+    state: &S,
+) where
+    N: HashValue + Copy,
+    S: HashState,
+{
+    debug_assert_eq!(values.len(), hashes.len());
+    debug_assert_eq!(values.len(), nulls.len());
+
+    const LANES: usize = 8;
+    let bit_chunks = nulls.inner().bit_chunks();
+    let mut chunk_start = 0;
+    for mask in bit_chunks.iter() {
+        if mask == u64::MAX {
+            for lane_offset in (0..64).step_by(LANES) {
+                let base = chunk_start + lane_offset;
+                unsafe {
+                    // Gather+hash all LANES before storing so the hashes compute
+                    // in parallel instead of serializing on the store back.
+                    let new_hashes: [u64; LANES] = std::array::from_fn(|lane| {
+                        let value = *values.get_unchecked(base + lane);
+                        let prev_hash = *hashes.get_unchecked(base + lane);
+                        hash_prim_one::<_, _, REHASH>(state, prev_hash, value)
+                    });
+                    for lane in 0..LANES {
+                        *hashes.get_unchecked_mut(base + lane) = new_hashes[lane];
+                    }
+                }
+            }
+        } else {
+            // Iterate only set bits: `remaining & (remaining - 1)` clears the
+            // lowest set bit; `trailing_zeros` reads the next one's position.
+            let mut remaining = mask;
+            while remaining != 0 {
+                let row_idx = chunk_start + remaining.trailing_zeros() as usize;
+                unsafe {
+                    let value = *values.get_unchecked(row_idx);
+                    let prev_hash = *hashes.get_unchecked(row_idx);
+                    *hashes.get_unchecked_mut(row_idx) =
+                        hash_prim_one::<_, _, REHASH>(state, prev_hash, value);
+                }
+                remaining &= remaining - 1;
+            }
+        }
+        chunk_start += 64;
+    }
+
+    // Null buffers whose length isn't a multiple of 64 bits land here.
+    let tail_len = bit_chunks.remainder_len();
+    if tail_len > 0 {
+        let mut remaining = bit_chunks.remainder_bits() & ((1u64 << tail_len) - 1);
+        while remaining != 0 {
+            let row_idx = chunk_start + remaining.trailing_zeros() as usize;
+            unsafe {
+                let value = *values.get_unchecked(row_idx);
+                let prev_hash = *hashes.get_unchecked(row_idx);
+                *hashes.get_unchecked_mut(row_idx) =
+                    hash_prim_one::<_, _, REHASH>(state, prev_hash, value);
+            }
+            remaining &= remaining - 1;
         }
     }
 }
