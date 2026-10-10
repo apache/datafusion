@@ -2831,7 +2831,7 @@ impl Filter {
     /// Create a new filter operator.
     ///
     /// Skips the type-checking, window function check and dealiasing done in
-    /// [Self::try_new]. For internal use in DataFusion only.
+    /// [Self::try_new].
     ///
     /// **Preconditions:**
     /// - the `predicate` expression returns a boolean value
