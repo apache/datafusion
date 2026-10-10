@@ -1639,7 +1639,13 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 ..
             }) => match (func.simplify(), expr) {
                 (Some(simplify_function), Expr::AggregateFunction(af)) => {
-                    Transformed::yes(simplify_function(af, info)?)
+                    let original = Expr::AggregateFunction(af.clone());
+                    let simplified = simplify_function(af, info)?;
+                    if simplified == original {
+                        Transformed::no(simplified)
+                    } else {
+                        Transformed::yes(simplified)
+                    }
                 }
                 (_, expr) => Transformed::no(expr),
             },
@@ -5601,23 +5607,47 @@ mod tests {
 
         let expected = aggregate_function_expr.clone();
         assert_eq!(simplify(aggregate_function_expr), expected);
+
+        let udaf = AggregateUDF::new_from_impl(SimplifyMockUdaf::new_with_noop());
+        let aggregate_function_expr =
+            Expr::AggregateFunction(expr::AggregateFunction::new_udf(
+                udaf.into(),
+                vec![],
+                false,
+                None,
+                vec![],
+                None,
+            ));
+
+        let expected = aggregate_function_expr.clone();
+        let (actual, cycles) = simplify_with_cycle_count(aggregate_function_expr);
+        assert_eq!(actual, expected);
+        assert_eq!(cycles, 1);
     }
 
     /// A Mock UDAF which defines `simplify` to be used in tests
     /// related to UDAF simplification
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     struct SimplifyMockUdaf {
-        simplify: bool,
+        simplify: Option<bool>,
     }
 
     impl SimplifyMockUdaf {
         /// make simplify method return new expression
         fn new_with_simplify() -> Self {
-            Self { simplify: true }
+            Self {
+                simplify: Some(true),
+            }
         }
         /// make simplify method return no change
         fn new_without_simplify() -> Self {
-            Self { simplify: false }
+            Self { simplify: None }
+        }
+        /// make simplify method return the original expression
+        fn new_with_noop() -> Self {
+            Self {
+                simplify: Some(false),
+            }
         }
     }
 
@@ -5653,10 +5683,12 @@ mod tests {
         }
 
         fn simplify(&self) -> Option<AggregateFunctionSimplification> {
-            if self.simplify {
-                Some(Box::new(|_, _| Ok(col("result_column"))))
-            } else {
-                None
+            match self.simplify {
+                Some(true) => Some(Box::new(|_, _| Ok(col("result_column")))),
+                Some(false) => Some(Box::new(|aggregate_function, _| {
+                    Ok(Expr::AggregateFunction(aggregate_function))
+                })),
+                None => None,
             }
         }
     }
