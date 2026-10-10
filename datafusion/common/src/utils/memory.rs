@@ -642,8 +642,7 @@ impl BufferIdMap {
         }
 
         // Promote to overflow.
-        let mut overflow =
-            hashbrown::HashMap::with_capacity(INLINE_BUFFER_IDS + 1);
+        let mut overflow = hashbrown::HashMap::with_capacity(INLINE_BUFFER_IDS + 1);
         for i in 0..self.len {
             overflow.insert(self.inline[i].0, self.inline[i].1);
         }
@@ -689,6 +688,7 @@ impl BufferIdMap {
     /// Insert-only compatibility used by tests. Returns `true` if the buffer
     /// was newly inserted.
     #[cfg(test)]
+    #[expect(dead_code)]
     fn insert(&mut self, buffer_id: NonZero<usize>) -> bool {
         self.increment(buffer_id)
     }
@@ -1315,13 +1315,9 @@ mod record_batch_tests {
     fn test_uncount_two_slices_example_from_issue() {
         // The exact example from the issue description.
         let array = Int32Array::from(vec![0; 1_000_000]); // 4 MB
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "col",
-            DataType::Int32,
-            false,
-        )]));
-        let batch =
-            RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap();
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("col", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap();
         let slice1 = batch.slice(0, 500_000);
         let slice2 = batch.slice(500_000, 500_000);
 
@@ -1608,12 +1604,12 @@ mod record_batch_tests {
                 counter.uncount_array(array);
                 array_live_counts[idx] -= 1;
                 for (addr, cap) in &buffers {
-                    if let Some(entry) = ref_map.get_mut(addr) {
-                        if entry.0 > 0 {
-                            entry.0 -= 1;
-                            if entry.0 == 0 {
-                                ref_memory -= cap;
-                            }
+                    if let Some(entry) = ref_map.get_mut(addr)
+                        && entry.0 > 0
+                    {
+                        entry.0 -= 1;
+                        if entry.0 == 0 {
+                            ref_memory -= cap;
                         }
                     }
                 }
@@ -1632,7 +1628,11 @@ mod record_batch_tests {
                 counter.uncount_array(*array);
             }
         }
-        assert_eq!(counter.memory_usage(), 0, "Memory not zero after full drain");
+        assert_eq!(
+            counter.memory_usage(),
+            0,
+            "Memory not zero after full drain"
+        );
     }
 
     // ---------------------------------------------------------------
@@ -1658,7 +1658,10 @@ mod record_batch_tests {
 
         let mut counter = RecordBatchMemoryCounter::new();
         let counted1 = counter.count_array(&slice1);
-        assert_eq!(counted1, full_size, "First slice should count all shared data buffers");
+        assert_eq!(
+            counted1, full_size,
+            "First slice should count all shared data buffers"
+        );
 
         let counted2 = counter.count_array(&slice2);
         assert_eq!(counted2, 0, "Second slice shares all buffers with first");
@@ -1727,7 +1730,10 @@ mod record_batch_tests {
         let mut counter = RecordBatchMemoryCounter::new();
         let counted1 = counter.count_array(&list1);
         let counted2 = counter.count_array(&list2);
-        assert!(counted2 < counted1, "list2 shares child buffer, should add less");
+        assert!(
+            counted2 < counted1,
+            "list2 shares child buffer, should add less"
+        );
 
         let total = counter.memory_usage();
         let released1 = counter.uncount_array(&list1);
@@ -1949,7 +1955,8 @@ mod record_batch_tests {
 
     #[test]
     fn test_uncount_large_utf8_array() {
-        let array = arrow::array::LargeStringArray::from(vec!["alpha", "bravo", "charlie"]);
+        let array =
+            arrow::array::LargeStringArray::from(vec!["alpha", "bravo", "charlie"]);
 
         let mut counter = RecordBatchMemoryCounter::new();
         let counted = counter.count_array(&array);
@@ -1994,12 +2001,7 @@ mod record_batch_tests {
     #[test]
     fn test_uncount_fixed_size_binary() {
         let array = arrow::array::FixedSizeBinaryArray::try_from_iter(
-            vec![
-                vec![1u8, 2, 3, 4],
-                vec![5, 6, 7, 8],
-                vec![9, 10, 11, 12],
-            ]
-            .into_iter(),
+            vec![vec![1u8, 2, 3, 4], vec![5, 6, 7, 8], vec![9, 10, 11, 12]].into_iter(),
         )
         .unwrap();
 
@@ -2016,7 +2018,8 @@ mod record_batch_tests {
     fn test_uncount_fixed_size_list() {
         let values = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
         let field = Arc::new(Field::new("item", DataType::Int32, false));
-        let array = arrow::array::FixedSizeListArray::new(field, 3, Arc::new(values), None);
+        let array =
+            arrow::array::FixedSizeListArray::new(field, 3, Arc::new(values), None);
 
         let mut counter = RecordBatchMemoryCounter::new();
         let counted = counter.count_array(&array);
@@ -2037,18 +2040,14 @@ mod record_batch_tests {
         // counted once and released correctly.
         let shared_col: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6]));
         let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int32, false)]));
-        let batch1 = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::clone(&shared_col)],
-        )
-        .unwrap()
-        .slice(0, 3);
-        let batch2 = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::clone(&shared_col)],
-        )
-        .unwrap()
-        .slice(3, 3);
+        let batch1 =
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::clone(&shared_col)])
+                .unwrap()
+                .slice(0, 3);
+        let batch2 =
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::clone(&shared_col)])
+                .unwrap()
+                .slice(3, 3);
 
         let mut counter = RecordBatchMemoryCounter::new();
         let counted1 = counter.count_batch_with_array_overhead(&batch1);
@@ -2101,19 +2100,16 @@ mod record_batch_tests {
             .unwrap(),
         ) as ArrayRef;
 
-        let struct_fields =
-            Fields::from(vec![Arc::new(Field::new(
-                "d",
-                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
-                false,
-            ))]);
-        let struct_array = StructArray::new(struct_fields.clone(), vec![dict_array], None);
-
-        let list_field = Arc::new(Field::new(
-            "item",
-            DataType::Struct(struct_fields),
+        let struct_fields = Fields::from(vec![Arc::new(Field::new(
+            "d",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
-        ));
+        ))]);
+        let struct_array =
+            StructArray::new(struct_fields.clone(), vec![dict_array], None);
+
+        let list_field =
+            Arc::new(Field::new("item", DataType::Struct(struct_fields), false));
         let list_array = ListArray::new(
             list_field,
             OffsetBuffer::new(vec![0, 3].into()),
