@@ -39,7 +39,7 @@ use datafusion_physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode,
     StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
-use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
+use datafusion_physical_plan::statistics::StatisticsArgs;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use std::sync::Arc;
 
@@ -59,14 +59,10 @@ impl JoinSelection {
 /// Get statistics for a plan node, consulting the registry's providers if one
 /// is available.
 fn get_stats(
-    plan: &dyn ExecutionPlan,
+    plan: &Arc<dyn ExecutionPlan>,
     context: &dyn PhysicalOptimizerContext,
 ) -> Result<Arc<Statistics>> {
-    let ctx = match context.statistics_registry() {
-        Some(reg) => StatisticsContext::new_with_registry(reg.clone()),
-        None => StatisticsContext::new(),
-    };
-    ctx.compute(plan, &StatisticsArgs::new())
+    context.compute_statistics(plan, &StatisticsArgs::new())
 }
 
 // TODO: We need some performance test for Right Semi/Right Join swap to Left Semi/Left Join in case that the right side is smaller but not much smaller.
@@ -86,8 +82,8 @@ fn get_stats(
 /// Used configurations
 /// - `optimizer.join_reordering`: allows or forbids statistics-driven join swapping
 pub(crate) fn should_swap_join_order(
-    left: &dyn ExecutionPlan,
-    right: &dyn ExecutionPlan,
+    left: &Arc<dyn ExecutionPlan>,
+    right: &Arc<dyn ExecutionPlan>,
     context: &dyn PhysicalOptimizerContext,
 ) -> Result<bool> {
     if !context.config_options().optimizer.join_reordering {
@@ -115,7 +111,7 @@ pub(crate) fn should_swap_join_order(
 }
 
 fn supports_collect_by_thresholds(
-    plan: &dyn ExecutionPlan,
+    plan: &Arc<dyn ExecutionPlan>,
     threshold_byte_size: usize,
     threshold_num_rows: usize,
     context: &dyn PhysicalOptimizerContext,
@@ -204,14 +200,14 @@ pub(crate) fn try_collect_left(
 
     let left_can_collect = ignore_threshold
         || supports_collect_by_thresholds(
-            &**left,
+            left,
             optimizer_config.hash_join_single_partition_threshold,
             optimizer_config.hash_join_single_partition_threshold_rows,
             context,
         );
     let right_can_collect = ignore_threshold
         || supports_collect_by_thresholds(
-            &**right,
+            right,
             optimizer_config.hash_join_single_partition_threshold,
             optimizer_config.hash_join_single_partition_threshold_rows,
             context,
@@ -221,7 +217,7 @@ pub(crate) fn try_collect_left(
         (true, true) => {
             // For null-aware joins, we only swap `LeftAnti` joins where the left side is > right side
             if can_swap_hash_join(hash_join)
-                && should_swap_join_order(&**left, &**right, context)?
+                && should_swap_join_order(left, right, context)?
             {
                 Ok(Some(hash_join.swap_inputs(PartitionMode::CollectLeft)?))
             } else {
@@ -269,9 +265,7 @@ pub(crate) fn partitioned_hash_join(
     } else {
         PartitionMode::Partitioned
     };
-    if can_swap_hash_join(hash_join)
-        && should_swap_join_order(&**left, &**right, context)?
-    {
+    if can_swap_hash_join(hash_join) && should_swap_join_order(left, right, context)? {
         hash_join.swap_inputs(partition_mode)
     } else {
         // Null-aware anti joins must use CollectLeft mode because they track probe-side state
@@ -316,7 +310,7 @@ fn statistical_join_selection_subrule(
                 let left = hash_join.left();
                 let right = hash_join.right();
                 if can_swap_hash_join(hash_join)
-                    && should_swap_join_order(&**left, &**right, context)?
+                    && should_swap_join_order(left, right, context)?
                 {
                     // Null-aware RightAnti only supports CollectLeft
                     let partition_mode = if hash_join.null_aware {
@@ -333,7 +327,7 @@ fn statistical_join_selection_subrule(
     } else if let Some(cross_join) = plan.downcast_ref::<CrossJoinExec>() {
         let left = cross_join.left();
         let right = cross_join.right();
-        if should_swap_join_order(&**left, &**right, context)? {
+        if should_swap_join_order(left, right, context)? {
             cross_join.swap_inputs().map(Some)?
         } else {
             None
@@ -342,7 +336,7 @@ fn statistical_join_selection_subrule(
         let left = nl_join.left();
         let right = nl_join.right();
         if nl_join.join_type().supports_swap()
-            && should_swap_join_order(&**left, &**right, context)?
+            && should_swap_join_order(left, right, context)?
         {
             nl_join.swap_inputs().map(Some)?
         } else {

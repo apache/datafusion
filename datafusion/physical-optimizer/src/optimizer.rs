@@ -40,29 +40,42 @@ use crate::limit_pushdown_past_window::LimitPushPastWindows;
 use crate::pushdown_sort::PushdownSort;
 use crate::window_topn::WindowTopN;
 use datafusion_common::config::ConfigOptions;
+use datafusion_physical_plan::statistics::StatisticsContext;
 
 // Re-export from this module for backwards compatibility.
 pub use datafusion_session::{PhysicalOptimizerContext, PhysicalOptimizerRule};
 
+pub use datafusion_session::with_statistics_context;
+
 /// Simple context wrapping [`ConfigOptions`] for backward compatibility.
 ///
 /// This struct provides a minimal implementation of [`PhysicalOptimizerContext`]
-/// that only supplies configuration options. Used when no statistics registry
-/// is available or needed.
+/// that supplies configuration options and a [`StatisticsContext`] without a
+/// statistics registry. Used when no statistics registry is available or
+/// needed.
 pub struct ConfigOnlyContext<'a> {
     config: &'a ConfigOptions,
+    statistics_context: StatisticsContext,
 }
 
 impl<'a> ConfigOnlyContext<'a> {
     /// Create a new context wrapping the given config options.
     pub fn new(config: &'a ConfigOptions) -> Self {
-        Self { config }
+        Self {
+            config,
+            // No providers, matching `statistics_registry()`, which is `None`
+            statistics_context: StatisticsContext::new(),
+        }
     }
 }
 
 impl PhysicalOptimizerContext for ConfigOnlyContext<'_> {
     fn config_options(&self) -> &ConfigOptions {
         self.config
+    }
+
+    fn statistics_context(&self) -> Option<&StatisticsContext> {
+        Some(&self.statistics_context)
     }
 }
 

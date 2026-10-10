@@ -25,7 +25,7 @@ use datafusion_physical_plan::aggregates::{
 };
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
-use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
+use datafusion_physical_plan::statistics::StatisticsArgs;
 use datafusion_physical_plan::udaf::{
     AggregateFunctionExpr, StatisticsArgs as PlanStatisticsArgs,
 };
@@ -33,6 +33,7 @@ use datafusion_physical_plan::{ExecutionPlan, expressions};
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
+use crate::optimizer::{ConfigOnlyContext, PhysicalOptimizerContext};
 
 /// Optimizer that uses available statistics for aggregate functions
 #[derive(Default, Debug)]
@@ -46,20 +47,26 @@ impl AggregateStatistics {
 }
 
 impl PhysicalOptimizerRule for AggregateStatistics {
-    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
-    #[expect(clippy::allow_attributes)] // See https://github.com/apache/datafusion/issues/18881#issuecomment-3621545670
-    #[allow(clippy::only_used_in_recursion)] // See https://github.com/rust-lang/rust-clippy/issues/14566
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.optimize_with_context(plan, &ConfigOnlyContext::new(config))
+    }
+
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
+    fn optimize_with_context(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        context: &dyn PhysicalOptimizerContext,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         if let Some(partial_agg_exec) = take_optimizable(&plan) {
             let partial_agg_exec = partial_agg_exec
                 .downcast_ref::<AggregateExec>()
                 .expect("take_optimizable() ensures that this is a AggregateExec");
-            let stats = StatisticsContext::new()
-                .compute(partial_agg_exec.input().as_ref(), &StatisticsArgs::new())?;
+            let stats = context
+                .compute_statistics(partial_agg_exec.input(), &StatisticsArgs::new())?;
             let mut projections = vec![];
             for expr in partial_agg_exec.aggr_expr() {
                 let field = expr.field();
@@ -92,13 +99,17 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                 )?))
             } else {
                 plan.map_children(|child| {
-                    self.optimize(child, config).map(Transformed::yes)
+                    self.optimize_with_context(child, context)
+                        .map(Transformed::yes)
                 })
                 .data()
             }
         } else {
-            plan.map_children(|child| self.optimize(child, config).map(Transformed::yes))
-                .data()
+            plan.map_children(|child| {
+                self.optimize_with_context(child, context)
+                    .map(Transformed::yes)
+            })
+            .data()
         }
     }
 

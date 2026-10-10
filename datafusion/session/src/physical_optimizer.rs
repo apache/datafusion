@@ -20,10 +20,11 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::{Result, Statistics};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
+use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 
 /// Context available to physical optimizer rules.
 ///
@@ -40,6 +41,80 @@ pub trait PhysicalOptimizerContext: Send + Sync {
     fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
         None
     }
+
+    /// Returns a [`StatisticsContext`] shared by every rule of one optimizer
+    /// run, so statistics computed by one rule are reused by later rules.
+    ///
+    /// The context must be built from [`Self::statistics_registry`]. Its cache
+    /// entries hold the plan nodes they were computed for, so it is safe to
+    /// share across plan rewrites (see [`StatisticsContext`]).
+    ///
+    /// Returns `None` if no shared context is available, in which case rules
+    /// create their own context.
+    fn statistics_context(&self) -> Option<&StatisticsContext> {
+        None
+    }
+
+    /// Computes the statistics of `plan` with [`Self::statistics_context`],
+    /// or, if it is `None`, with a new context built from
+    /// [`Self::statistics_registry`].
+    ///
+    /// Rules that compute statistics should use this, so they reuse the
+    /// statistics computed by earlier rules and consult the same statistics
+    /// providers as the built-in rules.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow_schema::Schema;
+    /// # use datafusion_common::config::ConfigOptions;
+    /// # use datafusion_physical_plan::ExecutionPlan;
+    /// # use datafusion_physical_plan::empty::EmptyExec;
+    /// # use datafusion_physical_plan::statistics::StatisticsArgs;
+    /// # use datafusion_session::PhysicalOptimizerContext;
+    /// # struct MyContext(ConfigOptions);
+    /// # impl PhysicalOptimizerContext for MyContext {
+    /// #     fn config_options(&self) -> &ConfigOptions {
+    /// #         &self.0
+    /// #     }
+    /// # }
+    /// # let context = MyContext(ConfigOptions::new());
+    /// let plan: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
+    /// let statistics = context.compute_statistics(&plan, &StatisticsArgs::new())?;
+    /// # Ok::<(), datafusion_common::DataFusionError>(())
+    /// ```
+    fn compute_statistics(
+        &self,
+        plan: &Arc<dyn ExecutionPlan>,
+        args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        with_statistics_context(self, |stats_ctx| stats_ctx.compute_arc(plan, args))
+    }
+}
+
+/// Calls `f` with [`PhysicalOptimizerContext::statistics_context`], or, if it
+/// is `None`, with a new context built from
+/// [`PhysicalOptimizerContext::statistics_registry`].
+///
+/// Use this to pass one [`StatisticsContext`] down a traversal. To compute
+/// the statistics of a single plan, use
+/// [`PhysicalOptimizerContext::compute_statistics`].
+pub fn with_statistics_context<C, R>(
+    context: &C,
+    f: impl FnOnce(&StatisticsContext) -> R,
+) -> R
+where
+    C: PhysicalOptimizerContext + ?Sized,
+{
+    if let Some(shared) = context.statistics_context() {
+        return f(shared);
+    }
+    let local = match context.statistics_registry() {
+        Some(registry) => StatisticsContext::new_with_registry(registry.clone()),
+        None => StatisticsContext::new(),
+    };
+    f(&local)
 }
 
 /// `PhysicalOptimizerRule` transforms one [`ExecutionPlan`] into another which
