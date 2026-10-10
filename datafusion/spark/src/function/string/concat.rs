@@ -88,14 +88,18 @@ impl ScalarUDFImpl for SparkConcat {
         // Spark semantics: concat returns NULL if ANY input is NULL
         let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
 
-        let arg_types: Vec<DataType> = args
-            .arg_fields
-            .iter()
-            .map(|f| f.data_type().clone())
-            .collect();
-        let dt = ConcatFunc::new().return_type(&arg_types)?;
+        let return_type = if args.arg_fields.is_empty() {
+            DataType::Utf8
+        } else {
+            let arg_types: Vec<DataType> = args
+                .arg_fields
+                .iter()
+                .map(|f| f.data_type().clone())
+                .collect();
+            ConcatFunc::new().return_type(&arg_types)?
+        };
 
-        Ok(Arc::new(Field::new("concat", dt.clone(), nullable)))
+        Ok(Arc::new(Field::new("concat", return_type, nullable)))
     }
 }
 
