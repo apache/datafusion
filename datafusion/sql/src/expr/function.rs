@@ -352,7 +352,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             };
 
             for planner in self.context_provider.get_expr_planners().iter() {
-                match planner.plan_scalar(scalar_expr)? {
+                match planner.plan_scalar(scalar_expr, schema)? {
                     PlannerResult::Planned(expr) => return Ok(expr),
                     PlannerResult::Original(expr) => scalar_expr = expr,
                 }

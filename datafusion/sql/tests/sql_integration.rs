@@ -28,10 +28,10 @@ use arrow::datatypes::{TimeUnit::Nanosecond, *};
 use common::MockContextProvider;
 use datafusion_common::{DFSchema, DataFusionError, Result, assert_contains};
 use datafusion_expr::{
-    ColumnarValue, CreateIndex, DdlStatement, Expr, HigherOrderFunctionArgs,
-    HigherOrderReturnFieldArgs, HigherOrderSignature, HigherOrderUDF, HigherOrderUDFImpl,
-    LambdaParametersProgress, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-    ValueOrLambda, Volatility, col,
+    ColumnarValue, CreateIndex, DdlStatement, Expr, ExprSchemable,
+    HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
+    HigherOrderUDF, HigherOrderUDFImpl, LambdaParametersProgress, ScalarFunctionArgs,
+    ScalarUDF, ScalarUDFImpl, Signature, ValueOrLambda, Volatility, col,
     expr::{HigherOrderFunction, LambdaVariable, ScalarFunction},
     lambda,
     logical_plan::LogicalPlan,
@@ -910,10 +910,15 @@ fn select_scalar_func_with_literal_no_relation() {
 struct SingleArgumentCoalescePlanner;
 
 impl ExprPlanner for SingleArgumentCoalescePlanner {
-    fn plan_scalar(&self, expr: RawScalarExpr) -> Result<PlannerResult<RawScalarExpr>> {
+    fn plan_scalar(
+        &self,
+        expr: RawScalarExpr,
+        schema: &DFSchema,
+    ) -> Result<PlannerResult<RawScalarExpr>> {
         if expr.func.name() == "coalesce"
             && let [arg] = expr.args.as_slice()
         {
+            assert_eq!(arg.get_type(schema)?, DataType::Int64);
             Ok(PlannerResult::Planned(arg.clone()))
         } else {
             Ok(PlannerResult::Original(expr))
@@ -927,7 +932,7 @@ fn select_scalar_func_with_expr_planner() -> Result<()> {
         .with_scalar_function(core_functions::coalesce())
         .with_expr_planner(Arc::new(SingleArgumentCoalescePlanner));
     let plan = logical_plan_from_state(
-        "SELECT coalesce(42)",
+        "SELECT coalesce(t.a) FROM (SELECT 42 AS a) AS t",
         &GenericDialect {},
         ParserOptions::default(),
         state,
@@ -935,8 +940,10 @@ fn select_scalar_func_with_expr_planner() -> Result<()> {
     assert_snapshot!(
         plan,
         @r"
-    Projection: Int64(42)
-      EmptyRelation: rows=1
+    Projection: t.a
+      SubqueryAlias: t
+        Projection: Int64(42) AS a
+          EmptyRelation: rows=1
     "
     );
     Ok(())
