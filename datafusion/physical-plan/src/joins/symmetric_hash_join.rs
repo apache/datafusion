@@ -1569,7 +1569,7 @@ impl OneSideHashJoiner {
         }
         // Process the build and probe side sorted filter expressions if both are present:
         // Collect the sorted filter expressions into a vector of (node_index, interval) tuples:
-        let mut filter_intervals = Vec::with_capacity(2);
+        let mut filter_intervals = vec![];
         for expr in [
             &build_side_sorted_filter_expr,
             &probe_side_sorted_filter_expr,

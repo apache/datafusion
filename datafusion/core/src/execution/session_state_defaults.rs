@@ -50,7 +50,7 @@ impl SessionStateDefaults {
     /// returns a map of the default [`TableProviderFactory`]s
     pub fn default_table_factories() -> HashMap<String, Arc<dyn TableProviderFactory>> {
         let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
-            HashMap::with_capacity(6);
+            HashMap::new();
         #[cfg(feature = "parquet")]
         table_factories.insert("PARQUET".into(), Arc::new(DefaultTableFactory::new()));
         table_factories.insert("CSV".into(), Arc::new(DefaultTableFactory::new()));

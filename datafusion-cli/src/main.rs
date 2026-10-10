@@ -448,7 +448,7 @@ impl ByteUnit {
 fn parse_size_string(size: &str, label: &str) -> Result<usize, String> {
     static BYTE_SUFFIXES: LazyLock<HashMap<&'static str, ByteUnit>> =
         LazyLock::new(|| {
-            let mut m = HashMap::with_capacity(9);
+            let mut m = HashMap::new();
             m.insert("b", ByteUnit::Byte);
             m.insert("k", ByteUnit::KiB);
             m.insert("kb", ByteUnit::KiB);

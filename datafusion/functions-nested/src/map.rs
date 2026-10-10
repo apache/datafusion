@@ -287,9 +287,8 @@ fn make_map_batch_internal(
 
     let key_field = Arc::new(Field::new("key", keys.data_type().clone(), false));
     let value_field = Arc::new(Field::new("value", values.data_type().clone(), true));
-    let mut entry_struct_buffer: VecDeque<(Arc<Field>, ArrayRef)> =
-        VecDeque::with_capacity(2);
-    let mut entry_offsets_buffer = VecDeque::with_capacity(2);
+    let mut entry_struct_buffer: VecDeque<(Arc<Field>, ArrayRef)> = VecDeque::new();
+    let mut entry_offsets_buffer = VecDeque::new();
     entry_offsets_buffer.push_back(0);
 
     entry_struct_buffer.push_back((Arc::clone(&key_field), Arc::clone(keys)));

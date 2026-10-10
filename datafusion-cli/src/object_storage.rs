@@ -421,7 +421,7 @@ impl ExtensionOptions for AwsOptions {
             }
         }
 
-        let mut v = Visitor(Vec::with_capacity(6));
+        let mut v = Visitor(vec![]);
         self.access_key_id.visit(&mut v, "access_key_id", "");
         self.secret_access_key
             .visit(&mut v, "secret_access_key", "");
@@ -506,7 +506,7 @@ impl ExtensionOptions for GcpOptions {
             }
         }
 
-        let mut v = Visitor(Vec::with_capacity(3));
+        let mut v = Visitor(vec![]);
         self.service_account_path
             .visit(&mut v, "service_account_path", "");
         self.service_account_key
