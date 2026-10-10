@@ -106,6 +106,7 @@ use futures::TryStreamExt;
 use parking_lot::Mutex;
 
 use super::partitioned_hash_eval::SeededRandomState;
+use super::selection::SelectionExchange;
 
 mod prepared;
 pub use prepared::PreparedHashJoinBuild;
@@ -509,6 +510,7 @@ impl HashJoinExecBuilder {
                 filter: None,
                 join_type,
                 left_fut: Default::default(),
+                selection_exchange: Default::default(),
                 prepared_build: None,
                 random_state: HASH_JOIN_SEED,
                 mode: PartitionMode::Auto,
@@ -619,12 +621,14 @@ impl HashJoinExecBuilder {
         self.preserve_properties &= has_same_children_properties(&self.exec, &children)?;
         self.exec.right = children.swap_remove(1);
         self.exec.left = children.swap_remove(0);
+        self.exec.selection_exchange = Default::default();
         Ok(self)
     }
 
     /// Reset task-local runtime state while retaining the immutable prepared build.
     pub fn reset_state(mut self) -> Self {
         self.exec.left_fut = Default::default();
+        self.exec.selection_exchange = Default::default();
         self.exec.dynamic_filter = None;
         self.exec.metrics = ExecutionPlanMetricsSet::new();
         self
@@ -664,6 +668,7 @@ impl HashJoinExecBuilder {
             filter,
             join_type,
             left_fut,
+            selection_exchange,
             prepared_build,
             random_state,
             mode,
@@ -713,6 +718,7 @@ impl HashJoinExecBuilder {
             join_type,
             join_schema,
             left_fut,
+            selection_exchange,
             prepared_build,
             random_state,
             mode,
@@ -745,6 +751,7 @@ impl From<&HashJoinExec> for HashJoinExecBuilder {
                 join_type: exec.join_type,
                 join_schema: Arc::clone(&exec.join_schema),
                 left_fut: Arc::clone(&exec.left_fut),
+                selection_exchange: Arc::clone(&exec.selection_exchange),
                 prepared_build: exec.prepared_build.clone(),
                 random_state: exec.random_state.clone(),
                 mode: exec.mode,
@@ -976,6 +983,7 @@ pub struct HashJoinExec {
     /// Each output stream waits on the `OnceAsync` to signal the completion of
     /// the hash table creation.
     left_fut: Arc<OnceAsync<JoinLeftData>>,
+    selection_exchange: Arc<SelectionExchange>,
     /// Immutable build attached by an embedding executor.
     prepared_build: Option<Arc<PreparedHashJoinBuild>>,
     /// Shared the `SeededRandomState` for the hashing algorithm (seeds preserved for serialization)
@@ -1914,7 +1922,57 @@ impl ExecutionPlan for HashJoinExec {
 
         // we have the batches and the hash map with their keys. We can how create a stream
         // over the right that uses this information to issue new batches.
-        let right_stream = self.right.execute(partition, context)?;
+        let selection = if context
+            .session_config()
+            .options()
+            .execution
+            .enable_hash_join_probe_selection
+            && matches!(
+                context.memory_pool().memory_limit(),
+                datafusion_execution::memory_pool::MemoryLimit::Infinite
+            )
+            && self.mode == PartitionMode::Partitioned
+            && self.join_type == JoinType::Inner
+            && !self.null_aware
+            && self.dynamic_filter.is_none()
+            && self
+                .on
+                .iter()
+                .all(|(_, key)| key.downcast_ref::<Column>().is_some())
+        {
+            self.right
+                .downcast_ref::<crate::repartition::RepartitionExec>()
+                .filter(|r| !r.preserve_order())
+                .and_then(|r| match r.partitioning() {
+                    Partitioning::Hash(keys, n)
+                        if *n > 1
+                            && keys.len() == self.on.len()
+                            && keys.iter().zip(&self.on).all(|(a, (_, b))| a.eq(b)) =>
+                    {
+                        Some(self.selection_exchange.execute(
+                            r.input().as_ref(),
+                            keys,
+                            *n,
+                            partition,
+                            &context,
+                        ))
+                    }
+                    _ => None,
+                })
+        } else {
+            None
+        }
+        .transpose()?;
+        let right_stream = if selection.is_some() {
+            MetricBuilder::new(&self.metrics)
+                .counter("probe_selection_partitions", partition)
+                .add(1);
+            Box::pin(crate::stream::EmptyRecordBatchStream::new(
+                self.right.schema(),
+            )) as SendableRecordBatchStream
+        } else {
+            self.right.execute(partition, context)?
+        };
 
         // update column indices to reflect the projection
         let column_indices_after_projection = match self.projection.as_ref() {
@@ -1931,27 +1989,30 @@ impl ExecutionPlan for HashJoinExec {
             .map(|(_, right_expr)| Arc::clone(right_expr))
             .collect::<Vec<_>>();
 
-        Ok(Box::pin(HashJoinStream::new(
-            partition,
-            self.schema(),
-            on_right,
-            self.filter.clone(),
-            self.join_type,
-            right_stream,
-            self.random_state.random_state().clone(),
-            join_metrics,
-            column_indices_after_projection,
-            self.null_equality,
-            HashJoinStreamState::WaitBuildSide,
-            BuildSide::Initial(BuildSideInitialState { left_fut }),
-            batch_size,
-            vec![],
-            self.right.output_ordering().is_some(),
-            build_accumulator,
-            self.mode,
-            null_aware,
-            self.fetch,
-        )))
+        Ok(Box::pin(
+            HashJoinStream::new(
+                partition,
+                self.schema(),
+                on_right,
+                self.filter.clone(),
+                self.join_type,
+                right_stream,
+                self.random_state.random_state().clone(),
+                join_metrics,
+                column_indices_after_projection,
+                self.null_equality,
+                HashJoinStreamState::WaitBuildSide,
+                BuildSide::Initial(BuildSideInitialState { left_fut }),
+                batch_size,
+                vec![],
+                self.right.output_ordering().is_some(),
+                build_accumulator,
+                self.mode,
+                null_aware,
+                self.fetch,
+            )
+            .with_selection_input(selection),
+        ))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -2252,6 +2313,8 @@ impl ExecutionPlan for HashJoinExec {
             join_schema: _,
             // runtime build-side state, not part of the plan
             left_fut: _,
+            // runtime probe-side state, not part of the plan
+            selection_exchange: _,
             prepared_build,
             // the fixed `HASH_JOIN_SEED` constant, set identically by the
             // builder on decode
