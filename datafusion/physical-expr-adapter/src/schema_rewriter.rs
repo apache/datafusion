@@ -570,11 +570,9 @@ impl DefaultPhysicalExprAdapterRewriter {
                 return Ok(None);
             };
             let mut args = get_field_expr.args().to_vec();
-            args[0] = Arc::new(CastExpr::new_with_target_field(
-                Arc::clone(inner),
-                target_field,
-                Some(cast.cast_options().clone()),
-            ));
+            args[0] = Arc::new(
+                cast.with_new_expr_and_target_field(Arc::clone(inner), target_field),
+            );
             return Arc::clone(expr).with_new_children(args).map(Some);
         }
 
@@ -598,10 +596,9 @@ impl DefaultPhysicalExprAdapterRewriter {
         {
             return Ok(Some(extracted));
         }
-        Ok(Some(Arc::new(CastExpr::new_with_target_field(
+        Ok(Some(Arc::new(cast.with_new_expr_and_target_field(
             extracted,
             logical_return_field,
-            Some(cast.cast_options().clone()),
         ))))
     }
 
