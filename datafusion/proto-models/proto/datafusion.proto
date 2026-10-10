@@ -1110,12 +1110,17 @@ message PhysicalExprNode {
     PhysicalRangeExprNode range_expr = 27;
     PhysicalSqlSimilarToPatternNode sql_similar_to_pattern = 28;
     PhysicalLiteralNode literal_with_metadata = 29;
+    PhysicalNormalizeFloatZeroNode normalize_float_zero = 31;
   }
 }
 
 message PhysicalLiteralNode {
   datafusion_common.ScalarValue value = 1;
   map<string, string> metadata = 2;
+}
+
+message PhysicalNormalizeFloatZeroNode {
+  PhysicalExprNode expr = 1;
 }
 
 message PhysicalDynamicFilterNode {

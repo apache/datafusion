@@ -254,3 +254,27 @@ SELECT l.id, r.id FROM nested_zeros l JOIN nested_zeros r ON l.a = r.a ORDER BY 
 
 statement ok
 DROP TABLE nested_zeros;
+
+#####
+## Window partitions treat signed zeros as equal
+#####
+
+# Both zeros belong to one partition, ordered by b.
+query RII
+SELECT a, b,
+       row_number() OVER (PARTITION BY a ORDER BY b) AS rn
+FROM (VALUES (-0.0, 2), (0.0, 1)) t(a, b)
+ORDER BY b;
+----
+0 1 1
+0 2 2
+
+# Normalize nested values before sorting composite partition keys.
+query II rowsort
+SELECT b, count(*) OVER (PARTITION BY a, b)
+FROM (VALUES ([-0.0], 1), ([-0.0], 2), ([0.0], 1), ([0.0], 2)) t(a, b);
+----
+1 2
+1 2
+2 2
+2 2
