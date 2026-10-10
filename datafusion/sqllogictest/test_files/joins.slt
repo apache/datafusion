@@ -2074,6 +2074,24 @@ set datafusion.explain.logical_plan_only = false;
 statement ok
 set datafusion.execution.target_partitions = 4;
 
+# A CASE equijoin key that references two inputs on the same side of a cross
+# join must remain as a filter if it cannot be attached to a single rebuilt
+# join. The expected rows are 17 for k=0 and 18 for k=1.
+query II
+SELECT k.k, b.id
+FROM (SELECT 1 AS t, 17 AS x, 18 AS y) a
+CROSS JOIN (SELECT 0 AS k UNION ALL SELECT 1) k
+JOIN (
+  SELECT 1 AS t, CAST(value AS INT) AS id
+  FROM generate_series(0, 20)
+) b
+  ON b.t = a.t
+ AND b.id = CASE k.k WHEN 0 THEN a.x ELSE a.y END
+ORDER BY k.k, b.id;
+----
+0 17
+1 18
+
 # Planning inner nested loop join
 # inputs are swapped due to inexact statistics + join reordering caused additional projection
 
