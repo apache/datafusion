@@ -63,10 +63,8 @@ logical_plan
 04)------TableScan: window_topn_t projection=[id, pk, val]
 physical_plan
 01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
-02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----RepartitionExec: partitioning=Hash([pk@1], 4), input_partitions=1, maintains_sort_order=true
-04)------PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@1], order=[val@2 ASC NULLS LAST]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@1], order=[val@2 ASC NULLS LAST], emit=[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Test 3: rn < 4 should give same results (fetch=3)
 query III rowsort
@@ -154,10 +152,8 @@ logical_plan
 04)------TableScan: window_topn_t projection=[id, pk, val]
 physical_plan
 01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
-02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----RepartitionExec: partitioning=Hash([pk@1], 4), input_partitions=1, maintains_sort_order=true
-04)------PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@1], order=[val@2 ASC NULLS LAST]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@1], order=[val@2 ASC NULLS LAST], emit=[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Test 7: Filter on data column (not window output) — should NOT optimize
 query TT
@@ -188,10 +184,8 @@ EXPLAIN SELECT * FROM (
 ----
 physical_plan
 01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
-02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----RepartitionExec: partitioning=Hash([pk@1], 4), input_partitions=1, maintains_sort_order=true
-04)------PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@1], order=[val@2 ASC NULLS LAST]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@1], order=[val@2 ASC NULLS LAST], emit=[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 SET datafusion.explain.physical_plan_only = false;
@@ -245,46 +239,32 @@ physical_plan
 16)│          val: val         │
 17)└─────────────┬─────────────┘
 18)┌─────────────┴─────────────┐
-19)│    BoundedWindowAggExec   │
+19)│    PartitionedTopKExec    │
 20)│    --------------------   │
-21)│        mode: Sorted       │
-22)│                           │
-23)│        select_list:       │
-24)│ row_number() PARTITION BY │
-25)│  [window_topn_t.pk] ORDER │
-26)│    BY [window_topn_t.val  │
-27)│    ASC NULLS LAST] RANGE  │
-28)│      BETWEEN UNBOUNDED    │
-29)│        PRECEDING AND      │
-30)│         CURRENT ROW       │
-31)└─────────────┬─────────────┘
-32)┌─────────────┴─────────────┐
-33)│      RepartitionExec      │
-34)│    --------------------   │
-35)│ partition_count(in->out): │
-36)│           1 -> 4          │
-37)│                           │
-38)│    partitioning_scheme:   │
-39)│      Hash([pk@1], 4)      │
-40)└─────────────┬─────────────┘
-41)┌─────────────┴─────────────┐
-42)│    PartitionedTopKExec    │
-43)│    --------------------   │
-44)│          fetch: 3         │
-45)│       fn: row_number      │
-46)│                           │
-47)│           order:          │
-48)│   [val@2 ASC NULLS LAST]  │
-49)│                           │
-50)│     partition: [pk@1]     │
-51)└─────────────┬─────────────┘
-52)┌─────────────┴─────────────┐
-53)│       DataSourceExec      │
-54)│    --------------------   │
-55)│         bytes: 480        │
-56)│       format: memory      │
-57)│          rows: 10         │
-58)└───────────────────────────┘
+21)│           emit:           │
+22)│ [row_number() PARTITION BY│
+23)│  [window_topn_t.pk] ORDER │
+24)│    BY [window_topn_t.val  │
+25)│    ASC NULLS LAST] RANGE  │
+26)│      BETWEEN UNBOUNDED    │
+27)│        PRECEDING AND      │
+28)│        CURRENT ROW]       │
+29)│                           │
+30)│          fetch: 3         │
+31)│       fn: row_number      │
+32)│                           │
+33)│           order:          │
+34)│   [val@2 ASC NULLS LAST]  │
+35)│                           │
+36)│     partition: [pk@1]     │
+37)└─────────────┬─────────────┘
+38)┌─────────────┴─────────────┐
+39)│       DataSourceExec      │
+40)│    --------------------   │
+41)│         bytes: 480        │
+42)│       format: memory      │
+43)│          rows: 10         │
+44)└───────────────────────────┘
 
 statement ok
 SET datafusion.explain.format = indent;
@@ -501,10 +481,8 @@ EXPLAIN SELECT * FROM (
 ----
 physical_plan
 01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [window_topn_t.pk, window_topn_t.id] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
-02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_t.pk, window_topn_t.id] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_t.pk, window_topn_t.id] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----RepartitionExec: partitioning=Hash([pk@1, id@0], 4), input_partitions=1, maintains_sort_order=true
-04)------PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@1, id@0], order=[val@2 ASC NULLS LAST]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@1, id@0], order=[val@2 ASC NULLS LAST], emit=[row_number() PARTITION BY [window_topn_t.pk, window_topn_t.id] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 SET datafusion.explain.physical_plan_only = false;
@@ -533,10 +511,8 @@ EXPLAIN SELECT * FROM (
 ----
 physical_plan
 01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [window_topn_t.id] ORDER BY [window_topn_t.id ASC NULLS LAST, window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
-02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_t.id] ORDER BY [window_topn_t.id ASC NULLS LAST, window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_t.id] ORDER BY [window_topn_t.id ASC NULLS LAST, window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1, maintains_sort_order=true
-04)------PartitionedTopKExec: fn=row_number, fetch=3, partition=[id@0], order=[val@2 ASC NULLS LAST]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--PartitionedTopKExec: fn=row_number, fetch=3, partition=[id@0], order=[val@2 ASC NULLS LAST], emit=[row_number() PARTITION BY [window_topn_t.id] ORDER BY [window_topn_t.id ASC NULLS LAST, window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Test 19: Overlapping keys correctness (each id is unique, so rn=1 for all)
 statement ok
@@ -569,10 +545,8 @@ EXPLAIN SELECT * FROM (
 ----
 physical_plan
 01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.pk ASC NULLS LAST, window_topn_t.val DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
-02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.pk ASC NULLS LAST, window_topn_t.val DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.pk ASC NULLS LAST, window_topn_t.val DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----RepartitionExec: partitioning=Hash([pk@1], 4), input_partitions=1, maintains_sort_order=true
-04)------PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@1], order=[val@2 DESC]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@1], order=[val@2 DESC], emit=[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.pk ASC NULLS LAST, window_topn_t.val DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Test 21: Correctness for PARTITION BY pk ORDER BY pk, val DESC
 statement ok
@@ -604,10 +578,8 @@ EXPLAIN SELECT * FROM (
 ----
 physical_plan
 01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.pk DESC NULLS FIRST, window_topn_t.val DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
-02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.pk DESC NULLS FIRST, window_topn_t.val DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.pk DESC NULLS FIRST, window_topn_t.val DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----RepartitionExec: partitioning=Hash([pk@1], 4), input_partitions=1, maintains_sort_order=true
-04)------PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@1], order=[val@2 DESC]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@1], order=[val@2 DESC], emit=[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.pk DESC NULLS FIRST, window_topn_t.val DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 SET datafusion.explain.physical_plan_only = false;
@@ -639,10 +611,8 @@ QUALIFY rn <= 3;
 ----
 physical_plan
 01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
-02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----RepartitionExec: partitioning=Hash([pk@1], 4), input_partitions=1, maintains_sort_order=true
-04)------PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@1], order=[val@2 ASC NULLS LAST]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@1], order=[val@2 ASC NULLS LAST], emit=[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Test 30: QUALIFY with < operator
 statement ok
@@ -669,10 +639,8 @@ QUALIFY rnk <= 3;
 ----
 physical_plan
 01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, rank() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rnk]
-02)--BoundedWindowAggExec: wdw=[rank() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----RepartitionExec: partitioning=Hash([pk@1], 4), input_partitions=1, maintains_sort_order=true
-04)------PartitionedTopKExec: fn=rank, fetch=3, partition=[pk@1], order=[val@2 ASC NULLS LAST]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--PartitionedTopKExec: fn=rank, fetch=3, partition=[pk@1], order=[val@2 ASC NULLS LAST], emit=[rank() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 SET datafusion.explain.physical_plan_only = false;
@@ -747,10 +715,8 @@ EXPLAIN SELECT * FROM (
 ----
 physical_plan
 01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [window_topn_nulls.pk] ORDER BY [window_topn_nulls.val ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
-02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_nulls.pk] ORDER BY [window_topn_nulls.val ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_nulls.pk] ORDER BY [window_topn_nulls.val ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----RepartitionExec: partitioning=Hash([pk@1], 4), input_partitions=1, maintains_sort_order=true
-04)------PartitionedTopKExec: fn=row_number, fetch=2, partition=[pk@1], order=[val@2 ASC]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--PartitionedTopKExec: fn=row_number, fetch=2, partition=[pk@1], order=[val@2 ASC], emit=[row_number() PARTITION BY [window_topn_nulls.pk] ORDER BY [window_topn_nulls.val ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
 EXPLAIN SELECT * FROM (
@@ -759,10 +725,8 @@ EXPLAIN SELECT * FROM (
 ----
 physical_plan
 01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [window_topn_nulls.pk] ORDER BY [window_topn_nulls.val DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
-02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_nulls.pk] ORDER BY [window_topn_nulls.val DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_nulls.pk] ORDER BY [window_topn_nulls.val DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----RepartitionExec: partitioning=Hash([pk@1], 4), input_partitions=1, maintains_sort_order=true
-04)------PartitionedTopKExec: fn=row_number, fetch=2, partition=[pk@1], order=[val@2 DESC NULLS LAST]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--PartitionedTopKExec: fn=row_number, fetch=2, partition=[pk@1], order=[val@2 DESC NULLS LAST], emit=[row_number() PARTITION BY [window_topn_nulls.pk] ORDER BY [window_topn_nulls.val DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 SET datafusion.explain.physical_plan_only = false;
@@ -842,10 +806,8 @@ logical_plan
 04)------TableScan: window_topn_rank_t projection=[id, pk, val]
 physical_plan
 01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, rank() PARTITION BY [window_topn_rank_t.pk] ORDER BY [window_topn_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rk]
-02)--BoundedWindowAggExec: wdw=[rank() PARTITION BY [window_topn_rank_t.pk] ORDER BY [window_topn_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [window_topn_rank_t.pk] ORDER BY [window_topn_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----RepartitionExec: partitioning=Hash([pk@1], 4), input_partitions=1, maintains_sort_order=true
-04)------PartitionedTopKExec: fn=rank, fetch=3, partition=[pk@1], order=[val@2 ASC NULLS LAST]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--PartitionedTopKExec: fn=rank, fetch=3, partition=[pk@1], order=[val@2 ASC NULLS LAST], emit=[rank() PARTITION BY [window_topn_rank_t.pk] ORDER BY [window_topn_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Test R3: rk < 4 should give the same results (fetch = K-1 = 3)
 query III rowsort
@@ -950,10 +912,8 @@ logical_plan
 04)------TableScan: window_topn_rank_t projection=[id, pk, val]
 physical_plan
 01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, rank() PARTITION BY [window_topn_rank_t.pk, window_topn_rank_t.id] ORDER BY [window_topn_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rk]
-02)--BoundedWindowAggExec: wdw=[rank() PARTITION BY [window_topn_rank_t.pk, window_topn_rank_t.id] ORDER BY [window_topn_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [window_topn_rank_t.pk, window_topn_rank_t.id] ORDER BY [window_topn_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----RepartitionExec: partitioning=Hash([pk@1, id@0], 4), input_partitions=1, maintains_sort_order=true
-04)------PartitionedTopKExec: fn=rank, fetch=1, partition=[pk@1, id@0], order=[val@2 ASC NULLS LAST]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--PartitionedTopKExec: fn=rank, fetch=1, partition=[pk@1, id@0], order=[val@2 ASC NULLS LAST], emit=[rank() PARTITION BY [window_topn_rank_t.pk, window_topn_rank_t.id] ORDER BY [window_topn_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Test R9: RANK with DESC ordering
 query III rowsort
@@ -1091,10 +1051,8 @@ logical_plan
 04)------TableScan: window_topn_rank_dense_t projection=[id, pk, val]
 physical_plan
 01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, rank() PARTITION BY [window_topn_rank_dense_t.pk] ORDER BY [window_topn_rank_dense_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rk]
-02)--BoundedWindowAggExec: wdw=[rank() PARTITION BY [window_topn_rank_dense_t.pk] ORDER BY [window_topn_rank_dense_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [window_topn_rank_dense_t.pk] ORDER BY [window_topn_rank_dense_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----RepartitionExec: partitioning=Hash([pk@1], 4), input_partitions=1, maintains_sort_order=true
-04)------PartitionedTopKExec: fn=rank, fetch=3, partition=[pk@1], order=[val@2 ASC NULLS LAST]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--PartitionedTopKExec: fn=rank, fetch=3, partition=[pk@1], order=[val@2 ASC NULLS LAST], emit=[rank() PARTITION BY [window_topn_rank_dense_t.pk] ORDER BY [window_topn_rank_dense_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 DROP TABLE window_topn_rank_dense_t;
@@ -1160,10 +1118,8 @@ logical_plan
 04)------TableScan: window_topn_rank_null_t projection=[id, pk, val]
 physical_plan
 01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, rank() PARTITION BY [window_topn_rank_null_t.pk] ORDER BY [window_topn_rank_null_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rk]
-02)--BoundedWindowAggExec: wdw=[rank() PARTITION BY [window_topn_rank_null_t.pk] ORDER BY [window_topn_rank_null_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [window_topn_rank_null_t.pk] ORDER BY [window_topn_rank_null_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----RepartitionExec: partitioning=Hash([pk@1], 4), input_partitions=1, maintains_sort_order=true
-04)------PartitionedTopKExec: fn=rank, fetch=2, partition=[pk@1], order=[val@2 ASC NULLS LAST]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--PartitionedTopKExec: fn=rank, fetch=2, partition=[pk@1], order=[val@2 ASC NULLS LAST], emit=[rank() PARTITION BY [window_topn_rank_null_t.pk] ORDER BY [window_topn_rank_null_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Test R19: DESC NULLS LAST — pk=1: 3,2,1,NULL ranks 1,2,3,4; pk=2: 5,NULL,NULL ranks 1,2,2.
 query III rowsort
@@ -1272,10 +1228,8 @@ logical_plan
 04)------TableScan: window_topn_dense_rank_t projection=[id, pk, val]
 physical_plan
 01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as dr]
-02)--BoundedWindowAggExec: wdw=[dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----RepartitionExec: partitioning=Hash([pk@1], 4), input_partitions=1, maintains_sort_order=true
-04)------PartitionedTopKExec: fn=dense_rank, fetch=2, partition=[pk@1], order=[val@2 ASC NULLS LAST]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--PartitionedTopKExec: fn=dense_rank, fetch=2, partition=[pk@1], order=[val@2 ASC NULLS LAST], emit=[dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Test DR3: dr < 3 should give the same results (fetch = K-1 = 2)
 query III rowsort
@@ -1523,10 +1477,8 @@ logical_plan
 04)------TableScan: window_topn_dr_null_t projection=[id, pk, val]
 physical_plan
 01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val]
-02)--BoundedWindowAggExec: wdw=[dense_rank() PARTITION BY [window_topn_dr_null_t.pk] ORDER BY [window_topn_dr_null_t.val ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "dense_rank() PARTITION BY [window_topn_dr_null_t.pk] ORDER BY [window_topn_dr_null_t.val ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----RepartitionExec: partitioning=Hash([pk@1], 4), input_partitions=1, maintains_sort_order=true
-04)------PartitionedTopKExec: fn=dense_rank, fetch=2, partition=[pk@1], order=[val@2 ASC]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--PartitionedTopKExec: fn=dense_rank, fetch=2, partition=[pk@1], order=[val@2 ASC], emit=[dense_rank() PARTITION BY [window_topn_dr_null_t.pk] ORDER BY [window_topn_dr_null_t.val ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Test DR14: NULLS LAST — NULL is the largest distinct ob (dr 4). 10 (dr
 # 1) and 20 (dr 2) are the two smallest, so `dr <= 2` excludes the NULLs.
@@ -1574,12 +1526,9 @@ logical_plan
 04)------TableScan: t projection=[c1, c2]
 physical_plan
 01)ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, row_number() PARTITION BY [t.c1] ORDER BY [t.c2 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rn]
-02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [t.c1] ORDER BY [t.c2 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [t.c1] ORDER BY [t.c2 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----SortPreservingMergeExec: [c1@0 ASC NULLS LAST, c2@1 DESC]
-04)------SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 DESC], preserve_partitioning=[true]
-05)--------PartitionedTopKExec: fn=row_number, fetch=1, partition=[c1@0], order=[c2@1 DESC]
-06)----------RepartitionExec: partitioning=Hash([c1@0], 5), input_partitions=1
-07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--PartitionedTopKExec: fn=row_number, fetch=1, partition=[c1@0], order=[c2@1 DESC], emit=[row_number() PARTITION BY [t.c1] ORDER BY [t.c2 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+03)----RepartitionExec: partitioning=Hash([c1@0], 5), input_partitions=1
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 set datafusion.execution.target_partitions = 4;
