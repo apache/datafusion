@@ -23,6 +23,7 @@ use crate::decorrelate::{PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR};
 use crate::optimizer::ApplyOrder;
 use crate::utils::evaluates_to_null;
 use crate::{OptimizerConfig, OptimizerRule};
+use datafusion_expr::expr::{WindowFunction, WindowFunctionDefinition};
 use datafusion_expr::{Expr, Join, expr};
 
 use datafusion_common::tree_node::{
@@ -30,7 +31,7 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{Column, DFSchema, Result, ScalarValue, TableReference};
 use datafusion_expr::logical_plan::{JoinType, Subquery};
-use datafusion_expr::utils::conjunction;
+use datafusion_expr::utils::{conjunction, find_join_exprs, split_conjunction};
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, SubqueryAlias};
 
 /// Optimizer rule for rewriting lateral joins to joins
@@ -52,14 +53,14 @@ impl OptimizerRule for DecorrelateLateralJoin {
     fn rewrite(
         &self,
         plan: LogicalPlan,
-        _config: &dyn OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         // Find cross joins with outer column references on the right side (i.e., the apply operator).
         let LogicalPlan::Join(join) = plan else {
             return Ok(Transformed::no(plan));
         };
 
-        rewrite_internal(join)
+        rewrite_internal(join, config)
     }
 
     fn name(&self) -> &str {
@@ -73,7 +74,10 @@ impl OptimizerRule for DecorrelateLateralJoin {
 
 // Build the decorrelated join based on the original lateral join query.
 // Supports INNER and LEFT lateral joins.
-fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
+fn rewrite_internal(
+    join: Join,
+    config: &dyn OptimizerConfig,
+) -> Result<Transformed<LogicalPlan>> {
     if !matches!(join.join_type, JoinType::Inner | JoinType::Left) {
         return Ok(Transformed::no(LogicalPlan::Join(join)));
     }
@@ -103,6 +107,20 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
 
     let subquery_plan = subquery.subquery.as_ref();
     let original_join_filter = join.filter.clone();
+
+    // DISTINCT must be applied after the correlated filter for each outer row.
+    // Pulling a filter on a non-grouped column above DISTINCT adds that column
+    // to the grouping keys and can expose duplicates. Handle the simple shape
+    // here by joining before the DISTINCT aggregate and grouping by a unique
+    // outer-row id as well as the original DISTINCT keys.
+    let row_number_udwf = config
+        .function_registry()
+        .and_then(|registry| registry.udwf("row_number").ok());
+    if let Some(plan) =
+        rewrite_correlated_distinct(&join, subquery_plan, row_number_udwf)?
+    {
+        return Ok(Transformed::new(plan, true, TreeNodeRecursion::Jump));
+    }
 
     // Walk the subquery plan bottom-up, extracting correlated filter
     // predicates into join conditions and converting ungrouped aggregates
@@ -327,6 +345,176 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
     };
 
     Ok(Transformed::new(new_plan, true, TreeNodeRecursion::Jump))
+}
+
+/// Rewrite a simple `DISTINCT(Projection(Filter(input)))` LATERAL subquery when
+/// its correlated filter reads columns that are not part of the DISTINCT key.
+/// Keeping a row number from the outer input in the grouping keys preserves
+/// duplicate outer rows under SQL bag semantics.
+fn rewrite_correlated_distinct(
+    join: &Join,
+    subquery: &LogicalPlan,
+    row_number_udwf: Option<Arc<datafusion_expr::WindowUDF>>,
+) -> Result<Option<LogicalPlan>> {
+    if join.join_type != JoinType::Inner
+        || join.filter.as_ref().is_some_and(|filter| {
+            !matches!(filter, Expr::Literal(ScalarValue::Boolean(Some(true)), _))
+        })
+    {
+        return Ok(None);
+    }
+
+    let LogicalPlan::Aggregate(aggregate) = subquery else {
+        return Ok(None);
+    };
+    if !aggregate.aggr_expr.is_empty()
+        || aggregate
+            .group_expr
+            .iter()
+            .any(|expr| matches!(expr, Expr::GroupingSet(_)))
+    {
+        return Ok(None);
+    }
+    if join.right.schema().fields().len() != aggregate.group_expr.len() {
+        return Ok(None);
+    }
+    // SQL expresses SELECT DISTINCT x as Aggregate(Projection(Filter(...)));
+    // only direct-column projections are needed for this targeted rewrite.
+    let (projection_expr, filter) = match aggregate.input.as_ref() {
+        LogicalPlan::Projection(projection) => {
+            let LogicalPlan::Filter(filter) = projection.input.as_ref() else {
+                return Ok(None);
+            };
+            (projection.expr.as_slice(), filter)
+        }
+        LogicalPlan::Filter(filter) => (aggregate.group_expr.as_slice(), filter),
+        _ => return Ok(None),
+    };
+    if projection_expr
+        .iter()
+        .any(|expr| !matches!(expr, Expr::Column(_)))
+    {
+        return Ok(None);
+    }
+    if !filter.predicate.contains_outer() {
+        return Ok(None);
+    }
+
+    let predicates = split_conjunction(&filter.predicate);
+    let (join_filters, local_filters) = find_join_exprs(predicates)?;
+    if join_filters.is_empty() {
+        return Ok(None);
+    }
+
+    // This special case is only needed when a correlated predicate reads an
+    // inner column outside the DISTINCT key. If it reads only grouped columns,
+    // the existing pull-up is semantics-preserving.
+    let distinct_columns = aggregate
+        .group_expr
+        .iter()
+        .filter_map(|expr| match expr {
+            Expr::Column(column) => Some(column),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let pulls_non_key_column = join_filters.iter().any(|predicate| {
+        predicate.column_refs().iter().any(|column| {
+            filter.input.schema().has_column(column) && !distinct_columns.contains(column)
+        })
+    });
+    if !pulls_non_key_column {
+        return Ok(None);
+    }
+    let Some(row_number_udwf) = row_number_udwf else {
+        return Ok(None);
+    };
+
+    let mut inner_group_expr = Vec::with_capacity(aggregate.group_expr.len());
+    for group in &aggregate.group_expr {
+        let Expr::Column(group_column) = group else {
+            return Ok(None);
+        };
+        let Some((index, _)) = aggregate.input.schema().iter().enumerate().find(
+            |(_, (qualifier, field))| {
+                Column::new(qualifier.cloned(), field.name()) == *group_column
+            },
+        ) else {
+            return Ok(None);
+        };
+        let Some(group_expr) = projection_expr.get(index) else {
+            return Ok(None);
+        };
+        inner_group_expr.push(group_expr.clone());
+    }
+
+    // Leave unsupported nested scopes and non-deterministic projections to the
+    // existing rule. This path only moves a filter across one DISTINCT.
+    if filter.input.contains_outer_reference() {
+        return Ok(None);
+    }
+
+    let mut identity_name = "__df_lateral_row_id".to_string();
+    while join
+        .left
+        .schema()
+        .has_column(&Column::new_unqualified(identity_name.clone()))
+    {
+        identity_name.push('_');
+    }
+    let row_number = Expr::WindowFunction(Box::new(WindowFunction::new(
+        WindowFunctionDefinition::WindowUDF(row_number_udwf),
+        vec![],
+    )))
+    .alias(identity_name.clone());
+    let left_with_identity = LogicalPlanBuilder::from((*join.left).clone())
+        .window(vec![row_number])?
+        .build()?;
+
+    let right_input = if let Some(local_filter) = conjunction(local_filters) {
+        LogicalPlanBuilder::from((*filter.input).clone())
+            .filter(local_filter)?
+            .build()?
+    } else {
+        (*filter.input).clone()
+    };
+    let joined = LogicalPlanBuilder::from(left_with_identity)
+        .join_on(right_input, JoinType::Inner, conjunction(join_filters))?
+        .build()?;
+
+    let left_count = join.left.schema().fields().len();
+    let mut group_expr = joined
+        .schema()
+        .iter()
+        .take(left_count + 1)
+        .map(|(qualifier, field)| {
+            Expr::Column(Column::new(qualifier.cloned(), field.name()))
+        })
+        .collect::<Vec<_>>();
+    group_expr.extend(inner_group_expr);
+    let grouped = LogicalPlanBuilder::from(joined)
+        .aggregate(group_expr, Vec::<Expr>::new())?
+        .build()?;
+
+    // Restore the original lateral join's visible schema, dropping the row
+    // identity and exposing only the original DISTINCT output columns.
+    let mut projection = Vec::with_capacity(join.schema.fields().len());
+    for (index, (target_qualifier, target_field)) in join.schema.iter().enumerate() {
+        let source_index = if index < left_count { index } else { index + 1 };
+        let Some((source_qualifier, source_field)) =
+            grouped.schema().iter().nth(source_index)
+        else {
+            return Ok(None);
+        };
+        let column =
+            Expr::Column(Column::new(source_qualifier.cloned(), source_field.name()));
+        projection
+            .push(column.alias_qualified(target_qualifier.cloned(), target_field.name()));
+    }
+    let projected = LogicalPlanBuilder::from(grouped)
+        .project(projection)?
+        .build()?;
+
+    Ok(Some(projected))
 }
 
 /// Extract the Subquery and optional alias from a lateral join's right side.
