@@ -238,6 +238,9 @@ config_namespace! {
         /// The default schema name - this impacts what SQL queries use if not specified
         pub default_schema: String, default = "public".to_string()
 
+        /// The system schema name - when set a global system and `information_schema` catalog will be available
+        pub system_catalog: Option<String>, default = None
+
         /// Should DataFusion provide access to `information_schema`
         /// virtual tables for displaying schema information
         pub information_schema: bool, default = false
