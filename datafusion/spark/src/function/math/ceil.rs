@@ -18,11 +18,14 @@
 use std::sync::Arc;
 
 use arrow::array::{ArrowNativeTypeOp, AsArray, Decimal128Array};
-use arrow::datatypes::{DataType, Decimal128Type, Float32Type, Float64Type, Int64Type};
-use datafusion_common::utils::take_function_args;
-use datafusion_common::{Result, ScalarValue, exec_err};
+use arrow::datatypes::{
+    DataType, Decimal128Type, Field, FieldRef, Float32Type, Float64Type, Int64Type,
+};
+use datafusion_common::types::{NativeType, logical_int32};
+use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    Coercion, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, TypeSignature, TypeSignatureClass, Volatility,
 };
 
 /// Spark-compatible `ceil` expression
@@ -36,8 +39,12 @@ use datafusion_expr::{
 ///  - Spark only supports Decimal128; DataFusion also supports Decimal32/64/256
 ///  - Spark does not check for decimal overflow; DataFusion errors on overflow
 ///
-/// 2-argument ceil(value, scale) is not yet implemented
-/// <https://github.com/apache/datafusion/issues/21560>
+/// `ceil(value, scale)` rounds up to `scale` decimal places. Spark declares this form as
+/// `RoundCeil(DecimalType, IntegerType)`, so the value is a decimal and `scale` must be a
+/// constant integer. The result type follows Spark's `RoundBase::dataType`:
+///
+/// - `scale < 0`  -> `Decimal128(min(max(p - s + 1, -scale + 1), 38), 0)`
+/// - `scale >= 0` -> `Decimal128(min(p - s + 1 + min(s, scale), 38), min(s, scale))`
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkCeil {
     signature: Signature,
@@ -52,8 +59,24 @@ impl Default for SparkCeil {
 
 impl SparkCeil {
     pub fn new() -> Self {
+        let scale = Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_int32()),
+            vec![TypeSignatureClass::Integer],
+            NativeType::Int32,
+        );
         Self {
-            signature: Signature::numeric(1, Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![
+                    // ceil(value)
+                    TypeSignature::Numeric(1),
+                    // ceil(decimal, scale)
+                    TypeSignature::Coercible(vec![
+                        Coercion::new_exact(TypeSignatureClass::Decimal),
+                        scale,
+                    ]),
+                ],
+                Volatility::Immutable,
+            ),
             aliases: vec!["ceiling".to_string()],
         }
     }
@@ -66,6 +89,43 @@ impl ScalarUDFImpl for SparkCeil {
 
     fn signature(&self) -> &Signature {
         &self.signature
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+        let value_type = args.arg_fields[0].data_type();
+
+        let data_type = if args.arg_fields.len() == 1 {
+            self.return_type(std::slice::from_ref(value_type))?
+        } else {
+            // Spark requires a foldable scale: a non-constant one is a plan-time error there
+            // (NON_FOLDABLE_INPUT) rather than something evaluated per row.
+            let scale = match args.scalar_arguments.get(1).copied().flatten() {
+                Some(ScalarValue::Int32(Some(scale))) => *scale,
+                Some(ScalarValue::Int32(None)) => {
+                    return plan_err!("Function ceil requires a non-null scale argument");
+                }
+                _ => {
+                    return plan_err!(
+                        "Function ceil requires a constant integer scale argument"
+                    );
+                }
+            };
+
+            match value_type {
+                DataType::Decimal128(p, s) => DataType::Decimal128(
+                    ceil_scaled_precision(*p, *s, scale),
+                    ceil_scaled_scale(*s, scale),
+                ),
+                other => {
+                    return plan_err!(
+                        "Function ceil does not support a scale argument for {other:?}"
+                    );
+                }
+            }
+        };
+
+        Ok(Arc::new(Field::new("ceil", data_type, nullable)))
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
@@ -98,11 +158,102 @@ impl ScalarUDFImpl for SparkCeil {
 }
 
 fn spark_ceil(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let [input] = take_function_args("ceil", args)?;
+    match args {
+        [input] => match input {
+            ColumnarValue::Scalar(value) => spark_ceil_scalar(value),
+            ColumnarValue::Array(input) => spark_ceil_array(input),
+        },
+        [input, scale] => spark_ceil_with_scale(input, scale),
+        _ => exec_err!("Function ceil expects one or two arguments"),
+    }
+}
+
+/// Result scale for `ceil(decimal(p, s), scale)`, per Spark's `RoundBase::dataType`.
+#[inline]
+fn ceil_scaled_scale(input_scale: i8, scale: i32) -> i8 {
+    if scale < 0 {
+        0
+    } else {
+        (input_scale as i32).min(scale) as i8
+    }
+}
+
+/// Result precision for `ceil(decimal(p, s), scale)`, per Spark's `RoundBase::dataType`.
+///
+/// Rounding up can carry into a new integral digit (`ceil(9.9, 0)` is `10`), so the integral
+/// part always gets one digit more than the input had.
+#[inline]
+fn ceil_scaled_precision(precision: u8, input_scale: i8, scale: i32) -> u8 {
+    let integral_least_num_digits = precision as i32 - input_scale as i32 + 1;
+    let new_precision = if scale < 0 {
+        integral_least_num_digits.max(-scale + 1)
+    } else {
+        integral_least_num_digits + (input_scale as i32).min(scale)
+    };
+    new_precision.clamp(1, 38) as u8
+}
+
+/// Round `value` up to `target_scale` decimal places, where `value` is held at `input_scale`.
+#[inline]
+fn decimal128_ceil_to_scale(value: i128, input_scale: i8, target_scale: i32) -> i128 {
+    if target_scale >= input_scale as i32 {
+        // Already finer-grained than the target, so there is nothing to drop.
+        return value;
+    }
+
+    let dropped = (input_scale as i32 - target_scale) as u32;
+    let rounded = decimal128_ceil(value, dropped);
+
+    if target_scale < 0 {
+        // The result is held at scale 0, so put the trailing zeros back.
+        rounded.mul_wrapping(10_i128.pow_wrapping((-target_scale) as u32))
+    } else {
+        rounded
+    }
+}
+
+fn spark_ceil_with_scale(
+    input: &ColumnarValue,
+    scale: &ColumnarValue,
+) -> Result<ColumnarValue> {
+    let ColumnarValue::Scalar(scale) = scale else {
+        return exec_err!("Function ceil requires a constant integer scale argument");
+    };
+    let ScalarValue::Int32(Some(scale)) = scale else {
+        return exec_err!("Function ceil requires a non-null integer scale argument");
+    };
+    let scale = *scale;
 
     match input {
-        ColumnarValue::Scalar(value) => spark_ceil_scalar(value),
-        ColumnarValue::Array(input) => spark_ceil_array(input),
+        ColumnarValue::Scalar(ScalarValue::Decimal128(value, p, s)) => {
+            let result = ScalarValue::Decimal128(
+                value.map(|x| decimal128_ceil_to_scale(x, *s, scale)),
+                ceil_scaled_precision(*p, *s, scale),
+                ceil_scaled_scale(*s, scale),
+            );
+            Ok(ColumnarValue::Scalar(result))
+        }
+        ColumnarValue::Array(array) => match array.data_type() {
+            DataType::Decimal128(p, s) => {
+                let (p, s) = (*p, *s);
+                let result: Decimal128Array = array
+                    .as_primitive::<Decimal128Type>()
+                    .unary(|x| decimal128_ceil_to_scale(x, s, scale));
+                Ok(ColumnarValue::Array(Arc::new(result.with_data_type(
+                    DataType::Decimal128(
+                        ceil_scaled_precision(p, s, scale),
+                        ceil_scaled_scale(s, scale),
+                    ),
+                ))))
+            }
+            other => {
+                exec_err!("Function ceil does not support a scale argument for {other:?}")
+            }
+        },
+        other => exec_err!(
+            "Function ceil does not support a scale argument for {:?}",
+            other.data_type()
+        ),
     }
 }
 
@@ -166,6 +317,64 @@ fn spark_ceil_array(input: &Arc<dyn arrow::array::Array>) -> Result<ColumnarValu
     };
 
     Ok(ColumnarValue::Array(result))
+}
+
+#[cfg(test)]
+mod scale_tests {
+    use super::*;
+
+    /// Reference values captured from PySpark 3.5.5, as recorded in
+    /// `datafusion/sqllogictest/test_files/spark/math/ceil.slt`.
+    #[test]
+    fn matches_pyspark_for_the_documented_cases() {
+        // SELECT ceil(3.1411, 3) -> Decimal('3.142'), decimal(5,3)
+        let value = 31411_i128; // 3.1411 at scale 4
+        assert_eq!(decimal128_ceil_to_scale(value, 4, 3), 3142);
+        assert_eq!(ceil_scaled_precision(5, 4, 3), 5);
+        assert_eq!(ceil_scaled_scale(4, 3), 3);
+
+        // SELECT ceil(3.1411, -3) -> Decimal('1000'), decimal(4,0)
+        assert_eq!(decimal128_ceil_to_scale(value, 4, -3), 1000);
+        assert_eq!(ceil_scaled_precision(5, 4, -3), 4);
+        assert_eq!(ceil_scaled_scale(4, -3), 0);
+    }
+
+    #[test]
+    fn rounds_up_toward_positive_infinity() {
+        // -3.1411 to three places is -3.141, which is larger than the input.
+        assert_eq!(decimal128_ceil_to_scale(-31411, 4, 3), -3141);
+        // and to zero places it is -3.
+        assert_eq!(decimal128_ceil_to_scale(-31411, 4, 0), -3);
+    }
+
+    #[test]
+    fn a_scale_at_or_beyond_the_input_scale_is_a_no_op() {
+        assert_eq!(decimal128_ceil_to_scale(31411, 4, 4), 31411);
+        assert_eq!(decimal128_ceil_to_scale(31411, 4, 9), 31411);
+        // the result keeps the input scale rather than growing to the requested one
+        assert_eq!(ceil_scaled_scale(4, 9), 4);
+        assert_eq!(ceil_scaled_precision(5, 4, 9), 6);
+    }
+
+    #[test]
+    fn an_exact_value_does_not_round_up() {
+        // 3.1400 to two places is exactly 3.14, no carry.
+        assert_eq!(decimal128_ceil_to_scale(31400, 4, 2), 314);
+        // 9.9 to zero places carries into a new integral digit.
+        assert_eq!(decimal128_ceil_to_scale(99, 1, 0), 10);
+        assert_eq!(ceil_scaled_precision(2, 1, 0), 2);
+    }
+
+    #[test]
+    fn precision_is_capped_at_the_decimal128_maximum() {
+        assert_eq!(ceil_scaled_precision(38, 0, -40), 38);
+        assert_eq!(ceil_scaled_precision(38, 2, 30), 38);
+    }
+
+    #[test]
+    fn precision_is_never_below_one() {
+        assert_eq!(ceil_scaled_precision(1, 1, 0), 1);
+    }
 }
 
 #[cfg(test)]
