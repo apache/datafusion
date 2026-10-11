@@ -969,11 +969,22 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 self.plan_table_with_joins(input, planner_context)
             }
             _ => {
+                // Names repeated across comma-separated entries are only
+                // visible here, so check the whole `FROM` once and plan the
+                // entries without their own check.
+                let duplicates =
+                    self.find_duplicate_relation_names(from.iter().flat_map(|t| {
+                        std::iter::once(&t.relation)
+                            .chain(t.joins.iter().map(|j| &j.relation))
+                    }));
+                self.warn_duplicate_relation_names(&duplicates);
+
                 let mut from = from.into_iter();
 
                 let mut left = LogicalPlanBuilder::from({
                     let input = from.next().unwrap();
-                    self.plan_table_with_joins(input, planner_context)?
+                    self.plan_table_with_joins_inner(input, planner_context)
+                        .map_err(|e| Self::with_duplicate_diagnostic(e, &duplicates))?
                 });
                 let old_outer_from_schema = {
                     let left_schema = Some(Arc::clone(left.schema()));
@@ -981,8 +992,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 };
                 for input in from {
                     // Join `input` with the current result (`left`).
-                    let right = self.plan_table_with_joins(input, planner_context)?;
-                    left = left.cross_join(right)?;
+                    let right = self
+                        .plan_table_with_joins_inner(input, planner_context)
+                        .map_err(|e| Self::with_duplicate_diagnostic(e, &duplicates))?;
+                    left = left
+                        .cross_join(right)
+                        .map_err(|e| Self::with_duplicate_diagnostic(e, &duplicates))?;
                     // Update the outer FROM schema.
                     let left_schema = Some(Arc::clone(left.schema()));
                     planner_context.set_outer_from_schema(left_schema);
