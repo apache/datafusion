@@ -26,7 +26,7 @@ use crate::tree_node::{
     TreeNodeVisitor,
 };
 use indexmap::IndexMap;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasher, Hash, Hasher, RandomState};
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -371,9 +371,13 @@ where
                     // controller lists them in. `CSERewriter` reads `id_array` in
                     // pre-order, so the indexes that this visitor assigns must
                     // follow the same order.
+                    let conditional = conditional
+                        .into_iter()
+                        .map(std::ptr::from_ref)
+                        .collect::<HashSet<_>>();
                     node.apply_children(|child| {
                         self.conditional =
-                            conditional.iter().any(|c| std::ptr::eq(*c, child));
+                            conditional.contains(&std::ptr::from_ref(child));
                         child.visit(self)?;
                         Ok(TreeNodeRecursion::Continue)
                     })?;
