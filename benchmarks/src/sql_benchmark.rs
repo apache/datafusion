@@ -73,6 +73,8 @@ pub struct SqlBenchmark {
     last_results: Option<Vec<RecordBatch>>,
     /// Print plans and execution metrics for each run query.
     debug: bool,
+    /// Whether diagnostics have been printed for a successful run.
+    diagnostics_printed: bool,
     /// echo statements
     echo: Vec<String>,
 }
@@ -114,6 +116,7 @@ impl SqlBenchmark {
             is_loaded: false,
             last_results: None,
             debug: false,
+            diagnostics_printed: false,
             echo: vec![],
         };
         insert_replacement(
@@ -129,7 +132,8 @@ impl SqlBenchmark {
     }
 
     /// Enable plan diagnostics for run queries, including post-execution metrics.
-    /// Output is part of each execution and therefore affects measured timings.
+    /// Output occurs on the first successful run, including preparation or warm-up,
+    /// and affects that execution's timing.
     pub fn set_debug(&mut self, debug: bool) {
         self.debug = debug;
     }
@@ -313,6 +317,7 @@ impl SqlBenchmark {
         // Every `run` query was planned and checked above, and a plan does not
         // change between iterations, so later iterations skip the check.
         self.plans_validated = true;
+        self.diagnostics_printed |= self.debug;
 
         // Store results for verification
         self.last_results = Some(result);
@@ -633,7 +638,7 @@ impl SqlBenchmark {
         &self,
         df: DataFrame,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if !self.debug {
+        if !self.debug || self.diagnostics_printed {
             return df.create_physical_plan().await;
         }
 
@@ -650,7 +655,7 @@ impl SqlBenchmark {
     }
 
     fn print_plan_metrics(&self, physical_plan: &Arc<dyn ExecutionPlan>) {
-        if self.debug {
+        if self.debug && !self.diagnostics_printed {
             println!(
                 "=== Physical plan with metrics ===\n{}\n",
                 DisplayableExecutionPlan::with_metrics(physical_plan.as_ref())
