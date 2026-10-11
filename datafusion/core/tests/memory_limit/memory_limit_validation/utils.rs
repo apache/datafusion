@@ -43,22 +43,27 @@ where
     F: FnOnce() -> Fut,
     Fut: Future<Output = T>,
 {
-    // Initialize system information
-    let mut system = System::new_all();
-    system.refresh_all();
-
     // Get the current process ID
     let pid = sysinfo::get_current_pid().expect("Failed to get current PID");
-
-    // Shared atomic variable to store max RSS
-    let max_rss = Arc::new(AtomicUsize::new(0));
+    let mut system = System::new();
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[pid]),
+        true,
+        ProcessRefreshKind::nothing().with_memory().without_tasks(),
+    );
+    let initial_rss = system
+        .process(pid)
+        .expect("Current process is missing")
+        .memory();
+    // Capture a baseline before execution; monitor startup may outlast a short query.
+    let max_rss = Arc::new(AtomicUsize::new(initial_rss as usize));
 
     // Clone for the monitoring task
     let max_rss_clone = Arc::clone(&max_rss);
 
     // Spawn a monitoring task
     let monitor_handle = SpawnedTask::spawn(async move {
-        let mut sys = System::new_all();
+        let mut sys = system;
         let mut interval = interval(Duration::from_millis(7));
 
         loop {
@@ -66,7 +71,7 @@ where
             sys.refresh_processes_specifics(
                 ProcessesToUpdate::Some(&[pid]),
                 true,
-                ProcessRefreshKind::nothing().with_memory(),
+                ProcessRefreshKind::nothing().with_memory().without_tasks(),
             );
             if let Some(process) = sys.process(pid) {
                 let rss_bytes = process.memory();
