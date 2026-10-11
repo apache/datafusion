@@ -71,6 +71,7 @@ mod runtime_config;
 pub mod select;
 mod sql_api;
 mod union_comparison;
+mod union_field_metadata;
 mod union_nullable;
 mod unparser;
 
