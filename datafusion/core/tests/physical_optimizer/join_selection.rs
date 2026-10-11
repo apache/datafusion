@@ -2105,29 +2105,37 @@ async fn test_join_selection_skips_unbounded_hash_join_with_dynamic_filter() -> 
 /// End-to-end regression for #26106: let `FilterPushdown::new_post_optimization()`
 /// wire up a real dynamic filter, then ensure `JoinSelection` leaves the join
 /// untouched and the plan still executes with correct results.
+///
+/// The build side reports larger statistics than the probe side so that
+/// `should_swap_join_order` returns true: without the dynamic-filter guard,
+/// `JoinSelection` would attempt `swap_inputs` and fail.
 #[tokio::test]
 async fn test_join_selection_skips_real_dynamic_filter_pushdown() -> Result<()> {
     let build_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Utf8, false),
-        Field::new("b", DataType::Utf8, false),
+        Field::new("build_a", DataType::Utf8, false),
+        Field::new("build_b", DataType::Utf8, false),
     ]));
     let build_scan = TestScanBuilder::new(Arc::clone(&build_schema))
         .with_support(true)
         .with_batches(vec![
-            record_batch!(("a", Utf8, ["aa", "ab"]), ("b", Utf8, ["ba", "bb"])).unwrap(),
+            record_batch!(
+                ("build_a", Utf8, ["aa", "ab"]),
+                ("build_b", Utf8, ["ba", "bb"])
+            )
+            .unwrap(),
         ])
         .build();
 
     let probe_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Utf8, false),
-        Field::new("b", DataType::Utf8, false),
+        Field::new("probe_a", DataType::Utf8, false),
+        Field::new("probe_b", DataType::Utf8, false),
     ]));
     let probe_scan = TestScanBuilder::new(Arc::clone(&probe_schema))
         .with_support(true)
         .with_batches(vec![
             record_batch!(
-                ("a", Utf8, ["aa", "ab", "ac"]),
-                ("b", Utf8, ["ba", "bb", "bc"])
+                ("probe_a", Utf8, ["aa", "ab", "ac"]),
+                ("probe_b", Utf8, ["ba", "bb", "bc"])
             )
             .unwrap(),
         ])
@@ -2138,7 +2146,10 @@ async fn test_join_selection_skips_real_dynamic_filter_pushdown() -> Result<()> 
         RepartitionExec::try_new(
             build_scan,
             Partitioning::Hash(
-                vec![col("a", &build_schema)?, col("b", &build_schema)?],
+                vec![
+                    col("build_a", &build_schema)?,
+                    col("build_b", &build_schema)?,
+                ],
                 partition_count,
             ),
         )
@@ -2148,7 +2159,10 @@ async fn test_join_selection_skips_real_dynamic_filter_pushdown() -> Result<()> 
         RepartitionExec::try_new(
             probe_scan,
             Partitioning::Hash(
-                vec![col("a", &probe_schema)?, col("b", &probe_schema)?],
+                vec![
+                    col("probe_a", &probe_schema)?,
+                    col("probe_b", &probe_schema)?,
+                ],
                 partition_count,
             ),
         )
@@ -2156,8 +2170,14 @@ async fn test_join_selection_skips_real_dynamic_filter_pushdown() -> Result<()> 
     );
 
     let on = vec![
-        (col("a", &build_schema)?, col("a", &probe_schema)?),
-        (col("b", &build_schema)?, col("b", &probe_schema)?),
+        (
+            col("build_a", &build_schema)?,
+            col("probe_a", &probe_schema)?,
+        ),
+        (
+            col("build_b", &build_schema)?,
+            col("probe_b", &probe_schema)?,
+        ),
     ];
     let join = Arc::new(
         HashJoinExec::try_new(
@@ -2186,14 +2206,59 @@ async fn test_join_selection_skips_real_dynamic_filter_pushdown() -> Result<()> 
         !join_with_filter.dynamic_expressions_produced().is_empty(),
         "FilterPushdown should have created a dynamic filter"
     );
+    let orig_left = Arc::clone(join_with_filter.left());
+    let orig_right = Arc::clone(join_with_filter.right());
 
-    // JoinSelection must not panic in `swap_inputs` and must leave the join as-is
-    let after_selection = JoinSelection::new().optimize(with_filter, &config)?;
+    // Both `TestScanBuilder` inputs report the same 123-byte size, so force the
+    // build side to look larger. Without the dynamic-filter guard this makes
+    // `JoinSelection` attempt the swap and fail in `swap_inputs`.
+    let mut registry = StatisticsRegistry::new();
+    registry.register(Arc::new(ClosureStatisticsProvider::with_matches(
+        |plan| {
+            plan.schema()
+                .fields()
+                .iter()
+                .any(|f| f.name().starts_with("build_"))
+        },
+        |_plan, _child_stats| Ok(StatisticsResult::Computed(big_statistics().into())),
+    )));
+
+    struct ContextWithRegistry {
+        config: ConfigOptions,
+        registry: StatisticsRegistry,
+    }
+
+    impl PhysicalOptimizerContext for ContextWithRegistry {
+        fn config_options(&self) -> &ConfigOptions {
+            &self.config
+        }
+
+        fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
+            Some(&self.registry)
+        }
+    }
+
+    let context = ContextWithRegistry {
+        config: config.clone(),
+        registry,
+    };
+
+    // JoinSelection must not fail in `swap_inputs` and must leave the join as-is
+    let after_selection =
+        JoinSelection::new().optimize_with_context(with_filter, &context)?;
     let final_join = after_selection
         .downcast_ref::<HashJoinExec>()
         .expect("JoinSelection must leave dynamic-filter join as HashJoinExec");
     assert!(!final_join.dynamic_expressions_produced().is_empty());
     assert_eq!(*final_join.partition_mode(), PartitionMode::Partitioned);
+    assert!(
+        Arc::ptr_eq(final_join.left(), &orig_left),
+        "build side must not be swapped"
+    );
+    assert!(
+        Arc::ptr_eq(final_join.right(), &orig_right),
+        "probe side must not be swapped"
+    );
 
     // The wired plan must still execute and return the 2 matching rows
     let session_config = SessionConfig::new();
