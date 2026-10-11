@@ -8,6 +8,7 @@
 #   OB_EXPR  ORDER BY value expression  (`v2` distinct, integer-cast for ties)
 #   OB_BOUND SQL predicate pinning ob's cardinality, asserted below
 #   NAME     display name
+#   TWO_WINDOWS  append and project ROW_NUMBER alongside FN (default false)
 #
 # Why this subgroup exists: the `window` subgroup registers `x` with no declared
 # ordering, so `output_ordering()` is None and the planner cannot know the input
@@ -88,9 +89,9 @@ expect_plan output_ordering=[pk@0 ASC NULLS LAST, ob@1 DESC]
 
 run
 -- Top-2 per partition by ${FN} over the declared-sorted input.
-SELECT pk, ob FROM (
+SELECT pk, ob ${TWO_WINDOWS:-false|, rnk, rn| } FROM (
     SELECT pk, ob,
-           ${FN}() OVER (PARTITION BY pk ORDER BY ob DESC) AS rnk
+           ${FN}() OVER (PARTITION BY pk ORDER BY ob DESC) AS rnk ${TWO_WINDOWS:-false|, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY ob DESC) AS rn| }
     FROM x_sorted
 ) sub_query WHERE rnk <= 2;
 
