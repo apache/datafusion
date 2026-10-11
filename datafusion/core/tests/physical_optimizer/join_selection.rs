@@ -22,8 +22,11 @@ use std::{
     task::{Context, Poll},
 };
 
+use arrow::array::record_batch;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use datafusion::datasource::object_store::ObjectStoreUrl;
+use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{ColumnStatistics, JoinType, ScalarValue, stats::Precision};
@@ -41,7 +44,9 @@ use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_optimizer::PhysicalOptimizerContext;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion_physical_optimizer::join_selection::JoinSelection;
+use datafusion_physical_plan::collect;
 use datafusion_physical_plan::displayable;
 use datafusion_physical_plan::joins::utils::ColumnIndex;
 use datafusion_physical_plan::joins::utils::JoinFilter;
@@ -50,6 +55,7 @@ use datafusion_physical_plan::operator_statistics::{
     ClosureStatisticsProvider, StatisticsRegistry, StatisticsResult,
 };
 use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{
     ChildrenPropertiesMode, ExecutionPlanProperties, ReplaceChildrenOptions,
@@ -61,7 +67,10 @@ use datafusion_physical_plan::{
 };
 
 use futures::Stream;
+use object_store::memory::InMemory;
 use rstest::rstest;
+
+use super::pushdown_utils::TestScanBuilder;
 
 /// Return statistics for empty table
 fn empty_statistics() -> Statistics {
@@ -2027,7 +2036,8 @@ async fn test_join_selection_skips_hash_join_with_dynamic_filter(
 }
 
 #[tokio::test]
-async fn test_join_selection_skips_unbounded_hash_join_with_dynamic_filter() -> Result<()> {
+async fn test_join_selection_skips_unbounded_hash_join_with_dynamic_filter() -> Result<()>
+{
     let left_exec: Arc<dyn ExecutionPlan> = Arc::new(UnboundedExec::new(
         None,
         RecordBatch::new_empty(Arc::new(Schema::new(vec![Field::new(
@@ -2088,6 +2098,117 @@ async fn test_join_selection_skips_unbounded_hash_join_with_dynamic_filter() -> 
     assert!(Arc::ptr_eq(optimized_join.right(), &right_exec));
     assert_eq!(optimized_join.schema(), original_schema);
     assert_eq!(optimized_join.dynamic_expressions_produced().len(), 1);
+
+    Ok(())
+}
+
+/// End-to-end regression for #26106: let `FilterPushdown::new_post_optimization()`
+/// wire up a real dynamic filter, then ensure `JoinSelection` leaves the join
+/// untouched and the plan still executes with correct results.
+#[tokio::test]
+async fn test_join_selection_skips_real_dynamic_filter_pushdown() -> Result<()> {
+    let build_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+    ]));
+    let build_scan = TestScanBuilder::new(Arc::clone(&build_schema))
+        .with_support(true)
+        .with_batches(vec![
+            record_batch!(("a", Utf8, ["aa", "ab"]), ("b", Utf8, ["ba", "bb"])).unwrap(),
+        ])
+        .build();
+
+    let probe_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+    ]));
+    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_schema))
+        .with_support(true)
+        .with_batches(vec![
+            record_batch!(
+                ("a", Utf8, ["aa", "ab", "ac"]),
+                ("b", Utf8, ["ba", "bb", "bc"])
+            )
+            .unwrap(),
+        ])
+        .build();
+
+    let partition_count = 4;
+    let build_repartition = Arc::new(
+        RepartitionExec::try_new(
+            build_scan,
+            Partitioning::Hash(
+                vec![col("a", &build_schema)?, col("b", &build_schema)?],
+                partition_count,
+            ),
+        )
+        .unwrap(),
+    );
+    let probe_repartition = Arc::new(
+        RepartitionExec::try_new(
+            probe_scan,
+            Partitioning::Hash(
+                vec![col("a", &probe_schema)?, col("b", &probe_schema)?],
+                partition_count,
+            ),
+        )
+        .unwrap(),
+    );
+
+    let on = vec![
+        (col("a", &build_schema)?, col("a", &probe_schema)?),
+        (col("b", &build_schema)?, col("b", &probe_schema)?),
+    ];
+    let join = Arc::new(
+        HashJoinExec::try_new(
+            build_repartition,
+            probe_repartition,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    ) as Arc<dyn ExecutionPlan>;
+
+    let mut config = ConfigOptions::new();
+    config.execution.parquet.pushdown_filters = true;
+
+    // Real optimizer wiring (not manual `with_dynamic_filter_expr`)
+    let with_filter = FilterPushdown::new_post_optimization().optimize(join, &config)?;
+    let join_with_filter = with_filter
+        .downcast_ref::<HashJoinExec>()
+        .expect("plan should still be a HashJoinExec after pushdown");
+    assert!(
+        !join_with_filter.dynamic_expressions_produced().is_empty(),
+        "FilterPushdown should have created a dynamic filter"
+    );
+
+    // JoinSelection must not panic in `swap_inputs` and must leave the join as-is
+    let after_selection = JoinSelection::new().optimize(with_filter, &config)?;
+    let final_join = after_selection
+        .downcast_ref::<HashJoinExec>()
+        .expect("JoinSelection must leave dynamic-filter join as HashJoinExec");
+    assert!(!final_join.dynamic_expressions_produced().is_empty());
+    assert_eq!(*final_join.partition_mode(), PartitionMode::Partitioned);
+
+    // The wired plan must still execute and return the 2 matching rows
+    let session_config = SessionConfig::new();
+    let session_ctx = SessionContext::new_with_config(session_config);
+    session_ctx.register_object_store(
+        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+        Arc::new(InMemory::new()),
+    );
+    let task_ctx = session_ctx.task_ctx();
+    let batches = collect(after_selection, task_ctx).await?;
+    let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(
+        total_rows, 2,
+        "expected 2 inner-join matches, got {batches:?}"
+    );
 
     Ok(())
 }
