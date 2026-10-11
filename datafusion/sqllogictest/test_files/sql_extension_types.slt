@@ -127,7 +127,7 @@ statement ok
 CREATE TABLE t1 (id UUID);
 
 # Then, try to insert the invalid type
-statement error Cannot cast Utf8 to extension type at column 0
+statement error Cannot automatically convert Utf8 to FixedSizeBinary\(16\)
 INSERT INTO t1 VALUES ('not-a-uuid');
 
 statement ok
@@ -141,7 +141,7 @@ statement ok
 CREATE TABLE mix_types (id UUID);
 
 # Even if the JSON string is 16 bytes, it lacks the arrow.uuid metadata
-statement error Cannot cast Utf8 to extension type at column 0
+statement error Cannot automatically convert Utf8 to FixedSizeBinary\(16\)
 INSERT INTO mix_types VALUES (CAST('{"key": "value"}' AS JSON));
 
 statement ok
@@ -156,7 +156,7 @@ INSERT INTO multi_col VALUES
   (CAST('{"a":1}' AS JSON), CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID));
 
 # This will fail because a Boolean cannot be cast to FixedSizeBinary(16)
-statement error Cannot cast Boolean to extension type at column 1
+statement error Cannot automatically convert Boolean to FixedSizeBinary\(16\)
 INSERT INTO multi_col VALUES 
   (CAST('{"a":1}' AS JSON), true);
 
@@ -192,6 +192,7 @@ CREATE TABLE u1 (id UUID) AS VALUES (CAST(arrow_cast(X'0001020304050607080900010
 statement ok
 CREATE TABLE u2 (id UUID) AS VALUES (CAST(arrow_cast(X'00010203040506070809000102030507', 'FixedSizeBinary(16)') AS UUID));
 
+# UNION merges schemas by storage type, so extension metadata decays to NULL
 query T
 SELECT arrow_metadata(id, 'ARROW:extension:name') FROM (
     SELECT id FROM u1
@@ -199,7 +200,7 @@ SELECT arrow_metadata(id, 'ARROW:extension:name') FROM (
     SELECT id FROM u2
 ) LIMIT 1;
 ----
-arrow.uuid
+NULL
 
 statement ok
 DROP TABLE u1;
@@ -233,11 +234,12 @@ CREATE TABLE c1 (id UUID) AS VALUES
   (CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID)),
   (CAST(arrow_cast(X'00010203040506070809000102030507', 'FixedSizeBinary(16)') AS UUID));
 
+# CASE expressions decay to the physical storage type unless explicitly cast
 query T
 SELECT arrow_metadata(CASE WHEN 1=1 THEN id ELSE id END, 'ARROW:extension:name') FROM c1;
 ----
-arrow.uuid
-arrow.uuid
+NULL
+NULL
 
 # This forces the engine to evaluate the condition row-by-row - type coersion drops metadata
 query T

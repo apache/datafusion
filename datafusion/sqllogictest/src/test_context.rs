@@ -36,7 +36,6 @@ use datafusion::catalog::{
     CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, SchemaProvider, Session,
 };
 use datafusion::common::config::Dialect;
-use datafusion::common::stats::Precision;
 use datafusion::common::{DataFusionError, Result, not_impl_err};
 use datafusion::functions::math::abs;
 use datafusion::logical_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
@@ -62,11 +61,6 @@ use datafusion::common::cast::as_float64_array;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::memory_pool::UnboundedMemoryPool;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
-use datafusion::physical_plan::joins::HashJoinExec;
-use datafusion::physical_plan::operator_statistics::{
-    ClosureStatisticsProvider, StatisticsRegistry, StatisticsResult,
-};
-use datafusion::physical_plan::statistics::StatisticsArgs;
 use log::info;
 use tempfile::TempDir;
 
