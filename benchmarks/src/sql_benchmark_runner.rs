@@ -674,6 +674,7 @@ pub async fn prepare_benchmark(
     benchmark: &mut SqlBenchmark,
     config: &SqlRunConfig,
 ) -> Result<()> {
+    benchmark.set_debug(config.common.debug);
     benchmark.initialize(ctx).await?;
     record_pool_peak_after_init(ctx)?;
     benchmark.assert(ctx).await?;
