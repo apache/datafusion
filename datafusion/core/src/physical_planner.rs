@@ -76,7 +76,7 @@ use datafusion_common::{
     not_impl_err, plan_err,
 };
 use datafusion_common::{
-    TableReference, assert_eq_or_internal_err, assert_or_internal_err,
+    NullEquality, TableReference, assert_eq_or_internal_err, assert_or_internal_err,
 };
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::memory::MemorySourceConfig;
@@ -1750,6 +1750,25 @@ impl DefaultPhysicalPlanner {
                             None,
                         )?)
                     }
+                } else if *null_aware
+                    && !prefer_hash_join
+                    && *join_type == JoinType::LeftAnti
+                    && join_on.len() == 1
+                    && join_filter.is_none()
+                    && *null_equality == NullEquality::NullEqualsNothing
+                {
+                    Arc::new(
+                        SortMergeJoinExec::try_new(
+                            physical_left,
+                            physical_right,
+                            join_on,
+                            join_filter,
+                            *join_type,
+                            vec![SortOptions::new(false, true)], // ASC NULLS FIRST
+                            *null_equality,
+                        )?
+                        .with_null_aware(true)?,
+                    )
                 } else if session_state.config().target_partitions() > 1
                     && session_state.config().repartition_joins()
                     && !prefer_hash_join
