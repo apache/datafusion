@@ -532,6 +532,18 @@ APIs now use <code class="docutils literal notranslate"><span class="pre">Metada
 change. Use <code class="docutils literal notranslate"><span class="pre">FieldMetadata::to_hashmap</span></code> where a <code class="docutils literal notranslate"><span class="pre">HashMap</span></code> is still required.</p>
 </section>
 </section>
+<section id="csvsource-newlines-in-values-is-deprecated">
+<h3><code class="docutils literal notranslate"><span class="pre">CsvSource::newlines_in_values</span></code> is deprecated<a class="headerlink" href="#csvsource-newlines-in-values-is-deprecated" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">CsvSource::newlines_in_values()</span></code> is deprecated starting in 56.0.0 but remains
+callable with unchanged behavior. There is no replacement getter, and
+<code class="docutils literal notranslate"><span class="pre">CsvSource</span></code> does not expose a <code class="docutils literal notranslate"><span class="pre">csv_options()</span></code> method.</p>
+<p><strong>Migration guide:</strong></p>
+<p>Retain the <code class="docutils literal notranslate"><span class="pre">CsvOptions</span></code> used to configure the source before passing them to
+<code class="docutils literal notranslate"><span class="pre">CsvSource::with_csv_options</span></code>. Read <code class="docutils literal notranslate"><span class="pre">options.newlines_in_values.unwrap_or(false)</span></code>
+to obtain the same boolean value: <code class="docutils literal notranslate"><span class="pre">None</span></code> and <code class="docutils literal notranslate"><span class="pre">Some(false)</span></code> mean false, while
+<code class="docutils literal notranslate"><span class="pre">Some(true)</span></code> means true. CSV reading, repartitioning, and serialization behavior
+are unchanged.</p>
+</section>
 <section id="parquetaccessplan-into-overall-row-selection-is-deprecated">
 <h3><code class="docutils literal notranslate"><span class="pre">ParquetAccessPlan::into_overall_row_selection</span></code> is deprecated<a class="headerlink" href="#parquetaccessplan-into-overall-row-selection-is-deprecated" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">ParquetAccessPlan::into_overall_row_selection</span></code> is deprecated starting in 56.0.0.
@@ -1358,6 +1370,7 @@ the API breaks.</p>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#field-and-schema-metadata-now-use-arrow-s-metadata-type">Field and schema metadata now use arrow’s <code class="docutils literal notranslate"><span class="pre">Metadata</span></code> type</a></li>
 </ul>
 </li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#csvsource-newlines-in-values-is-deprecated"><code class="docutils literal notranslate"><span class="pre">CsvSource::newlines_in_values</span></code> is deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parquetaccessplan-into-overall-row-selection-is-deprecated"><code class="docutils literal notranslate"><span class="pre">ParquetAccessPlan::into_overall_row_selection</span></code> is deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rowgroupaccessplanfilter-prune-by-range-takes-a-rowgrouprangeassignment"><code class="docutils literal notranslate"><span class="pre">RowGroupAccessPlanFilter::prune_by_range</span></code> takes a <code class="docutils literal notranslate"><span class="pre">RowGroupRangeAssignment</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#missing-parquet-null-counts-are-treated-as-unknown">Missing Parquet null counts are treated as unknown</a></li>
