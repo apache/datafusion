@@ -196,9 +196,11 @@ provide integrations with other systems, some of which are described below:
 
 ### Integrations
 
+- [datafusion-arrowmetal](https://github.com/singhpratech/ArrowMetal/tree/main/datafusion) A physical optimizer rule that runs sorts and measured group-bys on the Apple silicon GPU through Metal
 - [datafusion-bigtable](https://github.com/datafusion-contrib/datafusion-bigtable)
 - [datafusion-catalogprovider-glue](https://github.com/datafusion-contrib/datafusion-catalogprovider-glue)
 - [datafusion-federation](https://github.com/datafusion-contrib/datafusion-federation)
+- [narwhals-datafusion](https://github.com/s5dsn-eqee/narwhals-datafusion) Plugin that runs the [Narwhals](https://github.com/narwhals-dev/narwhals) dataframe API on DataFusion
 
 ## Why DataFusion?
 

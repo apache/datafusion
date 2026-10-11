@@ -1628,7 +1628,6 @@ impl DisplayAs for RepartitionExec {
                 if let Some(sort_exprs) = self.sort_exprs() {
                     write!(f, ", sort_exprs={}", sort_exprs.clone())?;
                 }
-                Ok(())
             }
             DisplayFormatType::TreeRender => {
                 writeln!(f, "partitioning_scheme={}", self.partitioning())?;
@@ -1643,9 +1642,9 @@ impl DisplayAs for RepartitionExec {
                 if self.preserve_order {
                     writeln!(f, "preserve_order={}", self.preserve_order)?;
                 }
-                Ok(())
             }
         }
+        Ok(())
     }
 }
 
@@ -1759,7 +1758,8 @@ impl ExecutionPlan for RepartitionExec {
             Arc::clone(&context.runtime_env()),
             spill_metrics,
             input.schema(),
-        );
+        )
+        .with_compression_type(context.session_config().spill_compression());
 
         // Get existing ordering to use for merging
         let sort_exprs = self.sort_exprs().cloned();
@@ -1885,7 +1885,7 @@ impl ExecutionPlan for RepartitionExec {
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.metrics.clone_inner())
+        Some(self.metrics.clone_inner().with_output_rows_skew())
     }
 
     fn child_stats_requests(&self, _partition: Option<usize>) -> Vec<ChildStats> {
@@ -2657,6 +2657,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use datafusion_common::ScalarValue;
     use datafusion_common::cast::{as_string_array, as_uint32_array};
+    use datafusion_common::config::SpillCompression;
     use datafusion_common::exec_err;
     use datafusion_common::test_util::batches_to_sort_string;
     use datafusion_common_runtime::JoinSet;
@@ -4586,6 +4587,80 @@ mod tests {
         );
 
         println!("No spilling occurred - all data processed in memory");
+
+        Ok(())
+    }
+
+    /// Runs a spilling `RepartitionExec` with the given spill compression and
+    /// returns `(spilled_rows, spilled_bytes)`.
+    async fn repartition_spill_with_compression(
+        spill_compression: SpillCompression,
+    ) -> Result<(usize, usize)> {
+        // Highly compressible input: 20 batches of 8192 identical values
+        let schema = test_schema(false);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(UInt32Array::from(vec![42; 8192]))],
+        )?;
+        let num_batches = 20;
+        let input_partitions = vec![vec![batch; num_batches]];
+
+        // Tight memory limit to force every batch to spill
+        let runtime = RuntimeEnvBuilder::default()
+            .with_memory_limit(1, 1.0)
+            .build_arc()?;
+        let session_config =
+            SessionConfig::new().with_spill_compression(spill_compression);
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_runtime(runtime)
+                .with_session_config(session_config),
+        );
+
+        let exec =
+            TestMemoryExec::try_new_exec(&input_partitions, Arc::clone(&schema), None)?;
+        let exec = RepartitionExec::try_new(exec, Partitioning::RoundRobinBatch(4))?;
+
+        let mut total_rows = 0;
+        for i in 0..exec.partitioning().partition_count() {
+            let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
+            while let Some(result) = stream.next().await {
+                let batch = result?;
+                // Spilled data must read back intact regardless of the codec
+                let values = as_uint32_array(batch.column(0))?;
+                assert!(values.iter().all(|v| v == Some(42)));
+                total_rows += batch.num_rows();
+            }
+        }
+        assert_eq!(total_rows, num_batches * 8192);
+
+        let metrics = exec.metrics().unwrap();
+        Ok((
+            metrics.spilled_rows().unwrap(),
+            metrics.spilled_bytes().unwrap(),
+        ))
+    }
+
+    #[tokio::test]
+    async fn repartition_spill_honors_spill_compression() -> Result<()> {
+        let (uncompressed_rows, uncompressed_bytes) =
+            repartition_spill_with_compression(SpillCompression::Uncompressed).await?;
+        assert!(uncompressed_rows > 0, "Expected spilling to occur");
+
+        for spill_compression in [SpillCompression::Lz4Frame, SpillCompression::Zstd] {
+            let (rows, bytes) =
+                repartition_spill_with_compression(spill_compression).await?;
+            assert_eq!(
+                rows, uncompressed_rows,
+                "Expected the same rows to spill with {spill_compression}"
+            );
+            // The input is constant, so any codec shrinks it by far more than 2x
+            assert!(
+                bytes * 2 < uncompressed_bytes,
+                "Expected {spill_compression} spill files to be much smaller than \
+                 uncompressed ones: {bytes} vs {uncompressed_bytes} bytes"
+            );
+        }
 
         Ok(())
     }
