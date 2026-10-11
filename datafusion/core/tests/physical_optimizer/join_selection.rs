@@ -43,7 +43,9 @@ use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_plan::displayable;
 use datafusion_physical_plan::joins::utils::ColumnIndex;
 use datafusion_physical_plan::joins::utils::JoinFilter;
-use datafusion_physical_plan::joins::{HashJoinExec, NestedLoopJoinExec, PartitionMode};
+use datafusion_physical_plan::joins::{
+    HashJoinExec, HashJoinExecBuilder, NestedLoopJoinExec, PartitionMode,
+};
 use datafusion_physical_plan::operator_statistics::{
     ClosureStatisticsProvider, StatisticsRegistry, StatisticsResult,
 };
@@ -607,11 +609,10 @@ async fn test_null_aware_left_anti_respects_disabled_join_reordering() -> Result
 }
 
 /// A filtered null-aware `LeftAnti` (produced by decorrelating a correlated
-/// `NOT IN`) must not be swapped to `RightAnti`: the swap is only valid for
-/// unfiltered null-aware joins, since a filtered `RightAnti` would apply its
-/// build-side NULL short-circuit before the filter.
+/// `NOT IN`) swaps to a null-aware `RightAnti` that decides `NOT IN` per probe
+/// row; the filter's sides are swapped with the inputs.
 #[tokio::test]
-async fn test_null_aware_left_anti_with_filter_does_not_swap() -> Result<()> {
+async fn test_null_aware_left_anti_with_filter_swaps() -> Result<()> {
     let (big, small) = create_big_and_small();
     let join = HashJoinExec::try_new(
         Arc::clone(&big),
@@ -630,16 +631,70 @@ async fn test_null_aware_left_anti_with_filter_does_not_swap() -> Result<()> {
 
     let optimized_join =
         JoinSelection::new().optimize(Arc::new(join), &ConfigOptions::new())?;
-    let unswapped_join = optimized_join
+    let swapped_join = optimized_join
         .downcast_ref::<HashJoinExec>()
-        .expect("filtered null-aware anti join should not swap");
+        .expect("anti join swap should not require a projection");
 
-    assert_eq!(*unswapped_join.join_type(), JoinType::LeftAnti);
-    assert_eq!(*unswapped_join.partition_mode(), PartitionMode::CollectLeft);
-    assert!(unswapped_join.null_aware);
-    assert!(unswapped_join.filter().is_some());
-    assert_eq!(unswapped_join.left().schema().field(0).name(), "big_col");
-    assert_eq!(unswapped_join.right().schema().field(0).name(), "small_col");
+    assert_eq!(*swapped_join.join_type(), JoinType::RightAnti);
+    assert_eq!(*swapped_join.partition_mode(), PartitionMode::CollectLeft);
+    assert!(swapped_join.null_aware);
+    let filter = swapped_join.filter().expect("filter should be kept");
+    assert_eq!(
+        filter
+            .column_indices()
+            .iter()
+            .map(|c| c.side)
+            .collect::<Vec<_>>(),
+        vec![JoinSide::Right, JoinSide::Left]
+    );
+    assert_eq!(swapped_join.left().schema().field(0).name(), "small_col");
+    assert_eq!(swapped_join.right().schema().field(0).name(), "big_col");
+
+    Ok(())
+}
+
+/// A multi-key null-aware `LeftAnti` (a multi-column `NOT IN`, correlation
+/// scope keys, or both) swaps to a `RightAnti` that keeps the number of
+/// `NOT IN` value keys and the key order.
+#[rstest]
+#[case(1)]
+#[case(2)]
+#[tokio::test]
+async fn test_null_aware_multi_key_left_anti_swaps_to_right_anti(
+    #[case] value_keys: usize,
+) -> Result<()> {
+    let (big, small) = create_big_and_small();
+    let big_col = Arc::new(Column::new_with_schema("big_col", &big.schema())?) as _;
+    let small_col = Arc::new(Column::new_with_schema("small_col", &small.schema())?) as _;
+    let join = HashJoinExecBuilder::new(
+        Arc::clone(&big),
+        Arc::clone(&small),
+        vec![
+            (Arc::clone(&big_col), Arc::clone(&small_col)),
+            (big_col, small_col),
+        ],
+        JoinType::LeftAnti,
+    )
+    .with_partition_mode(PartitionMode::CollectLeft)
+    .with_null_aware(true)
+    .with_null_aware_value_keys(value_keys)
+    .build()?;
+    let original_schema = join.schema();
+
+    let optimized_join =
+        JoinSelection::new().optimize(Arc::new(join), &ConfigOptions::new())?;
+    let swapped_join = optimized_join
+        .downcast_ref::<HashJoinExec>()
+        .expect("anti join swap should not require a projection");
+
+    assert_eq!(*swapped_join.join_type(), JoinType::RightAnti);
+    assert_eq!(*swapped_join.partition_mode(), PartitionMode::CollectLeft);
+    assert!(swapped_join.null_aware);
+    assert_eq!(swapped_join.null_aware_value_keys, value_keys);
+    assert_eq!(swapped_join.on().len(), 2);
+    assert_eq!(swapped_join.left().schema().field(0).name(), "small_col");
+    assert_eq!(swapped_join.right().schema().field(0).name(), "big_col");
+    assert_eq!(swapped_join.schema(), original_schema);
 
     Ok(())
 }
