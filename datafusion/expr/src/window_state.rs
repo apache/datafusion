@@ -21,6 +21,7 @@ use std::{collections::VecDeque, ops::Range, sync::Arc};
 
 use crate::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 
+use arrow::compute::kernels::sort::{LexicographicalComparator, SortColumn};
 use arrow::{
     array::ArrayRef,
     compute::{SortOptions, concat, concat_batches},
@@ -70,7 +71,10 @@ impl WindowAggState {
         match self.window_frame_ctx.as_mut() {
             // Rows have no state do nothing
             Some(WindowFrameContext::Rows(_)) => {}
-            Some(WindowFrameContext::Range { .. }) => {}
+            Some(WindowFrameContext::Range { state, .. }) => {
+                // The comparator refers to the old, unpruned ORDER BY arrays.
+                state.peer_comparator = None;
+            }
             Some(WindowFrameContext::Groups { state, .. }) => {
                 let mut n_group_to_del = 0;
                 for (_, end_idx) in &state.group_end_indices {
@@ -343,12 +347,66 @@ impl PartitionBatchState {
 #[derive(Debug, Default, Clone)]
 pub struct WindowFrameStateRange {
     sort_options: Vec<SortOptions>,
+    peer_comparator: Option<RangePeerComparator>,
+}
+
+/// Cache comparators because dictionary logical-null masks can scan entire arrays.
+#[derive(Clone)]
+struct RangePeerComparator {
+    columns: Vec<ArrayRef>,
+    comparator: Arc<LexicographicalComparator>,
+}
+
+// The cached Arrow arrays and comparison closures are immutable. A comparison
+// that unwinds cannot leave this cache partially updated.
+impl std::panic::UnwindSafe for RangePeerComparator {}
+impl std::panic::RefUnwindSafe for RangePeerComparator {}
+
+impl std::fmt::Debug for RangePeerComparator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RangePeerComparator")
+            .field("num_columns", &self.columns.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl WindowFrameStateRange {
     /// Create a new object to store the search state.
     fn new(sort_options: Vec<SortOptions>) -> Self {
-        Self { sort_options }
+        Self {
+            sort_options,
+            peer_comparator: None,
+        }
+    }
+
+    fn peer_comparator(
+        &mut self,
+        range_columns: &[ArrayRef],
+    ) -> Result<&LexicographicalComparator> {
+        let needs_rebuild = self.peer_comparator.as_ref().is_none_or(|cached| {
+            cached.columns.len() != range_columns.len()
+                || cached
+                    .columns
+                    .iter()
+                    .zip(range_columns)
+                    .any(|(old, new)| !Arc::ptr_eq(old, new))
+        });
+        if needs_rebuild {
+            // Sliced arrays have different row indices even when they share buffers.
+            let sort_columns = range_columns
+                .iter()
+                .zip(&self.sort_options)
+                .map(|(values, options)| SortColumn {
+                    values: Arc::clone(values),
+                    options: Some(*options),
+                })
+                .collect::<Vec<_>>();
+            self.peer_comparator = Some(RangePeerComparator {
+                columns: range_columns.to_vec(),
+                comparator: Arc::new(LexicographicalComparator::try_new(&sort_columns)?),
+            });
+        }
+        Ok(&self.peer_comparator.as_ref().unwrap().comparator)
     }
 
     /// This function calculates beginning/ending indices for the frame of the current row.
@@ -440,6 +498,28 @@ impl WindowFrameStateRange {
         delta: Option<&ScalarValue>,
         length: usize,
     ) -> Result<usize> {
+        if delta.is_none()
+            && range_columns
+                .iter()
+                .any(|column| column.data_type().is_nested())
+        {
+            // CURRENT ROW needs peer equality. Scalar ordering does not support
+            // all nested keys; Arrow's sort comparator also handles dictionary nulls.
+            let mut boundary = if SIDE {
+                last_range.start
+            } else {
+                last_range.end.max(idx)
+            };
+            let comparator = self.peer_comparator(range_columns)?;
+            while boundary < length {
+                let is_peer = comparator.compare(boundary, idx).is_eq();
+                if if SIDE { is_peer } else { !is_peer } {
+                    break;
+                }
+                boundary += 1;
+            }
+            return Ok(boundary);
+        }
         let current_row_values = get_row_at_idx(range_columns, idx)?;
         let search_start = if SIDE {
             last_range.start
@@ -732,6 +812,73 @@ mod tests {
 
     use arrow::array::{Float64Array, UInt64Array};
     use arrow::datatypes::{Field, Schema};
+
+    #[test]
+    fn range_peer_comparator_reuses_arrays_and_invalidates_after_pruning() -> Result<()> {
+        use arrow::array::ListArray;
+        use arrow::datatypes::Int64Type;
+
+        fn assert_unwind_safe<T: std::panic::UnwindSafe + std::panic::RefUnwindSafe>() {}
+        assert_unwind_safe::<WindowFrameStateRange>();
+
+        let frame = Arc::new(WindowFrame::new_bounds(
+            WindowFrameUnits::Range,
+            WindowFrameBound::CurrentRow,
+            WindowFrameBound::CurrentRow,
+        ));
+        let columns: [ArrayRef; 1] =
+            [Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(
+                [1, 1, 2, 2].into_iter().map(|v| Some(vec![Some(v)])),
+            ))];
+        let mut range = WindowFrameStateRange::new(vec![SortOptions::default()]);
+        assert_eq!(
+            range.calculate_range(&frame, &(0..0), &columns, 4, 0)?,
+            0..2
+        );
+        let first = Arc::downgrade(&range.peer_comparator.as_ref().unwrap().comparator);
+        assert_eq!(
+            range.calculate_range(&frame, &(0..2), &columns, 4, 1)?,
+            0..2
+        );
+        assert!(Arc::ptr_eq(
+            &first.upgrade().unwrap(),
+            &range.peer_comparator.as_ref().unwrap().comparator,
+        ));
+
+        let columns = [columns[0].slice(1, 3)];
+        assert_eq!(
+            range.calculate_range(&frame, &(0..0), &columns, 3, 0)?,
+            0..1
+        );
+        assert!(first.upgrade().is_none());
+        let retained = Arc::downgrade(&columns[0]);
+        let cached = Arc::downgrade(&range.peer_comparator.as_ref().unwrap().comparator);
+        let mut state = WindowAggState::new(&DataType::Int64)?;
+        state.window_frame_range =
+            range.calculate_range(&frame, &(0..1), &columns, 3, 1)?;
+        assert_eq!(state.window_frame_range, 1..3);
+        state.last_calculated_index = 1;
+        state.window_frame_ctx = Some(WindowFrameContext::Range {
+            window_frame: frame,
+            state: range,
+        });
+        let pruned = [columns[0].slice(1, 2)];
+        drop(columns);
+        assert!(retained.upgrade().is_some());
+        state.prune_state(1);
+        assert!(retained.upgrade().is_none());
+        assert!(cached.upgrade().is_none());
+        assert_eq!(
+            state.window_frame_ctx.as_mut().unwrap().calculate_range(
+                &pruned,
+                &state.window_frame_range,
+                2,
+                0,
+            )?,
+            0..2
+        );
+        Ok(())
+    }
 
     fn get_test_data() -> (Vec<ArrayRef>, Vec<SortOptions>) {
         let range_columns: Vec<ArrayRef> = vec![Arc::new(Float64Array::from(vec![
