@@ -859,6 +859,169 @@ where trunc(t1.b, -1) >= 10;
 NULL 40
 
 ###
+### Strict string function matrix
+###
+
+# Unary string function on the nullable side of a LEFT JOIN -> INNER JOIN.
+query TT
+explain
+select t1.a
+from t1 left join t2 on t1.a = t2.x
+where upper(t2.z) = 'P';
+----
+logical_plan
+01)Projection: t1.a
+02)--Inner Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a]
+04)----Projection: t2.x
+05)------Filter: upper(t2.z) = Utf8View("P")
+06)--------TableScan: t2 projection=[x, z]
+
+query I rowsort
+select t1.a
+from t1 left join t2 on t1.a = t2.x
+where upper(t2.z) = 'P';
+----
+1
+
+# Unary string function on the nullable side of a RIGHT JOIN -> INNER JOIN.
+query TT
+explain
+select t2.x
+from t1 right join t2 on t1.a = t2.x
+where character_length(t1.c) = 1;
+----
+logical_plan
+01)Projection: t2.x
+02)--Inner Join: t1.a = t2.x
+03)----Projection: t1.a
+04)------Filter: character_length(t1.c) = Int32(1)
+05)--------TableScan: t1 projection=[a, c]
+06)----TableScan: t2 projection=[x]
+
+query I rowsort
+select t2.x
+from t1 right join t2 on t1.a = t2.x
+where character_length(t1.c) = 1;
+----
+1
+2
+
+# Binary string function with the nullable column as its first argument.
+query TT
+explain
+select t1.a
+from t1 left join t2 on t1.a = t2.x
+where left(t2.z, 1) = 'q';
+----
+logical_plan
+01)Projection: t1.a
+02)--Inner Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a]
+04)----Projection: t2.x
+05)------Filter: left(t2.z, Int64(1)) = Utf8View("q")
+06)--------TableScan: t2 projection=[x, z]
+
+query I rowsort
+select t1.a
+from t1 left join t2 on t1.a = t2.x
+where left(t2.z, 1) = 'q';
+----
+2
+
+# Binary string function with the nullable column as its second argument.
+query TT
+explain
+select t1.a
+from t1 left join t2 on t1.a = t2.x
+where strpos('pq', t2.z) > 0;
+----
+logical_plan
+01)Projection: t1.a
+02)--Inner Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a]
+04)----Projection: t2.x
+05)------Filter: strpos(Utf8("pq"), t2.z) > Int32(0)
+06)--------TableScan: t2 projection=[x, z]
+
+query I rowsort
+select t1.a
+from t1 left join t2 on t1.a = t2.x
+where strpos('pq', t2.z) > 0;
+----
+1
+2
+
+# A strict string function on only the right side of a FULL JOIN -> RIGHT JOIN.
+query TT
+explain
+select t1.a, t2.z
+from t1 full join t2 on t1.a = t2.x
+where lower(t2.z) <> 'p';
+----
+logical_plan
+01)Projection: t1.a, t2.z
+02)--Right Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a]
+04)----Filter: lower(t2.z) != Utf8View("p")
+05)------TableScan: t2 projection=[x, z]
+
+query IT rowsort
+select t1.a, t2.z
+from t1 full join t2 on t1.a = t2.x
+where lower(t2.z) <> 'p';
+----
+2 q
+NULL r
+
+# A strict string function on only the left side of a FULL JOIN -> LEFT JOIN.
+query TT
+explain
+select t1.a, t1.c
+from t1 full join t2 on t1.a = t2.x
+where substr(t1.c, 1, 1) <> 'a';
+----
+logical_plan
+01)Projection: t1.a, t1.c
+02)--Left Join: t1.a = t2.x
+03)----Filter: substr(t1.c, Int64(1), Int64(1)) != Utf8View("a")
+04)------TableScan: t1 projection=[a, c]
+05)----TableScan: t2 projection=[x]
+
+query IT rowsort
+select t1.a, t1.c
+from t1 full join t2 on t1.a = t2.x
+where substr(t1.c, 1, 1) <> 'a';
+----
+2 b
+3 c
+NULL d
+
+# `concat` skips NULL arguments, so it is not strict and the LEFT JOIN stays:
+# the NULL-padded rows pass the filter.
+query TT
+explain
+select t1.a
+from t1 left join t2 on t1.a = t2.x
+where concat(t2.z, 'x') = 'x';
+----
+logical_plan
+01)Projection: t1.a
+02)--Filter: concat(t2.z, Utf8View("x")) = Utf8View("x")
+03)----Projection: t1.a, t2.z
+04)------Left Join: t1.a = t2.x
+05)--------TableScan: t1 projection=[a]
+06)--------TableScan: t2 projection=[x, z]
+
+query I rowsort
+select t1.a
+from t1 left join t2 on t1.a = t2.x
+where concat(t2.z, 'x') = 'x';
+----
+3
+NULL
+
+###
 ### Cleanup
 ###
 

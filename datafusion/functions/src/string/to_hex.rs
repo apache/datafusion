@@ -130,6 +130,10 @@ impl ScalarUDFImpl for ToHexFunc {
         Ok(DataType::Utf8)
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let arg = &args.args[0];
 

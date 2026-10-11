@@ -105,6 +105,10 @@ impl ScalarUDFImpl for StrposFunc {
         )
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         // Fast path for array haystack and scalar needle
         if let (

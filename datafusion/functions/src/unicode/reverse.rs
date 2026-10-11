@@ -87,6 +87,10 @@ impl ScalarUDFImpl for ReverseFunc {
         Ok(arg_types[0].clone())
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(reverse, vec![])(&args.args)
     }

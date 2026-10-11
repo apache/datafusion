@@ -105,6 +105,10 @@ impl ScalarUDFImpl for ReplaceFunc {
         }
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let data_types = args
             .args

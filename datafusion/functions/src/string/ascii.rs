@@ -89,6 +89,10 @@ impl ScalarUDFImpl for AsciiFunc {
         transform_leaf_type_preserving_encoding(&arg_types[0], &|_| Ok(DataType::Int32))
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [arg] = take_function_args(self.name(), args.args)?;
 

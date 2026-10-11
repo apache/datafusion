@@ -92,6 +92,10 @@ impl ScalarUDFImpl for FindInSetFunc {
         utf8_to_int_type(&arg_types[0], "find_in_set")
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let return_field = args.return_field;
         let [string, str_list] = take_function_args(self.name(), args.args)?;
