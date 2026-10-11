@@ -20,6 +20,9 @@
 use arrow::array::ArrayRef;
 use arrow::compute::kernels::{cmp::eq, nullif::nullif};
 use datafusion_common::{Result, ScalarValue};
+use regex::Regex;
+use std::collections::{HashMap, hash_map::Entry};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 pub(crate) use datafusion_physical_expr_common::regex::explain_regexp_kernel_error;
@@ -34,6 +37,87 @@ pub mod regexpinstr;
 pub mod regexplike;
 pub mod regexpmatch;
 pub mod regexpreplace;
+
+/// Patterns are addressed by index rather than by reference so that `last` can
+/// memoize the previous row's pattern without holding a borrow of `indices`
+/// across rows. Repeated patterns yield the same key on consecutive rows, so
+/// the memo avoids hashing in that case.
+///
+/// Criterion benchmarks for each function using this cache are in
+/// `datafusion/functions/benches/regex_expressions/cache.rs`.
+pub(crate) struct RegexCache<'a> {
+    function_name: &'static str,
+    compiled: Vec<Regex>,
+    indices: HashMap<RegexKey<'a>, usize>,
+    last: Option<(RegexKey<'a>, usize)>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct RegexKey<'a> {
+    regex: &'a str,
+    flags: Option<&'a str>,
+}
+
+impl Hash for RegexKey<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.regex.hash(state);
+        // String hashing includes a delimiter, so absent flags need no
+        // additional discriminator. Equality still distinguishes every key.
+        if let Some(flags) = self.flags {
+            flags.hash(state);
+        }
+    }
+}
+
+impl<'a> RegexCache<'a> {
+    fn new(function_name: &'static str) -> Self {
+        Self {
+            function_name,
+            compiled: Vec::new(),
+            indices: HashMap::new(),
+            last: None,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn get_or_compile(
+        &mut self,
+        regex: &'a str,
+        flags: Option<&'a str>,
+    ) -> Result<&Regex> {
+        let key = RegexKey { regex, flags };
+        let index = match self.last {
+            Some((last_key, index)) if last_key == key => index,
+            _ => {
+                let index = match self.indices.entry(key) {
+                    Entry::Occupied(entry) => *entry.get(),
+                    Entry::Vacant(entry) => {
+                        self.compiled.push(Self::compile(
+                            self.function_name,
+                            regex,
+                            flags,
+                        )?);
+                        *entry.insert(self.compiled.len() - 1)
+                    }
+                };
+                self.last = Some((key, index));
+                index
+            }
+        };
+        Ok(&self.compiled[index])
+    }
+    #[cold]
+    fn compile(function_name: &str, regex: &str, flags: Option<&str>) -> Result<Regex> {
+        // Replacement's global flag chooses the replacement limit. Other
+        // functions reject it through the standard compilation helper.
+        if function_name == "regexp_replace" {
+            let flags = flags.map(|flags| flags.replace('g', ""));
+            compile_regex(function_name, regex, flags.as_deref())
+        } else {
+            compile_regex(function_name, regex, flags)
+        }
+    }
+}
 
 /// Arrow's regex kernels treat null flags as no flags, but reject empty flags.
 /// Normalize empty strings without copying the string buffers.
@@ -162,6 +246,49 @@ pub(crate) fn start_to_byte_offset(value: &str, start: i64) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::start_to_byte_offset;
+
+    #[test]
+    fn regex_cache_compiles_each_key_once() {
+        let mut cache = super::RegexCache::new("regexp_instr");
+        for (pattern, flags) in [
+            ("a", None),
+            ("a", None),
+            ("b", None),
+            ("a", None),
+            ("a", Some("i")),
+            ("a", Some("i")),
+            ("a", None),
+        ] {
+            let regex = cache.get_or_compile(pattern, flags).unwrap();
+            assert!(regex.is_match(pattern));
+        }
+        assert_eq!(cache.compiled.len(), 3);
+        assert!(cache.get_or_compile("[", None).is_err());
+        assert!(cache.get_or_compile("a", None).unwrap().is_match("a"));
+    }
+
+    #[test]
+    fn regex_cache_preserves_flag_semantics() {
+        let mut cache = super::RegexCache::new("regexp_instr");
+        let mut replacement_cache = super::RegexCache::new("regexp_replace");
+        assert!(!cache.get_or_compile("a", None).unwrap().is_match("A"));
+        assert!(cache.get_or_compile("a", Some("i")).unwrap().is_match("A"));
+        assert!(!cache.get_or_compile("a", None).unwrap().is_match("A"));
+        assert!(cache.get_or_compile("a", Some("g")).is_err());
+        assert!(
+            replacement_cache
+                .get_or_compile("a", Some("gi"))
+                .unwrap()
+                .is_match("A")
+        );
+        assert!(
+            !replacement_cache
+                .get_or_compile("a", Some("g"))
+                .unwrap()
+                .is_match("A")
+        );
+        assert!(cache.get_or_compile("a", Some("g")).is_err());
+    }
 
     #[test]
     fn empty_flags_match_omitted_flags() {

@@ -30,11 +30,9 @@ use datafusion_expr::{
 };
 use datafusion_macros::user_doc;
 use regex::Regex;
-use std::collections::HashMap;
-use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
-use crate::regex::{compile_regex, start_to_byte_offset};
+use crate::regex::{RegexCache, start_to_byte_offset};
 
 #[user_doc(
     doc_section(label = "Regular Expression Functions"),
@@ -297,7 +295,7 @@ where
     S: StringArrayType<'a>,
 {
     let len = values.len();
-    let mut regex_cache = RegexCache::default();
+    let mut regex_cache = RegexCache::new("regexp_instr");
     let mut result = Int64Builder::with_capacity(len);
 
     // A NULL in any argument produces a NULL result
@@ -330,45 +328,6 @@ where
     }
 
     Ok(Arc::new(result.finish()))
-}
-
-/// Compiles the patterns seen so far, keyed by `(pattern, flags)`.
-///
-/// Patterns are addressed by index rather than by reference so that `last` can
-/// memoize the previous row's pattern without holding a borrow of `indices`
-/// across rows. A literal pattern yields the same string on every row, so that
-/// memo means the common case never hashes a key.
-#[derive(Default)]
-struct RegexCache<'a> {
-    compiled: Vec<Regex>,
-    indices: HashMap<(&'a str, Option<&'a str>), usize>,
-    last: Option<((&'a str, Option<&'a str>), usize)>,
-}
-
-impl<'a> RegexCache<'a> {
-    fn get_or_compile(
-        &mut self,
-        regex: &'a str,
-        flags: Option<&'a str>,
-    ) -> Result<&Regex> {
-        let key = (regex, flags);
-        let index = match self.last {
-            Some((last_key, index)) if last_key == key => index,
-            _ => {
-                let index = match self.indices.entry(key) {
-                    Entry::Occupied(entry) => *entry.get(),
-                    Entry::Vacant(entry) => {
-                        self.compiled
-                            .push(compile_regex("regexp_instr", regex, flags)?);
-                        *entry.insert(self.compiled.len() - 1)
-                    }
-                };
-                self.last = Some((key, index));
-                index
-            }
-        };
-        Ok(&self.compiled[index])
-    }
 }
 
 /// Returns the 1-based character position of the `n`-th match of `pattern` in
