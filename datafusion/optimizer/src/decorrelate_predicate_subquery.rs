@@ -569,7 +569,7 @@ struct MarkJoin {
 /// Are the `IN` equalities, in order, the first equalities of `join_filter`
 /// that the hash join can use as keys? A null-aware hash join reads its first
 /// `V` keys as the `IN` values (one per tuple element of a multi-column
-/// `IN`) and the other keys as the correlation.
+/// `IN` that can be NULL in scope) and the other keys as the correlation.
 fn values_are_first_keys(
     in_values: &[InValue],
     join_filter: &Expr,
@@ -722,9 +722,11 @@ fn strip_casts(expr: &Expr) -> &Expr {
 /// Combines the `IN`/`NOT IN` equalities, one per value, with the correlation
 /// predicates, if any.
 ///
-/// The equalities stay the leading conjuncts, in order, so that they become
-/// `on[..V]`, the key positions a null-aware hash join reads as the `NOT IN`
-/// value keys (see `HashJoinExec::null_aware`).
+/// The equalities stay the leading conjuncts, in order, so that the first `V`
+/// of them become `on[..V]`, the key positions a null-aware hash join reads as
+/// the `NOT IN` value keys (see `HashJoinExec::null_aware`). The equalities
+/// after them, if any, are on tuple elements that cannot be NULL, which the
+/// join reads as scope keys like the correlation.
 fn in_join_filter(in_values: &[InValue], correlation: Option<Expr>) -> Result<Expr> {
     conjunction(
         in_values
@@ -845,16 +847,19 @@ fn build_join(
         None => vec![],
     };
 
-    // True if an `IN` value or the subquery column it is compared with can be
-    // NULL inside the scope of an outer row.
-    let mut value_may_be_null = false;
-    for in_value in &in_values {
-        value_may_be_null |= in_value.may_be_null_in_scope(
-            left.schema(),
-            sub_query_alias.schema(),
-            &pull_up.correlated_filters,
-        )?;
-    }
+    // For each `IN` value, true if it or the subquery column it is compared
+    // with can be NULL inside the scope of an outer row.
+    let elements_may_be_null = in_values
+        .iter()
+        .map(|in_value| {
+            in_value.may_be_null_in_scope(
+                left.schema(),
+                sub_query_alias.schema(),
+                &pull_up.correlated_filters,
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let value_may_be_null = elements_may_be_null.iter().any(|may_be_null| *may_be_null);
 
     // Whether this join needs null-aware (`NOT IN` three-valued) semantics.
     // Decided once: the constant projection below, the mark branch and the anti
@@ -929,6 +934,38 @@ fn build_join(
     }
     let left = projected_left.as_ref().unwrap_or(left);
 
+    // The first `V` keys of a null-aware join are its `NOT IN` value keys.
+    //
+    // A tuple element that cannot be NULL in scope on either side never makes
+    // the tuple comparison UNKNOWN: compared with a definite value it is either
+    // equal, which leaves the other elements to decide, or a definite mismatch,
+    // which makes the comparison FALSE whatever the other elements are. It
+    // therefore only selects which subquery rows a NULL in another element is
+    // compared with, which is what a correlation scope key does. Moving such
+    // elements after the ones that can be NULL turns them into scope keys, so
+    // the hash join finds the rows a NULL-valued row is compared with through a
+    // hash lookup instead of pairing it with every row of the other side
+    // (<https://github.com/apache/datafusion/issues/26088>).
+    //
+    // A null-aware tuple has at least one element that can be NULL, so `V` is
+    // at least one. With exactly one, the join is a scalar `NOT IN` on that
+    // element, correlated by the other elements.
+    let null_aware_value_keys = if null_aware && in_values.len() > 1 {
+        let (nullable, non_nullable): (Vec<_>, Vec<_>) = in_values
+            .into_iter()
+            .zip(elements_may_be_null)
+            .partition(|(_, may_be_null)| *may_be_null);
+        let null_aware_value_keys = nullable.len();
+        in_values = nullable
+            .into_iter()
+            .chain(non_nullable)
+            .map(|(in_value, _)| in_value)
+            .collect();
+        null_aware_value_keys
+    } else {
+        in_values.len().max(1)
+    };
+
     let join_filter = match (in_values.is_empty(), join_filter_opt) {
         (false, correlation_opt) => in_join_filter(&in_values, correlation_opt)?,
         (true, Some(correlation)) => correlation,
@@ -938,23 +975,22 @@ fn build_join(
     // Only a null-aware join reads the key order.
     let value_is_first_key = null_aware
         && values_are_first_keys(
-            &in_values,
+            &in_values[..null_aware_value_keys],
             &join_filter,
             left.schema(),
             sub_query_alias.schema(),
         )?;
 
     // A multi-column `IN` has no fallback that materializes the UNKNOWN rows
-    // (see below), so a tuple element that does not become its key, for
-    // example because its type is not hashable, is rejected instead of being
-    // read in the wrong key position.
+    // (see below), so a tuple element that can be NULL and does not become its
+    // key, for example because its type is not hashable, is rejected instead
+    // of being read in the wrong key position. The other elements need not be
+    // keys: like any correlation, they may stay in the join filter.
     if null_aware && !value_is_first_key && in_values.len() > 1 {
         return not_impl_err!(
             "Multi-column NOT IN subquery is not supported when a tuple element is not a hashable equi-join key: {join_filter}"
         );
     }
-    // The first `V` keys of a null-aware join are its `NOT IN` value keys.
-    let null_aware_value_keys = in_values.len().max(1);
 
     // A `NOT IN` in a filter builds a `LeftAnti` join. The null-aware hash
     // join reads its first key as the `NOT IN` value and the other keys as the

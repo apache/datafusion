@@ -1027,19 +1027,21 @@ pub struct HashJoinExec {
     /// [`Self::null_aware`] is set.
     ///
     /// A scalar `x NOT IN (SELECT y ...)` has one value key; a multi-column
-    /// `(a, b) NOT IN (SELECT x, y ...)` has one per tuple element. The tuple
-    /// comparison is UNKNOWN rather than FALSE when no element pair is a
-    /// definite mismatch and at least one of them involves a NULL, so a NULL in
-    /// one element does not make every comparison UNKNOWN the way a scalar
-    /// NULL does.
+    /// `(a, b) NOT IN (SELECT x, y ...)` has one per tuple element that can be
+    /// NULL. The tuple comparison is UNKNOWN rather than FALSE when no element
+    /// pair is a definite mismatch and at least one of them involves a NULL,
+    /// so a NULL in one element does not make every comparison UNKNOWN the
+    /// way a scalar NULL does. A tuple element that cannot be NULL on either
+    /// side never makes the comparison UNKNOWN; the planner passes it as a
+    /// scope key after the value keys, so it narrows the rows a NULL-valued
+    /// row is compared with.
     ///
     /// Such a join always decides UNKNOWN per build row, like a correlated
     /// scalar `NOT IN`, which has two costs the uncorrelated scalar join does
     /// not: the outer side stays the build side, since only a single-key join
-    /// is swapped, and without correlation keys every NULL-valued row is paired
+    /// is swapped, and without scope keys every NULL-valued row is paired
     /// with every row on the other side to check its other elements. See
-    /// <https://github.com/apache/datafusion/issues/26088> and
-    /// <https://github.com/apache/datafusion/issues/26089> for the follow-ups.
+    /// <https://github.com/apache/datafusion/issues/26089> for a follow-up.
     pub null_aware_value_keys: usize,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: Arc<PlanProperties>,

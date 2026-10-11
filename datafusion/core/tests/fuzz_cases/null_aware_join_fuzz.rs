@@ -21,6 +21,8 @@
 //! null-aware hash joins, are compared with `NOT EXISTS` / `EXISTS`
 //! formulations of the same three-valued logic, which do not. Random tables
 //! with NULLs on both sides are swept across batch sizes and partition counts.
+//! Some columns are NOT NULL, so that tuples mix elements that can be NULL with
+//! elements that cannot, which the null-aware join reads as scope keys.
 
 use std::sync::Arc;
 
@@ -36,8 +38,8 @@ use rand::{Rng, SeedableRng};
 async fn null_aware_join_matches_reference() {
     for seed in 0..20 {
         let mut rng = StdRng::seed_from_u64(seed);
-        let outer = random_table(&mut rng, &["id", "k", "a", "b", "c"]);
-        let inner = random_table(&mut rng, &["k", "x", "y", "z"]);
+        let outer = random_table(&mut rng, &["id", "k", "a", "b", "c"], &["n", "m"]);
+        let inner = random_table(&mut rng, &["k", "x", "y", "z"], &["v", "w"]);
         for target_partitions in [1, 4] {
             for batch_size in [1, 3, 8192] {
                 let config = SessionConfig::new()
@@ -93,6 +95,22 @@ fn cases() -> Vec<(String, String)> {
                 "o.a = i.x AND o.b = i.y AND o.c = i.z",
             ),
             ("(o.a, 1)", "i.x, i.y", "o.a = i.x AND 1 = i.y"),
+            // `o.n`, `o.m`, `i.v` and `i.w` are NOT NULL.
+            ("(o.a, o.n)", "i.x, i.v", "o.a = i.x AND o.n = i.v"),
+            ("(o.n, o.a)", "i.v, i.x", "o.n = i.v AND o.a = i.x"),
+            (
+                "(o.n, o.a, o.b)",
+                "i.v, i.x, i.y",
+                "o.n = i.v AND o.a = i.x AND o.b = i.y",
+            ),
+            (
+                "(o.n, o.a, o.m)",
+                "i.v, i.x, i.w",
+                "o.n = i.v AND o.a = i.x AND o.m = i.w",
+            ),
+            ("(o.n, o.a)", "i.y, i.x", "o.n = i.y AND o.a = i.x"),
+            ("(1, o.a)", "i.v, i.x", "1 = i.v AND o.a = i.x"),
+            ("(o.n, o.m)", "i.v, i.w", "o.n = i.v AND o.m = i.w"),
         ] {
             let subquery = format!("SELECT {output} FROM i{correlation}");
             let matched = format!(
@@ -130,13 +148,23 @@ fn cases() -> Vec<(String, String)> {
     cases
 }
 
-/// A table of nullable `Int32` columns with values in `0..3`, split into up
-/// to three partitions. A column named `id` holds unique row ids instead.
-fn random_table(rng: &mut StdRng, columns: &[&str]) -> Arc<MemTable> {
+/// A table of `Int32` columns with values in `0..3`, split into up to three
+/// partitions: the `nullable` columns, then the `non_nullable` ones. A column
+/// named `id` holds unique row ids instead.
+fn random_table(
+    rng: &mut StdRng,
+    nullable: &[&str],
+    non_nullable: &[&str],
+) -> Arc<MemTable> {
+    let columns = nullable
+        .iter()
+        .map(|name| (*name, true))
+        .chain(non_nullable.iter().map(|name| (*name, false)))
+        .collect::<Vec<_>>();
     let schema = Arc::new(Schema::new(
         columns
             .iter()
-            .map(|name| Field::new(*name, DataType::Int32, true))
+            .map(|(name, nullable)| Field::new(*name, DataType::Int32, *nullable))
             .collect::<Vec<_>>(),
     ));
     let null_fraction = [0.0, 0.1, 0.3][rng.random_range(0..3)];
@@ -146,13 +174,13 @@ fn random_table(rng: &mut StdRng, columns: &[&str]) -> Arc<MemTable> {
             let rows = rng.random_range(0..6);
             let arrays = columns
                 .iter()
-                .map(|name| {
+                .map(|(name, nullable)| {
                     let values: Int32Array = if *name == "id" {
                         (next_id..next_id + rows).map(Some).collect()
                     } else {
                         (0..rows)
                             .map(|_| {
-                                (!rng.random_bool(null_fraction))
+                                (!(*nullable && rng.random_bool(null_fraction)))
                                     .then(|| rng.random_range(0..3))
                             })
                             .collect()

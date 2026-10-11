@@ -479,6 +479,135 @@ physical_plan
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 05)------DataSourceExec: partitions=1, partition_sizes=[1]
 
+# A tuple element that cannot be NULL on either side never makes the tuple
+# comparison UNKNOWN. It follows the elements that can be NULL as a scope key,
+# so `value_keys` counts only the nullable elements.
+statement ok
+CREATE TABLE multi_col_outer_nn(k INT NOT NULL, a INT, b INT NOT NULL) AS VALUES
+(1, 1, 2),
+(2, NULL, 8);
+
+statement ok
+CREATE TABLE multi_col_inner_nn(k INT NOT NULL, x INT, y INT NOT NULL) AS VALUES
+(1, 1, 2),
+(2, NULL, 4);
+
+# `b = y` moves after `a = x`.
+query TT
+EXPLAIN SELECT * FROM multi_col_outer_nn
+WHERE (b, a) NOT IN (SELECT y, x FROM multi_col_inner_nn);
+----
+logical_plan
+01)LeftAnti Join: multi_col_outer_nn.a = __correlated_sq_1.x, multi_col_outer_nn.b = __correlated_sq_1.y null_aware
+02)--TableScan: multi_col_outer_nn projection=[k, a, b]
+03)--SubqueryAlias: __correlated_sq_1
+04)----Projection: multi_col_inner_nn.y, multi_col_inner_nn.x
+05)------TableScan: multi_col_inner_nn projection=[x, y]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(a@1, x@1), (b@2, y@0)], null_aware
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# The element scope key comes before the correlation keys.
+query TT
+EXPLAIN SELECT * FROM multi_col_outer_nn o
+WHERE (b, a) NOT IN (SELECT y, x FROM multi_col_inner_nn i WHERE i.k = o.k);
+----
+logical_plan
+01)LeftAnti Join: o.a = __correlated_sq_1.x, o.b = __correlated_sq_1.y, o.k = __correlated_sq_1.k null_aware
+02)--SubqueryAlias: o
+03)----TableScan: multi_col_outer_nn projection=[k, a, b]
+04)--SubqueryAlias: __correlated_sq_1
+05)----Projection: i.y, i.x, i.k
+06)------SubqueryAlias: i
+07)--------TableScan: multi_col_inner_nn projection=[k, x, y]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(a@1, x@1), (b@2, y@0), (k@0, k@2)], null_aware
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# `NULLIF` can give a NULL, so `k` stays a value key, after `a` as in the
+# tuple, and only `b` moves.
+query TT
+EXPLAIN SELECT * FROM multi_col_outer_nn
+WHERE (b, a, k) NOT IN (SELECT y, x, NULLIF(k, 0) FROM multi_col_inner_nn);
+----
+logical_plan
+01)LeftAnti Join: multi_col_outer_nn.a = __correlated_sq_1.x, CAST(multi_col_outer_nn.k AS Int64) = __correlated_sq_1.nullif(multi_col_inner_nn.k,Int64(0)), multi_col_outer_nn.b = __correlated_sq_1.y null_aware(value_keys=2)
+02)--TableScan: multi_col_outer_nn projection=[k, a, b]
+03)--SubqueryAlias: __correlated_sq_1
+04)----Projection: multi_col_inner_nn.y, multi_col_inner_nn.x, nullif(CAST(multi_col_inner_nn.k AS Int64), Int64(0))
+05)------TableScan: multi_col_inner_nn projection=[k, x, y]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(a@1, x@1), (CAST(multi_col_outer_nn.k AS Int64)@3, nullif(multi_col_inner_nn.k,Int64(0))@2), (b@2, y@0)], projection=[k@0, a@1, b@2], null_aware(value_keys=2)
+02)--ProjectionExec: expr=[k@0 as k, a@1 as a, b@2 as b, CAST(k@0 AS Int64) as CAST(multi_col_outer_nn.k AS Int64)]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--ProjectionExec: expr=[y@2 as y, x@1 as x, nullif(CAST(k@0 AS Int64), 0) as nullif(multi_col_inner_nn.k,Int64(0))]
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A constant element is NOT NULL, so against a NOT NULL column it is a scope
+# key.
+query TT
+EXPLAIN SELECT * FROM multi_col_outer_nn
+WHERE (2, a) NOT IN (SELECT y, x FROM multi_col_inner_nn);
+----
+logical_plan
+01)Projection: multi_col_outer_nn.k, multi_col_outer_nn.a, multi_col_outer_nn.b
+02)--LeftAnti Join: multi_col_outer_nn.a = __correlated_sq_1.x, __correlated_sq_1_value_0 = __correlated_sq_1.multi_col_inner_nn.y null_aware
+03)----Projection: multi_col_outer_nn.k, multi_col_outer_nn.a, multi_col_outer_nn.b, Int64(2) AS __correlated_sq_1_value_0
+04)------TableScan: multi_col_outer_nn projection=[k, a, b]
+05)----SubqueryAlias: __correlated_sq_1
+06)------Projection: CAST(multi_col_inner_nn.y AS Int64), multi_col_inner_nn.x
+07)--------TableScan: multi_col_inner_nn projection=[x, y]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(a@1, x@1), (__correlated_sq_1_value_0@3, multi_col_inner_nn.y@0)], projection=[k@0, a@1, b@2], null_aware
+02)--ProjectionExec: expr=[k@0 as k, a@1 as a, b@2 as b, 2 as __correlated_sq_1_value_0]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--ProjectionExec: expr=[CAST(y@1 AS Int64) as multi_col_inner_nn.y, x@0 as x]
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# NOT NULL on the outer side only: the subquery can still give a NULL `y`, so
+# `b` stays a value key.
+query TT
+EXPLAIN SELECT * FROM multi_col_outer_nn
+WHERE (b, a) NOT IN (SELECT y, x FROM multi_col_inner);
+----
+logical_plan
+01)LeftAnti Join: multi_col_outer_nn.b = __correlated_sq_1.y, multi_col_outer_nn.a = __correlated_sq_1.x null_aware(value_keys=2)
+02)--TableScan: multi_col_outer_nn projection=[k, a, b]
+03)--SubqueryAlias: __correlated_sq_1
+04)----Projection: multi_col_inner.y, multi_col_inner.x
+05)------TableScan: multi_col_inner projection=[x, y]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(b@2, y@0), (a@1, x@1)], null_aware(value_keys=2)
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# The mark join reorders the same way.
+query TT
+EXPLAIN SELECT b, a, (b, a) NOT IN (SELECT y, x FROM multi_col_inner_nn) AS r
+FROM multi_col_outer_nn;
+----
+logical_plan
+01)Projection: multi_col_outer_nn.b, multi_col_outer_nn.a, NOT __correlated_sq_1.mark AS r
+02)--LeftMark Join: multi_col_outer_nn.a = __correlated_sq_1.x, multi_col_outer_nn.b = __correlated_sq_1.y null_aware
+03)----TableScan: multi_col_outer_nn projection=[a, b]
+04)----SubqueryAlias: __correlated_sq_1
+05)------Projection: multi_col_inner_nn.y, multi_col_inner_nn.x
+06)--------TableScan: multi_col_inner_nn projection=[x, y]
+physical_plan
+01)ProjectionExec: expr=[b@1 as b, a@0 as a, NOT mark@2 as r]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(a@0, x@1), (b@1, y@0)], null_aware
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE multi_col_outer_nn;
+
+statement ok
+DROP TABLE multi_col_inner_nn;
+
 statement ok
 DROP TABLE multi_col_outer;
 

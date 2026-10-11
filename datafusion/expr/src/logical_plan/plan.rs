@@ -4513,7 +4513,9 @@ pub struct Join {
     /// [`Self::null_aware`] is set.
     ///
     /// A scalar `x NOT IN (SELECT y ...)` has one value key, a multi-column
-    /// `(a, b) NOT IN (SELECT x, y ...)` one per tuple element. The value keys
+    /// `(a, b) NOT IN (SELECT x, y ...)` one per tuple element that can be
+    /// NULL in scope. A tuple element that cannot be NULL on either side never
+    /// makes the comparison UNKNOWN, so it is a scope key instead. The value keys
     /// are the leading equi-join keys (`on[..n]`, or the leading equality
     /// conjuncts of `filter` before they are extracted into `on`); any keys
     /// after them are correlation scope keys of a correlated subquery. A NULL
