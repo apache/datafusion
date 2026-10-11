@@ -17,7 +17,7 @@
 
 //! This module provides a builder for creating LogicalPlans
 
-use datafusion_common::metadata::check_metadata_with_storage_equal;
+// use datafusion_common::metadata::check_metadata_with_storage_equal;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -278,9 +278,9 @@ impl LogicalPlanBuilder {
         for j in 0..n_cols {
             let field = schema.field(j);
             let field_type = field.data_type();
-            let field_metadata = field.metadata();
-            let is_target_ext = field_metadata
-                .contains_key(arrow_schema::extension::EXTENSION_TYPE_NAME_KEY);
+            // let field_metadata = field.metadata();
+            // let is_target_ext = field_metadata
+            //     .contains_key(arrow_schema::extension::EXTENSION_TYPE_NAME_KEY);
             let column_name = format!("column {j}");
             for row in values.iter() {
                 let value = &row[j];
@@ -289,39 +289,39 @@ impl LogicalPlanBuilder {
                     continue;
                 }
 
-                if is_target_ext {
-                    let value_meta = value.metadata(schema)?;
-                    let value_meta_map = value_meta.to_hashmap();
-                    let is_value_ext = value_meta_map
-                        .contains_key(arrow_schema::extension::EXTENSION_TYPE_NAME_KEY);
+                // if is_target_ext {
+                //     let value_meta = value.metadata(schema)?;
+                //     let value_meta_map = value_meta.to_hashmap();
+                //     let is_value_ext = value_meta_map
+                //         .contains_key(arrow_schema::extension::EXTENSION_TYPE_NAME_KEY);
 
-                    if is_value_ext && value_type == *field_type {
-                        check_metadata_with_storage_equal(
-                            (&value_type, Some(&value_meta_map)),
-                            (field_type, Some(field_metadata)),
-                            &column_name,
-                            " in VALUES list",
-                        )?;
-                    } else if !can_cast_types(&value_type, field_type) {
-                        return plan_err!(
-                            "Cannot cast {} to extension type at {}",
-                            value_type,
-                            column_name
-                        );
-                    }
-                } else {
-                    // Optimized path for standard types
-                    if !value_type.equals_datatype(field_type)
-                        && !can_cast_types(&value_type, field_type)
-                    {
-                        return plan_err!(
-                            "Cannot cast {} to {} for {}",
-                            value_type,
-                            field_type,
-                            column_name
-                        );
-                    }
-                }
+                //     if is_value_ext && value_type == *field_type {
+                //         check_metadata_with_storage_equal(
+                //             (&value_type, Some(&value_meta_map)),
+                //             (field_type, Some(field_metadata)),
+                //             &column_name,
+                //             " in VALUES list",
+                //         )?;
+                //     } else if !can_cast_types(&value_type, field_type) {
+                //         return plan_err!(
+                //             "Cannot cast {} to extension type at {}",
+                //             value_type,
+                //             column_name
+                //         );
+                //     }
+                // } else {
+                //     // Optimized path for standard types
+                //     if !value_type.equals_datatype(field_type)
+                //         && !can_cast_types(&value_type, field_type)
+                //     {
+                //         return plan_err!(
+                //             "Cannot cast {} to {} for {}",
+                //             value_type,
+                //             field_type,
+                //             column_name
+                //         );
+                //     }
+                // }
             }
 
             fields.push_with_metadata(
