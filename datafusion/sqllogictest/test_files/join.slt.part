@@ -1240,6 +1240,33 @@ on t1.v1 > 0;
 query error DataFusion error: Schema error: Schema contains duplicate qualified field name t1\.v1
 select t1.v1 from t1 join t1 using(v1) cross join (select struct('foo' as v1) as t1);
 
+## A quoted alias containing a dot is not the same relation as a schema-qualified table
+statement ok
+create schema dup_s;
+
+statement ok
+create table dup_s.t1(v1 int) as values(1);
+
+query I
+select count(*) from t1 as "dup_s.t1", dup_s.t1;
+----
+1
+
+statement ok
+drop table dup_s.t1;
+
+## Unaliased table function is not a duplicate of a table with the same name
+statement ok
+create table generate_series(v1 int) as values(1);
+
+query I
+select count(*) from generate_series, generate_series(1, 2);
+----
+2
+
+statement ok
+drop table generate_series;
+
 statement ok
 drop table t1;
 
