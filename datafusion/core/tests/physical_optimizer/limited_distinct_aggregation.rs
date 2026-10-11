@@ -29,10 +29,13 @@ use arrow::datatypes::DataType;
 use arrow::{compute::SortOptions, util::pretty::pretty_format_batches};
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
+use datafusion_common::config::ConfigOptions;
 use datafusion_execution::config::SessionConfig;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{self, cast, col};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggregation;
 use datafusion_physical_plan::{
     ExecutionPlan,
     aggregates::{AggregateExec, AggregateMode},
@@ -46,6 +49,37 @@ async fn run_plan_and_format(plan: Arc<dyn ExecutionPlan>) -> Result<String> {
     let batches = collect(plan, ctx.task_ctx()).await?;
     let actual = format!("{}", pretty_format_batches(&batches)?);
     Ok(actual)
+}
+
+/// Construct test plan:
+///
+/// AggregateExec(mode=Final)
+/// -- AggregateExec(mode=Partial)
+fn distinct_aggregate_pair(
+    input: Arc<dyn ExecutionPlan>,
+    columns: &[&str],
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let schema = input.schema();
+    let group_by = build_group_by(
+        &schema,
+        columns.iter().map(|column| (*column).to_string()).collect(),
+    );
+    let partial = AggregateExec::try_new(
+        AggregateMode::Partial,
+        group_by.clone(),
+        vec![],
+        vec![],
+        input,
+        Arc::clone(&schema),
+    )?;
+    Ok(Arc::new(AggregateExec::try_new(
+        AggregateMode::Final,
+        group_by.as_final(),
+        vec![],
+        vec![],
+        Arc::new(partial),
+        schema,
+    )?))
 }
 
 #[tokio::test]
@@ -338,12 +372,19 @@ async fn single_distinct_aggregate_stream_respects_soft_limit() -> Result<()> {
     Ok(())
 }
 
+/// This optimizer rule is guaranteed to have input shape
+///
+/// AggregateExec(mode=Final)
+///   AggregateExec(mode=Partial)
+///
+/// Combining compatible final/partial aggregate pair into one single aggregate
+/// happen in later optimizer phase, so no-op here.
 #[tokio::test]
-async fn test_single_local() -> Result<()> {
+async fn test_single_local_is_unchanged() -> Result<()> {
     let source = mock_data()?;
     let schema = source.schema();
 
-    // `SELECT a FROM DataSourceExec GROUP BY a LIMIT 4;`, Single AggregateExec
+    // A prebuilt Single aggregate is outside this rule's final/partial contract.
     let single_agg = AggregateExec::try_new(
         AggregateMode::Single,
         build_group_by(&schema.clone(), vec!["a".to_string()]),
@@ -356,15 +397,14 @@ async fn test_single_local() -> Result<()> {
         Arc::new(single_agg),
         4, // fetch
     );
-    // expected to push the limit to the AggregateExec
-    let plan: Arc<dyn ExecutionPlan> = Arc::new(limit_exec);
-    let formatted = get_optimized_plan(&plan)?;
-    let actual = formatted.trim();
+    let plan = LimitedDistinctAggregation::new()
+        .optimize(Arc::new(limit_exec), &ConfigOptions::new())?;
+    let actual = displayable(plan.as_ref()).indent(true).to_string();
     assert_snapshot!(
         actual,
         @r"
     LocalLimitExec: fetch=4
-      AggregateExec: mode=Single, gby=[a@0 as a], aggr=[], lim=[4]
+      AggregateExec: mode=Single, gby=[a@0 as a], aggr=[]
         DataSourceExec: partitions=1, partition_sizes=[1]
     "
     );
@@ -385,12 +425,13 @@ async fn test_single_local() -> Result<()> {
     Ok(())
 }
 
+/// See comments for `test_single_local_is_unchanged`
 #[tokio::test]
-async fn test_single_global() -> Result<()> {
+async fn test_single_global_is_unchanged() -> Result<()> {
     let source = mock_data()?;
     let schema = source.schema();
 
-    // `SELECT a FROM DataSourceExec GROUP BY a LIMIT 4;`, Single AggregateExec
+    // A global limit also leaves a prebuilt Single aggregate unchanged.
     let single_agg = AggregateExec::try_new(
         AggregateMode::Single,
         build_group_by(&schema.clone(), vec!["a".to_string()]),
@@ -404,15 +445,14 @@ async fn test_single_global() -> Result<()> {
         1,       // skip
         Some(3), // fetch
     );
-    // expected to push the skip+fetch limit to the AggregateExec
-    let plan: Arc<dyn ExecutionPlan> = Arc::new(limit_exec);
-    let formatted = get_optimized_plan(&plan)?;
-    let actual = formatted.trim();
+    let plan = LimitedDistinctAggregation::new()
+        .optimize(Arc::new(limit_exec), &ConfigOptions::new())?;
+    let actual = displayable(plan.as_ref()).indent(true).to_string();
     assert_snapshot!(
         actual,
         @r"
     GlobalLimitExec: skip=1, fetch=3
-      AggregateExec: mode=Single, gby=[a@0 as a], aggr=[], lim=[4]
+      AggregateExec: mode=Single, gby=[a@0 as a], aggr=[]
         DataSourceExec: partitions=1, partition_sizes=[1]
     "
     );
@@ -432,43 +472,32 @@ async fn test_single_global() -> Result<()> {
     Ok(())
 }
 
+/// For nested aggregation with limit, the limit only get pushed into parent aggregation
 #[tokio::test]
 async fn test_distinct_cols_different_than_group_by_cols() -> Result<()> {
     let source = mock_data()?;
-    let schema = source.schema();
 
-    // `SELECT distinct a FROM DataSourceExec GROUP BY a, b LIMIT 4;`, Single/Single AggregateExec
-    let group_by_agg = AggregateExec::try_new(
-        AggregateMode::Single,
-        build_group_by(&schema.clone(), vec!["a".to_string(), "b".to_string()]),
-        vec![],         /* aggr_expr */
-        vec![],         /* filter_expr */
-        source,         /* input */
-        schema.clone(), /* input_schema */
-    )?;
-    let distinct_agg = AggregateExec::try_new(
-        AggregateMode::Single,
-        build_group_by(&schema.clone(), vec!["a".to_string()]),
-        vec![],                 /* aggr_expr */
-        vec![],                 /* filter_expr */
-        Arc::new(group_by_agg), /* input */
-        schema.clone(),         /* input_schema */
-    )?;
+    // Each DISTINCT operation has its own final/partial pair.
+    let group_by_agg = distinct_aggregate_pair(source, &["a", "b"])?;
+    let distinct_agg = distinct_aggregate_pair(group_by_agg, &["a"])?;
     let limit_exec = LocalLimitExec::new(
-        Arc::new(distinct_agg),
+        distinct_agg,
         4, // fetch
     );
-    // expected to push the limit to the outer AggregateExec only
-    let plan: Arc<dyn ExecutionPlan> = Arc::new(limit_exec);
-    let formatted = get_optimized_plan(&plan)?;
-    let actual = formatted.trim();
+    // Only the outer pair receives the hint: four distinct (a, b) pairs might
+    // contain fewer than four distinct a values.
+    let plan = LimitedDistinctAggregation::new()
+        .optimize(Arc::new(limit_exec), &ConfigOptions::new())?;
+    let actual = displayable(plan.as_ref()).indent(true).to_string();
     assert_snapshot!(
         actual,
         @r"
     LocalLimitExec: fetch=4
-      AggregateExec: mode=Single, gby=[a@0 as a], aggr=[], lim=[4]
-        AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[]
-          DataSourceExec: partitions=1, partition_sizes=[1]
+      AggregateExec: mode=Final, gby=[a@0 as a], aggr=[], lim=[4]
+        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[], lim=[4]
+          AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[]
+            AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b], aggr=[]
+              DataSourceExec: partitions=1, partition_sizes=[1]
     "
     );
     let expected = run_plan_and_format(plan).await?;

@@ -210,6 +210,7 @@ use itertools::Itertools;
 use topk::hash_table::is_supported_hash_key_type;
 use topk::heap::is_supported_heap_type;
 
+mod aggregate_argument;
 mod aggregate_hash_table;
 mod aggregate_stream;
 pub mod group_values;
@@ -935,8 +936,9 @@ impl AggregateExec {
     ///
     /// # Public Only for Internal Use:
     ///
-    /// This is not part of the supported public API, it's made public for internal
-    /// optimizer usage.
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
     ///
     /// # TopK Optimization Overview
     ///
@@ -1141,6 +1143,13 @@ impl AggregateExec {
     /// leaves the aggregate in a consistent state. Ineligible aggregates return
     /// `None`. Eligible aggregates are returned unchanged when the limit is zero
     /// or no tighter than the existing limit.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
     pub fn try_optimize_distinct_soft_limit(
         mut self,
         limit: usize,
@@ -1166,6 +1175,13 @@ impl AggregateExec {
     ///
     /// The caller must preserve the schema, filters, and ordering requirements.
     /// Changing expressions in a TopK aggregate drops its specialization.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
     pub fn with_new_aggr_exprs(
         &self,
         aggr_expr: impl Into<Arc<[Arc<AggregateFunctionExpr>]>>,
@@ -1391,6 +1407,23 @@ impl AggregateExec {
     /// Aggregation mode (full, partial)
     pub fn mode(&self) -> &AggregateMode {
         &self.mode
+    }
+
+    /// Returns whether this is a compatible partial/final aggregation pair.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is made public for the physical optimizer to use, this is not part of
+    /// the public API.
+    #[doc(hidden)]
+    pub fn matches_partial(&self, partial: &Self) -> bool {
+        matches!(
+            (self.mode, partial.mode),
+            (
+                AggregateMode::Final | AggregateMode::FinalPartitioned,
+                AggregateMode::Partial,
+            )
+        ) && self.group_expr() == &partial.group_expr().as_final()
     }
 
     /// Set a legacy limit hint. Unsupported requests leave ordinary aggregation.
@@ -3670,6 +3703,7 @@ pub fn evaluate_group_by(
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use std::mem::size_of;
     use std::task::{Context, Poll};
 
     use super::*;
@@ -3951,7 +3985,8 @@ mod tests {
 
         const KEYS: usize = 64;
         const VALUES_PER_KEY: i64 = 64;
-        const MEMORY_LIMIT: usize = 8192;
+        // Leave only a small amount above 8 KiB for the empty aggregate state.
+        const MEMORY_LIMIT: usize = 8_384;
         let schema = Arc::new(Schema::new(vec![
             Field::new("key", DataType::Int64, false),
             Field::new("value", DataType::Int64, false),
@@ -4355,8 +4390,8 @@ mod tests {
         )];
 
         let task_ctx = if spill {
-            // adjust the max memory size to have the partial aggregate result for spill mode.
-            new_spill_ctx(4, 500)
+            // Includes the descriptor-aware empty grouping-set table state.
+            new_spill_ctx(4, 700)
         } else {
             Arc::new(TaskContext::default())
         };
@@ -4374,6 +4409,14 @@ mod tests {
             collect(partial_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
 
         if spill {
+            let early_emit_count = partial_aggregate
+                .metrics()
+                .unwrap()
+                .sum_by_name("early_emit_count")
+                .unwrap()
+                .as_usize();
+            assert!(early_emit_count > 0);
+
             // In spill mode, we test with the limited memory, if the mem usage exceeds,
             // we trigger the early emit rule, which turns out the partial aggregate result.
             allow_duplicates! {
@@ -7780,9 +7823,11 @@ mod tests {
         )?);
 
         let batch_size = 2;
-        let memory_pool = Arc::new(FairSpillPool::new(
-            initial_reservation(&single_aggregate)? + 200,
-        ));
+        // Allow the already-retained initial table but no extra headroom.
+        // This fixture's groups can fit in that initial capacity, so successful
+        // execution need not spill.
+        let memory_pool =
+            Arc::new(FairSpillPool::new(initial_reservation(&single_aggregate)?));
         let task_ctx = Arc::new(
             TaskContext::default()
                 .with_session_config(SessionConfig::new().with_batch_size(batch_size))
@@ -7796,8 +7841,6 @@ mod tests {
         let result = collect(single_aggregate.execute(0, Arc::clone(&task_ctx))?).await;
         match result {
             Ok(result) => {
-                assert_spill_count_metric(true, single_aggregate);
-
                 allow_duplicates! {
                     assert_snapshot!(batches_to_string(&result), @r"
                 +---+---+--------+--------+

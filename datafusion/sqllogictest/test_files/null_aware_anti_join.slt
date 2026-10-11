@@ -406,7 +406,87 @@ SELECT * FROM test_table t1 WHERE c1 NOT IN (SELECT c2 FROM test_table t2 WHERE 
 NULL 0
 
 #############
-## Cleanup
+## Test 19: Multi-column NOT IN plans
+#############
+
+# Results under a batch size sweep are in null_aware_multi_column.slt. A tuple
+# NOT IN is a null-aware join whose leading keys are the tuple elements
+# (`value_keys`), followed by any correlation keys.
+
+statement ok
+CREATE TABLE multi_col_outer(k INT, a INT, b INT) AS VALUES
+(1, 1, 2),
+(2, NULL, 8);
+
+statement ok
+CREATE TABLE multi_col_inner(k INT, x INT, y INT) AS VALUES
+(1, 1, 2),
+(2, NULL, 4);
+
+query TT
+EXPLAIN SELECT * FROM multi_col_outer o
+WHERE (a, b) NOT IN (SELECT x, y FROM multi_col_inner i WHERE i.k = o.k);
+----
+logical_plan
+01)LeftAnti Join: o.a = __correlated_sq_1.x, o.b = __correlated_sq_1.y, o.k = __correlated_sq_1.k null_aware(value_keys=2)
+02)--SubqueryAlias: o
+03)----TableScan: multi_col_outer projection=[k, a, b]
+04)--SubqueryAlias: __correlated_sq_1
+05)----Projection: i.x, i.y, i.k
+06)------SubqueryAlias: i
+07)--------TableScan: multi_col_inner projection=[k, x, y]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(a@1, x@0), (b@2, y@1), (k@0, k@2)], null_aware(value_keys=2)
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A constant element is projected as an outer column so that it stays a join
+# key in its tuple position.
+query TT
+EXPLAIN SELECT * FROM multi_col_outer
+WHERE (a, 2) NOT IN (SELECT x, y FROM multi_col_inner);
+----
+logical_plan
+01)Projection: multi_col_outer.k, multi_col_outer.a, multi_col_outer.b
+02)--LeftAnti Join: multi_col_outer.a = __correlated_sq_1.x, __correlated_sq_1_value_1 = __correlated_sq_1.multi_col_inner.y null_aware(value_keys=2)
+03)----Projection: multi_col_outer.k, multi_col_outer.a, multi_col_outer.b, Int64(2) AS __correlated_sq_1_value_1
+04)------TableScan: multi_col_outer projection=[k, a, b]
+05)----SubqueryAlias: __correlated_sq_1
+06)------Projection: multi_col_inner.x, CAST(multi_col_inner.y AS Int64)
+07)--------TableScan: multi_col_inner projection=[x, y]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(a@1, x@0), (__correlated_sq_1_value_1@3, multi_col_inner.y@1)], projection=[k@0, a@1, b@2], null_aware(value_keys=2)
+02)--ProjectionExec: expr=[k@0 as k, a@1 as a, b@2 as b, 2 as __correlated_sq_1_value_1]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--ProjectionExec: expr=[x@0 as x, CAST(y@1 AS Int64) as multi_col_inner.y]
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# As a nullable value, the tuple NOT IN is a null-aware mark join.
+query TT
+EXPLAIN SELECT a, b, (a, b) NOT IN (SELECT x, y FROM multi_col_inner) AS r
+FROM multi_col_outer;
+----
+logical_plan
+01)Projection: multi_col_outer.a, multi_col_outer.b, NOT __correlated_sq_1.mark AS r
+02)--LeftMark Join: multi_col_outer.a = __correlated_sq_1.x, multi_col_outer.b = __correlated_sq_1.y null_aware(value_keys=2)
+03)----TableScan: multi_col_outer projection=[a, b]
+04)----SubqueryAlias: __correlated_sq_1
+05)------TableScan: multi_col_inner projection=[x, y]
+physical_plan
+01)ProjectionExec: expr=[a@0 as a, b@1 as b, NOT mark@2 as r]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(a@0, x@0), (b@1, y@1)], null_aware(value_keys=2)
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE multi_col_outer;
+
+statement ok
+DROP TABLE multi_col_inner;
+
+#############
+## Cleanup (original tables)
 #############
 
 statement ok

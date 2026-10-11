@@ -925,6 +925,29 @@ config_namespace! {
         /// Support for build_side.num_rows() >= u32::MAX will be added in the future.
         pub perfect_hash_join_min_key_density: f64, default = 0.15
 
+        /// Enable an exact integer membership prefilter for hash joins with a single
+        /// integer key when the build side uses a hash table and the join is not
+        /// null-aware. It skips lookups for absent keys while retaining NULLs and
+        /// probe rows for the original join logic.
+        pub enable_join_integer_prefilter: bool, default = false
+
+        /// Maximum number of integer values covered by the join prefilter bitmap
+        /// (`max_key - min_key + 1`). Zero disables bitmap construction.
+        /// Larger ranges fall back to normal hash table lookups.
+        pub join_integer_prefilter_max_key_range: u64, default = 262144
+
+        /// The integer prefilter must prune more than this fraction of all sampled
+        /// probe rows, including NULLs, to keep filtering. Must be finite and in
+        /// [0, 1], validated when executing the join.
+        pub join_integer_prefilter_min_pruning_ratio: f64, default = 0.5
+
+        /// Minimum input probe rows in each integer prefilter sampling window,
+        /// including NULLs. Must be greater than zero. Windows end at batch boundaries.
+        /// Unprofitable samples initially pause for 10 times this many input rows;
+        /// consecutive failures double the pause up to 128 times. A profitable
+        /// sample resets the pause to 10 times this many rows.
+        pub join_integer_prefilter_sample_rows: ConfigNonZeroUsize, default = non_zero_usize_default(12288)
+
         /// When set to true, record batches will be examined between each operator and
         /// small batches will be coalesced into larger batches. This is helpful when there
         /// are highly selective filters or joins that could produce tiny output batches. The
@@ -1534,6 +1557,12 @@ config_namespace! {
         /// default parquet writer setting
         pub bloom_filter_ndv: Option<u64>, default = None
 
+        /// (writing) Write the number of distinct values (NDV) for each column
+        /// in row group statistics when creating parquet files. Enabling this
+        /// improves NDV-based query optimizations at the cost of hashing every
+        /// non-null value during write.
+        pub write_row_group_number_distinct_values: bool, default = false
+
         /// (writing) Controls whether DataFusion will attempt to speed up writing
         /// parquet files by serializing them in parallel. Each column
         /// in each row group in each output file are serialized in parallel
@@ -1809,7 +1838,9 @@ config_namespace! {
         /// rule. When set to false, any rules that produce errors will cause the query to fail
         pub skip_failed_rules: bool, default = false
 
-        /// Number of times that the optimizer will attempt to optimize the plan
+        /// The logical optimizer applies rules in order for up to `max_passes` passes,
+        /// stopping early if a pass leaves the plan unchanged or repeats an earlier plan.
+        /// The physical optimizer always runs in one pass.
         pub max_passes: usize, default = 3
 
         /// When set to true, the physical plan optimizer will run a top down

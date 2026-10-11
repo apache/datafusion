@@ -29,11 +29,12 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_execution::TaskContext;
-use datafusion_expr::Operator;
+use datafusion_expr::{AggregateUDF, Operator};
+use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
-use datafusion_physical_expr::expressions::{BinaryExpr, col};
+use datafusion_physical_expr::expressions::{BinaryExpr, col, lit};
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
@@ -61,6 +62,7 @@ const FILTER_CASES: &[Option<usize>] = &[
 enum ArgumentKind {
     Column,
     Multiply,
+    Literal,
 }
 
 impl ArgumentKind {
@@ -68,6 +70,7 @@ impl ArgumentKind {
         match self {
             Self::Column => "column",
             Self::Multiply => "multiply",
+            Self::Literal => "literal",
         }
     }
 }
@@ -151,19 +154,30 @@ fn aggregate_expr(
     argument_kind: ArgumentKind,
 ) -> Arc<AggregateFunctionExpr> {
     let value = col("value", schema).unwrap();
-    let argument: Arc<dyn PhysicalExpr> = match argument_kind {
-        ArgumentKind::Column => value,
-        ArgumentKind::Multiply => Arc::new(BinaryExpr::new(
-            Arc::clone(&value),
-            Operator::Multiply,
-            value,
-        )),
-    };
+    let (function, argument): (Arc<AggregateUDF>, Arc<dyn PhysicalExpr>) =
+        match argument_kind {
+            ArgumentKind::Column => (sum_udaf(), value),
+            ArgumentKind::Multiply => (
+                sum_udaf(),
+                Arc::new(BinaryExpr::new(
+                    Arc::clone(&value),
+                    Operator::Multiply,
+                    value,
+                )),
+            ),
+            // `COUNT(*)` is planned as `COUNT(1)`
+            ArgumentKind::Literal => (count_udaf(), lit(1i64)),
+        };
 
+    let alias = format!(
+        "{}_{}_{aggregate_index}",
+        function.name(),
+        argument_kind.name()
+    );
     Arc::new(
-        AggregateExprBuilder::new(sum_udaf(), vec![argument])
+        AggregateExprBuilder::new(function, vec![argument])
             .schema(Arc::clone(schema))
-            .alias(format!("sum_{}_{aggregate_index}", argument_kind.name()))
+            .alias(alias)
             .build()
             .unwrap(),
     )
@@ -266,7 +280,11 @@ fn aggregate_filter_benchmark(c: &mut Criterion) {
         c,
         &runtime,
         AggregateLayout::OneAggregate,
-        &[ArgumentKind::Column, ArgumentKind::Multiply],
+        &[
+            ArgumentKind::Column,
+            ArgumentKind::Multiply,
+            ArgumentKind::Literal,
+        ],
     );
     benchmark_case(
         c,
