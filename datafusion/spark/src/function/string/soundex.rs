@@ -16,12 +16,12 @@
 // under the License.
 
 use arrow::array::{ArrayRef, GenericStringBuilder, OffsetSizeTrait};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::{ColumnarValue, Signature, Volatility};
-use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
+use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_functions::utils::make_scalar_function;
 use std::sync::Arc;
 
@@ -60,6 +60,22 @@ impl ScalarUDFImpl for SparkSoundex {
             DataType::LargeUtf8 => Ok(DataType::LargeUtf8),
             _ => Ok(DataType::Utf8),
         }
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        // Like Spark's UnaryExpression, non-null inputs never produce null:
+        // https://github.com/apache/spark/blob/32f7299601108917fb01920a54e084595b7b3bf8/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/Expression.scala#L596-L599
+        let input = &args.arg_fields[0];
+        Ok(Arc::new(Field::new(
+            self.name(),
+            self.return_type(&arg_types)?,
+            input.is_nullable(),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

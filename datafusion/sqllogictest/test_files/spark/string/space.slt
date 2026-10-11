@@ -30,6 +30,11 @@ SELECT space(0::INT);
 ----
 (empty)
 
+query TTT
+DESCRIBE SELECT space(0::INT) AS spaces;
+----
+spaces Utf8 NO
+
 query T
 SELECT space(-1::INT);
 ----
@@ -39,3 +44,31 @@ query T
 SELECT space(NULL);
 ----
 NULL
+
+query TTT
+DESCRIBE SELECT space(NULL) AS spaces;
+----
+spaces Utf8 YES
+
+query T
+SELECT concat(space(n), 'Spark') FROM VALUES (1::INT), (0::INT), (-1::INT) AS t(n);
+----
+ Spark
+Spark
+Spark
+
+query TTT
+DESCRIBE SELECT space(n) AS spaces FROM VALUES (1::INT), (0::INT), (-1::INT) AS t(n);
+----
+spaces Utf8 NO
+
+query T
+SELECT space(n) FROM VALUES (0::INT), (NULL::INT) AS t(n);
+----
+(empty)
+NULL
+
+query TTT
+DESCRIBE SELECT space(n) AS spaces FROM VALUES (0::INT), (NULL::INT) AS t(n);
+----
+spaces Utf8 YES
