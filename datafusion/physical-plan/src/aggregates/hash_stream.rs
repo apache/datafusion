@@ -27,13 +27,9 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{
     DataFusionError, Result, assert_ne_or_internal_err, internal_datafusion_err,
-    internal_err,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
-use datafusion_physical_expr::PhysicalSortExpr;
-use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
@@ -41,14 +37,11 @@ use super::aggregate_hash_table::{
     AggregateHashTable, FinalMarker, OrderedAggregateTableMetrics, PartialMarker,
     PartialSkipMarker,
 };
-use super::ordered_final_stream::OrderedFinalAggregateStream;
 use super::skip_partial::SkipAggregationProbe;
+use super::spill::AggregateSpill;
 use crate::metrics::{
     BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput, SpillMetrics,
 };
-use crate::sorts::IncrementalSortIterator;
-use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
-use crate::spill::spill_manager::SpillManager;
 use crate::stream::{EmptyRecordBatchStream, RecordBatchStreamAdapter};
 use crate::{InputOrderMode, SendableRecordBatchStream, metrics};
 
@@ -143,7 +136,7 @@ use crate::{InputOrderMode, SendableRecordBatchStream, metrics};
 /// 3. Perform a sort-preserving merge of all spill files and feed the merged output
 ///    into an ordered streaming aggregation, which ensures bounded memory usage and
 ///    evaluates the final result.
-///    - [`OrderedFinalAggregateStream`] is reused for the streaming aggregation.
+///    - [`OrderedFinalAggregateStream`](super::ordered_final_stream::OrderedFinalAggregateStream) is reused for the streaming aggregation.
 pub(crate) struct PartialHashAggregateStream {
     /// Output schema: group columns followed by partial aggregate state columns.
     schema: SchemaRef,
@@ -179,28 +172,6 @@ pub(crate) struct PartialHashAggregateStream {
     hash_table: Option<AggregateHashTable<PartialMarker>>,
 }
 
-/// Spill configuration and accumulated runs for final hash aggregation.
-///
-/// Each spill event drains all currently buffered groups, sorts their intermediate
-/// states by the full group key, and writes them to one spill file. All files are
-/// merged and replayed after the original input ends.
-struct FinalSpillContext {
-    /// Aggregate configuration used to construct the final replay stream.
-    final_agg: AggregateExec,
-    /// Task context.
-    context: Arc<TaskContext>,
-    /// Original partition index.
-    partition: usize,
-    /// Target batch size from configuration.
-    batch_size: usize,
-    /// Full group-key ordering kept by every spill file and the merged input.
-    spill_expr: LexOrdering,
-    /// Spill I/O and metrics manager.
-    spill_manager: SpillManager,
-    /// Spill runs waiting to be merged, they're all sorted by full group-by keys.
-    spills: Vec<SortedSpillFile>,
-}
-
 /// Hash aggregation is implemented in two stages: partial and final. This
 /// stream implements the final stage.
 ///
@@ -227,141 +198,7 @@ pub(crate) struct FinalHashAggregateStream {
     /// This will be None when creating the stream
     hash_table: Option<AggregateHashTable<FinalMarker>>,
     /// `None` if spilling is not supported by the configured `DiskManager`.
-    spill_context: Option<Box<FinalSpillContext>>,
-}
-
-impl FinalSpillContext {
-    fn new(
-        agg: &AggregateExec,
-        context: &Arc<TaskContext>,
-        partition: usize,
-        batch_size: usize,
-        spill_schema: &SchemaRef,
-        spill_metrics: SpillMetrics,
-    ) -> Result<Self> {
-        let group_schema = agg.group_by.group_schema(&agg.input().schema())?;
-        let output_ordering = agg.cache.output_ordering();
-        let spill_sort_exprs =
-            group_schema
-                .fields()
-                .iter()
-                .enumerate()
-                .map(|(idx, field)| {
-                    let output_expr = Column::new(field.name(), idx);
-                    let sort_options = output_ordering
-                        .and_then(|ordering| ordering.get_sort_options(&output_expr))
-                        .unwrap_or_default();
-                    PhysicalSortExpr::new(Arc::new(output_expr), sort_options)
-                });
-        let Some(spill_expr) = LexOrdering::new(spill_sort_exprs) else {
-            return internal_err!("Final hash aggregate spill expression is empty");
-        };
-
-        let spill_manager = SpillManager::new(
-            context.runtime_env(),
-            spill_metrics,
-            Arc::clone(spill_schema),
-        )
-        .with_compression_type(context.session_config().spill_compression());
-
-        let mut final_agg = agg.clone();
-        final_agg.input_order_mode = InputOrderMode::Sorted;
-
-        Ok(Self {
-            final_agg,
-            context: Arc::clone(context),
-            partition,
-            batch_size,
-            spill_expr,
-            spill_manager,
-            spills: vec![],
-        })
-    }
-
-    fn has_spills(&self) -> bool {
-        !self.spills.is_empty()
-    }
-
-    /// Sorts and spills the aggregated groups. Memory reservation should be updated
-    /// by the caller.
-    ///
-    /// Individual spill files are ordered by the `group by` keys.
-    ///
-    /// See [`FinalHashAggregateStream`] for spilling details.
-    fn spill_table(
-        &mut self,
-        hash_table: &mut AggregateHashTable<FinalMarker>,
-    ) -> Result<()> {
-        let Some(batch) = hash_table.take_state_batch()? else {
-            return Ok(());
-        };
-
-        let sorted_iter =
-            IncrementalSortIterator::new(batch, self.spill_expr.clone(), self.batch_size);
-        let spill_file = self
-            .spill_manager
-            .spill_record_batch_iter_and_return_max_batch_memory(
-                sorted_iter,
-                "FinalHashAggregateSpill",
-            )?;
-
-        let Some((file, max_record_batch_memory)) = spill_file else {
-            return internal_err!("Final hash aggregation produced an empty spill");
-        };
-
-        self.spills.push(SortedSpillFile {
-            file,
-            max_record_batch_memory,
-        });
-
-        Ok(())
-    }
-
-    /// Merges every sorted run, and do the aggregate evaluation with
-    /// [`OrderedFinalAggregateStream`]
-    fn into_replay_stream(
-        self,
-        baseline_metrics: &BaselineMetrics,
-        metrics: OrderedAggregateTableMetrics,
-        reservation: MemoryReservation,
-    ) -> Result<SendableRecordBatchStream> {
-        let Self {
-            final_agg,
-            context,
-            partition,
-            batch_size,
-            spill_expr,
-            spill_manager,
-            spills,
-        } = self;
-
-        let spill_schema = Arc::clone(spill_manager.schema());
-        // The merge and replay table are two components of the same aggregate
-        // operator. Keep them under one consumer registration so a fair memory
-        // pool does not divide this operator's quota between its own phases.
-        let merge_reservation = reservation.new_empty();
-        let merged = StreamingMergeBuilder::new()
-            .with_schema(spill_schema)
-            .with_spill_manager(spill_manager)
-            .with_sorted_spill_files(spills)
-            .with_expressions(&spill_expr)
-            .with_metrics(baseline_metrics.intermediate())
-            .with_batch_size(batch_size)
-            .with_reservation(merge_reservation)
-            .build()?;
-        let replay = OrderedFinalAggregateStream::new_with_input_and_metrics(
-            &final_agg,
-            &context,
-            partition,
-            merged,
-            &InputOrderMode::Sorted,
-            baseline_metrics.clone(),
-            metrics,
-            None,
-            reservation,
-        )?;
-        Ok(Box::pin(replay))
-    }
+    spill_context: Option<Box<AggregateSpill>>,
 }
 
 #[derive(PartialEq)]
@@ -401,7 +238,7 @@ impl PartialHashAggregateStream {
             Arc::clone(&schema),
             batch_size,
         )?;
-        let skip_aggregation_probe = if agg.group_by.is_single() {
+        let skip_aggregation_probe = if agg.group_by().is_single() {
             let options = &context.session_config().options().execution;
             let probe_ratio_threshold =
                 options.skip_partial_aggregation_probe_ratio_threshold;
@@ -430,6 +267,9 @@ impl PartialHashAggregateStream {
                 // to ensure fair application of back pressure amongst the memory consumers.
                 .with_can_spill(true)
                 .register(context.memory_pool());
+
+        // Reserve memory for the initial hash table. that we hold for the lifetime of the stream.
+        reservation.try_grow(hash_table.memory_size())?;
 
         Ok(Self {
             schema,
@@ -588,73 +428,48 @@ impl PartialHashAggregateStream {
         }
     }
 
-    /// emit a materialized partial-state on memory pressure
-    /// batch in `batch_size`(from configuration) slices
+    /// Emit a materialized partial-state batch in `batch_size` slices.
     async fn emit_on_memory_pressure(
         &mut self,
-        // After each incremental emitting step, the `remaining_groups` will be updated
-        // with batch slicing.
         mut remaining_groups: RecordBatch,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
         hash_table_mem_size: usize,
     ) -> Result<()> {
         let remaining_groups_memory = remaining_groups.get_array_memory_size();
 
-        // Emitting clears the aggregate table and releases its
-        // accumulated memory. Update the reservation accordingly.
-        // We account here for the remaining groups memory to see if we can return batch size states
-        // if there is not enough memory, fallback to emit large batch
         match self
             .reservation
             .try_resize(hash_table_mem_size + remaining_groups_memory)
         {
-            Ok(_) => {
-                // Continue with slicing
-            }
+            Ok(()) => {}
             Err(DataFusionError::ResourcesExhausted(_)) => {
-                // Fail to reserve memory for the hash table + state batch while slicing so emit a huge batch
-
-                // Try resize without holding the state batch, if it fails there is nothing we can do
                 self.reservation.try_resize(hash_table_mem_size)?;
-
                 self.reduction_factor.add_part(remaining_groups.num_rows());
                 emitter
                     .emit(remaining_groups.record_output(&self.baseline_metrics))
                     .await;
-
                 return Ok(());
             }
-            Err(e) => return Err(e),
+            Err(error) => return Err(error),
         }
 
         while remaining_groups.num_rows() > self.batch_size {
-            // More batch to output, continue in the current state.
             let output = remaining_groups.slice(0, self.batch_size);
-
             remaining_groups = remaining_groups.slice(
                 self.batch_size,
                 remaining_groups.num_rows() - self.batch_size,
             );
-
             self.reduction_factor.add_part(output.num_rows());
-            debug_assert!(output.num_rows() > 0);
-
             emitter
                 .emit(output.record_output(&self.baseline_metrics))
                 .await;
         }
 
         self.reduction_factor.add_part(remaining_groups.num_rows());
-        debug_assert!(remaining_groups.num_rows() > 0);
-
-        // We are no longer holding on the batch while slicing, so release the memory.
-        // The memory will now equal to the hash table size
         self.reservation.try_shrink(remaining_groups_memory)?;
-
         emitter
             .emit(remaining_groups.record_output(&self.baseline_metrics))
             .await;
-
         Ok(())
     }
 
@@ -735,8 +550,18 @@ impl FinalHashAggregateStream {
         ));
         debug_assert_eq!(agg.input_order_mode, InputOrderMode::Linear);
 
-        let schema = Arc::clone(&agg.schema);
         let input = agg.input.execute(partition, Arc::clone(context))?;
+        Self::new_with_input(agg, context, partition, input)
+    }
+
+    /// Builds the stream over `input` instead of executing the plan's input.
+    pub(in crate::aggregates) fn new_with_input(
+        agg: &AggregateExec,
+        context: &Arc<TaskContext>,
+        partition: usize,
+        input: SendableRecordBatchStream,
+    ) -> Result<Self> {
+        let schema = Arc::clone(&agg.schema);
         let input_schema = input.schema();
         let batch_size = context.session_config().batch_size();
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
@@ -751,11 +576,13 @@ impl FinalHashAggregateStream {
 
         let can_spill = context.runtime_env().disk_manager.tmp_files_enabled();
         let spill_context = if can_spill {
-            Some(Box::new(FinalSpillContext::new(
+            Some(Box::new(AggregateSpill::try_new(
+                "FinalHashAggregateSpill",
                 agg,
                 context,
                 partition,
                 batch_size,
+                &InputOrderMode::Linear,
                 &input_schema,
                 spill_metrics,
             )?))
@@ -767,6 +594,9 @@ impl FinalHashAggregateStream {
             MemoryConsumer::new(format!("FinalHashAggregateStream[{partition}]"))
                 .with_can_spill(can_spill)
                 .register(context.memory_pool());
+
+        // Reserve memory for the initial hash table. that we hold for the lifetime of the stream.
+        reservation.try_grow(hash_table.memory_size())?;
 
         Ok(Self {
             schema,
@@ -829,7 +659,7 @@ impl FinalHashAggregateStream {
     /// Reserve memory for the current aggregate table.
     fn reservation_size_for_table(
         hash_table: &AggregateHashTable<FinalMarker>,
-        spill_context: Option<&FinalSpillContext>,
+        spill_context: Option<&AggregateSpill>,
     ) -> usize {
         let table_size = hash_table.memory_size();
         if spill_context.is_some() {
@@ -853,7 +683,7 @@ impl FinalHashAggregateStream {
     async fn consume_input(
         &mut self,
         hash_table: &mut AggregateHashTable<FinalMarker>,
-        spill_context: &mut Option<Box<FinalSpillContext>>,
+        spill_context: &mut Option<Box<AggregateSpill>>,
     ) -> Result<()> {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
 
@@ -901,7 +731,9 @@ impl FinalHashAggregateStream {
 
                     // Go to the next state to perform spilling the aggregated
                     // groups so far.
-                    let result = spill_context.spill_table(hash_table);
+                    let result = hash_table
+                        .take_state_batch()
+                        .and_then(|batch| spill_context.sort_and_spill(batch));
 
                     // Spilling shrinks the aggregate table and releases its accumulated
                     // memory. Update the reservation accordingly.
@@ -931,14 +763,16 @@ impl FinalHashAggregateStream {
     async fn produce_output_from_spills(
         &mut self,
         mut hash_table: AggregateHashTable<FinalMarker>,
-        mut spill_context: Box<FinalSpillContext>,
+        mut spill_context: Box<AggregateSpill>,
         mut emitter: TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let timer = elapsed_compute.timer();
 
         // Input was exhausted after spilling. Spill the last in-memory run
-        spill_context.spill_table(&mut hash_table)?;
+        hash_table
+            .take_state_batch()
+            .and_then(|batch| spill_context.sort_and_spill(batch))?;
 
         // Construct the ordered input used to merge all spill files.
         let mut output_stream =
@@ -967,7 +801,7 @@ impl FinalHashAggregateStream {
     fn switch_to_ordered_final_stream(
         &mut self,
         hash_table: AggregateHashTable<FinalMarker>,
-        spill_context: Box<FinalSpillContext>,
+        spill_context: Box<AggregateSpill>,
     ) -> Result<SendableRecordBatchStream> {
         let metrics = OrderedAggregateTableMetrics::from_hash_table(&hash_table);
         drop(hash_table);
@@ -1021,18 +855,26 @@ mod tests {
 
     use super::*;
     use crate::aggregates::{AggregateMode, PhysicalGroupBy};
+    use crate::common::collect;
     use crate::execution_plan::ExecutionPlan;
     use crate::test::TestMemoryExec;
     use crate::test::exec::BarrierExec;
 
-    use arrow::array::{AsArray, Int32Array, Int64Array};
+    use arrow::array::{AsArray, Int32Array, Int64Array, StringViewArray};
     use arrow::datatypes::{DataType, Field, Int32Type, Schema};
     use datafusion_common::Result;
+    use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::memory_pool::{
+        GreedyMemoryPool, MemoryPool, UnboundedMemoryPool,
+    };
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_functions_aggregate::count::count_udaf;
+    use datafusion_functions_aggregate::{min_max::min_udaf, sum::sum_udaf};
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::col;
-    use futures::StreamExt;
+    use futures::channel::mpsc;
+    use futures::{FutureExt, StreamExt};
+    use std::collections::BTreeMap;
 
     #[tokio::test]
     async fn test_partial_hash_stream_double_emission_race_condition_bug() -> Result<()> {
@@ -1067,7 +909,7 @@ mod tests {
 
         // Create constrained memory to trigger early emission but not completely fail
         let runtime = RuntimeEnvBuilder::default()
-            .with_memory_limit(1024, 1.0) // small enough to start but will trigger pressure
+            .with_memory_limit(5 * 1024, 1.0) // fits the initial table but will trigger pressure
             .build_arc()?;
 
         let mut task_ctx = TaskContext::default().with_runtime(runtime);
@@ -1148,7 +990,7 @@ mod tests {
 
         // Disable skip aggregation so the same input is emitted on memory pressure.
         let runtime = RuntimeEnvBuilder::default()
-            .with_memory_limit(1024, 1.0)
+            .with_memory_limit(5 * 1024, 1.0)
             .build_arc()?;
         let session_config = task_ctx.session_config().clone().set(
             "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
@@ -1413,53 +1255,23 @@ mod tests {
     #[tokio::test]
     async fn test_partial_hash_stream_accounts_held_batch_on_memory_pressure_while_slicing()
     -> Result<()> {
-        // When memory pressure triggers early emission, the materialized state
-        // batch is held while it is sliced into `batch_size` outputs. The
-        // stream must keep that held batch accounted for in its memory
-        // reservation until the last slice is emitted; before the fix the
-        // reservation was resized down to just the (emptied) hash table size,
-        // leaving the held batch unaccounted.
-
         let batch_size = 1024;
-        // One row per group so the state batch is emitted in 4 slices
         let num_groups = 4 * batch_size;
-
-        // Smaller than the building hash table (so pressure triggers) but large
-        // enough to hold the materialized state batch (so slicing can proceed)
         let memory_limit = 100 * 1024;
         let (mut stream, input, runtime) =
             partial_stream_under_memory_limit(memory_limit, batch_size, num_groups)?;
 
-        // The first output batch must be a pressure-emitted slice, with the rest
-        // of the materialized state batch still held by the stream
         let first = tokio::time::timeout(Duration::from_secs(5), stream.next())
             .await
-            .expect(
-                "did not get early emit due to OOM, this probably means that the \
-                 memory limit is too high to trigger the OOM",
-            )
+            .expect("early emit should occur")
             .expect("stream ended early")?;
         assert_eq!(first.num_rows(), batch_size);
 
-        // The emitted slice shares buffers with the held state batch, so its
-        // array memory size reflects the full held allocation
         let held_size = first.get_array_memory_size();
-        let reserved = runtime.memory_pool.reserved();
-        assert!(
-            reserved >= held_size,
-            "memory pool has {reserved} bytes reserved but the stream is \
-             holding a materialized state batch of {held_size} bytes"
-        );
+        assert!(runtime.memory_pool.reserved() >= held_size);
 
         let second = stream.next().await.expect("stream ended early")?;
         assert_eq!(second.num_rows(), batch_size);
-
-        // Make sure the state batch is really being sliced (and not emitted whole by the fallback path):
-        // the second output must share the same underlying buffer as the first
-        //
-        // If you changed the code and this fail because
-        // - you now deep copy `batch_size` from the full state batch, please update this assertion to something else
-        // - you only take batch size from the hash table, you can remove the test
         assert_eq!(
             first
                 .column(0)
@@ -1473,65 +1285,34 @@ mod tests {
                 .values()
                 .inner()
                 .data_ptr(),
-            "both batches should be slices of the same materialized state batch"
+            "batches should slice one materialized state batch"
         );
 
-        // Let the input finish and drain the stream: no groups lost
         input.wait_finish().await;
         let mut total_rows = first.num_rows() + second.num_rows();
         while let Some(batch) = stream.next().await {
             total_rows += batch?.num_rows();
         }
         assert_eq!(total_rows, num_groups);
-
         Ok(())
     }
 
     #[tokio::test]
     async fn test_partial_hash_stream_emits_whole_batch_when_held_batch_does_not_fit()
     -> Result<()> {
-        // When memory pressure triggers early emission but the materialized
-        // state batch itself does not fit in the reservation, the stream must
-        // not fail with a resources exhausted error. Instead it gives up on
-        // slicing and emits the whole state batch at once.
-
         let batch_size = 1024;
         let num_groups = 4 * batch_size;
-
-        // Smaller than the materialized state batch (4096 rows of Int32 group
-        // keys plus Int64 counts is at least 48 KiB), so the reservation for
-        // hash table  held batch fails. The emptied hash table itself is tiny
-        // and still fits.
         let memory_limit = 32 * 1024;
         let (mut stream, input, runtime) =
             partial_stream_under_memory_limit(memory_limit, batch_size, num_groups)?;
 
         let first = tokio::time::timeout(Duration::from_secs(5), stream.next())
             .await
-            .expect(
-                "did not get early emit due to OOM, this probably means that the \
-                 memory limit is too high to trigger the OOM",
-            )
+            .expect("early emit should occur")
             .expect("stream ended early")?;
-
-        // The whole state batch is emitted at once instead of `batch_size` slices
         assert_eq!(first.num_rows(), num_groups);
-        assert!(
-            first.get_array_memory_size() > memory_limit,
-            "test setup is wrong: the state batch fits within the memory limit, \
-             so the slicing path would have been taken"
-        );
-
-        // Unlike the slicing path, the stream does not hold on to the emitted
-        // batch, so it must not be accounted for in the reservation. Only the
-        // (emptied) hash table remains reserved
-        let emitted_size = first.get_array_memory_size();
-        let reserved = runtime.memory_pool.reserved();
-        assert!(
-            reserved < emitted_size,
-            "memory pool has {reserved} bytes reserved but the stream no longer \
-             holds the emitted state batch of {emitted_size} bytes"
-        );
+        assert!(first.get_array_memory_size() > memory_limit);
+        assert!(runtime.memory_pool.reserved() < first.get_array_memory_size());
 
         input.wait_finish().await;
         let mut total_rows = first.num_rows();
@@ -1539,60 +1320,35 @@ mod tests {
             total_rows += batch?.num_rows();
         }
         assert_eq!(total_rows, num_groups);
-
         Ok(())
     }
 
     #[tokio::test]
     async fn test_partial_hash_stream_releases_held_batch_after_last_slice() -> Result<()>
     {
-        // While the pressure-emitted state batch is sliced, the stream holds
-        // the remaining groups and keeps them reserved. Once the last slice is
-        // handed out nothing is held anymore, so the reservation must drop
-        // back to just the (emptied) hash table before the input is resumed.
-
         let batch_size = 1024;
         let num_slices = 4;
         let num_groups = num_slices * batch_size;
-
         let memory_limit = 100 * 1024;
         let (mut stream, input, runtime) =
             partial_stream_under_memory_limit(memory_limit, batch_size, num_groups)?;
 
-        // The input has not finished, so all of these are pressure-emitted slices
         let mut held_size = 0;
         for slice_idx in 0..num_slices {
             let slice = if slice_idx == 0 {
                 tokio::time::timeout(Duration::from_secs(5), stream.next())
                     .await
-                    .expect(
-                        "did not get early emit due to OOM, this probably means that the \
-                         memory limit is too high to trigger the OOM",
-                    )
+                    .expect("early emit should occur")
                     .expect("stream ended early")?
             } else {
                 stream.next().await.expect("stream ended early")?
             };
-
             assert_eq!(slice.num_rows(), batch_size);
-
-            // Every slice shares buffers with the held state batch, so this is
-            // the size of the full held allocation
             held_size = slice.get_array_memory_size();
-            let reserved = runtime.memory_pool.reserved();
-
             if slice_idx + 1 < num_slices {
-                assert!(
-                    reserved >= held_size,
-                    "after slice {slice_idx} the stream still holds {held_size} \
-                     bytes but only {reserved} bytes are reserved"
-                );
+                assert!(runtime.memory_pool.reserved() >= held_size);
             } else {
-                assert!(
-                    reserved < held_size,
-                    "after the last slice nothing is held anymore but {reserved} \
-                     bytes are still reserved (held batch was {held_size} bytes)"
-                );
+                assert!(runtime.memory_pool.reserved() < held_size);
             }
         }
         assert!(held_size > 0);
@@ -1603,7 +1359,301 @@ mod tests {
             total_rows += batch?.num_rows();
         }
         assert_eq!(total_rows, num_groups);
+        Ok(())
+    }
 
+    #[derive(Clone, Copy)]
+    enum Finish {
+        Collect,
+        DropDuringReplay,
+        InputError,
+    }
+
+    #[tokio::test]
+    async fn final_hash_spill_replay_with_other_partitions_holding_state() -> Result<()> {
+        for spills in [1, 2, 3] {
+            run_shared_pool_case(spills, Some(1024 * 1024), Finish::Collect).await?;
+        }
+        // Collision-mode scratch can exceed a fixed reference budget. Use an
+        // unbounded pool so this case always exercises output without spilling.
+        run_shared_pool_case(0, None, Finish::Collect).await
+    }
+
+    #[tokio::test]
+    async fn final_hash_spill_replay_releases_memory_on_drop() -> Result<()> {
+        run_shared_pool_case(1, Some(1024 * 1024), Finish::DropDuringReplay).await
+    }
+
+    #[tokio::test]
+    async fn final_hash_spill_releases_memory_on_input_error() -> Result<()> {
+        run_shared_pool_case(1, Some(1024 * 1024), Finish::InputError).await
+    }
+
+    /// Partition 0 spills `spills` times and replays while partitions 1..3
+    /// keep their aggregate state in the same greedy pool. With `spills` at 0,
+    /// partition 0 reads a fixed input that fits in memory.
+    ///
+    /// Input sizes follow the observed reservations, so the cases do not
+    /// depend on the memory accounting of a platform or feature set.
+    ///
+    /// These cases cover the spill and replay lifecycle in a shared pool:
+    /// results, spill metrics, and memory release. Case G in
+    /// `aggregate_memory_spill.slt` covers the merge fan-in regression for
+    /// issue #25423.
+    async fn run_shared_pool_case(
+        spills: usize,
+        limit: Option<usize>,
+        finish: Finish,
+    ) -> Result<()> {
+        const PARTITIONS: usize = 4;
+        /// Partitions 1..3 hold at least this much state.
+        const HELD_BYTES: usize = 512 * 1024;
+        /// A case that never reaches its target fails instead of looping.
+        const MAX_BATCHES: i64 = 1000;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+            Field::new("v", DataType::Int64, false),
+            Field::new("s", DataType::Utf8View, false),
+        ]));
+        let groups = PhysicalGroupBy::new_single(vec![
+            (col("a", &schema)?, "a".into()),
+            (col("b", &schema)?, "b".into()),
+        ]);
+        let expressions = vec![
+            Arc::new(
+                AggregateExprBuilder::new(sum_udaf(), vec![col("v", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("sum")
+                    .build()?,
+            ),
+            Arc::new(
+                AggregateExprBuilder::new(min_udaf(), vec![col("s", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("min")
+                    .build()?,
+            ),
+        ];
+        let empty = TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(&schema), None)?;
+        let partial = AggregateExec::try_new(
+            AggregateMode::Partial,
+            groups.clone(),
+            expressions.clone(),
+            vec![None; 2],
+            empty,
+            Arc::clone(&schema),
+        )?;
+        let partial_schema = partial.schema();
+        let input = TestMemoryExec::try_new_exec(
+            &vec![vec![]; PARTITIONS],
+            Arc::clone(&partial_schema),
+            None,
+        )?;
+        let aggregate = AggregateExec::try_new(
+            AggregateMode::FinalPartitioned,
+            groups.as_final(),
+            expressions,
+            vec![None; 2],
+            input,
+            schema,
+        )?;
+        assert_eq!(aggregate.input_order_mode(), &InputOrderMode::Linear);
+
+        let pool: Arc<dyn MemoryPool> = match limit {
+            Some(limit) => Arc::new(GreedyMemoryPool::new(limit)),
+            None => Arc::new(UnboundedMemoryPool::default()),
+        };
+        let context = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(128))
+                .with_runtime(
+                    RuntimeEnvBuilder::new()
+                        .with_memory_pool(Arc::clone(&pool))
+                        .build_arc()?,
+                ),
+        );
+        let make_stream = |partition| -> Result<_> {
+            let (sender, receiver) = mpsc::unbounded();
+            let input = Box::pin(RecordBatchStreamAdapter::new(
+                Arc::clone(&partial_schema),
+                receiver,
+            ));
+            let stream = FinalHashAggregateStream::new_with_input(
+                &aggregate, &context, partition, input,
+            )?
+            .into_stream();
+            Ok((sender, stream))
+        };
+
+        // Construct the holders first. Their reservation is the baseline that
+        // must survive partition 0's spill/replay lifecycle.
+        let mut streams = vec![];
+        let mut senders = vec![];
+        for partition in 1..PARTITIONS {
+            let (sender, stream) = make_stream(partition)?;
+            senders.push(sender);
+            streams.push(stream);
+        }
+        let mut expected = BTreeMap::new();
+        let mut make_batch = |partition: i64, start: i64| {
+            for value in start..start + 128 {
+                let entry = expected
+                    .entry((
+                        partition,
+                        if partition == 0 && value % 128 == 0 {
+                            0
+                        } else {
+                            value
+                        },
+                    ))
+                    .or_insert_with(|| (0, (value % 2).to_string()));
+                entry.0 += value * 2;
+            }
+            RecordBatch::try_new(
+                Arc::clone(&partial_schema),
+                vec![
+                    Arc::new(Int64Array::from(vec![partition; 128])),
+                    Arc::new(Int64Array::from_iter_values((start..start + 128).map(
+                        |value| {
+                            if partition == 0 && value % 128 == 0 {
+                                0
+                            } else {
+                                value
+                            }
+                        },
+                    ))),
+                    Arc::new(Int64Array::from_iter_values(
+                        (start..start + 128).map(|v| v * 2),
+                    )),
+                    Arc::new(StringViewArray::from_iter_values(
+                        (start..start + 128).map(|v| if v % 2 == 0 { "0" } else { "1" }),
+                    )),
+                ],
+            )
+            .unwrap()
+        };
+        // Channel inputs return Pending after each supplied batch, so the
+        // interleaving below does not depend on task scheduling.
+        let mut held_batches = 0;
+        while pool.reserved() < HELD_BYTES {
+            assert!(held_batches < MAX_BATCHES, "held state stays small");
+            for (partition, (sender, stream)) in
+                senders.iter().zip(streams.iter_mut()).enumerate()
+            {
+                let partition = partition + 1;
+                sender
+                    .unbounded_send(Ok(make_batch(partition as i64, held_batches * 128)))
+                    .unwrap();
+                assert!(stream.next().now_or_never().is_none());
+            }
+            held_batches += 1;
+        }
+        let held = pool.reserved();
+        let spill_count = || aggregate.metrics().unwrap().spill_count().unwrap();
+        assert_eq!(spill_count(), 0);
+
+        // Do not include partition 0's empty table in `held`: it is correctly
+        // released when that stream spills, errors, or is dropped.
+        let (partition_zero_sender, mut first) = make_stream(0)?;
+        // Feed partition 0 until it has spilled `spills` times. Key (0, 0)
+        // repeats in every batch, so replay must merge its sum across runs.
+        let mut batches = 0;
+        loop {
+            let done = if spills == 0 {
+                batches == 70
+            } else {
+                spill_count() >= spills
+            };
+            if done {
+                break;
+            }
+            assert!(batches < MAX_BATCHES, "partition 0 did not spill");
+            partition_zero_sender
+                .unbounded_send(Ok(make_batch(0, batches * 128)))
+                .unwrap();
+            assert!(first.next().now_or_never().is_none());
+            batches += 1;
+        }
+        // Add groups after the last spill so replay also merges the final
+        // in-memory run.
+        for _ in 0..8 {
+            partition_zero_sender
+                .unbounded_send(Ok(make_batch(0, batches * 128)))
+                .unwrap();
+            assert!(first.next().now_or_never().is_none());
+            batches += 1;
+        }
+        assert!(spill_count() >= spills);
+        assert_eq!(spill_count() == 0, spills == 0);
+        match finish {
+            Finish::Collect => {
+                partition_zero_sender.close_channel();
+                let mut output = collect(first).await?;
+                assert_eq!(pool.reserved(), held);
+                for sender in &senders {
+                    sender.close_channel();
+                }
+                for stream in streams.drain(..) {
+                    output.extend(collect(stream).await?);
+                }
+                let mut actual = BTreeMap::new();
+                for batch in output {
+                    let a = batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap();
+                    let b = batch
+                        .column(1)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap();
+                    let sum = batch
+                        .column(2)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap();
+                    let min = batch
+                        .column(3)
+                        .as_any()
+                        .downcast_ref::<StringViewArray>()
+                        .unwrap();
+                    for row in 0..batch.num_rows() {
+                        assert!(
+                            actual
+                                .insert(
+                                    (a.value(row), b.value(row)),
+                                    (sum.value(row), min.value(row).to_string())
+                                )
+                                .is_none()
+                        );
+                    }
+                }
+                assert_eq!(actual, expected);
+                assert_eq!(spill_count() == 0, spills == 0);
+            }
+            Finish::DropDuringReplay => {
+                partition_zero_sender.close_channel();
+                first.next().await.unwrap()?;
+                assert!(pool.reserved() > held);
+                drop(first);
+                assert_eq!(pool.reserved(), held);
+            }
+            Finish::InputError => {
+                partition_zero_sender
+                    .unbounded_send(datafusion_common::exec_err!(
+                        "injected input failure"
+                    ))
+                    .unwrap();
+                let error = first.next().await.unwrap().unwrap_err();
+                assert!(error.to_string().contains("injected input failure"));
+                assert_eq!(pool.reserved(), held);
+                drop(first);
+            }
+        }
+        drop(streams);
+        assert_eq!(pool.reserved(), 0);
         Ok(())
     }
 }

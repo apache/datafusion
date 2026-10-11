@@ -4,10 +4,18 @@
 
 - [Quick Start Setup](docs/source/contributor-guide/development_environment.md#quick-start)
 - [Testing Quick Start](docs/source/contributor-guide/testing.md#testing-quick-start)
+- [Open Contribution and Assigning tickets](docs/source/contributor-guide/index.md#open-contribution-and-assigning-tickets)
+- [Choosing What Kind of Test to Write](docs/source/contributor-guide/testing.md#choosing-what-kind-of-test-to-write)
 - [Before Submitting a PR](docs/source/contributor-guide/index.md#before-submitting-a-pr)
 - [Reviewing Pull Requests](docs/source/contributor-guide/pr_review.md)
 - [Contributor Guide](docs/source/contributor-guide/index.md)
 - [Architecture Guide](docs/source/contributor-guide/architecture.md)
+
+## Before Starting Work
+
+Before you start work on an issue, you MUST follow the instructions in
+[Open Contribution and Assigning tickets](docs/source/contributor-guide/index.md#open-contribution-and-assigning-tickets). You must ensure duplicate work is not being created.
+Do not create multiple PRs if this is your first time contributing.
 
 ## Before Committing
 
@@ -38,7 +46,10 @@ When creating a PR, you MUST follow the [PR template](.github/pull_request_templ
 
 ## Testing
 
-If documentation files changed then run 
+When adding tests, you MUST follow
+[Choosing What Kind of Test to Write](docs/source/contributor-guide/testing.md#choosing-what-kind-of-test-to-write):
+
+If documentation files changed then run
 ```bash
 ./ci/scripts/doc_prettier_check.sh --write --allow-dirty
 ```

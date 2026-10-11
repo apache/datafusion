@@ -125,7 +125,7 @@ SELECT regexp_match('bb-1', '.*-(\d)', 'g');
 query error Error during planning: regexp_match\(\) does not support the "global" option
 SELECT regexp_match('bb-1', '.*-(\d)', 'g');
 
-query error Arrow error: Compute error: Regular expression did not compile: CompiledTooBig\(10485760\)
+query error DataFusion error: Execution error: Regular expression did not compile: Compiled regex exceeds size limit of 10485760 bytes
 SELECT regexp_match('aaaaa', 'a{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}');
 
 # look-around is not supported and will just return null
@@ -232,3 +232,79 @@ NULL [bar]
 
 statement ok
 DROP TABLE regexp_empty_flags;
+
+# A pattern that does not compile is reported with the diagnosis of the `regex`
+# crate. The kernel compiles the pattern, and the diagnosis is produced only
+# after the kernel has failed, so a query that succeeds compiles it once.
+query error DataFusion error: Execution error: Regular expression did not compile: regex parse error
+SELECT regexp_match('abc', 'a(b');
+
+statement ok
+CREATE TABLE t_invalid_pattern(str varchar, pattern varchar) AS VALUES ('abc', 'a(b'), ('abc', NULL);
+
+query error DataFusion error: Execution error: Regular expression did not compile: regex parse error
+SELECT regexp_match(str, 'a(b') FROM t_invalid_pattern;
+
+# A pattern that varies per row is reported in the same way.
+query error DataFusion error: Execution error: Regular expression did not compile: regex parse error
+SELECT regexp_match(str, pattern) FROM t_invalid_pattern;
+
+# An unknown flag makes the pattern fail to compile in the same way.
+query error DataFusion error: Execution error: Regular expression did not compile: regex parse error
+SELECT regexp_match('abc', 'a', 'z');
+
+# A NULL value or a NULL pattern gives NULL, and compiles nothing.
+query ?
+SELECT regexp_match(NULL, 'a(b');
+----
+NULL
+
+query ?
+SELECT regexp_match('abc', NULL);
+----
+NULL
+
+query ?
+SELECT regexp_match(str, pattern) FROM t_invalid_pattern WHERE pattern IS NULL;
+----
+NULL
+
+statement ok
+DROP TABLE t_invalid_pattern;
+
+# A row whose value or whose pattern is NULL gives NULL, and the kernel never
+# compiles that row's pattern. The diagnosis therefore names the pattern that
+# made the kernel fail, not the one of a row the kernel skipped.
+statement ok
+CREATE TABLE t_null_value(str varchar, pattern varchar) AS VALUES (NULL, 'a(b'), ('abc', NULL), ('abc', 'c[d');
+
+query error DataFusion error: Execution error: Regular expression did not compile: regex parse error[\s\S]*unclosed character class
+SELECT regexp_match(str, pattern) FROM t_null_value;
+
+query error DataFusion error: Execution error: Regular expression did not compile: regex parse error[\s\S]*unclosed character class
+SELECT regexp_match(str, pattern, 'm') FROM t_null_value;
+
+# The control: on their own, the rows that the kernel skips give NULL, and the
+# pattern that does not compile is never reported.
+query ?
+SELECT regexp_match(str, pattern) FROM t_null_value WHERE str IS NULL;
+----
+NULL
+
+query ?
+SELECT regexp_match(str, pattern) FROM t_null_value WHERE pattern IS NULL;
+----
+NULL
+
+query ?
+SELECT regexp_match(str, pattern, 'm') FROM t_null_value WHERE str IS NULL;
+----
+NULL
+
+query ?
+SELECT regexp_match(str, pattern, 'm') FROM t_null_value WHERE pattern IS NULL;
+----
+NULL
+
+statement ok
+DROP TABLE t_null_value;

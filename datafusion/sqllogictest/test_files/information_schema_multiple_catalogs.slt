@@ -44,7 +44,7 @@ datafusion information_schema views VIEW
 # Create multiple catalogs
 ###########
 statement ok
-create database my_catalog;
+create catalog my_catalog;
 
 statement ok
 create schema my_catalog.my_schema;
@@ -62,7 +62,7 @@ statement ok
 create table t2 as values(1);
 
 statement ok
-create database my_other_catalog;
+create catalog my_other_catalog;
 
 statement ok
 create schema my_other_catalog.my_other_schema;

@@ -348,7 +348,7 @@ fn has_empty_grouping_set(group_expr: &[Expr]) -> bool {
 #[cfg(test)]
 mod tests {
 
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::{DataType, Field, Metadata, Schema};
 
     use datafusion_common::{Column, DFSchema};
     use datafusion_expr::logical_plan::table_scan;
@@ -800,7 +800,7 @@ mod tests {
             produce_one_row: false,
             schema: Arc::new(DFSchema::from_unqualified_fields(
                 fields.into(),
-                Default::default(),
+                Metadata::new(),
             )?),
         });
 

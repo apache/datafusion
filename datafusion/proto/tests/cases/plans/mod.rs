@@ -92,6 +92,23 @@ fn roundtrip_test_and_return(
     Ok(result_exec_plan)
 }
 
+/// Round-trip through the public JSON APIs and return the decoded plan for field assertions.
+#[cfg(feature = "json")]
+fn roundtrip_test_json_and_return(
+    exec_plan: Arc<dyn ExecutionPlan>,
+    ctx: &SessionContext,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    use datafusion_proto::bytes::{physical_plan_from_json, physical_plan_to_json};
+
+    let json = physical_plan_to_json(Arc::clone(&exec_plan))?;
+    let result_exec_plan = physical_plan_from_json(&json, ctx.task_ctx().as_ref())?;
+    pretty_assertions::assert_eq!(
+        format!("{exec_plan:?}"),
+        format!("{result_exec_plan:?}")
+    );
+    Ok(result_exec_plan)
+}
+
 /// Perform a serde roundtrip and assert that the string representation of the before and after plans
 /// are identical. Note that this often isn't sufficient to guarantee that no information is
 /// lost during serde because the string representation of a plan often only shows a subset of state.

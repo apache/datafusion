@@ -22,6 +22,7 @@ use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
 use datafusion_common::cast::{as_float64_array, as_uint64_array};
 use datafusion_common::{HashMap, Result, ScalarValue};
 use datafusion_doc::aggregate_doc_sections::DOC_SECTION_STATISTICAL;
+use datafusion_expr::DistinctHandling;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -512,6 +513,13 @@ impl AggregateUDFImpl for Regr {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.regr_type.documentation()
+    }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // Duplicate-sensitive, but the accumulator does not read
+        // `is_distinct` and today silently returns the non-distinct answer.
+        // The tag records the intent; enforcement is a follow-up change.
+        DistinctHandling::Unsupported
     }
 }
 

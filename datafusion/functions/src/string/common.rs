@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use crate::strings::{
     GenericStringArrayBuilder, STRING_VIEW_INIT_BLOCK_SIZE, STRING_VIEW_MAX_BLOCK_SIZE,
-    StringViewArrayBuilder, StringWriter, append_view,
+    StringViewArrayBuilder, StringWriter, substr_view,
 };
 use arrow::array::{
     Array, ArrayRef, AsArray, GenericStringArray, NullBufferBuilder, OffsetSizeTrait,
@@ -31,20 +31,20 @@ use arrow::buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
+use datafusion_common::utils::{offset_span, offset_span_len};
 use datafusion_common::{ScalarValue, exec_err};
 use datafusion_expr::ColumnarValue;
 
 /// Trait for trim operations, allowing compile-time dispatch instead of runtime matching.
 ///
-/// Each implementation performs its specific trim operation and returns
-/// (trimmed_str, start_offset) where start_offset is the byte offset
-/// from the beginning of the input string where the trimmed result starts.
+/// Each implementation performs its specific trim operation and returns the
+/// trimmed slice of the input.
 pub(crate) trait Trimmer {
-    fn trim<'a>(input: &'a str, pattern: &[char]) -> (&'a str, u32);
+    fn trim<'a>(input: &'a str, pattern: &[char]) -> &'a str;
 
     /// Optimized trim for a single ASCII byte.
     /// Uses byte-level scanning instead of char-level iteration.
-    fn trim_ascii_char(input: &str, byte: u8) -> (&str, u32);
+    fn trim_ascii_char(input: &str, byte: u8) -> &str;
 }
 
 /// Returns the number of leading bytes matching `byte`
@@ -64,19 +64,16 @@ pub(crate) struct TrimLeft;
 
 impl Trimmer for TrimLeft {
     #[inline]
-    fn trim<'a>(input: &'a str, pattern: &[char]) -> (&'a str, u32) {
+    fn trim<'a>(input: &'a str, pattern: &[char]) -> &'a str {
         if pattern.len() == 1 && pattern[0].is_ascii() {
             return Self::trim_ascii_char(input, pattern[0] as u8);
         }
-        let trimmed = input.trim_start_matches(pattern);
-        let offset = (input.len() - trimmed.len()) as u32;
-        (trimmed, offset)
+        input.trim_start_matches(pattern)
     }
 
     #[inline]
-    fn trim_ascii_char(input: &str, byte: u8) -> (&str, u32) {
-        let start = leading_bytes(input.as_bytes(), byte);
-        (&input[start..], start as u32)
+    fn trim_ascii_char(input: &str, byte: u8) -> &str {
+        &input[leading_bytes(input.as_bytes(), byte)..]
     }
 }
 
@@ -85,19 +82,17 @@ pub(crate) struct TrimRight;
 
 impl Trimmer for TrimRight {
     #[inline]
-    fn trim<'a>(input: &'a str, pattern: &[char]) -> (&'a str, u32) {
+    fn trim<'a>(input: &'a str, pattern: &[char]) -> &'a str {
         if pattern.len() == 1 && pattern[0].is_ascii() {
             return Self::trim_ascii_char(input, pattern[0] as u8);
         }
-        let trimmed = input.trim_end_matches(pattern);
-        (trimmed, 0)
+        input.trim_end_matches(pattern)
     }
 
     #[inline]
-    fn trim_ascii_char(input: &str, byte: u8) -> (&str, u32) {
+    fn trim_ascii_char(input: &str, byte: u8) -> &str {
         let bytes = input.as_bytes();
-        let end = bytes.len() - trailing_bytes(bytes, byte);
-        (&input[..end], 0)
+        &input[..bytes.len() - trailing_bytes(bytes, byte)]
     }
 }
 
@@ -106,22 +101,19 @@ pub(crate) struct TrimBoth;
 
 impl Trimmer for TrimBoth {
     #[inline]
-    fn trim<'a>(input: &'a str, pattern: &[char]) -> (&'a str, u32) {
+    fn trim<'a>(input: &'a str, pattern: &[char]) -> &'a str {
         if pattern.len() == 1 && pattern[0].is_ascii() {
             return Self::trim_ascii_char(input, pattern[0] as u8);
         }
-        let left_trimmed = input.trim_start_matches(pattern);
-        let offset = (input.len() - left_trimmed.len()) as u32;
-        let trimmed = left_trimmed.trim_end_matches(pattern);
-        (trimmed, offset)
+        input.trim_matches(pattern)
     }
 
     #[inline]
-    fn trim_ascii_char(input: &str, byte: u8) -> (&str, u32) {
+    fn trim_ascii_char(input: &str, byte: u8) -> &str {
         let bytes = input.as_bytes();
         let start = leading_bytes(bytes, byte);
         let end = bytes.len() - trailing_bytes(&bytes[start..], byte);
-        (&input[start..end], start as u32)
+        &input[start..end]
     }
 }
 
@@ -154,8 +146,8 @@ fn string_view_trim<Tr: Trimmer>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 .zip(string_view_array.views().iter())
             {
                 if let Some(src_str) = src_str_opt {
-                    let (trimmed, offset) = Tr::trim_ascii_char(src_str, b' ');
-                    append_view(&mut views_buf, raw_view, trimmed, offset);
+                    let trimmed = Tr::trim_ascii_char(src_str, b' ');
+                    views_buf.push(substr_view(*raw_view, src_str, trimmed));
                     null_builder.append_non_null();
                 } else {
                     null_builder.append_null();
@@ -201,8 +193,8 @@ fn string_view_trim<Tr: Trimmer>(args: &[ArrayRef]) -> Result<ArrayRef> {
                     {
                         pattern.clear();
                         pattern.extend(characters.chars());
-                        let (trimmed, offset) = Tr::trim(src_str, &pattern);
-                        append_view(&mut views_buf, raw_view, trimmed, offset);
+                        let trimmed = Tr::trim(src_str, &pattern);
+                        views_buf.push(substr_view(*raw_view, src_str, trimmed));
                         null_builder.append_non_null();
                     } else {
                         null_builder.append_null();
@@ -228,7 +220,7 @@ fn string_view_trim<Tr: Trimmer>(args: &[ArrayRef]) -> Result<ArrayRef> {
     unsafe {
         let array = StringViewArray::new_unchecked(
             views_buf,
-            string_view_array.data_buffers().to_vec(),
+            Arc::clone(string_view_array.data_buffers()),
             nulls_buf,
         );
         Ok(Arc::new(array) as ArrayRef)
@@ -253,8 +245,8 @@ fn trim_and_append_view<Tr: Trimmer>(
     original_view: &u128,
 ) {
     if let Some(src_str) = src_str_opt {
-        let (trimmed, offset) = Tr::trim(src_str, pattern);
-        append_view(views_buf, original_view, trimmed, offset);
+        let trimmed = Tr::trim(src_str, pattern);
+        views_buf.push(substr_view(*original_view, src_str, trimmed));
         null_builder.append_non_null();
     } else {
         null_builder.append_null();
@@ -282,11 +274,7 @@ where
     F: for<'a> FnMut(usize, &'a str) -> &'a str,
 {
     let len = string_array.len();
-    let input_offsets = string_array.value_offsets();
-    let start = input_offsets.first().unwrap().as_usize();
-    let end = input_offsets.last().unwrap().as_usize();
-
-    let mut values: Vec<u8> = Vec::with_capacity(end - start);
+    let mut values: Vec<u8> = Vec::with_capacity(offset_span_len(string_array.offsets()));
     let mut offsets: Vec<T> = Vec::with_capacity(len + 1);
     offsets.push(T::usize_as(0));
 
@@ -335,7 +323,7 @@ fn string_trim<T: OffsetSizeTrait, Tr: Trimmer>(args: &[ArrayRef]) -> Result<Arr
             Ok(build_trimmed(
                 string_array,
                 string_array.nulls().cloned(),
-                |_, s| Tr::trim_ascii_char(s, b' ').0,
+                |_, s| Tr::trim_ascii_char(s, b' '),
             ))
         }
         2 => {
@@ -354,7 +342,7 @@ fn string_trim<T: OffsetSizeTrait, Tr: Trimmer>(args: &[ArrayRef]) -> Result<Arr
                 return Ok(build_trimmed(
                     string_array,
                     string_array.nulls().cloned(),
-                    |_, s| Tr::trim(s, &pattern).0,
+                    |_, s| Tr::trim(s, &pattern),
                 ));
             }
 
@@ -374,7 +362,7 @@ fn string_trim<T: OffsetSizeTrait, Tr: Trimmer>(args: &[ArrayRef]) -> Result<Arr
             Ok(build_trimmed(string_array, nulls, |i, s| {
                 pattern.clear();
                 pattern.extend(characters_array.value(i).chars());
-                Tr::trim(s, &pattern).0
+                Tr::trim(s, &pattern)
             }))
         }
         other => {
@@ -540,10 +528,7 @@ fn case_conversion_array<O: OffsetSizeTrait>(
 
     // Values contain non-ASCII.
     let item_len = string_array.len();
-    let offsets = string_array.value_offsets();
-    let start = offsets.first().unwrap().as_usize();
-    let end = offsets.last().unwrap().as_usize();
-    let capacity = (end - start) + PRE_ALLOC_BYTES;
+    let capacity = offset_span_len(string_array.offsets()) + PRE_ALLOC_BYTES;
     // Null-preserving: reuse the input null buffer as the output null buffer.
     let nulls = string_array.nulls().cloned();
     let mut builder = GenericStringArrayBuilder::<O>::with_capacity(item_len, capacity);
@@ -691,7 +676,7 @@ fn case_conversion_utf8view_ascii_inner<F: Fn(&u8) -> u8>(
     unsafe {
         StringViewArray::new_unchecked(
             ScalarBuffer::from(new_views),
-            completed,
+            completed.into(),
             array.nulls().cloned(),
         )
     }
@@ -705,10 +690,8 @@ fn case_conversion_ascii_array<O: OffsetSizeTrait>(
     string_array: &GenericStringArray<O>,
     lower: bool,
 ) -> Result<ArrayRef> {
-    let value_offsets = string_array.value_offsets();
-    let start = value_offsets.first().unwrap().as_usize();
-    let end = value_offsets.last().unwrap().as_usize();
-    let relevant = &string_array.value_data()[start..end];
+    let (start, len) = offset_span(string_array.offsets());
+    let relevant = &string_array.value_data()[start..start + len];
 
     let converted: Vec<u8> = if lower {
         relevant.iter().map(u8::to_ascii_lowercase).collect()

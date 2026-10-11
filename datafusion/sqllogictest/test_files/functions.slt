@@ -486,6 +486,30 @@ BAR Dictionary(Int32, Utf8)
 statement ok
 DROP TABLE upper_dictionary_test
 
+# upper and lower preserve input nullability in the planned schema
+query TTT
+DESCRIBE SELECT upper(a) AS ua, lower(a) AS la, upper(b) AS ub
+FROM (VALUES ('Ab', CAST(NULL AS VARCHAR))) AS t(a, b)
+----
+ua Utf8 NO
+la Utf8 NO
+ub Utf8View YES
+
+# An outer join widens a non-nullable input before it reaches upper
+query TTT
+DESCRIBE SELECT upper(t.a) AS ua
+FROM (SELECT 1 AS k) x
+LEFT JOIN (VALUES ('Ab')) AS t(a) ON false
+----
+ua Utf8 YES
+
+query T
+SELECT upper(t.a)
+FROM (SELECT 1 AS k) x
+LEFT JOIN (VALUES ('Ab')) AS t(a) ON false
+----
+NULL
+
 query T
 SELECT btrim('   foo  ')
 ----

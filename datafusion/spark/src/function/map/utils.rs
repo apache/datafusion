@@ -25,7 +25,7 @@ use arrow::array::{
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::compute::{filter, take};
 use arrow::datatypes::{DataType, Field, Fields};
-use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 
 /// Helper function to get element [`DataType`]
 /// from [`List`](DataType::List)/[`LargeList`](DataType::LargeList)/[`FixedSizeList`](DataType::FixedSizeList)<br>
@@ -70,8 +70,14 @@ pub fn get_list_offsets(array: &ArrayRef) -> Result<Cow<'_, [i32]>> {
                 .as_list::<i64>()
                 .offsets()
                 .iter()
-                .map(|i| *i as i32)
-                .collect::<Vec<_>>(),
+                .map(|offset| {
+                    i32::try_from(*offset).map_err(|_| {
+                        exec_datafusion_err!(
+                            "get_list_offsets: LargeList offset {offset} cannot be represented as i32"
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?,
         )),
         DataType::FixedSizeList(_, size) => Ok(Cow::Owned(
             (0..=array.len() as i32).map(|i| size * i).collect(),
@@ -164,10 +170,14 @@ fn map_deduplicate_keys(
     let offsets_len = keys_offsets.len();
     let mut new_offsets = Vec::with_capacity(offsets_len);
 
-    let mut cur_keys_offset = keys_offsets
+    // For a sliced list the offsets do not start at 0: `flat_keys` and
+    // `flat_values` are the full child arrays, and only the elements in
+    // `offsets[0]..offsets[len]` belong to the input rows.
+    let first_keys_offset = keys_offsets
         .first()
         .map(|offset| *offset as usize)
         .unwrap_or(0);
+    let mut cur_keys_offset = first_keys_offset;
     let mut cur_values_offset = values_offsets
         .first()
         .map(|offset| *offset as usize)
@@ -178,9 +188,11 @@ fn map_deduplicate_keys(
 
     // Mirror Spark's `ArrayBasedMapBuilder`: the first occurrence of a key
     // fixes its position in the output; under LAST_WIN a later duplicate
-    // overwrites that slot's value. `keys_mask` selects the first-seen keys,
-    // `value_indices` records the source index in `flat_values` to materialize
-    // for each output slot (updated in place on overwrite).
+    // overwrites that slot's value. `keys_mask` selects the first-seen keys
+    // and has one bit per key entry of the input rows, so bit 0 corresponds to
+    // `flat_keys[first_keys_offset]`. `value_indices` records the source index
+    // in `flat_values` to materialize for each output slot (updated in place
+    // on overwrite).
     let mut keys_mask_builder = BooleanBuilder::new();
     let mut value_indices: Vec<i32> = Vec::new();
     let mut key_to_output_idx: HashMap<ScalarValue, usize> = HashMap::new();
@@ -231,7 +243,7 @@ fn map_deduplicate_keys(
             }
         } else {
             // The result entry is NULL — no keys/values emitted. Still pad the
-            // mask so it stays aligned with `flat_keys`.
+            // mask so it stays aligned with the key entries of later rows.
             keys_mask_builder.append_n(num_keys_entries, false);
         }
         new_offsets.push(new_last_offset);
@@ -239,7 +251,11 @@ fn map_deduplicate_keys(
         cur_values_offset += num_values_entries;
     }
     let keys_mask = keys_mask_builder.finish();
-    let needed_keys = filter(&flat_keys, &keys_mask)?;
+    // Every key entry of the input rows must have exactly one mask bit;
+    // otherwise the mask selects the wrong keys for all later rows.
+    debug_assert_eq!(keys_mask.len(), cur_keys_offset - first_keys_offset);
+    let input_keys = flat_keys.slice(first_keys_offset, keys_mask.len());
+    let needed_keys = filter(&input_keys, &keys_mask)?;
     let value_indices_array = Int32Array::from(value_indices);
     let needed_values = take(&flat_values, &value_indices_array, None)?;
     let offsets = OffsetBuffer::new(new_offsets.into());
@@ -249,7 +265,8 @@ fn map_deduplicate_keys(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Int32Array, StringArray};
+    use arrow::array::{Int32Array, LargeListArray, NullArray, StringArray};
+    use arrow::datatypes::Int32Type;
 
     fn int32_utf8_inputs(
         keys: Vec<i32>,
@@ -258,6 +275,24 @@ mod tests {
         let keys: ArrayRef = Arc::new(Int32Array::from(keys));
         let values: ArrayRef = Arc::new(StringArray::from(values));
         (keys, values)
+    }
+
+    #[test]
+    fn large_list_offsets_do_not_truncate() {
+        let start = i64::from(i32::MAX) + 1;
+        let values: ArrayRef = Arc::new(NullArray::new((start + 1) as usize));
+        let array: ArrayRef = Arc::new(
+            LargeListArray::new(
+                Arc::new(Field::new_list_field(DataType::Null, true)),
+                OffsetBuffer::new(vec![0, start, start + 1].into()),
+                values,
+                None,
+            )
+            .slice(1, 1),
+        );
+
+        let err = get_list_offsets(&array).unwrap_err().to_string();
+        assert!(err.contains("cannot be represented as i32"), "{err}");
     }
 
     #[test]
@@ -371,5 +406,113 @@ mod tests {
         assert_eq!(map.value_offsets(), &[0, 0, 2]);
         assert!(map.is_null(0));
         assert!(!map.is_null(1));
+    }
+
+    /// Returns the flattened `(key, value)` entries of an Int32 -> Utf8 map.
+    fn int32_utf8_entries(map: &MapArray) -> Vec<(i32, Option<String>)> {
+        let keys = map.keys().as_primitive::<Int32Type>();
+        let values = map.values().as_string::<i32>();
+        keys.values()
+            .iter()
+            .zip(values.iter())
+            .map(|(k, v)| (*k, v.map(str::to_string)))
+            .collect()
+    }
+
+    #[test]
+    fn sliced_input_reads_keys_and_values_from_offset_range() {
+        let (keys, values) = int32_utf8_inputs(
+            vec![99, 98, 97, 1, 2, 3, 96],
+            vec![Some("z"), Some("a"), Some("b"), Some("c"), Some("y")],
+        );
+        let keys_offsets = [3i32, 5, 6];
+        let values_offsets = [1i32, 3, 4];
+
+        let result = map_from_keys_values_offsets_nulls(
+            &keys,
+            &values,
+            &keys_offsets,
+            &values_offsets,
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+
+        let map = result.as_map();
+        assert_eq!(map.value_offsets(), &[0, 2, 3]);
+        assert_eq!(
+            int32_utf8_entries(map),
+            vec![
+                (1, Some("a".to_string())),
+                (2, Some("b".to_string())),
+                (3, Some("c".to_string())),
+            ]
+        );
+    }
+
+    #[test]
+    fn sliced_input_last_win() {
+        let (keys, values) = int32_utf8_inputs(
+            vec![99, 1, 2, 1, 96],
+            vec![Some("z"), Some("y"), Some("a"), Some("b"), Some("c")],
+        );
+        let keys_offsets = [1i32, 4];
+        let values_offsets = [2i32, 5];
+
+        let result = map_from_keys_values_offsets_nulls(
+            &keys,
+            &values,
+            &keys_offsets,
+            &values_offsets,
+            None,
+            None,
+            true,
+        )
+        .unwrap();
+
+        let map = result.as_map();
+        assert_eq!(map.value_offsets(), &[0, 2]);
+        assert_eq!(
+            int32_utf8_entries(map),
+            vec![(1, Some("c".to_string())), (2, Some("b".to_string()))]
+        );
+    }
+
+    #[test]
+    fn sliced_input_null_row() {
+        // Row 0 is NULL; its (duplicate) keys are skipped but still occupy
+        // positions in the child array ahead of row 1's keys.
+        let (keys, values) = int32_utf8_inputs(
+            vec![99, 1, 1, 2, 3],
+            vec![
+                Some("z"),
+                Some("dup-a"),
+                Some("dup-b"),
+                Some("x"),
+                Some("y"),
+            ],
+        );
+        let offsets = [1i32, 3, 5];
+        let keys_nulls = NullBuffer::from(vec![false, true]);
+
+        let result = map_from_keys_values_offsets_nulls(
+            &keys,
+            &values,
+            &offsets,
+            &offsets,
+            Some(&keys_nulls),
+            None,
+            false,
+        )
+        .unwrap();
+
+        let map = result.as_map();
+        assert_eq!(map.value_offsets(), &[0, 0, 2]);
+        assert!(map.is_null(0));
+        assert_eq!(
+            int32_utf8_entries(map),
+            vec![(2, Some("x".to_string())), (3, Some("y".to_string()))]
+        );
     }
 }

@@ -18,7 +18,7 @@
 use crate::logical_plan::consumer::SubstraitConsumer;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit, UnionFields};
 use datafusion::common::{
-    DFSchema, DFSchemaRef, TableReference, exec_err, not_impl_err,
+    Column, DFSchema, DFSchemaRef, TableReference, exec_err, not_impl_err,
     substrait_datafusion_err, substrait_err,
 };
 use datafusion::logical_expr::expr::Sort;
@@ -421,6 +421,12 @@ impl NameTracker {
             seen_schema_names: HashSet::default(),
             qualified_names: HashSet::default(),
             unqualified_names: HashSet::default(),
+        }
+    }
+
+    pub(super) fn reserve_schema(&mut self, schema: &DFSchema) {
+        for (qualifier, field) in schema.iter() {
+            self.insert(&Expr::Column(Column::from((qualifier, field))));
         }
     }
 

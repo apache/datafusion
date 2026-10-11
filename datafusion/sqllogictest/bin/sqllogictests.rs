@@ -19,9 +19,14 @@ use clap::{ColorChoice, Parser};
 use datafusion::common::instant::Instant;
 use datafusion::common::utils::get_available_parallelism;
 use datafusion::common::{DataFusionError, Result, exec_datafusion_err, exec_err};
+use datafusion::execution::memory_pool::DEFAULT_DRIFT_LOG_THRESHOLD;
 #[cfg(feature = "substrait")]
 use datafusion_sqllogictest::DataFusionSubstraitRoundTrip;
 use datafusion_sqllogictest::TestFile;
+use datafusion_sqllogictest::{
+    CountingAllocator, enable_memory_drift_logging, flush_thread_allocations,
+    memory_drift_tracker,
+};
 use datafusion_sqllogictest::{
     CurrentlyExecutingSqlTracker, DFColumnType, DataFusion, Filter, TestContext,
     df_value_validator, read_dir_recursive, run_each_configuration, setup_scratch_dir,
@@ -57,6 +62,9 @@ use std::time::Duration;
 #[cfg(feature = "postgres")]
 mod postgres_container;
 
+#[global_allocator]
+static ALLOC: CountingAllocator = CountingAllocator;
+
 const TEST_DIRECTORY: &str = "test_files/";
 const DATAFUSION_TESTING_TEST_DIRECTORY: &str = "../../datafusion-testing/data/";
 const PG_COMPAT_FILE_PREFIX: &str = "pg_compat_";
@@ -88,6 +96,7 @@ fn config_change_result(
 pub fn main() -> Result<()> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
+        .on_thread_stop(flush_thread_allocations)
         .build()?
         .block_on(run_tests())
 }
@@ -138,6 +147,10 @@ async fn run_tests() -> Result<()> {
     }
 
     options.warn_on_ignored();
+
+    if options.memory_drift {
+        enable_memory_drift_logging(options.memory_drift_log_threshold);
+    }
 
     // Print parallelism info for debugging CI performance
     eprintln!(
@@ -226,6 +239,7 @@ async fn run_tests() -> Result<()> {
                             filters.as_ref(),
                             currently_running_sql_tracker_clone,
                             colored_output,
+                            options.substrait_optimize,
                         )
                         .await
                     }
@@ -386,6 +400,16 @@ async fn run_tests() -> Result<()> {
         HumanDuration(start.elapsed())
     ))?;
 
+    if let Some(peak) = memory_drift_tracker().and_then(|t| t.peak_drift()) {
+        eprintln!("Peak memory drift: {peak}");
+        if options.test_threads > 1 {
+            eprintln!(
+                "Test files ran concurrently, so the file and consumer above can be wrong. \
+                 Run with --test-threads 1 to attribute drift to one file."
+            );
+        }
+    }
+
     #[cfg(feature = "postgres")]
     terminate_postgres_container().await?;
 
@@ -438,7 +462,9 @@ fn is_env_truthy(name: &str) -> bool {
 enum Engine {
     DataFusion,
     #[cfg(feature = "substrait")]
-    SubstraitRoundTrip,
+    SubstraitRoundTrip {
+        optimize: bool,
+    },
 }
 
 impl Engine {
@@ -448,12 +474,13 @@ impl Engine {
         match self {
             Engine::DataFusion => "Datafusion",
             #[cfg(feature = "substrait")]
-            Engine::SubstraitRoundTrip => "DatafusionSubstraitRoundTrip",
+            Engine::SubstraitRoundTrip { .. } => "DatafusionSubstraitRoundTrip",
         }
     }
 }
 
 #[cfg(feature = "substrait")]
+#[expect(clippy::too_many_arguments, reason = "mirrors the other file runners")]
 async fn run_test_file_substrait_round_trip(
     test_file: TestFile,
     validator: Validator,
@@ -462,9 +489,10 @@ async fn run_test_file_substrait_round_trip(
     filters: &[Filter],
     currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
     colored_output: bool,
+    optimize: bool,
 ) -> Result<()> {
     run_matrix(
-        Engine::SubstraitRoundTrip,
+        Engine::SubstraitRoundTrip { optimize },
         test_file,
         validator,
         mp,
@@ -481,6 +509,10 @@ async fn run_test_file_substrait_round_trip(
     clippy::unused_async,
     reason = "matches the substrait-enabled implementation"
 )]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "matches the enabled implementation"
+)]
 async fn run_test_file_substrait_round_trip(
     _test_file: TestFile,
     _validator: Validator,
@@ -489,6 +521,7 @@ async fn run_test_file_substrait_round_trip(
     _filters: &[Filter],
     _currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
     _colored_output: bool,
+    _optimize: bool,
 ) -> Result<()> {
     exec_err!("Cannot run substrait round-trip: the 'substrait' feature is not enabled")
 }
@@ -597,8 +630,8 @@ impl MatrixRunner<'_> {
         match self.engine {
             Engine::DataFusion => self.run_datafusion(&test_ctx, pb).await,
             #[cfg(feature = "substrait")]
-            Engine::SubstraitRoundTrip => {
-                self.run_substrait_round_trip(&test_ctx, pb).await
+            Engine::SubstraitRoundTrip { optimize } => {
+                self.run_substrait_round_trip(&test_ctx, pb, optimize).await
             }
         }
     }
@@ -666,6 +699,7 @@ impl MatrixRunner<'_> {
         &self,
         test_ctx: &TestContext,
         pb: ProgressBar,
+        optimize: bool,
     ) -> Result<()> {
         let mut runner = sqllogictest::Runner::new(|| async {
             Ok(DataFusionSubstraitRoundTrip::new(
@@ -673,6 +707,7 @@ impl MatrixRunner<'_> {
                 self.relative_path.to_path_buf(),
                 pb.clone(),
             )
+            .with_optimization(optimize)
             .with_currently_executing_sql_tracker(
                 self.currently_executing_sql_tracker.clone(),
             ))
@@ -1042,6 +1077,13 @@ struct Options {
     )]
     substrait_round_trip: bool,
 
+    #[clap(
+        long,
+        requires = "substrait_round_trip",
+        help = "Optimize logical plans before serializing them in Substrait round-trip mode"
+    )]
+    substrait_optimize: bool,
+
     #[clap(long, env = "INCLUDE_SQLITE", help = "Include sqlite files")]
     include_sqlite: bool,
 
@@ -1105,6 +1147,24 @@ struct Options {
         help = "Print deterministic per-file timing summary"
     )]
     timing_summary: bool,
+
+    #[clap(
+        long,
+        env = "SLT_MEMORY_DRIFT",
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        help = "Log drift between MemoryPool reservations and allocated bytes (RUST_LOG=datafusion_execution::memory_pool=info to log each rise of --memory-drift-log-threshold bytes)"
+    )]
+    memory_drift: bool,
+
+    #[clap(
+        long,
+        env = "SLT_MEMORY_DRIFT_LOG_THRESHOLD",
+        value_name = "BYTES",
+        default_value_t = DEFAULT_DRIFT_LOG_THRESHOLD,
+        help = "Rise in memory drift, in bytes, needed before another line is logged"
+    )]
+    memory_drift_log_threshold: usize,
 
     #[clap(
         long,

@@ -32,7 +32,7 @@ use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::Result;
 use datafusion_common::utils::{
-    ListCoercion, base_type, coerced_type_with_base_type_only,
+    ListCoercion, base_type, coerced_type_with_base_type_only, offset_span_len,
 };
 use datafusion_common::{
     cast::as_generic_list_array,
@@ -441,8 +441,11 @@ fn concat_internal<O: OffsetSizeTrait>(
         list_arrays.iter().map(|la| la.values().to_data()).collect();
     let values_data_refs: Vec<&ArrayData> = values_data.iter().collect();
 
-    // Estimate capacity as the sum of all values arrays' lengths.
-    let total_capacity: usize = values_data.iter().map(|d| d.len()).sum();
+    // Only reserve for values covered by the visible rows of each input.
+    let total_capacity: usize = list_arrays
+        .iter()
+        .map(|array| offset_span_len(array.offsets()))
+        .sum();
 
     let mut mutable = MutableArrayData::with_capacities(
         values_data_refs,
@@ -604,7 +607,8 @@ where
     let values = list_array.values();
     let original_data = values.to_data();
     let element_data = element_array.to_data();
-    let capacity = Capacities::Array(original_data.len() + element_data.len());
+    let capacity =
+        Capacities::Array(offset_span_len(list_array.offsets()) + element_array.len());
 
     let mut mutable = MutableArrayData::with_capacities(
         vec![&original_data, &element_data],
@@ -642,4 +646,29 @@ where
         arrow::array::make_array(data),
         None,
     )?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_concat_sliced_capacity() -> Result<()> {
+        crate::utils::tests::check_sliced_list_behavior(|input| {
+            array_concat_inner(&[Arc::clone(input), Arc::clone(input)])
+        })
+    }
+
+    #[test]
+    fn test_append_sliced_capacity() -> Result<()> {
+        crate::utils::tests::check_sliced_list_behavior(|input| {
+            array_append_inner(
+                &[
+                    Arc::clone(input),
+                    Arc::new(arrow::array::Float64Array::from(vec![3.0; input.len()])),
+                ],
+                input.data_type(),
+            )
+        })
+    }
 }
