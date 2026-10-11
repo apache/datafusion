@@ -26,7 +26,7 @@ use arrow::array::downcast_integer_array;
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::datatypes::DataType;
 use datafusion_common::config::ExecutionOptions;
-use datafusion_common::{Result, ScalarValue, config_err};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::memory_pool::MemoryReservation;
 
 /// One bit per integer in the build key range, shared by all probe streams.
@@ -137,12 +137,9 @@ impl PrefilterState {
         if !config.enable_join_integer_prefilter {
             return Ok(None);
         }
-        let ratio = config.join_integer_prefilter_min_pruning_ratio;
-        if !(0.0..=1.0).contains(&ratio) {
-            return config_err!(
-                "join_integer_prefilter_min_pruning_ratio must be finite and in [0, 1]"
-            );
-        }
+        // Invariant (finite and in [0, 1]) is enforced by `ConfigUnitInterval`
+        // when the config is set, so this cannot fail.
+        let ratio = config.join_integer_prefilter_min_pruning_ratio.get();
         Ok(Some(Self::new(
             config.join_integer_prefilter_sample_rows.get(),
             ratio,

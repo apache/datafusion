@@ -837,6 +837,94 @@ impl Display for ConfigFilterSelectivity {
     }
 }
 
+/// Used for config values that must be finite and in the unit interval
+/// `[0, 1]`, such as
+/// [`ExecutionOptions::join_integer_prefilter_min_pruning_ratio`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ConfigUnitInterval(f64);
+
+/// Private helper for hard-coded defaults in `config_namespace!`, which cannot
+/// use `?`. All external construction should use
+/// [`ConfigUnitInterval::try_new`].
+///
+/// Note: comparisons (rather than `f64::is_finite`, which is not `const`)
+/// reject `NaN` and infinities, since any comparison with `NaN` is false.
+const fn unit_interval_default(value: f64) -> ConfigUnitInterval {
+    if value >= 0.0 && value <= 1.0 {
+        ConfigUnitInterval(value)
+    } else {
+        panic!("value must be finite and in [0, 1]")
+    }
+}
+
+impl ConfigUnitInterval {
+    /// Creates a [`ConfigUnitInterval`], returning a configuration error if
+    /// `value` is not finite or not in `[0, 1]`.
+    pub fn try_new(value: f64) -> Result<Self> {
+        if value.is_finite() && (0.0..=1.0).contains(&value) {
+            Ok(Self(value))
+        } else {
+            _config_err!("value must be finite and in [0, 1], got {value}")
+        }
+    }
+
+    /// Returns the wrapped `f64`.
+    pub const fn get(self) -> f64 {
+        self.0
+    }
+}
+
+impl From<ConfigUnitInterval> for f64 {
+    fn from(value: ConfigUnitInterval) -> Self {
+        value.get()
+    }
+}
+
+impl FromStr for ConfigUnitInterval {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::try_new(default_config_transform::<f64>(s)?)
+    }
+}
+
+impl ConfigField for ConfigUnitInterval {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        if !key.is_empty() {
+            return _config_err!(
+                "Config field is a scalar ConfigUnitInterval and does not have nested field \"{}\"",
+                key
+            );
+        }
+
+        // Parse before assigning so an invalid value leaves the current
+        // setting unchanged.
+        *self = ConfigUnitInterval::from_str(value)?;
+        Ok(())
+    }
+
+    fn reset(&mut self, key: &str) -> Result<()> {
+        if key.is_empty() {
+            Ok(())
+        } else {
+            _config_err!(
+                "Config field is a scalar ConfigUnitInterval and does not have nested field \"{}\"",
+                key
+            )
+        }
+    }
+}
+
+impl Display for ConfigUnitInterval {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.get())
+    }
+}
+
 /// Policy for handling duplicate keys in Spark-compatible map-construction
 /// functions (`map_from_arrays`, `map_from_entries`, `str_to_map`). Mirrors
 /// Spark's [`spark.sql.mapKeyDedupPolicy`](https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961).
@@ -938,8 +1026,8 @@ config_namespace! {
 
         /// The integer prefilter must prune more than this fraction of all sampled
         /// probe rows, including NULLs, to keep filtering. Must be finite and in
-        /// [0, 1], validated when executing the join.
-        pub join_integer_prefilter_min_pruning_ratio: f64, default = 0.5
+        /// [0, 1], validated when the config is set.
+        pub join_integer_prefilter_min_pruning_ratio: ConfigUnitInterval, default = unit_interval_default(0.5)
 
         /// Minimum input probe rows in each integer prefilter sampling window,
         /// including NULLs. Must be greater than zero. Windows end at batch boundaries.
@@ -4812,6 +4900,67 @@ mod tests {
         let mut scalar = DFParquetStatistics::Page;
         assert!(ConfigField::set(&mut scalar, "typo", "none").is_err());
         assert_eq!(scalar, DFParquetStatistics::Page);
+    }
+
+    #[test]
+    fn test_join_integer_prefilter_min_pruning_ratio_validation() {
+        use crate::config::ConfigOptions;
+
+        const KEY: &str = "datafusion.execution.join_integer_prefilter_min_pruning_ratio";
+        let mut config = ConfigOptions::default();
+        assert_eq!(
+            config
+                .execution
+                .join_integer_prefilter_min_pruning_ratio
+                .get(),
+            0.5
+        );
+
+        // Valid values, including the [0, 1] boundaries, are accepted.
+        for value in ["0", "1", "0.5", "0.75", "1.0", "0.0"] {
+            config.set(KEY, value).unwrap();
+            assert_eq!(
+                config
+                    .execution
+                    .join_integer_prefilter_min_pruning_ratio
+                    .get(),
+                value.parse::<f64>().unwrap()
+            );
+        }
+
+        // Out-of-range, negative, NaN, and infinite values are rejected at
+        // SET time and leave the previous value in place.
+        for value in ["-0.1", "1.5", "2", "nan", "NaN", "inf", "-inf"] {
+            let err = config.set(KEY, value).unwrap_err();
+            assert_contains!(err.to_string(), "must be finite and in [0, 1]");
+            assert_eq!(
+                config
+                    .execution
+                    .join_integer_prefilter_min_pruning_ratio
+                    .get(),
+                0.0
+            );
+        }
+
+        // Unparseable values are rejected as well.
+        assert!(config.set(KEY, "half").is_err());
+        assert_eq!(
+            config
+                .execution
+                .join_integer_prefilter_min_pruning_ratio
+                .get(),
+            0.0
+        );
+
+        // Resetting restores the default.
+        config.reset(KEY).unwrap();
+        assert_eq!(
+            config
+                .execution
+                .join_integer_prefilter_min_pruning_ratio
+                .get(),
+            0.5
+        );
     }
 
     #[test]
