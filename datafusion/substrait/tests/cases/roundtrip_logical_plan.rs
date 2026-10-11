@@ -401,10 +401,9 @@ async fn roundtrip_table_scan_offset_and_fetch() -> Result<()> {
 // Limit expressions use Int64, but limit pushdown can produce a larger usize fetch.
 #[tokio::test]
 #[cfg(target_pointer_width = "64")]
-async fn roundtrip_table_scan_fetch_above_i64_max() -> Result<()> {
+async fn reject_table_scan_fetch_above_i64_max() -> Result<()> {
     use datafusion::arrow::array::Int64Array;
     use datafusion::arrow::record_batch::RecordBatch;
-    use datafusion::dataframe::DataFrame;
 
     let ctx = SessionContext::new();
     ctx.register_batch(
@@ -425,15 +424,13 @@ async fn roundtrip_table_scan_fetch_above_i64_max() -> Result<()> {
         panic!("expected TableScan")
     };
     assert_eq!(scan.fetch, Some(i64::MAX as usize + 1));
-    let proto = to_substrait_plan(&plan, &ctx.state())?;
-    let restored = from_substrait_plan(&ctx.state(), &proto).await?;
-    for plan in [plan, restored] {
-        let batches = DataFrame::new(ctx.state(), plan).collect().await?;
-        datafusion::assert_batches_eq!(
-            ["+---+", "| x |", "+---+", "| 1 |", "| 2 |", "+---+"],
-            &batches
-        );
-    }
+    let error = to_substrait_plan(&plan, &ctx.state())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("TableScan fetch exceeds the supported Int64 range"),
+        "{error}"
+    );
     Ok(())
 }
 
@@ -453,30 +450,19 @@ async fn roundtrip_table_scan_signed_range() -> Result<()> {
         .await?;
     let source = provider_as_source(ctx.table_provider("t").await?);
     let max = i64::MAX as usize;
-    for (skip, fetch, parent, succeeds) in [
-        (None, Some(max), None, true),
-        (Some(max), None, None, true),
-        (None, Some(max + 1), None, false),
-        (None, Some(usize::MAX), None, false),
-        (Some(max + 1), None, None, false),
-        (Some(usize::MAX), None, None, false),
-        // The parent covers the scan bound exactly, or imposes a tighter bound.
-        (None, Some(max + 1), Some((1, Some(max))), true),
-        (None, Some(usize::MAX), Some((1, Some(2))), true),
-        (Some(1), Some(max + 1), Some((0, Some(2))), true),
-        // These parents do not make the scan fetch redundant.
-        (None, Some(max + 1), Some((max, Some(max))), false),
-        (None, Some(max + 1), Some((1, None)), false),
+    for (skip, fetch, succeeds) in [
+        (None, Some(max), true),
+        (Some(max), None, true),
+        (None, Some(max + 1), false),
+        (None, Some(usize::MAX), false),
+        (Some(max + 1), None, false),
+        (Some(usize::MAX), None, false),
     ] {
         let scan = TableScanBuilder::new("t", source.clone())
             .with_skip(skip)
             .with_fetch(fetch)
             .build()?;
-        let mut builder = LogicalPlanBuilder::from(LogicalPlan::TableScan(scan));
-        if let Some((skip, fetch)) = parent {
-            builder = builder.limit(skip, fetch)?;
-        }
-        let plan = builder.build()?;
+        let plan = LogicalPlan::TableScan(scan);
         let proto = to_substrait_plan(&plan, &ctx.state());
         if !succeeds {
             let error = proto.unwrap_err().to_string();
@@ -493,8 +479,6 @@ async fn roundtrip_table_scan_signed_range() -> Result<()> {
         let restored = from_substrait_plan(&ctx.state(), &proto).await?;
         let expected = if skip == Some(max) {
             vec![]
-        } else if parent.is_some() {
-            vec![1, 2]
         } else {
             vec![0, 1, 2]
         };

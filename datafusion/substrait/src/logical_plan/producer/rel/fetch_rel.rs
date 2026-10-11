@@ -17,7 +17,7 @@
 
 use crate::logical_plan::producer::SubstraitProducer;
 use datafusion::common::DFSchema;
-use datafusion::logical_expr::{FetchType, Limit, LogicalPlan, SkipType};
+use datafusion::logical_expr::Limit;
 use std::sync::Arc;
 use substrait::proto::rel::RelType;
 use substrait::proto::{FetchRel, Rel, fetch_rel};
@@ -26,22 +26,7 @@ pub fn from_limit(
     producer: &mut impl SubstraitProducer,
     limit: &Limit,
 ) -> datafusion::common::Result<Box<Rel>> {
-    // Pushing down LIMIT + OFFSET can produce a scan fetch above i64::MAX.
-    // It is redundant when this Limit requests no rows beyond that bound.
-    // Remove only that redundant fetch; retain the scan's exact offset.
-    let mut input_plan = None;
-    if let LogicalPlan::TableScan(scan) = limit.input.as_ref()
-        && let Some(scan_fetch) = scan.fetch
-        && i64::try_from(scan_fetch).is_err()
-        && let FetchType::Literal(Some(fetch)) = limit.get_fetch_type()?
-        && let SkipType::Literal(skip) = limit.get_skip_type()?
-        && skip.checked_add(fetch).is_some_and(|end| end <= scan_fetch)
-    {
-        let mut scan = scan.clone();
-        scan.fetch = None;
-        input_plan = Some(LogicalPlan::TableScan(scan));
-    }
-    let input = producer.handle_plan(input_plan.as_ref().unwrap_or(&limit.input))?;
+    let input = producer.handle_plan(limit.input.as_ref())?;
     let empty_schema = Arc::new(DFSchema::empty());
 
     let offset_mode = limit
