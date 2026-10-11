@@ -132,7 +132,7 @@ use crate::spill::in_progress_spill_file::InProgressSpillFile;
 use crate::spill::spill_manager::SpillManager;
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 use arrow::array::{Array, ArrayRef, BooleanArray, BooleanBufferBuilder, RecordBatch};
-use arrow::compute::{BatchCoalescer, SortOptions, filter_record_batch, not};
+use arrow::compute::{BatchCoalescer, SortOptions, and, filter_record_batch, not};
 use arrow::datatypes::SchemaRef;
 use arrow::util::bit_chunk_iterator::UnalignedBitChunk;
 use arrow::util::bit_util::apply_bitwise_binary_op;
@@ -197,6 +197,32 @@ fn find_key_group_end(cmp: &JoinKeyComparator, from: usize, len: usize) -> usize
         }
     }
     lo
+}
+
+/// Applies SQL NOT IN semantics to the unmatched outer rows.
+fn null_aware_left_anti_selection(
+    unmatched: BooleanArray,
+    outer_key: &dyn Array,
+    subqury_state: SubqueryState,
+) -> Result<BooleanArray> {
+    match subqury_state {
+        SubqueryState::Empty => Ok(unmatched),
+        SubqueryState::NonEmptyNoNull => match outer_key.logical_nulls() {
+            // All outer keys are non-NULL, so unmatched rows can be kept.
+            None => Ok(unmatched),
+            Some(nulls) => {
+                // With a nonempty RHS containing no NULL keys, NOT IN keeps only
+                // unmatched outer rows whose keys are non-NULL. Combine the
+                // unmatched mask with the outer key validity bitmap to exclude
+                // NULL keys, for which NOT IN evaluates to UNKNOWN.
+                let valids = BooleanArray::new(nulls.inner().clone(), None);
+                and(&unmatched, &valids).map_err(DataFusionError::from)
+            }
+        },
+        SubqueryState::Pending | SubqueryState::HasNull => {
+            internal_err!("Cannot emit null-aware anti rows before RHS validation")
+        }
+    }
 }
 
 /// State of the right-side subquery used by a null-aware `LeftAnti` join.
@@ -624,7 +650,15 @@ impl BitwiseSortMergeJoinStream {
                 }
             }
             JoinType::LeftAnti | JoinType::RightAnti => {
-                let selection = not(&BooleanArray::new(matched_buf, None))?;
+                let unmatched = not(&BooleanArray::new(matched_buf, None))?;
+                let selection = match self.null_aware {
+                    None => unmatched,
+                    Some(NullAwareMode::LeftAnti) => null_aware_left_anti_selection(
+                        unmatched,
+                        self.outer_key_arrays[0].as_ref(),
+                        self.subquery_state,
+                    )?,
+                };
                 let filtered = filter_record_batch(&batch, &selection)?;
                 if filtered.num_rows() > 0 {
                     self.coalescer.push_batch(filtered)?;
