@@ -120,6 +120,10 @@ impl ScalarUDFImpl for SparkMakeDtInterval {
         )))
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         if args.args.is_empty() {
             return Ok(ColumnarValue::Scalar(ScalarValue::DurationMicrosecond(

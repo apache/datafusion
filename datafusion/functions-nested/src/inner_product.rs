@@ -140,6 +140,10 @@ impl ScalarUDFImpl for InnerProduct {
         Ok(coerced)
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(inner_product_inner)(&args.args)
     }

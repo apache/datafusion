@@ -69,6 +69,10 @@ impl ScalarUDFImpl for SparkAtan2 {
         Ok(DataType::Float64)
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(spark_atan2, vec![])(&args.args)
     }

@@ -95,6 +95,10 @@ impl ScalarUDFImpl for SparkFloor {
         Ok(Arc::new(Field::new(self.name(), return_type, nullable)))
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(
         &self,
         args: ScalarFunctionArgs,

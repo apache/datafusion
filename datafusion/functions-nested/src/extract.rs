@@ -160,6 +160,10 @@ impl ScalarUDFImpl for ArrayElement {
         }
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_element_inner)(&args.args)
     }

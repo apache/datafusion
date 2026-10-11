@@ -101,6 +101,10 @@ impl ScalarUDFImpl for ArrayReverse {
         Ok(arg_types[0].clone())
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_reverse_inner)(&args.args)
     }

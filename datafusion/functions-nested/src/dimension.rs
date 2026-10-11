@@ -163,6 +163,10 @@ impl ScalarUDFImpl for ArrayNdims {
         Ok(UInt64)
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_ndims_inner)(&args.args)
     }

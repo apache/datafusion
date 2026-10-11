@@ -90,6 +90,10 @@ impl ScalarUDFImpl for SparkSlice {
         Ok(Arc::new(Field::new("slice", data_type, nullable)))
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(
         &self,
         mut func_args: ScalarFunctionArgs,

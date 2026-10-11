@@ -150,6 +150,10 @@ impl ScalarUDFImpl for SHAFunc {
         Ok(DataType::Binary)
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [data] = take_function_args(self.name(), args.args)?;
         digest_process(&data, self.algorithm)

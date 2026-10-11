@@ -80,6 +80,10 @@ impl ScalarUDFImpl for BitmapBitPosition {
         )))
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(bitmap_bit_position_inner, vec![])(&args.args)
     }
