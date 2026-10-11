@@ -58,6 +58,8 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Operator;
+use datafusion_functions_window::rank::{dense_rank_udwf, rank_udwf};
+use datafusion_functions_window::row_number::row_number_udwf;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
 use datafusion_physical_expr::window::StandardWindowExpr;
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
@@ -403,23 +405,32 @@ fn scalar_to_usize(value: &ScalarValue) -> Option<usize> {
 
 /// Identify which supported ranking window function `expr` is.
 ///
-/// Downcasts through `StandardWindowExpr` → `WindowUDFExpr` and checks
-/// the UDF name. Returns:
-/// - `Some(WindowFnKind::RowNumber)` for `"row_number"`
-/// - `Some(WindowFnKind::Rank)` for `"rank"`
-/// - `Some(WindowFnKind::DenseRank)` for `"dense_rank"`
+/// Downcasts through `StandardWindowExpr` → `WindowUDFExpr` and compares
+/// the UDF with the built-in one. Returns:
+/// - `Some(WindowFnKind::RowNumber)` for the built-in `row_number`
+/// - `Some(WindowFnKind::Rank)` for the built-in `rank`
+/// - `Some(WindowFnKind::DenseRank)` for the built-in `dense_rank`
 /// - `None` for everything else
+///
+/// The comparison is `WindowUDF` equality rather than the name: a user-defined
+/// function registered as `row_number` (say) can compute anything, and the
+/// rewrite both prunes its input and, with a single window expression, drops
+/// its evaluator.
 fn supported_window_fn(
     expr: &Arc<dyn datafusion_physical_expr::window::WindowExpr>,
 ) -> Option<WindowFnKind> {
     let swe = expr.as_any().downcast_ref::<StandardWindowExpr>()?;
     let swfe = swe.get_standard_func_expr();
     let udf = swfe.as_any().downcast_ref::<WindowUDFExpr>()?;
-    match udf.fun().name() {
-        "row_number" => Some(WindowFnKind::RowNumber),
-        "rank" => Some(WindowFnKind::Rank),
-        "dense_rank" => Some(WindowFnKind::DenseRank),
-        _ => None,
+    let fun = udf.fun();
+    if fun == &row_number_udwf() {
+        Some(WindowFnKind::RowNumber)
+    } else if fun == &rank_udwf() {
+        Some(WindowFnKind::Rank)
+    } else if fun == &dense_rank_udwf() {
+        Some(WindowFnKind::DenseRank)
+    } else {
+        None
     }
 }
 

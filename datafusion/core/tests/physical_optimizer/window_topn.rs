@@ -17,17 +17,24 @@
 
 //! Tests for the WindowTopN physical optimizer rule.
 
+use std::ops::Range;
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::array::{ArrayRef, RecordBatch};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::Operator;
-use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
+use datafusion_expr::{
+    PartitionEvaluator, Signature, Volatility, WindowFrame, WindowFrameBound,
+    WindowFrameUnits, WindowUDFImpl,
+};
 use datafusion_functions_window::rank::{dense_rank_udwf, rank_udwf};
 use datafusion_functions_window::row_number::row_number_udwf;
+use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, col, lit};
 use datafusion_physical_expr::window::StandardWindowExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -960,6 +967,203 @@ async fn ranking_column_ordering_keeps_order_by_sort_free() -> Result<()> {
             !displayed.contains("SortExec"),
             "{func}: the ranking column's ordering should make this sort-free:\n{displayed}"
         );
+    }
+    Ok(())
+}
+
+/// A user-defined window function that shares a built-in ranking function's
+/// name but computes something else: the constant 7, or (`frame_len`) the
+/// number of rows in its window frame.
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct SameNameWindowUdf {
+    name: String,
+    return_type: DataType,
+    frame_len: bool,
+    signature: Signature,
+}
+
+impl SameNameWindowUdf {
+    fn new_udwf(
+        name: &str,
+        return_type: DataType,
+        frame_len: bool,
+    ) -> datafusion_expr::WindowUDF {
+        datafusion_expr::WindowUDF::from(Self {
+            name: name.to_string(),
+            return_type,
+            frame_len,
+            signature: Signature::nullary(Volatility::Immutable),
+        })
+    }
+}
+
+impl WindowUDFImpl for SameNameWindowUdf {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn partition_evaluator(
+        &self,
+        _args: PartitionEvaluatorArgs,
+    ) -> Result<Box<dyn PartitionEvaluator>> {
+        Ok(Box::new(SameNameEvaluator {
+            return_type: self.return_type.clone(),
+            frame_len: self.frame_len,
+        }))
+    }
+
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
+        Ok(Field::new(field_args.name(), self.return_type.clone(), false).into())
+    }
+}
+
+#[derive(Debug)]
+struct SameNameEvaluator {
+    return_type: DataType,
+    frame_len: bool,
+}
+
+impl PartitionEvaluator for SameNameEvaluator {
+    fn evaluate(
+        &mut self,
+        _values: &[ArrayRef],
+        range: &Range<usize>,
+    ) -> Result<ScalarValue> {
+        let value = if self.frame_len {
+            range.len() as i64
+        } else {
+            7
+        };
+        ScalarValue::Int64(Some(value)).cast_to(&self.return_type)
+    }
+
+    fn supports_bounded_execution(&self) -> bool {
+        true
+    }
+
+    fn uses_window_frame(&self) -> bool {
+        self.frame_len
+    }
+
+    fn is_causal(&self) -> bool {
+        !self.frame_len
+    }
+}
+
+/// Runs `sql` over the tie-heavy test table with the flag on and off, with
+/// `udwfs` registered, asserts the flag-on plan has no `PartitionedTopKExec`
+/// and returns both results.
+async fn run_with_custom_udwfs(
+    udwfs: &[datafusion_expr::WindowUDF],
+    sql: &str,
+) -> Result<(Vec<RecordBatch>, Vec<RecordBatch>)> {
+    let create = "CREATE TABLE t AS
+         SELECT v % 5 AS pk, (v % 3) * 10 AS val FROM (SELECT unnest(range(0, 60)) AS v)";
+    let mut results = Vec::new();
+    for enabled in [true, false] {
+        let mut config = SessionConfig::new()
+            .with_batch_size(4)
+            .with_target_partitions(4);
+        config.options_mut().optimizer.enable_window_topn = enabled;
+        let ctx = SessionContext::new_with_config(config);
+        for udwf in udwfs {
+            ctx.register_udwf(udwf.clone());
+        }
+        ctx.sql(create).await?.collect().await?;
+
+        let plan = ctx.sql(sql).await?.create_physical_plan().await?;
+        assert!(
+            !plan_str(plan.as_ref()).contains("PartitionedTopKExec"),
+            "a custom window function must not be rewritten:\n{}",
+            plan_str(plan.as_ref())
+        );
+        results.push(collect(plan, ctx.task_ctx()).await?);
+    }
+    let off = results.pop().unwrap();
+    let on = results.pop().unwrap();
+    Ok((on, off))
+}
+
+/// A user-defined function registered under a built-in ranking function's name
+/// is not that function: the rule must leave it alone rather than prune its
+/// input and replace its evaluator with the operator's ranking column.
+#[tokio::test]
+async fn custom_udwf_with_ranking_name_is_not_rewritten() -> Result<()> {
+    for name in ["row_number", "rank", "dense_rank"] {
+        for return_type in [DataType::UInt64, DataType::Int64] {
+            let sql = format!(
+                "SELECT pk, val, rn FROM (
+                   SELECT *, {name}() OVER (PARTITION BY pk ORDER BY val) AS rn FROM t
+                 ) WHERE rn <= 7 ORDER BY pk, val"
+            );
+            let udwf = SameNameWindowUdf::new_udwf(name, return_type.clone(), false);
+            let (on, off) = run_with_custom_udwfs(&[udwf], &sql).await?;
+            assert_eq!(
+                datafusion_common::test_util::batches_to_string(&on),
+                datafusion_common::test_util::batches_to_string(&off),
+                "{name} ({return_type})"
+            );
+
+            // Every row passes `rn <= 7` and keeps the function's own value.
+            let rns = on
+                .iter()
+                .flat_map(|b| {
+                    let col =
+                        arrow::compute::cast(b.column(2), &DataType::Int64).unwrap();
+                    col.as_any()
+                        .downcast_ref::<arrow::array::Int64Array>()
+                        .unwrap()
+                        .values()
+                        .to_vec()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(rns, vec![7; 60], "{name} ({return_type})");
+        }
+    }
+    Ok(())
+}
+
+/// The built-in `ROW_NUMBER` is filtered on, but its sibling is a user-defined
+/// function named `rank` that counts the rows in a `CURRENT ROW AND 1
+/// FOLLOWING` frame. Its value at the last retained row depends on the first
+/// pruned one, so the sibling has to block the rewrite.
+#[tokio::test]
+async fn custom_udwf_sibling_with_ranking_name_blocks_rewrite() -> Result<()> {
+    let sql = "SELECT pk, val, rn, rk FROM (
+                 SELECT *,
+                   ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) AS rn,
+                   rank() OVER (
+                     PARTITION BY pk ORDER BY val
+                     ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING
+                   ) AS rk
+                 FROM t
+               ) WHERE rn <= 2 ORDER BY pk, rn";
+    for return_type in [DataType::UInt64, DataType::Int64] {
+        let udwf = SameNameWindowUdf::new_udwf("rank", return_type.clone(), true);
+        let (on, off) = run_with_custom_udwfs(&[udwf], sql).await?;
+        assert_eq!(
+            datafusion_common::test_util::batches_to_string(&on),
+            datafusion_common::test_util::batches_to_string(&off),
+            "{return_type}"
+        );
+
+        // Both retained rows of each partition have a following row.
+        let rks = on
+            .iter()
+            .flat_map(|b| {
+                let col = arrow::compute::cast(b.column(3), &DataType::Int64).unwrap();
+                col.as_any()
+                    .downcast_ref::<arrow::array::Int64Array>()
+                    .unwrap()
+                    .values()
+                    .to_vec()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(rks, vec![2; 10], "{return_type}");
     }
     Ok(())
 }
