@@ -116,7 +116,7 @@ pub fn try_cast_literal_to_type(
 /// [`CastPredicatePreimage::Exact`] where moving the cast preserves comparison
 /// semantics, and a
 /// [`CastPredicatePreimage::Range`] for many-to-one casts with known preimages
-/// such as timestamp precision narrowing.
+/// such as timestamp precision narrowing and decimal-to-integer truncation.
 pub fn cast_predicate_preimage(
     source_type: &DataType,
     target_type: &DataType,
@@ -156,14 +156,141 @@ fn maybe_range_preimage(
     target_type: &DataType,
     lit_value: &ScalarValue,
 ) -> Result<Option<CastPredicatePreimage>> {
-    if !is_timestamp_precision_narrowing_cast(source_type, target_type) {
-        return Ok(None);
+    if is_timestamp_precision_narrowing_cast(source_type, target_type) {
+        return Ok(timestamp_narrowing_range_preimage(
+            source_type,
+            target_type,
+            lit_value,
+        )?
+        .map(CastPredicatePreimage::Range));
     }
 
     Ok(
-        timestamp_narrowing_range_preimage(source_type, target_type, lit_value)?
+        decimal_to_integer_range_preimage(source_type, target_type, lit_value)
             .map(CastPredicatePreimage::Range),
     )
+}
+
+/// Computes the source-domain preimage interval for a decimal-to-integer cast.
+///
+/// Casting `Decimal128(p, s)` with `s > 0` to an integer truncates toward zero,
+/// so an integer target value `v` describes a bucket of source values instead of
+/// a single value. That bucket is the one
+/// [`trunc_toward_zero_bucket`] computes for unit-narrowing timestamps, with
+/// `10^s` as the bucket width:
+///
+/// * `v > 0`: `[v * 10^s, (v + 1) * 10^s)`
+/// * `v == 0`: `[1 - 10^s, 10^s)`
+/// * `v < 0`: `[(v - 1) * 10^s + 1, v * 10^s + 1)`
+///
+/// The bounds are `Decimal128(p, s)` scalars so the rewritten predicate
+/// compares the source column against source-domain literals, mirroring the
+/// timestamp range preimage.
+///
+/// A bucket bound that `Decimal128(p, s)` cannot represent has no source-domain
+/// interval, so the cast is retained. For example `v = 99999` against a
+/// `Decimal128(5, 2)` source whose bucket starts at `9_999_900` returns `None`.
+///
+/// # Scope
+/// * `Decimal128` sources only, with one level of `Dictionary` unwrapped (the
+///   same unwrapping [`is_exact_cast_safe`] uses). `Decimal32`, `Decimal64` and
+///   `Decimal256` sources retain their cast. The cast target must be a plain
+///   integer type.
+/// * `s > 0` only: a `Decimal128(p, 0)` value is an integer already, so it never
+///   needs a range preimage. Negative scales are not modelled here.
+/// * The literal must be a non-null integer the target type can represent;
+///   otherwise it can never equal the cast result.
+/// * `CAST` of a value outside the target integer range errors (or is `NULL`
+///   for `TRY_CAST`) instead of producing a target value, while the rewritten
+///   source-domain predicate returns a Boolean rather than preserving the
+///   `CAST` error or `TRY_CAST` NULL. This matches the accepted overflow policy
+///   of the timestamp range preimages.
+fn decimal_to_integer_range_preimage(
+    source_type: &DataType,
+    target_type: &DataType,
+    lit_value: &ScalarValue,
+) -> Option<Interval> {
+    // Unwrap at most one level of dictionary for the source, matching the
+    // family-level checks in `is_exact_cast_safe`.
+    let (source, source_key_type) = match source_type {
+        DataType::Dictionary(key_type, value_type) => {
+            (value_type.as_ref(), Some(key_type.as_ref()))
+        }
+        other => (other, None),
+    };
+
+    let DataType::Decimal128(precision, scale) = source else {
+        return None;
+    };
+    if *scale <= 0 {
+        return None;
+    }
+
+    let (target_min, target_max) = integer_type_value_bounds(target_type)?;
+    let target_value = integer_literal_value(lit_value)?;
+    if target_value < target_min || target_value > target_max {
+        return None;
+    }
+
+    let bucket_width = 10_i128.checked_pow(scale.unsigned_abs().into())?;
+    let (lower, upper) = trunc_toward_zero_bucket(target_value, bucket_width)?;
+
+    let (min, max) = decimal128_value_bounds(*precision)?;
+    if lower < min || upper > max {
+        return None;
+    }
+
+    let scalar = |value: i128| {
+        let value = ScalarValue::Decimal128(Some(value), *precision, *scale);
+        match source_key_type {
+            Some(key_type) => {
+                ScalarValue::Dictionary(Box::new(key_type.clone()), Box::new(value))
+            }
+            None => value,
+        }
+    };
+    Interval::try_new(scalar(lower), scalar(upper)).ok()
+}
+
+/// Returns the inclusive value range of an integer type, or `None` for any
+/// other type.
+fn integer_type_value_bounds(int_type: &DataType) -> Option<(i128, i128)> {
+    let bounds: (i128, i128) = match int_type {
+        DataType::Int8 => (i8::MIN.into(), i8::MAX.into()),
+        DataType::Int16 => (i16::MIN.into(), i16::MAX.into()),
+        DataType::Int32 => (i32::MIN.into(), i32::MAX.into()),
+        DataType::Int64 => (i64::MIN.into(), i64::MAX.into()),
+        DataType::UInt8 => (0, u8::MAX.into()),
+        DataType::UInt16 => (0, u16::MAX.into()),
+        DataType::UInt32 => (0, u32::MAX.into()),
+        DataType::UInt64 => (0, u64::MAX.into()),
+        _ => return None,
+    };
+    Some(bounds)
+}
+
+/// Returns the value of a non-null integer literal, or `None` for any other
+/// literal.
+fn integer_literal_value(lit_value: &ScalarValue) -> Option<i128> {
+    match lit_value {
+        ScalarValue::Int8(Some(value)) => Some(i128::from(*value)),
+        ScalarValue::Int16(Some(value)) => Some(i128::from(*value)),
+        ScalarValue::Int32(Some(value)) => Some(i128::from(*value)),
+        ScalarValue::Int64(Some(value)) => Some(i128::from(*value)),
+        ScalarValue::UInt8(Some(value)) => Some(i128::from(*value)),
+        ScalarValue::UInt16(Some(value)) => Some(i128::from(*value)),
+        ScalarValue::UInt32(Some(value)) => Some(i128::from(*value)),
+        ScalarValue::UInt64(Some(value)) => Some(i128::from(*value)),
+        _ => None,
+    }
+}
+
+/// Returns the inclusive range of raw (`i128`) values that a `Decimal128` of
+/// `precision` can store.
+fn decimal128_value_bounds(precision: u8) -> Option<(i128, i128)> {
+    let min = *MIN_DECIMAL128_FOR_EACH_PRECISION.get(precision as usize)?;
+    let max = *MAX_DECIMAL128_FOR_EACH_PRECISION.get(precision as usize)?;
+    Some((min, max))
 }
 
 /// Computes a singleton source-domain literal for exact cast-predicate rewrites.
@@ -490,7 +617,8 @@ fn timestamp_narrowing_range_preimage(
     };
 
     let bucket_width = source_scale / target_scale;
-    let Some((lower, upper)) = trunc_toward_zero_bucket(target_value, bucket_width)
+    let Some((lower, upper)) =
+        trunc_toward_zero_bucket(i128::from(target_value), bucket_width)
     else {
         return Ok(None);
     };
@@ -569,10 +697,10 @@ fn timestamp_widening_ordered_preimage(
 /// Returns the half-open source-domain bucket `[lower, upper)` that truncates
 /// toward zero to `value` when divided by `bucket_width`.
 ///
-/// Timestamp precision narrowing follows integer truncation toward zero rather
-/// than mathematical floor. For example, when `bucket_width = 1_000_000`, both
-/// `999_999` and `-999_999` truncate to `0`, while `-1_000_000` truncates to
-/// `-1`.
+/// Timestamp precision narrowing and decimal-to-integer casts both follow
+/// integer truncation toward zero rather than mathematical floor. For example,
+/// when `bucket_width = 1_000_000`, both `999_999` and `-999_999` truncate to
+/// `0`, while `-1_000_000` truncates to `-1`.
 ///
 /// This makes the inverse bucket depend on the sign of `value`:
 ///
@@ -583,8 +711,7 @@ fn timestamp_widening_ordered_preimage(
 ///
 /// The arithmetic uses `checked_*` operations and returns `None` if an
 /// intermediate bound cannot be represented as `i128`.
-fn trunc_toward_zero_bucket(value: i64, bucket_width: i128) -> Option<(i128, i128)> {
-    let value = value as i128;
+fn trunc_toward_zero_bucket(value: i128, bucket_width: i128) -> Option<(i128, i128)> {
     match value.cmp(&0) {
         Ordering::Greater => {
             let lower = value.checked_mul(bucket_width)?;
@@ -2643,12 +2770,14 @@ mod tests {
             Operator::Eq,
             &ScalarValue::Decimal128(Some(10000), 10, 2),
         );
-        // decimal → int
-        assert_preimage_none(
+        // decimal → int is no longer blocked: it is a many-to-one cast with a
+        // known source-domain bucket, so it produces a Range preimage instead
+        // of an Exact one (see `test_decimal_to_int_range_bucket_bounds`).
+        assert_decimal_to_int_range(
             &DataType::Decimal128(18, 2),
             &DataType::Int64,
-            Operator::Eq,
             &ScalarValue::Int64(Some(123)),
+            (12_300, 12_400),
         );
         // Increasing scale while narrowing integer capacity can overflow for
         // valid source values, even when this particular literal round-trips.
@@ -2861,6 +2990,249 @@ mod tests {
                 )
                 .unwrap()
             ))
+        );
+    }
+
+    // ── Decimal → integer range preimages ───────────────────────────────
+
+    /// Asserts the `Range` preimage of `CAST(<decimal> AS <int>) = <lit>`.
+    ///
+    /// `source_type` names the decimal, `target_type` the integer, and the
+    /// expected raw bounds are `i128` values for `source_type`'s precision and
+    /// scale.
+    fn assert_decimal_to_int_range(
+        source_type: &DataType,
+        target_type: &DataType,
+        lit_value: &ScalarValue,
+        expected: (i128, i128),
+    ) {
+        let (precision, scale) = decimal_precision_scale(source_type);
+        let (lower, upper) = expected;
+        assert_eq!(
+            cast_predicate_preimage(source_type, target_type, Operator::Eq, lit_value)
+                .unwrap(),
+            Some(CastPredicatePreimage::Range(
+                Interval::try_new(
+                    ScalarValue::Decimal128(Some(lower), precision, scale),
+                    ScalarValue::Decimal128(Some(upper), precision, scale),
+                )
+                .unwrap()
+            )),
+            "expected decimal bucket [{lower}, {upper}) for {lit_value:?}"
+        );
+    }
+
+    /// Asserts the raw bucket bounds for a `Decimal128(15, 2)` source and an
+    /// `Int64` literal.
+    fn assert_decimal15_2_to_int64_range(lit_value: i64, expected: (i128, i128)) {
+        assert_decimal_to_int_range(
+            &DataType::Decimal128(15, 2),
+            &DataType::Int64,
+            &ScalarValue::Int64(Some(lit_value)),
+            expected,
+        );
+    }
+
+    #[test]
+    fn test_decimal_to_int_range_bucket_bounds() {
+        // Casting truncates toward zero, so the preimage is the bucket that
+        // truncates to the literal: 173665.00..173665.99 -> 173665.
+        assert_decimal15_2_to_int64_range(173665, (17_366_500, 17_366_600));
+        // v == 0 spans both sides of zero: -0.99..0.99 -> 0.
+        assert_decimal15_2_to_int64_range(0, (-99, 100));
+        // v < 0: -173665.99..-173664.99 -> -173665. The upper bound excludes
+        // the first value that truncates to -173664.
+        assert_decimal15_2_to_int64_range(-173665, (-17_366_599, -17_366_499));
+    }
+
+    #[test]
+    fn test_decimal_to_int_range_for_every_operator() {
+        // Every comparison operator works off the same interval bounds.
+        let source_type = DataType::Decimal128(15, 2);
+        let target_type = DataType::Int64;
+        let literal = ScalarValue::Int64(Some(173665));
+        let expected = Some(CastPredicatePreimage::Range(
+            Interval::try_new(
+                ScalarValue::Decimal128(Some(17_366_500), 15, 2),
+                ScalarValue::Decimal128(Some(17_366_600), 15, 2),
+            )
+            .unwrap(),
+        ));
+
+        for op in [
+            Operator::Eq,
+            Operator::NotEq,
+            Operator::Lt,
+            Operator::LtEq,
+            Operator::Gt,
+            Operator::GtEq,
+            Operator::IsDistinctFrom,
+            Operator::IsNotDistinctFrom,
+        ] {
+            assert_eq!(
+                cast_predicate_preimage(&source_type, &target_type, op, &literal)
+                    .unwrap(),
+                expected,
+                "unexpected preimage for {op:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_decimal_to_int_range_rejects_unrepresentable_bounds() {
+        // Decimal128(5, 2) holds at most 999.99, so the bucket of 99999
+        // ([9_999_900, 10_000_000) is outside the source domain and the cast
+        // must be retained.
+        assert_preimage_none(
+            &DataType::Decimal128(5, 2),
+            &DataType::Int64,
+            Operator::Eq,
+            &ScalarValue::Int64(Some(99999)),
+        );
+
+        // The rejection is about the bucket bounds, not the type: a literal
+        // whose bucket fits in Decimal128(5, 2) is still rewritten.
+        assert_decimal_to_int_range(
+            &DataType::Decimal128(5, 2),
+            &DataType::Int64,
+            &ScalarValue::Int64(Some(173)),
+            (17_300, 17_400),
+        );
+
+        // The literal may exceed the source decimal's value range: what matters
+        // is whether its bucket is representable.
+        let v = i128::from(i64::MAX);
+        assert_decimal_to_int_range(
+            &DataType::Decimal128(38, 2),
+            &DataType::Int64,
+            &ScalarValue::Int64(Some(i64::MAX)),
+            (v * 100, (v + 1) * 100),
+        );
+        assert_preimage_none(
+            &DataType::Decimal128(15, 2),
+            &DataType::Int64,
+            Operator::Eq,
+            &ScalarValue::Int64(Some(i64::MAX)),
+        );
+    }
+
+    #[test]
+    fn test_decimal_to_int_range_requires_nonzero_scale() {
+        // A Decimal128(p, 0) value is an integer, so it has no bucket to expand
+        // and must not be range-rewritten.
+        for source_type in [DataType::Decimal128(15, 0), DataType::Decimal128(15, -2)] {
+            let result = cast_predicate_preimage(
+                &source_type,
+                &DataType::Int64,
+                Operator::Eq,
+                &ScalarValue::Int64(Some(173665)),
+            )
+            .unwrap();
+            assert!(
+                !matches!(result, Some(CastPredicatePreimage::Range(_))),
+                "{source_type:?} must not be range-rewritten: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_decimal_to_int_range_dictionary_source() {
+        // One level of dictionary is unwrapped, and the bounds keep the
+        // dictionary wrapper so the rewritten predicate has the source type.
+        let source_type = DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(DataType::Decimal128(15, 2)),
+        );
+        assert_eq!(
+            cast_predicate_preimage(
+                &source_type,
+                &DataType::Int64,
+                Operator::Eq,
+                &ScalarValue::Int64(Some(173665)),
+            )
+            .unwrap(),
+            Some(CastPredicatePreimage::Range(
+                Interval::try_new(
+                    ScalarValue::Dictionary(
+                        Box::new(DataType::Int32),
+                        Box::new(ScalarValue::Decimal128(Some(17_366_500), 15, 2)),
+                    ),
+                    ScalarValue::Dictionary(
+                        Box::new(DataType::Int32),
+                        Box::new(ScalarValue::Decimal128(Some(17_366_600), 15, 2)),
+                    ),
+                )
+                .unwrap()
+            ))
+        );
+
+        // A dictionary of a non-decimal is not range-rewritten: the inner type
+        // is not a decimal, so the preimage (if any) is exact, not a range.
+        let result = cast_predicate_preimage(
+            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int64)),
+            &DataType::Int64,
+            Operator::Eq,
+            &ScalarValue::Int64(Some(173665)),
+        )
+        .unwrap();
+        assert!(
+            !matches!(result, Some(CastPredicatePreimage::Range(_))),
+            "dictionary of Int64 must not get a range preimage: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_decimal_to_int_range_rejects_non_decimal128_sources() {
+        // Decimal32, Decimal64 and Decimal256 sources are out of scope and
+        // keep their cast; only Decimal128 has a range preimage.
+        for source_type in [
+            DataType::Decimal32(9, 2),
+            DataType::Decimal64(18, 2),
+            DataType::Decimal256(76, 2),
+        ] {
+            assert_preimage_none(
+                &source_type,
+                &DataType::Int64,
+                Operator::Eq,
+                &ScalarValue::Int64(Some(173665)),
+            );
+        }
+
+        // Non-integer targets keep their cast too.
+        for target_type in [DataType::Float64, DataType::Utf8] {
+            assert_preimage_none(
+                &DataType::Decimal128(15, 2),
+                &target_type,
+                Operator::Eq,
+                &ScalarValue::Int64(Some(173665)),
+            );
+        }
+    }
+
+    #[test]
+    fn test_decimal_to_int_range_rejects_out_of_range_literal() {
+        // `CAST(<decimal> AS Int8)` can never produce 300, so there is no
+        // source bucket to rewrite to.
+        assert_preimage_none(
+            &DataType::Decimal128(15, 2),
+            &DataType::Int8,
+            Operator::Eq,
+            &ScalarValue::Int64(Some(300)),
+        );
+
+        // An in-range literal for the same narrow target is rewritten, and the
+        // unsigned variant accepts the literal's value as well.
+        assert_decimal_to_int_range(
+            &DataType::Decimal128(15, 2),
+            &DataType::Int8,
+            &ScalarValue::Int64(Some(-1)),
+            (-199, -99),
+        );
+        assert_decimal_to_int_range(
+            &DataType::Decimal128(15, 2),
+            &DataType::UInt8,
+            &ScalarValue::UInt8(Some(255)),
+            (25_500, 25_600),
         );
     }
 }

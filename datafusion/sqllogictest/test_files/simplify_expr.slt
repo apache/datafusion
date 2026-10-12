@@ -659,3 +659,241 @@ drop table cast_preimage_tz;
 
 statement ok
 drop table cast_preimage_tz_ms;
+
+# ------------------------------------------------------------------------
+# Unwrapping decimal -> integer casts in comparison predicates.
+#
+# Casting a `DECIMAL(15, 2)` value to `BIGINT` truncates toward zero, so an
+# integer literal describes a whole bucket of source values:
+# `CAST(price AS BIGINT) = 173665` matches every `price` in
+# `[173665.00, 173666.00)`, not only `173665.00`.
+#
+# Folding the literal into the source domain as an exact decimal
+# (`price = 173665.00`) dropped the four rows between those values
+# (spiceai/spiceai#14969). The range preimage rewrites the predicate to the
+# bucket bounds instead, so the CAST leaves the column and no row is lost.
+#
+# The eight rows below are the ones from the issue.
+statement ok
+create table decimal_cast_preimage (k int, price decimal(15, 2)) as values
+  (1, 173664.94),
+  (2, 173665.29),
+  (3, 173665.47),
+  (4, 173665.73),
+  (5, 173665.91),
+  (6, 173666.04),
+  (7, 205623.50),
+  (8, 193846.25);
+
+query TR
+select arrow_typeof(price), price from decimal_cast_preimage where k = 1;
+----
+Decimal128(15, 2) 173664.94
+
+# The CAST is truncation toward zero, so rows 2-5 are exactly the rows whose
+# integer value is 173665.
+query II
+select k, cast(price as bigint) from decimal_cast_preimage order by k;
+----
+1 173664
+2 173665
+3 173665
+4 173665
+5 173665
+6 173666
+7 205623
+8 193846
+
+# `= 173665` becomes the source-domain bucket `[173665.00, 173666.00)`.
+query TT
+explain select k from decimal_cast_preimage where CAST(price AS BIGINT) = 173665;
+----
+logical_plan
+01)Projection: decimal_cast_preimage.k
+02)--Filter: decimal_cast_preimage.price >= Decimal128(173665.00,15,2) AND decimal_cast_preimage.price < Decimal128(173666.00,15,2)
+03)----TableScan: decimal_cast_preimage projection=[k, price]
+physical_plan
+01)FilterExec: price@1 >= 173665.00 AND price@1 < 173666.00, projection=[k@0]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# The regression from the issue: the four rows inside the bucket, not zero
+# (exact `price = 173665.00` matches nothing) and not all eight.
+query I
+select k from decimal_cast_preimage where CAST(price AS BIGINT) = 173665 order by k;
+----
+2
+3
+4
+5
+
+# Range predicates use the same bucket bounds: `> 173664` (a strict `>`)
+# becomes `>= 173665.00` and `< 173666` becomes `< 173666.00`. Row 1
+# (173664.94) casts to 173664 and is therefore not `> 173664`, so it is
+# excluded on the value, not by the rewrite.
+query TT
+explain select k from decimal_cast_preimage where CAST(price AS BIGINT) > 173664 AND CAST(price AS BIGINT) < 173666;
+----
+logical_plan
+01)Projection: decimal_cast_preimage.k
+02)--Filter: decimal_cast_preimage.price >= Decimal128(173665.00,15,2) AND decimal_cast_preimage.price < Decimal128(173666.00,15,2)
+03)----TableScan: decimal_cast_preimage projection=[k, price]
+physical_plan
+01)FilterExec: price@1 >= 173665.00 AND price@1 < 173666.00, projection=[k@0]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+select k from decimal_cast_preimage where CAST(price AS BIGINT) > 173664 AND CAST(price AS BIGINT) < 173666 order by k;
+----
+2
+3
+4
+5
+
+# Row 1 is included by a non-strict lower bound, whose preimage is the bucket
+# start `>= 173664.00`.
+query TT
+explain select k from decimal_cast_preimage where CAST(price AS BIGINT) >= 173664 AND CAST(price AS BIGINT) < 173666;
+----
+logical_plan
+01)Projection: decimal_cast_preimage.k
+02)--Filter: decimal_cast_preimage.price >= Decimal128(173664.00,15,2) AND decimal_cast_preimage.price < Decimal128(173666.00,15,2)
+03)----TableScan: decimal_cast_preimage projection=[k, price]
+physical_plan
+01)FilterExec: price@1 >= 173664.00 AND price@1 < 173666.00, projection=[k@0]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+select k from decimal_cast_preimage where CAST(price AS BIGINT) >= 173664 AND CAST(price AS BIGINT) < 173666 order by k;
+----
+1
+2
+3
+4
+5
+
+# The decoded bucket is a decimal-domain range that returns the same rows, so
+# the rewrite is exact.
+query I
+select k from decimal_cast_preimage where price >= 173665.00 AND price < 173666.00 order by k;
+----
+2
+3
+4
+5
+
+# A literal whose bucket cannot be represented in `DECIMAL(15, 2)` has no
+# source-domain preimage, so the CAST stays on the column. No `DECIMAL(15, 2)`
+# value can truncate to 99999999999999.
+query TT
+explain select k from decimal_cast_preimage where CAST(price AS BIGINT) = 99999999999999;
+----
+logical_plan
+01)Projection: decimal_cast_preimage.k
+02)--Filter: CAST(decimal_cast_preimage.price AS Int64) = Int64(99999999999999)
+03)----TableScan: decimal_cast_preimage projection=[k, price]
+physical_plan
+01)FilterExec: CAST(price@1 AS Int64) = 99999999999999, projection=[k@0]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# The CAST is retained and the query matches no rows, so the expected block
+# below is empty.
+query I
+select k from decimal_cast_preimage where CAST(price AS BIGINT) = 99999999999999 order by k;
+----
+
+# Truncation toward zero around zero and for negative literals.
+statement ok
+create table decimal_cast_preimage_neg (k int, price decimal(15, 2)) as values
+  (1, -0.50),
+  (2,  0.00),
+  (3,  0.49),
+  (4, -1.00),
+  (5,  1.00),
+  (6, -173665.29),
+  (7, NULL);
+
+# Zero is the only bucket that spans both signs: `[-0.99, 1.00)`.
+query TT
+explain select k from decimal_cast_preimage_neg where CAST(price AS BIGINT) = 0;
+----
+logical_plan
+01)Projection: decimal_cast_preimage_neg.k
+02)--Filter: decimal_cast_preimage_neg.price >= Decimal128(-0.99,15,2) AND decimal_cast_preimage_neg.price < Decimal128(1.00,15,2)
+03)----TableScan: decimal_cast_preimage_neg projection=[k, price]
+physical_plan
+01)FilterExec: price@1 >= -0.99 AND price@1 < 1.00, projection=[k@0]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+select k from decimal_cast_preimage_neg where CAST(price AS BIGINT) = 0 order by k;
+----
+1
+2
+3
+
+# Negative buckets mirror the sign: truncation toward zero shrinks the
+# magnitude, so the bucket of -1 is `[-1.99, -0.99)` (`[(-1 - 1) * 100 + 1,
+# -1 * 100 + 1)`), which contains -1.00 but not -0.99.
+query TT
+explain select k from decimal_cast_preimage_neg where CAST(price AS BIGINT) = -1;
+----
+logical_plan
+01)Projection: decimal_cast_preimage_neg.k
+02)--Filter: decimal_cast_preimage_neg.price >= Decimal128(-1.99,15,2) AND decimal_cast_preimage_neg.price < Decimal128(-0.99,15,2)
+03)----TableScan: decimal_cast_preimage_neg projection=[k, price]
+physical_plan
+01)FilterExec: price@1 >= -1.99 AND price@1 < -0.99, projection=[k@0]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+select k from decimal_cast_preimage_neg where CAST(price AS BIGINT) = -1 order by k;
+----
+4
+
+query I
+select k from decimal_cast_preimage_neg where CAST(price AS BIGINT) = -173665 order by k;
+----
+6
+
+# IS DISTINCT FROM uses the same bounds and preserves NULL semantics: the
+# NULL row is returned (NULL IS DISTINCT FROM 0), while the rewritten form
+# `price < -0.99 OR price >= 1.00 OR price IS NULL` keeps it too.
+query I
+select k from decimal_cast_preimage_neg where CAST(price AS BIGINT) IS DISTINCT FROM 0 order by k;
+----
+4
+5
+6
+7
+
+# IS NOT DISTINCT FROM 0 keeps only the zero bucket and drops the NULL row,
+# matching `price IS NOT NULL AND price >= -0.99 AND price < 1.00`.
+query I
+select k from decimal_cast_preimage_neg where CAST(price AS BIGINT) IS NOT DISTINCT FROM 0 order by k;
+----
+1
+2
+3
+
+# `CAST(price AS BIGINT) != 0` is NULL for the NULL row, so the row is
+# filtered out exactly like the rewritten `price < -0.99 OR price >= 1.00`.
+query I
+select k from decimal_cast_preimage_neg where CAST(price AS BIGINT) != 0 order by k;
+----
+4
+5
+6
+
+# The NULL row distinguishes NULL from false directly: `IS DISTINCT FROM`
+# evaluates to true on NULL while plain comparisons stay NULL (and a NULL
+# filter row is dropped either way).
+query BBB
+select CAST(price AS BIGINT) IS DISTINCT FROM 0, CAST(price AS BIGINT) IS NOT DISTINCT FROM 0, CAST(price AS BIGINT) = 0 from decimal_cast_preimage_neg where k = 7;
+----
+true false NULL
+
+statement ok
+drop table decimal_cast_preimage;
+
+statement ok
+drop table decimal_cast_preimage_neg;
