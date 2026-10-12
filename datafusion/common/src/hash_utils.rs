@@ -397,8 +397,8 @@ fn hash_prim_nulls<N, S, const REHASH: bool>(
                         let prev_hash = *hashes.get_unchecked(base + lane);
                         hash_prim_one::<_, _, REHASH>(state, prev_hash, value)
                     });
-                    for lane in 0..LANES {
-                        *hashes.get_unchecked_mut(base + lane) = new_hashes[lane];
+                    for (lane, new_hash) in new_hashes.iter().copied().enumerate() {
+                        *hashes.get_unchecked_mut(base + lane) = new_hash;
                     }
                 }
             }
