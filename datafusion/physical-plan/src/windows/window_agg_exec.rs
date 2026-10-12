@@ -555,7 +555,7 @@ impl WindowAggStream {
         let partition_points =
             evaluate_partition_ranges(batch.num_rows(), &partition_by_sort_keys)?;
 
-        let mut partition_results = vec![];
+        let mut partition_results = Vec::with_capacity(partition_points.len());
         // Calculate window cols
         for partition_point in partition_points {
             let length = partition_point.end - partition_point.start;

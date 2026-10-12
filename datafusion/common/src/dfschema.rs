@@ -286,7 +286,9 @@ impl DFSchema {
     /// Create a new schema that contains the fields from this schema followed by the fields
     /// from the supplied schema. An error will be returned if there are duplicate field names.
     pub fn join(&self, schema: &DFSchema) -> Result<Self> {
-        let mut schema_builder = SchemaBuilder::new();
+        let mut schema_builder = SchemaBuilder::with_capacity(
+            self.inner.fields().len() + schema.fields().len(),
+        );
         schema_builder.extend(self.inner.fields().iter().cloned());
         schema_builder.extend(schema.fields().iter().cloned());
         let new_schema = schema_builder.finish();
@@ -338,7 +340,7 @@ impl DFSchema {
             .collect();
 
         let mut schema_builder = SchemaBuilder::from(self.inner.fields.clone());
-        let mut qualifiers = Vec::new();
+        let mut qualifiers = Vec::with_capacity(other_schema.inner.fields.len());
         for (qualifier, field) in other_schema.iter() {
             // skip duplicate columns
             let duplicated_field = match qualifier {

@@ -605,8 +605,8 @@ fn try_reorder(
         return (join_keys, None);
     };
 
-    let mut new_left_keys = vec![];
-    let mut new_right_keys = vec![];
+    let mut new_left_keys = Vec::with_capacity(positions.len());
+    let mut new_right_keys = Vec::with_capacity(positions.len());
     for pos in positions.iter() {
         new_left_keys.push(Arc::clone(&join_keys.left_keys[*pos]));
         new_right_keys.push(Arc::clone(&join_keys.right_keys[*pos]));
@@ -1003,7 +1003,7 @@ fn get_repartition_requirement_status(
     let children = plan.children();
     let rr_beneficial = plan.benefits_from_input_partitioning();
     let requirements = plan.input_distribution_requirements().into_per_child();
-    let mut repartition_status_flags = vec![];
+    let mut repartition_status_flags = Vec::with_capacity(children.len());
     for (child, requirement, roundrobin_beneficial) in
         izip!(children.into_iter(), requirements, rr_beneficial)
     {

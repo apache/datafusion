@@ -260,6 +260,9 @@ where
     /// inner states
     visit_stack: Vec<VisitRecord<'n, N>>,
 
+    /// buffer reused by `pop_enter_mark` to collect the identifiers of children
+    node_ids: Vec<Identifier<'n, N>>,
+
     /// preorder index, start from 0.
     down_index: usize,
 
@@ -319,22 +322,22 @@ where
         &mut self,
         can_normalize: bool,
     ) -> (usize, Option<Identifier<'n, N>>, bool) {
-        let mut node_ids: Vec<Identifier<'n, N>> = vec![];
         let mut is_valid = true;
 
         while let Some(item) = self.visit_stack.pop() {
             match item {
                 VisitRecord::EnterMark(down_index) => {
                     if can_normalize {
-                        node_ids.sort_by_key(|i| i.hash);
+                        self.node_ids.sort_by_key(|i| i.hash);
                     }
-                    let node_id = node_ids
-                        .into_iter()
+                    let node_id = self
+                        .node_ids
+                        .drain(..)
                         .fold(None, |accum, item| Some(item.combine(accum)));
                     return (down_index, node_id, is_valid);
                 }
                 VisitRecord::NodeItem(sub_node_id, sub_node_is_valid) => {
-                    node_ids.push(sub_node_id);
+                    self.node_ids.push(sub_node_id);
                     is_valid &= sub_node_is_valid;
                 }
             }
@@ -551,6 +554,7 @@ where
             node_stats,
             id_array,
             visit_stack: vec![],
+            node_ids: vec![],
             down_index: 0,
             up_index: 0,
             random_state: &self.random_state,
