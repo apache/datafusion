@@ -522,8 +522,9 @@ impl LogicalPlan {
             };
             if let Some(on) = on {
                 // The join keys in using-join must be columns.
-                let columns =
-                    on.iter().try_fold(HashSet::new(), |mut accumu, (l, r)| {
+                let columns = on.iter().try_fold(
+                    HashSet::with_capacity(on.len() * 2),
+                    |mut accumu, (l, r)| {
                         let Some(l) = l.get_as_join_column() else {
                             return internal_err!(
                                 "Invalid join key. Expected column, found {l:?}"
@@ -537,7 +538,8 @@ impl LogicalPlan {
                         accumu.insert(l.to_owned());
                         accumu.insert(r.to_owned());
                         Result::<_, DataFusionError>::Ok(accumu)
-                    })?;
+                    },
+                )?;
                 using_columns.push(columns);
             }
             Ok(TreeNodeRecursion::Continue)
@@ -3596,13 +3598,13 @@ impl Union {
             }
         }
 
-        let mut name_counts: HashMap<String, usize> = HashMap::new();
+        let mut name_counts: HashMap<String, usize> =
+            HashMap::with_capacity(fields_count);
+        let mut fields: Vec<&FieldRef> = Vec::with_capacity(inputs.len());
         let union_fields = (0..fields_count)
             .map(|i| {
-                let fields = inputs
-                    .iter()
-                    .map(|input| input.schema().field(i))
-                    .collect::<Vec<_>>();
+                fields.clear();
+                fields.extend(inputs.iter().map(|input| input.schema().field(i)));
                 let first_field = fields[0];
                 let base_name = first_field.name().to_string();
 
@@ -4352,7 +4354,7 @@ impl PartialOrd for Aggregate {
 #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
 fn max_grouping_set_duplicate_ordinal(group_expr: &[Expr]) -> usize {
     if let Some(Expr::GroupingSet(GroupingSet::GroupingSets(sets))) = group_expr.first() {
-        let mut counts: HashMap<&[Expr], usize> = HashMap::new();
+        let mut counts: HashMap<&[Expr], usize> = HashMap::with_capacity(sets.len());
         for set in sets {
             *counts.entry(set).or_insert(0) += 1;
         }
@@ -5162,7 +5164,7 @@ impl Unnest {
 
         let input_schema = input.schema();
 
-        let mut dependency_indices = vec![];
+        let mut dependency_indices = Vec::with_capacity(input_schema.fields().len());
         // Transform input schema into new schema
         // Given this comprehensive example
         //

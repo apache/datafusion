@@ -1888,12 +1888,12 @@ impl DefaultPhysicalPlanner {
             LogicalPlan::Extension(Extension { node }) => {
                 let mut maybe_plan = None;
                 let children = children.vec();
+                let logical_input = node.inputs();
                 for planner in &self.extension_planners {
                     if maybe_plan.is_some() {
                         break;
                     }
 
-                    let logical_input = node.inputs();
                     maybe_plan = planner
                         .plan_extension(
                             self,
@@ -2519,10 +2519,11 @@ fn extract_dml_filters(
     //
     // Deduplication is necessary because filters may appear in both Filter nodes
     // and TableScan.filters when the optimizer performs partial (Inexact) pushdown.
-    let mut seen_filters = HashSet::new();
-    filters
-        .into_iter()
-        .try_fold(Vec::new(), |mut deduped, filter| {
+    let num_filters = filters.len();
+    let mut seen_filters = HashSet::with_capacity(num_filters);
+    filters.into_iter().try_fold(
+        Vec::with_capacity(num_filters),
+        |mut deduped, filter| {
             let unqualified = strip_column_qualifiers(filter).map_err(|e| {
                 e.context(format!(
                     "Failed to strip column qualifiers for DML filter on table '{target}'"
@@ -2532,7 +2533,8 @@ fn extract_dml_filters(
                 deduped.push(unqualified);
             }
             Ok(deduped)
-        })
+        },
+    )
 }
 
 /// Determine whether a predicate references only columns from the target table

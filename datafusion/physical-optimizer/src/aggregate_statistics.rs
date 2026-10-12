@@ -75,7 +75,7 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                 {
                     projections.push(ProjectionExpr {
                         expr: expressions::lit(optimizable_statistic),
-                        alias: name.to_owned(),
+                        alias: name,
                     });
                 } else {
                     // TODO: we need all aggr_expr to be resolved (cf TODO fullres)

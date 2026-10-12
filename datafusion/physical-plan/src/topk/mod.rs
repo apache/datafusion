@@ -276,10 +276,9 @@ impl<'a> TopKHeapBoundary<'a> {
         sort_exprs: &[PhysicalSortExpr],
     ) -> Result<Vec<ScalarValue>> {
         let mut scalar_values = Vec::with_capacity(sort_exprs.len());
+        let row = self.batch.slice(self.row.index, 1);
         for sort_expr in sort_exprs {
-            let value = sort_expr
-                .expr
-                .evaluate(&self.batch.slice(self.row.index, 1))?;
+            let value = sort_expr.expr.evaluate(&row)?;
 
             let scalar = match value {
                 ColumnarValue::Scalar(scalar) => scalar,
@@ -2959,6 +2958,7 @@ impl PartitionedTopKDenseRank {
         let mut batch_refs: Vec<&RecordBatch> = Vec::new();
         let mut batch_id_pos: HashMap<u32, usize> = HashMap::new();
         let mut indices: Vec<(usize, usize)> = Vec::with_capacity(batch_size);
+        let mut sorted_obs: Vec<(Vec<u8>, Vec<GroupEntry>)> = Vec::new();
 
         // Chunk at `batch_size` so the operator emits the same batch sizes
         // as before and no single `interleave` output exceeds `batch_size`.
@@ -2970,10 +2970,9 @@ impl PartitionedTopKDenseRank {
             } = states.remove(&pk).expect("key from states.keys()");
             // Sort the <= K distinct ob keys so rows emit ascending
             // (byte-comparable encoding == sort order).
-            let mut sorted_obs: Vec<(Vec<u8>, Vec<GroupEntry>)> =
-                groups.into_iter().collect();
+            sorted_obs.extend(groups);
             sorted_obs.sort_by(|a, b| a.0.cmp(&b.0));
-            for (_ob, entries) in sorted_obs {
+            for (_ob, entries) in sorted_obs.drain(..) {
                 for entry in entries {
                     let batch = &store
                         .get(entry.batch_id)
