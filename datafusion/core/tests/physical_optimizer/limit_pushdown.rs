@@ -15,30 +15,39 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fmt::Formatter;
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    coalesce_partitions_exec, global_limit_exec, hash_join_exec, local_limit_exec,
-    sort_exec, sort_preserving_merge_exec, stream_exec,
+    TestScan, coalesce_partitions_exec, global_limit_exec, hash_join_exec,
+    local_limit_exec, sort_exec, sort_preserving_merge_exec, stream_exec,
 };
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion_common::Statistics;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
+use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::{JoinType, Operator};
-use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr::expressions::{BinaryExpr, col, lit};
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_common::physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::limit_pushdown::LimitPushdown;
 use datafusion_physical_plan::empty::EmptyExec;
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::NestedLoopJoinExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
-use datafusion_physical_plan::{ExecutionPlan, get_plan_string};
+use datafusion_physical_plan::union::UnionExec;
+use datafusion_physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, StatisticsArgs,
+    get_plan_string,
+};
 
 fn create_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
@@ -103,6 +112,215 @@ fn format_plan(plan: &Arc<dyn ExecutionPlan>) -> String {
     get_plan_string(plan).join("\n")
 }
 
+/// Test plan that reports a fixed `fetch` but cannot change it through
+/// `with_fetch`. It can optionally allow limits to be pushed to its child.
+#[derive(Debug)]
+struct TestFetchOnlyExec {
+    input: Arc<dyn ExecutionPlan>,
+    fetch: Option<usize>,
+    supports_limit_pushdown: bool,
+    properties: Arc<PlanProperties>,
+}
+
+impl TestFetchOnlyExec {
+    fn new(input: Arc<dyn ExecutionPlan>, fetch: Option<usize>) -> Self {
+        let properties = PlanProperties::new(
+            EquivalenceProperties::new(input.schema()),
+            Partitioning::UnknownPartitioning(1),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        );
+        Self {
+            input,
+            fetch,
+            supports_limit_pushdown: false,
+            properties: Arc::new(properties),
+        }
+    }
+
+    /// Set whether limits may be pushed through this operator to its child.
+    fn with_supports_limit_pushdown(mut self, supports: bool) -> Self {
+        self.supports_limit_pushdown = supports;
+        self
+    }
+}
+
+impl DisplayAs for TestFetchOnlyExec {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "TestFetchOnlyExec")?;
+        if let Some(fetch) = self.fetch {
+            write!(f, ": fetch={fetch}")?;
+        }
+        Ok(())
+    }
+}
+
+impl ExecutionPlan for TestFetchOnlyExec {
+    fn name(&self) -> &str {
+        "TestFetchOnlyExec"
+    }
+
+    fn properties(&self) -> &Arc<PlanProperties> {
+        &self.properties
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&PhysicalExprRef) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // `TestFetchOnlyExec` owns no `PhysicalExpr`s.
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        assert_eq!(children.len(), 1);
+        Ok(Arc::new(
+            Self::new(children[0].clone(), self.fetch)
+                .with_supports_limit_pushdown(self.supports_limit_pushdown),
+        ))
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        unreachable!("TestFetchOnlyExec is only used by optimizer tests")
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        _input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        Ok(Arc::new(Statistics::new_unknown(self.schema().as_ref())))
+    }
+
+    fn fetch(&self) -> Option<usize> {
+        self.fetch
+    }
+
+    fn supports_limit_pushdown(&self) -> bool {
+        self.supports_limit_pushdown
+    }
+}
+
+/// Test multi-child plan with a single output partition that allows limit
+/// pushdown. Optionally absorbs a fetch via `with_fetch`.
+#[derive(Debug, Clone)]
+struct TestMultiChildExec {
+    inputs: Vec<Arc<dyn ExecutionPlan>>,
+    properties: Arc<PlanProperties>,
+    supports_fetch: bool,
+    fetch: Option<usize>,
+}
+
+impl TestMultiChildExec {
+    fn new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Self {
+        let properties = PlanProperties::new(
+            EquivalenceProperties::new(inputs[0].schema()),
+            Partitioning::UnknownPartitioning(1),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        );
+        Self {
+            inputs,
+            properties: Arc::new(properties),
+            supports_fetch: false,
+            fetch: None,
+        }
+    }
+
+    /// Set whether `with_fetch()` returns `Some` (true) or `None` (false).
+    fn with_supports_fetch(mut self, supports: bool) -> Self {
+        self.supports_fetch = supports;
+        self
+    }
+}
+
+impl DisplayAs for TestMultiChildExec {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "TestMultiChildExec")?;
+        if let Some(fetch) = self.fetch {
+            write!(f, ": fetch={fetch}")?;
+        }
+        Ok(())
+    }
+}
+
+impl ExecutionPlan for TestMultiChildExec {
+    fn name(&self) -> &str {
+        "TestMultiChildExec"
+    }
+
+    fn properties(&self) -> &Arc<PlanProperties> {
+        &self.properties
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        self.inputs.iter().collect()
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&PhysicalExprRef) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // `TestMultiChildExec` owns no `PhysicalExpr`s.
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        assert_eq!(children.len(), self.inputs.len());
+        let mut new_plan = Self::new(children).with_supports_fetch(self.supports_fetch);
+        new_plan.fetch = self.fetch;
+        Ok(Arc::new(new_plan))
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        unreachable!("TestMultiChildExec is only used by optimizer tests")
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        _input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        Ok(Arc::new(Statistics::new_unknown(self.schema().as_ref())))
+    }
+
+    fn supports_limit_pushdown(&self) -> bool {
+        true
+    }
+
+    fn with_fetch(&self, fetch: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
+        if self.supports_fetch {
+            let mut new_plan = self.clone();
+            new_plan.fetch = fetch;
+            Some(Arc::new(new_plan))
+        } else {
+            None
+        }
+    }
+
+    fn fetch(&self) -> Option<usize> {
+        self.fetch
+    }
+}
+
 #[test]
 fn transforms_streaming_table_exec_into_fetching_version_when_skip_is_zero() -> Result<()>
 {
@@ -162,6 +380,481 @@ fn transforms_streaming_table_exec_into_fetching_version_and_keeps_the_global_li
     Ok(())
 }
 
+#[test]
+fn keeps_global_limit_above_fetch_capable_multi_partition_scan() -> Result<()> {
+    let schema = create_schema();
+    let scan = Arc::new(
+        TestScan::new(schema, vec![])
+            .with_supports_fetch(true)
+            .with_partition_count(2),
+    );
+    let global_limit = global_limit_exec(scan, 0, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    CoalescePartitionsExec: fetch=5
+      TestScan: fetch=5
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn keeps_global_offset_limit_above_fetch_capable_multi_partition_scan() -> Result<()> {
+    let schema = create_schema();
+    let scan = Arc::new(
+        TestScan::new(schema, vec![])
+            .with_supports_fetch(true)
+            .with_partition_count(2),
+    );
+    let global_limit = global_limit_exec(scan, 2, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    GlobalLimitExec: skip=2, fetch=5
+      CoalescePartitionsExec: fetch=7
+        TestScan: fetch=7
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn preserves_existing_per_partition_fetch_under_global_limit() -> Result<()> {
+    let schema = create_schema();
+    let scan = Arc::new(
+        TestScan::new(schema, vec![])
+            .with_supports_fetch(true)
+            .with_partition_count(2),
+    );
+    let scan = scan.with_fetch(Some(3)).unwrap();
+    let global_limit = global_limit_exec(scan, 0, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    CoalescePartitionsExec: fetch=5
+      TestScan: fetch=3
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn adds_global_boundary_above_unfetchable_multi_partition_scan() -> Result<()> {
+    let schema = create_schema();
+    let scan = Arc::new(TestScan::new(schema, vec![]).with_partition_count(2));
+    let global_limit = global_limit_exec(scan, 0, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    CoalescePartitionsExec: fetch=5
+      TestScan
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn materializes_global_boundary_before_pushing_into_union_children() -> Result<()> {
+    let schema = create_schema();
+    let left =
+        Arc::new(TestScan::new(Arc::clone(&schema), vec![]).with_supports_fetch(true));
+    let right = Arc::new(TestScan::new(schema, vec![]).with_supports_fetch(true));
+    let union = UnionExec::try_new(vec![left, right])?;
+    let global_limit = global_limit_exec(union, 0, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    CoalescePartitionsExec: fetch=5
+      UnionExec
+        TestScan: fetch=5
+        TestScan: fetch=5
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn materializes_ordered_global_limit_with_sort_preserving_merge() -> Result<()> {
+    let schema = create_schema();
+    let ordering: LexOrdering = [PhysicalSortExpr {
+        expr: col("c1", &schema)?,
+        options: SortOptions::default(),
+    }]
+    .into();
+    let scan = Arc::new(
+        TestScan::with_ordering(Arc::clone(&schema), ordering.clone())
+            .with_supports_fetch(true)
+            .with_partition_count(2),
+    );
+    let mut global_limit =
+        datafusion_physical_plan::limit::GlobalLimitExec::new(scan, 2, Some(5));
+    global_limit.set_required_ordering(Some(ordering));
+    let global_limit = Arc::new(global_limit);
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    GlobalLimitExec: skip=2, fetch=5
+      SortPreservingMergeExec: [c1@0 ASC], fetch=7
+        TestScan: output_ordering=[c1@0 ASC], fetch=7
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn materializes_global_boundary_for_offset_only_multi_partition_scan() -> Result<()> {
+    let schema = create_schema();
+    let scan = Arc::new(TestScan::new(schema, vec![]).with_partition_count(2));
+    let global_limit = global_limit_exec(scan, 2, None);
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    GlobalLimitExec: skip=2, fetch=None
+      CoalescePartitionsExec
+        TestScan
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn removes_noop_global_limit_without_materializing_boundary() -> Result<()> {
+    let schema = create_schema();
+    let scan = Arc::new(TestScan::new(schema, vec![]).with_partition_count(2));
+    let noop_global_limit = global_limit_exec(scan, 0, None);
+
+    let optimized =
+        LimitPushdown::new().optimize(noop_global_limit, &ConfigOptions::new())?;
+
+    let plan = format_plan(&optimized);
+    assert!(!plan.contains("CoalescePartitionsExec"));
+    assert!(!plan.contains("SortPreservingMergeExec"));
+    assert!(!plan.contains("GlobalLimitExec"));
+    insta::assert_snapshot!(plan, @"TestScan");
+
+    Ok(())
+}
+
+#[test]
+fn preserves_outer_global_limit_across_nested_global_limit() -> Result<()> {
+    let schema = create_schema();
+    let scan = Arc::new(
+        TestScan::new(schema, vec![])
+            .with_supports_fetch(true)
+            .with_partition_count(2),
+    );
+    let inner = global_limit_exec(scan, 0, Some(10));
+    let outer = global_limit_exec(inner, 0, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(outer, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    CoalescePartitionsExec: fetch=5
+      TestScan: fetch=5
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn preserves_outer_global_limit_across_noop_global_limit() -> Result<()> {
+    let schema = create_schema();
+    let scan = Arc::new(
+        TestScan::new(schema, vec![])
+            .with_supports_fetch(true)
+            .with_partition_count(2),
+    );
+    let noop = global_limit_exec(scan, 0, None);
+    let outer = global_limit_exec(noop, 0, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(outer, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    CoalescePartitionsExec: fetch=5
+      TestScan: fetch=5
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn materializes_pending_global_limit_below_extension_combiner() -> Result<()> {
+    let schema = create_schema();
+    let left =
+        Arc::new(TestScan::new(Arc::clone(&schema), vec![]).with_supports_fetch(true));
+    let right = Arc::new(TestScan::new(schema, vec![]).with_supports_fetch(true));
+    let union = UnionExec::try_new(vec![left, right])?;
+    let combiner = Arc::new(TestMultiChildExec::new(vec![union]));
+    let global_limit = global_limit_exec(combiner, 0, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    TestMultiChildExec
+      CoalescePartitionsExec: fetch=5
+        UnionExec
+          TestScan: fetch=5
+          TestScan: fetch=5
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn materializes_global_limit_before_multi_child_extension() -> Result<()> {
+    // Regression test: a pending global limit used to be cloned to every
+    // child of a multi-child node, so each child applied the full LIMIT and
+    // the merged output exceeded it. The limit must stay above the node.
+    let schema = create_schema();
+    let left =
+        Arc::new(TestScan::new(Arc::clone(&schema), vec![]).with_supports_fetch(true));
+    let right = Arc::new(TestScan::new(schema, vec![]).with_supports_fetch(true));
+    let custom = Arc::new(TestMultiChildExec::new(vec![left, right]));
+    let global_limit = global_limit_exec(custom, 0, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    GlobalLimitExec: skip=0, fetch=5
+      TestMultiChildExec
+        TestScan: fetch=5
+        TestScan: fetch=5
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn materializes_global_offset_limit_before_multi_child_extension() -> Result<()> {
+    // The offset stays in the GlobalLimitExec; children only get a fetch hint
+    // of skip + fetch for early stopping.
+    let schema = create_schema();
+    let left =
+        Arc::new(TestScan::new(Arc::clone(&schema), vec![]).with_supports_fetch(true));
+    let right = Arc::new(TestScan::new(schema, vec![]).with_supports_fetch(true));
+    let custom = Arc::new(TestMultiChildExec::new(vec![left, right]));
+    let global_limit = global_limit_exec(custom, 2, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    GlobalLimitExec: skip=2, fetch=5
+      TestMultiChildExec
+        TestScan: fetch=7
+        TestScan: fetch=7
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn multi_child_extension_absorbs_global_limit_and_hints_children() -> Result<()> {
+    // When the multi-child node absorbs the fetch itself, no extra limit is
+    // needed; children still receive the same fetch for early stopping.
+    let schema = create_schema();
+    let left =
+        Arc::new(TestScan::new(Arc::clone(&schema), vec![]).with_supports_fetch(true));
+    let right = Arc::new(TestScan::new(schema, vec![]).with_supports_fetch(true));
+    let custom =
+        Arc::new(TestMultiChildExec::new(vec![left, right]).with_supports_fetch(true));
+    let global_limit = global_limit_exec(custom, 0, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    TestMultiChildExec: fetch=5
+      TestScan: fetch=5
+      TestScan: fetch=5
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn materializes_local_limit_before_multi_child_extension() -> Result<()> {
+    // A local limit also cannot be replicated to every child of a multi-child
+    // node with a single output partition.
+    let schema = create_schema();
+    let left =
+        Arc::new(TestScan::new(Arc::clone(&schema), vec![]).with_supports_fetch(true));
+    let right = Arc::new(TestScan::new(schema, vec![]).with_supports_fetch(true));
+    let custom = Arc::new(TestMultiChildExec::new(vec![left, right]));
+    let local_limit = local_limit_exec(custom, 5);
+
+    let optimized = LimitPushdown::new().optimize(local_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    GlobalLimitExec: skip=0, fetch=5
+      TestMultiChildExec
+        TestScan: fetch=5
+        TestScan: fetch=5
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn upgrades_pending_local_limit_before_extension_combiner() -> Result<()> {
+    let schema = create_schema();
+    let inner_left =
+        Arc::new(TestScan::new(Arc::clone(&schema), vec![]).with_supports_fetch(true));
+    let inner_right =
+        Arc::new(TestScan::new(Arc::clone(&schema), vec![]).with_supports_fetch(true));
+    let inner_union = UnionExec::try_new(vec![inner_left, inner_right])?;
+    let combiner = Arc::new(TestMultiChildExec::new(vec![inner_union]));
+    let outer_child = Arc::new(TestScan::new(schema, vec![]).with_supports_fetch(true));
+    let outer_union = UnionExec::try_new(vec![combiner, outer_child])?;
+    let local_limit = local_limit_exec(outer_union, 5);
+
+    let optimized = LimitPushdown::new().optimize(local_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    UnionExec
+      TestMultiChildExec
+        CoalescePartitionsExec: fetch=5
+          UnionExec
+            TestScan: fetch=5
+            TestScan: fetch=5
+      TestScan: fetch=5
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn upgrades_pending_local_limit_before_noop_global_wrapper() -> Result<()> {
+    let schema = create_schema();
+    let inner_left =
+        Arc::new(TestScan::new(Arc::clone(&schema), vec![]).with_supports_fetch(true));
+    let inner_right =
+        Arc::new(TestScan::new(Arc::clone(&schema), vec![]).with_supports_fetch(true));
+    let inner_union = UnionExec::try_new(vec![inner_left, inner_right])?;
+    let noop_global = global_limit_exec(inner_union, 0, None);
+    let outer_child = Arc::new(TestScan::new(schema, vec![]).with_supports_fetch(true));
+    let outer_union = UnionExec::try_new(vec![noop_global, outer_child])?;
+    let local_limit = local_limit_exec(outer_union, 5);
+
+    let optimized = LimitPushdown::new().optimize(local_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    UnionExec
+      CoalescePartitionsExec: fetch=5
+        UnionExec
+          TestScan: fetch=5
+          TestScan: fetch=5
+      TestScan: fetch=5
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn keeps_global_limit_above_local_limit_on_multi_partition_union() -> Result<()> {
+    let schema = create_schema();
+    let left =
+        Arc::new(TestScan::new(Arc::clone(&schema), vec![]).with_supports_fetch(true));
+    let right = Arc::new(TestScan::new(schema, vec![]).with_supports_fetch(true));
+    let union = UnionExec::try_new(vec![left, right])?;
+    let local_limit = local_limit_exec(union, 3);
+    let global_limit = global_limit_exec(local_limit, 0, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    CoalescePartitionsExec: fetch=5
+      UnionExec
+        TestScan: fetch=3
+        TestScan: fetch=3
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn keeps_global_offset_limit_above_local_limit_on_multi_partition_union() -> Result<()> {
+    let schema = create_schema();
+    let left =
+        Arc::new(TestScan::new(Arc::clone(&schema), vec![]).with_supports_fetch(true));
+    let right = Arc::new(TestScan::new(schema, vec![]).with_supports_fetch(true));
+    let union = UnionExec::try_new(vec![left, right])?;
+    let local_limit = local_limit_exec(union, 3);
+    let global_limit = global_limit_exec(local_limit, 2, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    GlobalLimitExec: skip=2, fetch=5
+      CoalescePartitionsExec: fetch=7
+        UnionExec
+          TestScan: fetch=3
+          TestScan: fetch=3
+    "
+    );
+
+    Ok(())
+}
+
 fn join_on_columns(
     left_col: &str,
     right_col: &str,
@@ -180,8 +873,9 @@ fn join_on_columns(
 fn absorbs_limit_into_hash_join_inner() -> Result<()> {
     // HashJoinExec with Inner join should absorb limit via with_fetch
     let schema = create_schema();
-    let left = empty_exec(Arc::clone(&schema));
-    let right = empty_exec(Arc::clone(&schema));
+    let left =
+        Arc::new(TestScan::new(Arc::clone(&schema), vec![]).with_supports_fetch(true));
+    let right = Arc::new(TestScan::new(schema, vec![]).with_supports_fetch(true));
     let on = join_on_columns("c1", "c1");
     let hash_join = hash_join_exec(left, right, on, None, &JoinType::Inner)?;
     let global_limit = global_limit_exec(hash_join, 0, Some(5));
@@ -192,8 +886,8 @@ fn absorbs_limit_into_hash_join_inner() -> Result<()> {
         @r"
     GlobalLimitExec: skip=0, fetch=5
       HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c1@0, c1@0)]
-        EmptyExec
-        EmptyExec
+        TestScan
+        TestScan
     "
     );
 
@@ -205,8 +899,8 @@ fn absorbs_limit_into_hash_join_inner() -> Result<()> {
         optimized,
         @r"
     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c1@0, c1@0)], fetch=5
-      EmptyExec
-      EmptyExec
+      TestScan
+      TestScan
     "
     );
 
@@ -829,6 +1523,128 @@ fn outer_offset_with_same_sort_key_still_pushes_limit() -> Result<()> {
       SortExec: expr=[c1@0 ASC], preserve_partitioning=[false]
         SortExec: TopK(fetch=8), expr=[c1@0 ASC], preserve_partitioning=[false]
           EmptyExec
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn keeps_global_limit_when_existing_fetch_is_looser_than_owed() -> Result<()> {
+    // This operator's `fetch=10` is weaker than `LIMIT 5` and cannot be lowered.
+    // Keep `GlobalLimitExec` so the query still returns at most five rows.
+    let schema = create_schema();
+    let scan = Arc::new(TestScan::new(schema, vec![]));
+    let fetch_only = Arc::new(TestFetchOnlyExec::new(scan, Some(10)));
+    let global_limit = global_limit_exec(fetch_only, 0, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    GlobalLimitExec: skip=0, fetch=5
+      TestFetchOnlyExec: fetch=10
+        TestScan
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn pushes_owed_limit_below_fetch_only_unary_when_limit_pushdown_supported() -> Result<()>
+{
+    // This operator allows limit pushdown but cannot lower its own `fetch` from
+    // 10 to 5. Its child cannot accept a fetch either, so keep
+    // `GlobalLimitExec(fetch=5)` between them.
+    let schema = create_schema();
+    let scan = Arc::new(TestScan::new(schema, vec![]));
+    let fetch_only = Arc::new(
+        TestFetchOnlyExec::new(scan, Some(10)).with_supports_limit_pushdown(true),
+    );
+    let global_limit = global_limit_exec(fetch_only, 0, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    TestFetchOnlyExec: fetch=10
+      GlobalLimitExec: skip=0, fetch=5
+        TestScan
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn does_not_add_redundant_wrapper_when_existing_fetch_is_tighter_than_owed() -> Result<()>
+{
+    // `fetch=3` is stricter than `LIMIT 5`, so no additional limit is needed.
+    let schema = create_schema();
+    let scan = Arc::new(TestScan::new(schema, vec![]));
+    let fetch_only = Arc::new(TestFetchOnlyExec::new(scan, Some(3)));
+    let global_limit = global_limit_exec(fetch_only, 0, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    TestFetchOnlyExec: fetch=3
+      TestScan
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn tightens_existing_sort_fetch_to_owed_limit() -> Result<()> {
+    // `SortExec` can lower its `fetch` from 10 to 5, so the separate
+    // `GlobalLimitExec` is unnecessary.
+    let schema = create_schema();
+    let scan = Arc::new(TestScan::new(schema.clone(), vec![]));
+    let ordering: LexOrdering = [PhysicalSortExpr {
+        expr: col("c1", &schema)?,
+        options: SortOptions::default(),
+    }]
+    .into();
+    let sort = sort_exec(ordering, scan).with_fetch(Some(10)).unwrap();
+    let global_limit = global_limit_exec(sort, 0, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    SortExec: TopK(fetch=5), expr=[c1@0 ASC], preserve_partitioning=[false]
+      TestScan
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn keeps_global_offset_limit_when_existing_fetch_is_looser() -> Result<()> {
+    // An operator `fetch` cannot apply `OFFSET 2`; keep `GlobalLimitExec` to
+    // enforce both the offset and `LIMIT 5`.
+    let schema = create_schema();
+    let scan = Arc::new(TestScan::new(schema, vec![]));
+    let fetch_only = Arc::new(TestFetchOnlyExec::new(scan, Some(10)));
+    let global_limit = global_limit_exec(fetch_only, 2, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    GlobalLimitExec: skip=2, fetch=5
+      TestFetchOnlyExec: fetch=10
+        TestScan
     "
     );
 
