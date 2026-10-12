@@ -243,6 +243,12 @@ When predicate pushdown is enabled, `DataSourceExec` with `ParquetSource` gains 
 - `row_pushdown_eval_time`: time spent evaluating row-level filters
 - `page_index_eval_time`: time required to evaluate the page index filters
 
+`output_rows_skew` is also reported by operators that execute in multiple
+partitions: `RepartitionExec`, `HashJoinExec`, `AggregateExec`,
+`BoundedWindowAggExec` and `WindowAggExec`. It shows how evenly their output
+rows are spread across partitions, which helps spot data skew (for example, a
+hot join or grouping key). With a single partition the skew is always `0%`.
+
 ## Postgres-style `EXPLAIN (...)` options
 
 In addition to the legacy keyword form (`EXPLAIN ANALYZE VERBOSE FORMAT tree SELECT ...`),

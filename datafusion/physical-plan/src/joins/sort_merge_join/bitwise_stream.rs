@@ -130,7 +130,9 @@ use crate::metrics::{
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
 use crate::spill::spill_manager::SpillManager;
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
-use arrow::array::{Array, ArrayRef, BooleanArray, BooleanBufferBuilder, RecordBatch};
+use arrow::array::{
+    Array, ArrayRef, BooleanArray, BooleanBufferBuilder, RecordBatch, RecordBatchOptions,
+};
 use arrow::compute::{BatchCoalescer, SortOptions, filter_record_batch, not};
 use arrow::datatypes::SchemaRef;
 use arrow::util::bit_chunk_iterator::UnalignedBitChunk;
@@ -669,7 +671,17 @@ impl BitwiseSortMergeJoinStream {
 
             let inner_batch = self.inner_batch.as_ref().unwrap();
             let slice = inner_batch.slice(from, group_end - from);
-            self.inner_buffer_size += slice.get_array_memory_size();
+            // A slice reports its parent's full buffers, so a group ending
+            // inside the batch is charged its share of the parent by row
+            // count (rounded up per row, which cannot overflow). A group
+            // reaching the batch end keeps the whole parent alive once the
+            // cursor advances, so charge all of it.
+            let parent_size = slice.get_array_memory_size();
+            self.inner_buffer_size += if group_end < num_inner {
+                parent_size.div_ceil(num_inner) * slice.num_rows()
+            } else {
+                parent_size
+            };
             self.inner_key_buffer.push(slice);
 
             // Reserve memory for the newly buffered slice. If the pool
@@ -1296,7 +1308,11 @@ fn evaluate_filter_for_inner_row(
         }
     }
 
-    let filter_batch = RecordBatch::try_new(Arc::clone(filter.schema()), columns)?;
+    let filter_batch = RecordBatch::try_new_with_options(
+        Arc::clone(filter.schema()),
+        columns,
+        &RecordBatchOptions::new().with_row_count(Some(num_outer_rows)),
+    )?;
     let result = filter
         .expression()
         .evaluate(&filter_batch)?

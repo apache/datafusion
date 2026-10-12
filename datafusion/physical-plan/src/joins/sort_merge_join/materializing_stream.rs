@@ -45,12 +45,12 @@ use arrow::compute::{
     self, BatchCoalescer, SortOptions, concat_batches, filter_record_batch, interleave,
     take_arrays,
 };
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatchOptions;
 use datafusion_common::cast::as_uint64_array;
 use datafusion_common::instant::Instant;
 use datafusion_common::{
-    DataFusionError, JoinType, NullEquality, Result, exec_err, internal_err,
+    DataFusionError, JoinSide, JoinType, NullEquality, Result, exec_err, internal_err,
 };
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::runtime_env::RuntimeEnv;
@@ -296,6 +296,10 @@ pub(super) struct MaterializingSortMergeJoinStream {
     /// Cached `needs_deferred_filtering(filter, join_type)` — both inputs
     /// are fixed at construction time.
     pub deferred_filtering: bool,
+    /// The join filter's schema with buffered-side fields marked nullable,
+    /// since NULL-padded rows reach filter evaluation. `None` unless
+    /// `deferred_filtering`.
+    pub filter_schema: Option<SchemaRef>,
     /// Target output batch size
     pub batch_size: usize,
 
@@ -552,6 +556,30 @@ impl MaterializingSortMergeJoinStream {
              semi/anti/mark joins use BitwiseSortMergeJoinStream"
         );
         let join_time = join_metrics.join_time();
+        let buffered_side = if join_type == JoinType::Right {
+            JoinSide::Left
+        } else {
+            JoinSide::Right
+        };
+        let deferred_filtering = needs_deferred_filtering(filter.as_ref(), join_type);
+        let filter_schema = if deferred_filtering && let Some(f) = &filter {
+            let mut fields = Vec::with_capacity(f.schema().fields().len());
+            for (column_index, field) in
+                f.column_indices().iter().zip(f.schema().fields().iter())
+            {
+                if column_index.side == buffered_side {
+                    fields.push(Arc::new(field.as_ref().clone().with_nullable(true)));
+                } else {
+                    fields.push(Arc::clone(field));
+                }
+            }
+            Some(Arc::new(Schema::new_with_metadata(
+                fields,
+                f.schema().metadata().clone(),
+            )))
+        } else {
+            None
+        };
         let mut this = Self {
             sort_options,
             null_equality,
@@ -567,7 +595,8 @@ impl MaterializingSortMergeJoinStream {
             buffered_exhausted: false,
             on_streamed,
             on_buffered,
-            deferred_filtering: needs_deferred_filtering(filter.as_ref(), join_type),
+            deferred_filtering,
+            filter_schema,
             filter,
             joined_record_batches: JoinedRecordBatches {
                 joined_batches: new_output_coalescer(Arc::clone(&schema), batch_size),
@@ -1603,8 +1632,9 @@ impl MaterializingSortMergeJoinStream {
         // A filter that reads no columns (e.g. a bound parameter or a volatile
         // function) still has to be evaluated, so key on the filter itself.
         if let Some(f) = &self.filter {
+            let schema = self.filter_schema.as_ref().unwrap_or_else(|| f.schema());
             let filter_batch = RecordBatch::try_new_with_options(
-                Arc::clone(f.schema()),
+                Arc::clone(schema),
                 filter_columns,
                 &RecordBatchOptions::new().with_row_count(Some(total_matched_rows)),
             )?;

@@ -223,6 +223,37 @@ statement ok
 DROP TABLE mul_wrap;
 
 ######
+# Division with a zero numerator endpoint must not infer an empty filter
+######
+
+statement ok
+COPY (
+    SELECT * FROM (VALUES (-3, -1), (-2, -1), (0, -2)) AS t(a, b)
+)
+TO 'test_files/scratch/parquet_statistics/div_zero_endpoint.parquet' STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE div_zero_endpoint STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_statistics/div_zero_endpoint.parquet';
+
+# [-3,0] / [-2,-1] must include 2 and 3, rather than being narrowed to [0,1].
+query III
+SELECT a, b, a / b AS q FROM div_zero_endpoint WHERE a / b > 1 ORDER BY a;
+----
+-3 -1 3
+-2 -1 2
+
+query TT
+EXPLAIN SELECT a, b FROM div_zero_endpoint WHERE a / b > 1;
+----
+physical_plan
+01)FilterExec: a@0 / b@1 > 1, statistics=[Rows=Inexact(3), Bytes=Inexact(48), [(Col[0]: Min=Inexact(Int64(-3)) Max=Inexact(Int64(0)) Null=Inexact(0) ScanBytes=Inexact(24)),(Col[1]: Min=Inexact(Int64(-2)) Max=Inexact(Int64(-1)) Null=Inexact(0) ScanBytes=Inexact(24))]]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/div_zero_endpoint.parquet]]}, projection=[a, b], file_type=parquet, predicate=a@0 / b@1 > 1, statistics=[Rows=Inexact(3), Bytes=Inexact(48), [(Col[0]: Min=Inexact(Int64(-3)) Max=Inexact(Int64(0)) Null=Inexact(0) ScanBytes=Inexact(24)),(Col[1]: Min=Inexact(Int64(-2)) Max=Inexact(Int64(-1)) Null=Inexact(0) ScanBytes=Inexact(24))]]
+
+statement ok
+DROP TABLE div_zero_endpoint;
+
+######
 # Aggregate statistics through casts
 ######
 

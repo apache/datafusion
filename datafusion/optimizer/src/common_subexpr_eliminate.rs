@@ -540,10 +540,6 @@ fn get_consecutive_window_exprs(
 }
 
 impl OptimizerRule for CommonSubexprEliminate {
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     fn apply_order(&self) -> Option<ApplyOrder> {
         // This rule handles recursion itself in a `ApplyOrder::TopDown` like manner.
         // This is because in some cases adjacent nodes are collected (e.g. `Window`) and

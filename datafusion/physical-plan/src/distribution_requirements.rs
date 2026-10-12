@@ -188,6 +188,12 @@ impl InputDistributionRequirements {
     /// Independent per-child requirements are intentionally ignored here, use
     /// [`Self::child_satisfaction`] for those checks. An empty result means all
     /// co-partitioning requirements are satisfied.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
     #[doc(hidden)]
     pub fn unsatisfied_co_partitioned_children(
         &self,

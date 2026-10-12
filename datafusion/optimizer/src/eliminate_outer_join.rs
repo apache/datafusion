@@ -95,10 +95,6 @@ impl OptimizerRule for EliminateOuterJoin {
         Some(ApplyOrder::TopDown)
     }
 
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     fn rewrite(
         &self,
         plan: LogicalPlan,
@@ -181,6 +177,7 @@ fn try_simplify_join(join: &Join, predicate: &Expr) -> Option<LogicalPlan> {
         schema: Arc::clone(&join.schema),
         null_equality: join.null_equality,
         null_aware: join.null_aware,
+        null_aware_value_keys: join.null_aware_value_keys,
     }))
 }
 
