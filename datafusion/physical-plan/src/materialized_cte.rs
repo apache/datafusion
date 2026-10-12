@@ -36,7 +36,9 @@
 //! A scan reads a spill file one batch at a time, without read-ahead. After
 //! the body is buffered, memory for one decoded batch per concurrent reader is
 //! reserved. If the pool cannot grant it, in-memory batches are moved to spill
-//! files until it can.
+//! files until it can. An in-memory batch that is larger than the batches on
+//! disk is written in pieces, so that the move does not raise the memory that
+//! each reader needs.
 
 use std::fmt;
 use std::pin::Pin;
@@ -87,27 +89,82 @@ struct BufferedPartition {
     reservation: MemoryReservation,
 }
 
+/// A plan to move the in-memory batches `split..` of a [`BufferedPartition`]
+/// to a spill file. See [`BufferedPartition::plan_spill`].
+struct SpillPlan {
+    split: usize,
+    /// A batch larger than this is written in pieces of about this size.
+    piece_size: usize,
+    /// The memory that the move releases, less the memory that it adds to
+    /// the replay of the spill files.
+    gain: usize,
+}
+
 impl BufferedPartition {
-    /// Move in-memory batches from the end of `batches` to a new spill file,
-    /// until at least `bytes` are released or no in-memory batch is left.
-    /// The new file is read before the existing spill files, so the order of
-    /// the partition is kept.
-    fn spill_in_memory_suffix(
-        &mut self,
+    /// Plan a move of in-memory batches from the end of `batches` to a spill
+    /// file, to gain at least `bytes`.
+    ///
+    /// A spilled batch that is larger than every batch already on disk makes
+    /// each scan reserve more memory to decode it. `added_replay_memory`
+    /// returns that increase for a new `max_spilled_batch_size`. To keep it
+    /// small, a batch larger than `piece_size` is written in pieces.
+    ///
+    /// Returns `None` when no move releases more memory than it adds.
+    fn plan_spill(
+        &self,
         bytes: usize,
-        spill_manager: &SpillManager,
-    ) -> Result<()> {
-        let mut split = self.batches.len();
+        piece_size: usize,
+        added_replay_memory: impl Fn(usize) -> usize,
+    ) -> Option<SpillPlan> {
+        let mut best: Option<SpillPlan> = None;
         let mut released = 0;
-        while split > 0 && released < bytes {
-            split -= 1;
-            released += self.batches[split].get_array_memory_size();
+        let mut max_size = self.max_spilled_batch_size;
+        let mut added = 0;
+        for (split, batch) in self.batches.iter().enumerate().rev() {
+            let size = batch.get_array_memory_size();
+            released += size;
+            // A batch of one row cannot be written in pieces.
+            let spilled_size = match batch.num_rows() {
+                0 | 1 => size,
+                _ => size.min(piece_size),
+            };
+            if spilled_size > max_size {
+                max_size = spilled_size;
+                added = added_replay_memory(max_size);
+            }
+            let gain = released.saturating_sub(added);
+            if gain > best.as_ref().map_or(0, |b| b.gain) {
+                best = Some(SpillPlan {
+                    split,
+                    piece_size,
+                    gain,
+                });
+            }
+            if gain >= bytes {
+                break;
+            }
         }
-        let suffix = self.batches.split_off(split);
+        best
+    }
+
+    /// Move the in-memory batches of `plan` to a new spill file. The new file
+    /// is read before the existing spill files, so the order of the partition
+    /// is kept.
+    fn spill(&mut self, plan: &SpillPlan, spill_manager: &SpillManager) -> Result<()> {
+        let suffix = self.batches.split_off(plan.split);
         let mut file = spill_manager.create_in_progress_file("MaterializedCte")?;
+        let mut released = 0;
         for batch in &suffix {
-            let size = file.append_batch(batch)?;
-            self.max_spilled_batch_size = self.max_spilled_batch_size.max(size);
+            let size = batch.get_array_memory_size();
+            released += size;
+            let rows = batch.num_rows();
+            // Rows per piece, so that a piece is about `piece_size`.
+            let piece_rows = rows.div_ceil(size.div_ceil(plan.piece_size).max(1)).max(1);
+            for offset in (0..rows.max(1)).step_by(piece_rows) {
+                let piece = batch.slice(offset, piece_rows.min(rows - offset));
+                let size = file.append_batch(&piece)?;
+                self.max_spilled_batch_size = self.max_spilled_batch_size.max(size);
+            }
         }
         if let Some(file) = file.finish()? {
             self.spill_files.insert(0, file);
@@ -126,23 +183,24 @@ struct MaterializedOutput {
     _replay_reservation: MemoryReservation,
 }
 
-/// The memory that the scans need to read the spill files of `partitions`.
+/// The memory that the scans need to read the spill files of the body
+/// partitions. `max_spilled_batch_sizes` has one entry per body partition.
 ///
 /// Partition `p` of a scan with `n` partitions reads the body partitions
 /// `p, p + n, ...` one after the other, with at most one decoded batch in
 /// memory. All scan partitions can read at the same time.
-fn replay_memory(partitions: &[BufferedPartition], scan_partitions: &[usize]) -> usize {
+fn replay_memory(max_spilled_batch_sizes: &[usize], scan_partitions: &[usize]) -> usize {
     scan_partitions
         .iter()
         .map(|&n| {
             (0..n)
                 .map(|p| {
-                    partitions
+                    max_spilled_batch_sizes
                         .iter()
                         .skip(p)
                         .step_by(n)
-                        .map(|b| b.max_spilled_batch_size)
                         .max()
+                        .copied()
                         .unwrap_or(0)
                 })
                 .sum::<usize>()
@@ -151,8 +209,14 @@ fn replay_memory(partitions: &[BufferedPartition], scan_partitions: &[usize]) ->
 }
 
 /// Grow `reservation` to the memory the scans need to replay `partitions`.
-/// If the pool cannot grant it, move in-memory batches to spill files, from
-/// the partition that holds the most memory first, until it can.
+/// If the pool cannot grant it, move in-memory batches to spill files until
+/// it can.
+///
+/// A move can also raise the memory that the replay needs, because a scan
+/// reserves memory for the largest batch that it reads from disk. Each step
+/// makes the move that gains the most memory, and a batch that is larger than
+/// the batches on disk is written in pieces. If no move gains memory, the
+/// allocation error is returned.
 fn reserve_replay_memory(
     partitions: &mut [BufferedPartition],
     scan_partitions: &[usize],
@@ -160,21 +224,38 @@ fn reserve_replay_memory(
     reservation: &mut MemoryReservation,
 ) -> Result<()> {
     loop {
-        let required = replay_memory(partitions, scan_partitions);
+        let sizes: Vec<_> = partitions
+            .iter()
+            .map(|p| p.max_spilled_batch_size)
+            .collect();
+        let required = replay_memory(&sizes, scan_partitions);
         let Err(e) = reservation.try_resize(required) else {
             return Ok(());
         };
-        let Some(partition) = partitions
-            .iter_mut()
-            .filter(|p| !p.batches.is_empty())
-            .max_by_key(|p| p.reservation.size())
-        else {
+        // `required` is not zero, so at least one partition has a spill file.
+        let largest = sizes.iter().copied().max().unwrap_or(0).max(1);
+        let plan = partitions
+            .iter()
+            .enumerate()
+            .filter_map(|(i, partition)| {
+                let piece_size = match sizes[i] {
+                    0 => largest,
+                    size => size,
+                };
+                let added_replay_memory = |size| {
+                    let mut sizes = sizes.clone();
+                    sizes[i] = size;
+                    replay_memory(&sizes, scan_partitions).saturating_sub(required)
+                };
+                let plan =
+                    partition.plan_spill(required, piece_size, added_replay_memory)?;
+                Some((i, plan))
+            })
+            .max_by_key(|(_, plan)| plan.gain);
+        let Some((i, plan)) = plan else {
             return Err(e);
         };
-        partition.spill_in_memory_suffix(
-            required.saturating_sub(reservation.size()),
-            spill_manager,
-        )?;
+        partitions[i].spill(&plan, spill_manager)?;
     }
 }
 
@@ -829,6 +910,61 @@ mod tests {
             assert_eq!(values, (0..10_000).collect::<Vec<_>>());
         }
         assert_eq!(context.memory_pool().reserved(), 0);
+        Ok(())
+    }
+
+    /// The first batch is larger than the batches on disk. To move it to disk
+    /// whole would raise the memory that each scan needs to decode a batch
+    /// above the memory limit, so it is written in pieces.
+    #[tokio::test]
+    async fn spill_of_large_in_memory_batch_does_not_raise_replay_memory() -> Result<()> {
+        let memory_limit = 17_500;
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch = |range: std::ops::Range<i32>| {
+            let values = Int32Array::from_iter_values(range);
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(values)])
+        };
+        let mut batches = vec![batch(0..4000)?];
+        for i in 0..10 {
+            batches.push(batch(4000 + i * 250..4000 + (i + 1) * 250)?);
+        }
+        let small_batch_size = batches[1].get_array_memory_size();
+        let body = TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
+        let buffer = Arc::new(MaterializedCteBuffer::new(0, "c"));
+        let _exec = MaterializedCteExec::new(
+            body,
+            Arc::new(EmptyExec::new(Arc::clone(&schema))),
+            Arc::clone(&buffer),
+        );
+        let scan = MaterializedCteScanExec::new(0, "c", Arc::clone(&schema), 1);
+        let scans = [
+            scan.bind(Arc::clone(&buffer)),
+            scan.bind(Arc::clone(&buffer)),
+        ];
+
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(memory_limit, 1.0)
+            .build_arc()?;
+        let context = Arc::new(TaskContext::default().with_runtime(runtime));
+
+        let mut once = buffer.materialize(Arc::clone(&context))?;
+        let output = std::future::poll_fn(|cx| once.get_shared(cx)).await?;
+        let partition = &output.partitions[0];
+        assert!(partition.batches.is_empty(), "the large batch is in memory");
+        assert!(partition.max_spilled_batch_size <= small_batch_size);
+        assert!(context.memory_pool().reserved() <= memory_limit);
+
+        for scan in &scans {
+            let batches = collect(scan.execute(0, Arc::clone(&context))?).await?;
+            let values: Vec<i32> = batches
+                .iter()
+                .flat_map(|b| {
+                    let array = b.column(0).as_any().downcast_ref::<Int32Array>();
+                    array.unwrap().values().to_vec()
+                })
+                .collect();
+            assert_eq!(values, (0..6500).collect::<Vec<_>>());
+        }
         Ok(())
     }
 }

@@ -449,6 +449,23 @@ Plan with Metrics
 11)------------ProjectionExec: expr=[], metrics=[<slt:ignore>]
 12)--------------MaterializedCteScanExec: name=g, metrics=[output_rows=200.0 K, <slt:ignore>]
 
+# Spill: the first batch has long strings and stays in memory. The next
+# batches are smaller and go to disk. The two references then need memory to
+# decode the spill files, and the first batch must move to disk. It is
+# written in pieces, because each reference reserves memory for the largest
+# batch on disk.
+statement ok
+SET datafusion.runtime.memory_limit = '18M'
+
+query I
+WITH c AS MATERIALIZED (
+  SELECT repeat('x', CASE WHEN value <= 8192 THEN 2000 ELSE 375 END) AS s
+  FROM generate_series(1, 50000)
+)
+SELECT count(*) FROM (SELECT s FROM c UNION ALL SELECT s FROM c)
+----
+100000
+
 statement ok
 RESET datafusion.runtime.memory_limit
 
