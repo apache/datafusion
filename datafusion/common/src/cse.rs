@@ -26,7 +26,7 @@ use crate::tree_node::{
     TreeNodeVisitor,
 };
 use indexmap::IndexMap;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasher, Hash, Hasher, RandomState};
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -176,6 +176,9 @@ pub trait CSEController {
 
     /// Splits the children to normal and conditionally evaluated ones or returns `None`
     /// if all are always evaluated.
+    ///
+    /// The returned references must point to the children of `node` themselves. The two
+    /// lists can be in any order.
     fn conditional_children(node: &Self::Node) -> Option<ChildrenList<&Self::Node>>;
 
     // Returns true if a node is valid. If a node is invalid then it can't be eliminated.
@@ -363,14 +366,21 @@ where
             // If we are already in a node that can short-circuit then start new
             // traversals on its normal conditional children.
             match C::conditional_children(node) {
-                Some((normal, conditional)) => {
-                    normal
+                Some((_normal, conditional)) => {
+                    // Visit the children in tree order, whatever order the
+                    // controller lists them in. `CSERewriter` reads `id_array` in
+                    // pre-order, so the indexes that this visitor assigns must
+                    // follow the same order.
+                    let conditional = conditional
                         .into_iter()
-                        .try_for_each(|n| n.visit(self).map(|_| ()))?;
-                    self.conditional = true;
-                    conditional
-                        .into_iter()
-                        .try_for_each(|n| n.visit(self).map(|_| ()))?;
+                        .map(std::ptr::from_ref)
+                        .collect::<HashSet<_>>();
+                    node.apply_children(|child| {
+                        self.conditional =
+                            conditional.contains(&std::ptr::from_ref(child));
+                        child.visit(self)?;
+                        Ok(TreeNodeRecursion::Continue)
+                    })?;
                     self.conditional = false;
 
                     TreeNodeRecursion::Jump
