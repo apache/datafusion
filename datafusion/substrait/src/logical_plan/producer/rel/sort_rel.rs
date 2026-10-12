@@ -21,7 +21,7 @@ use datafusion::logical_expr::Sort;
 use substrait::proto::expression::literal::LiteralType;
 use substrait::proto::expression::{Literal, RexType};
 use substrait::proto::rel::RelType;
-use substrait::proto::{Expression, FetchRel, Rel, SortRel, fetch_rel};
+use substrait::proto::{Expression, FetchRel, Rel, SortRel};
 
 pub fn from_sort(
     producer: &mut impl SubstraitProducer,
@@ -46,20 +46,19 @@ pub fn from_sort(
 
     match fetch {
         Some(amount) => {
-            let count_mode =
-                Some(fetch_rel::CountMode::CountExpr(Box::new(Expression {
-                    rex_type: Some(RexType::Literal(Literal {
-                        nullable: false,
-                        type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
-                        literal_type: Some(LiteralType::I64(*amount as i64)),
-                    })),
-                })));
+            let count_expr = Some(Box::new(Expression {
+                rex_type: Some(RexType::Literal(Literal {
+                    nullable: false,
+                    type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                    literal_type: Some(LiteralType::I64(*amount as i64)),
+                })),
+            }));
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Fetch(Box::new(FetchRel {
                     common: None,
                     input: Some(sort_rel),
-                    offset_mode: None,
-                    count_mode,
+                    offset_expr: None,
+                    count_expr,
                     advanced_extension: None,
                 }))),
             }))

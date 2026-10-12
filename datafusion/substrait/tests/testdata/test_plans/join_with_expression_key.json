@@ -226,28 +226,29 @@
                     }
                   },
                   "groupings": [{
-                    "groupingExpressions": [{
-                      "selection": {
-                        "directReference": {
-                          "structField": {
-                            "field": 1
-                          }
-                        },
-                        "rootReference": {
-                        }
-                      }
-                    }, {
-                      "selection": {
-                        "directReference": {
-                          "structField": {
-                            "field": 2
-                          }
-                        },
-                        "rootReference": {
-                        }
-                      }
-                    }]
+                    "expressionReferences": [0, 1]
                   }],
+                  "groupingExpressions": [{
+                  "selection": {
+                    "directReference": {
+                      "structField": {
+                        "field": 1
+                      }
+                    },
+                    "rootReference": {
+                    }
+                  }
+                }, {
+                  "selection": {
+                    "directReference": {
+                      "structField": {
+                        "field": 2
+                      }
+                    },
+                    "rootReference": {
+                    }
+                  }
+                }],
                   "measures": [{
                     "measure": {
                       "functionReference": 2,
@@ -531,28 +532,29 @@
                                     }
                                   },
                                   "groupings": [{
-                                    "groupingExpressions": [{
-                                      "selection": {
-                                        "directReference": {
-                                          "structField": {
-                                            "field": 1
-                                          }
-                                        },
-                                        "rootReference": {
-                                        }
-                                      }
-                                    }, {
-                                      "selection": {
-                                        "directReference": {
-                                          "structField": {
-                                            "field": 2
-                                          }
-                                        },
-                                        "rootReference": {
-                                        }
-                                      }
-                                    }]
+                                    "expressionReferences": [0, 1]
                                   }],
+                                  "groupingExpressions": [{
+                                  "selection": {
+                                    "directReference": {
+                                      "structField": {
+                                        "field": 1
+                                      }
+                                    },
+                                    "rootReference": {
+                                    }
+                                  }
+                                }, {
+                                  "selection": {
+                                    "directReference": {
+                                      "structField": {
+                                        "field": 2
+                                      }
+                                    },
+                                    "rootReference": {
+                                    }
+                                  }
+                                }],
                                   "measures": [{
                                     "measure": {
                                       "functionReference": 2,
@@ -679,18 +681,19 @@
                     }
                   },
                   "groupings": [{
-                    "groupingExpressions": [{
-                      "selection": {
-                        "directReference": {
-                          "structField": {
-                            "field": 1
-                          }
-                        },
-                        "rootReference": {
-                        }
-                      }
-                    }]
+                    "expressionReferences": [0]
                   }],
+                  "groupingExpressions": [{
+                  "selection": {
+                    "directReference": {
+                      "structField": {
+                        "field": 1
+                      }
+                    },
+                    "rootReference": {
+                    }
+                  }
+                }],
                   "measures": [{
                     "measure": {
                       "functionReference": 2,

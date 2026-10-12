@@ -17,7 +17,7 @@
 
 use crate::logical_plan::consumer::{NameTracker, SubstraitConsumer};
 use crate::logical_plan::consumer::{from_substrait_agg_func, from_substrait_sorts};
-use datafusion::common::{Column, DFSchemaRef, internal_err, not_impl_err};
+use datafusion::common::{Column, internal_err, not_impl_err, substrait_datafusion_err};
 use datafusion::logical_expr::builder::project;
 use datafusion::logical_expr::{
     Aggregate, Expr, GroupingSet, LogicalPlan, LogicalPlanBuilder,
@@ -45,26 +45,16 @@ pub async fn from_aggregate_rel(
         match agg.groupings.len() {
             0 => {}
             1 => {
-                group_exprs.extend_from_slice(
-                    &from_substrait_grouping(
-                        consumer,
-                        &agg.groupings[0],
-                        &ref_group_exprs,
-                        input.schema(),
-                    )
-                    .await?,
-                );
+                group_exprs.extend_from_slice(&from_substrait_grouping(
+                    &agg.groupings[0],
+                    &ref_group_exprs,
+                )?);
             }
             _ => {
                 let mut grouping_sets = vec![];
                 for grouping in &agg.groupings {
-                    let grouping_set = from_substrait_grouping(
-                        consumer,
-                        grouping,
-                        &ref_group_exprs,
-                        input.schema(),
-                    )
-                    .await?;
+                    let grouping_set =
+                        from_substrait_grouping(grouping, &ref_group_exprs)?;
                     grouping_sets.push(grouping_set);
                 }
                 // Single-element grouping expression of type Expr::GroupingSet.
@@ -170,24 +160,22 @@ fn reorder_grouping_set_output(
     project(plan, exprs)
 }
 
-#[expect(deprecated)]
-async fn from_substrait_grouping(
-    consumer: &impl SubstraitConsumer,
+/// A grouping set names the expressions it groups by index into the
+/// relation-level `grouping_expressions`.
+fn from_substrait_grouping(
     grouping: &Grouping,
     expressions: &[Expr],
-    input_schema: &DFSchemaRef,
 ) -> datafusion::common::Result<Vec<Expr>> {
-    let mut group_exprs = vec![];
-    if !grouping.grouping_expressions.is_empty() {
-        for e in &grouping.grouping_expressions {
-            let expr = consumer.consume_expression(e, input_schema).await?;
-            group_exprs.push(expr);
-        }
-        return Ok(group_exprs);
-    }
-    for idx in &grouping.expression_references {
-        let e = &expressions[*idx as usize];
-        group_exprs.push(e.clone());
-    }
-    Ok(group_exprs)
+    grouping
+        .expression_references
+        .iter()
+        .map(|idx| {
+            expressions.get(*idx as usize).cloned().ok_or_else(|| {
+                substrait_datafusion_err!(
+                    "Grouping references expression {idx} but the aggregate declares {}",
+                    expressions.len()
+                )
+            })
+        })
+        .collect()
 }

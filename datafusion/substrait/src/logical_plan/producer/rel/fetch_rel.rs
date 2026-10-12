@@ -20,7 +20,7 @@ use datafusion::common::DFSchema;
 use datafusion::logical_expr::{Limit, LogicalPlan, lit};
 use std::sync::Arc;
 use substrait::proto::rel::RelType;
-use substrait::proto::{FetchRel, Rel, fetch_rel};
+use substrait::proto::{FetchRel, Rel};
 
 pub fn from_limit(
     producer: &mut impl SubstraitProducer,
@@ -47,24 +47,22 @@ pub fn from_limit(
         (None, Some(skip)) => Some(lit(skip as i64)),
         (None, None) => None,
     };
-    let offset_mode = skip_expr
+    let offset_expr = skip_expr
         .map(|expr| producer.handle_expr(&expr, &empty_schema))
         .transpose()?
-        .map(Box::new)
-        .map(fetch_rel::OffsetMode::OffsetExpr);
-    let count_mode = limit
+        .map(Box::new);
+    let count_expr = limit
         .fetch
         .as_ref()
         .map(|expr| producer.handle_expr(expr.as_ref(), &empty_schema))
         .transpose()?
-        .map(Box::new)
-        .map(fetch_rel::CountMode::CountExpr);
+        .map(Box::new);
     Ok(Box::new(Rel {
         rel_type: Some(RelType::Fetch(Box::new(FetchRel {
             common: None,
             input: Some(input),
-            offset_mode,
-            count_mode,
+            offset_expr,
+            count_expr,
             advanced_extension: None,
         }))),
     }))

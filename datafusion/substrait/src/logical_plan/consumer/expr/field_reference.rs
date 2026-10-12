@@ -74,7 +74,19 @@ fn resolve_outer_reference(
     outer_ref: &substrait::proto::expression::field_reference::OuterReference,
     field_idx: usize,
 ) -> datafusion::common::Result<Expr> {
-    let steps_out = outer_ref.steps_out as usize;
+    use substrait::proto::expression::field_reference::outer_reference::OuterReferenceType;
+    // `StepsOut` is deprecated in favour of `RelReference`, but a relation
+    // reference needs anchors that DataFusion does not assign.
+    #[expect(deprecated)]
+    let steps_out = match outer_ref.outer_reference_type {
+        Some(OuterReferenceType::StepsOut(steps_out)) => steps_out as usize,
+        Some(OuterReferenceType::RelReference(_)) => {
+            return not_impl_err!(
+                "OuterReference by relation reference is not supported"
+            );
+        }
+        None => return substrait_err!("OuterReference without a reference type"),
+    };
     let Some(outer_schema) = consumer.get_outer_schema(steps_out) else {
         return substrait_err!(
             "OuterReference with steps_out={steps_out} \
@@ -150,6 +162,34 @@ mod tests {
             err.to_string(),
             "At lambda 0 steps out, no field at index 1, got only 1"
         );
+    }
+
+    #[tokio::test]
+    async fn unsupported_outer_reference_forms_are_rejected() {
+        use substrait::proto::expression::field_reference::{
+            OuterReference, outer_reference::OuterReferenceType,
+        };
+
+        let extensions = Extensions::default();
+        let session_state = SessionContext::new().state();
+        let consumer = DefaultSubstraitConsumer::new(&extensions, &session_state);
+        for (reference_type, message) in [
+            (
+                Some(OuterReferenceType::RelReference(1)),
+                "by relation reference is not supported",
+            ),
+            (None, "without a reference type"),
+        ] {
+            let mut reference = lambda_field_ref(0, 0);
+            reference.root_type = Some(RootType::OuterReference(OuterReference {
+                outer_reference_type: reference_type,
+            }));
+            let error =
+                from_field_reference(&consumer, &reference, DFSchema::empty_ref())
+                    .await
+                    .unwrap_err();
+            assert_contains!(error.to_string(), message);
+        }
     }
 
     fn lambda_field_ref(field: i32, steps_out: u32) -> FieldReference {
