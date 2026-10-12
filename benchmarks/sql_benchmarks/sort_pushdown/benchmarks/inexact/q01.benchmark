@@ -1,0 +1,8 @@
+template sql_benchmarks/sort_pushdown/sort_pushdown.benchmark.template
+QPAD=01
+QUERY_ID=1
+VARIANT=inexact
+DATASET=sort_pushdown_inexact
+QUERY_DIR=sort_pushdown_inexact
+SETTINGS=inexact
+ORDERING=ordered

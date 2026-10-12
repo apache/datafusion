@@ -1,0 +1,8 @@
+template sql_benchmarks/sort_pushdown/sort_pushdown.benchmark.template
+QPAD=07
+QUERY_ID=7
+VARIANT=sorted
+DATASET=sort_pushdown
+QUERY_DIR=sort_pushdown
+SETTINGS=standard
+ORDERING=ordered

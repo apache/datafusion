@@ -1,0 +1,12 @@
+name Q${QPAD}
+group sort_pushdown
+subgroup ${VARIANT}
+
+load sql_benchmarks/sort_pushdown/load/${SETTINGS}.sql
+
+load sql_benchmarks/sort_pushdown/load/${ORDERING}.sql
+
+run queries/${QUERY_DIR}/q${QUERY_ID}.sql
+
+cleanup
+DROP TABLE lineitem;
