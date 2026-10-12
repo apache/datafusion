@@ -543,11 +543,13 @@ fn hash_dictionary_scatter<
             if let Some(key) = key {
                 let idx = key.as_usize();
                 if !HAS_NULL_VALUES || dict_values.is_valid(idx) {
-                    if MULTI_COL {
-                        *hash = combine_hashes(dict_hashes[idx], *hash);
+                    // SAFETY: `idx` is a valid Arrow dict key, in-bounds for `dict_hashes`.
+                    let dict_hash = unsafe { *dict_hashes.get_unchecked(idx) };
+                    *hash = if MULTI_COL {
+                        combine_hashes(dict_hash, *hash)
                     } else {
-                        *hash = dict_hashes[idx];
-                    }
+                        dict_hash
+                    };
                 }
             }
         }
@@ -555,11 +557,13 @@ fn hash_dictionary_scatter<
         for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().values()) {
             let idx = key.as_usize();
             if !HAS_NULL_VALUES || dict_values.is_valid(idx) {
-                if MULTI_COL {
-                    *hash = combine_hashes(dict_hashes[idx], *hash);
+                // SAFETY: `idx` is a valid Arrow dict key, in-bounds for `dict_hashes`.
+                let dict_hash = unsafe { *dict_hashes.get_unchecked(idx) };
+                *hash = if MULTI_COL {
+                    combine_hashes(dict_hash, *hash)
                 } else {
-                    *hash = dict_hashes[idx];
-                }
+                    dict_hash
+                };
             }
         }
     }
@@ -1304,6 +1308,9 @@ mod tests {
     use std::hash::{BuildHasherDefault, Hasher};
     use std::sync::Arc;
 
+    #[cfg(not(feature = "force_hash_collisions"))]
+    use arrow::buffer::{NullBuffer, ScalarBuffer};
+
     use super::*;
 
     #[cfg(not(feature = "force_hash_collisions"))]
@@ -1856,8 +1863,6 @@ mod tests {
     // Tests actual values of hashes, which are different if forcing collisions
     #[cfg(not(feature = "force_hash_collisions"))]
     fn create_hashes_for_list_view_arrays() {
-        use arrow::buffer::{NullBuffer, ScalarBuffer};
-
         // Create values array: [0, 1, 2, 3, null, 5]
         let values = Arc::new(Int32Array::from(vec![
             Some(0),
@@ -1906,8 +1911,6 @@ mod tests {
     // Tests actual values of hashes, which are different if forcing collisions
     #[cfg(not(feature = "force_hash_collisions"))]
     fn create_hashes_for_large_list_view_arrays() {
-        use arrow::buffer::{NullBuffer, ScalarBuffer};
-
         // Create values array: [0, 1, 2, 3, null, 5]
         let values = Arc::new(Int32Array::from(vec![
             Some(0),
