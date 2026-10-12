@@ -1258,6 +1258,42 @@ fn range_hash_join_preserves_equal_reference() -> Result<()> {
 }
 
 #[test]
+fn range_hash_join_preserves_large_reference() -> Result<()> {
+    // Both inputs are above the `CollectLeft` thresholds, so the slightly
+    // larger one is adapted to the reference and only it is shuffled.
+    let left = parquet_exec_with_partitioning_and_size(
+        Partitioning::UnknownPartitioning(4),
+        Precision::Inexact(11_000_000),
+        Precision::Inexact(880_000_000),
+    );
+    let right = parquet_exec_with_partitioning_and_size(
+        range_partitioning("a", [10, 20, 30], SortOptions::default())?,
+        Precision::Inexact(10_000_000),
+        Precision::Inexact(800_000_000),
+    );
+
+    let join_on = vec![(
+        Arc::new(Column::new_with_schema("a", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("a", &right.schema())?) as _,
+    )];
+    let join = hash_join_exec(left, right, &join_on, &JoinType::Inner);
+
+    let plan = TestConfig::default()
+        .with_query_execution_partitions(4)
+        .to_plan(join, &DISTRIB_DISTRIB_SORT);
+
+    let expected = range_partitioning("a", [10, 20, 30], SortOptions::default())?;
+
+    let children = plan.children();
+    assert_eq!(children.len(), 2);
+    for child in children {
+        assert_eq!(child.output_partitioning(), &expected);
+    }
+
+    Ok(())
+}
+
+#[test]
 fn range_singleton_scaling_respects_required_keys() -> Result<()> {
     let ordering = [PhysicalSortExpr::new_default(col("a", &schema())?)].into();
     let samples = (10..=50)
@@ -1496,13 +1532,11 @@ fn range_fallback_preserves_target_parallelism() -> Result<()> {
             .with_query_execution_partitions(4)
             .to_plan(join, &DISTRIB_DISTRIB_SORT);
         let rendered = displayable(plan.as_ref()).indent(true).to_string();
-        // The native four-partition input is smaller, so reject it as a
-        // reference and preserve target parallelism with hash partitioning.
         for child in plan.children() {
-            let Partitioning::Hash(_, count) = child.output_partitioning() else {
+            let Partitioning::Range(range) = child.output_partitioning() else {
                 panic!("{rendered}")
             };
-            assert_eq!(*count, 4, "{rendered}");
+            assert_eq!(range.partition_count(), 4, "{rendered}");
         }
     }
     Ok(())

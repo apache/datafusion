@@ -1078,6 +1078,21 @@ impl PlanSize {
     fn is_known(&self) -> bool {
         self.byte_size.is_some() || self.num_rows.is_some()
     }
+
+    /// Whether the plan is below the `CollectLeft` thresholds of `JoinSelection`,
+    /// comparing bytes when known and rows otherwise. `None` when the size is unknown.
+    fn is_small(&self, config: &ConfigOptions) -> Option<bool> {
+        let optimizer = &config.optimizer;
+        match (self.byte_size, self.num_rows) {
+            (Some(bytes), _) => {
+                Some(bytes < optimizer.hash_join_single_partition_threshold)
+            }
+            (None, Some(rows)) => {
+                Some(rows < optimizer.hash_join_single_partition_threshold_rows)
+            }
+            (None, None) => None,
+        }
+    }
 }
 
 impl PartialOrd for PlanSize {
@@ -1123,8 +1138,9 @@ fn enforce_distribution_relationships(
     plan_name: &str,
     input_distributions: &InputDistributionRequirements,
     children: &mut [DistributionChildState],
-    target_partitions: usize,
+    config: &ConfigOptions,
 ) -> Result<()> {
+    let target_partitions = config.execution.target_partitions;
     let mut repartitioned_for_relationship = vec![false; children.len()];
 
     loop {
@@ -1210,16 +1226,21 @@ fn enforce_distribution_relationships(
             }
         };
 
-        // Reject a reference when another child in the co-partitioned group
-        // is strictly larger, allowing standard hash partitioning instead.
+        // Do not adapt a child above the `CollectLeft` thresholds to a reference
+        // below them; fall back to hash partitioning instead. Otherwise keep the
+        // reference, so that it is not shuffled as well.
         let best_satisfied_child = best_satisfied_child.filter(|(ref_idx, _)| {
             let reference_size =
                 PlanSize::from_plan(children[*ref_idx].context.plan.as_ref());
+            if reference_size.is_small(config) != Some(true) {
+                return true;
+            }
 
             !unsatisfied_children.iter().any(|&child_idx| {
                 child_idx != *ref_idx
                     && PlanSize::from_plan(children[child_idx].context.plan.as_ref())
-                        > reference_size
+                        .is_small(config)
+                        == Some(false)
             })
         });
 
@@ -1678,7 +1699,7 @@ pub fn ensure_distribution_with_stats(
         plan.name(),
         &input_distributions,
         &mut children,
-        target_partitions,
+        config,
     )?;
 
     let children = children
