@@ -563,7 +563,7 @@ fn range_join_key_positions(
         return None;
     };
 
-    if join_keys.len() != range.ordering().len() {
+    if range.partition_count() <= 1 || join_keys.len() != range.ordering().len() {
         return None;
     }
 
@@ -606,9 +606,13 @@ fn forces_unbounded_sort<'a>(
     let sort_exprs = keys
         .zip(sort_options)
         .map(|(expr, options)| PhysicalSortExpr::new(Arc::clone(expr), *options));
-    Ok(!input
-        .equivalence_properties()
-        .ordering_satisfy(sort_exprs)?)
+    // A repartition of a multi-partition input drops its per-partition
+    // constants, so do not rely on them to satisfy the ordering.
+    let mut eq_properties = input.equivalence_properties().clone();
+    if input.output_partitioning().partition_count() > 1 {
+        eq_properties.clear_per_partition_constants();
+    }
+    Ok(!eq_properties.ordering_satisfy(sort_exprs)?)
 }
 
 /// Returns the non-identity permutation that aligns `on` with a
