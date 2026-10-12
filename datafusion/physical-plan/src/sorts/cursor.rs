@@ -596,6 +596,10 @@ pub struct ArrayValues<T: CursorValues> {
     // Otherwise, the first null index
     null_threshold: usize,
     options: SortOptions,
+    /// `true` when this array has at least one null. When `false`, the hot
+    /// `compare` / `eq` paths skip the two `is_null(idx)` checks entirely
+    /// (sort keys are usually null-free, so this branch is common).
+    has_nulls: bool,
 
     /// Tracks the memory used by the values array,
     /// freed on drop.
@@ -613,15 +617,17 @@ impl<T: CursorValues> ArrayValues<T> {
         reservation: MemoryReservation,
     ) -> Self {
         assert!(array.len() > 0, "Empty array passed to FieldCursor");
+        let null_count = array.null_count();
         let null_threshold = match options.nulls_first {
-            true => array.null_count(),
-            false => array.len() - array.null_count(),
+            true => null_count,
+            false => array.len() - null_count,
         };
 
         Self {
             values: array.values(),
             null_threshold,
             options,
+            has_nulls: null_count > 0,
             _reservation: reservation,
         }
     }
@@ -643,6 +649,11 @@ impl<T: CursorValues> CursorValues for ArrayValues<T> {
 
     #[inline(always)]
     fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool {
+        // Fast path: neither array has nulls, so the match below would take
+        // the (false, false) arm every time.
+        if !l.has_nulls && !r.has_nulls {
+            return T::eq(&l.values, l_idx, &r.values, r_idx);
+        }
         match (l.is_null(l_idx), r.is_null(r_idx)) {
             (true, true) => true,
             (false, false) => T::eq(&l.values, l_idx, &r.values, r_idx),
@@ -653,6 +664,9 @@ impl<T: CursorValues> CursorValues for ArrayValues<T> {
     #[inline(always)]
     fn eq_to_previous(cursor: &Self, idx: usize) -> bool {
         assert!(idx > 0);
+        if !cursor.has_nulls {
+            return T::eq_to_previous(&cursor.values, idx);
+        }
         match (cursor.is_null(idx), cursor.is_null(idx - 1)) {
             (true, true) => true,
             // Delegate to inner `eq_to_previous` so a caching cursor can answer
@@ -664,6 +678,13 @@ impl<T: CursorValues> CursorValues for ArrayValues<T> {
 
     #[inline(always)]
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
+        // Fast path: neither array has nulls, so skip both is_null checks.
+        if !l.has_nulls && !r.has_nulls {
+            return match l.options.descending {
+                true => T::compare(&r.values, r_idx, &l.values, l_idx),
+                false => T::compare(&l.values, l_idx, &r.values, r_idx),
+            };
+        }
         match (l.is_null(l_idx), r.is_null(r_idx)) {
             (true, true) => Ordering::Equal,
             (true, false) => match l.options.nulls_first {
@@ -736,6 +757,7 @@ mod tests {
             values: PrimitiveValues::new(values),
             null_threshold,
             options,
+            has_nulls: null_count > 0,
             _reservation: reservation,
         };
 
@@ -945,5 +967,29 @@ mod tests {
         // 6 < -3
         b.advance();
         assert_eq!(a.cmp(&b), Ordering::Less);
+    }
+
+    /// Verifies the `ArrayValues::has_nulls` fast path is actually taken
+    /// (all null-free cursors) and produces the same ordering as the
+    /// null-aware slow path.
+    #[test]
+    fn test_array_values_has_nulls_fast_path_agrees_with_slow_path() {
+        let options = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+
+        // Two null-free cursors -- compare takes the has_nulls fast path.
+        let a = new_primitive(options, ScalarBuffer::from(vec![1i32, 2, 3, 4]), 0);
+        let b = new_primitive(options, ScalarBuffer::from(vec![2i32, 3, 4, 5]), 0);
+        assert!(!a.values.has_nulls);
+        assert!(!b.values.has_nulls);
+        assert_eq!(a.cmp(&b), Ordering::Less);
+
+        // A null-containing cursor forces the slow (null-aware) path, and the
+        // two paths must agree.
+        let c = new_primitive(options, ScalarBuffer::from(vec![i32::MAX, 3i32, 4]), 1);
+        assert!(c.values.has_nulls);
+        assert_eq!(a.cmp(&c), Ordering::Less);
     }
 }
