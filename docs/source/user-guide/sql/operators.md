@@ -461,15 +461,20 @@ Bitwise Or
 
 ### `#`
 
-Bitwise Xor (interchangeable with `^`)
+Bitwise Xor. Only the PostgreSQL and Redshift dialects parse `#` as an operator
+(see `datafusion.sql_parser.dialect`); the default dialect rejects it, and MySQL,
+Snowflake, Hive and BigQuery treat `#` as the start of a comment. With other
+dialects use `^`, which is bitwise xor everywhere except the PostgreSQL dialect,
+where it is exponentiation.
 
 ```sql
+> SET datafusion.sql_parser.dialect = 'PostgreSQL';
 > SELECT 5 # 3;
-+---------------------+
-| Int64(5) # Int64(3) |
-+---------------------+
-| 6                   |
-+---------------------+
++---------------------------+
+| Int64(5) BIT_XOR Int64(3) |
++---------------------------+
+| 6                         |
++---------------------------+
 ```
 
 (op_shift_r)=
