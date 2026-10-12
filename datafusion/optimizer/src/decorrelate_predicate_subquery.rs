@@ -57,10 +57,6 @@ impl DecorrelatePredicateSubquery {
 }
 
 impl OptimizerRule for DecorrelatePredicateSubquery {
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     fn rewrite(
         &self,
         plan: LogicalPlan,

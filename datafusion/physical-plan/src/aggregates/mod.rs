@@ -210,6 +210,7 @@ use itertools::Itertools;
 use topk::hash_table::is_supported_hash_key_type;
 use topk::heap::is_supported_heap_type;
 
+mod aggregate_argument;
 mod aggregate_hash_table;
 mod aggregate_stream;
 pub mod group_values;
@@ -935,8 +936,9 @@ impl AggregateExec {
     ///
     /// # Public Only for Internal Use:
     ///
-    /// This is not part of the supported public API, it's made public for internal
-    /// optimizer usage.
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
     ///
     /// # TopK Optimization Overview
     ///
@@ -1141,6 +1143,13 @@ impl AggregateExec {
     /// leaves the aggregate in a consistent state. Ineligible aggregates return
     /// `None`. Eligible aggregates are returned unchanged when the limit is zero
     /// or no tighter than the existing limit.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
     pub fn try_optimize_distinct_soft_limit(
         mut self,
         limit: usize,
@@ -1166,6 +1175,13 @@ impl AggregateExec {
     ///
     /// The caller must preserve the schema, filters, and ordering requirements.
     /// Changing expressions in a TopK aggregate drops its specialization.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
     pub fn with_new_aggr_exprs(
         &self,
         aggr_expr: impl Into<Arc<[Arc<AggregateFunctionExpr>]>>,

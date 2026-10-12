@@ -857,10 +857,6 @@ impl OptimizerRule for PushDownFilter {
         Some(ApplyOrder::TopDown)
     }
 
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     fn rewrite(
         &self,
         plan: LogicalPlan,

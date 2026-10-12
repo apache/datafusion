@@ -48,10 +48,6 @@ impl OptimizerRule for UnionsToFilter {
         "unions_to_filter"
     }
 
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     fn rewrite(
         &self,
         plan: LogicalPlan,
