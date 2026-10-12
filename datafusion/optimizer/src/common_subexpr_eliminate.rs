@@ -722,9 +722,14 @@ impl CSEController for ExprCSEController<'_> {
                     .collect(),
             )),
 
-            // The same applies to the arguments of a window function with a `FILTER`
-            // clause. The `PARTITION BY` and `ORDER BY` expressions of the window are
-            // evaluated for every input row.
+            // The arguments of a window function with a `FILTER` clause are
+            // conservatively handled like the arguments of a filtered aggregate.
+            // The window executor does not guarantee the same today:
+            // `AggregateWindowExpr::get_result_column` evaluates the arguments
+            // before it applies the filter. This rule must not rely on that order,
+            // so it does not extract a subexpression that occurs only in such
+            // arguments. The `PARTITION BY` and `ORDER BY` expressions of the
+            // window are evaluated for every input row.
             Expr::WindowFunction(window_function) => {
                 let WindowFunction {
                     params:
@@ -2136,8 +2141,10 @@ mod test {
     fn test_window_filter_arguments() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        // The arguments of a window function with a `FILTER` are conditionally
-        // evaluated. The `PARTITION BY` expressions and the filter are not.
+        // CSE conservatively treats the arguments of a window function with a
+        // `FILTER` as conditionally evaluated, although the window executor
+        // evaluates them before it applies the filter today. The `PARTITION BY`
+        // expressions and the filter are evaluated for every input row.
         let window_sum = |arg: Expr| {
             Expr::from(WindowFunction::new(
                 WindowFunctionDefinition::AggregateUDF(sum_udaf()),
