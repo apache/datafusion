@@ -32,9 +32,11 @@ use crate::joins::hash_join::probe_completion::ProbeSideSummary;
 use crate::joins::hash_join::shared_bounds::{
     PartitionBounds, PartitionBuildData, SharedBuildAccumulator,
 };
+use crate::joins::integer_prefilter::PrefilterState;
 use crate::joins::utils::{
     JoinKeyComparator, OnceFut, equal_rows_arr_with_normalized_left, matchable_join_keys,
 };
+use crate::metrics::Count;
 use crate::stream::EmptyRecordBatchStream;
 use crate::{
     RecordBatchStream, SendableRecordBatchStream, handle_state,
@@ -55,6 +57,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, internal_datafusion_err, internal_err,
 };
+use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::datum::apply_cmp;
@@ -188,6 +191,8 @@ pub(super) struct ProcessProbeBatchState {
     /// exist and cannot match (`NullEquality::NullEqualsNothing`); NULL rows
     /// are skipped during JoinHashMap lookups
     valid_keys: Option<NullBuffer>,
+    /// Original validity combined with integer membership, for lookup only.
+    lookup_keys: Option<NullBuffer>,
     /// Starting offset for JoinHashMap lookups
     offset: MapOffset,
     /// Max joined probe-side index from current batch
@@ -378,6 +383,8 @@ pub(super) struct HashJoinStream {
     random_state: RandomState,
     /// Metrics
     join_metrics: BuildProbeJoinMetrics,
+    integer_prefilter_state: Option<(PrefilterState, MemoryReservation)>,
+    probe_prefilter_rows_pruned: Count,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
     /// Defines the null equality for the join.
@@ -571,6 +578,8 @@ impl HashJoinStream {
         mode: PartitionMode,
         null_aware: Option<NullAwareMode>,
         fetch: Option<usize>,
+        integer_prefilter_state: Option<(PrefilterState, MemoryReservation)>,
+        probe_prefilter_rows_pruned: Count,
     ) -> Self {
         // Create output buffer with coalescing and optional fetch limit.
         let output_buffer =
@@ -585,6 +594,8 @@ impl HashJoinStream {
             right,
             random_state,
             join_metrics,
+            integer_prefilter_state,
+            probe_prefilter_rows_pruned,
             column_indices,
             null_equality,
             state,
@@ -782,6 +793,10 @@ impl HashJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
+        // The previous batch's lookup mask has been released with its state.
+        if let Some((_, reservation)) = &self.integer_prefilter_state {
+            reservation.free();
+        }
         match ready!(self.right.poll_next_unpin(cx)) {
             None => {
                 // Release the probe-side input pipeline's resources. The schema
@@ -810,6 +825,47 @@ impl HashJoinStream {
                     None
                 };
 
+                let lookup_keys = if let (Some((state, reservation)), Some(filter)) = (
+                    self.integer_prefilter_state.as_mut(),
+                    self.build_side
+                        .try_as_ready()?
+                        .left_data
+                        .integer_prefilter(),
+                ) {
+                    let timer = self.join_metrics.join_time.timer();
+                    let bytes = PrefilterState::mask_memory_size(
+                        batch.num_rows(),
+                        valid_keys.is_some(),
+                    );
+                    let lookup_keys = if state.should_filter(batch.num_rows())
+                        && bytes
+                            .is_some_and(|bytes| reservation.try_resize(bytes).is_ok())
+                    {
+                        if let Some(mask) = state.filter(filter, keys_values[0].as_ref())
+                        {
+                            self.probe_prefilter_rows_pruned.add(mask.null_count());
+                            let lookup =
+                                NullBuffer::union(valid_keys.as_ref(), Some(&mask));
+                            drop(mask);
+                            reservation.resize(
+                                lookup
+                                    .as_ref()
+                                    .map_or(0, |mask| mask.inner().inner().capacity()),
+                            );
+                            lookup
+                        } else {
+                            reservation.free();
+                            valid_keys.clone()
+                        }
+                    } else {
+                        valid_keys.clone()
+                    };
+                    timer.done();
+                    lookup_keys
+                } else {
+                    valid_keys.clone()
+                };
+
                 self.join_metrics.input_batches.add(1);
                 self.join_metrics.input_rows.add(batch.num_rows());
 
@@ -818,6 +874,7 @@ impl HashJoinStream {
                         batch,
                         values: keys_values,
                         valid_keys,
+                        lookup_keys,
                         offset: (0, None),
                         joined_probe_idx: None,
                         matched_probe_idx: None,
@@ -909,7 +966,7 @@ impl HashJoinStream {
                 &state.values,
                 self.null_equality,
                 &self.hashes_buffer,
-                state.valid_keys.as_ref(),
+                state.lookup_keys.as_ref(),
                 self.batch_size,
                 state.offset,
                 &mut self.probe_indices_buffer,
@@ -1289,18 +1346,19 @@ fn null_aware_skip_probe_batch(
         | NullAwareMode::LeftMark {
             correlated: false, ..
         } => {
-            // `on[0]` is the `NOT IN` value key for both modes.
-            let probe_key_column = &state.values[0];
             let is_anti = matches!(mode, NullAwareMode::LeftAnti { .. });
-            let probe_has_null = if is_anti {
-                probe_key_column.logical_null_count() > 0
-            } else {
-                probe_key_column.null_count() > 0
-            };
-            // Only batches with rows count: `NULL NOT IN (empty)` is TRUE.
-            left_data.record_probe_batch(state.batch.num_rows() > 0, probe_has_null);
+            if state.offset == (0, None) {
+                // `on[0]` is the `NOT IN` value key for both modes. A probe
+                // batch may resume lookup many times, but its summary is
+                // invariant and only needs to be computed once.
+                let probe_has_null = state.values[0].logical_null_count() > 0;
+                // Only batches with rows count: `NULL NOT IN (empty)` is TRUE.
+                left_data.record_probe_batch(state.batch.num_rows() > 0, probe_has_null);
+            }
             // Best-effort early exit; the final stage re-checks the flag
-            // through `report_probe_completed`.
+            // through `report_probe_completed`. Keep this outside the first-
+            // chunk guard so a sibling partition can stop an anti join between
+            // resumed lookups.
             is_anti && left_data.probe_side_has_null_hint()
         }
     }
@@ -1388,13 +1446,19 @@ fn null_aware_left_mark_column(
     left_side: &UInt64Array,
     right_side: &UInt32Array,
 ) -> ArrayRef {
-    let build_key_column = &left_data.values()[0];
     // Correlated joins precomputed the UNKNOWN decision per build row.
     let null_indices_bitmap = correlated.then(|| left_data.null_indices_bitmap().lock());
+    // Uncorrelated joins use the logical-null bitmap computed once with the
+    // build side. Correlated joins carry the answer in `null_indices_bitmap`.
+    let build_key_nulls = if correlated {
+        None
+    } else {
+        left_data.left_mark_build_key_nulls()
+    };
     build_null_aware_left_mark_column(
         left_side,
         right_side,
-        build_key_column.as_ref(),
+        build_key_nulls,
         null_indices_bitmap.as_deref(),
         probe_summary.has_null,
         probe_summary.non_empty,
