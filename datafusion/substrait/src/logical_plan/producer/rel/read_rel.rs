@@ -127,13 +127,11 @@ pub fn from_table_scan(
     let offset_mode = skip
         .map(|skip| producer.handle_expr(&lit(skip), &empty_schema))
         .transpose()?
-        .map(Box::new)
-        .map(fetch_rel::OffsetMode::OffsetExpr);
+        .map(|expr| fetch_rel::OffsetMode::OffsetExpr(Box::new(expr)));
     let count_mode = fetch
         .map(|fetch| producer.handle_expr(&lit(fetch), &empty_schema))
         .transpose()?
-        .map(Box::new)
-        .map(fetch_rel::CountMode::CountExpr);
+        .map(|expr| fetch_rel::CountMode::CountExpr(Box::new(expr)));
     Ok(Box::new(Rel {
         rel_type: Some(RelType::Fetch(Box::new(FetchRel {
             common: None,
