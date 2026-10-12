@@ -900,17 +900,12 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
         values: &[ArrayRef],
         opt_filter: Option<&BooleanArray>,
     ) -> Result<Vec<ArrayRef>> {
+        let filter = opt_filter
+            .cloned()
+            .unwrap_or_else(|| BooleanArray::from(vec![true; values[0].len()]));
         let mut result = values.to_vec();
-        match opt_filter {
-            Some(f) => {
-                result.push(Arc::new(f.clone()));
-                Ok(result)
-            }
-            None => {
-                result.push(Arc::new(BooleanArray::from(vec![true; values[0].len()])));
-                Ok(result)
-            }
-        }
+        result.push(Arc::new(filter));
+        Ok(result)
     }
 }
 

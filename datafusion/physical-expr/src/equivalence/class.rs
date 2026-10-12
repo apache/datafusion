@@ -624,8 +624,8 @@ impl EquivalenceGroup {
             .filter(|req| !self.is_uniform_constant(&req.expr))
     }
 
-    /// Perform an indirect projection of `expr` by consulting the equivalence
-    /// classes.
+    /// Projects `expr` through its children or an equivalent expression in the
+    /// mapping, preferring to preserve its structure.
     fn project_expr_indirect(
         aug_mapping: &AugmentedMapping,
         expr: &Arc<dyn PhysicalExpr>,
@@ -635,8 +635,32 @@ impl EquivalenceGroup {
             return Some(Arc::clone(expr));
         }
 
-        // The given expression is not inside the mapping, so we try to project
-        // indirectly using equivalence classes.
+        // Preserve expression structure when its children can be projected.
+        // Otherwise, projecting a class such as a + 1 = b can collapse it to
+        // b = b, losing the equivalence even when a survives the projection.
+        let children = expr.children();
+        if !children.is_empty() {
+            let projected_children = children
+                .into_iter()
+                .map(|child| {
+                    // First, we try to project children with an exact match. If
+                    // we are unable to do this, we consult equivalence classes.
+                    if let Some((targets, _)) = aug_mapping.get(child) {
+                        // If we match the source, we can project directly:
+                        let (target, _) = targets.first();
+                        Some(Arc::clone(target))
+                    } else {
+                        Self::project_expr_indirect(aug_mapping, child)
+                    }
+                })
+                .collect::<Option<Vec<_>>>();
+            if let Some(children) = projected_children {
+                return Some(Arc::clone(expr).with_new_children(children).unwrap());
+            }
+        }
+
+        // Project expressions whose children could not be projected by consulting
+        // equivalence classes.
         for (targets, eq_class) in aug_mapping.values() {
             // If we match an equivalent expression to a source expression in
             // the mapping, then we can project. For example, if we have the
@@ -647,27 +671,7 @@ impl EquivalenceGroup {
                 return Some(Arc::clone(target));
             }
         }
-        // Project a non-leaf expression by projecting its children.
-        let children = expr.children();
-        if children.is_empty() {
-            // A leaf expression should be inside the mapping.
-            return None;
-        }
-        children
-            .into_iter()
-            .map(|child| {
-                // First, we try to project children with an exact match. If
-                // we are unable to do this, we consult equivalence classes.
-                if let Some((targets, _)) = aug_mapping.get(child) {
-                    // If we match the source, we can project directly:
-                    let (target, _) = targets.first();
-                    Some(Arc::clone(target))
-                } else {
-                    Self::project_expr_indirect(aug_mapping, child)
-                }
-            })
-            .collect::<Option<Vec<_>>>()
-            .map(|children| Arc::clone(expr).with_new_children(children).unwrap())
+        None
     }
 
     fn augment_projection_mapping<'a>(

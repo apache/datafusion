@@ -33,12 +33,13 @@ use super::{
         unproject_unnest_expr_as_flatten_value, unproject_window_exprs,
     },
 };
-use crate::unparser::extension_unparser::{
-    UnparseToStatementResult, UnparseWithinStatementResult,
-};
 use crate::unparser::utils::{find_unnest_node_until_relation, unproject_agg_exprs};
 use crate::unparser::{
     ast::FlattenRelationBuilder, ast::UnnestRelationBuilder, rewrite::rewrite_qualify,
+};
+use crate::unparser::{
+    extension_unparser::{UnparseToStatementResult, UnparseWithinStatementResult},
+    utils::filter_depends_on_input_alias,
 };
 use crate::utils::UNNEST_PLACEHOLDER;
 use datafusion_common::{
@@ -516,6 +517,14 @@ impl Unparser<'_> {
                 .then_some(DerivedInputScope {
                     alias,
                     schema: projection.input.schema().as_ref(),
+                })
+            }
+            // when a filter references aliases from its input, we add a subquery around it to
+            // prevent invalid references, so we need to keep track of it here
+            LogicalPlan::Filter(filter) if filter_depends_on_input_alias(filter) => {
+                Some(DerivedInputScope {
+                    alias: "derived_projection",
+                    schema: filter.input.schema().as_ref(),
                 })
             }
             LogicalPlan::Filter(filter) => {
@@ -1241,6 +1250,18 @@ impl Unparser<'_> {
                     )?;
                     let filter_expr = self.expr_to_sql(&predicate)?;
                     select.selection(Some(filter_expr));
+                }
+
+                // if the inner plan aliases columns used by the filter, we need to convert to a
+                // subquery to prevent invalid references
+                if filter_depends_on_input_alias(filter) {
+                    return self.derive_with_dialect_alias(
+                        "derived_projection",
+                        &filter.input,
+                        relation,
+                        false,
+                        vec![],
+                    );
                 }
 
                 self.select_to_sql_recursively(
@@ -2326,7 +2347,10 @@ impl Unparser<'_> {
     }
 
     fn is_scan_with_pushdown(scan: &TableScan) -> bool {
-        scan.projection.is_some() || !scan.filters.is_empty() || scan.fetch.is_some()
+        scan.projection.is_some()
+            || !scan.filters.is_empty()
+            || scan.fetch.is_some()
+            || scan.skip.is_some()
     }
 
     /// Returns true if a plan, when used as the direct child of a SubqueryAlias,
@@ -2600,8 +2624,13 @@ impl Unparser<'_> {
                     builder = builder.filter(filter)?;
                 }
 
-                if let Some(fetch) = table_scan.fetch {
-                    builder = builder.limit(0, Some(fetch))?;
+                match (table_scan.skip, table_scan.fetch) {
+                    (Some(offset), Some(fetch)) => {
+                        builder = builder.limit(offset, Some(fetch))?
+                    }
+                    (Some(offset), None) => builder = builder.limit(offset, None)?,
+                    (None, Some(fetch)) => builder = builder.limit(0, Some(fetch))?,
+                    (None, None) => (),
                 }
 
                 // If the table scan has an alias but no projection or filters, it means no column references are rebased.

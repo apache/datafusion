@@ -373,7 +373,7 @@ mod tests {
         ));
         let mut config = ConfigOptions::default();
         if let Some(tz) = timezone {
-            config.execution.time_zone = Some(tz.to_string());
+            config.execution.time_zone = Some(tz.parse().unwrap());
         }
         ScalarFunctionArgs {
             args: vec![
@@ -761,7 +761,7 @@ mod tests {
             true,
         ));
         let mut config = ConfigOptions::default();
-        config.execution.time_zone = Some("UTC".to_string());
+        config.execution.time_zone = Some("UTC".parse().unwrap());
         config.execution.enable_ansi_mode = enable_ansi_mode;
         ScalarFunctionArgs {
             args: vec![

@@ -405,26 +405,17 @@ impl<'a> JoinFilterRewriter<'a> {
         Ok(new_intermediate_idx)
     }
 
-    /// Checks whether the entire expression depends on the given `join_side`.
+    /// Checks whether the expression references any columns from `join_side`.
     fn depends_on_join_side(
-        &mut self,
+        &self,
         expr: &Arc<dyn PhysicalExpr>,
         join_side: JoinSide,
     ) -> Result<bool> {
-        let mut result = false;
-        expr.apply(|expr| match expr.downcast_ref::<Column>() {
-            None => Ok(TreeNodeRecursion::Continue),
-            Some(c) => {
-                let column_index = &self.intermediate_column_indices[c.index()];
-                if column_index.side == join_side {
-                    result = true;
-                    return Ok(TreeNodeRecursion::Stop);
-                }
-                Ok(TreeNodeRecursion::Continue)
-            }
-        })?;
-
-        Ok(result)
+        expr.exists(|expr| {
+            Ok(expr.downcast_ref::<Column>().is_some_and(|c| {
+                self.intermediate_column_indices[c.index()].side == join_side
+            }))
+        })
     }
 }
 

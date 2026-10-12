@@ -27,7 +27,7 @@ use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::types::{NativeType, logical_float64};
 use datafusion_common::{Result, ScalarValue, not_impl_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::utils::format_state_name;
+use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Coercion, EmitTo, GroupsAccumulator, ReversedUDAF,
     Signature, TypeSignatureClass, Volatility,
@@ -115,6 +115,10 @@ impl AggregateUDFImpl for SparkAvg {
 
     fn reverse_expr(&self) -> ReversedUDAF {
         ReversedUDAF::Identical
+    }
+
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        AggregateOrderSensitivity::Insensitive
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
