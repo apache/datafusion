@@ -1672,6 +1672,11 @@ config_namespace! {
         /// predicate push down.
         pub filter_null_join_keys: bool, default = false
 
+        /// When set to true, the optimizer pushes semi / anti joins below inner
+        /// joins and restricts the aggregate of decorrelated subqueries to the
+        /// keys of the outer query (see `PushDownSemiJoin`).
+        pub enable_semi_join_pushdown: bool, default = true
+
         /// Should DataFusion repartition data using the aggregate keys to execute aggregates
         /// in parallel using the provided `target_partitions` level
         pub repartition_aggregations: bool, default = true
