@@ -18,6 +18,7 @@
 //! Regex expressions
 use memchr::memchr;
 
+use crate::utils::transform_leaf_type_preserving_encoding;
 use arrow::array::ArrayDataBuilder;
 use arrow::array::BufferBuilder;
 use arrow::array::GenericStringArray;
@@ -25,7 +26,7 @@ use arrow::array::StringViewBuilder;
 use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
 use arrow::array::{ArrayAccessor, StringViewArray};
 use arrow::array::{ArrayIter, AsArray, new_null_array};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::ScalarValue;
 use datafusion_common::cast::{
     as_large_string_array, as_string_array, as_string_view_array,
@@ -35,10 +36,10 @@ use datafusion_common::plan_err;
 use datafusion_common::utils::offset_span_len;
 use datafusion_common::{Result, cast::as_generic_string_array, internal_err};
 use datafusion_expr::ColumnarValue;
-use datafusion_expr::TypeSignature;
 use datafusion_expr::function::Hint;
 use datafusion_expr::{
-    Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 use regex::{CaptureLocations, Regex};
@@ -95,16 +96,8 @@ impl Default for RegexpReplaceFunc {
 
 impl RegexpReplaceFunc {
     pub fn new() -> Self {
-        use DataType::*;
-        use TypeSignature::*;
         Self {
-            signature: Signature::one_of(
-                vec![
-                    Uniform(3, vec![Utf8View, LargeUtf8, Utf8]),
-                    Uniform(4, vec![Utf8View, LargeUtf8, Utf8]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -119,33 +112,90 @@ impl ScalarUDFImpl for RegexpReplaceFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        use DataType::*;
-        Ok(match &arg_types[0] {
-            LargeUtf8 | LargeBinary => LargeUtf8,
-            Utf8 | Binary => Utf8,
-            Utf8View | BinaryView => Utf8View,
-            Null => Null,
-            Dictionary(_, t) => match **t {
-                LargeUtf8 | LargeBinary => LargeUtf8,
-                Utf8 | Binary => Utf8,
-                Null => Null,
-                _ => {
-                    return plan_err!(
-                        "the regexp_replace can only accept strings but got {:?}",
-                        **t
-                    );
-                }
-            },
-            other => {
-                return plan_err!(
-                    "The regexp_replace function can only accept strings. Got {other}"
-                );
+        transform_leaf_type_preserving_encoding(&arg_types[0], &regexp_replace_leaf_type)
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let input = &args.arg_fields[0];
+        let others_scalar = args.scalar_arguments.iter().skip(1).all(Option::is_some);
+        let output_type = match input.data_type() {
+            DataType::Dictionary(_, value_type) if !others_scalar => {
+                regexp_replace_leaf_type(value_type.as_ref())?
             }
-        })
+            other => self.return_type(std::slice::from_ref(other))?,
+        };
+        Ok(Arc::new(Field::new(self.name(), output_type, true)))
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if !(3..=4).contains(&arg_types.len()) {
+            return plan_err!(
+                "regexp_replace expects 3 or 4 arguments, got {}",
+                arg_types.len()
+            );
+        }
+        let leaf = match &arg_types[0] {
+            DataType::Dictionary(_, v) => v.as_ref(),
+            other => other,
+        };
+        let is_string_leaf = matches!(
+            leaf,
+            DataType::Utf8
+                | DataType::LargeUtf8
+                | DataType::Utf8View
+                | DataType::Binary
+                | DataType::LargeBinary
+                | DataType::BinaryView
+        );
+        let target = if is_string_leaf {
+            regexp_replace_leaf_type(leaf)?
+        } else {
+            DataType::Utf8View
+        };
+        let first = match &arg_types[0] {
+            DataType::Dictionary(k, _) if is_string_leaf => {
+                DataType::Dictionary(k.clone(), Box::new(target.clone()))
+            }
+            _ => target.clone(),
+        };
+        let mut out = Vec::with_capacity(arg_types.len());
+        out.push(first);
+        for _ in 1..arg_types.len() {
+            out.push(target.clone());
+        }
+        Ok(out)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let args = &args.args;
+        let mut args = args.args;
+
+        let scalar_dict_key = if let Some(ColumnarValue::Scalar(
+            ScalarValue::Dictionary(key_type, value),
+        )) = args.first()
+        {
+            let key = key_type.clone();
+            args[0] = ColumnarValue::Scalar(value.as_ref().clone());
+            Some(key)
+        } else {
+            None
+        };
+
+        if let ColumnarValue::Array(array) = &args[0]
+            && let DataType::Dictionary(_, value_type) = array.data_type().clone()
+        {
+            let others_scalar = args[1..]
+                .iter()
+                .all(|a| matches!(a, ColumnarValue::Scalar(_)));
+            if others_scalar {
+                let dict = array.as_any_dictionary();
+                let mut inner: Vec<ColumnarValue> = Vec::with_capacity(args.len());
+                inner.push(ColumnarValue::Array(Arc::clone(dict.values())));
+                inner.extend_from_slice(&args[1..]);
+                let values_out = regexp_replace_func(&inner)?;
+                return Ok(ColumnarValue::Array(dict.with_values(values_out)));
+            }
+            args[0] = ColumnarValue::Array(arrow::compute::cast(array, &value_type)?);
+        }
 
         let len = args
             .iter()
@@ -155,19 +205,40 @@ impl ScalarUDFImpl for RegexpReplaceFunc {
             });
 
         let is_scalar = len.is_none();
-        let result = regexp_replace_func(args);
-        if is_scalar {
-            // If all inputs are scalar, keeps output as scalar
-            let result = result.and_then(|arr| ScalarValue::try_from_array(&arr, 0));
-            result.map(ColumnarValue::Scalar)
+        let result = regexp_replace_func(&args)?;
+        let out = if is_scalar {
+            ColumnarValue::Scalar(ScalarValue::try_from_array(&result, 0)?)
         } else {
-            result.map(ColumnarValue::Array)
+            ColumnarValue::Array(result)
+        };
+
+        if let (Some(key_type), ColumnarValue::Scalar(scalar)) = (scalar_dict_key, &out) {
+            return Ok(ColumnarValue::Scalar(ScalarValue::Dictionary(
+                key_type,
+                Box::new(scalar.clone()),
+            )));
         }
+        Ok(out)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+}
+
+fn regexp_replace_leaf_type(dt: &DataType) -> Result<DataType> {
+    use DataType::*;
+    Ok(match dt {
+        LargeUtf8 | LargeBinary => LargeUtf8,
+        Utf8 | Binary => Utf8,
+        Utf8View | BinaryView => Utf8View,
+        Null => Null,
+        other => {
+            return plan_err!(
+                "the regexp_replace can only accept strings but got {other:?}"
+            );
+        }
+    })
 }
 
 fn regexp_replace_func(args: &[ColumnarValue]) -> Result<ArrayRef> {
