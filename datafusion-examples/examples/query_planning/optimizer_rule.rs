@@ -108,11 +108,6 @@ impl OptimizerRule for MyOptimizerRule {
         "my_optimizer_rule"
     }
 
-    // New OptimizerRules should use the "rewrite" api as it is more efficient
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     /// Ask the optimizer to handle the plan recursion. `rewrite` will be called
     /// on each plan node.
     fn apply_order(&self) -> Option<ApplyOrder> {

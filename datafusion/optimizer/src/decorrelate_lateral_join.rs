@@ -45,10 +45,6 @@ impl DecorrelateLateralJoin {
 }
 
 impl OptimizerRule for DecorrelateLateralJoin {
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     fn rewrite(
         &self,
         plan: LogicalPlan,
