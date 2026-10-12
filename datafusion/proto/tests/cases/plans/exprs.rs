@@ -410,6 +410,62 @@ fn roundtrip_binary_expr_overflow_json() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn roundtrip_cast_safe_option_execution() -> Result<()> {
+    use arrow::array::{Array, Int32Array};
+    use arrow::compute::CastOptions;
+    use datafusion::physical_plan::collect;
+    use datafusion::physical_plan::expressions::CastExpr;
+    use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
+    use datafusion_common::assert_contains;
+    use datafusion_common::format::DEFAULT_CAST_OPTIONS;
+    use datafusion_proto::bytes::{physical_plan_from_bytes, physical_plan_to_bytes};
+
+    let ctx = SessionContext::new();
+    // `safe: false` matches DataFusion's default cast options, which the encoder
+    // omits from the wire; `safe: true` must be carried by the encoded options.
+    for safe in [true, false] {
+        let cast_options = CastOptions {
+            safe,
+            ..DEFAULT_CAST_OPTIONS
+        };
+        // A safe cast can turn a non-null input into NULL. Use an explicit
+        // nullable target: a type-only cast would inherit the literal's
+        // non-nullability, and the projection would reject the NULL.
+        let expr: Arc<dyn PhysicalExpr> = Arc::new(CastExpr::new_with_target_field(
+            lit("9.1"),
+            Arc::new(Field::new("result", DataType::Int32, true)),
+            Some(cast_options),
+        ));
+        let original: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+            vec![(expr, "result".to_string())],
+            Arc::new(PlaceholderRowExec::new(Arc::new(Schema::empty()))),
+        )?);
+        let bytes = physical_plan_to_bytes(Arc::clone(&original))?;
+        let decoded = physical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+
+        for (label, plan) in [("original", original), ("decoded", decoded)] {
+            match (safe, collect(plan, ctx.task_ctx()).await) {
+                (true, Ok(batches)) => {
+                    assert_eq!(batches.len(), 1, "{label} plan batch count");
+                    assert_eq!(
+                        batches[0].column(0).as_any().downcast_ref::<Int32Array>(),
+                        Some(&Int32Array::new_null(1)),
+                        "{label} plan should cast '9.1' to NULL"
+                    );
+                }
+                (false, Err(e)) => {
+                    assert_contains!(e.to_string(), "Cannot cast string '9.1'");
+                }
+                (_, other) => {
+                    panic!("{label} plan with safe={safe} returned {other:?}")
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Test that a chain of the same operator (a AND b AND c) is linearized
 /// and roundtrips correctly.
 #[test]
