@@ -3140,6 +3140,63 @@ mod tests {
     }
 
     #[test]
+    fn plan_builder_aggregate_nullable_unique_adds_no_implicit_group_by_exprs()
+    -> Result<()> {
+        // A nullable UNIQUE column permits multiple NULL rows that may differ
+        // in the other columns, so it does not determine them across the
+        // single NULL group and they must not be added to the GROUP BY.
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("state", DataType::Utf8, true),
+            Field::new("salary", DataType::Int32, true),
+        ]);
+        let constraints = Constraints::new_unverified(vec![Constraint::Unique(vec![0])]);
+        let table_source = table_source_with_constraints(&schema, constraints);
+
+        let options =
+            LogicalPlanBuilderOptions::new().with_add_implicit_group_by_exprs(true);
+        let plan = LogicalPlanBuilder::scan("employee_csv", table_source, None)?
+            .with_options(options)
+            .aggregate(vec![col("id")], vec![sum(col("salary"))])?
+            .build()?;
+
+        assert_snapshot!(plan, @r"
+        Aggregate: groupBy=[[employee_csv.id]], aggr=[[sum(employee_csv.salary)]]
+          TableScan: employee_csv
+        ");
+
+        Ok(())
+    }
+
+    #[test]
+    fn plan_builder_aggregate_not_null_unique_implicit_group_by_exprs() -> Result<()> {
+        // A UNIQUE column declared NOT NULL has no NULL rows, so it determines
+        // the other columns like a PRIMARY KEY and they are added to the
+        // GROUP BY.
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("state", DataType::Utf8, true),
+            Field::new("salary", DataType::Int32, true),
+        ]);
+        let constraints = Constraints::new_unverified(vec![Constraint::Unique(vec![0])]);
+        let table_source = table_source_with_constraints(&schema, constraints);
+
+        let options =
+            LogicalPlanBuilderOptions::new().with_add_implicit_group_by_exprs(true);
+        let plan = LogicalPlanBuilder::scan("employee_csv", table_source, None)?
+            .with_options(options)
+            .aggregate(vec![col("id")], vec![sum(col("salary"))])?
+            .build()?;
+
+        assert_snapshot!(plan, @r"
+        Aggregate: groupBy=[[employee_csv.id, employee_csv.state, employee_csv.salary]], aggr=[[sum(employee_csv.salary)]]
+          TableScan: employee_csv
+        ");
+
+        Ok(())
+    }
+
+    #[test]
     fn plan_builder_aggregate_rejects_nested_aggregates() -> Result<()> {
         // https://github.com/apache/datafusion/issues/23812
         let err = table_scan(
