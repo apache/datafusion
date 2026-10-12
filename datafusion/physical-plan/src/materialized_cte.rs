@@ -573,6 +573,18 @@ impl ExecutionPlan for MaterializedCteExec {
         )
     }
 
+    /// Clears the shared buffer in place and returns `self`.
+    ///
+    /// This is an exception to the `reset_state` contract, which expects a
+    /// new node and leaves the old node unchanged. `RecursiveQueryExec` resets
+    /// the recursive term before each iteration, and a `MATERIALIZED` CTE in
+    /// that term must be computed again. A new buffer would also need new
+    /// scans, and a scan in a scalar subquery is not below this node, so this
+    /// node cannot rebind it. `ScalarSubqueryExec::reset_state` does the same.
+    ///
+    /// Two overlapping runs of one plan share this buffer. Nothing in
+    /// DataFusion does that today. See
+    /// <https://github.com/apache/datafusion/issues/26229>.
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
         self.buffer.reset();
         Ok(self)
