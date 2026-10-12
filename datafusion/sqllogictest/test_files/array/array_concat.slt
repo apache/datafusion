@@ -61,6 +61,37 @@ select array_concat(NULL::integer[], [1, 2, 3]);
 ----
 [1, 2, 3]
 
+# test with untyped NULL arguments, which behave like NULL arrays
+query ?
+select array_concat([1, 2], NULL);
+----
+[1, 2]
+
+query ?
+select array_cat(NULL, [1, 2]);
+----
+[1, 2]
+
+query ?
+select array_concat(['a'], NULL, ['b']);
+----
+[a, b]
+
+query ?
+select array_concat([[1, 2]], NULL);
+----
+[[1, 2]]
+
+query T
+select arrow_typeof(array_concat([1, 2], NULL));
+----
+List(Int64)
+
+query ?
+select array_concat(NULL, NULL);
+----
+NULL
+
 # Concatenating strings arrays
 query ?
 select array_concat(
