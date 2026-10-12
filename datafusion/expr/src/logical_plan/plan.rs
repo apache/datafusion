@@ -2854,12 +2854,18 @@ impl Filter {
     /// Create a new filter operator.
     ///
     /// Skips the type-checking, window function check and dealiasing done in
-    /// [Self::try_new]. For internal use in DataFusion only.
+    /// [Self::try_new].
     ///
     /// **Preconditions:**
     /// - the `predicate` expression returns a boolean value
     /// - the `predicate` expression is not aliased
     /// - the `predicate` expression contains no window function calls
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
     #[doc(hidden)]
     pub fn new(predicate: Expr, input: Arc<LogicalPlan>) -> Self {
         Self { predicate, input }
