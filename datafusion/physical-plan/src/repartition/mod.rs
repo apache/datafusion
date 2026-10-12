@@ -62,7 +62,7 @@ use datafusion_common::{
 use datafusion_common::{Result, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
-use datafusion_execution::memory_pool::MemoryConsumer;
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr, RangePartitioning};
 use datafusion_physical_expr_common::physical_expr::PhysicalExprRef;
@@ -215,7 +215,7 @@ impl PartitionSpillWriters {
 impl OutputChannel {
     fn coalesce(&mut self, batch: RecordBatch) -> Result<Vec<RecordBatch>> {
         match &self.shared_coalescer {
-            Some(shared) => Ok(shared.push_and_drain(batch)?),
+            Some(shared) => Ok(shared.push_and_drain(batch, &self.reservation)?),
             None => Ok(vec![batch]),
         }
     }
@@ -251,7 +251,7 @@ impl OutputChannel {
         let Some(shared) = self.shared_coalescer.take() else {
             return Ok(());
         };
-        for batch in shared.finalize()? {
+        for batch in shared.finalize(&self.reservation)? {
             // If this errored, it means that nobody is listening on the other side, which is fine
             // and can happen in certain cases, like when a LIMIT drops the stream that listens.
             let _ = self.send(batch).await;
@@ -268,51 +268,83 @@ impl OutputChannel {
 /// into it. The last task to call [`Self::finalize`] is the one that
 /// finalizes the coalescer and ships the residual batch.
 ///
+/// The rows the coalescer buffers are charged to the output partition's
+/// memory reservation until they are flushed into a completed batch, which
+/// [`OutputChannel::send`] then charges on its own.
+///
 /// Cheap to [`Clone`]: both fields are [`Arc`]s.
 #[derive(Clone)]
 struct SharedCoalescer {
-    inner: Arc<Mutex<LimitedBatchCoalescer>>,
+    inner: Arc<Mutex<BufferedCoalescer>>,
     active_senders: Arc<AtomicUsize>,
+}
+
+/// A [`LimitedBatchCoalescer`] and the number of bytes of its buffered rows
+/// currently charged to the output partition's memory reservation.
+struct BufferedCoalescer {
+    coalescer: LimitedBatchCoalescer,
+    reserved: usize,
+}
+
+impl BufferedCoalescer {
+    /// Set the charge for the buffered rows to the coalescer's current size.
+    /// Completed batches must be drained first, so their bytes are not
+    /// counted here as well as in [`OutputChannel::send`].
+    fn update_reservation(&mut self, reservation: &MemoryReservation) {
+        let buffered = self.coalescer.size();
+        if buffered > self.reserved {
+            reservation.grow(buffered - self.reserved);
+        } else {
+            reservation.shrink(self.reserved - buffered);
+        }
+        self.reserved = buffered;
+    }
 }
 
 impl SharedCoalescer {
     fn new(schema: SchemaRef, target_batch_size: usize, num_senders: usize) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(LimitedBatchCoalescer::new(
-                schema,
-                target_batch_size,
-                None,
-            ))),
+            inner: Arc::new(Mutex::new(BufferedCoalescer {
+                coalescer: LimitedBatchCoalescer::new(schema, target_batch_size, None),
+                reserved: 0,
+            })),
             active_senders: Arc::new(AtomicUsize::new(num_senders)),
         }
     }
 
     /// Push `batch` into the coalescer and drain any newly completed
     /// batches. The mutex is held only briefly.
-    fn push_and_drain(&self, batch: RecordBatch) -> Result<Vec<RecordBatch>> {
+    fn push_and_drain(
+        &self,
+        batch: RecordBatch,
+        reservation: &MemoryReservation,
+    ) -> Result<Vec<RecordBatch>> {
         let mut acc = Vec::new();
         let mut c = self.inner.lock();
-        c.push_batch(batch)?;
-        while let Some(b) = c.next_completed_batch() {
+        c.coalescer.push_batch(batch)?;
+        while let Some(b) = c.coalescer.next_completed_batch() {
             acc.push(b);
         }
+        c.update_reservation(reservation);
         Ok(acc)
     }
 
     /// Decrement the active-senders counter. If this caller was the last
     /// sender, finalize the coalescer and return its residual batches; if
     /// other senders are still active, return `Ok(None)`.
-    fn finalize(&self) -> Result<Vec<RecordBatch>> {
+    fn finalize(&self, reservation: &MemoryReservation) -> Result<Vec<RecordBatch>> {
         let was_last = self.active_senders.fetch_sub(1, AtomicOrdering::AcqRel) == 1;
         if !was_last {
             return Ok(vec![]);
         }
         let mut acc = Vec::new();
         let mut c = self.inner.lock();
-        c.finish()?;
-        while let Some(b) = c.next_completed_batch() {
+        c.coalescer.finish()?;
+        while let Some(b) = c.coalescer.next_completed_batch() {
             acc.push(b);
         }
+        reservation.shrink(c.reserved);
+        c.reserved = 0;
         Ok(acc)
     }
 }
@@ -4527,6 +4559,88 @@ mod tests {
             spill_count,
             spilled_bytes
         );
+
+        Ok(())
+    }
+
+    /// Rows held in the output coalescer are charged to the memory pool until
+    /// they are flushed, and each byte is charged only once.
+    #[tokio::test]
+    async fn repartition_reserves_coalescer_buffered_rows() -> Result<()> {
+        use datafusion_execution::memory_pool::{MemoryPool, UnboundedMemoryPool};
+
+        let batch_size = 100;
+        let schema = test_schema(false);
+        let rows = |range: std::ops::Range<u32>| {
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(UInt32Array::from_iter_values(range))],
+            )
+        };
+        // Four batches complete one output batch. The last one stays in the
+        // coalescer. All are small enough to be coalesced rather than passed
+        // through.
+        let batches = vec![
+            rows(0..25)?,
+            rows(25..50)?,
+            rows(50..75)?,
+            rows(75..100)?,
+            rows(100..150)?,
+        ];
+
+        // What the repartition coalescer should hold, and so have reserved,
+        // once it has taken all five batches and handed out the completed one.
+        let mut expected =
+            LimitedBatchCoalescer::new(Arc::clone(&schema), batch_size, None);
+        for batch in &batches {
+            expected.push_batch(batch.clone())?;
+        }
+        assert_eq!(expected.next_completed_batch().unwrap().num_rows(), 100);
+        assert!(expected.next_completed_batch().is_none());
+        let expected_reserved = expected.size();
+        assert!(expected_reserved >= 50 * size_of::<u32>());
+
+        // Keep the input open after its last batch, so the coalescer holds
+        // the last 50 rows until the test releases it.
+        let input = Arc::new(
+            BarrierExec::new(vec![batches], Arc::clone(&schema))
+                .without_start_barrier()
+                .with_finish_barrier()
+                .with_log(false),
+        );
+
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let runtime = RuntimeEnvBuilder::default()
+            .with_memory_pool(Arc::clone(&pool))
+            .build_arc()?;
+        let task_ctx = TaskContext::default()
+            .with_session_config(SessionConfig::new().with_batch_size(batch_size))
+            .with_runtime(runtime);
+
+        let exec = RepartitionExec::try_new(
+            Arc::clone(&input) as Arc<dyn ExecutionPlan>,
+            Partitioning::RoundRobinBatch(1),
+        )?;
+        let mut stream = exec.execute(0, Arc::new(task_ctx))?;
+
+        let batch = stream.next().await.expect("completed batch")?;
+        assert_eq!(batch.num_rows(), batch_size);
+
+        // The completed batch was released when it was received. The input
+        // task pushes the last batch in the background.
+        for _ in 0..100 {
+            if pool.reserved() == expected_reserved {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(pool.reserved(), expected_reserved);
+
+        input.wait_finish().await;
+        let batch = stream.next().await.expect("residual batch")?;
+        assert_eq!(batch.num_rows(), 50);
+        assert_eq!(pool.reserved(), 0);
+        assert!(stream.next().await.is_none());
 
         Ok(())
     }
