@@ -20,8 +20,7 @@
 use super::{SpillReaderStream, in_progress_spill_file::InProgressSpillFile};
 use crate::coop::cooperative;
 use crate::{common::spawn_buffered, metrics::SpillMetrics};
-use arrow::array::{BinaryViewArray, GenericByteViewArray, StringViewArray};
-use arrow::datatypes::{ByteViewType, SchemaRef};
+use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result, config::SpillCompression};
 use datafusion_execution::SendableRecordBatchStream;
@@ -141,29 +140,32 @@ impl SpillManager {
         Ok(file.map(|f| (f, max_record_batch_size)))
     }
 
-    /// Spill a stream of `RecordBatch`es to disk and return the spill file and the size of the largest batch in memory
-    pub(crate) async fn spill_record_batch_stream_and_return_max_batch_memory(
+    /// Spill a stream of `RecordBatch`es and return the file, maximum batch memory,
+    /// and maximum batch row count.
+    pub(crate) async fn spill_record_batch_stream_and_return_max_batch_stats(
         &self,
         stream: &mut SendableRecordBatchStream,
         request_description: &str,
-    ) -> Result<Option<(Arc<dyn SpillFile>, usize)>> {
+    ) -> Result<Option<(Arc<dyn SpillFile>, usize, usize)>> {
         use futures::StreamExt;
 
         let mut in_progress_file = self.create_in_progress_file(request_description)?;
 
         let result = async {
             let mut max_record_batch_size = 0;
+            let mut max_batch_rows = 0;
 
             while let Some(batch) = stream.next().await {
                 let batch = batch?;
                 let gc_sliced_size = in_progress_file.append_batch_async(&batch).await?;
 
                 max_record_batch_size = max_record_batch_size.max(gc_sliced_size);
+                max_batch_rows = max_batch_rows.max(batch.num_rows());
             }
 
             let file = in_progress_file.finish_async().await?;
 
-            Ok(file.map(|f| (f, max_record_batch_size)))
+            Ok(file.map(|f| (f, max_record_batch_size, max_batch_rows)))
         }
         .await;
 
@@ -232,33 +234,12 @@ impl GetSlicedSize for RecordBatch {
         let mut total = 0;
         for array in self.columns() {
             let data = array.to_data();
+            // Since https://github.com/apache/arrow-rs/issues/8230 this also
+            // accounts for the variadic data buffers retained by view arrays
             total += data.get_slice_memory_size()?;
-
-            // While StringViewArray holds large data buffer for non inlined string, the Arrow layout (BufferSpec)
-            // does not include any data buffers. Currently, ArrayData::get_slice_memory_size()
-            // under-counts memory size by accounting only views buffer although data buffer is cloned during slice()
-            //
-            // Therefore, we manually add the sum of the lengths used by all non inlined views
-            // on top of the sliced size for views buffer. This matches the intended semantics of
-            // "bytes needed if we materialized exactly this slice into fresh buffers".
-            // This is a workaround until https://github.com/apache/arrow-rs/issues/8230
-            if let Some(sv) = array.as_any().downcast_ref::<StringViewArray>() {
-                total += byte_view_data_buffer_size(sv);
-            }
-            if let Some(bv) = array.as_any().downcast_ref::<BinaryViewArray>() {
-                total += byte_view_data_buffer_size(bv);
-            }
         }
         Ok(total)
     }
-}
-
-fn byte_view_data_buffer_size<T: ByteViewType>(array: &GenericByteViewArray<T>) -> usize {
-    array
-        .data_buffers()
-        .iter()
-        .map(|buffer| buffer.capacity())
-        .sum()
 }
 
 #[cfg(test)]
@@ -471,7 +452,7 @@ mod tests {
             Box::pin(RecordBatchStreamAdapter::new(schema, input));
 
         let error = manager
-            .spill_record_batch_stream_and_return_max_batch_memory(
+            .spill_record_batch_stream_and_return_max_batch_stats(
                 &mut stream,
                 "abort-test",
             )
@@ -526,10 +507,11 @@ mod tests {
             half_batch.get_sliced_size().unwrap()
                 < get_record_batch_memory_size(&half_batch)
         );
+        // `get_slice_memory_size` accounts for the retained
+        // variadic data buffers as well, so it matches `get_sliced_size`
         let data = arrow::array::Array::to_data(&half_batch.column(0));
         let views_sliced_size = data.get_slice_memory_size()?;
-        // The sliced size should be larger than sliced views buffer size
-        assert!(views_sliced_size < half_batch.get_sliced_size().unwrap());
+        assert_eq!(views_sliced_size, half_batch.get_sliced_size().unwrap());
 
         Ok(())
     }

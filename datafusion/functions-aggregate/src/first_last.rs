@@ -40,7 +40,9 @@ use datafusion_common::{
     not_impl_err,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
+use datafusion_expr::utils::{
+    AggregateOrderSensitivity, format_state_name, ordering_state_fields,
+};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, EmitTo, Expr, ExprFunctionExt,
     GroupsAccumulator, ReversedUDAF, Signature, SortExpr, Volatility,
@@ -332,7 +334,7 @@ impl AggregateUDFImpl for FirstValue {
             )
             .into(),
         ];
-        fields.extend(args.ordering_fields.iter().cloned());
+        fields.extend(ordering_state_fields(args.name, args.ordering_fields));
         fields.push(
             Field::new(
                 format_state_name(args.name, "first_value_is_set"),
@@ -898,17 +900,12 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
         values: &[ArrayRef],
         opt_filter: Option<&BooleanArray>,
     ) -> Result<Vec<ArrayRef>> {
+        let filter = opt_filter
+            .cloned()
+            .unwrap_or_else(|| BooleanArray::from(vec![true; values[0].len()]));
         let mut result = values.to_vec();
-        match opt_filter {
-            Some(f) => {
-                result.push(Arc::new(f.clone()));
-                Ok(result)
-            }
-            None => {
-                result.push(Arc::new(BooleanArray::from(vec![true; values[0].len()])));
-                Ok(result)
-            }
-        }
+        result.push(Arc::new(filter));
+        Ok(result)
     }
 }
 
@@ -1252,7 +1249,7 @@ impl AggregateUDFImpl for LastValue {
             )
             .into(),
         ];
-        fields.extend(args.ordering_fields.iter().cloned());
+        fields.extend(ordering_state_fields(args.name, args.ordering_fields));
         fields.push(
             Field::new(
                 format_state_name(args.name, "last_value_is_set"),

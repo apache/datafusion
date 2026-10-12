@@ -24,6 +24,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::cast::{
     as_large_string_array, as_string_array, as_string_view_array,
 };
+use datafusion_common::utils::offset_span_len;
 use datafusion_common::{Result, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -117,14 +118,18 @@ fn spark_url_encode(args: &[ArrayRef]) -> Result<ArrayRef> {
     match &args[0].data_type() {
         DataType::Utf8 => {
             let array = as_string_array(&args[0])?;
-            let builder =
-                StringBuilder::with_capacity(array.len(), array.value_data().len());
+            let builder = StringBuilder::with_capacity(
+                array.len(),
+                offset_span_len(array.offsets()),
+            );
             encode_all!(array, builder)
         }
         DataType::LargeUtf8 => {
             let array = as_large_string_array(&args[0])?;
-            let builder =
-                LargeStringBuilder::with_capacity(array.len(), array.value_data().len());
+            let builder = LargeStringBuilder::with_capacity(
+                array.len(),
+                offset_span_len(array.offsets()),
+            );
             encode_all!(array, builder)
         }
         DataType::Utf8View => {
@@ -139,6 +144,7 @@ fn spark_url_encode(args: &[ArrayRef]) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::function::utils::test::check_sliced_string_capacity;
     use arrow::array::{LargeStringArray, StringArray, StringViewArray};
 
     const INPUT: [Option<&str>; 5] = [
@@ -182,5 +188,10 @@ mod tests {
         let result = as_string_view_array(&result)?;
         assert_eq!(&StringViewArray::from(EXPECTED.to_vec()), result);
         Ok(())
+    }
+
+    #[test]
+    fn test_sliced_capacity() -> Result<()> {
+        check_sliced_string_capacity("ab", |input| spark_url_encode(&[input]))
     }
 }

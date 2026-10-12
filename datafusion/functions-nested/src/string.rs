@@ -25,7 +25,7 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, Field};
 
-use datafusion_common::utils::ListCoercion;
+use datafusion_common::utils::{ListCoercion, offset_span_len};
 use datafusion_common::{DataFusionError, Result, ScalarValue, not_impl_err};
 
 use std::fmt::{self, Write};
@@ -278,8 +278,10 @@ impl ScalarUDFImpl for StringToArray {
         let result = match string_array.data_type() {
             Utf8 => {
                 let arr = string_array.as_string::<i32>();
-                let builder =
-                    StringBuilder::with_capacity(arr.len(), arr.get_buffer_memory_size());
+                let builder = StringBuilder::with_capacity(
+                    arr.len(),
+                    offset_span_len(arr.offsets()),
+                );
                 string_to_array_scalar_args(&arr, delimiter, null_value, builder)
             }
             Utf8View => {
@@ -291,7 +293,7 @@ impl ScalarUDFImpl for StringToArray {
                 let arr = string_array.as_string::<i64>();
                 let builder = LargeStringBuilder::with_capacity(
                     arr.len(),
-                    arr.get_buffer_memory_size(),
+                    offset_span_len(arr.offsets()),
                 );
                 string_to_array_scalar_args(&arr, delimiter, null_value, builder)
             }
@@ -423,7 +425,7 @@ fn string_to_array_fallback(args: &[ArrayRef]) -> Result<ArrayRef> {
         Utf8 => {
             let arr = args[0].as_string::<i32>();
             let builder =
-                StringBuilder::with_capacity(arr.len(), arr.get_buffer_memory_size());
+                StringBuilder::with_capacity(arr.len(), offset_span_len(arr.offsets()));
             string_to_array_column_args(&arr, &args[1], null_value_array, builder)
         }
         Utf8View => {
@@ -435,7 +437,7 @@ fn string_to_array_fallback(args: &[ArrayRef]) -> Result<ArrayRef> {
             let arr = args[0].as_string::<i64>();
             let builder = LargeStringBuilder::with_capacity(
                 arr.len(),
-                arr.get_buffer_memory_size(),
+                offset_span_len(arr.offsets()),
             );
             string_to_array_column_args(&arr, &args[1], null_value_array, builder)
         }
@@ -813,5 +815,54 @@ impl StringArrayBuilderType for LargeStringBuilder {
 
     fn append_null(&mut self) {
         LargeStringBuilder::append_null(self);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sliced_capacity() -> Result<()> {
+        let padding = "x".repeat(65536);
+        let input = StringArray::from(vec![
+            Some(padding.as_str()),
+            Some("a,b"),
+            None,
+            Some(padding.as_str()),
+        ]);
+        for data_type in [Utf8, LargeUtf8] {
+            let input = cast(&input, &data_type)?;
+            for len in [0, 2] {
+                for delimiter in [
+                    ColumnarValue::Scalar(ScalarValue::from(",")),
+                    ColumnarValue::Array(Arc::new(StringArray::from(vec![","; len]))),
+                ] {
+                    let result = StringToArray::new()
+                        .invoke_with_args(ScalarFunctionArgs {
+                            args: vec![
+                                ColumnarValue::Array(input.slice(1, len)),
+                                delimiter,
+                            ],
+                            arg_fields: vec![
+                                Field::new("input", data_type.clone(), true).into(),
+                                Field::new("delimiter", Utf8, false).into(),
+                            ],
+                            number_rows: len,
+                            return_field: Field::new(
+                                "result",
+                                DataType::new_list(data_type.clone(), true),
+                                true,
+                            )
+                            .into(),
+                            config_options: Default::default(),
+                        })?
+                        .into_array(len)?;
+                    assert_eq!(result.len(), len);
+                    assert!(result.get_buffer_memory_size() < 1024);
+                }
+            }
+        }
+        Ok(())
     }
 }

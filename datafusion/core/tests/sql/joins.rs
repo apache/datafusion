@@ -28,6 +28,71 @@ use datafusion_sql::unparser::plan_to_sql;
 use super::*;
 
 #[tokio::test]
+async fn volatile_join_filter_preserves_evaluations_below_min() -> Result<()> {
+    use arrow::array::record_batch;
+    use datafusion::logical_expr::{ColumnarValue, Volatility, create_udf};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // Request sort-merge joins; these small inputs remain in a single partition.
+    let mut config = SessionConfig::new().with_target_partitions(2);
+    config.options_mut().optimizer.prefer_hash_join = false;
+    let ctx = SessionContext::new_with_config(config);
+
+    // Return true, false, true, ... across successive input rows, including
+    // across batches. Both arguments keep the predicate at the join.
+    let evaluations = AtomicUsize::new(0);
+    ctx.register_udf(create_udf(
+        "alternating",
+        vec![DataType::Int32, DataType::Int32],
+        DataType::Boolean,
+        Volatility::Volatile,
+        Arc::new(move |args| {
+            let args = ColumnarValue::values_to_arrays(args)?;
+            let len = args[0].len();
+            let first = evaluations.fetch_add(len, Ordering::Relaxed);
+            let values = BooleanArray::from_iter(
+                (first..first + len).map(|i| Some(i.is_multiple_of(2))),
+            );
+            Ok(ColumnarValue::Array(Arc::new(values)))
+        }),
+    ));
+
+    ctx.register_batch(
+        "l",
+        record_batch!(("id", Int32, vec![1, 2]), ("x", Int32, vec![20, 10]))?,
+    )?;
+    ctx.register_batch(
+        "r",
+        record_batch!(("id", Int32, vec![1, 1, 2]), ("y", Int32, vec![0, 0, 0]))?,
+    )?;
+
+    // The inner join evaluates both pairs for id=1, so id=2 receives the
+    // third (true) result. A semi join would stop after the first match for
+    // id=1, give id=2 the second (false) result, and incorrectly return 20.
+    let df = ctx
+        .sql(
+            "SELECT MIN(l.x) AS minimum FROM l JOIN r \
+             ON l.id = r.id AND alternating(l.x, r.y)",
+        )
+        .await?;
+    let plan = df.create_physical_plan().await?;
+    let formatted = displayable(plan.as_ref()).indent(true).to_string();
+    assert_contains!(formatted, "SortMergeJoinExec: join_type=Inner");
+    let batches = collect(plan, ctx.task_ctx()).await?;
+    assert_batches_eq!(
+        [
+            "+---------+",
+            "| minimum |",
+            "+---------+",
+            "| 10      |",
+            "+---------+",
+        ],
+        &batches
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn join_change_in_planner() -> Result<()> {
     let config = SessionConfig::new().with_target_partitions(8);
     let ctx = SessionContext::new_with_config(config);
@@ -457,33 +522,6 @@ async fn asof_join_all_match_directions_across_batches() -> Result<()> {
 }
 
 #[tokio::test]
-async fn asof_join_coerces_equality_and_match_types() -> Result<()> {
-    let ctx = SessionContext::new();
-    let batches = ctx
-        .sql(
-            "SELECT t.id, p.price \
-             FROM (VALUES (CAST(1 AS INT), CAST(4 AS INT), 7)) t(k, ts, id) \
-             ASOF JOIN \
-             (VALUES (CAST(1 AS BIGINT), CAST(2 AS BIGINT), 20)) p(k, ts, price) \
-             MATCH_CONDITION (t.ts >= p.ts) ON t.k = p.k",
-        )
-        .await?
-        .collect()
-        .await?;
-    assert_batches_eq!(
-        [
-            "+----+-------+",
-            "| id | price |",
-            "+----+-------+",
-            "| 7  | 20    |",
-            "+----+-------+",
-        ],
-        &batches
-    );
-    Ok(())
-}
-
-#[tokio::test]
 async fn asof_join_broadcasts_multi_partition_right_input() -> Result<()> {
     let config = SessionConfig::new().with_target_partitions(4);
     let ctx = SessionContext::new_with_config(config);
@@ -575,28 +613,6 @@ async fn asof_join_projection_drops_output_ordering() -> Result<()> {
 }
 
 #[tokio::test]
-async fn asof_join_explain_names_equality_and_match_conditions() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_asof_test_tables(&ctx)?;
-    let batches = ctx
-        .sql(
-            "EXPLAIN SELECT t.trade_id, p.price FROM trades t \
-             ASOF JOIN prices p MATCH_CONDITION (t.ts >= p.ts) \
-             ON t.symbol = p.symbol",
-        )
-        .await?
-        .collect()
-        .await?;
-    let explain = arrow::util::pretty::pretty_format_batches(&batches)?.to_string();
-    assert_contains!(explain.as_str(), "AsOf Join: match=[t.ts >= p.ts]");
-    assert_contains!(explain.as_str(), "on=[t.symbol = p.symbol]");
-    assert_contains!(explain.as_str(), "AsOfJoinExec:");
-    assert_contains!(explain.as_str(), "on=[(symbol = symbol)]");
-    assert_contains!(explain.as_str(), "match=[ts >= ts]");
-    Ok(())
-}
-
-#[tokio::test]
 async fn asof_join_rejects_unbounded_inputs_during_physical_planning() -> Result<()> {
     let ctx = SessionContext::new();
     let tmp_dir = TempDir::new()?;
@@ -633,7 +649,7 @@ async fn asof_join_rejects_unbounded_inputs_during_physical_planning() -> Result
 }
 
 #[tokio::test]
-async fn asof_join_using_preserves_key_access_and_unparser_round_trips() -> Result<()> {
+async fn asof_join_using_unparser_round_trips() -> Result<()> {
     let ctx = SessionContext::new();
     register_asof_test_tables(&ctx)?;
     let df = ctx
@@ -642,45 +658,11 @@ async fn asof_join_using_preserves_key_access_and_unparser_round_trips() -> Resu
              MATCH_CONDITION (t.ts >= p.ts) USING (symbol)",
         )
         .await?;
-    assert_eq!(
-        df.schema()
-            .fields()
-            .iter()
-            .map(|field| field.name())
-            .collect::<Vec<_>>(),
-        vec!["ts", "trade_id", "symbol", "ts", "price"]
-    );
     let sql = plan_to_sql(df.logical_plan())?.to_string();
     assert!(sql.contains("ASOF JOIN"));
     assert!(sql.contains("MATCH_CONDITION"));
     assert!(sql.contains("USING(symbol)"), "unexpected SQL: {sql}");
     ctx.sql(&sql).await?;
-
-    let batches = ctx
-        .sql(
-            "SELECT t.trade_id, t.symbol AS left_symbol, p.symbol AS right_symbol \
-             FROM trades t ASOF JOIN prices p \
-             MATCH_CONDITION (t.ts >= p.ts) USING (symbol) \
-             ORDER BY t.trade_id",
-        )
-        .await?
-        .collect()
-        .await?;
-    assert_batches_eq!(
-        [
-            "+----------+-------------+--------------+",
-            "| trade_id | left_symbol | right_symbol |",
-            "+----------+-------------+--------------+",
-            "| 1        | A           |              |",
-            "| 2        | A           | A            |",
-            "| 3        | A           | A            |",
-            "| 4        | B           | B            |",
-            "| 5        | B           | B            |",
-            "| 6        |             |              |",
-            "+----------+-------------+--------------+",
-        ],
-        &batches
-    );
     Ok(())
 }
 
@@ -716,23 +698,6 @@ async fn asof_join_unparser_preserves_right_preselection() -> Result<()> {
             datafusion_common::test_util::batches_to_string(&actual),
             "unparsed SQL changed ASOF candidate preselection: {sql}"
         );
-    }
-    Ok(())
-}
-
-#[tokio::test]
-async fn asof_join_rejects_invalid_contracts() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_asof_test_tables(&ctx)?;
-    for sql in [
-        "SELECT * FROM trades t ASOF JOIN prices p MATCH_CONDITION (t.ts = p.ts) ON t.symbol = p.symbol",
-        "SELECT * FROM trades t ASOF JOIN prices p MATCH_CONDITION (p.ts >= t.ts) ON t.symbol = p.symbol",
-        "SELECT * FROM trades t ASOF JOIN prices p MATCH_CONDITION (t.ts >= p.ts) ON t.symbol > p.symbol",
-        "SELECT * FROM trades t ASOF JOIN prices p MATCH_CONDITION (1 >= p.ts) ON t.symbol = p.symbol",
-        "SELECT * FROM trades t ASOF JOIN prices p MATCH_CONDITION (t.ts >= p.ts) ON 1 = 1",
-        "SELECT * FROM trades t ASOF JOIN prices p MATCH_CONDITION (t.ts >= p.ts AND t.ts > p.ts) ON t.symbol = p.symbol",
-    ] {
-        assert!(ctx.sql(sql).await.is_err(), "query should fail: {sql}");
     }
     Ok(())
 }

@@ -829,6 +829,14 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
     }
 
+    {
+        let aggs: Vec<String> = (0..1000).map(|i| format!("SUM(d{i})")).collect();
+        let query = format!("SELECT {} FROM t1000", aggs.join(", "));
+        c.bench_function("logical_wide_aggregate_1000_exprs", |b| {
+            b.iter(|| logical_plan(&ctx, &rt, &query))
+        });
+    }
+
     // Many CASE WHEN expressions (complex expressions)
     {
         let cases: Vec<String> = (0..50)

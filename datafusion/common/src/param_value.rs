@@ -64,21 +64,20 @@ impl ParamValues {
                     check_metadata_with_storage_equal(
                         (
                             &lit.value.data_type(),
-                            lit.metadata.as_ref().map(|m| m.to_hashmap()).as_ref(),
+                            lit.metadata.as_ref().map(|m| m.to_metadata()).as_ref(),
                         ),
                         (param_type.data_type(), Some(param_type.metadata())),
                         "parameter",
                         &format!(" at index {i}"),
                     )?;
                 }
-                Ok(())
             }
             ParamValues::Map(_) => {
                 // If it is a named query, variables can be reused,
                 // but the lengths are not necessarily equal
-                Ok(())
             }
         }
+        Ok(())
     }
 
     pub fn get_placeholders_with_values(&self, id: &str) -> Result<ScalarAndMetadata> {

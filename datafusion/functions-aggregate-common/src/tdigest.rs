@@ -206,7 +206,12 @@ impl TDigest {
         v.clamp(min, max)
     }
 
-    // public for testing in other modules
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
     pub fn merge_unsorted_f64(&self, unsorted_values: Vec<f64>) -> TDigest {
         let mut values = unsorted_values;
         values.sort_by(|a, b| a.total_cmp(b));

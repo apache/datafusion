@@ -23,6 +23,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::in_list::{SetMembership, unwrap_scalar};
+use crate::key_range_bitmap_expr::KeyRangeBitmapPruningExpr;
 use crate::primitive_in_list::PrimitiveInListDomain;
 use crate::string_in_list::{BinaryInListPruningExpr, StringInListPruningExpr};
 
@@ -52,6 +53,7 @@ use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr::utils::{Guarantee, LiteralGuarantee};
 use datafusion_physical_expr::{PhysicalExprRef, expressions as phys_expr};
 use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr_opt;
+use datafusion_physical_plan::joins::HashTableLookupExpr;
 use datafusion_physical_plan::{ColumnarValue, PhysicalExpr};
 
 /// Used to prove that arbitrary predicates (boolean expression) can not
@@ -1520,6 +1522,78 @@ impl CompactInListDomain {
     }
 }
 
+/// Statistics expressions for `column`: its min, its max, and "not every row is
+/// NULL". Appends to `required_columns`, rolling the appends back if any part
+/// cannot be built, since [`RequiredColumns::stat_column_expr`] only appends.
+fn min_max_non_null_exprs(
+    column: &phys_expr::Column,
+    column_expr: &Arc<dyn PhysicalExpr>,
+    field: &Field,
+    schema: &Schema,
+    required_columns: &mut RequiredColumns,
+) -> Option<(PhysicalExprRef, PhysicalExprRef, PhysicalExprRef)> {
+    let appended = required_columns.columns.len();
+    let statistics = (|| {
+        let min = required_columns
+            .min_column_expr(column, column_expr, field)
+            .ok()?;
+        let max = required_columns
+            .max_column_expr(column, column_expr, field)
+            .ok()?;
+        // A cast on `column_expr` (widening it towards min/max's target type)
+        // does not affect nullability, so check it on the bare column beneath.
+        let bare_expr = match column_expr.downcast_ref::<phys_expr::CastExpr>() {
+            Some(cast) => cast.expr(),
+            None => column_expr,
+        };
+        let non_null =
+            build_is_null_column_expr(bare_expr, schema, required_columns, true)?;
+        Some((min, max, non_null))
+    })();
+    if statistics.is_none() {
+        required_columns.columns.truncate(appended);
+    }
+    statistics
+}
+
+/// Builds a "may match" expression for a [`HashTableLookupExpr`] (a large join
+/// build side pushed down as an opaque hash-table lookup): tests container
+/// min/max stats against the build side's key-range bitmap, which is fixed size
+/// and built once with the join's hash table.
+fn build_hash_lookup_pruning_expr(
+    lookup: &HashTableLookupExpr,
+    schema: &Schema,
+    required_columns: &mut RequiredColumns,
+) -> Option<Arc<dyn PhysicalExpr>> {
+    let bitmap = Arc::clone(lookup.pruning_bitmap()?);
+    let on_columns = lookup.children();
+    let [column_expr] = on_columns[..] else {
+        return None;
+    };
+    // The schema adapter often wraps the column in a same-type or widening cast
+    // (a nullable table column over a REQUIRED file column, or a narrower file
+    // type). `stat_column_expr` rewrites only the inner `Column`, keeping it.
+    let column = match column_expr.downcast_ref::<phys_expr::CastExpr>() {
+        Some(cast) => {
+            let column = cast.expr().downcast_ref::<phys_expr::Column>()?;
+            let from = schema.fields().get(column.index())?.data_type();
+            cast.is_bigger_cast(from).then_some(column)?
+        }
+        None => column_expr.downcast_ref::<phys_expr::Column>()?,
+    };
+    let field = schema.fields().get(column.index())?;
+    if field.name() != column.name() {
+        return None;
+    }
+    let (min, max, non_null) =
+        min_max_non_null_exprs(column, column_expr, field, schema, required_columns)?;
+    Some(Arc::new(phys_expr::BinaryExpr::new(
+        non_null,
+        Operator::And,
+        Arc::new(KeyRangeBitmapPruningExpr { min, max, bitmap }),
+    )))
+}
+
 /// Keep large literal lists of supported ordered types compact instead of
 /// building a per-value tree: an OR tree for `IN`, an AND chain for `NOT IN`.
 ///
@@ -1596,24 +1670,8 @@ fn build_compact_in_list_expr(
             Some(false),
         ))));
     }
-    // Roll back appended statistics columns if the compact rewrite cannot be
-    // completed. `RequiredColumns::stat_column_expr` only appends entries.
-    let required_columns_len = required_columns.columns.len();
-    let statistics = (|| {
-        let min = required_columns
-            .min_column_expr(column, in_list.expr(), field)
-            .ok()?;
-        let max = required_columns
-            .max_column_expr(column, in_list.expr(), field)
-            .ok()?;
-        let non_null =
-            build_is_null_column_expr(in_list.expr(), schema, required_columns, true)?;
-        Some((min, max, non_null))
-    })();
-    let Some((min, max, non_null)) = statistics else {
-        required_columns.columns.truncate(required_columns_len);
-        return None;
-    };
+    let (min, max, non_null) =
+        min_max_non_null_exprs(column, in_list.expr(), field, schema, required_columns)?;
     let may_match = match domain {
         CompactInListDomain::String(values) => {
             Arc::new(StringInListPruningExpr::new(membership, min, max, values))
@@ -1815,6 +1873,45 @@ fn build_predicate_expression(
         } else {
             return unhandled_hook.handle(expr);
         }
+    }
+    if let Some(lookup) = expr.downcast_ref::<HashTableLookupExpr>() {
+        return build_hash_lookup_pruning_expr(lookup, schema, required_columns)
+            .unwrap_or_else(|| unhandled_hook.handle(expr));
+    }
+    // A partitioned hash join hides its per-partition filters under a `CASE` on the
+    // repartition hash. A row takes exactly one branch, so a container may match
+    // only if some branch may: the branches' disjunction is a sound relaxation, and
+    // the `WHEN`s (a hash, which no statistics describe) can be dropped.
+    if let Some(case) = expr.downcast_ref::<phys_expr::CaseExpr>() {
+        // Only a Boolean `CASE` is a predicate; anything else is a value for
+        // whatever compares it to handle.
+        if !matches!(case.data_type(schema), Ok(DataType::Boolean)) {
+            return unhandled_hook.handle(expr);
+        }
+        // Without an `ELSE`, unmatched rows are UNKNOWN: not a match, but not
+        // FALSE either, which full-match inference must be able to tell apart.
+        if case.else_expr().is_none() {
+            return unhandled_hook.handle(expr);
+        }
+        return case
+            .when_then_expr()
+            .iter()
+            .map(|(_, then)| then)
+            .chain(case.else_expr())
+            .map(|branch| {
+                build_predicate_expression(
+                    branch,
+                    schema,
+                    required_columns,
+                    unhandled_hook,
+                    max_in_list_size,
+                    properties,
+                )
+            })
+            .reduce(|acc, branch| {
+                Arc::new(phys_expr::BinaryExpr::new(acc, Operator::Or, branch)) as _
+            })
+            .unwrap_or_else(|| unhandled_hook.handle(expr));
     }
 
     let (left, op, right) = {
@@ -2407,7 +2504,11 @@ mod tests {
         self as phys_expr, DynamicFilterPhysicalExpr,
     };
     use datafusion_physical_expr::planner::logical2physical;
+    use datafusion_physical_plan::joins::join_hash_map::JoinHashMapU32;
+    use datafusion_physical_plan::joins::key_range_bitmap::KeyRangeBitmap;
+    use datafusion_physical_plan::joins::{Map, SeededRandomState};
     use itertools::Itertools;
+    use rstest::rstest;
 
     #[derive(Debug, Default)]
     /// Mock statistic provider for tests
@@ -7339,5 +7440,151 @@ mod tests {
         let expected =
             "c1_null_count@2 != row_count@3 AND c1_min@0 <= a AND a <= c1_max@1";
         assert_eq!(res.to_string(), expected);
+    }
+
+    /// A hash-table lookup over `column` carrying a bitmap over `keys`.
+    fn hash_lookup(
+        column: &Arc<dyn PhysicalExpr>,
+        keys: &[i64],
+    ) -> Arc<dyn PhysicalExpr> {
+        let array: ArrayRef = Arc::new(Int64Array::from(keys.to_vec()));
+        let bitmap = KeyRangeBitmap::try_new(
+            &array,
+            &ScalarValue::Int64(Some(*keys.iter().min().unwrap())),
+            &ScalarValue::Int64(Some(*keys.iter().max().unwrap())),
+            keys.len(),
+        );
+        Arc::new(HashTableLookupExpr::new(
+            vec![Arc::clone(column)],
+            SeededRandomState::with_seed(1),
+            Arc::new(Map::HashMap(Box::new(JoinHashMapU32::with_capacity(1)))),
+            "hash_lookup".to_string(),
+            bitmap.map(Arc::new),
+        ))
+    }
+
+    #[test]
+    fn test_hash_lookup_pruning_via_min_max() {
+        let schema = Arc::new(Schema::new(vec![Field::new("b", DataType::Int64, true)]));
+        let column: Arc<dyn PhysicalExpr> = Arc::new(phys_expr::Column::new("b", 0));
+        // Gapped keys: 10,20,30 then a far-away 100000, so the bitmap is sparse.
+        let lookup = hash_lookup(&column, &[10, 20, 30, 100_000]);
+
+        let predicate = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(&schema))
+            .try_build(lookup)
+            .unwrap();
+
+        // An opaque lookup yields no literal guarantees, so `contained()` is never
+        // consulted and every exclusion below comes from the min/max rewrite.
+        assert!(predicate.literal_guarantees().is_empty());
+
+        let statistics = TestStatistics::new().with(
+            "b",
+            ContainerStats::new_i64(
+                vec![Some(5000), Some(15), Some(50000)],
+                vec![Some(8000), Some(25), Some(60000)],
+            ),
+        );
+
+        let result = predicate.prune(&statistics).unwrap();
+        // Containers 0 and 2 sit in the gap between 30 and 100000; container 1
+        // holds 20. The bitmap excludes the first and third.
+        assert_eq!(result, vec![false, true, false]);
+    }
+
+    #[rstest]
+    #[case::widening_i32_to_i64(DataType::Int32, DataType::Int64, true)]
+    #[case::widening_u32_to_i64(DataType::UInt32, DataType::Int64, true)]
+    #[case::widening_u16_to_i64(DataType::UInt16, DataType::Int64, true)]
+    #[case::same_type_i64_to_i64(DataType::Int64, DataType::Int64, true)]
+    #[case::narrowing_i64_to_i32(DataType::Int64, DataType::Int32, false)]
+    #[case::narrowing_u32_to_i16(DataType::UInt32, DataType::Int16, false)]
+    fn test_hash_lookup_pruning_through_cast(
+        #[case] file_type: DataType,
+        #[case] cast_type: DataType,
+        #[case] pruned: bool,
+    ) {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("b", file_type.clone(), true)]));
+        let column: Arc<dyn PhysicalExpr> = Arc::new(phys_expr::Column::new("b", 0));
+        let cast_column: Arc<dyn PhysicalExpr> =
+            Arc::new(phys_expr::CastExpr::new(column, cast_type, None));
+        let lookup = hash_lookup(&cast_column, &[10, 20, 30, 100_000]);
+
+        let predicate = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(&schema))
+            .try_build(lookup)
+            .unwrap();
+
+        let to_file_type = |values: Vec<Option<i64>>| -> ArrayRef {
+            let values: ArrayRef = Arc::new(values.into_iter().collect::<Int64Array>());
+            arrow::compute::cast(&values, &file_type).unwrap()
+        };
+        let statistics = TestStatistics::new().with(
+            "b",
+            ContainerStats::new()
+                .with_min(to_file_type(vec![Some(5000), Some(15), Some(50000)]))
+                .with_max(to_file_type(vec![Some(8000), Some(25), Some(60000)])),
+        );
+
+        let result = predicate.prune(&statistics).unwrap();
+        // Containers 0 and 2 sit in the gap between 30 and 100000; container 1
+        // holds 20. A working cast excludes the first and third; a declined one
+        // falls back to keeping every container.
+        let expected = if pruned {
+            vec![false, true, false]
+        } else {
+            vec![true, true, true]
+        };
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_partition_routed_hash_lookup_pruning() {
+        let schema = Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, true)]));
+        let column: Arc<dyn PhysicalExpr> = Arc::new(phys_expr::Column::new("b", 0));
+        let literal = |value: ScalarValue| -> Arc<dyn PhysicalExpr> {
+            Arc::new(phys_expr::Literal::new(value))
+        };
+        // One branch per build partition, each holding its own slice of the build
+        // side, as `build_partitioned_filter` produces them.
+        let case: Arc<dyn PhysicalExpr> = Arc::new(
+            phys_expr::CaseExpr::try_new(
+                Some(literal(ScalarValue::UInt64(Some(0)))),
+                vec![
+                    (
+                        literal(ScalarValue::UInt64(Some(0))),
+                        hash_lookup(&column, &[10, 20, 30]),
+                    ),
+                    (
+                        literal(ScalarValue::UInt64(Some(1))),
+                        hash_lookup(&column, &[40, 50, 60]),
+                    ),
+                ],
+                // Partitions with no build rows reject everything routed to them.
+                Some(literal(ScalarValue::Boolean(Some(false)))),
+            )
+            .unwrap(),
+        );
+
+        let predicate = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(&schema))
+            .try_build(case)
+            .unwrap();
+
+        let statistics = TestStatistics::new().with(
+            "b",
+            ContainerStats::new_i32(
+                vec![Some(5), Some(15), Some(45), Some(100)],
+                vec![Some(8), Some(25), Some(55), Some(200)],
+            ),
+        );
+
+        let result = predicate.prune(&statistics).unwrap();
+        // Container 1 ([15,25]) holds 20 from the first branch and container 2
+        // ([45,55]) holds 50 from the second, so a branch may match in each. The
+        // other two intersect neither branch, nor the `ELSE`.
+        assert_eq!(result, vec![false, true, true, false]);
     }
 }

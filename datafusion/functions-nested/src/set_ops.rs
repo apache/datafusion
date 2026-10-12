@@ -28,7 +28,7 @@ use arrow::datatypes::DataType::{LargeList, List, Null};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow::row::{RowConverter, SortField};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
-use datafusion_common::utils::{ListCoercion, normalize_float_zero};
+use datafusion_common::utils::{ListCoercion, normalize_float_zero, offset_span};
 use datafusion_common::{
     Result, assert_eq_or_internal_err, exec_err, internal_err, utils::take_function_args,
 };
@@ -234,15 +234,15 @@ impl ScalarUDFImpl for ArrayIntersect {
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Returns distinct values from the array after removing duplicates.",
+    description = "Returns distinct values from the array after removing duplicates, in the order they first appear.",
     syntax_example = "array_distinct(array)",
     sql_example = r#"```sql
 > select array_distinct([1, 3, 2, 3, 1, 2, 4]);
-+---------------------------------+
-| array_distinct(List([1,2,3,4])) |
-+---------------------------------+
-| [1, 2, 3, 4]                    |
-+---------------------------------+
++---------------------------------------+
+| array_distinct(List([1,3,2,3,1,2,4])) |
++---------------------------------------+
+| [1, 3, 2, 4]                          |
++---------------------------------------+
 ```"#,
     argument(
         name = "array",
@@ -297,7 +297,7 @@ impl ScalarUDFImpl for ArrayDistinct {
 }
 
 /// array_distinct SQL function
-/// example: from list [1, 3, 2, 3, 1, 2, 4] to [1, 2, 3, 4]
+/// example: from list [1, 3, 2, 3, 1, 2, 4] to [1, 3, 2, 4]
 fn array_distinct_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array] = take_function_args("array_distinct", args)?;
     match array.data_type() {
@@ -332,8 +332,7 @@ impl Display for SetOp {
 pub(crate) fn normalize_visible_values<OffsetSize: OffsetSizeTrait>(
     array: &GenericListArray<OffsetSize>,
 ) -> ArrayRef {
-    let first = array.offsets()[0].as_usize();
-    let len = array.offsets()[array.len()].as_usize() - first;
+    let (first, len) = offset_span(array.offsets());
     if first == 0 && len == array.values().len() {
         normalize_float_zero(array.values())
     } else {

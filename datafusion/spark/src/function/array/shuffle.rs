@@ -26,6 +26,7 @@ use arrow::datatypes::FieldRef;
 use datafusion_common::cast::{
     as_fixed_size_list_array, as_large_list_array, as_list_array,
 };
+use datafusion_common::utils::offset_span_len;
 use datafusion_common::{
     Result, ScalarValue, exec_err, internal_err, utils::take_function_args,
 };
@@ -167,7 +168,9 @@ fn general_array_shuffle<O: OffsetSizeTrait>(
 ) -> Result<ArrayRef> {
     let values = array.values();
     let original_data = values.to_data();
-    let capacity = Capacities::Array(original_data.len());
+    // Each null row emits one placeholder child value.
+    let capacity =
+        Capacities::Array(offset_span_len(array.offsets()) + array.null_count());
     let mut offsets = vec![O::usize_as(0)];
     let mut nulls = vec![];
     let mut mutable =
@@ -184,8 +187,7 @@ fn general_array_shuffle<O: OffsetSizeTrait>(
         // skip the null value
         if array.is_null(row_index) {
             nulls.push(false);
-            offsets.push(offsets[row_index] + O::one());
-            mutable.try_extend(0, 0, 1)?;
+            offsets.push(offsets[row_index]);
             continue;
         }
         nulls.push(true);
@@ -269,8 +271,45 @@ fn fixed_size_array_shuffle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::{Int32Array, ListArray};
+    use arrow::buffer::NullBuffer;
     use arrow::datatypes::Field;
     use datafusion_expr::ReturnFieldArgs;
+
+    #[test]
+    fn test_shuffle_null_lists() -> Result<()> {
+        let field = Arc::new(Field::new_list_field(DataType::Int32, false));
+        let input = ListArray::new(
+            Arc::clone(&field),
+            OffsetBuffer::new(vec![0, 0, 0, 1, 1].into()),
+            Arc::new(Int32Array::from(vec![42])),
+            Some(NullBuffer::from(vec![false, true, true, false])),
+        );
+        let empty_child = ListArray::new(
+            Arc::clone(&field),
+            OffsetBuffer::new(vec![0, 0, 0].into()),
+            Arc::new(Int32Array::from(Vec::<i32>::new())),
+            Some(NullBuffer::from(vec![false, true])),
+        );
+
+        for (list, expected_values_len) in
+            [(empty_child, 0), (input.clone(), 1), (input.slice(3, 1), 0)]
+        {
+            for data_type in [list.data_type().clone(), LargeList(Arc::clone(&field))] {
+                let array = arrow::compute::cast(&list, &data_type)?;
+                let result = array_shuffle_with_seed(&[Arc::clone(&array)], Some(0))?;
+                assert_eq!(result.as_ref(), array.as_ref());
+                // Null rows need no placeholder child value.
+                let values_len = match data_type {
+                    List(_) => as_list_array(&result)?.values().len(),
+                    LargeList(_) => as_large_list_array(&result)?.values().len(),
+                    _ => unreachable!(),
+                };
+                assert_eq!(values_len, expected_values_len);
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn test_shuffle_nullability() {
@@ -311,5 +350,27 @@ mod tests {
         // The result should be nullable (same as input)
         assert!(result.is_nullable());
         assert_eq!(result.data_type(), nullable_field.data_type());
+    }
+
+    #[test]
+    fn test_sliced_capacity() -> Result<()> {
+        use arrow::array::{Int64Array, ListArray};
+        use arrow::buffer::NullBuffer;
+        let field = Arc::new(Field::new_list_field(DataType::Int64, true));
+        let input = ListArray::new(
+            Arc::clone(&field),
+            OffsetBuffer::new(vec![0, 8192, 8195, 8195, 16384].into()),
+            Arc::new(Int64Array::from_iter_values(0..16384)),
+            Some(NullBuffer::from(vec![true, true, false, true])),
+        );
+        for data_type in [input.data_type().clone(), LargeList(field)] {
+            let input = arrow::compute::cast(&input, &data_type)?;
+            for len in [0, 2] {
+                let result = array_shuffle_with_seed(&[input.slice(1, len)], Some(0))?;
+                assert_eq!(result.len(), len);
+                assert!(result.get_buffer_memory_size() < 1024);
+            }
+        }
+        Ok(())
     }
 }

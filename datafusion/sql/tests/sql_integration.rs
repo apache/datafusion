@@ -850,6 +850,17 @@ fn plan_delete() {
     );
 }
 
+#[rstest]
+#[case("delete from person limit 1")]
+#[case("delete from person where id = 1 limit 1")]
+fn plan_delete_rejects_limit(#[case] sql: &str) {
+    let err = logical_plan(sql).expect_err("DELETE LIMIT should be rejected");
+    assert_eq!(
+        err.strip_backtrace(),
+        "Error during planning: Delete-limit clause is not supported"
+    );
+}
+
 #[test]
 fn plan_delete_quoted_identifier_case_sensitive() {
     let sql =
@@ -3944,7 +3955,7 @@ fn select_groupby_orderby_aggregate_on_non_selected_column_original_issue() {
 }
 
 #[test]
-fn plan_merge_into_canonicalizes_qualifiers_and_preserves_quoted_columns() {
+fn plan_merge_into_preserves_target_qualifier_and_quoted_columns() {
     let plan = logical_plan(
         "MERGE INTO person_quoted_cols AS t USING j2 AS s ON t.id = s.j2_id \
          WHEN MATCHED THEN UPDATE SET \"First Name\" = s.j2_string \
@@ -3958,7 +3969,11 @@ fn plan_merge_into_canonicalizes_qualifiers_and_preserves_quoted_columns() {
         panic!("expected MergeInto, got {:?}", dml.op);
     };
 
-    assert_eq!(merge_op.on.to_string(), "person_quoted_cols.id = s.j2_id");
+    assert_eq!(
+        merge_op.target_qualifier(),
+        &datafusion_common::TableReference::bare("t")
+    );
+    assert_eq!(merge_op.on.to_string(), "t.id = s.j2_id");
 
     let datafusion_expr::dml::MergeIntoAction::Update(assignments) =
         &merge_op.clauses[0].action

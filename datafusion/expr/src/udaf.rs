@@ -41,8 +41,7 @@ use crate::function::{
 };
 use crate::groups_accumulator::GroupsAccumulator;
 use crate::udf_eq::UdfEq;
-use crate::utils::AggregateOrderSensitivity;
-use crate::utils::format_state_name;
+use crate::utils::{AggregateOrderSensitivity, format_state_name, ordering_state_fields};
 use crate::{Accumulator, Expr, expr_vec_fmt};
 use crate::{Documentation, Signature};
 
@@ -614,7 +613,7 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
         Ok(fields
             .into_iter()
             .map(Arc::new)
-            .chain(args.ordering_fields.to_vec())
+            .chain(ordering_state_fields(args.name, args.ordering_fields))
             .collect())
     }
 
@@ -1762,7 +1761,7 @@ pub enum DistinctHandling {
 #[cfg(test)]
 mod test {
     use crate::{AggregateUDF, AggregateUDFImpl};
-    use arrow::datatypes::{DataType, FieldRef};
+    use arrow::datatypes::{DataType, Field, FieldRef};
     use datafusion_common::Result;
     use datafusion_expr_common::accumulator::Accumulator;
     use datafusion_expr_common::signature::{Signature, Volatility};
@@ -1771,6 +1770,7 @@ mod test {
     };
     use std::cmp::Ordering;
     use std::hash::{DefaultHasher, Hash, Hasher};
+    use std::sync::Arc;
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     struct AMeanUdf {
@@ -1847,6 +1847,44 @@ mod test {
         }
     }
 
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    struct DefaultStateFieldsUdf {
+        signature: Signature,
+    }
+
+    impl DefaultStateFieldsUdf {
+        fn new() -> Self {
+            Self {
+                signature: Signature::uniform(
+                    1,
+                    vec![DataType::Float64],
+                    Volatility::Immutable,
+                ),
+            }
+        }
+    }
+
+    impl AggregateUDFImpl for DefaultStateFieldsUdf {
+        fn name(&self) -> &str {
+            "default_state_fields"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+            unimplemented!()
+        }
+
+        fn accumulator(
+            &self,
+            _acc_args: AccumulatorArgs,
+        ) -> Result<Box<dyn Accumulator>> {
+            unimplemented!()
+        }
+    }
+
     #[test]
     fn test_partial_eq() {
         let a1 = AggregateUDF::from(AMeanUdf::new());
@@ -1874,5 +1912,38 @@ mod test {
         let hasher = &mut DefaultHasher::new();
         value.hash(hasher);
         hasher.finish()
+    }
+
+    #[test]
+    fn test_default_state_fields_namespaces_ordering_fields() -> Result<()> {
+        let udf = DefaultStateFieldsUdf::new();
+
+        let input_fields = vec![Arc::new(Field::new("value", DataType::Float64, true))];
+
+        let ordering_fields = vec![
+            Arc::new(Field::new("timestamp@0", DataType::Int64, true)),
+            Arc::new(Field::new("timestamp@0", DataType::Int64, true)),
+        ];
+
+        let fields = udf.state_fields(StateFieldsArgs {
+            name: "my_agg(value)",
+            input_fields: &input_fields,
+            return_field: Arc::new(Field::new("result", DataType::Float64, true)),
+            ordering_fields: &ordering_fields,
+            is_distinct: false,
+        })?;
+
+        let names: Vec<_> = fields.iter().map(|f| f.name().as_str()).collect();
+
+        assert_eq!(
+            names,
+            vec![
+                "my_agg(value)[value]",
+                "my_agg(value)[ordering_0]",
+                "my_agg(value)[ordering_1]",
+            ]
+        );
+
+        Ok(())
     }
 }

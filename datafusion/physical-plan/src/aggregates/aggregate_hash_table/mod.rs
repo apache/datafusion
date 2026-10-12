@@ -70,7 +70,7 @@ pub(super) struct AggregateTableMetrics {
 impl AggregateTableMetrics {
     pub(super) fn new(agg: &AggregateExec, partition: usize) -> Self {
         let aggregate_labels = agg
-            .aggr_expr
+            .aggr_expr()
             .iter()
             .map(|agg_expr| aggregate_metric_label(agg_expr))
             .collect::<Vec<_>>();
@@ -99,7 +99,7 @@ impl AggregateTableMetrics {
 
 pub(super) use common::{
     AggregateHashTable, FinalMarker, PartialMarker, PartialReduceMarker,
-    PartialSkipMarker, SingleMarker,
+    PartialSkipMarker, SingleMarker, create_group_accumulator,
 };
 pub(super) use common_ordered::{OrderedAggregateTable, OrderedAggregateTableMetrics};
 
