@@ -963,20 +963,38 @@ pub fn exprlist_to_fields<'a>(
 /// .project(vec![col("c1"), col("SUM(c2)")?
 /// ```
 pub fn columnize_expr(e: Expr, input: &LogicalPlan) -> Result<Expr> {
-    let output_exprs = match input.columnized_output_exprs() {
-        Ok(exprs) if !exprs.is_empty() => exprs,
-        _ => return Ok(e),
-    };
-    let exprs_map: HashMap<&Expr, Column> = output_exprs.into_iter().collect();
-    e.transform_down(|node: Expr| match exprs_map.get(&node) {
-        Some(column) => Ok(Transformed::new(
-            Expr::Column(column.clone()),
-            true,
-            TreeNodeRecursion::Jump,
-        )),
-        None => Ok(Transformed::no(node)),
-    })
-    .data()
+    Columnizer::new(input).columnize(e)
+}
+
+/// Applies [`columnize_expr`] to many expressions over the same input plan,
+/// building the lookup of the input's output expressions only once.
+pub(crate) struct Columnizer<'a> {
+    output_exprs: HashMap<&'a Expr, Column>,
+}
+
+impl<'a> Columnizer<'a> {
+    pub(crate) fn new(input: &'a LogicalPlan) -> Self {
+        let output_exprs = input
+            .columnized_output_exprs()
+            .map(|exprs| exprs.into_iter().collect())
+            .unwrap_or_default();
+        Self { output_exprs }
+    }
+
+    pub(crate) fn columnize(&self, e: Expr) -> Result<Expr> {
+        if self.output_exprs.is_empty() {
+            return Ok(e);
+        }
+        e.transform_down(|node: Expr| match self.output_exprs.get(&node) {
+            Some(column) => Ok(Transformed::new(
+                Expr::Column(column.clone()),
+                true,
+                TreeNodeRecursion::Jump,
+            )),
+            None => Ok(Transformed::no(node)),
+        })
+        .data()
+    }
 }
 
 /// Collect all deeply nested `Expr::Column`'s. They are returned in order of

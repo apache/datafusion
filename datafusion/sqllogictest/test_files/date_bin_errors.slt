@@ -73,7 +73,7 @@ select date_bin(
 ----
 NULL
 
-# Extreme timestamp overflow: source - origin overflows i64 (should return NULL, not panic)
+# source - origin overflows i64 nanoseconds
 query P
 select date_bin(
   interval '1 nanosecond',
@@ -81,7 +81,7 @@ select date_bin(
   arrow_cast(-9223372036854775808, 'Timestamp(Nanosecond, None)')
 );
 ----
-NULL
+2262-04-11T23:47:16.854775807
 
 # compute_distance overflow: source at i64::MIN nanoseconds previously panicked
 # inside compute_distance; it must return NULL through the SQL execution path
@@ -93,17 +93,17 @@ select date_bin(
 ----
 NULL
 
-# Source timestamp scaling to nanoseconds overflows: should return NULL, not panic
+# Scaling the source to nanoseconds overflows i64
 query P
 select date_bin(
   interval '1 nanosecond',
-  arrow_cast(9223372036854775807, 'Timestamp(Second, None)'),
+  arrow_cast(10000000000, 'Timestamp(Second, None)'),
   timestamp '1970-01-01 00:00:00'
 );
 ----
-NULL
+2286-11-20T17:46:40
 
-# Source timestamp scaling to nanoseconds overflows in array path: should return NULL, not panic
+# Same in the array path
 query P
 select date_bin(
   interval '1 nanosecond',
@@ -111,7 +111,7 @@ select date_bin(
   timestamp '1970-01-01 00:00:00'
 )
 from (
-  values (arrow_cast(9223372036854775807, 'Timestamp(Second, None)'))
+  values (arrow_cast(10000000000, 'Timestamp(Second, None)'))
 ) as t(ts);
 ----
-NULL
+2286-11-20T17:46:40

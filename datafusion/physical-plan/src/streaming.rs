@@ -239,8 +239,6 @@ impl DisplayAs for StreamingTableExec {
                 }
 
                 display_orderings(f, &self.projected_output_ordering)?;
-
-                Ok(())
             }
             DisplayFormatType::TreeRender => {
                 if self.infinite {
@@ -251,10 +249,9 @@ impl DisplayAs for StreamingTableExec {
                 } else {
                     write!(f, "limit=None")?;
                 }
-
-                Ok(())
             }
         }
+        Ok(())
     }
 }
 

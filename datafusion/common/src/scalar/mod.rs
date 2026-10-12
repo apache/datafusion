@@ -5646,7 +5646,10 @@ impl fmt::Display for ScalarValue {
                 f,
                 e.map(|v| {
                     let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-                    match epoch.checked_add_signed(Duration::try_milliseconds(v).unwrap())
+                    // `try_milliseconds` is `None` for `i64::MIN`, which
+                    // `Duration` cannot hold: treat it as out of range too
+                    match Duration::try_milliseconds(v)
+                        .and_then(|d| epoch.checked_add_signed(d))
                     {
                         Some(date) => date.to_string(),
                         None => "".to_string(),
@@ -10127,6 +10130,9 @@ mod tests {
             format!("{}", ScalarValue::Date64(Some(-790179464505600000))),
             ""
         );
+        // These used to panic too, see https://github.com/apache/datafusion/issues/24892
+        assert_eq!(format!("{}", ScalarValue::Date64(Some(i64::MIN))), "");
+        assert_eq!(format!("{}", ScalarValue::Date64(Some(i64::MAX))), "");
     }
 
     #[test]
