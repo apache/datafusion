@@ -360,8 +360,8 @@ where
             let new_hashes: [u64; LANES] = std::array::from_fn(|lane| {
                 values.get_unchecked(row + lane).hash_one(state)
             });
-            for lane in 0..LANES {
-                *hashes.get_unchecked_mut(row + lane) = new_hashes[lane];
+            for (lane, new_hash) in new_hashes.iter().copied().enumerate() {
+                *hashes.get_unchecked_mut(row + lane) = new_hash;
             }
         }
         row += LANES;
@@ -398,8 +398,8 @@ where
                 value.hash_write(&mut hasher);
                 hasher.finish()
             });
-            for lane in 0..LANES {
-                *hashes.get_unchecked_mut(row + lane) = new_hashes[lane];
+            for (lane, new_hash) in new_hashes.iter().copied().enumerate() {
+                *hashes.get_unchecked_mut(row + lane) = new_hash;
             }
         }
         row += LANES;
