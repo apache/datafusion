@@ -2209,9 +2209,11 @@ async fn test_join_selection_skips_real_dynamic_filter_pushdown() -> Result<()> 
     let orig_left = Arc::clone(join_with_filter.left());
     let orig_right = Arc::clone(join_with_filter.right());
 
-    // Both `TestScanBuilder` inputs report the same 123-byte size, so force the
-    // build side to look larger. Without the dynamic-filter guard this makes
-    // `JoinSelection` attempt the swap and fail in `swap_inputs`.
+    // Both `TestScanBuilder` inputs report the same 123-byte size, and after
+    // `FilterPushdown` wires the dynamic filter the probe side reports Absent
+    // stats, so force both sides: build looks larger than probe. Without the
+    // dynamic-filter guard this makes `JoinSelection` attempt the swap and
+    // fail in `swap_inputs`.
     let mut registry = StatisticsRegistry::new();
     registry.register(Arc::new(ClosureStatisticsProvider::with_matches(
         |plan| {
@@ -2221,6 +2223,15 @@ async fn test_join_selection_skips_real_dynamic_filter_pushdown() -> Result<()> 
                 .any(|f| f.name().starts_with("build_"))
         },
         |_plan, _child_stats| Ok(StatisticsResult::Computed(big_statistics().into())),
+    )));
+    registry.register(Arc::new(ClosureStatisticsProvider::with_matches(
+        |plan| {
+            plan.schema()
+                .fields()
+                .iter()
+                .any(|f| f.name().starts_with("probe_"))
+        },
+        |_plan, _child_stats| Ok(StatisticsResult::Computed(small_statistics().into())),
     )));
 
     struct ContextWithRegistry {
