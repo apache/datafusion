@@ -765,6 +765,56 @@ async fn prepared_build_matches_collect_left() -> Result<()> {
     Ok(())
 }
 
+/// A prepared hash-map build keeps its rows in input batch order, and each
+/// hash-map index still points at the row with its key.
+#[tokio::test]
+async fn prepared_build_keeps_build_order_across_batches() -> Result<()> {
+    let batches = vec![
+        batch(vec![Some(10), Some(20)]),
+        batch(vec![Some(3000), Some(4000)]),
+    ];
+    let base = join(batches[0].schema(), batch(vec![Some(20), Some(3000)]))?;
+    // Never pick the array map, so the hash-map build path is exercised.
+    let mut config = ConfigOptions::default();
+    config.execution.perfect_hash_join_small_build_threshold = 0;
+    config.execution.perfect_hash_join_min_key_density = f64::INFINITY;
+    let prepared = base
+        .prepare_build(
+            input(batches.clone(), batches[0].schema()),
+            Arc::new(GreedyMemoryPool::new(1 << 20)),
+            Arc::new(config),
+        )
+        .await?;
+    assert!(matches!(prepared.build.map.as_ref(), Map::HashMap(_)));
+    assert_batches_eq!(
+        [
+            "+------+---------+",
+            "| key  | payload |",
+            "+------+---------+",
+            "| 10   | 10      |",
+            "| 20   | 11      |",
+            "| 3000 | 10      |",
+            "| 4000 | 11      |",
+            "+------+---------+",
+        ],
+        std::slice::from_ref(&prepared.build.batch)
+    );
+
+    let task = base.builder().with_prepared_build(prepared).build()?;
+    assert_batches_eq!(
+        [
+            "+------+---------+------+---------+",
+            "| key  | payload | key  | payload |",
+            "+------+---------+------+---------+",
+            "| 20   | 11      | 20   | 10      |",
+            "| 3000 | 10      | 3000 | 11      |",
+            "+------+---------+------+---------+",
+        ],
+        &run(&task).await?
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn prepared_concat_admission_with_small_batches() -> Result<()> {
     let rows = 65_536;
