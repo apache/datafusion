@@ -183,7 +183,8 @@ fn rewrite_aggregate_non_aggregate_aggr_expr(
         return Ok(Transformed::no(plan));
     };
 
-    let rewrote_aggs = rewrite_multiple_linear_aggregates(&mut aggr_expr)?;
+    let rewrote_aggs =
+        rewrite_multiple_linear_aggregates(&mut aggr_expr, input.schema())?;
 
     // Ensure that all Aggregate arguments are AggregateExpr
     if aggr_expr.iter().all(is_top_level_aggregate_expr) {

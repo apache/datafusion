@@ -134,6 +134,59 @@ physical_plan
 02)--AggregateExec: mode=Single, gby=[], aggr=[sum(sum_simplify_t.column1), count(sum_simplify_t.column1)]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
+# Floating point arguments are not rewritten, because the rewrite is not exact
+# for floating point arithmetic. With the values below the large values cancel
+# out and `SUM(x + 1.0)` is 4, while `SUM(x) + 1.0 * COUNT(x)` would be 6.
+statement ok
+CREATE TABLE sum_simplify_float_t (x DOUBLE) AS VALUES (1e17), (3.0), (-1e17);
+
+query R
+SELECT SUM(x + 1.0) FROM sum_simplify_float_t;
+----
+4
+
+query RR
+SELECT SUM(x + 1.0), SUM(x + 2.0) FROM sum_simplify_float_t;
+----
+4 5
+
+query TT
+EXPLAIN SELECT SUM(x + 1.0), SUM(x + 2.0) FROM sum_simplify_float_t;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[sum(sum_simplify_float_t.x + Float64(1)), sum(sum_simplify_float_t.x + Float64(2))]]
+02)--TableScan: sum_simplify_float_t projection=[x]
+physical_plan
+01)AggregateExec: mode=Single, gby=[], aggr=[sum(sum_simplify_float_t.x + Float64(1)), sum(sum_simplify_float_t.x + Float64(2))]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# The same applies when only the column is floating point
+query RR
+SELECT SUM(x + 1), SUM(x + 2) FROM sum_simplify_float_t;
+----
+4 5
+
+# ... or when only the literal is floating point
+query RR
+SELECT SUM(column1 + 1.0), SUM(column1 + 2.0) FROM sum_simplify_t;
+----
+7 10
+
+query TT
+EXPLAIN SELECT SUM(column1 + 1.0), SUM(column1 + 2.0) FROM sum_simplify_t;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS sum_simplify_t.column1 + Float64(1)), sum(__common_expr_1 AS sum_simplify_t.column1 + Float64(2))]]
+02)--Projection: CAST(sum_simplify_t.column1 AS Float64) AS __common_expr_1
+03)----TableScan: sum_simplify_t projection=[column1]
+physical_plan
+01)AggregateExec: mode=Single, gby=[], aggr=[sum(sum_simplify_t.column1 + Float64(1)), sum(sum_simplify_t.column1 + Float64(2))]
+02)--ProjectionExec: expr=[CAST(column1@0 AS Float64) as __common_expr_1]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE sum_simplify_float_t;
+
 # DISTINCT aggregates with different arguments
 query II
 SELECT SUM(DISTINCT column1 + 1), SUM(DISTINCT column1 + 2) FROM sum_simplify_t;

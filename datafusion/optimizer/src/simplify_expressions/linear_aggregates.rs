@@ -17,9 +17,9 @@
 
 //! Simplification to refactor multiple aggregate functions to use the same aggregate function
 
-use datafusion_common::HashMap;
+use datafusion_common::{DFSchema, HashMap};
 use datafusion_expr::expr::AggregateFunctionParams;
-use datafusion_expr::{BinaryExpr, Expr};
+use datafusion_expr::{BinaryExpr, Expr, ExprSchemable};
 use datafusion_expr_common::operator::Operator;
 
 /// Threshold of the number of aggregates that share similar arguments before
@@ -44,6 +44,10 @@ const DUPLICATE_THRESHOLD: usize = 2;
 ///
 /// See the background [`AggregateUDFImpl::simplify_expr_op_literal`] for details.
 ///
+/// The rewrite is only applied when it is exact: floating point arithmetic is
+/// not associative, so `SUM(x + 1.0)` and `SUM(x) + 1.0 * COUNT(x)` can return
+/// different values for the same input.
+///
 /// Returns `true` if any of the arguments are rewritten (modified), `false`
 /// otherwise.
 ///
@@ -54,6 +58,7 @@ const DUPLICATE_THRESHOLD: usize = 2;
 /// [`AggregateUDFImpl::simplify_expr_op_literal`]: datafusion_expr::AggregateUDFImpl::simplify_expr_op_literal
 pub(super) fn rewrite_multiple_linear_aggregates(
     agg_expr: &mut [Expr],
+    input_schema: &DFSchema,
 ) -> datafusion_common::Result<bool> {
     // map <expr>: count of expressions that have a common argument
     let mut common_args = HashMap::new();
@@ -72,6 +77,10 @@ pub(super) fn rewrite_multiple_linear_aggregates(
         let Some(expr_literal) = ExprLiteral::try_new(arg) else {
             continue;
         };
+
+        if expr_literal.has_floating_point_operand(input_schema)? {
+            continue;
+        }
 
         let counter = common_args.entry(expr_literal.expr()).or_insert(0);
         *counter += 1;
@@ -94,6 +103,10 @@ pub(super) fn rewrite_multiple_linear_aggregates(
         let Some(expr_literal) = ExprLiteral::try_new(arg) else {
             continue;
         };
+
+        if expr_literal.has_floating_point_operand(input_schema)? {
+            continue;
+        }
 
         // Not enough common expressions to make it worth rewriting
         if common_args.get(expr_literal.expr()).unwrap_or(&0) < &DUPLICATE_THRESHOLD {
@@ -225,5 +238,15 @@ impl<'a> ExprLiteral<'a> {
 
     fn arg_is_left(&self) -> bool {
         matches!(self, Self::ArgOpLit { .. })
+    }
+
+    /// Returns true if either operand is a floating point value, in which case
+    /// rewriting the aggregate would not be exact.
+    fn has_floating_point_operand(
+        &self,
+        schema: &DFSchema,
+    ) -> datafusion_common::Result<bool> {
+        Ok(self.expr().get_type(schema)?.is_floating()
+            || self.lit().get_type(schema)?.is_floating())
     }
 }
