@@ -4001,6 +4001,7 @@ mod tests {
         Ok(())
     }
 
+    #[test]
     fn test_unparse_null_treatment_window_and_aggregate() -> Result<()> {
         use datafusion_expr::expr::NullTreatment;
         use datafusion_functions_aggregate::first_last::first_value_udaf;
