@@ -469,6 +469,63 @@ SELECT count(*) FROM (SELECT s FROM c UNION ALL SELECT s FROM c)
 statement ok
 RESET datafusion.runtime.memory_limit
 
+# Known limitation: a reference to a materialized CTE has unknown statistics.
+# The join below builds the hash table on the 100000 rows of `huge`. When the
+# CTE is inlined, the hash table is built on the 5 rows of `small`.
+statement ok
+CREATE TABLE small AS SELECT value AS k FROM generate_series(1, 5)
+
+statement ok
+CREATE TABLE huge AS SELECT value AS k FROM generate_series(1, 100000)
+
+query TT
+EXPLAIN WITH c AS MATERIALIZED (SELECT k FROM small)
+SELECT count(*) FROM huge JOIN c ON huge.k = c.k
+----
+logical_plan
+01)MaterializedCte: name=c
+02)--SubqueryAlias: c
+03)----TableScan: small projection=[k]
+04)--Projection: count(Int64(1)) AS count(*)
+05)----Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+06)------Projection:
+07)--------Inner Join: huge.k = c.k
+08)----------TableScan: huge projection=[k]
+09)----------MaterializedCteScan: name=c
+physical_plan
+01)MaterializedCteExec: name=c
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
+04)----AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1))]
+05)------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(k@0, k@0)], projection=[]
+06)--------DataSourceExec: partitions=1, partition_sizes=[13]
+07)--------MaterializedCteScanExec: name=c
+
+query TT
+EXPLAIN WITH c AS NOT MATERIALIZED (SELECT k FROM small)
+SELECT count(*) FROM huge JOIN c ON huge.k = c.k
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----Projection:
+04)------Inner Join: huge.k = c.k
+05)--------TableScan: huge projection=[k]
+06)--------SubqueryAlias: c
+07)----------TableScan: small projection=[k]
+physical_plan
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1))]
+03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(k@0, k@0)], projection=[]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[13]
+
+statement ok
+DROP TABLE small
+
+statement ok
+DROP TABLE huge
+
 # Setting a runtime option also sets this option to false.
 statement ok
 RESET datafusion.catalog.create_default_catalog_and_schema

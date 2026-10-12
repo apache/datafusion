@@ -789,6 +789,13 @@ impl ExecutionPlan for MaterializedCteScanExec {
         Some(self.metrics.clone_inner())
     }
 
+    /// The statistics are unknown: a leaf cannot ask the body for its
+    /// statistics through [`StatisticsArgs`].
+    ///
+    /// This is a known limitation, and it can make a plan worse than the
+    /// plan of the inlined CTE. For example, `JoinSelection` does not know
+    /// that a scan is small, and can put the other, larger input of a hash
+    /// join on the build side.
     fn statistics_from_inputs(
         &self,
         _input_stats: &[Arc<Statistics>],
