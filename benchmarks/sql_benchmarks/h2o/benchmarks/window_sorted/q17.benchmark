@@ -1,0 +1,16 @@
+# RANK top-2, ~100K partitions, with a sibling ROW_NUMBER expression.
+# Project both ranks so the window stays above TopK and TopK's derived ranks
+# are unused. Compare with q08's single-expression workload.
+
+subgroup window_sorted
+
+template sql_benchmarks/h2o/window_sorted.benchmark.template
+QPAD=17
+FN=RANK
+PK_MOD=100000
+OB_EXPR=v2
+OB_BOUND=count(DISTINCT ob) > 1000
+NAME=window_sorted_q17_rank_100k_partitions_two_windows
+TWO_WINDOWS=true
+
+expect_plan BoundedWindowAggExec
