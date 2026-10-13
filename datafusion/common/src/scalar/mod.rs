@@ -494,6 +494,7 @@ fn nested_eq<T: Array + PartialEq>(a: &Arc<T>, b: &Arc<T>) -> bool {
             && a.as_ref() == b.as_ref())
 }
 
+// manual implementation of `PartialEq`
 impl PartialEq for ScalarValue {
     fn eq(&self, other: &Self) -> bool {
         use ScalarValue::*;
