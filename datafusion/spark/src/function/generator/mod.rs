@@ -15,11 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod stack;
+
 use datafusion_expr::ScalarUDF;
+use datafusion_functions::make_udf_function;
 use std::sync::Arc;
 
-pub mod expr_fn {}
+make_udf_function!(stack::SparkStack, stack);
+
+pub mod expr_fn {
+    use datafusion_functions::export_functions;
+
+    export_functions!((
+        stack,
+        "Separates the values into `n` rows, returned as a list of structs with fields `col0`, `col1`, and so on.",
+        args,
+    ));
+}
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![]
+    vec![stack()]
 }

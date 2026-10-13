@@ -1,0 +1,156 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for Spark-compatible stack function
+# https://spark.apache.org/docs/latest/api/sql/index.html#stack
+#
+# Test cases derived from Spark GeneratorFunctionSuite, GeneratorExpressionSuite,
+# TypeCoercionSuite and the generators.sql, table-valued-functions.sql and
+# join-lateral.sql golden files:
+# https://github.com/apache/spark/blob/master/sql/core/src/test/scala/org/apache/spark/sql/GeneratorFunctionSuite.scala
+#
+# Spark's stack generates rows. Here it returns them as a list of structs, which
+# unnest expands. `n` must be a bare integer literal, so it is never cast.
+
+# Values fill n rows of ceil(k / n) columns in order, padded with NULLs
+query ?
+SELECT stack(1, 1, 2, 3);
+----
+[{col0: 1, col1: 2, col2: 3}]
+
+query ?
+SELECT stack(2, 1, 2, 3);
+----
+[{col0: 1, col1: 2}, {col0: 3, col1: NULL}]
+
+query ?
+SELECT stack(3, 1, 2, 3);
+----
+[{col0: 1}, {col0: 2}, {col0: 3}]
+
+query ?
+SELECT stack(4, 1, 2, 3);
+----
+[{col0: 1}, {col0: 2}, {col0: 3}, {col0: NULL}]
+
+query TB
+SELECT arrow_typeof(stack(2, a, b, c)), arrow_field(stack(2, a, b, c))['nullable'] FROM (VALUES (1, 2, 3)) AS t(a, b, c);
+----
+List(non-null Struct("col0": Int64, "col1": Int64)) false
+
+# Various column types
+query ?
+SELECT stack(3, 1, 1.1, 'a', 2, 2.2, 'b', 3, 3.3, 'c');
+----
+[{col0: 1, col1: 1.1, col2: a}, {col0: 2, col1: 2.2, col2: b}, {col0: 3, col1: 3.3, col2: c}]
+
+query ?
+SELECT stack(2, 1.5::DECIMAL(10, 2), '2024-01-01'::DATE, true, [1, 2], named_struct('a', 1), NULL, NULL, false, [3], named_struct('a', 2));
+----
+[{col0: 1.50, col1: 2024-01-01, col2: true, col3: [1, 2], col4: {a: 1}}, {col0: NULL, col1: NULL, col2: false, col3: [3], col4: {a: 2}}]
+
+# NULLs take the type of the first non-NULL value in their column
+query ?
+SELECT stack(3, 1, 1.1, NULL, 2, NULL, 'b', NULL, 3.3, 'c');
+----
+[{col0: 1, col1: 1.1, col2: NULL}, {col0: 2, col1: NULL, col2: b}, {col0: NULL, col1: 3.3, col2: c}]
+
+query TTTT
+SELECT arrow_typeof(stack(3, 1, 2, NULL)), arrow_typeof(stack(3, NULL, '2', '3')), arrow_typeof(stack(2, NULL, NULL, 1, '2')), arrow_typeof(stack(3, NULL, NULL, NULL));
+----
+List(non-null Struct("col0": Int64)) List(non-null Struct("col0": Utf8)) List(non-null Struct("col0": Int64, "col1": Utf8)) List(non-null Struct("col0": Null))
+
+# Array inputs
+query ?
+SELECT stack(2, a, b, c) FROM (VALUES (1, 2, 3), (4, 5, 6)) AS t(a, b, c);
+----
+[{col0: 1, col1: 2}, {col0: 3, col1: NULL}]
+[{col0: 4, col1: 5}, {col0: 6, col1: NULL}]
+
+# Array, scalar and NULL values in the same columns
+query ?
+SELECT stack(2, a, 100, b, NULL) FROM (VALUES (1, NULL), (NULL, 2), (NULL, NULL)) AS t(a, b);
+----
+[{col0: 1, col1: 100}, {col0: NULL, col1: NULL}]
+[{col0: NULL, col1: 100}, {col0: 2, col1: NULL}]
+[{col0: NULL, col1: 100}, {col0: NULL, col1: NULL}]
+
+# Values of one Spark type with different Arrow types are cast to the first one
+query ?T
+SELECT stack(2, 'a', s), arrow_typeof(stack(2, 'a', s)) FROM (VALUES (arrow_cast('b', 'Utf8View'))) AS t(s);
+----
+[{col0: a}, {col0: b}] List(non-null Struct("col0": Utf8))
+
+# unnest expands the generated rows, which repeat for every input row
+query ITI rowsort
+SELECT c1, unnest(unnest(stack(2, 'Key', c1, 'Value', c2))) FROM (VALUES (0, 1), (1, 2)) AS t(c1, c2);
+----
+0 Key 0
+0 Value 1
+1 Key 1
+1 Value 2
+
+query II rowsort
+SELECT unnest(unnest(stack(2, 1, 2, 3))) FROM (VALUES (1), (2)) AS t(x);
+----
+1 2
+1 2
+3 NULL
+3 NULL
+
+# An empty input generates nothing
+query ?
+SELECT stack(1, a, 2, 3) FROM (VALUES (1)) AS t(a) WHERE a > 1;
+----
+
+query error The `stack` requires > 1 parameters but the actual number is 0\.
+SELECT stack();
+
+query error The `stack` requires > 1 parameters but the actual number is 1\.
+SELECT stack(1);
+
+# n must be a positive integer literal
+query error The first parameter requires the "INT" type, however "Float64\(1\.1\)" has the type "Float64"\.
+SELECT stack(1.1, 1, 2, 3);
+
+query error The `n` must be between \(0, 2147483647\] \(current value = -1\)\.
+SELECT stack(-1, 1, 2, 3);
+
+# Spark types 2147483648 as BIGINT and reports the type instead
+query error The `n` must be between \(0, 2147483647\] \(current value = 2147483648\)\.
+SELECT stack(2147483648, 1);
+
+query error the input `n` should be a foldable "INT" expression; however, got "n"\. Only an integer literal is supported\.
+SELECT stack(n, a, b, c) FROM (VALUES (2, 1, 2, 3)) AS t(n, a, b, c);
+
+# Spark accepts any foldable n, such as 3 - 1 or 2::INT. DataFusion only sees the
+# value of a literal when it plans the return type.
+# query ?
+# SELECT stack(3 - 1, 1, '2', NULL, NULL);
+# ----
+# [{col0: 1, col1: 2}, {col0: NULL, col1: NULL}]
+
+# The values of a column must have the same type. The first mismatch in
+# argument order is reported.
+query error The data type of the column \(0\) do not have the same type: "Int64" \(1\) <> "Utf8" \(2\)\.
+SELECT stack(2, 1, '2.2');
+
+query error The data type of the column \(1\) do not have the same type: "Utf8" \(2\) <> "Float64" \(5\)\.
+SELECT stack(2, 1, '1.1', 'a', 2, 2.2, 'b');
+
+query error The data type of the column \(1\) do not have the same type: "Utf8" \(2\) <> "Int64" \(4\)\.
+SELECT stack(3, 1, 'a', 2, 5, 'x', 'b');
