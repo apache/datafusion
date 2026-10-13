@@ -1781,8 +1781,8 @@ impl DefaultPhysicalPlanner {
                             None,
                         )?)
                     }
-                } else if session_state.config().target_partitions() > 1
-                    && session_state.config().repartition_joins()
+                } else if (session_state.config().target_partitions() == 1
+                    || session_state.config().repartition_joins())
                     && !prefer_hash_join
                     && !*null_aware
                 // Null-aware joins (e.g. `NOT IN` with a nullable subquery) must
