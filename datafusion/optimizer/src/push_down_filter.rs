@@ -1465,7 +1465,7 @@ impl OptimizerRule for PushDownFilter {
             }
             child => {
                 filter.input = Arc::new(child);
-Ok(Transformed::no(LogicalPlan::Filter(filter)))
+                Ok(Transformed::no(LogicalPlan::Filter(filter)))
             }
         };
         result.map(|mut result| {
