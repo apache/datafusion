@@ -3,6 +3,8 @@
 pub struct ColumnRelation {
     #[prost(string, tag = "1")]
     pub relation: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag = "2")]
+    pub parts: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Column {
@@ -867,6 +869,9 @@ pub struct ParquetOptions {
     /// default = false
     #[prost(bool, tag = "30")]
     pub skip_arrow_metadata: bool,
+    /// default = false
+    #[prost(bool, tag = "41")]
+    pub write_row_group_number_distinct_values: bool,
     #[prost(uint64, tag = "12")]
     pub dictionary_page_size_limit: u64,
     #[prost(uint64, tag = "18")]

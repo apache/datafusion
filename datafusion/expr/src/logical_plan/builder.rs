@@ -331,7 +331,7 @@ impl LogicalPlanBuilder {
                 if let Some(prev_type) = common_type {
                     // Widen the running type so that it can hold both the
                     // previously seen rows and this row's value.
-                    let data_types = vec![prev_type.clone(), data_type.clone()];
+                    let data_types = [prev_type.clone(), data_type.clone()];
                     let Some(new_type) = type_union_resolution(&data_types) else {
                         return plan_err!(
                             "Inconsistent data type across values list at row {i} column {j}. Was {prev_type} but found {data_type}"
@@ -1282,6 +1282,7 @@ impl LogicalPlanBuilder {
             schema: DFSchemaRef::new(join_schema),
             null_equality,
             null_aware,
+            null_aware_value_keys: 1,
         })))
     }
 
@@ -1303,7 +1304,7 @@ impl LogicalPlanBuilder {
             .collect::<Result<_>>()?;
 
         let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys).collect();
-        let mut join_on: Vec<(Expr, Expr)> = vec![];
+        let mut join_on: Vec<(Expr, Expr)> = Vec::with_capacity(on.len());
         let mut filters: Option<Expr> = None;
         for (l, r) in &on {
             if self.plan.schema().has_column(l)
@@ -1725,9 +1726,9 @@ pub fn unique_field_aliases(fields: &Fields) -> Vec<Option<String>> {
     // That's why we need the `seen` set, so the fields are always unique.
 
     // Tracks a mapping between a field name and the number of appearances of that field.
-    let mut name_map = HashMap::<&str, usize>::new();
+    let mut name_map = HashMap::<&str, usize>::with_capacity(fields.len());
     // Tracks all the fields and aliases that were previously seen.
-    let mut seen = HashSet::<Cow<String>>::new();
+    let mut seen = HashSet::<Cow<String>>::with_capacity(fields.len());
 
     fields
         .iter()
@@ -2014,9 +2015,10 @@ pub fn validate_unique_names<'a>(
     node_name: &str,
     expressions: impl IntoIterator<Item = &'a Expr>,
 ) -> Result<()> {
-    let mut unique_names = HashMap::new();
+    let expressions = expressions.into_iter();
+    let mut unique_names = HashMap::with_capacity(expressions.size_hint().0);
 
-    expressions.into_iter().enumerate().try_for_each(|(position, expr)| {
+    expressions.enumerate().try_for_each(|(position, expr)| {
         let name = expr.schema_name().to_string();
         match unique_names.get(&name) {
             None => {

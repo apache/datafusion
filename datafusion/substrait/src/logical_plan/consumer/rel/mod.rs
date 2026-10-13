@@ -100,7 +100,7 @@ fn apply_emit_kind(
                 // converting a single call of the random() function into multiple calls due to
                 // duplicate fields in the output_mapping.
                 LogicalPlan::Projection(proj) if !contains_volatile_expr(&proj) => {
-                    let mut exprs: Vec<Expr> = vec![];
+                    let mut exprs: Vec<Expr> = Vec::with_capacity(output_mapping.len());
                     for field in output_mapping {
                         let expr = proj.expr
                             .get(field as usize)
@@ -118,7 +118,7 @@ fn apply_emit_kind(
                 _ => {
                     let input_schema = plan.schema();
 
-                    let mut exprs: Vec<Expr> = vec![];
+                    let mut exprs: Vec<Expr> = Vec::with_capacity(output_mapping.len());
                     for index in output_mapping.into_iter() {
                         let column = Expr::Column(Column::from(
                             input_schema.qualified_field(index as usize),
