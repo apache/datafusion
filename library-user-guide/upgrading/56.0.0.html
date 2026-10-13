@@ -1003,6 +1003,14 @@ should treat an empty list as the absent-key case instead.</p>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/24981">issue #24981</a> and
 <a class="reference external" href="https://github.com/apache/datafusion/issues/24983">issue #24983</a> for details.</p>
 </section>
+<section id="date-bin-rejects-strides-that-are-not-positive">
+<h3><code class="docutils literal notranslate"><span class="pre">date_bin</span></code> rejects strides that are not positive<a class="headerlink" href="#date-bin-rejects-strides-that-are-not-positive" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">date_bin</span></code> now returns an error when its stride is not greater than zero,
+matching <a class="reference external" href="https://www.postgresql.org/docs/current/functions-datetime.html#FUNCTIONS-DATETIME-BIN">PostgreSQL</a> for fixed strides. PostgreSQL does not support month
+strides, and DataFusion applies the same rule to them. Negative strides were
+previously accepted but did not produce well-defined bins; use the absolute
+value of the stride instead. See <a class="reference external" href="https://github.com/apache/datafusion/issues/25856">issue #25856</a> for details.</p>
+</section>
 <section id="dataframe-from-columns-accepts-intoiterator">
 <h3><code class="docutils literal notranslate"><span class="pre">DataFrame::from_columns</span></code> accepts <code class="docutils literal notranslate"><span class="pre">IntoIterator</span></code><a class="headerlink" href="#dataframe-from-columns-accepts-intoiterator" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">DataFrame::from_columns</span></code> now accepts any <code class="docutils literal notranslate"><span class="pre">IntoIterator&lt;Item</span> <span class="pre">=</span> <span class="pre">(&amp;str,</span> <span class="pre">ArrayRef)&gt;</span></code>
@@ -1392,6 +1400,7 @@ the API breaks.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#statisticsregistry-compute-and-compute-base-are-deprecated"><code class="docutils literal notranslate"><span class="pre">StatisticsRegistry::compute</span></code> and <code class="docutils literal notranslate"><span class="pre">compute_base</span></code> are deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#api-change-for-floor-and-ceil-udf">API change for <code class="docutils literal notranslate"><span class="pre">floor</span></code> and <code class="docutils literal notranslate"><span class="pre">ceil</span></code> UDF</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#map-extract-element-at-return-an-empty-list-for-absent-keys"><code class="docutils literal notranslate"><span class="pre">map_extract</span></code> / <code class="docutils literal notranslate"><span class="pre">element_at</span></code> return an empty list for absent keys</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#date-bin-rejects-strides-that-are-not-positive"><code class="docutils literal notranslate"><span class="pre">date_bin</span></code> rejects strides that are not positive</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dataframe-from-columns-accepts-intoiterator"><code class="docutils literal notranslate"><span class="pre">DataFrame::from_columns</span></code> accepts <code class="docutils literal notranslate"><span class="pre">IntoIterator</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#aggregate-ordering-state-field-names-are-now-namespaced">Aggregate ordering state field names are now namespaced</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#physical-filter-pushdown-resolves-columns-by-position">Physical filter pushdown resolves columns by position</a></li>

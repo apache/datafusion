@@ -642,6 +642,17 @@ should treat an empty list as the absent-key case instead.
 See [issue #24981](https://github.com/apache/datafusion/issues/24981) and
 [issue #24983](https://github.com/apache/datafusion/issues/24983) for details.
 
+### `date_bin` rejects strides that are not positive
+
+`date_bin` now returns an error when its stride is not greater than zero,
+matching [PostgreSQL] for fixed strides. PostgreSQL does not support month
+strides, and DataFusion applies the same rule to them. Negative strides were
+previously accepted but did not produce well-defined bins; use the absolute
+value of the stride instead. See [issue #25856] for details.
+
+[postgresql]: https://www.postgresql.org/docs/current/functions-datetime.html#FUNCTIONS-DATETIME-BIN
+[issue #25856]: https://github.com/apache/datafusion/issues/25856
+
 ### `DataFrame::from_columns` accepts `IntoIterator`
 
 `DataFrame::from_columns` now accepts any `IntoIterator<Item = (&str, ArrayRef)>`
