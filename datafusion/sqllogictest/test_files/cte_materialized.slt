@@ -534,6 +534,21 @@ RESET datafusion.catalog.create_default_catalog_and_schema
 statement ok
 SET datafusion.execution.target_partitions = 4
 
+# Type coercion changes the type of `a` in the body from Null to Int64, and
+# the scans get the new type.
+query II
+WITH c AS MATERIALIZED (SELECT NULL a, 12 b UNION ALL SELECT 11 a, 13 b)
+SELECT * FROM c ORDER BY 1, 2
+----
+11 13
+NULL 12
+
+query II
+WITH c AS MATERIALIZED (SELECT NULL a, 12 b UNION ALL SELECT 11 a, 13 b)
+SELECT x.a, x.b FROM c x WHERE EXISTS (SELECT 1 FROM c y WHERE y.a = x.a)
+----
+11 13
+
 # An unbounded body is rejected: it is fully buffered before any row is
 # returned, so the query would never produce output.
 statement ok
