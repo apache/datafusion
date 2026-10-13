@@ -1,0 +1,171 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## The sort options of a SortMergeJoin follow the ordering both inputs declare on the join keys,
+## so no SortExec is needed on top of inputs that are already sorted that way.
+##########
+
+statement ok
+set datafusion.optimizer.prefer_hash_join = false;
+
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+COPY (SELECT * FROM (VALUES (3, 'c', 30), (2, 'b', 20), (1, 'a', 10)) AS t(k1, k2, v) ORDER BY k1 DESC NULLS LAST, k2 ASC NULLS FIRST)
+TO 'test_files/scratch/sort_merge_join_sort_options/left.parquet';
+
+statement ok
+COPY (SELECT * FROM (VALUES (3, 'c', 300), (2, 'b', 200), (4, 'd', 400)) AS t(k1, k2, w) ORDER BY k1 DESC NULLS LAST, k2 ASC NULLS FIRST)
+TO 'test_files/scratch/sort_merge_join_sort_options/right.parquet';
+
+# both inputs sorted `k1 DESC NULLS LAST, k2 ASC NULLS FIRST`: the join adopts these per key options
+statement ok
+CREATE EXTERNAL TABLE l (k1 INT, k2 VARCHAR, v INT) STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_merge_join_sort_options/left.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE r (k1 INT, k2 VARCHAR, w INT) STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_merge_join_sort_options/right.parquet';
+
+query TT
+EXPLAIN SELECT l.k1, l.k2, v, w FROM l JOIN r ON l.k1 = r.k1 AND l.k2 = r.k2
+----
+logical_plan
+01)Projection: l.k1, l.k2, l.v, r.w
+02)--Inner Join: l.k1 = r.k1, l.k2 = r.k2
+03)----TableScan: l projection=[k1, k2, v]
+04)----TableScan: r projection=[k1, k2, w]
+physical_plan
+01)SortMergeJoinExec: join_type=Inner, on=[(k1@0, k1@0), (k2@1, k2@1)], projection=[k1@0, k2@1, v@2, w@5]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_merge_join_sort_options/left.parquet]]}, projection=[k1, k2, v], output_ordering=[k1@0 DESC NULLS LAST, k2@1 ASC], file_type=parquet
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_merge_join_sort_options/right.parquet]]}, projection=[k1, k2, w], output_ordering=[k1@0 DESC NULLS LAST, k2@1 ASC], file_type=parquet
+
+query ITII rowsort
+SELECT l.k1, l.k2, v, w FROM l JOIN r ON l.k1 = r.k1 AND l.k2 = r.k2
+----
+2 b 20 200
+3 c 30 300
+
+# the right table declares a different ordering than the file holds, so only the left ordering is adopted
+# and the right input is sorted
+statement ok
+CREATE EXTERNAL TABLE r_asc (k1 INT, k2 VARCHAR, w INT) STORED AS PARQUET
+WITH ORDER (k1 ASC NULLS LAST, k2 ASC NULLS FIRST)
+LOCATION 'test_files/scratch/sort_merge_join_sort_options/right.parquet';
+
+query TT
+EXPLAIN SELECT l.k1, l.k2, v, w FROM l JOIN r_asc r ON l.k1 = r.k1 AND l.k2 = r.k2
+----
+logical_plan
+01)Projection: l.k1, l.k2, l.v, r.w
+02)--Inner Join: l.k1 = r.k1, l.k2 = r.k2
+03)----TableScan: l projection=[k1, k2, v]
+04)----SubqueryAlias: r
+05)------TableScan: r_asc projection=[k1, k2, w]
+physical_plan
+01)SortMergeJoinExec: join_type=Inner, on=[(k1@0, k1@0), (k2@1, k2@1)], projection=[k1@0, k2@1, v@2, w@5]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_merge_join_sort_options/left.parquet]]}, projection=[k1, k2, v], output_ordering=[k1@0 DESC NULLS LAST, k2@1 ASC], file_type=parquet
+03)--SortExec: expr=[k1@0 DESC NULLS LAST, k2@1 ASC], preserve_partitioning=[false]
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_merge_join_sort_options/right.parquet]]}, projection=[k1, k2, w], file_type=parquet, sort_order_for_reorder=[k1@0 DESC NULLS LAST, k2@1 ASC], reverse_row_groups=true
+
+# the join keys are listed in a different order than the input ordering: the keys are reordered
+# to follow the ordering, so no SortExec is needed
+query TT
+EXPLAIN SELECT l.k1, l.k2, v, w FROM l JOIN r ON l.k2 = r.k2 AND l.k1 = r.k1
+----
+logical_plan
+01)Projection: l.k1, l.k2, l.v, r.w
+02)--Inner Join: l.k2 = r.k2, l.k1 = r.k1
+03)----TableScan: l projection=[k1, k2, v]
+04)----TableScan: r projection=[k1, k2, w]
+physical_plan
+01)SortMergeJoinExec: join_type=Inner, on=[(k1@0, k1@0), (k2@1, k2@1)], projection=[k1@0, k2@1, v@2, w@5]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_merge_join_sort_options/left.parquet]]}, projection=[k1, k2, v], output_ordering=[k1@0 DESC NULLS LAST, k2@1 ASC], file_type=parquet
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_merge_join_sort_options/right.parquet]]}, projection=[k1, k2, w], output_ordering=[k1@0 DESC NULLS LAST, k2@1 ASC], file_type=parquet
+
+query ITII rowsort
+SELECT l.k1, l.k2, v, w FROM l JOIN r ON l.k2 = r.k2 AND l.k1 = r.k1
+----
+2 b 20 200
+3 c 30 300
+
+# only the leading ordering column is a join key: its options are adopted and no SortExec is needed
+query TT
+EXPLAIN SELECT l.k1, v, w FROM l JOIN r ON l.k1 = r.k1
+----
+logical_plan
+01)Projection: l.k1, l.v, r.w
+02)--Inner Join: l.k1 = r.k1
+03)----TableScan: l projection=[k1, v]
+04)----TableScan: r projection=[k1, w]
+physical_plan
+01)SortMergeJoinExec: join_type=Inner, on=[(k1@0, k1@0)], projection=[k1@0, v@1, w@3]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_merge_join_sort_options/left.parquet]]}, projection=[k1, v], output_ordering=[k1@0 DESC NULLS LAST], file_type=parquet
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_merge_join_sort_options/right.parquet]]}, projection=[k1, w], output_ordering=[k1@0 DESC NULLS LAST], file_type=parquet
+
+query III rowsort
+SELECT l.k1, v, w FROM l JOIN r ON l.k1 = r.k1
+----
+2 20 200
+3 30 300
+
+# k2 is constant after the filter, so it does not need to be in the ordering: the join adopts the
+# options of the k1 ordering and no SortExec is needed (a single partition avoids a repartition)
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+query TT
+EXPLAIN SELECT l.k1, l.k2, v, w FROM l JOIN r ON l.k2 = r.k2 AND l.k1 = r.k1 WHERE l.k2 = 'b'
+----
+logical_plan
+01)Projection: l.k1, l.k2, l.v, r.w
+02)--Inner Join: l.k2 = r.k2, l.k1 = r.k1
+03)----Filter: l.k2 = Utf8View("b")
+04)------TableScan: l projection=[k1, k2, v], partial_filters=[l.k2 = Utf8View("b")]
+05)----Filter: r.k2 = Utf8View("b")
+06)------TableScan: r projection=[k1, k2, w], partial_filters=[r.k2 = Utf8View("b")]
+physical_plan
+01)SortMergeJoinExec: join_type=Inner, on=[(k1@0, k1@0), (k2@1, k2@1)], projection=[k1@0, k2@1, v@2, w@5]
+02)--FilterExec: k2@1 = b
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_merge_join_sort_options/left.parquet]]}, projection=[k1, k2, v], output_ordering=[k1@0 DESC NULLS LAST, k2@1 ASC], file_type=parquet, predicate=k2@1 = b, pruning_predicate=k2_null_count@2 != row_count@3 AND k2_min@0 <= b AND b <= k2_max@1, required_guarantees=[k2 in (b)]
+04)--FilterExec: k2@1 = b
+05)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_merge_join_sort_options/right.parquet]]}, projection=[k1, k2, w], output_ordering=[k1@0 DESC NULLS LAST, k2@1 ASC], file_type=parquet, predicate=k2@1 = b, pruning_predicate=k2_null_count@2 != row_count@3 AND k2_min@0 <= b AND b <= k2_max@1, required_guarantees=[k2 in (b)]
+
+query ITII rowsort
+SELECT l.k1, l.k2, v, w FROM l JOIN r ON l.k2 = r.k2 AND l.k1 = r.k1 WHERE l.k2 = 'b'
+----
+2 b 20 200
+
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+DROP TABLE l;
+
+statement ok
+DROP TABLE r;
+
+statement ok
+DROP TABLE r_asc;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+reset datafusion.optimizer.prefer_hash_join;
