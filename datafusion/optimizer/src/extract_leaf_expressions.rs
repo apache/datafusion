@@ -47,11 +47,11 @@
 //! A Parquet scan merges it into the file projection and reads only the struct
 //! leaf. With the opposite precedence the scan reads the whole struct whenever
 //! `datafusion.execution.parquet.pushdown_filters` is `false`, which is the
-//! default. The filter loses nothing by staying one node higher, because
-//! `PushDownFilter` records the predicate in
-//! [`TableScan::filters`](datafusion_expr::logical_plan::TableScan) in the pass
-//! that runs before the extraction projection exists, so row group pruning and
-//! source level filtering still happen.
+//! default. The filter loses nothing by staying one node higher, because its
+//! predicates still reach
+//! [`TableScan::filters`](datafusion_expr::logical_plan::TableScan), so row
+//! group pruning and source level filtering still happen. See the module
+//! documentation of [`PushDownFilter`] for how.
 //!
 //! [`PushDownFilter`]: crate::push_down_filter::PushDownFilter
 
