@@ -258,6 +258,11 @@ pub enum StatisticsResult {
 /// estimation logic. The chain of providers is traversed until one returns
 /// [`StatisticsResult::Computed`].
 ///
+/// As for operators, `Exact` statistics must be guaranteed values, because
+/// optimizer rules use them for correctness, not just cost: they answer
+/// `COUNT(*)`, `MIN` and `MAX` without scanning and remove limits. Return
+/// `Inexact` for anything that is an estimate.
+///
 /// # Implementing a Custom Provider
 ///
 /// ```ignore
