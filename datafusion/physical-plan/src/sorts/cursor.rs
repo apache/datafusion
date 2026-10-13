@@ -969,27 +969,81 @@ mod tests {
         assert_eq!(a.cmp(&b), Ordering::Less);
     }
 
-    /// Verifies the `ArrayValues::has_nulls` fast path is actually taken
-    /// (all null-free cursors) and produces the same ordering as the
-    /// null-aware slow path.
-    #[test]
-    fn test_array_values_has_nulls_fast_path_agrees_with_slow_path() {
-        let options = SortOptions {
-            descending: false,
-            nulls_first: false,
+    /// Builds a cursor over `values` positioned at `idx`.
+    ///
+    /// With `with_null`, the array carries one extra null in the slot where
+    /// `options` sorts nulls, so `ArrayValues` takes its null-aware path while
+    /// every value the test touches stays non-null. Both variants therefore
+    /// hold the same logical value at `idx`, which is what lets the two paths
+    /// be compared directly.
+    fn new_primitive_at(
+        options: SortOptions,
+        values: &[i32],
+        with_null: bool,
+        idx: usize,
+    ) -> Cursor<ArrayValues<PrimitiveValues<i32>>> {
+        let (buffer, shift, null_count) = match (with_null, options.nulls_first) {
+            (false, _) => (values.to_vec(), 0, 0),
+            (true, true) => ([&[0i32][..], values].concat(), 1, 1),
+            (true, false) => ([values, &[0i32][..]].concat(), 0, 1),
         };
 
-        // Two null-free cursors -- compare takes the has_nulls fast path.
-        let a = new_primitive(options, ScalarBuffer::from(vec![1i32, 2, 3, 4]), 0);
-        let b = new_primitive(options, ScalarBuffer::from(vec![2i32, 3, 4, 5]), 0);
-        assert!(!a.values.has_nulls);
-        assert!(!b.values.has_nulls);
-        assert_eq!(a.cmp(&b), Ordering::Less);
+        let mut cursor = new_primitive(options, ScalarBuffer::from(buffer), null_count);
+        for _ in 0..idx + shift {
+            cursor.advance();
+        }
+        cursor
+    }
 
-        // A null-containing cursor forces the slow (null-aware) path, and the
-        // two paths must agree.
-        let c = new_primitive(options, ScalarBuffer::from(vec![i32::MAX, 3i32, 4]), 1);
-        assert!(c.values.has_nulls);
-        assert_eq!(a.cmp(&c), Ordering::Less);
+    /// Every `ArrayValues` method carrying a `has_nulls` fast path must answer
+    /// exactly as the null-aware path does on the same values, for both sort
+    /// directions and both null placements.
+    #[test]
+    fn test_array_values_has_nulls_fast_path_agrees_with_slow_path() {
+        // Repeated values so `eq` / `eq_to_previous` see ties as well as
+        // differences; `i32::MAX` catches a compare that overflows.
+        let values = [1i32, 2, 2, 5, i32::MAX];
+
+        for descending in [false, true] {
+            for nulls_first in [false, true] {
+                let options = SortOptions {
+                    descending,
+                    nulls_first,
+                };
+
+                for i in 0..values.len() {
+                    for j in 0..values.len() {
+                        let fast_l = new_primitive_at(options, &values, false, i);
+                        let fast_r = new_primitive_at(options, &values, false, j);
+                        let slow_l = new_primitive_at(options, &values, true, i);
+                        let slow_r = new_primitive_at(options, &values, true, j);
+
+                        assert!(!fast_l.values.has_nulls && !fast_r.values.has_nulls);
+                        assert!(slow_l.values.has_nulls && slow_r.values.has_nulls);
+
+                        assert_eq!(
+                            fast_l.cmp(&fast_r),
+                            slow_l.cmp(&slow_r),
+                            "compare({i}, {j}) disagreed for {options:?}"
+                        );
+                        assert_eq!(
+                            fast_l == fast_r,
+                            slow_l == slow_r,
+                            "eq({i}, {j}) disagreed for {options:?}"
+                        );
+                    }
+
+                    if i > 0 {
+                        let fast = new_primitive_at(options, &values, false, i);
+                        let slow = new_primitive_at(options, &values, true, i);
+                        assert_eq!(
+                            fast.is_eq_to_prev_row(),
+                            slow.is_eq_to_prev_row(),
+                            "eq_to_previous({i}) disagreed for {options:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 }
