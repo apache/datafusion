@@ -29,14 +29,14 @@ module.exports = async ({ github, context }) => {
         });
     } catch (error) {
         if (error.status === 404) {
-        await github.rest.issues.createLabel({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            name: target_version,
-            color: '222222'
-        });
+            await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: target_version,
+                color: '222222'
+            });
         } else {
-        throw error;
+            throw error;
         }
     }
 

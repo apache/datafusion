@@ -41,7 +41,7 @@ use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::filter::FilterExecBuilder;
 use crate::physical_plan::joins::utils as join_utils;
 use crate::physical_plan::joins::{
-    AsOfJoinExec, AsOfMatchExpr, CrossJoinExec, HashJoinExec, NestedLoopJoinExec,
+    AsOfJoinExec, AsOfMatchExpr, CrossJoinExec, HashJoinExecBuilder, NestedLoopJoinExec,
     PartitionMode, SortMergeJoinExec,
 };
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
@@ -587,6 +587,7 @@ impl DefaultPhysicalPlanner {
                     projection,
                     filters,
                     fetch,
+                    skip: offset,
                     projected_schema,
                     statistics_requests,
                     ..
@@ -604,6 +605,7 @@ impl DefaultPhysicalPlanner {
                         .with_projection(projection.as_deref())
                         .with_filters(Some(&filters_vec))
                         .with_limit(*fetch)
+                        .with_skip(*offset)
                         .with_statistics_requests(&stats_requests);
                     let res = source.scan_with_args(session_state, opts).await?;
                     Arc::clone(res.plan())
@@ -1356,6 +1358,7 @@ impl DefaultPhysicalPlanner {
                 join_type,
                 null_equality,
                 null_aware,
+                null_aware_value_keys,
                 schema: join_schema,
                 ..
             }) => {
@@ -1788,17 +1791,20 @@ impl DefaultPhysicalPlanner {
                         PartitionMode::CollectLeft
                     };
 
-                    Arc::new(HashJoinExec::try_new(
-                        physical_left,
-                        physical_right,
-                        join_on,
-                        join_filter,
-                        join_type,
-                        None,
-                        partition_mode,
-                        *null_equality,
-                        *null_aware,
-                    )?)
+                    Arc::new(
+                        HashJoinExecBuilder::new(
+                            physical_left,
+                            physical_right,
+                            join_on,
+                            *join_type,
+                        )
+                        .with_filter(join_filter)
+                        .with_partition_mode(partition_mode)
+                        .with_null_equality(*null_equality)
+                        .with_null_aware(*null_aware)
+                        .with_null_aware_value_keys(*null_aware_value_keys)
+                        .build()?,
+                    )
                 };
 
                 // If plan was mutated previously then need to create the ExecutionPlan
@@ -1882,12 +1888,12 @@ impl DefaultPhysicalPlanner {
             LogicalPlan::Extension(Extension { node }) => {
                 let mut maybe_plan = None;
                 let children = children.vec();
+                let logical_input = node.inputs();
                 for planner in &self.extension_planners {
                     if maybe_plan.is_some() {
                         break;
                     }
 
-                    let logical_input = node.inputs();
                     maybe_plan = planner
                         .plan_extension(
                             self,
@@ -2513,10 +2519,11 @@ fn extract_dml_filters(
     //
     // Deduplication is necessary because filters may appear in both Filter nodes
     // and TableScan.filters when the optimizer performs partial (Inexact) pushdown.
-    let mut seen_filters = HashSet::new();
-    filters
-        .into_iter()
-        .try_fold(Vec::new(), |mut deduped, filter| {
+    let num_filters = filters.len();
+    let mut seen_filters = HashSet::with_capacity(num_filters);
+    filters.into_iter().try_fold(
+        Vec::with_capacity(num_filters),
+        |mut deduped, filter| {
             let unqualified = strip_column_qualifiers(filter).map_err(|e| {
                 e.context(format!(
                     "Failed to strip column qualifiers for DML filter on table '{target}'"
@@ -2526,7 +2533,8 @@ fn extract_dml_filters(
                 deduped.push(unqualified);
             }
             Ok(deduped)
-        })
+        },
+    )
 }
 
 /// Determine whether a predicate references only columns from the target table

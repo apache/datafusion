@@ -605,8 +605,8 @@ fn try_reorder(
         return (join_keys, None);
     };
 
-    let mut new_left_keys = vec![];
-    let mut new_right_keys = vec![];
+    let mut new_left_keys = Vec::with_capacity(positions.len());
+    let mut new_right_keys = Vec::with_capacity(positions.len());
     for pos in positions.iter() {
         new_left_keys.push(Arc::clone(&join_keys.left_keys[*pos]));
         new_right_keys.push(Arc::clone(&join_keys.right_keys[*pos]));
@@ -1003,14 +1003,14 @@ fn get_repartition_requirement_status(
     let children = plan.children();
     let rr_beneficial = plan.benefits_from_input_partitioning();
     let requirements = plan.input_distribution_requirements().into_per_child();
-    let mut repartition_status_flags = vec![];
+    let mut repartition_status_flags = Vec::with_capacity(children.len());
     for (child, requirement, roundrobin_beneficial) in
         izip!(children.into_iter(), requirements, rr_beneficial)
     {
         // Decide whether adding a round robin is beneficial depending on
         // the statistical information we have on the number of rows:
         let roundrobin_beneficial_stats = match stats_ctx
-            .compute(child.as_ref(), &StatisticsArgs::new())?
+            .compute_arc(child, &StatisticsArgs::new())?
             .num_rows
         {
             Precision::Exact(n_rows) => n_rows > batch_size,
@@ -1353,9 +1353,7 @@ pub fn ensure_distribution(
 /// `stats_ctx` carries the memoization cache used to answer the child
 /// statistics queries behind the repartition decisions. Share one context
 /// across the whole traversal so each subtree is computed once rather than
-/// once per ancestor. The cache is keyed by raw plan-node pointers, so reset
-/// it (via [`StatisticsContext::reset_cache`]) after any node whose plan
-/// pointer actually changed.
+/// once per ancestor.
 #[expect(
     deprecated,
     reason = "HashPartitioned is accepted during the KeyPartitioned migration"

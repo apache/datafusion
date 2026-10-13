@@ -528,7 +528,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.metrics.clone_inner())
+        Some(self.metrics.clone_inner().with_output_rows_skew())
     }
 
     fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
@@ -718,6 +718,8 @@ pub struct LinearSearch {
     /// Keeps the hash of input buffer calculated from PARTITION BY columns.
     /// Its length is equal to the `input_buffer` length.
     input_buffer_hashes: VecDeque<u64>,
+    /// Hashes of the latest batch, reused across batches.
+    batch_hashes: Vec<u64>,
     /// Used during hash value calculation.
     random_state: RandomState,
     /// Input ordering and partition by key ordering need not be the same, so
@@ -899,6 +901,7 @@ impl LinearSearch {
     fn new(ordered_partition_by_indices: Vec<usize>, input_schema: SchemaRef) -> Self {
         LinearSearch {
             input_buffer_hashes: VecDeque::new(),
+            batch_hashes: Vec::new(),
             random_state: Default::default(),
             ordered_partition_by_indices,
             row_map_batch: HashTable::with_capacity(256),
@@ -920,9 +923,10 @@ impl LinearSearch {
         batch: &RecordBatch,
     ) -> Result<(Vec<PartitionKey>, Vec<u32>, Vec<usize>)> {
         let num_rows = batch.num_rows();
-        let mut batch_hashes = vec![0; num_rows];
-        create_hashes(columns, &self.random_state, &mut batch_hashes)?;
-        self.input_buffer_hashes.extend(&batch_hashes);
+        self.batch_hashes.clear();
+        self.batch_hashes.resize(num_rows, 0);
+        create_hashes(columns, &self.random_state, &mut self.batch_hashes)?;
+        self.input_buffer_hashes.extend(&self.batch_hashes);
         // reset row_map for new calculation
         self.row_map_batch.clear();
         let mut keys: Vec<PartitionKey> = vec![];
@@ -930,7 +934,7 @@ impl LinearSearch {
         let mut row_partition_ids = Vec::with_capacity(num_rows);
         // Number of rows in each partition:
         let mut counts: Vec<usize> = vec![];
-        for (hash, row_idx) in batch_hashes.into_iter().zip(0u32..) {
+        for (&hash, row_idx) in self.batch_hashes.iter().zip(0u32..) {
             let entry = self.row_map_batch.find_mut(hash, |(_, group_idx)| {
                 let row = get_row_at_idx(columns, row_idx as usize).unwrap();
                 // Handle hash collisions with an equality check:
@@ -1114,7 +1118,7 @@ impl SortedSearch {
     ) -> usize {
         // Different window aggregators may produce results at different rates.
         // We produce the overall batch result only as fast as the slowest one.
-        let mut counts = vec![];
+        let mut counts = Vec::with_capacity(window_agg_states.len());
         let out_col_counts = window_agg_states.iter().map(|window_agg_state| {
             // Store how many elements are generated for the current
             // window expression:
@@ -1559,7 +1563,7 @@ fn get_aggregate_result_out_column(
 ) -> Result<ArrayRef> {
     let mut result = None;
     let mut running_length = 0;
-    let mut batches_to_concat = vec![];
+    let mut batches_to_concat = Vec::with_capacity(partition_window_agg_states.len());
     // We assume that iteration order is according to insertion order
     for (
         _,

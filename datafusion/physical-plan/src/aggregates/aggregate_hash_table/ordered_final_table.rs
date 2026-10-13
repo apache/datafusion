@@ -46,7 +46,6 @@ impl OrderedAggregateTable<FinalMarker> {
         agg: &AggregateExec,
         input_schema: &SchemaRef,
         output_schema: SchemaRef,
-        batch_size: usize,
         input_order_mode: &InputOrderMode,
         metrics: OrderedAggregateTableMetrics,
     ) -> Result<Self> {
@@ -55,7 +54,6 @@ impl OrderedAggregateTable<FinalMarker> {
             input_schema,
             output_schema,
             Arc::clone(input_schema),
-            batch_size,
             input_order_mode,
             &AggregateMode::Final,
             vec![None; agg.aggr_expr().len()],
