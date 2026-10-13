@@ -257,6 +257,14 @@ fn is_date_minus_date(lhs: &DataType, rhs: &DataType) -> bool {
     )
 }
 
+/// Whether this is `interval * number` or `number * interval`.
+fn is_interval_multiplication(lhs: &DataType, rhs: &DataType) -> bool {
+    matches!(
+        (lhs, rhs),
+        (DataType::Interval(_), _) | (_, DataType::Interval(_))
+    )
+}
+
 /// Milliseconds per day, used for Date64 subtraction.
 const MILLIS_PER_DAY: i64 = 86_400_000;
 
@@ -659,6 +667,12 @@ impl PhysicalExpr for BinaryExpr {
             }
             Operator::Minus if self.fail_on_overflow => return apply(&lhs, &rhs, sub),
             Operator::Minus => return apply(&lhs, &rhs, sub_wrapping),
+            // arrow's interval kernels only implement checked multiplication.
+            Operator::Multiply
+                if is_interval_multiplication(&left_data_type, &right_data_type) =>
+            {
+                return apply(&lhs, &rhs, mul);
+            }
             Operator::Multiply if self.fail_on_overflow => return apply(&lhs, &rhs, mul),
             Operator::Multiply => return apply(&lhs, &rhs, mul_wrapping),
             Operator::Divide => return apply(&lhs, &rhs, div),

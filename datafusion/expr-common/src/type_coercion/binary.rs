@@ -147,6 +147,12 @@ impl<'a> BinaryTypeCoercer<'a> {
             return Ok(Signature::uniform(DataType::Int64));
         }
 
+        // `interval * NULL` and `interval / NULL` keep their `NULL` operand so that
+        // `signature_inner` coerces it to a number rather than to an interval.
+        if interval_number_coercion(self.lhs, self.rhs, self.op).is_some() {
+            return self.signature_inner(self.lhs, self.rhs);
+        }
+
         if let Some(coerced) = null_coercion(self.lhs, self.rhs) {
             // Special handling for arithmetic + null coercion:
             // For arithmetic operators on non-temporal types, we must handle the result type here using Arrow's numeric kernel.
@@ -186,7 +192,9 @@ impl<'a> BinaryTypeCoercer<'a> {
         let result = match self.op {
             Operator::Plus => add_wrapping(&l, &r),
             Operator::Minus => sub_wrapping(&l, &r),
-            Operator::Multiply => mul_wrapping(&l, &r),
+            // arrow's interval kernels only implement checked multiplication,
+            // so `mul_wrapping` would reject `interval * number`.
+            Operator::Multiply => mul(&l, &r),
             Operator::Divide => div(&l, &r),
             Operator::Modulo => rem(&l, &r),
             _ => unreachable!(),
@@ -327,6 +335,17 @@ impl<'a> BinaryTypeCoercer<'a> {
                     rhs: coerced,
                     ret,
                 });
+            }
+            if matches!(self.op, Multiply | Divide)
+                && let Some((lhs, rhs)) = interval_number_coercion(lhs, rhs, self.op)
+            {
+                // Interval scaling, e.g. Interval * Int64 or Interval / Float64
+                let ret = self.get_result(&lhs, &rhs).map_err(|e| {
+                    plan_datafusion_err!(
+                        "Cannot get result type for temporal operation {} {} {}: {e}", self.lhs, self.op, self.rhs
+                    )
+                })?;
+                return Ok(Signature { lhs, rhs, ret });
             }
             if let Ok(ret) = self.get_result(lhs, rhs) {
 
@@ -2211,17 +2230,40 @@ fn temporal_math_coercion(
         (Interval(_), Time32(_) | Time64(_)) => {
             Some((Interval(MonthDayNano), Interval(MonthDayNano)))
         }
-        // Interval * number => Interval
-        (
-            Interval(_),
-            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 | Float16
-            | Float32 | Float64,
-        ) => Some((Interval(MonthDayNano), Interval(MonthDayNano))),
-        (
-            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 | Float16
-            | Float32 | Float64,
-            Interval(_),
-        ) => Some((Interval(MonthDayNano), Interval(MonthDayNano))),
+        _ => None,
+    }
+}
+
+/// Coerces `interval * number`, `number * interval` and `interval / number` to
+/// the operand types supported by arrow's interval kernels: the interval becomes
+/// `Interval(MonthDayNano)`, an integer factor becomes `Int64`, and any other
+/// numeric (or `NULL`) factor or divisor becomes `Float64`.
+///
+/// Returns `None` for every other combination, including `number / interval`.
+fn interval_number_coercion(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+    op: &Operator,
+) -> Option<(DataType, DataType)> {
+    use DataType::*;
+
+    match (lhs_type, rhs_type, op) {
+        (Interval(_), number, Operator::Multiply) if number.is_integer() => {
+            Some((Interval(MonthDayNano), Int64))
+        }
+        (number, Interval(_), Operator::Multiply) if number.is_integer() => {
+            Some((Int64, Interval(MonthDayNano)))
+        }
+        (Interval(_), number, Operator::Multiply | Operator::Divide)
+            if number.is_numeric() || number.is_null() =>
+        {
+            Some((Interval(MonthDayNano), Float64))
+        }
+        (number, Interval(_), Operator::Multiply)
+            if number.is_numeric() || number.is_null() =>
+        {
+            Some((Float64, Interval(MonthDayNano)))
+        }
         _ => None,
     }
 }
