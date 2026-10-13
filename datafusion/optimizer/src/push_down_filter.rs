@@ -1465,11 +1465,7 @@ impl OptimizerRule for PushDownFilter {
             }
             child => {
                 filter.input = Arc::new(child);
-                Ok(Transformed::new(
-                    LogicalPlan::Filter(filter),
-                    predicates_changed || reorder_changed,
-                    TreeNodeRecursion::Continue,
-                ))
+Ok(Transformed::no(LogicalPlan::Filter(filter)))
             }
         };
         result.map(|mut result| {
