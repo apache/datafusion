@@ -226,13 +226,11 @@ query TT
 EXPLAIN SELECT SUM(column1 + 1) FILTER (WHERE column1 > 1), SUM(column1 + 1) FILTER (WHERE column1 > 0) FROM sum_simplify_t;
 ----
 logical_plan
-01)Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS sum_simplify_t.column1 + Int64(1)) FILTER (WHERE sum_simplify_t.column1 > Int64(1)), sum(__common_expr_1 AS sum_simplify_t.column1 + Int64(1)) FILTER (WHERE sum_simplify_t.column1 > Int64(0))]]
-02)--Projection: sum_simplify_t.column1 + Int64(1) AS __common_expr_1, sum_simplify_t.column1
-03)----TableScan: sum_simplify_t projection=[column1]
+01)Aggregate: groupBy=[[]], aggr=[[sum(sum_simplify_t.column1 + Int64(1)) FILTER (WHERE sum_simplify_t.column1 > Int64(1)), sum(sum_simplify_t.column1 + Int64(1)) FILTER (WHERE sum_simplify_t.column1 > Int64(0))]]
+02)--TableScan: sum_simplify_t projection=[column1]
 physical_plan
 01)AggregateExec: mode=Single, gby=[], aggr=[sum(sum_simplify_t.column1 + Int64(1)) FILTER (WHERE sum_simplify_t.column1 > Int64(1)), sum(sum_simplify_t.column1 + Int64(1)) FILTER (WHERE sum_simplify_t.column1 > Int64(0))]
-02)--ProjectionExec: expr=[column1@0 + 1 as __common_expr_1, column1@0 as column1]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # volatile aggregate arguments
 query B
