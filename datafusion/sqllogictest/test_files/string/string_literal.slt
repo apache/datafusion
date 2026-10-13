@@ -1159,6 +1159,11 @@ select
 ----
 true true true true
 
+query B
+SELECT arrow_cast('foobar', 'Dictionary(Int32, Utf8)') LIKE arrow_cast('foo%', 'Utf8View')
+----
+true
+
 # Literal with UTF8 string and different arrow types for pattern
 query BBBB
 select

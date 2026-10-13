@@ -602,15 +602,18 @@ impl<'a> TypeCoercionRewriter<'a> {
                 "There isn't a common type to coerce {left_type} and {right_type} in {op_name} expression"
             )
         })?;
-        let expr = match left_type {
+        let (expr, pattern_type) = match &left_type {
             DataType::Dictionary(_, inner)
-                if preserve_utf8_dictionary && *inner == DataType::Utf8 =>
+                if preserve_utf8_dictionary && **inner == DataType::Utf8 =>
             {
-                Box::new(expr)
+                (Box::new(expr), inner.as_ref().clone())
             }
-            _ => Box::new(expr.cast_to(&coerced_type, self.schema)?),
+            _ => (
+                Box::new(expr.cast_to(&coerced_type, self.schema)?),
+                coerced_type,
+            ),
         };
-        let pattern = Box::new(pattern.cast_to(&coerced_type, self.schema)?);
+        let pattern = Box::new(pattern.cast_to(&pattern_type, self.schema)?);
         Ok((expr, pattern))
     }
 }
@@ -2741,6 +2744,23 @@ mod test {
         assert_type_coercion_error(
             plan,
             "There isn't a common type to coerce Int64 and Utf8 in LIKE expression",
+        )?;
+
+        let expr = Box::new(col("a"));
+        let pattern = Box::new(lit(ScalarValue::Utf8View(Some("abc".to_string()))));
+        let like_expr = Expr::Like(Like::new(false, expr, pattern, None, false));
+        let empty = empty_with_type(DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(Utf8),
+        ));
+        let plan = LogicalPlan::Projection(Projection::try_new(vec![like_expr], empty)?);
+
+        assert_analyzed_plan_eq!(
+            plan,
+            @r#"
+        Projection: a LIKE CAST(Utf8View("abc") AS Utf8)
+          EmptyRelation: rows=0
+        "#
         )?;
 
         // ilike
