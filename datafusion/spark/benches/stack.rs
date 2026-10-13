@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, Int64Array, StringArray};
+use arrow::array::{ArrayRef, BooleanArray, Int64Array, StringArray};
 use arrow::datatypes::Field;
 use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
@@ -42,6 +42,13 @@ fn utf8_column(rng: &mut StdRng) -> ColumnarValue {
             (rng.random::<f32>() > 0.1)
                 .then(|| format!("value-{}", rng.random_range(0..1_000_000)))
         })
+        .collect();
+    ColumnarValue::Array(Arc::new(array) as ArrayRef)
+}
+
+fn boolean_column(rng: &mut StdRng) -> ColumnarValue {
+    let array: BooleanArray = (0..SIZE)
+        .map(|_| (rng.random::<f32>() > 0.1).then(|| rng.random::<bool>()))
         .collect();
     ColumnarValue::Array(Arc::new(array) as ArrayRef)
 }
@@ -88,6 +95,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     let rng = &mut StdRng::seed_from_u64(42);
     let ints = (0..4).map(|_| int64_column(rng)).collect::<Vec<_>>();
     let strings = (0..2).map(|_| utf8_column(rng)).collect::<Vec<_>>();
+    let booleans = (0..2).map(|_| boolean_column(rng)).collect::<Vec<_>>();
     let key = |k: &str| ColumnarValue::Scalar(ScalarValue::from(k));
 
     // stack(4, 'k1', c1, 'k2', c2, 'k3', c3, 'k4', c4): unpivot 4 columns
@@ -101,6 +109,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     bench_stack(c, "stack: 4 int64 columns into 4 rows", 4, ints.clone());
     bench_stack(c, "stack: 4 int64 columns into 1 row", 1, ints);
     bench_stack(c, "stack: 2 utf8 columns into 2 rows", 2, strings);
+    bench_stack(c, "stack: 2 boolean columns into 2 rows", 2, booleans);
 }
 
 criterion_group!(benches, criterion_benchmark);

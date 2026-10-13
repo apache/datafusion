@@ -28,7 +28,7 @@ pub mod expr_fn {
 
     export_functions!((
         stack,
-        "Separates the values into `n` rows, returned as a list of structs with fields `col0`, `col1`, and so on.",
+        "Separates the values into `n` rows, where `n` is an integer literal, and returns them as a list of structs with fields `col0`, `col1`, and so on, which `unnest` expands.",
         args,
     ));
 }

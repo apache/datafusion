@@ -18,11 +18,11 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, BooleanBufferBuilder, ListArray, PrimitiveArray,
-    StructArray, downcast_primitive, new_empty_array, new_null_array,
+    Array, ArrayRef, AsArray, ListArray, NullBufferBuilder, PrimitiveArray, StructArray,
+    UInt32Array, downcast_primitive, new_empty_array, new_null_array,
 };
-use arrow::buffer::{NullBuffer, OffsetBuffer};
-use arrow::compute::{cast, concat, interleave};
+use arrow::buffer::OffsetBuffer;
+use arrow::compute::{concat, take};
 use arrow::datatypes::{ArrowPrimitiveType, DataType, Field, FieldRef, Fields};
 use datafusion_common::types::NativeType;
 use datafusion_common::{
@@ -44,11 +44,13 @@ use datafusion_expr::{
 /// Note: In Spark, `stack` is a Generator that produces rows. In DataFusion, a
 /// ScalarUDF can only return one value per row, so the `n` rows are returned as a
 /// `List<Struct<col0, col1, ...>>`, which is the data type of Spark's Generator.
-/// The caller (e.g. Comet) is expected to unnest the list.
+/// The caller (e.g. Comet, or `unnest` in SQL) is expected to unnest the list.
 ///
-/// As in Spark, `n` must be an integer literal in `[1, 2147483647]`, and the
-/// values of a column must have the same type. Only untyped NULLs are coerced, to
-/// the type of the first non-NULL value in their column.
+/// As in Spark, the values of a column must have the same type, which is the type
+/// of its first non-NULL value. NULLs, Arrow types of the same Spark type (such as
+/// `Utf8` and `Utf8View`), and integer literals that fit are cast to it. Unlike
+/// Spark, which accepts any foldable `INT`, `n` must be an integer literal in
+/// `[1, 2147483647]`.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkStack {
     signature: Signature,
@@ -83,16 +85,15 @@ impl ScalarUDFImpl for SparkStack {
 
     /// Validates the arguments in the order Spark's `Stack.checkInputDataTypes` does.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let [n, values @ ..] = args.arg_fields else {
-            return plan_err!(
-                "The `stack` requires > 1 parameters but the actual number is 0."
-            );
+        let (n, values) = match args.arg_fields {
+            [n, values @ ..] if !values.is_empty() => (n, values),
+            fields => {
+                return plan_err!(
+                    "The `stack` requires > 1 parameters but the actual number is {}.",
+                    fields.len()
+                );
+            }
         };
-        if values.is_empty() {
-            return plan_err!(
-                "The `stack` requires > 1 parameters but the actual number is 1."
-            );
-        }
         if !n.data_type().is_integer() {
             return plan_err!(
                 "The first parameter requires the \"INT\" type, however \"{}\" has the type \"{}\".",
@@ -107,7 +108,8 @@ impl ScalarUDFImpl for SparkStack {
             );
         };
         let num_fields = values.len().div_ceil(parse_n(n_value)?);
-        let fields = column_types(values, num_fields)?
+        let literals = args.scalar_arguments.get(1..).unwrap_or_default();
+        let fields = column_types(values, literals, num_fields)?
             .into_iter()
             .enumerate()
             .map(|(i, data_type)| Field::new(format!("col{i}"), data_type, true))
@@ -146,7 +148,8 @@ impl ScalarUDFImpl for SparkStack {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        // Spark does no implicit casts. NULLs are coerced per column at execution.
+        // Spark does no implicit casts. Values are cast to their column's type at
+        // execution.
         Ok(arg_types.to_vec())
     }
 }
@@ -162,58 +165,96 @@ fn parse_n(n: &ScalarValue) -> Result<usize> {
 /// Returns the type of each output column, which is the type of its first
 /// non-NULL value as in Spark's `StackCoercion`. Errors on the first value, in
 /// argument order, whose type differs from its column's.
-fn column_types(values: &[FieldRef], num_fields: usize) -> Result<Vec<DataType>> {
+fn column_types(
+    values: &[FieldRef],
+    literals: &[Option<&ScalarValue>],
+    num_fields: usize,
+) -> Result<Vec<DataType>> {
     let mut types = vec![DataType::Null; num_fields];
     for (i, value) in values.iter().enumerate() {
-        let column_type = &mut types[i % num_fields];
-        if column_type.is_null() {
-            *column_type = value.data_type().clone();
-        }
-    }
-    for (i, value) in values.iter().enumerate() {
         let col = i % num_fields;
-        let (expected, actual) = (&types[col], value.data_type());
-        // Compare logical types, so `Utf8` and `Utf8View` are both Spark's STRING
-        if !actual.is_null()
-            && actual != expected
-            && NativeType::from(actual) != NativeType::from(expected)
-        {
-            return plan_err!(
-                "The data type of the column ({col}) do not have the same type: \"{expected}\" ({}) <> \"{actual}\" ({}).",
-                col + 1,
-                i + 1
-            );
+        let (expected, actual) = (&mut types[col], value.data_type());
+        if expected.is_null() {
+            *expected = actual.clone();
+            continue;
         }
+        if actual.is_null() || same_spark_type(actual, expected) {
+            continue;
+        }
+        // Integer literals are BIGINT here but INT in Spark, so one that fits is
+        // cast to an integer column. Being a literal never changes the column type,
+        // which must not change when constant folding turns an expression into a
+        // literal.
+        let literal = literals.get(i).copied().flatten();
+        if actual.is_integer()
+            && expected.is_integer()
+            && literal.is_some_and(|literal| literal.cast_to(expected).is_ok())
+        {
+            continue;
+        }
+        return plan_err!(
+            "The data type of the column ({col}) do not have the same type: \"{expected}\" ({}) <> \"{actual}\" ({}).",
+            col + 1,
+            i + 1
+        );
     }
     Ok(types)
 }
 
-/// Generates `n` rows of `item`'s struct type for each of `num_rows` input rows.
-/// Field `j` of generated row `i` is `values[i * num_fields + j]`, or NULL past the
-/// last value.
+/// Whether two Arrow types are the same Spark type. Types of one logical type, such
+/// as `Utf8` and `Utf8View`, match, and list elements match regardless of their
+/// field name, which Spark arrays do not have.
+fn same_spark_type(left: &DataType, right: &DataType) -> bool {
+    use DataType::*;
+    left == right
+        || match (left, right) {
+            (
+                List(left) | LargeList(left) | ListView(left) | LargeListView(left),
+                List(right) | LargeList(right) | ListView(right) | LargeListView(right),
+            ) => {
+                left.is_nullable() == right.is_nullable()
+                    && same_spark_type(left.data_type(), right.data_type())
+            }
+            (Struct(left), Struct(right)) => {
+                left.len() == right.len()
+                    && left.iter().zip(right.iter()).all(|(left, right)| {
+                        left.name() == right.name()
+                            && left.is_nullable() == right.is_nullable()
+                            && same_spark_type(left.data_type(), right.data_type())
+                    })
+            }
+            _ => NativeType::from(left) == NativeType::from(right),
+        }
+}
+
+/// Generates `n` rows of `item`'s struct type for each of `number_rows` input
+/// rows. Field `j` of generated row `i` is `values[i * num_fields + j]`, or NULL
+/// past the last value.
 fn stack(
     values: &[ColumnarValue],
     item: &FieldRef,
     n: usize,
-    num_rows: usize,
+    number_rows: usize,
 ) -> Result<ListArray> {
     let DataType::Struct(fields) = item.data_type() else {
         return internal_err!("stack: unexpected element type {item}");
     };
-    let offsets = OffsetBuffer::try_from_repeated_length(n, num_rows).map_err(|_| {
-        exec_datafusion_err!(
-            "stack: {num_rows} rows of {n} generated rows exceed the maximum list size"
-        )
-    })?;
-    let columns = if n == 1 {
-        // Every value is a column as is, without copying arrays
-        values
+    let offsets =
+        OffsetBuffer::try_from_repeated_length(n, number_rows).map_err(|_| {
+            exec_datafusion_err!(
+                "stack: {number_rows} rows of {n} generated rows exceed the maximum list size"
+            )
+        })?;
+    let columns = if number_rows == 0 {
+        fields
             .iter()
-            .zip(fields.iter())
-            .map(|(value, field)| cast_to(value.to_array(num_rows)?, field.data_type()))
-            .collect::<Result<_>>()?
+            .map(|field| new_empty_array(field.data_type()))
+            .collect()
+    } else if n == 1 {
+        // Every value is a column as is, without copying arrays
+        ColumnarValue::values_to_arrays(values)?
     } else {
-        stack_columns(values, fields, n, num_rows)?
+        stack_columns(values, fields, n, number_rows)?
     };
     let rows = StructArray::try_new(fields.clone(), columns, None)?;
     Ok(ListArray::try_new(
@@ -224,95 +265,77 @@ fn stack(
     )?)
 }
 
-/// Builds each output column from its `n` values. An array value is read at the
-/// input row. A scalar or NULL is a single value array read at index 0, so it is
-/// never broadcast.
+/// Builds each output column from its values, one per generated row, with the
+/// rows past the last value as NULL padding. An array value is read at the input
+/// row. A scalar is a single value array read at index 0, so it is never
+/// broadcast.
 fn stack_columns(
     values: &[ColumnarValue],
     fields: &Fields,
     n: usize,
-    num_rows: usize,
+    number_rows: usize,
 ) -> Result<Vec<ArrayRef>> {
     macro_rules! primitive_helper {
-        ($t:ty, $sources:ident, $per_row:ident, $num_rows:ident, $data_type:ident) => {
+        ($t:ty, $sources:ident, $is_array:ident, $n:ident, $number_rows:ident, $data_type:ident) => {
             Ok(stack_primitive::<$t>(
-                &$sources, &$per_row, $num_rows, $data_type,
+                &$sources,
+                &$is_array,
+                $n,
+                $number_rows,
+                $data_type,
             ))
         };
     }
     let num_fields = fields.len();
-    let mut indices = vec![];
+    let mut sources = Vec::with_capacity(values.len().div_ceil(num_fields));
+    let mut is_array = Vec::with_capacity(sources.capacity());
     fields
         .iter()
         .enumerate()
         .map(|(col, field)| {
             let data_type = field.data_type();
-            if data_type.is_null() {
-                return Ok(new_null_array(data_type, num_rows * n));
-            }
-            let null = new_null_array(data_type, 1);
-            let mut sources = Vec::with_capacity(n);
-            let mut per_row = Vec::with_capacity(n);
-            for row in 0..n {
-                let (source, is_array) = match values.get(row * num_fields + col) {
-                    Some(ColumnarValue::Array(array)) if !array.data_type().is_null() => {
-                        (cast_to(Arc::clone(array), data_type)?, true)
-                    }
-                    Some(ColumnarValue::Scalar(scalar)) if !scalar.is_null() => {
-                        (cast_to(scalar.to_array()?, data_type)?, false)
-                    }
-                    _ => (Arc::clone(&null), false),
-                };
-                sources.push(source);
-                per_row.push(is_array);
-            }
-            if !per_row.contains(&true) {
-                // The same `n` values for every input row
-                let sources = sources.iter().map(AsRef::as_ref).collect::<Vec<_>>();
-                return repeat(concat(&sources)?, num_rows);
+            sources.clear();
+            is_array.clear();
+            for value in values.iter().skip(col).step_by(num_fields) {
+                sources.push(value.cast_to(data_type, None)?.into_array(1)?);
+                is_array.push(matches!(value, ColumnarValue::Array(_)));
             }
             downcast_primitive! {
-                data_type => (primitive_helper, sources, per_row, num_rows, data_type),
-                _ => {
-                    indices.clear();
-                    indices.try_reserve(num_rows * n).map_err(|e| {
-                        exec_datafusion_err!("stack: failed to allocate indices: {e}")
-                    })?;
-                    for input_row in 0..num_rows {
-                        indices.extend(per_row.iter().enumerate().map(|(i, &per_row)| {
-                            (i, if per_row { input_row } else { 0 })
-                        }));
-                    }
-                    let sources = sources.iter().map(AsRef::as_ref).collect::<Vec<_>>();
-                    Ok(interleave(&sources, &indices)?)
+                data_type => (primitive_helper, sources, is_array, n, number_rows, data_type),
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary
+                    if !is_array.contains(&true) =>
+                {
+                    // The same `n` values for every input row, so `n` copies of
+                    // them are cheaper than one copy per value
+                    let padding = new_null_array(data_type, n - sources.len());
+                    let mut pattern = sources.iter().map(AsRef::as_ref).collect::<Vec<_>>();
+                    pattern.push(padding.as_ref());
+                    repeat(concat(&pattern)?, number_rows)
                 }
+                _ => stack_take(&sources, &is_array, n, number_rows, data_type),
             }
         })
         .collect()
 }
 
-/// Writes source `i` to every `n`-th slot starting at `i`. This avoids the
-/// index lookups of `interleave`, and only visits the NULL slots of the
-/// validity. It is about 2-3x faster for primitive types.
+/// Writes source `i` to every `n`-th slot starting at `i`, and leaves the slots of
+/// padding rows NULL. This avoids the index lookups of `take`, and only visits the
+/// NULL slots of the validity. It is about 2-3x faster for primitive types.
 fn stack_primitive<T: ArrowPrimitiveType>(
     sources: &[ArrayRef],
-    per_row: &[bool],
-    num_rows: usize,
+    is_array: &[bool],
+    n: usize,
+    number_rows: usize,
     data_type: &DataType,
 ) -> ArrayRef {
-    // `values[i..]` below needs at least one row
-    if num_rows == 0 {
-        return new_empty_array(data_type);
-    }
-    let n = sources.len();
-    let len = num_rows * n;
-    let mut values = vec![T::Native::default(); len];
-    let mut validity: Option<BooleanBufferBuilder> = None;
-    for (i, (source, &per_row)) in sources.iter().zip(per_row).enumerate() {
+    let len = number_rows * n;
+    let mut buffer = vec![T::Native::default(); len];
+    let mut nulls = NullBufferBuilder::new_with_len(len);
+    for (i, (source, &is_array)) in sources.iter().zip(is_array).enumerate() {
         let source = source.as_primitive::<T>();
-        let slots = values[i..].iter_mut().step_by(n);
+        let slots = buffer[i..].iter_mut().step_by(n);
         // `for` loops, as `for_each` on these iterators is 2x slower
-        if per_row {
+        if is_array {
             for (slot, value) in slots.zip(source.values().iter()) {
                 *slot = *value;
             }
@@ -322,35 +345,69 @@ fn stack_primitive<T: ArrowPrimitiveType>(
                 *slot = value;
             }
         }
-        if let Some(nulls) = source.nulls().filter(|nulls| nulls.null_count() > 0) {
-            let validity = validity.get_or_insert_with(|| {
-                let mut validity = BooleanBufferBuilder::new(len);
-                validity.append_n(len, true);
-                validity
-            });
-            if per_row {
-                for row in (!nulls.inner()).set_indices() {
-                    validity.set_bit(row * n + i, false);
+        if let Some(source_nulls) = source.nulls().filter(|nulls| nulls.null_count() > 0)
+        {
+            if is_array {
+                for input_row in (!source_nulls.inner()).set_indices() {
+                    nulls.set_bit(input_row * n + i, false);
                 }
             } else {
-                for row in 0..num_rows {
-                    validity.set_bit(row * n + i, false);
+                for input_row in 0..number_rows {
+                    nulls.set_bit(input_row * n + i, false);
                 }
             }
         }
     }
-    let nulls = validity.map(|mut validity| NullBuffer::new(validity.finish()));
+    for i in sources.len()..n {
+        for input_row in 0..number_rows {
+            nulls.set_bit(input_row * n + i, false);
+        }
+    }
     Arc::new(
-        PrimitiveArray::<T>::new(values.into(), nulls).with_data_type(data_type.clone()),
+        PrimitiveArray::<T>::new(buffer.into(), nulls.build())
+            .with_data_type(data_type.clone()),
     )
+}
+
+/// Takes every output value from the concatenated sources, with one more NULL at
+/// the end for the padding rows. `take` has dedicated kernels for every type,
+/// such as `Boolean`, and keeps the data buffers of view types shared.
+fn stack_take(
+    sources: &[ArrayRef],
+    is_array: &[bool],
+    n: usize,
+    number_rows: usize,
+    data_type: &DataType,
+) -> Result<ArrayRef> {
+    let null = new_null_array(data_type, 1);
+    let mut arrays = sources.iter().map(AsRef::as_ref).collect::<Vec<_>>();
+    arrays.push(null.as_ref());
+    let values = concat(&arrays)?;
+    // Source `i` is read at `start + input_row * step`
+    let mut start = 0;
+    let steps = sources
+        .iter()
+        .zip(is_array)
+        .map(|(source, &is_array)| {
+            let step = (start, u32::from(is_array));
+            start += source.len() as u32;
+            step
+        })
+        .collect::<Vec<_>>();
+    let padding = n - sources.len();
+    let mut indices = Vec::with_capacity(number_rows * n);
+    for input_row in 0..number_rows as u32 {
+        indices.extend(steps.iter().map(|&(start, step)| start + input_row * step));
+        // `start` is now the index of the NULL
+        indices.extend(std::iter::repeat_n(start, padding));
+    }
+    Ok(take(&values, &UInt32Array::from(indices), None)?)
 }
 
 /// Concatenates `count` copies of `array`, doubling a block of copies so it
 /// takes O(log count) bulk copies instead of one copy per value.
-fn repeat(array: ArrayRef, count: usize) -> Result<ArrayRef> {
-    let mut parts = vec![];
-    let mut block = array;
-    let mut count = count;
+fn repeat(mut block: ArrayRef, mut count: usize) -> Result<ArrayRef> {
+    let mut parts = Vec::with_capacity(count.count_ones() as usize);
     while count > 0 {
         if count & 1 == 1 {
             parts.push(Arc::clone(&block));
@@ -360,97 +417,39 @@ fn repeat(array: ArrayRef, count: usize) -> Result<ArrayRef> {
             block = concat(&[block.as_ref(), block.as_ref()])?;
         }
     }
-    match parts.as_slice() {
-        [] => Ok(block.slice(0, 0)),
-        [part] => Ok(Arc::clone(part)),
-        parts => Ok(concat(
-            &parts.iter().map(AsRef::as_ref).collect::<Vec<_>>(),
-        )?),
-    }
-}
-
-fn cast_to(array: ArrayRef, data_type: &DataType) -> Result<ArrayRef> {
-    if array.data_type() == data_type {
-        Ok(array)
-    } else {
-        Ok(cast(&array, data_type)?)
-    }
+    Ok(concat(
+        &parts.iter().map(AsRef::as_ref).collect::<Vec<_>>(),
+    )?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Int64Array, StringArray};
+    use arrow::array::Int64Array;
 
-    #[test]
-    fn test_stack_matches_interleave() -> Result<()> {
-        for num_rows in [0, 1000] {
-            check_stack_matches_interleave(num_rows)?;
-        }
-        Ok(())
+    fn item(fields: Vec<Field>) -> FieldRef {
+        Arc::new(Field::new_list_field(
+            DataType::Struct(fields.into()),
+            false,
+        ))
     }
 
-    fn check_stack_matches_interleave(num_rows: usize) -> Result<()> {
-        let ints: ArrayRef = Arc::new(
-            (0..num_rows as i64)
-                .map(|i| (i % 7 != 0).then_some(i))
-                .collect::<Int64Array>(),
-        );
-        let strings: ArrayRef = Arc::new(
-            (0..num_rows)
-                .map(|i| (i % 5 != 0).then(|| format!("s{i}")))
-                .collect::<StringArray>(),
-        );
-        // 3 rows of 3 columns: col0 takes the primitive path, col1 is all
-        // scalars and padding, col2 takes the `interleave` path
+    #[test]
+    fn test_stack_empty_batch() -> Result<()> {
+        let empty: ArrayRef = Arc::new(Int64Array::from(Vec::<i64>::new()));
         let values = [
-            ColumnarValue::Array(Arc::clone(&ints)),
-            ColumnarValue::Scalar(ScalarValue::from("a")),
-            ColumnarValue::Array(strings),
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(-1))),
-            ColumnarValue::Scalar(ScalarValue::Null),
-            ColumnarValue::Scalar(ScalarValue::from("b")),
-            ColumnarValue::Array(ints),
+            ColumnarValue::Array(Arc::clone(&empty)),
+            ColumnarValue::Array(empty),
         ];
-        let fields = Fields::from(vec![
-            Field::new("col0", DataType::Int64, true),
-            Field::new("col1", DataType::Utf8, true),
-            Field::new("col2", DataType::Utf8, true),
-        ]);
-        let item = Arc::new(Field::new_list_field(
-            DataType::Struct(fields.clone()),
-            false,
-        ));
-        let (n, num_fields) = (3, fields.len());
-        let list = stack(&values, &item, n, num_rows)?;
-        assert_eq!(list.len(), num_rows);
-        assert!(list.offsets().lengths().all(|len| len == n));
-
-        let indices = (0..num_rows)
-            .flat_map(|row| (0..n).map(move |i| (i, row)))
-            .collect::<Vec<_>>();
-        for (col, field) in fields.iter().enumerate() {
-            let sources = (0..n)
-                .map(|i| match values.get(i * num_fields + col) {
-                    Some(value) if !value.data_type().is_null() => {
-                        value.to_array(num_rows)
-                    }
-                    _ => Ok(new_null_array(field.data_type(), num_rows)),
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let sources = sources.iter().map(AsRef::as_ref).collect::<Vec<_>>();
-            let expected = interleave(&sources, &indices)?;
-            assert_eq!(list.values().as_struct().column(col), &expected, "{field}");
-        }
+        let item = item(vec![Field::new("col0", DataType::Int64, true)]);
+        let list = stack(&values, &item, 2, 0)?;
+        assert!(list.is_empty() && list.values().is_empty());
         Ok(())
     }
 
     #[test]
     fn test_stack_list_size_overflow() {
-        let item = Arc::new(Field::new_list_field(
-            DataType::Struct(vec![Field::new("col0", DataType::Int64, true)].into()),
-            false,
-        ));
+        let item = item(vec![Field::new("col0", DataType::Int64, true)]);
         let values = [ColumnarValue::Scalar(ScalarValue::Int64(Some(1)))];
         let err = stack(&values, &item, i32::MAX as usize, 2).unwrap_err();
         assert!(
