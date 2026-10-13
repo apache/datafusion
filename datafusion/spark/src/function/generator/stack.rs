@@ -43,14 +43,15 @@ use datafusion_expr::{
 ///
 /// Note: In Spark, `stack` is a Generator that produces rows. In DataFusion, a
 /// ScalarUDF can only return one value per row, so the `n` rows are returned as a
-/// `List<Struct<col0, col1, ...>>`, which is the data type of Spark's Generator.
-/// The caller (e.g. Comet, or `unnest` in SQL) is expected to unnest the list.
+/// `List<Struct<col0, col1, ...>>`, which is the data type of Spark's Generator. As
+/// in Spark, the list is not nullable while its elements and fields are. The
+/// caller (e.g. Comet, or `unnest` in SQL) is expected to unnest the list.
 ///
-/// As in Spark, the values of a column must have the same type, which is the type
-/// of its first non-NULL value. NULLs, Arrow types of the same Spark type (such as
-/// `Utf8` and `Utf8View`), and integer literals that fit are cast to it. Unlike
-/// Spark, which accepts any foldable `INT`, `n` must be an integer literal in
-/// `[1, 2147483647]`.
+/// As in Spark, `n` is an `INT` in `[1, 2147483647]`, and the values of a column
+/// must have the same type, which is the type of its first non-NULL value. NULLs,
+/// Arrow types of the same Spark type (such as `Utf8` and `Utf8View`), and integer
+/// literals that fit are cast to it. Unlike Spark, which accepts any foldable `n`,
+/// `n` must be an integer literal.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkStack {
     signature: Signature,
@@ -94,7 +95,7 @@ impl ScalarUDFImpl for SparkStack {
                 );
             }
         };
-        if !n.data_type().is_integer() {
+        if n.data_type() != &DataType::Int32 {
             return plan_err!(
                 "The first parameter requires the \"INT\" type, however \"{}\" has the type \"{}\".",
                 n.name(),
@@ -116,7 +117,7 @@ impl ScalarUDFImpl for SparkStack {
             .collect::<Fields>();
         Ok(Arc::new(Field::new(
             self.name(),
-            DataType::new_list(DataType::Struct(fields), false),
+            DataType::new_list(DataType::Struct(fields), true),
             false,
         )))
     }
@@ -148,9 +149,14 @@ impl ScalarUDFImpl for SparkStack {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        // Spark does no implicit casts. Values are cast to their column's type at
-        // execution.
-        Ok(arg_types.to_vec())
+        // `n` is an `INT` as in Spark, while integer literals are BIGINT here. The
+        // values are cast to their column's type at execution, since Spark does no
+        // implicit casts.
+        let mut arg_types = arg_types.to_vec();
+        if let Some(n) = arg_types.first_mut().filter(|n| n.is_integer()) {
+            *n = DataType::Int32;
+        }
+        Ok(arg_types)
     }
 }
 
@@ -428,10 +434,7 @@ mod tests {
     use arrow::array::Int64Array;
 
     fn item(fields: Vec<Field>) -> FieldRef {
-        Arc::new(Field::new_list_field(
-            DataType::Struct(fields.into()),
-            false,
-        ))
+        Arc::new(Field::new_list_field(DataType::Struct(fields.into()), true))
     }
 
     #[test]

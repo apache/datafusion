@@ -53,9 +53,9 @@ fn boolean_column(rng: &mut StdRng) -> ColumnarValue {
     ColumnarValue::Array(Arc::new(array) as ArrayRef)
 }
 
-fn bench_stack(c: &mut Criterion, name: &str, n: i64, values: Vec<ColumnarValue>) {
+fn bench_stack(c: &mut Criterion, name: &str, n: i32, values: Vec<ColumnarValue>) {
     let stack = stack();
-    let n = ScalarValue::Int64(Some(n));
+    let n = ScalarValue::Int32(Some(n));
     let args = std::iter::once(ColumnarValue::Scalar(n.clone()))
         .chain(values)
         .collect::<Vec<_>>();

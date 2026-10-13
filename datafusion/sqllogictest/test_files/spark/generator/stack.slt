@@ -50,7 +50,7 @@ SELECT stack(4, 1, 2, 3);
 query TB
 SELECT arrow_typeof(stack(2, a, b, c)), arrow_field(stack(2, a, b, c))['nullable'] FROM (VALUES (1, 2, 3)) AS t(a, b, c);
 ----
-List(non-null Struct("col0": Int64, "col1": Int64)) false
+List(Struct("col0": Int64, "col1": Int64)) false
 
 # Various column types
 query ?
@@ -67,7 +67,7 @@ SELECT stack(3, 1, 1.1, NULL, 2, NULL, 'b', NULL, 3.3, 'c');
 query TTTT
 SELECT arrow_typeof(stack(3, 1, 2, NULL)), arrow_typeof(stack(3, NULL, '2', '3')), arrow_typeof(stack(2, NULL, NULL, 1, '2')), arrow_typeof(stack(3, NULL, NULL, NULL));
 ----
-List(non-null Struct("col0": Int64)) List(non-null Struct("col0": Utf8)) List(non-null Struct("col0": Int64, "col1": Utf8)) List(non-null Struct("col0": Null))
+List(Struct("col0": Int64)) List(Struct("col0": Utf8)) List(Struct("col0": Int64, "col1": Utf8)) List(Struct("col0": Null))
 
 # Array inputs
 query ?
@@ -88,7 +88,7 @@ SELECT stack(3, i, 'a', s, -1, NULL, 'b', i) FROM (VALUES (1, 's1'), (NULL, 's2'
 query ???T
 SELECT stack(2, 'a', v), stack(2, 'a', d), stack(2, d, 'a'), arrow_typeof(stack(2, d, 'a')) FROM (VALUES (arrow_cast('b', 'Utf8View'), arrow_cast('b', 'Dictionary(Int32, Utf8)'))) AS t(v, d);
 ----
-[{col0: a}, {col0: b}] [{col0: a}, {col0: b}] [{col0: b}, {col0: a}] List(non-null Struct("col0": Dictionary(Int32, Utf8)))
+[{col0: a}, {col0: b}] [{col0: a}, {col0: b}] [{col0: b}, {col0: a}] List(Struct("col0": Dictionary(Int32, Utf8)))
 
 # List elements match regardless of their field name, such as `element` from
 # Spark's array and `item` from DataFusion's
@@ -102,7 +102,7 @@ SELECT stack(2, array(1), [2]);
 query ?T
 SELECT stack(2, a, 0), arrow_typeof(stack(2, a, 0)) FROM (VALUES (1::INT)) AS t(a);
 ----
-[{col0: 1}, {col0: 0}] List(non-null Struct("col0": Int32))
+[{col0: 1}, {col0: 0}] List(Struct("col0": Int32))
 
 query error The data type of the column \(0\) do not have the same type: "Int32" \(1\) <> "Int64" \(2\)\.
 SELECT stack(2, a, 3000000000) FROM (VALUES (1::INT)) AS t(a);
