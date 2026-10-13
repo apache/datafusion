@@ -473,6 +473,19 @@ select array_agg(DISTINCT column2 order by column2) from array_agg_order_list_ta
 [1, 2]
 [1, 2]
 
+# array_agg(DISTINCT .. ORDER BY ..) keeps its own order when another aggregate
+# needs the input sorted the opposite way
+query ??
+select array_agg(x order by x desc), array_agg(DISTINCT x order by x) from (values (2), (null), (1), (2)) t(x);
+----
+[NULL, 2, 2, 1] [1, 2, NULL]
+
+query T?? rowsort
+select column1, array_agg(column2 order by column2 desc), array_agg(DISTINCT column2 order by column2) from array_agg_order_list_table group by column1;
+----
+b [2, 1] [1, 2]
+w [2, 1, 1] [1, 2]
+
 statement error In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list
 select array_agg(DISTINCT column2 order by column1) from array_agg_order_list_table;
 
