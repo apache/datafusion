@@ -6496,6 +6496,9 @@ impl serde::Serialize for ParquetOptions {
         if self.skip_arrow_metadata {
             len += 1;
         }
+        if self.write_row_group_number_distinct_values {
+            len += 1;
+        }
         if self.dictionary_page_size_limit != 0 {
             len += 1;
         }
@@ -6618,6 +6621,9 @@ impl serde::Serialize for ParquetOptions {
         }
         if self.skip_arrow_metadata {
             struct_ser.serialize_field("skipArrowMetadata", &self.skip_arrow_metadata)?;
+        }
+        if self.write_row_group_number_distinct_values {
+            struct_ser.serialize_field("writeRowGroupNumberDistinctValues", &self.write_row_group_number_distinct_values)?;
         }
         if self.dictionary_page_size_limit != 0 {
             #[allow(clippy::needless_borrow)]
@@ -6797,6 +6803,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "binaryAsString",
             "skip_arrow_metadata",
             "skipArrowMetadata",
+            "write_row_group_number_distinct_values",
+            "writeRowGroupNumberDistinctValues",
             "dictionary_page_size_limit",
             "dictionaryPageSizeLimit",
             "data_page_row_count_limit",
@@ -6858,6 +6866,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             SchemaForceViewTypes,
             BinaryAsString,
             SkipArrowMetadata,
+            WriteRowGroupNumberDistinctValues,
             DictionaryPageSizeLimit,
             DataPageRowCountLimit,
             MaxRowGroupSize,
@@ -6917,6 +6926,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "schemaForceViewTypes" | "schema_force_view_types" => Ok(GeneratedField::SchemaForceViewTypes),
                             "binaryAsString" | "binary_as_string" => Ok(GeneratedField::BinaryAsString),
                             "skipArrowMetadata" | "skip_arrow_metadata" => Ok(GeneratedField::SkipArrowMetadata),
+                            "writeRowGroupNumberDistinctValues" | "write_row_group_number_distinct_values" => Ok(GeneratedField::WriteRowGroupNumberDistinctValues),
                             "dictionaryPageSizeLimit" | "dictionary_page_size_limit" => Ok(GeneratedField::DictionaryPageSizeLimit),
                             "dataPageRowCountLimit" | "data_page_row_count_limit" => Ok(GeneratedField::DataPageRowCountLimit),
                             "maxRowGroupSize" | "max_row_group_size" => Ok(GeneratedField::MaxRowGroupSize),
@@ -6974,6 +6984,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut schema_force_view_types__ = None;
                 let mut binary_as_string__ = None;
                 let mut skip_arrow_metadata__ = None;
+                let mut write_row_group_number_distinct_values__ = None;
                 let mut dictionary_page_size_limit__ = None;
                 let mut data_page_row_count_limit__ = None;
                 let mut max_row_group_size__ = None;
@@ -7106,6 +7117,12 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                                 return Err(serde::de::Error::duplicate_field("skipArrowMetadata"));
                             }
                             skip_arrow_metadata__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::WriteRowGroupNumberDistinctValues => {
+                            if write_row_group_number_distinct_values__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("writeRowGroupNumberDistinctValues"));
+                            }
+                            write_row_group_number_distinct_values__ = Some(map_.next_value()?);
                         }
                         GeneratedField::DictionaryPageSizeLimit => {
                             if dictionary_page_size_limit__.is_some() {
@@ -7261,6 +7278,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     schema_force_view_types: schema_force_view_types__.unwrap_or_default(),
                     binary_as_string: binary_as_string__.unwrap_or_default(),
                     skip_arrow_metadata: skip_arrow_metadata__.unwrap_or_default(),
+                    write_row_group_number_distinct_values: write_row_group_number_distinct_values__.unwrap_or_default(),
                     dictionary_page_size_limit: dictionary_page_size_limit__.unwrap_or_default(),
                     data_page_row_count_limit: data_page_row_count_limit__.unwrap_or_default(),
                     max_row_group_size: max_row_group_size__.unwrap_or_default(),

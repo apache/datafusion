@@ -854,7 +854,9 @@ impl PartialSortStream {
             })
             .collect::<Result<Vec<_>>>()?;
         let mut remaining_fetch = self.fetch.unwrap_or(usize::MAX);
-        let mut interleave_indices = vec![];
+        let total_rows = completed.batch_ends.last().copied().unwrap_or(0);
+        let mut interleave_indices = Vec::with_capacity(remaining_fetch.min(total_rows));
+        let mut sorted_indices: Vec<usize> = Vec::new();
 
         for prefix_range in completed.prefix_ranges() {
             if remaining_fetch == 0 {
@@ -863,26 +865,28 @@ impl PartialSortStream {
 
             let row_count = prefix_range.len();
             let prefix_fetch = remaining_fetch.min(row_count);
-            let sorted_indices = if let Some(suffix_ordering) = &self.suffix_ordering {
+            sorted_indices.clear();
+            if let Some(suffix_ordering) = &self.suffix_ordering {
                 let sort_columns = completed.gather_sort_columns(
                     prefix_range.clone(),
                     &sort_columns_by_batch,
                     suffix_ordering,
                 )?;
                 let fetch = (prefix_fetch < row_count).then_some(prefix_fetch);
-                lexsort_to_indices(&sort_columns, fetch)?
-                    .values()
-                    .iter()
-                    .map(|idx| *idx as usize)
-                    .collect::<Vec<_>>()
+                sorted_indices.extend(
+                    lexsort_to_indices(&sort_columns, fetch)?
+                        .values()
+                        .iter()
+                        .map(|idx| *idx as usize),
+                );
             } else {
-                (0..prefix_fetch).collect()
-            };
+                sorted_indices.extend(0..prefix_fetch);
+            }
 
             interleave_indices.extend(
                 sorted_indices
-                    .into_iter()
-                    .map(|index| completed.source_row(prefix_range.start + index)),
+                    .iter()
+                    .map(|&index| completed.source_row(prefix_range.start + index)),
             );
             remaining_fetch -= prefix_fetch;
         }
