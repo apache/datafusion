@@ -256,4 +256,4 @@ statement ok
 RESET datafusion.execution.batch_size
 
 statement ok
-RESET datafusion.execution.target_partitions
+RESET datafusion.catalog.create_default_catalog_and_schema
