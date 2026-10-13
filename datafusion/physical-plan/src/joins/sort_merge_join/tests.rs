@@ -1096,30 +1096,26 @@ async fn join_inner_group_spans_buffered_and_output_batches() -> Result<()> {
     let batches = common::collect(stream).await?;
 
     assert!(batches.iter().all(|batch| batch.num_rows() <= 4));
-    let pairs: Vec<(i32, i32)> = batches
-        .iter()
-        .flat_map(|batch| {
-            let c1 = batch
-                .column(2)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap();
-            let c2 = batch
-                .column(5)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap();
-            (0..batch.num_rows())
-                .map(|i| (c1.value(i), c2.value(i)))
-                .collect::<Vec<_>>()
-        })
-        .collect();
-    let expected: Vec<(i32, i32)> = [10, 11]
-        .into_iter()
-        .flat_map(|c1| (100..=105).map(move |c2| (c1, c2)))
-        .chain([(20, 200)])
-        .collect();
-    assert_eq!(pairs, expected);
+    // The output order is important as SMJ preserves sortedness
+    assert_snapshot!(batches_to_string(&batches), @r"
+    +----+----+----+----+----+-----+
+    | a1 | b1 | c1 | a2 | b2 | c2  |
+    +----+----+----+----+----+-----+
+    | 1  | 0  | 10 | 1  | 0  | 100 |
+    | 1  | 0  | 10 | 1  | 0  | 101 |
+    | 1  | 0  | 10 | 1  | 0  | 102 |
+    | 1  | 0  | 10 | 1  | 0  | 103 |
+    | 1  | 0  | 10 | 1  | 0  | 104 |
+    | 1  | 0  | 10 | 1  | 0  | 105 |
+    | 1  | 0  | 11 | 1  | 0  | 100 |
+    | 1  | 0  | 11 | 1  | 0  | 101 |
+    | 1  | 0  | 11 | 1  | 0  | 102 |
+    | 1  | 0  | 11 | 1  | 0  | 103 |
+    | 1  | 0  | 11 | 1  | 0  | 104 |
+    | 1  | 0  | 11 | 1  | 0  | 105 |
+    | 2  | 0  | 20 | 2  | 0  | 200 |
+    +----+----+----+----+----+-----+
+    ");
     Ok(())
 }
 
