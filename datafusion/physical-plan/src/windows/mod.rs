@@ -398,7 +398,7 @@ pub(crate) fn window_equivalence_properties(
         // Find "one" valid ordering for partition columns to avoid exponential complexity.
         // see https://github.com/apache/datafusion/issues/17401
         let mut all_satisfied_lexs = vec![];
-        let mut candidate_ordering = vec![];
+        let mut candidate_ordering = Vec::with_capacity(partitioning_exprs.len());
 
         for partition_expr in partitioning_exprs.iter() {
             let sort_options =
@@ -518,7 +518,7 @@ pub(crate) fn window_equivalence_properties(
                     // Find one valid ordering for aggregate arguments instead of
                     // checking all combinations
                     let aggregate_exprs = sliding_expr.get_aggregate_expr().expressions();
-                    let mut candidate_order = vec![];
+                    let mut candidate_order = Vec::with_capacity(aggregate_exprs.len());
                     let mut asc = false;
 
                     for (idx, expr) in aggregate_exprs.iter().enumerate() {

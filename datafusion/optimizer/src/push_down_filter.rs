@@ -783,8 +783,9 @@ fn infer_join_predicates_impl<
     input_predicates: &[Expr],
     inferred_predicates: &mut InferredPredicates,
 ) -> Result<()> {
+    let mut join_cols_to_replace = HashMap::new();
     for predicate in input_predicates {
-        let mut join_cols_to_replace = HashMap::new();
+        join_cols_to_replace.clear();
 
         for &col in &predicate.column_refs() {
             for (l, r) in join_col_keys.iter() {
@@ -948,7 +949,8 @@ impl OptimizerRule for PushDownFilter {
                 Ok(Transformed::yes(LogicalPlan::Sort(sort)))
             }
             LogicalPlan::SubqueryAlias(mut subquery_alias) => {
-                let mut replace_map = HashMap::new();
+                let mut replace_map =
+                    HashMap::with_capacity(subquery_alias.input.schema().fields().len());
                 for (i, (qualifier, field)) in
                     subquery_alias.input.schema().iter().enumerate()
                 {
@@ -999,9 +1001,10 @@ impl OptimizerRule for PushDownFilter {
                     }
                 }
 
+                let mut accum: HashSet<Column> = HashSet::new();
                 for predicate in predicates {
                     // collect all the Expr::Column in predicate recursively
-                    let mut accum: HashSet<Column> = HashSet::new();
+                    accum.clear();
                     expr_to_columns(&predicate, &mut accum)?;
 
                     let contains_list_columns =
@@ -1047,8 +1050,9 @@ impl OptimizerRule for PushDownFilter {
             }
             LogicalPlan::Union(mut union) => {
                 let mut inputs = Vec::with_capacity(union.inputs.len());
+                let mut replace_map = HashMap::with_capacity(union.schema.fields().len());
                 for input in union.inputs {
-                    let mut replace_map = HashMap::new();
+                    replace_map.clear();
                     for (i, (qualifier, field)) in input.schema().iter().enumerate() {
                         let (union_qualifier, union_field) =
                             union.schema.qualified_field(i);
@@ -1085,7 +1089,7 @@ impl OptimizerRule for PushDownFilter {
                 // As for plan Filter: Column(a+b) > 0 -- Agg: groupby:[Column(a)+Column(b)]
                 // After push, we need to replace `a+b` with Column(a)+Column(b)
                 // So we need create a replace_map, add {`a+b` --> Expr(Column(a)+Column(b))}
-                let mut replace_map = HashMap::new();
+                let mut replace_map = HashMap::with_capacity(agg.group_expr.len());
                 for expr in &agg.group_expr {
                     replace_map.insert(expr.schema_name().to_string(), unalias(expr));
                 }

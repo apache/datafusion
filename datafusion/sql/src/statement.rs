@@ -1831,7 +1831,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return Ok(results);
         }
 
-        let mut all_results = vec![];
+        let mut all_results = Vec::with_capacity(order_exprs.len());
         for expr in order_exprs {
             // Convert each OrderByExpr to a SortExpr:
             let expr_vec =
@@ -2090,7 +2090,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         options: Vec<(String, Value)>,
         allow_duplicates: bool,
     ) -> Result<HashMap<String, String>> {
-        let mut options_map = HashMap::new();
+        let mut options_map = HashMap::with_capacity(options.len());
         for (key, value) in options {
             if !allow_duplicates && options_map.contains_key(&key) {
                 return plan_err!("Option {key} is specified multiple times");
@@ -2721,7 +2721,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         Ok((col_name, value))
                     })
                     .collect::<Result<Vec<_>>>()?;
-                let mut seen = HashSet::new();
+                let mut seen = HashSet::with_capacity(assignments.len());
                 for (column, _) in &assignments {
                     if !seen.insert(column.as_str()) {
                         return plan_err!("Duplicate column '{column}' in MERGE UPDATE");
@@ -2742,7 +2742,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .collect::<Result<Vec<_>>>()?;
 
                 // Validate: no duplicates, all columns exist in target schema
-                let mut seen = HashSet::new();
+                let mut seen = HashSet::with_capacity(columns.len());
                 for col in &columns {
                     if !seen.insert(col.as_str()) {
                         return plan_err!("Duplicate column '{col}' in MERGE INSERT");
