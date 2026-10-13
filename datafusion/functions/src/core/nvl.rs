@@ -17,7 +17,7 @@
 
 use crate::core::coalesce::CoalesceFunc;
 use arrow::datatypes::{DataType, FieldRef};
-use datafusion_common::Result;
+use datafusion_common::{Result, plan_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
@@ -62,23 +62,6 @@ pub struct NVLFunc {
 /// Currently supported types by the nvl/ifnull function.
 /// The order of these types correspond to the order on which coercion applies
 /// This should thus be from least informative to most informative
-static SUPPORTED_NVL_TYPES: &[DataType] = &[
-    DataType::Boolean,
-    DataType::UInt8,
-    DataType::UInt16,
-    DataType::UInt32,
-    DataType::UInt64,
-    DataType::Int8,
-    DataType::Int16,
-    DataType::Int32,
-    DataType::Int64,
-    DataType::Float32,
-    DataType::Float64,
-    DataType::Utf8View,
-    DataType::Utf8,
-    DataType::LargeUtf8,
-];
-
 impl Default for NVLFunc {
     fn default() -> Self {
         Self::new()
@@ -89,11 +72,7 @@ impl NVLFunc {
     pub fn new() -> Self {
         Self {
             coalesce: CoalesceFunc {
-                signature: Signature::uniform(
-                    2,
-                    SUPPORTED_NVL_TYPES.to_vec(),
-                    Volatility::Immutable,
-                ),
+                signature: Signature::user_defined(Volatility::Immutable),
             },
             aliases: vec![String::from("ifnull")],
         }
@@ -111,6 +90,16 @@ impl ScalarUDFImpl for NVLFunc {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         self.coalesce.return_type(arg_types)
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 2 {
+            return plan_err!("nvl expects exactly 2 arguments, got {}", arg_types.len());
+        }
+        // Coerce both arguments to a common type the same way `coalesce` does,
+        // so decimals, timestamps and dates keep their types instead of being
+        // converted to Float64 or strings.
+        self.coalesce.coerce_types(arg_types)
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {

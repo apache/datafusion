@@ -114,7 +114,8 @@ SELECT NVL(1, 3);
 ----
 1
 
-query B
+# like coalesce(NULL, NULL), the result type is Null
+query ?
 SELECT NVL(NULL, NULL);
 ----
 NULL
@@ -183,3 +184,43 @@ physical_plan
 01)ProjectionExec: expr=[CASE WHEN __common_expr_1@0 IS NOT NULL THEN __common_expr_1@0 ELSE 9999 END as nvl(test.int_field,Int64(9999))]
 02)--ProjectionExec: expr=[CAST(int_field@0 AS Int64) as __common_expr_1]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# nvl / ifnull keep the argument types the same way coalesce does
+# (decimals are not converted to Float64, timestamps and dates not to strings)
+statement ok
+CREATE TABLE nvl_types AS SELECT
+  CAST('12345678901234567890123456789012345678' AS DECIMAL(38,0)) AS big,
+  CAST(1.23 AS DECIMAL(5,2)) AS d,
+  TIMESTAMP '2024-01-01 10:00:00' AS ts,
+  DATE '2024-01-01' AS dt;
+
+query RR
+SELECT nvl(big, 0), coalesce(big, 0) FROM nvl_types;
+----
+12345678901234567890123456789012345678 12345678901234567890123456789012345678
+
+query TTT
+SELECT arrow_typeof(nvl(d, d)), arrow_typeof(ifnull(d, d)), arrow_typeof(coalesce(d, d)) FROM nvl_types;
+----
+Decimal128(5, 2) Decimal128(5, 2) Decimal128(5, 2)
+
+query TT
+SELECT arrow_typeof(nvl(ts, ts)), arrow_typeof(nvl(dt, dt)) FROM nvl_types;
+----
+Timestamp(ns) Date32
+
+query P
+SELECT ifnull(ts, ts) + INTERVAL '1 hour' FROM nvl_types;
+----
+2024-01-01T11:00:00
+
+query R
+SELECT nvl(NULL, d) FROM nvl_types;
+----
+1.23
+
+query error nvl expects exactly 2 arguments
+SELECT nvl(1, 2, 3);
+
+statement ok
+DROP TABLE nvl_types;
