@@ -7030,6 +7030,48 @@ async fn test_fill_nan_uncastable_value() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_fill_null_and_nan_with_non_normalized_column_names() -> Result<()> {
+    // Column names with uppercase letters or dots must be referenced as-is,
+    // not parsed as SQL identifiers (which would normalize `Name` to `name`
+    // and split `a.b` into table `a`, column `b`).
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("Name", DataType::Utf8, true),
+        Field::new("a.b", DataType::Float64, true),
+        Field::new("v", DataType::Float64, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(StringArray::from(vec![Some("x"), None])),
+            Arc::new(Float64Array::from(vec![Some(f64::NAN), Some(2.0)])),
+            Arc::new(Float64Array::from(vec![Some(1.0), None])),
+        ],
+    )?;
+    let ctx = SessionContext::new();
+    let df = ctx.read_batch(batch)?;
+
+    let df_filled = df
+        .fill_null(&ScalarValue::Float64(Some(0.0)), &["v"])?
+        .fill_null(&ScalarValue::Utf8(Some("none".to_string())), &["Name"])?
+        .fill_nan(&ScalarValue::Float64(Some(0.0)), &["a.b"])?;
+
+    let results = df_filled.collect().await?;
+    assert_snapshot!(
+        batches_to_sort_string(&results),
+        @r"
+    +------+-----+-----+
+    | Name | a.b | v   |
+    +------+-----+-----+
+    | none | 2.0 | 0.0 |
+    | x    | 0.0 | 1.0 |
+    +------+-----+-----+
+    "
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_insert_into_casting_support() -> Result<()> {
     // Testing case1:
     // Inserting query schema mismatch: Expected table field 'a' with type Float16, but got 'a' with type Utf8.
