@@ -731,6 +731,7 @@ message WindowExprNode {
   optional NullTreatment null_treatment = 11;
   bool distinct = 12;
   LogicalExprNode filter = 13;
+  bool window_frame_explicit = 14;
 }
 
 message BetweenNode {

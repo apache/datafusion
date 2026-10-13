@@ -2706,6 +2706,7 @@ pub fn create_window_expr_with_name(
                         null_treatment,
                         distinct,
                         filter,
+                        ..
                     },
             } = window_fun.as_ref();
             let physical_args = create_physical_exprs(

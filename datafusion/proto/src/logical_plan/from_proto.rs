@@ -275,7 +275,11 @@ pub fn parse_expr(
                 builder = builder.filter(filter);
             }
 
-            builder.build().map_err(Error::DataFusionError)
+            let mut window_expr = builder.build().map_err(Error::DataFusionError)?;
+            if let Expr::WindowFunction(window_fun) = &mut window_expr {
+                window_fun.params.window_frame_explicit = expr.window_frame_explicit;
+            }
+            Ok(window_expr)
         }
         ExprType::Alias(alias) => Ok(Expr::Alias(Alias::new(
             parse_required_expr(alias.expr.as_deref(), ctx, "expr", codec)?,

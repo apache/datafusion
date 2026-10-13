@@ -30131,6 +30131,9 @@ impl serde::Serialize for WindowExprNode {
         if self.filter.is_some() {
             len += 1;
         }
+        if self.window_frame_explicit {
+            len += 1;
+        }
         if self.window_function.is_some() {
             len += 1;
         }
@@ -30162,6 +30165,9 @@ impl serde::Serialize for WindowExprNode {
         }
         if let Some(v) = self.filter.as_ref() {
             struct_ser.serialize_field("filter", v)?;
+        }
+        if self.window_frame_explicit {
+            struct_ser.serialize_field("windowFrameExplicit", &self.window_frame_explicit)?;
         }
         if let Some(v) = self.window_function.as_ref() {
             match v {
@@ -30196,6 +30202,8 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
             "nullTreatment",
             "distinct",
             "filter",
+            "window_frame_explicit",
+            "windowFrameExplicit",
             "udaf",
             "udwf",
         ];
@@ -30210,6 +30218,7 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
             NullTreatment,
             Distinct,
             Filter,
+            WindowFrameExplicit,
             Udaf,
             Udwf,
         }
@@ -30241,6 +30250,7 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
                             "nullTreatment" | "null_treatment" => Ok(GeneratedField::NullTreatment),
                             "distinct" => Ok(GeneratedField::Distinct),
                             "filter" => Ok(GeneratedField::Filter),
+                            "windowFrameExplicit" | "window_frame_explicit" => Ok(GeneratedField::WindowFrameExplicit),
                             "udaf" => Ok(GeneratedField::Udaf),
                             "udwf" => Ok(GeneratedField::Udwf),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
@@ -30270,6 +30280,7 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
                 let mut null_treatment__ = None;
                 let mut distinct__ = None;
                 let mut filter__ = None;
+                let mut window_frame_explicit__ = None;
                 let mut window_function__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
@@ -30323,6 +30334,12 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
                             }
                             filter__ = map_.next_value()?;
                         }
+                        GeneratedField::WindowFrameExplicit => {
+                            if window_frame_explicit__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("windowFrameExplicit"));
+                            }
+                            window_frame_explicit__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::Udaf => {
                             if window_function__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("udaf"));
@@ -30346,6 +30363,7 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
                     null_treatment: null_treatment__,
                     distinct: distinct__.unwrap_or_default(),
                     filter: filter__,
+                    window_frame_explicit: window_frame_explicit__.unwrap_or_default(),
                     window_function: window_function__,
                 })
             }

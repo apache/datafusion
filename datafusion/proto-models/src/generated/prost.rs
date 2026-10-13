@@ -1143,6 +1143,8 @@ pub struct WindowExprNode {
     pub distinct: bool,
     #[prost(message, optional, boxed, tag = "13")]
     pub filter: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+    #[prost(bool, tag = "14")]
+    pub window_frame_explicit: bool,
     #[prost(oneof = "window_expr_node::WindowFunction", tags = "3, 9")]
     pub window_function: ::core::option::Option<window_expr_node::WindowFunction>,
 }

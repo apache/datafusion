@@ -177,6 +177,7 @@ pub fn serialize_expr(
                         partition_by,
                         order_by,
                         window_frame,
+                        window_frame_explicit,
                         null_treatment,
                         distinct,
                         filter,
@@ -209,6 +210,7 @@ pub fn serialize_expr(
                 partition_by,
                 order_by,
                 window_frame,
+                window_frame_explicit: *window_frame_explicit,
                 distinct: *distinct,
                 filter: match filter {
                     Some(e) => Some(Box::new(serialize_expr(e.as_ref(), codec)?)),

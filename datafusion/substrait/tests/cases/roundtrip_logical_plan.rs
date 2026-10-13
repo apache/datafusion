@@ -2381,7 +2381,33 @@ async fn roundtrip_window_udf() -> Result<()> {
     let ctx = create_context().await?;
     ctx.register_udwf(dummy_agg);
 
-    roundtrip_with_ctx("select dummy_window(a) OVER () from data", ctx).await?;
+    fn frame_is_explicit(plan: &LogicalPlan) -> Option<bool> {
+        match plan {
+            LogicalPlan::Window(window) => window.window_expr.iter().find_map(|expr| {
+                if let Expr::WindowFunction(fun) = expr {
+                    Some(fun.params.window_frame_explicit)
+                } else {
+                    None
+                }
+            }),
+            _ => plan.inputs().into_iter().find_map(frame_is_explicit),
+        }
+    }
+    for (sql, expected_explicit) in [
+        ("select dummy_window(a) OVER () from data", false),
+        (
+            "select dummy_window(a) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) from data",
+            true,
+        ),
+    ] {
+        let plan = ctx.sql(sql).await?.into_optimized_plan()?;
+        let roundtripped = substrait_roundtrip(&plan, &ctx).await?;
+        assert_eq!(frame_is_explicit(&roundtripped), Some(expected_explicit));
+        roundtrip_with_ctx(sql, ctx.clone()).await?;
+    }
+    // An ordered default frame needs an upper bound in Substrait to retain
+    // execution semantics, even though that format cannot retain provenance.
+    roundtrip_with_ctx("select dummy_window(a) OVER (ORDER BY a) from data", ctx).await?;
     Ok(())
 }
 

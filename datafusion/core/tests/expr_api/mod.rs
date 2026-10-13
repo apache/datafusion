@@ -24,12 +24,12 @@ use arrow::datatypes::{DataType, Field};
 use arrow::util::pretty::{pretty_format_batches, pretty_format_columns};
 use datafusion::prelude::*;
 use datafusion_common::{DFSchema, ScalarValue};
-use datafusion_expr::ExprFunctionExt;
-use datafusion_expr::expr::NullTreatment;
+use datafusion_expr::expr::{NullTreatment, WindowFunction};
 use datafusion_expr::simplify::SimplifyContext;
+use datafusion_expr::{ExprFunctionExt, WindowFrame};
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_functions_aggregate::first_last::first_value_udaf;
-use datafusion_functions_aggregate::sum::sum_udaf;
+use datafusion_functions_aggregate::sum::{sum, sum_udaf};
 use datafusion_functions_nested::expr_ext::{IndexAccessor, SliceAccessor};
 use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 /// Tests of using and evaluating `Expr`s outside the context of a LogicalPlan
@@ -38,6 +38,115 @@ use std::sync::{Arc, LazyLock};
 mod parse_sql_expr;
 #[expect(clippy::needless_pass_by_value)]
 mod simplification;
+
+#[test]
+fn test_chaining_aggregate_options_preserves_existing_options() {
+    let order_by = vec![col("i").sort(true, false)];
+    let filter = col("i").gt(lit(0));
+    let aggregate = sum(col("i"))
+        .order_by(order_by.clone())
+        .filter(filter.clone())
+        .build()
+        .unwrap();
+
+    let Expr::AggregateFunction(aggregate) = aggregate.distinct().build().unwrap() else {
+        panic!("expected aggregate function");
+    };
+    assert_eq!(aggregate.params.order_by, order_by);
+    assert_eq!(aggregate.params.filter.as_deref(), Some(&filter));
+    assert!(aggregate.params.distinct);
+}
+
+#[test]
+fn test_chaining_window_options_preserves_explicit_frame() {
+    let order_by = vec![col("i").sort(true, false)];
+    let frame = WindowFrame::new(None);
+    let window = Expr::from(WindowFunction::new(first_value_udaf(), vec![col("i")]))
+        .order_by(order_by.clone())
+        .window_frame(frame.clone())
+        .build()
+        .unwrap();
+
+    let Expr::WindowFunction(window) =
+        window.partition_by(vec![col("id")]).build().unwrap()
+    else {
+        panic!("expected window function");
+    };
+    assert_eq!(window.params.order_by, order_by);
+    assert_eq!(window.params.partition_by, vec![col("id")]);
+    assert_eq!(window.params.window_frame, frame);
+    assert!(window.params.window_frame_explicit);
+}
+
+#[test]
+fn test_chaining_window_options_rederives_default_frame() {
+    let window = Expr::from(WindowFunction::new(first_value_udaf(), vec![col("i")]))
+        .partition_by(vec![col("id")])
+        .build()
+        .unwrap();
+    let Expr::WindowFunction(ref original) = window else {
+        panic!("expected window function");
+    };
+    assert!(!original.params.window_frame_explicit);
+    assert_eq!(original.params.window_frame, WindowFrame::new(None));
+
+    let order_by = vec![col("i").sort(true, false)];
+    let Expr::WindowFunction(chained) =
+        window.order_by(order_by.clone()).build().unwrap()
+    else {
+        panic!("expected window function");
+    };
+    assert_eq!(chained.params.order_by, order_by);
+    assert_eq!(chained.params.partition_by, vec![col("id")]);
+    assert_eq!(chained.params.window_frame, WindowFrame::new(Some(false)));
+    assert!(!chained.params.window_frame_explicit);
+}
+
+#[test]
+fn test_window_frame_provenance_does_not_change_expression_equality() {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+
+    let derived = Expr::from(WindowFunction::new(first_value_udaf(), vec![col("i")]));
+    let explicit = Expr::from(WindowFunction::new(first_value_udaf(), vec![col("i")]))
+        .window_frame(WindowFrame::new(None))
+        .build()
+        .unwrap();
+    assert_eq!(derived, explicit);
+
+    let mut derived_hash = DefaultHasher::new();
+    derived.hash(&mut derived_hash);
+    let mut explicit_hash = DefaultHasher::new();
+    explicit.hash(&mut explicit_hash);
+    assert_eq!(derived_hash.finish(), explicit_hash.finish());
+}
+
+#[tokio::test]
+async fn test_sql_window_frame_provenance() -> datafusion::error::Result<()> {
+    fn frame_is_explicit(plan: &datafusion_expr::LogicalPlan) -> Option<bool> {
+        match plan {
+            datafusion_expr::LogicalPlan::Window(window) => {
+                window.window_expr.iter().find_map(|expr| match expr {
+                    Expr::WindowFunction(fun) => Some(fun.params.window_frame_explicit),
+                    _ => None,
+                })
+            }
+            _ => plan.inputs().into_iter().find_map(frame_is_explicit),
+        }
+    }
+
+    let ctx = SessionContext::new();
+    for (frame_clause, expected) in [
+        ("", false),
+        ("ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", true),
+    ] {
+        let sql = format!(
+            "SELECT row_number() OVER (ORDER BY x {frame_clause}) FROM (VALUES (1), (2)) AS t(x)"
+        );
+        let plan = ctx.sql(&sql).await?.into_unoptimized_plan();
+        assert_eq!(frame_is_explicit(&plan), Some(expected), "{sql}");
+    }
+    Ok(())
+}
 
 #[test]
 fn test_octet_length() {
