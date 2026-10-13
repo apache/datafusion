@@ -1532,6 +1532,7 @@ mod tests {
             schema: join_schema,
             null_equality: NullEquality::NullEqualsNull,
             null_aware: false,
+            null_aware_value_keys: 1,
         });
 
         let optimized = EliminateCrossJoin::new()
