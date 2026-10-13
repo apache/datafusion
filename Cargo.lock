@@ -2768,6 +2768,7 @@ dependencies = [
  "prost",
  "serde_json",
  "substrait",
+ "tempfile",
  "tokio",
  "url",
 ]

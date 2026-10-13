@@ -59,10 +59,6 @@ impl OptimizerRule for RequestColumnStatistics {
         Some(ApplyOrder::TopDown)
     }
 
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     fn rewrite(
         &self,
         plan: LogicalPlan,
