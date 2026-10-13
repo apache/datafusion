@@ -726,7 +726,7 @@ impl Unparser<'_> {
     }
 
     fn scalar_value_list_to_sql(&self, array: &ArrayRef) -> Result<ast::Expr> {
-        let mut elem = Vec::new();
+        let mut elem = Vec::with_capacity(array.len());
         for i in 0..array.len() {
             let value = ScalarValue::try_from_array(&array, i)?;
             elem.push(self.scalar_to_sql(&value)?);

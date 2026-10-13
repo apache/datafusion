@@ -626,22 +626,16 @@ fn build_batch(
     schema: &Schema,
 ) -> Result<RecordBatch> {
     // Repeat value on the left n times
-    let arrays = left_data
-        .columns()
-        .iter()
-        .map(|arr| {
-            let scalar = ScalarValue::try_from_array(arr, left_index)?;
-            scalar.to_array_of_size(batch.num_rows())
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let mut arrays = Vec::with_capacity(left_data.num_columns() + batch.num_columns());
+    for arr in left_data.columns() {
+        let scalar = ScalarValue::try_from_array(arr, left_index)?;
+        arrays.push(scalar.to_array_of_size(batch.num_rows())?);
+    }
+    arrays.extend_from_slice(batch.columns());
 
     RecordBatch::try_new_with_options(
         Arc::new(schema.clone()),
-        arrays
-            .iter()
-            .chain(batch.columns().iter())
-            .cloned()
-            .collect(),
+        arrays,
         &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
     )
     .map_err(Into::into)

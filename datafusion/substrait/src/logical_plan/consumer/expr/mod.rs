@@ -193,7 +193,7 @@ pub async fn from_substrait_rex_vec(
     exprs: &Vec<Expression>,
     input_schema: &DFSchema,
 ) -> datafusion::common::Result<Vec<Expr>> {
-    let mut expressions: Vec<Expr> = vec![];
+    let mut expressions: Vec<Expr> = Vec::with_capacity(exprs.len());
     for expr in exprs {
         let expression = consumer.consume_expression(expr, input_schema).await?;
         expressions.push(expression);

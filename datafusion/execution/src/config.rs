@@ -569,9 +569,10 @@ impl SessionConfig {
     ///
     /// [`options`]: Self::options
     pub fn to_props(&self) -> HashMap<String, String> {
-        let mut map = HashMap::new();
+        let entries = self.options.entries();
+        let mut map = HashMap::with_capacity(entries.len());
         // copy configs from config_options
-        for entry in self.options.entries() {
+        for entry in entries {
             map.insert(entry.key, entry.value.unwrap_or_default());
         }
 

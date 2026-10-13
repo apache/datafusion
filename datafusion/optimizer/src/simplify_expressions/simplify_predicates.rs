@@ -55,7 +55,7 @@ pub fn simplify_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
 
     // Group predicates by their column reference
     let mut column_predicates: BTreeMap<Column, Vec<Expr>> = BTreeMap::new();
-    let mut other_predicates = Vec::new();
+    let mut other_predicates = Vec::with_capacity(predicates.len());
 
     for pred in predicates {
         match pred {

@@ -232,7 +232,7 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
     let new_plan = if let Some(expr_map) = collected_count_expr_map {
         let join_schema = new_plan.schema();
         let alias_qualifier = alias.as_ref();
-        let mut proj_exprs: Vec<Expr> = vec![];
+        let mut proj_exprs: Vec<Expr> = Vec::with_capacity(join_schema.fields().len());
 
         for (i, (qualifier, field)) in join_schema.iter().enumerate() {
             let col = Expr::Column(Column::new(qualifier.cloned(), field.name()));
@@ -283,7 +283,7 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
     // assumes it is deterministic.
     let new_plan = if let Some(on_cond) = on_condition_for_projection {
         let schema = Arc::clone(new_plan.schema());
-        let mut proj_exprs: Vec<Expr> = vec![];
+        let mut proj_exprs: Vec<Expr> = Vec::with_capacity(schema.fields().len());
 
         for (i, (qualifier, field)) in schema.iter().enumerate() {
             let col = Expr::Column(Column::new(qualifier.cloned(), field.name()));

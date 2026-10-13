@@ -454,7 +454,7 @@ fn remap_pairs_and_columns(
     from_schema: &DFSchema,
     to_schema: &DFSchema,
 ) -> Result<ExtractionTarget> {
-    let mut replace_map = HashMap::new();
+    let mut replace_map = HashMap::with_capacity(from_schema.fields().len());
     for ((from_q, from_f), (to_q, to_f)) in from_schema.iter().zip(to_schema.iter()) {
         replace_map.insert(
             qualified_name(from_q, from_f.name()),
@@ -765,7 +765,8 @@ fn build_extraction_projection_impl(
         Projection::try_new(proj_exprs, Arc::clone(&existing.input))
     } else {
         // Build new projection with extracted expressions + all input columns
-        let mut proj_exprs = Vec::new();
+        let mut proj_exprs =
+            Vec::with_capacity(extracted_exprs.len() + target_schema.fields().len());
         for (expr, alias) in extracted_exprs {
             proj_exprs.push(expr.clone().alias(alias));
         }
@@ -910,9 +911,9 @@ fn merge_would_duplicate_kept_expr(
     // same kept column twice still inlines one copy, so count each pair at most
     // once per column.
     let mut usage: HashMap<String, usize> = HashMap::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (expr, _alias) in pairs {
-        let mut seen: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        seen.clear();
         for col in expr.column_refs() {
             let name = col.flat_name();
             if kept_columns.contains(&name) && seen.insert(name.clone()) {

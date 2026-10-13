@@ -143,7 +143,7 @@ impl DigestAlgorithm {
                         opt.map(|x| {
                             let mut digest = Blake3::default();
                             digest.update(x.as_bytes());
-                            Blake3::finalize(&digest).as_bytes().to_vec()
+                            *Blake3::finalize(&digest).as_bytes()
                         })
                     })
                     .collect();
@@ -174,7 +174,7 @@ impl DigestAlgorithm {
                         opt.map(|x| {
                             let mut digest = Blake3::default();
                             digest.update(x);
-                            Blake3::finalize(&digest).as_bytes().to_vec()
+                            *Blake3::finalize(&digest).as_bytes()
                         })
                     })
                     .collect();

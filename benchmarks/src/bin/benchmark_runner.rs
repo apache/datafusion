@@ -29,6 +29,7 @@ use datafusion_benchmarks::sql_benchmark_runner::{
     BenchmarkFilter, SqlRunConfig, default_sql_benchmark_directory, ensure_selection,
     filter_benchmarks, finish_benchmark, load_benchmark_definitions_for_query, make_ctx,
     prepare_benchmark, run_criterion_benchmarks_impl_with_namespace,
+    validate_criterion_namespace,
 };
 use datafusion_benchmarks::sql_benchmark_suite::{
     ReservedOptions, SuiteExample, SuiteMetadata, discover_suites,
@@ -76,19 +77,7 @@ enum CliAction {
 }
 
 fn parse_criterion_namespace(value: &str) -> std::result::Result<String, String> {
-    if value.is_empty()
-        || !value.chars().all(|character| {
-            character.is_ascii_lowercase()
-                || character.is_ascii_digit()
-                || "_-".contains(character)
-        })
-    {
-        return Err(
-            "namespace must be nonempty and contain only lowercase ASCII letters, digits, '_', or '-'"
-                .to_string(),
-        );
-    }
-
+    validate_criterion_namespace(Some(value)).map_err(|error| error.to_string())?;
     Ok(value.to_string())
 }
 
@@ -204,7 +193,7 @@ struct Cli {
         env = "BENCH_NAMESPACE",
         value_name = "NAMESPACE",
         value_parser = parse_criterion_namespace,
-        help = "Append a safe namespace to Criterion benchmark groups"
+        help = "Append a safe namespace to benchmark groups (enables Criterion)"
     )]
     criterion_namespace: Option<String>,
 
@@ -439,8 +428,10 @@ fn cli_action_from_matches(
     matches: &ArgMatches,
     suite: Option<&SuiteMetadata>,
 ) -> Result<CliAction> {
-    let cli = Cli::from_arg_matches(matches)
+    let mut cli = Cli::from_arg_matches(matches)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let criterion_implied = !cli.criterion && cli.criterion_namespace.is_some();
+    cli.criterion |= criterion_implied;
 
     if cli.dry_run && cli.list {
         return Err(exec_datafusion_err!("--list cannot be used with --dry-run"));
@@ -456,11 +447,6 @@ fn cli_action_from_matches(
     if !cli.criterion && cli.save_baseline.is_some() {
         return Err(exec_datafusion_err!(
             "--save-baseline cannot be used without --criterion"
-        ));
-    }
-    if !cli.criterion && cli.criterion_namespace.is_some() {
-        return Err(exec_datafusion_err!(
-            "--criterion-namespace cannot be used without --criterion"
         ));
     }
     if cli.list || cli.benchmark.is_none() {
@@ -587,6 +573,12 @@ fn cli_action_from_matches(
         .as_deref()
         .map(|query| suite.query_filename(query))
         .transpose()?;
+
+    if criterion_implied {
+        eprintln!(
+            "Enabling Criterion because --criterion-namespace or BENCH_NAMESPACE is set."
+        );
+    }
 
     if cli.dry_run {
         let mode = if cli.criterion {
@@ -1665,6 +1657,47 @@ description = "Run query one against CSV data."
             };
 
             assert_eq!(criterion_namespace.as_deref(), Some("csv_sf1"));
+
+            let action =
+                parse_cli_from(["benchmark_runner", "alpha"], temp.path()).unwrap();
+            assert!(
+                matches!(action, CliAction::Criterion { criterion_namespace: Some(ref namespace), .. } if namespace == "csv_sf1")
+            );
+
+            let action =
+                parse_cli_from(["benchmark_runner", "--list"], temp.path()).unwrap();
+            assert!(matches!(action, CliAction::List));
+
+            let action =
+                parse_cli_from(["benchmark_runner", "alpha", "--dry-run"], temp.path())
+                    .unwrap();
+            assert!(
+                matches!(action, CliAction::DryRun(output) if matches!(output.mode, RunMode::Criterion))
+            );
+
+            let action = parse_cli_from(
+                [
+                    "benchmark_runner",
+                    "alpha",
+                    "--criterion-namespace",
+                    "parquet_sf1",
+                ],
+                temp.path(),
+            )
+            .unwrap();
+            assert!(
+                matches!(action, CliAction::Criterion { criterion_namespace: Some(ref namespace), .. } if namespace == "parquet_sf1")
+            );
+
+            for options in [["--output", "results.json"], ["--iterations", "2"]] {
+                let error = parse_cli_from(
+                    ["benchmark_runner", "alpha"].into_iter().chain(options),
+                    temp.path(),
+                )
+                .unwrap_err();
+                assert!(error.to_string().contains(options[0]), "{error}");
+                assert!(error.to_string().contains("--criterion"), "{error}");
+            }
             return;
         }
 
@@ -1685,13 +1718,21 @@ description = "Run query one against CSV data."
             "child failed:\n{}",
             String::from_utf8_lossy(&output.stderr)
         );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("Enabling Criterion"),
+            "missing inferred-mode notice on stderr"
+        );
+        assert!(
+            !String::from_utf8_lossy(&output.stdout).contains("Enabling Criterion"),
+            "inferred-mode notice must not contaminate stdout"
+        );
     }
 
     #[test]
-    fn cli_rejects_criterion_namespace_without_criterion() {
+    fn cli_criterion_namespace_enables_criterion() {
         let _env = ScopedEnv::remove("ALPHA_FORMAT");
         let temp = suite_root();
-        let err = parse_cli_from(
+        let action = parse_cli_from(
             [
                 "benchmark_runner",
                 "alpha",
@@ -1700,10 +1741,52 @@ description = "Run query one against CSV data."
             ],
             temp.path(),
         )
-        .unwrap_err();
+        .unwrap();
+        let CliAction::Criterion {
+            criterion_namespace,
+            ..
+        } = action
+        else {
+            panic!("expected criterion runner");
+        };
+        assert_eq!(criterion_namespace.as_deref(), Some("parquet"));
+    }
 
-        assert!(err.to_string().contains("--criterion-namespace"));
-        assert!(err.to_string().contains("--criterion"));
+    #[test]
+    fn cli_criterion_namespace_preserves_mode_checks() {
+        let _env = ScopedEnv::remove("ALPHA_FORMAT");
+        let temp = suite_root();
+        for options in [["--output", "results.json"], ["--iterations", "2"]] {
+            let error = parse_cli_from(
+                [
+                    "benchmark_runner",
+                    "alpha",
+                    "--criterion-namespace",
+                    "parquet",
+                ]
+                .into_iter()
+                .chain(options),
+                temp.path(),
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains(options[0]), "{error}");
+            assert!(error.to_string().contains("--criterion"), "{error}");
+        }
+        let action = parse_cli_from(
+            [
+                "benchmark_runner",
+                "alpha",
+                "--criterion-namespace",
+                "parquet",
+                "--save-baseline",
+                "baseline",
+            ],
+            temp.path(),
+        )
+        .unwrap();
+        assert!(
+            matches!(action, CliAction::Criterion { save_baseline: Some(ref name), .. } if name == "baseline")
+        );
     }
 
     #[test]
