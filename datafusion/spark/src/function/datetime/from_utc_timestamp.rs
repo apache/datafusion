@@ -228,6 +228,10 @@ fn parse_timezone(timezone: &str) -> Result<SparkTimeZone> {
 /// their values are ignored on null timestamp rows. Computed timezone expressions are evaluated
 /// only for rows with non-null timestamps. Empty batches evaluate neither child.
 ///
+/// Registering [`SparkFromUtcTimestamp`] as a UDF does not use this expression: ordinary SQL
+/// evaluates the UDF's arguments eagerly. Consumers must explicitly construct this expression
+/// after planning and coercing its children to obtain conditional timezone evaluation.
+///
 /// This intentionally differs from Spark's generated evaluation of foldable timezones, which
 /// evaluates the timezone and validates a non-null value before processing timestamp rows. This
 /// expression can therefore skip an invalid timezone or an error in the timezone expression when
@@ -242,6 +246,50 @@ pub struct SparkFromUtcTimestampExpr {
 
 impl SparkFromUtcTimestampExpr {
     /// Construct an expression that skips computed timezone evaluation for null timestamps.
+    ///
+    /// Both children must already have supported types: a timestamp (any time unit, with or
+    /// without timezone metadata) and a string (`Utf8`, `LargeUtf8`, or `Utf8View`). This
+    /// constructor does not validate or coerce their types. Insert required casts during
+    /// planning, keeping timezone casts inside the timezone child so they are also skipped
+    /// for null timestamps.
+    ///
+    /// # Example
+    ///
+    /// A consumer can plan typed children before constructing the physical expression.
+    /// The invalid integer cast in the timezone child is skipped for the null timestamp.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use arrow::array::{ArrayRef, StringArray, TimestampMicrosecondArray};
+    /// use arrow::datatypes::{DataType, TimeUnit};
+    /// use arrow::record_batch::RecordBatch;
+    /// use datafusion::prelude::{SessionContext, col};
+    /// use datafusion_common::DFSchema;
+    /// use datafusion_expr::cast;
+    /// use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+    /// use datafusion_spark::function::datetime::from_utc_timestamp::SparkFromUtcTimestampExpr;
+    ///
+    /// let batch = RecordBatch::try_from_iter([
+    ///     ("ts", Arc::new(StringArray::from(vec![Some("1970-01-01T00:00:00"), None])) as ArrayRef),
+    ///     ("value", Arc::new(StringArray::from(vec!["1", "invalid"])) as ArrayRef),
+    /// ])?;
+    /// let schema = DFSchema::try_from(batch.schema().as_ref().clone())?;
+    /// let ctx = SessionContext::new();
+    /// let timestamp = ctx.create_physical_expr(
+    ///     cast(col("ts"), DataType::Timestamp(TimeUnit::Microsecond, None)),
+    ///     &schema,
+    /// )?;
+    /// let timezone = ctx.parse_sql_expr(
+    ///     "CASE WHEN CAST(value AS INT) = 1 THEN 'GMT+1' ELSE 'UTC' END",
+    ///     &schema,
+    /// )?;
+    /// let timezone = ctx.create_physical_expr(cast(timezone, DataType::Utf8), &schema)?;
+    /// let expr = SparkFromUtcTimestampExpr::new(timestamp, timezone);
+    /// let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+    /// let expected = TimestampMicrosecondArray::from(vec![Some(3_600_000_000), None]);
+    /// assert_eq!(result.as_ref(), &expected);
+    /// # Ok::<(), datafusion_common::DataFusionError>(())
+    /// ```
     pub fn new(
         timestamp: Arc<dyn PhysicalExpr>,
         timezone: Arc<dyn PhysicalExpr>,
@@ -280,7 +328,11 @@ impl Hash for SparkFromUtcTimestampExpr {
 
 impl PhysicalExpr for SparkFromUtcTimestampExpr {
     fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        Display::fmt(self, f)
+        write!(f, "from_utc_timestamp(")?;
+        self.timestamp.fmt_sql(f)?;
+        write!(f, ", ")?;
+        self.timezone.fmt_sql(f)?;
+        write!(f, ")")
     }
 
     fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
@@ -362,8 +414,10 @@ mod tests {
     use datafusion::physical_expr::expressions::{
         BinaryExpr, CaseExpr, CastExpr, Column, Literal,
     };
-    use datafusion_common::{ScalarValue, config::ConfigOptions};
+    use datafusion::prelude::SessionContext;
+    use datafusion_common::{DFSchema, ScalarValue, config::ConfigOptions};
     use datafusion_expr::Operator;
+    use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
     fn expression_batch(timestamps: Vec<Option<i64>>, values: Vec<&str>) -> RecordBatch {
         RecordBatch::try_new(
@@ -625,6 +679,76 @@ mod tests {
             .evaluate(&expression_batch(vec![Some(0)], vec!["invalid"]))
             .unwrap_err();
         assert!(error.to_string().contains("invalid"));
+    }
+
+    #[tokio::test]
+    async fn planned_udf_requires_explicit_conditional_expression() -> Result<()> {
+        let ctx = SessionContext::new();
+        ctx.register_udf(
+            crate::function::datetime::from_utc_timestamp()
+                .as_ref()
+                .clone(),
+        );
+        let batch = RecordBatch::try_from_iter([
+            (
+                "timestamp_text",
+                Arc::new(StringArray::from(vec![
+                    None,
+                    Some("1970-01-01T00:00:00"),
+                    Some("1970-01-01T00:00:00"),
+                ])) as ArrayRef,
+            ),
+            (
+                "value",
+                Arc::new(StringArray::from(vec!["invalid", "0", "1"])) as ArrayRef,
+            ),
+        ])?;
+        ctx.register_batch("input", batch.clone())?;
+        let sql_expr = "from_utc_timestamp(timestamp_text, \
+            CASE WHEN CAST(value AS INT) = 0 THEN 'UTC' ELSE 'PST' END)";
+
+        // Registering the UDF leaves ordinary SQL argument evaluation eager.
+        let error = ctx
+            .sql(&format!("SELECT {sql_expr} FROM input"))
+            .await?
+            .collect()
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("invalid"));
+
+        // Reuse the planner's children, including its implicit string-to-timestamp cast.
+        let schema = DFSchema::try_from(batch.schema().as_ref().clone())?;
+        let planned =
+            ctx.create_physical_expr(ctx.parse_sql_expr(sql_expr, &schema)?, &schema)?;
+        let children = planned.children();
+        let conditional = SparkFromUtcTimestampExpr::new(
+            Arc::clone(children[0]),
+            Arc::clone(children[1]),
+        );
+        assert_eq!(
+            conditional.data_type(batch.schema_ref())?,
+            DataType::Timestamp(TimeUnit::Microsecond, None)
+        );
+        assert_eq!(
+            fmt_sql(&conditional).to_string(),
+            fmt_sql(planned.as_ref()).to_string()
+        );
+        let result = conditional.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let expected =
+            TimestampMicrosecondArray::from(vec![None, Some(0), Some(-28_800_000_000)]);
+        assert_eq!(result.as_ref(), &expected);
+
+        // The same computed timezone must fail when its timestamp is required.
+        let non_null_batch = RecordBatch::try_new(
+            batch.schema(),
+            vec![
+                Arc::new(StringArray::from(vec!["1970-01-01T00:00:00"; 3])),
+                Arc::clone(batch.column(1)),
+            ],
+        )?;
+        let error = conditional.evaluate(&non_null_batch).unwrap_err();
+        assert!(error.to_string().contains("invalid"));
+        Ok(())
     }
 
     #[test]

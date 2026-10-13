@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Measure the physical evaluator with a timezone column. The narrow and wide batches use
-//! identical timestamp and timezone columns; only the number of unused Int64 columns differs.
-//! Mixed-null timestamps expose any cost from filtering those unrelated columns.
+//! Measure column, computed, and literal timezone evaluation across batch widths and null
+//! densities. Computed timezones exercise selection and copying of unrelated columns, while
+//! literal timezones exercise scalar broadcasting. A physical expression benchmark is needed
+//! because ordinary SQL uses the eager UDF instead of the conditional evaluator.
 
 use std::hint::black_box;
 use std::sync::Arc;
@@ -26,11 +27,13 @@ use arrow::array::{ArrayRef, Int64Array, StringArray, TimestampMicrosecondArray}
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use datafusion::physical_expr::expressions::Column;
+use datafusion::prelude::{SessionContext, col, lit};
+use datafusion_common::DFSchema;
+use datafusion_expr::when;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_spark::function::datetime::from_utc_timestamp::SparkFromUtcTimestampExpr;
 
-fn batch(rows: usize, columns: usize, half_null: bool) -> RecordBatch {
+fn batch(rows: usize, columns: usize, null_every: Option<usize>) -> RecordBatch {
     let mut fields = vec![
         Field::new(
             "timestamp",
@@ -41,7 +44,9 @@ fn batch(rows: usize, columns: usize, half_null: bool) -> RecordBatch {
     ];
     let mut arrays: Vec<ArrayRef> = vec![
         Arc::new(TimestampMicrosecondArray::from_iter((0..rows).map(|row| {
-            (!half_null || row % 2 != 0).then_some(row as i64 * 86_400_000_000)
+            null_every
+                .is_none_or(|every| row % every != 0)
+                .then_some(row as i64 * 86_400_000_000)
         }))),
         Arc::new(StringArray::from_iter_values(
             (0..rows).map(|row| if (row / 2) % 2 == 0 { "PST" } else { "EST" }),
@@ -64,30 +69,48 @@ fn batch(rows: usize, columns: usize, half_null: bool) -> RecordBatch {
 
 fn criterion_benchmark(c: &mut Criterion) {
     let rows = 8192;
-    let expr = SparkFromUtcTimestampExpr::new(
-        Arc::new(Column::new("timestamp", 0)),
-        Arc::new(Column::new("timezone", 1)),
-    );
-    let mut group = c.benchmark_group("from_utc_timestamp_column");
-    group.throughput(Throughput::Elements(rows as u64));
+    let ctx = SessionContext::new();
+    let timezones = [
+        ("column", col("timezone")),
+        (
+            "computed",
+            when(col("timezone").eq(lit("PST")), lit("PST"))
+                .otherwise(lit("EST"))
+                .unwrap(),
+        ),
+        ("literal", lit("PST")),
+    ];
 
-    for columns in [2, 64, 256] {
-        for (half_null, name) in [(false, "no_nulls"), (true, "half_nulls")] {
-            let batch = batch(rows, columns, half_null);
-            let result = expr.evaluate(&batch).unwrap().into_array(rows).unwrap();
-            assert_eq!(result.len(), rows);
-            assert_eq!(result.null_count(), if half_null { rows / 2 } else { 0 });
+    for (source, timezone) in timezones {
+        let mut group = c.benchmark_group(format!("from_utc_timestamp_{source}"));
+        group.throughput(Throughput::Elements(rows as u64));
+        for columns in [2, 64, 256] {
+            for (null_every, name) in [
+                (None, "no_nulls"),
+                (Some(100), "sparse_nulls"),
+                (Some(2), "half_nulls"),
+            ] {
+                let batch = batch(rows, columns, null_every);
+                let schema = DFSchema::try_from(batch.schema().as_ref().clone()).unwrap();
+                let expr = SparkFromUtcTimestampExpr::new(
+                    ctx.create_physical_expr(col("timestamp"), &schema).unwrap(),
+                    ctx.create_physical_expr(timezone.clone(), &schema).unwrap(),
+                );
+                let result = expr.evaluate(&batch).unwrap().into_array(rows).unwrap();
+                assert_eq!(result.len(), rows);
+                assert_eq!(result.null_count(), batch.column(0).null_count());
 
-            group.bench_with_input(
-                BenchmarkId::new(format!("{columns}_columns"), name),
-                &batch,
-                |b, batch| {
-                    b.iter(|| black_box(expr.evaluate(black_box(batch)).unwrap()));
-                },
-            );
+                group.bench_with_input(
+                    BenchmarkId::new(format!("{columns}_columns"), name),
+                    &batch,
+                    |b, batch| {
+                        b.iter(|| black_box(expr.evaluate(black_box(batch)).unwrap()));
+                    },
+                );
+            }
         }
+        group.finish();
     }
-    group.finish();
 }
 
 criterion_group!(benches, criterion_benchmark);
