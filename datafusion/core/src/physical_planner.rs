@@ -1887,8 +1887,8 @@ impl DefaultPhysicalPlanner {
                         )?
                         .with_null_aware(true)?,
                     )
-                } else if session.config().target_partitions() > 1
-                    && session.config().repartition_joins()
+                } else if (session.config().target_partitions() == 1
+                    || session.config().repartition_joins())
                     && !prefer_hash_join
                     && !*null_aware
                 // Null-aware joins (e.g. `NOT IN` with a nullable subquery) that do not
