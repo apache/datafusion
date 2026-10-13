@@ -1134,6 +1134,36 @@ ancestor.</p>
 <p>Callers that only need the previous behaviour can keep using the deprecated
 form, or pass a freshly constructed <code class="docutils literal notranslate"><span class="pre">StatisticsContext</span></code> per call.</p>
 </section>
+<section id="physical-optimizer-rules-share-one-statisticscontext-per-query">
+<h3>Physical optimizer rules share one <code class="docutils literal notranslate"><span class="pre">StatisticsContext</span></code> per query<a class="headerlink" href="#physical-optimizer-rules-share-one-statisticscontext-per-query" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">PhysicalOptimizerContext</span></code> has a new <code class="docutils literal notranslate"><span class="pre">statistics_context</span></code> method. The physical
+planner returns one <code class="docutils literal notranslate"><span class="pre">StatisticsContext</span></code> for all the rules of one
+<code class="docutils literal notranslate"><span class="pre">optimize_physical_plan</span></code> call, so statistics computed by one rule are reused by
+later rules. The method returns <code class="docutils literal notranslate"><span class="pre">None</span></code> by default, so existing implementations
+are not affected. Custom rules that compute statistics should call the new
+<code class="docutils literal notranslate"><span class="pre">PhysicalOptimizerContext::compute_statistics</span></code> method in <code class="docutils literal notranslate"><span class="pre">optimize_with_context</span></code>.
+It uses the shared context, or, if there is none, a new context built from the
+statistics registry:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">statistics</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">context</span><span class="p">.</span><span class="n">compute_statistics</span><span class="p">(</span><span class="o">&amp;</span><span class="n">plan</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">StatisticsArgs</span><span class="p">::</span><span class="n">new</span><span class="p">())</span><span class="o">?</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>To pass one <code class="docutils literal notranslate"><span class="pre">StatisticsContext</span></code> down a traversal, use
+<code class="docutils literal notranslate"><span class="pre">datafusion_session::with_statistics_context</span></code>, which applies the same choice.</p>
+<p><code class="docutils literal notranslate"><span class="pre">AggregateStatistics</span></code>, <code class="docutils literal notranslate"><span class="pre">LimitPushdown</span></code> and the co-partitioning choice in
+<code class="docutils literal notranslate"><span class="pre">EnsureRequirements</span></code> now also consult the session’s statistics providers, as
+<code class="docutils literal notranslate"><span class="pre">JoinSelection</span></code> already did. Sessions without registered providers (the
+default) are not affected. As for operators, <code class="docutils literal notranslate"><span class="pre">Exact</span></code> statistics from a provider
+must be guaranteed values: <code class="docutils literal notranslate"><span class="pre">AggregateStatistics</span></code> answers <code class="docutils literal notranslate"><span class="pre">COUNT(*)</span></code>, <code class="docutils literal notranslate"><span class="pre">MIN</span></code> and
+<code class="docutils literal notranslate"><span class="pre">MAX</span></code> from them, and <code class="docutils literal notranslate"><span class="pre">LimitPushdown</span></code> removes a limit over an <code class="docutils literal notranslate"><span class="pre">Exact(0)</span></code> input.</p>
+<p>For the same reason,
+<code class="docutils literal notranslate"><span class="pre">datafusion_physical_optimizer::limit_pushdown::pushdown_limit_helper</span></code> is
+deprecated in favour of <code class="docutils literal notranslate"><span class="pre">pushdown_limit_helper_with_stats</span></code>, which takes the
+<code class="docutils literal notranslate"><span class="pre">StatisticsContext</span></code> from the caller. The deprecated form creates a new context
+on every call, without statistics providers. When providers are registered,
+switching to <code class="docutils literal notranslate"><span class="pre">pushdown_limit_helper_with_stats</span></code> with a context built from the
+statistics registry can change the result, because the providers are then
+consulted.</p>
+</section>
 <section id="mergeintoop-requires-the-sql-visible-target-qualifier">
 <h3><code class="docutils literal notranslate"><span class="pre">MergeIntoOp</span></code> requires the SQL-visible target qualifier<a class="headerlink" href="#mergeintoop-requires-the-sql-visible-target-qualifier" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">MergeIntoOp</span></code> now stores the SQL-visible target qualifier separately from the
@@ -1406,6 +1436,7 @@ the API breaks.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#physical-filter-pushdown-resolves-columns-by-position">Physical filter pushdown resolves columns by position</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#default-datafusion-sql-parser-recursion-limit-raised-from-50-to-51">Default <code class="docutils literal notranslate"><span class="pre">datafusion.sql_parser.recursion_limit</span></code> raised from 50 to 51</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ensure-distribution-is-deprecated-in-favour-of-ensure-distribution-with-stats"><code class="docutils literal notranslate"><span class="pre">ensure_distribution</span></code> is deprecated in favour of <code class="docutils literal notranslate"><span class="pre">ensure_distribution_with_stats</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#physical-optimizer-rules-share-one-statisticscontext-per-query">Physical optimizer rules share one <code class="docutils literal notranslate"><span class="pre">StatisticsContext</span></code> per query</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#mergeintoop-requires-the-sql-visible-target-qualifier"><code class="docutils literal notranslate"><span class="pre">MergeIntoOp</span></code> requires the SQL-visible target qualifier</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#mergeintoopnode-protobuf-literals-require-target-qualifier"><code class="docutils literal notranslate"><span class="pre">MergeIntoOpNode</span></code> protobuf literals require <code class="docutils literal notranslate"><span class="pre">target_qualifier</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#null-aware-joins-record-their-not-in-value-key-count">Null-aware joins record their <code class="docutils literal notranslate"><span class="pre">NOT</span> <span class="pre">IN</span></code> value key count</a></li>
