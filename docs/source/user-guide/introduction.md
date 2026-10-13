@@ -107,6 +107,7 @@ Here are some active projects using DataFusion:
 - [dbt Fusion engine](https://github.com/dbt-labs/dbt-fusion) The dbt Fusion engine, written in Rust, designed for speed and correctness with a native SQL understanding across DWH SQL dialects.
 - [delta-rs] Native Rust implementation of Delta Lake
 - [EDB Postgres Lakehouse] built with [Seafowl]
+- [det](https://github.com/det-Labs/det) Fast, local-first SQL ETL workspace and pipeline orchestration engine
 - [Feldera](https://github.com/feldera/feldera) Fast query engine for incremental computation
 - [Funnel](https://funnel.io/) Data Platform powering Marketing Intelligence applications.
 - [GlareDB](https://github.com/GlareDB/glaredb) Fast SQL database for querying and analyzing distributed data.
