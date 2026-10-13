@@ -1,8 +1,13 @@
 template sql_benchmarks/sort_pushdown/sort_pushdown.benchmark.template
 QPAD=07
-QUERY_ID=7
 VARIANT=baseline
 DATASET=sort_pushdown
-QUERY_DIR=sort_pushdown
 SETTINGS=standard
 ORDERING=unordered
+
+run
+-- Reverse scan: wide projection + DESC LIMIT
+SELECT *
+FROM lineitem
+ORDER BY l_orderkey DESC
+LIMIT 100

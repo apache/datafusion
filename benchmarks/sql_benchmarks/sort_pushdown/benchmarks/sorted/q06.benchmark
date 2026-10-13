@@ -1,8 +1,13 @@
 template sql_benchmarks/sort_pushdown/sort_pushdown.benchmark.template
 QPAD=06
-QUERY_ID=6
 VARIANT=sorted
 DATASET=sort_pushdown
-QUERY_DIR=sort_pushdown
 SETTINGS=standard
 ORDERING=ordered
+
+run
+-- Reverse scan: ORDER BY DESC LIMIT larger fetch (narrow projection)
+SELECT l_orderkey, l_partkey, l_suppkey
+FROM lineitem
+ORDER BY l_orderkey DESC
+LIMIT 1000

@@ -1,9 +1,8 @@
 # Sort pushdown SQL benchmarks
 
 Run the existing sort pushdown queries through `benchmark_runner`. This suite
-uses the same Parquet files and references the original SQL files under
-`benchmarks/queries/`. The `dfbench` implementation and its commands remain
-available for comparison.
+uses the same Parquet files, with queries inlined in each `.benchmark` file.
+The `dfbench` implementation and its commands remain available for comparison.
 
 From `benchmarks/`, prepare data with the existing generators:
 

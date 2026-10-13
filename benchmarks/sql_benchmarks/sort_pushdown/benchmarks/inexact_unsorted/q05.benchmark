@@ -1,8 +1,13 @@
 template sql_benchmarks/sort_pushdown/sort_pushdown.benchmark.template
 QPAD=05
-QUERY_ID=5
 VARIANT=inexact_unsorted
 DATASET=sort_pushdown_inexact
-QUERY_DIR=sort_pushdown_inexact_unsorted
 SETTINGS=inexact
 ORDERING=unordered
+
+run
+-- Unsupported path: DESC LIMIT (no declared ordering = no reverse scan).
+SELECT l_orderkey, l_partkey, l_suppkey
+FROM lineitem
+ORDER BY l_orderkey DESC
+LIMIT 100

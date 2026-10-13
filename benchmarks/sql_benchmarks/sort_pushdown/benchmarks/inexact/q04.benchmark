@@ -1,8 +1,15 @@
 template sql_benchmarks/sort_pushdown/sort_pushdown.benchmark.template
 QPAD=04
-QUERY_ID=4
 VARIANT=inexact
 DATASET=sort_pushdown_inexact
-QUERY_DIR=sort_pushdown_inexact
 SETTINGS=inexact
 ORDERING=ordered
+
+run
+-- Inexact path: wide projection + DESC LIMIT with larger fetch.
+-- Combines wide-row row-level filter benefit with larger LIMIT to
+-- demonstrate cumulative gains from RG reorder.
+SELECT *
+FROM lineitem
+ORDER BY l_orderkey DESC
+LIMIT 1000

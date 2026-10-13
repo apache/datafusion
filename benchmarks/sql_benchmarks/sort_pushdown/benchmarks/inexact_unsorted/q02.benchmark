@@ -1,8 +1,13 @@
 template sql_benchmarks/sort_pushdown/sort_pushdown.benchmark.template
 QPAD=02
-QUERY_ID=2
 VARIANT=inexact_unsorted
 DATASET=sort_pushdown_inexact
-QUERY_DIR=sort_pushdown_inexact_unsorted
 SETTINGS=inexact
 ORDERING=unordered
+
+run
+-- Unsupported path: TopK + ASC LIMIT with larger fetch.
+SELECT l_orderkey, l_partkey, l_suppkey
+FROM lineitem
+ORDER BY l_orderkey
+LIMIT 1000

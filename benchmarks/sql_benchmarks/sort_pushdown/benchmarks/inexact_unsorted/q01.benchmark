@@ -1,8 +1,15 @@
 template sql_benchmarks/sort_pushdown/sort_pushdown.benchmark.template
 QPAD=01
-QUERY_ID=1
 VARIANT=inexact_unsorted
 DATASET=sort_pushdown_inexact
-QUERY_DIR=sort_pushdown_inexact_unsorted
 SETTINGS=inexact
 ORDERING=unordered
+
+run
+-- Unsupported path: TopK + ASC LIMIT on file without declared ordering.
+-- Tests RG reorder benefit when no WITH ORDER is declared — the
+-- Unsupported path in try_pushdown_sort triggers RG reorder.
+SELECT l_orderkey, l_partkey, l_suppkey
+FROM lineitem
+ORDER BY l_orderkey
+LIMIT 100

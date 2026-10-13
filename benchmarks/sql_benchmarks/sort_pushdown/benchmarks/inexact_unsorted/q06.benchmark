@@ -1,8 +1,13 @@
 template sql_benchmarks/sort_pushdown/sort_pushdown.benchmark.template
 QPAD=06
-QUERY_ID=6
 VARIANT=inexact_unsorted
 DATASET=sort_pushdown_inexact
-QUERY_DIR=sort_pushdown_inexact_unsorted
 SETTINGS=inexact
 ORDERING=unordered
+
+run
+-- Unsupported path: wide projection + DESC LIMIT.
+SELECT *
+FROM lineitem
+ORDER BY l_orderkey DESC
+LIMIT 100

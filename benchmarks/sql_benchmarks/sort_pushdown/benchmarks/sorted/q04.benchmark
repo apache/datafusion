@@ -1,8 +1,13 @@
 template sql_benchmarks/sort_pushdown/sort_pushdown.benchmark.template
 QPAD=04
-QUERY_ID=4
 VARIANT=sorted
 DATASET=sort_pushdown
-QUERY_DIR=sort_pushdown
 SETTINGS=standard
 ORDERING=ordered
+
+run
+-- Sort elimination + limit: wide projection
+SELECT *
+FROM lineitem
+ORDER BY l_orderkey
+LIMIT 100
