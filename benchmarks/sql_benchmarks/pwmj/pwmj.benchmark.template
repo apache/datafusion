@@ -38,12 +38,9 @@ ${EXPECTED_ROWS}
 
 # Pin the operator and the join type: the flag only permits PWMJ, and a planner
 # that swapped the inputs would measure the mirrored join. `expect_plan` matches
-# the plan's `Debug` output, so the fields are checked one at a time.
-expect_plan PiecewiseMergeJoinExec
-
-expect_plan operator: Lt,
-
-expect_plan join_type: ${JOIN_KIND},
+# the plan as `EXPLAIN` displays it; the trailing comma keeps `Left` from
+# matching `LeftSemi`/`LeftAnti`/`LeftMark`.
+expect_plan PiecewiseMergeJoin: operator=Lt, join_type=${JOIN_KIND},
 
 run
 SELECT lhs.payload, rhs.payload FROM lhs ${JOIN} JOIN rhs ON lhs.key < rhs.key;
