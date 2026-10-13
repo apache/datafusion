@@ -15,12 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task;
 
 use arrow::datatypes::{DataType, Field};
 use arrow::ffi::FFI_ArrowSchema;
 use arrow_schema::FieldRef;
+use pin_project_lite::pin_project;
 use stabby::vec::Vec as SVec;
+use tokio::runtime::Handle;
 
 use crate::arrow_wrappers::WrappedSchema;
 
@@ -119,6 +123,60 @@ pub fn rvec_wrapped_to_vec_datatype(
         .iter()
         .map(|d| DataType::try_from(&d.0))
         .collect()
+}
+
+pin_project! {
+    /// A future that enters a tokio runtime each time it is polled.
+    ///
+    /// Futures returned across the FFI boundary are polled by the consumer's
+    /// executor, which may run on threads with no tokio context, or with a
+    /// context from a different copy of tokio than the provider links. This
+    /// wrapper makes the provider's runtime current for the duration of each
+    /// `poll`, so code inside the future that relies on
+    /// [`Handle::current`] (timers, `tokio::spawn`, I/O) works.
+    ///
+    /// The [`EnterGuard`](tokio::runtime::EnterGuard) is created and dropped
+    /// within a single `poll` call. Holding it across an `.await` instead would
+    /// make the future `!Send` and could drop guards out of order when futures
+    /// are interleaved on one thread, which tokio panics on.
+    ///
+    /// If no runtime is provided, the inner future is polled unchanged.
+    ///
+    /// Created by [`WithRuntimeExt::with_runtime`].
+    pub(crate) struct WithRuntime<'handle, F> {
+        #[pin]
+        future: F,
+        handle: Option<&'handle Handle>,
+    }
+}
+
+impl<F: Future> Future for WithRuntime<'_, F> {
+    type Output = F::Output;
+
+    fn poll(
+        self: Pin<&mut Self>,
+        cx: &mut task::Context<'_>,
+    ) -> task::Poll<Self::Output> {
+        let this = self.project();
+        let _guard = this.handle.map(Handle::enter);
+        this.future.poll(cx)
+    }
+}
+
+/// Extension trait for running a future inside an optional tokio runtime.
+pub(crate) trait WithRuntimeExt: Sized {
+    /// Wraps this future so that `runtime`, if provided, is entered on every
+    /// poll. See [`WithRuntime`] for details.
+    fn with_runtime(self, runtime: Option<&Handle>) -> WithRuntime<'_, Self>;
+}
+
+impl<F: Future> WithRuntimeExt for F {
+    fn with_runtime(self, runtime: Option<&Handle>) -> WithRuntime<'_, Self> {
+        WithRuntime {
+            future: self,
+            handle: runtime,
+        }
+    }
 }
 
 #[cfg(test)]
