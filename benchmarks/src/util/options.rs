@@ -151,8 +151,8 @@ impl CommonOpt {
             let url = ObjectStoreUrl::parse("file:///")?;
             rt.register_object_store(url.as_ref(), Arc::new(store));
             println!(
-                "Simulating remote object storage (get TTFB: 25-200ms, list TTFB: \
-                 40-400ms/page, {} MB/s per connection, {MAX_CONNECTIONS} connections)",
+                "Simulating remote object storage (get TTFB: 19-230ms, head TTFB: \
+                 8-28ms, list TTFB: 40-200ms/page, {} MB/s per connection, {MAX_CONNECTIONS} connections)",
                 BYTES_PER_SECOND / (1024 * 1024),
             );
         }

@@ -50,24 +50,40 @@ use rand::Rng;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::Instant;
 
-/// GET time to first byte, inspired by S3 latencies.
-/// Sorted: 25,25,28,28,30,30,30,30,32,32,35, 70,85,100,100,110, 130,150, 180,200
-/// P50≈32ms, P90≈110ms, P99≈200ms
+// The latency tables are an equal mix of S3 and GCS. Each table has 10 values
+// from S3 and 10 values from GCS, at the 5%, 15%, ..., 95% quantiles of each.
+// Thus one draw is S3-like or GCS-like with equal probability.
+//
+// Measured on 2026-10-13 with the `object_store` clients, from a VM in the
+// same region as the bucket:
+// - S3: c7i.2xlarge in us-east-2. GCS: e2-standard-8 in europe-west1.
+// - S3 is approximately 3x faster to the first byte than GCS.
+
+/// Time to first byte of a range GET.
+/// S3: P50≈24ms, P95≈30ms. GCS: P50≈75ms, P95≈210ms.
 const GET_TTFB_MS: &[u64] = &[
-    30, 100, 25, 85, 32, 200, 28, 130, 35, 70, 30, 150, 30, 110, 28, 180, 32, 25, 100, 30,
+    19, 21, 22, 23, 24, 25, 26, 27, 29, 35, // S3
+    30, 45, 55, 65, 75, 90, 110, 130, 165, 230, // GCS
 ];
 
-/// Time to first byte of one LIST page. It is usually higher than for GET.
-/// Sorted: 40,40,50,50,55,55,60,60,65,65,70, 120,140,160,160,180, 210,250, 300,400
-/// P50≈65ms, P90≈180ms, P99≈400ms
+/// Time to first byte of a HEAD.
+/// S3: P50≈11ms, P95≈16ms. GCS: P50≈18ms, P95≈28ms.
+const HEAD_TTFB_MS: &[u64] = &[
+    8, 9, 10, 10, 11, 11, 12, 12, 13, 16, // S3
+    13, 15, 16, 17, 18, 18, 19, 21, 23, 28, // GCS
+];
+
+/// Time to first byte of one LIST page.
+/// S3: P50≈50ms, P95≈60ms. GCS: P50≈83ms, P95≈170ms.
 const LIST_TTFB_MS: &[u64] = &[
-    55, 160, 40, 140, 65, 400, 50, 210, 70, 120, 60, 250, 55, 180, 50, 300, 65, 40, 160,
-    60,
+    40, 45, 47, 48, 49, 50, 51, 52, 54, 60, // S3
+    50, 62, 70, 75, 80, 86, 95, 106, 130, 200, // GCS
 ];
 
-/// Throughput of one connection. S3 and GCS give approximately 50-100MB/s on
-/// one connection, independent of the object size.
-pub const BYTES_PER_SECOND: u64 = 100 * 1024 * 1024;
+/// Throughput of one connection. For a 64MiB range GET, the measured median
+/// after the time to first byte is approximately 100MiB/s on S3 and 80MiB/s
+/// on GCS.
+pub const BYTES_PER_SECOND: u64 = 90 * 1024 * 1024;
 
 /// Maximum number of requests in flight.
 pub const MAX_CONNECTIONS: usize = 128;
@@ -78,6 +94,7 @@ const LIST_PAGE_SIZE: usize = 1000;
 #[derive(Debug, Clone, Copy)]
 struct Costs {
     get_ttfb_ms: &'static [u64],
+    head_ttfb_ms: &'static [u64],
     list_ttfb_ms: &'static [u64],
     bytes_per_second: u64,
     list_page_size: usize,
@@ -96,6 +113,7 @@ impl<T: ObjectStore> SimulatedObjectStore<T> {
     pub fn new(inner: T) -> Self {
         let costs = Costs {
             get_ttfb_ms: GET_TTFB_MS,
+            head_ttfb_ms: HEAD_TTFB_MS,
             list_ttfb_ms: LIST_TTFB_MS,
             bytes_per_second: BYTES_PER_SECOND,
             list_page_size: LIST_PAGE_SIZE,
@@ -214,7 +232,11 @@ impl<T: ObjectStore> ObjectStore for SimulatedObjectStore<T> {
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
-        let permit = round_trip(&self.connections, self.costs.get_ttfb_ms).await;
+        let ttfb_ms = match options.head {
+            true => self.costs.head_ttfb_ms,
+            false => self.costs.get_ttfb_ms,
+        };
+        let permit = round_trip(&self.connections, ttfb_ms).await;
         let result = self.inner.get_opts(location, options).await?;
         // A HEAD result has a range that covers the full object, but the
         // caller never reads its body, so it pays no transfer time.
@@ -341,8 +363,9 @@ mod tests {
     }
 
     const TTFB_MS: u64 = 10;
+    const HEAD_TTFB_MS: u64 = 3;
 
-    /// A store with a constant time to first byte, 1MiB/s and 3 keys per page.
+    /// A store with constant times to first byte, 1MiB/s and 3 keys per page.
     async fn store(objects: &[(&str, usize)]) -> SimulatedObjectStore<Recording> {
         let inner = Recording::default();
         for (name, len) in objects {
@@ -353,6 +376,7 @@ mod tests {
             inner,
             costs: Costs {
                 get_ttfb_ms: &[TTFB_MS],
+                head_ttfb_ms: &[HEAD_TTFB_MS],
                 list_ttfb_ms: &[TTFB_MS],
                 bytes_per_second: 1024 * 1024,
                 list_page_size: 3,
@@ -403,13 +427,13 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn head_does_not_pay_for_a_body() {
+    async fn head_pays_only_the_head_ttfb() {
         let store = store(&[("f", 1 << 20)]).await;
 
         let start = Instant::now();
         store.head(&Path::from("f")).await.unwrap();
 
-        assert_eq!(ms(start.elapsed()), TTFB_MS);
+        assert_eq!(ms(start.elapsed()), HEAD_TTFB_MS);
     }
 
     #[tokio::test(start_paused = true)]
