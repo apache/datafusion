@@ -1056,6 +1056,73 @@ async fn join_inner_two_two() -> Result<()> {
     Ok(())
 }
 
+/// A streamed row is paired with its buffered key group in runs, each ending where its
+/// buffered batch ends or where the output batch fills. Here the group of key 1 spans three
+/// buffered batches and the batch size is 4, so runs are cut both ways. Every pair must come
+/// out once, in the order of the buffered rows.
+#[tokio::test]
+async fn join_inner_group_spans_buffered_and_output_batches() -> Result<()> {
+    let left = build_table(
+        ("a1", &vec![1, 1, 2]),
+        ("b1", &vec![0, 0, 0]),
+        ("c1", &vec![10, 11, 20]),
+    );
+    let right = build_table_from_batches(vec![
+        build_table_i32(
+            ("a2", &vec![1, 1, 1]),
+            ("b2", &vec![0, 0, 0]),
+            ("c2", &vec![100, 101, 102]),
+        ),
+        build_table_i32(
+            ("a2", &vec![1, 1]),
+            ("b2", &vec![0, 0]),
+            ("c2", &vec![103, 104]),
+        ),
+        build_table_i32(
+            ("a2", &vec![1, 2]),
+            ("b2", &vec![0, 0]),
+            ("c2", &vec![105, 200]),
+        ),
+    ]);
+    let on = vec![(
+        Arc::new(Column::new_with_schema("a1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("a2", &right.schema())?) as _,
+    )];
+    let task_ctx = Arc::new(
+        TaskContext::default()
+            .with_session_config(SessionConfig::new().with_batch_size(4)),
+    );
+    let stream = join(left, right, on, Inner)?.execute(0, task_ctx)?;
+    let batches = common::collect(stream).await?;
+
+    assert!(batches.iter().all(|batch| batch.num_rows() <= 4));
+    let pairs: Vec<(i32, i32)> = batches
+        .iter()
+        .flat_map(|batch| {
+            let c1 = batch
+                .column(2)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
+            let c2 = batch
+                .column(5)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
+            (0..batch.num_rows())
+                .map(|i| (c1.value(i), c2.value(i)))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let expected: Vec<(i32, i32)> = [10, 11]
+        .into_iter()
+        .flat_map(|c1| (100..=105).map(move |c2| (c1, c2)))
+        .chain([(20, 200)])
+        .collect();
+    assert_eq!(pairs, expected);
+    Ok(())
+}
+
 #[tokio::test]
 async fn join_inner_with_nulls() -> Result<()> {
     let left = build_table_i32_nullable(

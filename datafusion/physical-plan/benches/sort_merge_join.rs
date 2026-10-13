@@ -168,6 +168,22 @@ fn bench_smj(c: &mut Criterion) {
         });
     }
 
+    // 1:100 Inner Join — 20K left, 20K right, 200 distinct keys
+    // Every streamed row matches 100 buffered rows, so the join emits 2M rows.
+    {
+        let n = 20_000;
+        let key_mod = 200;
+        let left_batches = build_sorted_batches(n, key_mod, &s);
+        let right_batches = build_sorted_batches(n, key_mod, &s);
+        group.bench_function(BenchmarkId::new("inner_1to100", n), |b| {
+            b.iter(|| {
+                let left = make_exec(&left_batches, &s);
+                let right = make_exec(&right_batches, &s);
+                do_join(left, right, datafusion_common::JoinType::Inner, &rt)
+            })
+        });
+    }
+
     // Left Join — 100K each, ~5% unmatched on left
     {
         let n = 100_000;

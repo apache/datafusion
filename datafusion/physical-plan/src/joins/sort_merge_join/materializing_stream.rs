@@ -125,8 +125,71 @@ impl StreamedBatch {
         buffered_idx: Option<usize>,
         batch_size: usize,
     ) {
-        // If no current chunk exists or current chunk is not for current buffered batch,
-        // create a new chunk
+        let streamed_idx = self.idx as u64;
+        let current_chunk = self.chunk_for(buffered_batch_idx, batch_size);
+
+        // Append index of streamed batch and index of buffered batch into current chunk
+        current_chunk.streamed_indices.append_value(streamed_idx);
+        if let Some(idx) = buffered_idx {
+            current_chunk.buffered_indices.append_value(idx as u64);
+        } else {
+            current_chunk.buffered_indices.append_null();
+        }
+        self.num_output_rows += 1;
+    }
+
+    /// Appends one pair for each row in `buffered_range` of the buffered batch with
+    /// `buffered_batch_idx` index, all with the current streamed index.
+    ///
+    /// Equivalent to calling [`Self::append_output_pair`] once per buffered row, but
+    /// appends the indices in bulk, which matters when a streamed row matches many
+    /// buffered rows.
+    #[inline]
+    fn append_output_pairs(
+        &mut self,
+        buffered_batch_idx: usize,
+        buffered_range: Range<usize>,
+        batch_size: usize,
+    ) {
+        let len = buffered_range.len();
+        if len == 0 {
+            return;
+        }
+        debug_assert!(
+            self.num_output_rows + len <= batch_size,
+            "appending {len} pairs to {} would exceed batch_size ({batch_size})",
+            self.num_output_rows
+        );
+        let streamed_idx = self.idx as u64;
+        let current_chunk = self.chunk_for(Some(buffered_batch_idx), batch_size);
+        if len == 1 {
+            // A single match, as in a one-to-one join, is cheaper to append directly.
+            current_chunk.streamed_indices.append_value(streamed_idx);
+            current_chunk
+                .buffered_indices
+                .append_value(buffered_range.start as u64);
+        } else {
+            current_chunk
+                .streamed_indices
+                .append_value_n(streamed_idx, len);
+            // SAFETY: a `Range<u64>` reports its exact length in `size_hint`.
+            unsafe {
+                current_chunk.buffered_indices.append_trusted_len_iter(
+                    buffered_range.start as u64..buffered_range.end as u64,
+                );
+            }
+        }
+        self.num_output_rows += len;
+    }
+
+    /// Returns the chunk that pairs for `buffered_batch_idx` go to, starting a new one
+    /// if there is no chunk yet or the current chunk is for another buffered batch.
+    #[inline]
+    fn chunk_for(
+        &mut self,
+        buffered_batch_idx: Option<usize>,
+        batch_size: usize,
+    ) -> &mut StreamedJoinedChunk {
         if self.output_indices.is_empty() || self.buffered_batch_idx != buffered_batch_idx
         {
             // Compute capacity only when creating a new chunk (infrequent operation).
@@ -145,16 +208,7 @@ impl StreamedBatch {
             });
             self.buffered_batch_idx = buffered_batch_idx;
         }
-        let current_chunk = self.output_indices.last_mut().unwrap();
-
-        // Append index of streamed batch and index of buffered batch into current chunk
-        current_chunk.streamed_indices.append_value(self.idx as u64);
-        if let Some(idx) = buffered_idx {
-            current_chunk.buffered_indices.append_value(idx as u64);
-        } else {
-            current_chunk.buffered_indices.append_null();
-        }
-        self.num_output_rows += 1;
+        self.output_indices.last_mut().unwrap()
     }
 }
 
@@ -725,13 +779,18 @@ impl MaterializingSortMergeJoinStream {
         while !self.buffered_data.scanning_finished()
             && self.num_unfrozen_pairs() < self.batch_size
         {
-            let scanning_idx = self.buffered_data.scanning_idx();
-            self.streamed_batch.append_output_pair(
-                Some(self.buffered_data.scanning_batch_idx),
-                Some(scanning_idx),
+            // Pair the streamed row with the rest of the scanning buffered batch at
+            // once, up to the room left in the output batch.
+            let range = &self.buffered_data.scanning_batch().range;
+            let start = range.start + self.buffered_data.scanning_offset;
+            let len =
+                (range.end - start).min(self.batch_size - self.num_unfrozen_pairs());
+            self.streamed_batch.append_output_pairs(
+                self.buffered_data.scanning_batch_idx,
+                start..start + len,
                 self.batch_size,
             );
-            self.buffered_data.scanning_advance();
+            self.buffered_data.scanning_advance_by(len);
         }
         if self.num_unfrozen_pairs() >= self.batch_size {
             return false;
@@ -2114,7 +2173,14 @@ impl BufferedData {
     }
 
     pub fn scanning_advance(&mut self) {
-        self.scanning_offset += 1;
+        self.scanning_advance_by(1);
+    }
+
+    /// Advances the scan by `n` rows, which must not pass the end of the scanning
+    /// batch, then skips to the next batch that has rows left.
+    pub fn scanning_advance_by(&mut self, n: usize) {
+        self.scanning_offset += n;
+        debug_assert!(self.scanning_offset <= self.scanning_batch().range.len());
         while !self.scanning_finished() && self.scanning_batch_finished() {
             self.scanning_batch_idx += 1;
             self.scanning_offset = 0;
