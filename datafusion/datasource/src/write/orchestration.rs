@@ -177,7 +177,7 @@ pub(crate) async fn stateless_serialize_and_write_files(
             serialize_rb_stream_to_object_store(data_rx, serializer, writer).await
         });
     }
-    let mut finished_writers = Vec::new();
+    let mut finished_writers = Vec::with_capacity(join_set.len());
     while let Some(result) = join_set.join_next().await {
         match result {
             Ok(res) => match res {

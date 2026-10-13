@@ -347,7 +347,7 @@ impl ExecutionPlan for StreamingTableExec {
                 .unwrap_or_else(|| (0..self.schema().fields().len()).collect()),
         );
 
-        let mut lex_orderings = vec![];
+        let mut lex_orderings = Vec::with_capacity(self.projected_output_ordering.len());
         for ordering in self.projected_output_ordering().into_iter() {
             let Some(ordering) = update_ordering(ordering, projection.expr())? else {
                 return Ok(None);

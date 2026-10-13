@@ -184,9 +184,10 @@ pub fn find_bisect_point<F>(
 where
     F: Fn(&[ScalarValue], &[ScalarValue]) -> Result<bool>,
 {
+    let mut val = Vec::with_capacity(item_columns.len());
     while low < high {
         let mid = ((high - low) / 2) + low;
-        let val = get_row_at_idx(item_columns, mid)?;
+        extract_row_at_idx_to_buf(item_columns, mid, &mut val)?;
         if compare_fn(&val, target)? {
             low = mid + 1;
         } else {
@@ -231,8 +232,9 @@ pub fn search_in_slice<F>(
 where
     F: Fn(&[ScalarValue], &[ScalarValue]) -> Result<bool>,
 {
+    let mut val = Vec::new();
     while low < high {
-        let val = get_row_at_idx(item_columns, low)?;
+        extract_row_at_idx_to_buf(item_columns, low, &mut val)?;
         if !compare_fn(&val, target)? {
             break;
         }
@@ -356,7 +358,7 @@ pub(crate) fn parse_identifiers_normalized(s: &str, ignore_case: bool) -> Vec<St
                 false
             };
             if is_double_quoted {
-                id[1..id.len() - 1].to_string().replace("\"\"", "\"")
+                id[1..id.len() - 1].replace("\"\"", "\"")
             } else if ignore_case {
                 id
             } else {
@@ -1070,7 +1072,9 @@ pub fn transpose<T>(original: Vec<Vec<T>>) -> Vec<Vec<T>> {
     match original.as_slice() {
         [] => vec![],
         [first, ..] => {
-            let mut result = (0..first.len()).map(|_| vec![]).collect::<Vec<_>>();
+            let mut result = (0..first.len())
+                .map(|_| Vec::with_capacity(original.len()))
+                .collect::<Vec<_>>();
             for row in original {
                 for (item, transposed_row) in row.into_iter().zip(&mut result) {
                     transposed_row.push(item);

@@ -561,7 +561,7 @@ impl ExecutionPlan for ProjectionExec {
         order: &[PhysicalSortExpr],
     ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
         let child = self.input();
-        let mut child_order = Vec::new();
+        let mut child_order = Vec::with_capacity(order.len());
 
         // Check and transform sort expressions
         for sort_expr in order {
@@ -1150,7 +1150,7 @@ pub fn update_ordering(
     ordering: LexOrdering,
     projected_exprs: &[ProjectionExpr],
 ) -> Result<Option<LexOrdering>> {
-    let mut updated_exprs = vec![];
+    let mut updated_exprs = Vec::with_capacity(ordering.len());
     for mut sort_expr in ordering.into_iter() {
         let Some(updated_expr) = update_expr(&sort_expr.expr, projected_exprs, false)?
         else {
@@ -1168,7 +1168,7 @@ pub fn update_ordering_requirement(
     reqs: LexRequirement,
     projected_exprs: &[ProjectionExpr],
 ) -> Result<Option<LexRequirement>> {
-    let mut updated_exprs = vec![];
+    let mut updated_exprs = Vec::with_capacity(reqs.len());
     for mut sort_expr in reqs.into_iter() {
         let Some(updated_expr) = update_expr(&sort_expr.expr, projected_exprs, false)?
         else {

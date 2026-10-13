@@ -793,7 +793,7 @@ fn build_join(
     pull_up
         .correlated_subquery_cols_map
         .values()
-        .for_each(|cols| all_correlated_cols.extend(cols.clone()));
+        .for_each(|cols| all_correlated_cols.extend(cols.iter().cloned()));
 
     // alias the join filter
     let join_filter_opt = conjunction(pull_up.join_filters)
