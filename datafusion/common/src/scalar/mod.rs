@@ -481,7 +481,6 @@ impl Hash for Fl<f16> {
     }
 }
 
-// manual implementation of `PartialEq`
 /// Equality of the arrays inside nested scalars.
 ///
 /// Arrow's array equality converts both arrays to `ArrayData` before it
