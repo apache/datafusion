@@ -29,11 +29,35 @@ select cosine_distance([1.0, 2.0, 3.0], [1.0, 2.0, 3.0]);
 ----
 0
 
+# Identical vectors susceptible to floating point sqrt roundoff: distance = 0.0
+query R
+select cosine_distance([1.0, 1.0, 1.0], [1.0, 1.0, 1.0]);
+----
+0
+
+# Identical vectors metric non-negativity: distance >= 0.0
+query B
+select cosine_distance([1.0, 1.0, 1.0], [1.0, 1.0, 1.0]) >= 0.0;
+----
+true
+
 # Opposite vectors: distance = 2.0
 query R
 select cosine_distance([1.0, 0.0], [-1.0, 0.0]);
 ----
 2
+
+# Opposite 3D vectors bounded: distance = 2.0
+query R
+select cosine_distance([1.0, 1.0, 1.0], [-1.0, -1.0, -1.0]);
+----
+2
+
+# Opposite vectors metric boundedness: distance <= 2.0
+query B
+select cosine_distance([1.0, 1.0, 1.0], [-1.0, -1.0, -1.0]) <= 2.0;
+----
+true
 
 # 45-degree angle: distance ≈ 0.293
 query R

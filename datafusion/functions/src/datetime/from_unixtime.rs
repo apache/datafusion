@@ -353,7 +353,7 @@ mod test {
         timezone: Option<&str>,
     ) -> Result<ColumnarValue> {
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = timezone.map(str::to_string);
+        options.execution.time_zone = timezone.map(|tz| tz.parse().unwrap());
         let func = FromUnixtimeFunc::new_with_config(&options);
 
         let arg_field: FieldRef = Field::new("a", DataType::Int64, true).into();
@@ -560,7 +560,7 @@ mod test {
     #[test]
     fn test_session_timezone_is_used_without_explicit_timezone() {
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = Some("America/Denver".to_string());
+        options.execution.time_zone = Some("America/Denver".parse().unwrap());
 
         let func = FromUnixtimeFunc::new_with_config(&options);
 
@@ -599,7 +599,7 @@ mod test {
     #[test]
     fn test_explicit_timezone_overrides_session_timezone() {
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = Some("America/Denver".to_string());
+        options.execution.time_zone = Some("America/Denver".parse().unwrap());
 
         let func = FromUnixtimeFunc::new_with_config(&options);
 

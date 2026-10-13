@@ -437,7 +437,8 @@ Not all statements will be round-tripped, some statements like CREATE, INSERT, S
 issued as is, but any other statement will be round-tripped to/from Substrait.
 
 _WARNING_: this mode lives behind the `substrait` feature, and the full suite still reports failures. CI therefore
-runs it over a single file, through `cargo xtask ci step test substrait`, which filters to `limit.slt`. Some of the
+runs `limit.slt` through `cargo xtask ci step test substrait` and optimized conditionless-join tests through
+`cargo xtask ci step test substrait-optimized`. Some of the
 failures are collected in https://github.com/apache/datafusion/issues/16248. To run the default suite in this mode:
 
 ```shell
@@ -448,6 +449,14 @@ For focusing on one specific failing test, a file:line filter can be used:
 
 ```shell
 cargo test --test sqllogictests --features substrait -- --substrait-round-trip binary.slt:23
+```
+
+Add `--substrait-optimize` to optimize the logical plan before serialization. This exercises
+producer inputs created by optimizer rewrites, such as conditionless joins from `LEFT JOIN ... ON true`
+and uncorrelated `WHERE EXISTS`:
+
+```shell
+cargo test --test sqllogictests --features substrait -- --substrait-round-trip --substrait-optimize joins_conditionless.slt
 ```
 
 ## `.slt` file format
