@@ -498,8 +498,11 @@ fn get_args_and_return_types(
             let return_types = arg_fields
                 .into_iter()
                 .multi_cartesian_product()
-                .filter_map(|arg_fields| return_field(&arg_fields).ok())
-                .map(|f| Some(remove_native_type_prefix(&f.data_type().into())))
+                .filter_map(|arg_fields| {
+                    return_field(&arg_fields)
+                        .ok()
+                        .map(|f| Some(remove_native_type_prefix(&f.data_type().into())))
+                })
                 .collect::<BTreeSet<_>>();
             let return_types = if return_types.is_empty() {
                 // Indicate `None` if the return type cannot be represented from a signature,
