@@ -150,13 +150,14 @@ pub mod enforce_sorting;
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
-use crate::optimizer::{ConfigOnlyContext, PhysicalOptimizerContext};
+use crate::optimizer::{
+    ConfigOnlyContext, PhysicalOptimizerContext, with_statistics_context,
+};
 
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_plan::ExecutionPlan;
-use datafusion_physical_plan::statistics::StatisticsContext;
 
 /// Optimizer rule that enforces both distribution and sorting requirements.
 ///
@@ -221,29 +222,13 @@ impl PhysicalOptimizerRule for EnsureRequirements {
 
         // Step 2a: Distribution enforcement (bottom-up)
         let dist_ctx = DistributionContext::new_default(plan);
-        // Share one statistics context across the whole distribution pass so each
-        // subtree's statistics are computed once instead of once per ancestor.
-        // Build it from the session's statistics registry so registered providers
-        // are consulted (an empty registry, the default, is unchanged behavior).
-        // `StatsCache` is keyed by raw node pointer, so reset it after any node
-        // whose plan pointer actually changed: a rewrite can free a cached node
-        // and a later allocation could reuse its address. A node that makes no
-        // change cannot free anything, so the cache safely persists across the
-        // no-op nodes that dominate a deep plan.
-        let stats_ctx = match context.statistics_registry() {
-            Some(registry) => StatisticsContext::new_with_registry(registry.clone()),
-            None => StatisticsContext::new(),
-        };
-        let dist_ctx = dist_ctx
-            .transform_up(|ctx| {
-                let before = Arc::clone(&ctx.plan);
-                let result = ensure_distribution_with_stats(ctx, config, &stats_ctx)?;
-                if !Arc::ptr_eq(&before, &result.data.plan) {
-                    stats_ctx.reset_cache();
-                }
-                Ok(result)
-            })
-            .data()?;
+        let dist_ctx = with_statistics_context(context, |stats_ctx| {
+            dist_ctx
+                .transform_up(|ctx| {
+                    ensure_distribution_with_stats(ctx, config, stats_ctx)
+                })
+                .data()
+        })?;
 
         // Step 2b: Sorting enforcement (bottom-up) — runs on distribution-fixed plan
         let sort_ctx = PlanWithCorrespondingSort::new_default(dist_ctx.plan);

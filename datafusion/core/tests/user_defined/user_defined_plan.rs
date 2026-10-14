@@ -428,10 +428,6 @@ impl OptimizerRule for OptimizerMakeExtensionNodeInvalid {
         Some(ApplyOrder::TopDown)
     }
 
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     // Example rewrite pass which impacts validity of the extension node.
     fn rewrite(
         &self,
@@ -500,19 +496,36 @@ impl OptimizerRule for TopKOptimizerRule {
         Some(ApplyOrder::TopDown)
     }
 
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     // Example rewrite pass to insert a user defined LogicalPlanNode
     fn rewrite(
         &self,
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
-        // Note: this code simply looks for the pattern of a Limit followed by a
-        // Sort and replaces it by a TopK node. It does not handle many
-        // edge cases (e.g multiple sort columns, sort ASC / DESC), etc.
+        // Note: this code simply looks for a Sort with a fetch, or a Limit
+        // followed by a Sort, and replaces it by a TopK node. It does not
+        // handle many edge cases (e.g multiple sort columns, sort ASC / DESC),
+        // etc.
+        //
+        // `PushDownLimit` gives a Sort below a Limit the Limit's fetch and
+        // removes the Limit, so a Sort with a fetch is the usual shape.
+        if let LogicalPlan::Sort(Sort {
+            expr,
+            input,
+            fetch: Some(fetch),
+        }) = &plan
+            && expr.len() == 1
+        {
+            return Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                node: Arc::new(TopKPlanNode {
+                    k: *fetch,
+                    input: input.as_ref().clone(),
+                    expr: expr[0].clone(),
+                    invariant_mock: self.invariant_mock.clone(),
+                }),
+            })));
+        }
+
         let LogicalPlan::Limit(ref limit) = plan else {
             return Ok(Transformed::no(plan));
         };

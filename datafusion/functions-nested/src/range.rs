@@ -327,7 +327,8 @@ impl Range {
         };
 
         let mut values = vec![];
-        let mut offsets = vec![0];
+        let mut offsets = Vec::with_capacity(stop_array.len() + 1);
+        offsets.push(0);
         let mut valid = NullBufferBuilder::new(stop_array.len());
         for (idx, stop) in stop_array.iter().enumerate() {
             match retrieve_range_args(start_array, stop, step_array, idx) {

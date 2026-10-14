@@ -272,7 +272,7 @@ pub fn evaluate_partition_prefix<'a>(
         return None;
     }
 
-    let mut parts = vec![];
+    let mut parts = Vec::with_capacity(partition_cols.len());
     for (p, _) in partition_cols {
         match partition_values.get(p.as_str()) {
             Some(PartitionValue::Single(val)) => {

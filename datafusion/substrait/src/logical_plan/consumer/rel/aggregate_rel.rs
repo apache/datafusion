@@ -32,7 +32,7 @@ pub async fn from_aggregate_rel(
 ) -> datafusion::common::Result<LogicalPlan> {
     if let Some(input) = agg.input.as_ref() {
         let input = LogicalPlanBuilder::from(consumer.consume_rel(input).await?);
-        let mut ref_group_exprs = vec![];
+        let mut ref_group_exprs = Vec::with_capacity(agg.grouping_expressions.len());
 
         for e in &agg.grouping_expressions {
             let x = consumer.consume_expression(e, input.schema()).await?;
@@ -40,7 +40,7 @@ pub async fn from_aggregate_rel(
         }
 
         let mut group_exprs = vec![];
-        let mut aggr_exprs = vec![];
+        let mut aggr_exprs = Vec::with_capacity(agg.measures.len());
 
         match agg.groupings.len() {
             0 => {}
@@ -56,7 +56,7 @@ pub async fn from_aggregate_rel(
                 );
             }
             _ => {
-                let mut grouping_sets = vec![];
+                let mut grouping_sets = Vec::with_capacity(agg.groupings.len());
                 for grouping in &agg.groupings {
                     let grouping_set = from_substrait_grouping(
                         consumer,
