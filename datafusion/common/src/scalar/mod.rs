@@ -1531,6 +1531,46 @@ impl ScalarValue {
         })
     }
 
+    /// Returns the raw `i64` value of a non-null timestamp with exactly the
+    /// given `unit` and `tz`.
+    ///
+    /// Returns `None` if this value is not a timestamp, is `NULL`, or has a
+    /// different unit or timezone.
+    ///
+    /// # Example
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow::datatypes::TimeUnit;
+    /// # use datafusion_common::ScalarValue;
+    /// let utc: Arc<str> = Arc::from("UTC");
+    /// let ts = ScalarValue::TimestampSecond(Some(1714521600), Some(Arc::clone(&utc)));
+    ///
+    /// // Same unit and timezone: the raw value
+    /// assert_eq!(ts.try_as_timestamp(TimeUnit::Second, Some(&utc)), Some(1714521600));
+    ///
+    /// // Different unit
+    /// assert_eq!(ts.try_as_timestamp(TimeUnit::Millisecond, Some(&utc)), None);
+    ///
+    /// // Different timezone
+    /// assert_eq!(ts.try_as_timestamp(TimeUnit::Second, None), None);
+    /// ```
+    pub fn try_as_timestamp(&self, unit: TimeUnit, tz: Option<&Arc<str>>) -> Option<i64> {
+        let (value, value_tz) = match (unit, self) {
+            (TimeUnit::Second, ScalarValue::TimestampSecond(Some(v), tz)) => (v, tz),
+            (TimeUnit::Millisecond, ScalarValue::TimestampMillisecond(Some(v), tz)) => {
+                (v, tz)
+            }
+            (TimeUnit::Microsecond, ScalarValue::TimestampMicrosecond(Some(v), tz)) => {
+                (v, tz)
+            }
+            (TimeUnit::Nanosecond, ScalarValue::TimestampNanosecond(Some(v), tz)) => {
+                (v, tz)
+            }
+            _ => return None,
+        };
+        (value_tz.as_ref() == tz).then_some(*value)
+    }
+
     /// Returns a [`ScalarValue`] representing PI
     pub fn new_pi(datatype: &DataType) -> Result<ScalarValue> {
         match datatype {

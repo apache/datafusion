@@ -502,7 +502,7 @@ impl ScalarUDFImpl for DateTruncFunc {
         // Extract the literal value and verify it matches the column's type.
         let Some(value) = lit_expr
             .as_literal()
-            .and_then(|lit| timestamp_value(lit, unit, tz_opt.as_ref()))
+            .and_then(|lit| lit.try_as_timestamp(unit, tz_opt.as_ref()))
         else {
             return Ok(PreimageResult::None);
         };
@@ -673,8 +673,6 @@ where
     1 + 3 * ((date.month() - 1) / 3)
 }
 
-
-
 /// Extract an `i64` timestamp value from a date literal wrapped in a CAST
 /// (e.g. `Cast(date_col, Timestamp(ns))`)
 ///
@@ -833,34 +831,6 @@ fn time_to_scalar(unit: TimeUnit, value: i64) -> ScalarValue {
         Millisecond => ScalarValue::Time32Millisecond(Some(value as i32)),
         Microsecond => ScalarValue::Time64Microsecond(Some(value)),
         Nanosecond => ScalarValue::Time64Nanosecond(Some(value)),
-    }
-}
-
-fn timestamp_value(
-    literal: &ScalarValue,
-    unit: TimeUnit,
-    tz_opt: Option<&Arc<str>>,
-) -> Option<i64> {
-    match (unit, literal) {
-        (Second, ScalarValue::TimestampSecond(Some(v), tz)) if tz.as_ref() == tz_opt => {
-            Some(*v)
-        }
-        (Millisecond, ScalarValue::TimestampMillisecond(Some(v), tz))
-            if tz.as_ref() == tz_opt =>
-        {
-            Some(*v)
-        }
-        (Microsecond, ScalarValue::TimestampMicrosecond(Some(v), tz))
-            if tz.as_ref() == tz_opt =>
-        {
-            Some(*v)
-        }
-        (Nanosecond, ScalarValue::TimestampNanosecond(Some(v), tz))
-            if tz.as_ref() == tz_opt =>
-        {
-            Some(*v)
-        }
-        _ => None,
     }
 }
 
