@@ -597,6 +597,10 @@ pub struct ArrayValues<T: CursorValues> {
     // Otherwise, the first null index
     null_threshold: usize,
     options: SortOptions,
+    /// `true` when this array has at least one null. When `false`, the hot
+    /// `compare` / `eq` paths skip the two `is_null(idx)` checks entirely
+    /// (sort keys are usually null-free, so this branch is common).
+    has_nulls: bool,
 
     /// Tracks the memory used by the values array,
     /// freed on drop.
@@ -614,15 +618,17 @@ impl<T: CursorValues> ArrayValues<T> {
         reservation: MemoryReservation,
     ) -> Self {
         assert!(array.len() > 0, "Empty array passed to FieldCursor");
+        let null_count = array.null_count();
         let null_threshold = match options.nulls_first {
-            true => array.null_count(),
-            false => array.len() - array.null_count(),
+            true => null_count,
+            false => array.len() - null_count,
         };
 
         Self {
             values: array.values(),
             null_threshold,
             options,
+            has_nulls: null_count > 0,
             _reservation: reservation,
         }
     }
@@ -644,6 +650,11 @@ impl<T: CursorValues> CursorValues for ArrayValues<T> {
 
     #[inline(always)]
     fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool {
+        // Fast path: neither array has nulls, so the match below would take
+        // the (false, false) arm every time.
+        if !l.has_nulls && !r.has_nulls {
+            return T::eq(&l.values, l_idx, &r.values, r_idx);
+        }
         match (l.is_null(l_idx), r.is_null(r_idx)) {
             (true, true) => true,
             (false, false) => T::eq(&l.values, l_idx, &r.values, r_idx),
@@ -654,6 +665,9 @@ impl<T: CursorValues> CursorValues for ArrayValues<T> {
     #[inline(always)]
     fn eq_to_previous(cursor: &Self, idx: usize) -> bool {
         assert!(idx > 0);
+        if !cursor.has_nulls {
+            return T::eq_to_previous(&cursor.values, idx);
+        }
         match (cursor.is_null(idx), cursor.is_null(idx - 1)) {
             (true, true) => true,
             // Delegate to inner `eq_to_previous` so a caching cursor can answer
@@ -665,6 +679,13 @@ impl<T: CursorValues> CursorValues for ArrayValues<T> {
 
     #[inline(always)]
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
+        // Fast path: neither array has nulls, so skip both is_null checks.
+        if !l.has_nulls && !r.has_nulls {
+            return match l.options.descending {
+                true => T::compare(&r.values, r_idx, &l.values, l_idx),
+                false => T::compare(&l.values, l_idx, &r.values, r_idx),
+            };
+        }
         match (l.is_null(l_idx), r.is_null(r_idx)) {
             (true, true) => Ordering::Equal,
             (true, false) => match l.options.nulls_first {
@@ -737,6 +758,7 @@ mod tests {
             values: PrimitiveValues::new(values),
             null_threshold,
             options,
+            has_nulls: null_count > 0,
             _reservation: reservation,
         };
 
@@ -946,5 +968,83 @@ mod tests {
         // 6 < -3
         b.advance();
         assert_eq!(a.cmp(&b), Ordering::Less);
+    }
+
+    /// Builds a cursor over `values` positioned at `idx`.
+    ///
+    /// With `with_null`, the array carries one extra null in the slot where
+    /// `options` sorts nulls, so `ArrayValues` takes its null-aware path while
+    /// every value the test touches stays non-null. Both variants therefore
+    /// hold the same logical value at `idx`, which is what lets the two paths
+    /// be compared directly.
+    fn new_primitive_at(
+        options: SortOptions,
+        values: &[i32],
+        with_null: bool,
+        idx: usize,
+    ) -> Cursor<ArrayValues<PrimitiveValues<i32>>> {
+        let (buffer, shift, null_count) = match (with_null, options.nulls_first) {
+            (false, _) => (values.to_vec(), 0, 0),
+            (true, true) => ([&[0i32][..], values].concat(), 1, 1),
+            (true, false) => ([values, &[0i32][..]].concat(), 0, 1),
+        };
+
+        let mut cursor = new_primitive(options, ScalarBuffer::from(buffer), null_count);
+        for _ in 0..idx + shift {
+            cursor.advance();
+        }
+        cursor
+    }
+
+    /// Every `ArrayValues` method carrying a `has_nulls` fast path must answer
+    /// exactly as the null-aware path does on the same values, for both sort
+    /// directions and both null placements.
+    #[test]
+    fn test_array_values_has_nulls_fast_path_agrees_with_slow_path() {
+        // Repeated values so `eq` / `eq_to_previous` see ties as well as
+        // differences; `i32::MAX` catches a compare that overflows.
+        let values = [1i32, 2, 2, 5, i32::MAX];
+
+        for descending in [false, true] {
+            for nulls_first in [false, true] {
+                let options = SortOptions {
+                    descending,
+                    nulls_first,
+                };
+
+                for i in 0..values.len() {
+                    for j in 0..values.len() {
+                        let fast_l = new_primitive_at(options, &values, false, i);
+                        let fast_r = new_primitive_at(options, &values, false, j);
+                        let slow_l = new_primitive_at(options, &values, true, i);
+                        let slow_r = new_primitive_at(options, &values, true, j);
+
+                        assert!(!fast_l.values.has_nulls && !fast_r.values.has_nulls);
+                        assert!(slow_l.values.has_nulls && slow_r.values.has_nulls);
+
+                        assert_eq!(
+                            fast_l.cmp(&fast_r),
+                            slow_l.cmp(&slow_r),
+                            "compare({i}, {j}) disagreed for {options:?}"
+                        );
+                        assert_eq!(
+                            fast_l == fast_r,
+                            slow_l == slow_r,
+                            "eq({i}, {j}) disagreed for {options:?}"
+                        );
+                    }
+
+                    if i > 0 {
+                        let fast = new_primitive_at(options, &values, false, i);
+                        let slow = new_primitive_at(options, &values, true, i);
+                        assert_eq!(
+                            fast.is_eq_to_prev_row(),
+                            slow.is_eq_to_prev_row(),
+                            "eq_to_previous({i}) disagreed for {options:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 }

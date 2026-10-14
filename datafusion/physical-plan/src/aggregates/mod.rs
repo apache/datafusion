@@ -1335,11 +1335,11 @@ impl AggregateExec {
         // it is not null in every group
         let indices: Vec<usize> = indices
             .into_iter()
-            .filter(|idx| group_by.groups.iter().all(|group| !group[*idx]))
             .filter(|idx| {
-                input_eq_properties
-                    .is_expr_constant(&groupby_exprs[*idx])
-                    .is_none()
+                group_by.groups.iter().all(|group| !group[*idx])
+                    && input_eq_properties
+                        .is_expr_constant(&groupby_exprs[*idx])
+                        .is_none()
             })
             .collect();
 
