@@ -885,6 +885,232 @@ async fn test_join_no_swap() {
     );
 }
 
+/// A plan under the `CollectLeft` thresholds, but larger than [`small_statistics`].
+fn create_medium() -> Arc<dyn ExecutionPlan> {
+    let (threshold_num_rows, threshold_byte_size) = get_thresholds();
+    Arc::new(StatisticsExec::new(
+        Statistics {
+            num_rows: Precision::Inexact(threshold_num_rows / 64),
+            total_byte_size: Precision::Inexact(threshold_byte_size / 64),
+            column_statistics: vec![ColumnStatistics::new_unknown()],
+        },
+        Schema::new(vec![Field::new("medium_col", DataType::Int32, false)]),
+    ))
+}
+
+/// Hash joins the first column of `left` with the first column of `right`.
+fn hash_join_on_first_columns(
+    left: &Arc<dyn ExecutionPlan>,
+    right: &Arc<dyn ExecutionPlan>,
+    join_type: JoinType,
+    partition_mode: PartitionMode,
+    null_aware: bool,
+) -> Arc<dyn ExecutionPlan> {
+    let left_schema = left.schema();
+    let right_schema = right.schema();
+    Arc::new(
+        HashJoinExec::try_new(
+            Arc::clone(left),
+            Arc::clone(right),
+            vec![(
+                col(left_schema.field(0).name(), &left_schema).unwrap(),
+                col(right_schema.field(0).name(), &right_schema).unwrap(),
+            )],
+            None,
+            &join_type,
+            None,
+            partition_mode,
+            NullEquality::NullEqualsNothing,
+            null_aware,
+        )
+        .unwrap(),
+    )
+}
+
+fn isolated_config(isolated_partitions: bool) -> ConfigOptions {
+    let mut config = ConfigOptions::new();
+    config.execution.isolated_partitions = isolated_partitions;
+    config
+}
+
+fn plan_text(plan: &Arc<dyn ExecutionPlan>) -> String {
+    displayable(plan.as_ref())
+        .indent(true)
+        .to_string()
+        .trim()
+        .to_string()
+}
+
+#[test]
+fn isolated_partitions_partitions_unsafe_collect_left_candidate() -> Result<()> {
+    let (big, small) = create_big_and_small();
+    let join = hash_join_on_first_columns(
+        &small,
+        &big,
+        JoinType::Left,
+        PartitionMode::Auto,
+        false,
+    );
+
+    let default =
+        JoinSelection::new().optimize(Arc::clone(&join), &isolated_config(false))?;
+    assert_snapshot!(plan_text(&default), @r"
+    HashJoinExec: mode=CollectLeft, join_type=Left, on=[(small_col@0, big_col@0)]
+      StatisticsExec: col_count=1, row_count=Inexact(1024)
+      StatisticsExec: col_count=1, row_count=Inexact(262144)
+    ");
+
+    let isolated = JoinSelection::new().optimize(join, &isolated_config(true))?;
+    assert_snapshot!(plan_text(&isolated), @r"
+    HashJoinExec: mode=Partitioned, join_type=Left, on=[(small_col@0, big_col@0)]
+      StatisticsExec: col_count=1, row_count=Inexact(1024)
+      StatisticsExec: col_count=1, row_count=Inexact(262144)
+    ");
+    Ok(())
+}
+
+#[test]
+fn isolated_partitions_keeps_safe_swap_to_collect_left() -> Result<()> {
+    let (big, small) = create_big_and_small();
+    let join = hash_join_on_first_columns(
+        &big,
+        &small,
+        JoinType::Left,
+        PartitionMode::Auto,
+        false,
+    );
+
+    let isolated = JoinSelection::new().optimize(join, &isolated_config(true))?;
+    assert_snapshot!(plan_text(&isolated), @r"
+    ProjectionExec: expr=[big_col@1 as big_col, small_col@0 as small_col]
+      HashJoinExec: mode=CollectLeft, join_type=Right, on=[(small_col@0, big_col@0)]
+        StatisticsExec: col_count=1, row_count=Inexact(1024)
+        StatisticsExec: col_count=1, row_count=Inexact(262144)
+    ");
+
+    // Re-running the rule, as Ballista's adaptive planner does, is stable
+    let rerun =
+        JoinSelection::new().optimize(Arc::clone(&isolated), &isolated_config(true))?;
+    assert_eq!(plan_text(&rerun), plan_text(&isolated));
+    Ok(())
+}
+
+#[test]
+fn isolated_partitions_swaps_only_when_reordering_is_allowed() -> Result<()> {
+    let (_, small) = create_big_and_small();
+    let medium = create_medium();
+    let join = hash_join_on_first_columns(
+        &small,
+        &medium,
+        JoinType::Left,
+        PartitionMode::Auto,
+        false,
+    );
+
+    let default =
+        JoinSelection::new().optimize(Arc::clone(&join), &isolated_config(false))?;
+    assert_snapshot!(plan_text(&default), @r"
+    HashJoinExec: mode=CollectLeft, join_type=Left, on=[(small_col@0, medium_col@0)]
+      StatisticsExec: col_count=1, row_count=Inexact(1024)
+      StatisticsExec: col_count=1, row_count=Inexact(2048)
+    ");
+
+    // Both sides fit, and only the swapped orientation is safe
+    let isolated =
+        JoinSelection::new().optimize(Arc::clone(&join), &isolated_config(true))?;
+    assert_snapshot!(plan_text(&isolated), @r"
+    ProjectionExec: expr=[small_col@1 as small_col, medium_col@0 as medium_col]
+      HashJoinExec: mode=CollectLeft, join_type=Right, on=[(medium_col@0, small_col@0)]
+        StatisticsExec: col_count=1, row_count=Inexact(2048)
+        StatisticsExec: col_count=1, row_count=Inexact(1024)
+    ");
+
+    // Without join reordering there is no swap, so the join is partitioned
+    let mut config = isolated_config(true);
+    config.optimizer.join_reordering = false;
+    let no_reordering = JoinSelection::new().optimize(join, &config)?;
+    assert_snapshot!(plan_text(&no_reordering), @r"
+    HashJoinExec: mode=Partitioned, join_type=Left, on=[(small_col@0, medium_col@0)]
+      StatisticsExec: col_count=1, row_count=Inexact(1024)
+      StatisticsExec: col_count=1, row_count=Inexact(2048)
+    ");
+    Ok(())
+}
+
+#[test]
+fn isolated_partitions_partitions_unsafe_collect_left_input() -> Result<()> {
+    let (big, small) = create_big_and_small();
+    let join = hash_join_on_first_columns(
+        &small,
+        &big,
+        JoinType::Full,
+        PartitionMode::CollectLeft,
+        false,
+    );
+
+    let isolated = JoinSelection::new().optimize(join, &isolated_config(true))?;
+    assert_snapshot!(plan_text(&isolated), @r"
+    HashJoinExec: mode=Partitioned, join_type=Full, on=[(small_col@0, big_col@0)]
+      StatisticsExec: col_count=1, row_count=Inexact(1024)
+      StatisticsExec: col_count=1, row_count=Inexact(262144)
+    ");
+    Ok(())
+}
+
+#[test]
+fn isolated_partitions_never_swaps_safe_collect_left_into_unsafe() -> Result<()> {
+    let (big, small) = create_big_and_small();
+    let join = hash_join_on_first_columns(
+        &big,
+        &small,
+        JoinType::Right,
+        PartitionMode::CollectLeft,
+        false,
+    );
+
+    // Today the bigger build side is swapped away, which produces a Left join
+    let default =
+        JoinSelection::new().optimize(Arc::clone(&join), &isolated_config(false))?;
+    assert_snapshot!(plan_text(&default), @r"
+    ProjectionExec: expr=[big_col@1 as big_col, small_col@0 as small_col]
+      HashJoinExec: mode=CollectLeft, join_type=Left, on=[(small_col@0, big_col@0)]
+        StatisticsExec: col_count=1, row_count=Inexact(1024)
+        StatisticsExec: col_count=1, row_count=Inexact(262144)
+    ");
+
+    let isolated = JoinSelection::new().optimize(join, &isolated_config(true))?;
+    assert_snapshot!(plan_text(&isolated), @r"
+    HashJoinExec: mode=CollectLeft, join_type=Right, on=[(big_col@0, small_col@0)]
+      StatisticsExec: col_count=1, row_count=Inexact(262144)
+      StatisticsExec: col_count=1, row_count=Inexact(1024)
+    ");
+
+    let rerun =
+        JoinSelection::new().optimize(Arc::clone(&isolated), &isolated_config(true))?;
+    assert_eq!(plan_text(&rerun), plan_text(&isolated));
+    Ok(())
+}
+
+#[test]
+fn isolated_partitions_leaves_null_aware_anti_join() -> Result<()> {
+    let (big, small) = create_big_and_small();
+    let join = hash_join_on_first_columns(
+        &small,
+        &big,
+        JoinType::LeftAnti,
+        PartitionMode::CollectLeft,
+        true,
+    );
+
+    let isolated = JoinSelection::new().optimize(join, &isolated_config(true))?;
+    assert_snapshot!(plan_text(&isolated), @r"
+    HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(small_col@0, big_col@0)], null_aware
+      StatisticsExec: col_count=1, row_count=Inexact(1024)
+      StatisticsExec: col_count=1, row_count=Inexact(262144)
+    ");
+    Ok(())
+}
+
 #[rstest(
     join_type,
     case::inner(JoinType::Inner),
