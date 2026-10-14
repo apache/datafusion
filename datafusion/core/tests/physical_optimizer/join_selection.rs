@@ -22,9 +22,13 @@ use std::{
     task::{Context, Poll},
 };
 
+use arrow::array::Int32Array;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use datafusion::datasource::MemTable;
+use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::test_util::batches_to_sort_string;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{ColumnStatistics, JoinType, ScalarValue, stats::Precision};
 use datafusion_common::{JoinSide, NullEquality};
@@ -58,7 +62,7 @@ use datafusion_physical_plan::{
     execution_plan::{Boundedness, EmissionType},
 };
 
-use futures::Stream;
+use futures::{Stream, TryStreamExt};
 use rstest::rstest;
 
 /// Return statistics for empty table
@@ -1201,6 +1205,87 @@ fn isolated_partitions_leaves_full_nested_loop_join() -> Result<()> {
         JoinSelection::new().optimize(Arc::clone(&join), &isolated_config(false))?;
     let isolated = JoinSelection::new().optimize(join, &isolated_config(true))?;
     assert_eq!(plan_text(&isolated), plan_text(&default));
+    Ok(())
+}
+
+/// A session with a `small` table in one partition and a `big` table in four.
+/// It is configured like an executor that runs every partition as an isolated
+/// task: no round-robin repartitioning, and no dynamic join filters (their
+/// build-side barrier waits for sibling partitions, which is a separate issue).
+fn isolated_task_context(isolated_partitions: bool) -> Result<SessionContext> {
+    let config = SessionConfig::new()
+        .with_target_partitions(4)
+        .with_round_robin_repartition(false)
+        .set_bool("datafusion.optimizer.enable_dynamic_filter_pushdown", false)
+        .set_bool(
+            "datafusion.execution.isolated_partitions",
+            isolated_partitions,
+        );
+    let ctx = SessionContext::new_with_config(config);
+    let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int32, false)]));
+    let batch = |keys: Vec<i32>| {
+        RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(Int32Array::from(keys))])
+    };
+    let small = vec![vec![batch(vec![1, 2, 3, 50])?]];
+    let big = (0..4)
+        .map(|p| Ok(vec![batch((10 + p * 1000..10 + (p + 1) * 1000).collect())?]))
+        .collect::<Result<Vec<_>>>()?;
+    ctx.register_table(
+        "small",
+        Arc::new(MemTable::try_new(Arc::clone(&schema), small)?),
+    )?;
+    ctx.register_table("big", Arc::new(MemTable::try_new(schema, big)?))?;
+    Ok(ctx)
+}
+
+/// Plans `sql` once per output partition and runs each partition on its own
+/// plan instance, as an executor that runs partitions as isolated tasks does.
+async fn collect_as_isolated_tasks(
+    ctx: &SessionContext,
+    sql: &str,
+) -> Result<Vec<RecordBatch>> {
+    let partition_count = ctx
+        .sql(sql)
+        .await?
+        .create_physical_plan()
+        .await?
+        .output_partitioning()
+        .partition_count();
+    let mut batches = vec![];
+    for partition in 0..partition_count {
+        let plan = ctx.sql(sql).await?.create_physical_plan().await?;
+        let stream = plan.execute(partition, ctx.task_ctx())?;
+        batches.extend(stream.try_collect::<Vec<_>>().await?);
+    }
+    Ok(batches)
+}
+
+#[tokio::test]
+async fn isolated_partitions_join_results_match_single_process_execution() -> Result<()> {
+    for sql in [
+        // A hash join that collects `small` and emits its unmatched rows
+        "SELECT small.k, big.k FROM small LEFT JOIN big ON small.k = big.k",
+        // A nested loop join that collects `small` and emits its unmatched rows
+        "SELECT small.k, big.k FROM small LEFT JOIN big ON small.k > big.k",
+    ] {
+        let expected = batches_to_sort_string(
+            &isolated_task_context(false)?
+                .sql(sql)
+                .await?
+                .collect()
+                .await?,
+        );
+
+        // The default plan relies on all partitions sharing one build side,
+        // so isolated tasks lose the unmatched `small` rows
+        let ctx = isolated_task_context(false)?;
+        let actual = batches_to_sort_string(&collect_as_isolated_tasks(&ctx, sql).await?);
+        assert_ne!(actual, expected, "{sql}");
+
+        let ctx = isolated_task_context(true)?;
+        let actual = batches_to_sort_string(&collect_as_isolated_tasks(&ctx, sql).await?);
+        assert_eq!(actual, expected, "{sql}");
+    }
     Ok(())
 }
 
