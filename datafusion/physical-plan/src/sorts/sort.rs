@@ -31,7 +31,7 @@ use crate::execution_plan::{
     replace_children_if_necessary,
 };
 use crate::expressions::PhysicalSortExpr;
-use crate::filter::FilterExec;
+use crate::filter::FilterExecBuilder;
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation, PushedDown,
@@ -74,6 +74,8 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
+use datafusion_physical_expr::filter::FilterConjunct;
+use datafusion_physical_expr::filter::PhysicalFilter;
 
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
@@ -1614,7 +1616,7 @@ impl ExecutionPlan for SortExec {
     fn gather_filters_for_pushdown(
         &self,
         phase: FilterPushdownPhase,
-        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        parent_filters: Vec<FilterConjunct>,
         config: &datafusion_common::config::ConfigOptions,
     ) -> Result<FilterDescription> {
         if phase != FilterPushdownPhase::Post {
@@ -1638,7 +1640,9 @@ impl ExecutionPlan for SortExec {
         if let Some(filter) = &self.filter
             && config.optimizer.enable_topk_dynamic_filter_pushdown
         {
-            child = child.with_self_filter(filter.read().expr());
+            // `SortExec` still sorts and limits all rows it gets, so the input
+            // does not need this filter for correctness.
+            child = child.with_optional_self_filter(filter.read().expr());
         }
 
         Ok(FilterDescription::new().with_child(child))
@@ -1666,24 +1670,28 @@ impl ExecutionPlan for SortExec {
         }
 
         // Collect parent filters that were NOT successfully pushed to our child.
-        let unsupported_filters: Vec<Arc<dyn PhysicalExpr>> = child_pushdown_result
+        // Each one keeps its properties (for example, the optional flag).
+        let unsupported_filter: PhysicalFilter = child_pushdown_result
             .parent_filters
             .iter()
             .filter(|&f| matches!(f.all(), PushedDown::No))
-            .map(|f| Arc::clone(&f.filter))
+            .map(|f| f.filter.clone())
             .collect();
 
-        if unsupported_filters.is_empty() {
+        if unsupported_filter.is_empty() {
             // All filters were pushed — nothing extra to do.
             return Ok(FilterPushdownPropagation::if_all(child_pushdown_result));
         }
 
-        // Build a single conjunctive predicate from the unsupported filters
-        // and insert a FilterExec between this SortExec and its child.
-        let predicate = datafusion_physical_expr::conjunction(unsupported_filters);
-        let new_child =
-            Arc::new(FilterExec::try_new(predicate, Arc::clone(self.input()))?)
-                as Arc<dyn ExecutionPlan>;
+        // Insert a FilterExec with the unsupported filters between this
+        // SortExec and its child.
+        let new_child = Arc::new(
+            FilterExecBuilder::new_with_filter(
+                unsupported_filter,
+                Arc::clone(self.input()),
+            )
+            .build()?,
+        ) as Arc<dyn ExecutionPlan>;
         let new_sort = Arc::new(
             SortExec::new(self.expr.clone(), new_child)
                 .with_fetch(self.fetch())
@@ -4193,7 +4201,7 @@ mod tests {
         let sort = make_sort_exec_with_fetch(Some(10));
         let desc = sort.gather_filters_for_pushdown(
             FilterPushdownPhase::Pre,
-            vec![Arc::new(Column::new("a", 0))],
+            vec![FilterConjunct::required(Arc::new(Column::new("a", 0)))],
             &ConfigOptions::new(),
         )?;
         // Sort with fetch (TopK) must not allow filters to be pushed below it.
@@ -4209,7 +4217,7 @@ mod tests {
         let sort = make_sort_exec_with_fetch(None);
         let desc = sort.gather_filters_for_pushdown(
             FilterPushdownPhase::Pre,
-            vec![Arc::new(Column::new("a", 0))],
+            vec![FilterConjunct::required(Arc::new(Column::new("a", 0)))],
             &ConfigOptions::new(),
         )?;
         // Plain sort (no fetch) is filter-commutative.
@@ -4229,7 +4237,7 @@ mod tests {
         config.optimizer.enable_topk_dynamic_filter_pushdown = true;
         let desc = sort.gather_filters_for_pushdown(
             FilterPushdownPhase::Post,
-            vec![Arc::new(Column::new("a", 0))],
+            vec![FilterConjunct::required(Arc::new(Column::new("a", 0)))],
             &config,
         )?;
         // Parent filters are still blocked in the Post phase.

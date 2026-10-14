@@ -34,6 +34,7 @@ pub mod binary_map {
 pub mod async_scalar_function;
 pub mod equivalence;
 pub mod expressions;
+pub mod filter;
 pub mod higher_order_function;
 pub mod intervals;
 mod partitioning;
@@ -63,6 +64,7 @@ pub use equivalence::{
     AcrossPartitions, ConstExpr, EquivalenceProperties, calculate_union,
 };
 pub use expressions::{DynamicFilterTracker, DynamicFilterTracking};
+pub use filter::{FilterConjunct, PhysicalFilter};
 pub use partitioning::{
     Distribution, Partitioning, PartitioningSatisfaction, RangePartitioning,
 };

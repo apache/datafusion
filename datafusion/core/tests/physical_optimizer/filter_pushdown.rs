@@ -40,7 +40,9 @@ use datafusion_common::{
     tree_node::{TreeNode, TreeNodeRecursion},
 };
 use datafusion_datasource::{
-    PartitionedFile, file_groups::FileGroup, file_scan_config::FileScanConfigBuilder,
+    PartitionedFile,
+    file_groups::FileGroup,
+    file_scan_config::{FileScanConfig, FileScanConfigBuilder},
 };
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::ScalarUDF;
@@ -52,6 +54,7 @@ use datafusion_functions_aggregate::{
 use datafusion_physical_expr::{
     LexOrdering, PhysicalSortExpr,
     expressions::{DynamicFilterPhysicalExpr, IsNullExpr, cast, col},
+    filter::FilterConjunct,
     utils::conjunction,
 };
 use datafusion_physical_expr::{
@@ -873,6 +876,31 @@ fn test_node_handles_child_pushdown_result() {
     );
 }
 
+/// The optimizer keeps the properties of each parent filter (for example, the
+/// optional flag) by position. A node that returns its parent filters in a
+/// different order breaks this rule, and debug builds report an error.
+#[test]
+fn test_reordered_parent_filters_are_rejected() {
+    let scan = TestScanBuilder::new(schema()).with_support(true).build();
+    let predicate = conjunction([
+        col_lit_predicate("a", "foo", &schema()),
+        col_lit_predicate("b", "bar", &schema()),
+    ]);
+    let node = TestNode::new(false, scan, col_lit_predicate("a", "baz", &schema()))
+        .with_reversed_parent_filters();
+    let plan = Arc::new(FilterExec::try_new(predicate, Arc::new(node)).unwrap());
+    let result = FilterPushdown::new().optimize(plan, &ConfigOptions::default());
+    if cfg!(debug_assertions) {
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains(
+                "expected TestInsertExec to return the parent filters in input order"
+            ),
+            "{err}"
+        );
+    }
+}
+
 // Not portable to sqllogictest: requires manually constructing
 // `SortExec(CoalescePartitionsExec(scan))`. A SQL `ORDER BY ... LIMIT` over a
 // multi-partition scan plans as `SortPreservingMergeExec(SortExec(scan))`
@@ -1535,6 +1563,58 @@ async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
     );
 }
 
+/// The hash join marks its dynamic filter as optional. `TestSource` does not
+/// override `FileSource::try_pushdown_filter`, so the default method gives it
+/// the dynamic filter through `try_pushdown_filters`, without the flag. The
+/// source applies it as a required filter, and the result is correct.
+#[tokio::test]
+async fn test_hashjoin_optional_dynamic_filter_default_source() {
+    let (build_side_schema, build_scan, probe_side_schema, probe_scan) =
+        hashjoin_pushdown_scans();
+    let on = vec![(
+        col("a", &build_side_schema).unwrap(),
+        col("a", &probe_side_schema).unwrap(),
+    )];
+    let plan = Arc::new(
+        HashJoinExec::try_new(
+            build_scan,
+            probe_scan,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            datafusion_common::NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    ) as Arc<dyn ExecutionPlan>;
+
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let (plan, batches) = optimize_and_collect_pushdown_plan(plan, config).await;
+
+    let probe_filter = plan.children()[1]
+        .downcast_ref::<DataSourceExec>()
+        .unwrap()
+        .data_source()
+        .downcast_ref::<FileScanConfig>()
+        .unwrap()
+        .file_source()
+        .filter()
+        .unwrap();
+    insta::assert_snapshot!(probe_filter, @"DynamicFilter [ a@0 >= aa AND a@0 <= ab AND a@0 IN (SET) ([aa, ab]) ]");
+    insta::assert_snapshot!(pretty_format_batches(&batches).unwrap(), @r"
+    +----+----+-----+----+----+-----+
+    | a  | b  | c   | a  | b  | e   |
+    +----+----+-----+----+----+-----+
+    | aa | ba | 1.0 | aa | ba | 1.0 |
+    | ab | bb | 2.0 | ab | bb | 2.0 |
+    +----+----+-----+----+----+-----+
+    ");
+}
+
 #[test]
 fn test_hashjoin_parent_filter_pushdown_same_column_names() {
     let build_side_schema = Arc::new(Schema::new(vec![
@@ -1623,7 +1703,7 @@ fn test_repartition_filter_pushdown_preserves_duplicate_column_indices() {
         let filters = repartition
             .gather_filters_for_pushdown(
                 phase,
-                vec![Arc::clone(&predicate)],
+                vec![FilterConjunct::required(Arc::clone(&predicate))],
                 &ConfigOptions::default(),
             )
             .unwrap()
@@ -1666,7 +1746,10 @@ fn test_filter_with_projection_pushdown_preserves_duplicate_column_indices() {
         let filters = filter
             .gather_filters_for_pushdown(
                 phase,
-                vec![id_eq_x(0), id_eq_x(1)],
+                vec![
+                    FilterConjunct::required(id_eq_x(0)),
+                    FilterConjunct::required(id_eq_x(1)),
+                ],
                 &ConfigOptions::default(),
             )
             .unwrap()
@@ -1703,7 +1786,11 @@ fn test_projection_pushdown_preserves_duplicate_aliases() {
     let filters = projection
         .gather_filters_for_pushdown(
             FilterPushdownPhase::Pre,
-            vec![id_eq_x(0), id_eq_x(1), id_eq_x(2)],
+            vec![
+                FilterConjunct::required(id_eq_x(0)),
+                FilterConjunct::required(id_eq_x(1)),
+                FilterConjunct::required(id_eq_x(2)),
+            ],
             &ConfigOptions::default(),
         )
         .unwrap()
@@ -1740,7 +1827,10 @@ fn test_aggregate_pushdown_preserves_duplicate_grouping_columns() {
     let filters = aggregate
         .gather_filters_for_pushdown(
             FilterPushdownPhase::Pre,
-            vec![id_eq_x(0), id_eq_x(1)],
+            vec![
+                FilterConjunct::required(id_eq_x(0)),
+                FilterConjunct::required(id_eq_x(1)),
+            ],
             &ConfigOptions::default(),
         )
         .unwrap()
@@ -1784,7 +1874,7 @@ fn test_hashjoin_parent_filter_pushdown_semi_join_expression_key() {
         let filters = join
             .gather_filters_for_pushdown(
                 FilterPushdownPhase::Pre,
-                vec![id_eq_x(0)],
+                vec![FilterConjunct::required(id_eq_x(0))],
                 &ConfigOptions::default(),
             )
             .unwrap()
@@ -1815,8 +1905,14 @@ fn test_from_child_rejects_column_name_mismatch() {
         Operator::Eq,
         Arc::new(Literal::new(ScalarValue::from("x"))),
     ));
-    let child =
-        ChildFilterDescription::from_child(&[mismatched, id_eq_x(0)], &input).unwrap();
+    let child = ChildFilterDescription::from_child(
+        &[
+            FilterConjunct::required(mismatched),
+            FilterConjunct::required(id_eq_x(0)),
+        ],
+        &input,
+    )
+    .unwrap();
     let filters = FilterDescription::new().with_child(child).parent_filters();
     assert!(matches!(filters[0][0].discriminant, PushedDown::No));
     assert!(matches!(filters[0][1].discriminant, PushedDown::Yes));
@@ -1840,7 +1936,7 @@ fn test_filter_with_projection_rejects_out_of_range_parent_filter() {
         FilterPushdownPhase::Pre,
         ChildPushdownResult {
             parent_filters: vec![ChildFilterPushdownResult {
-                filter: id_eq_x(1),
+                filter: FilterConjunct::required(id_eq_x(1)),
                 child_results: vec![PushedDown::No],
             }],
             self_filters: vec![vec![]],
@@ -1866,7 +1962,11 @@ fn test_from_child_with_allowed_indices_preserves_name_resolution() {
 
     let input = TestScanBuilder::new(duplicate_id_schema()).build();
     let child = ChildFilterDescription::from_child_with_allowed_indices(
-        &[id_eq_x(0), id_eq_x(1), id_eq_x(3)],
+        &[
+            FilterConjunct::required(id_eq_x(0)),
+            FilterConjunct::required(id_eq_x(1)),
+            FilterConjunct::required(id_eq_x(3)),
+        ],
         HashSet::from([1, 3]),
         &input,
     )
@@ -1895,7 +1995,7 @@ fn test_from_child_with_allowed_indices_rejects_unresolvable_name() {
         Arc::new(Literal::new(ScalarValue::from("x"))),
     ));
     let child = ChildFilterDescription::from_child_with_allowed_indices(
-        &[Arc::clone(&predicate)],
+        &[FilterConjunct::required(Arc::clone(&predicate))],
         HashSet::from([1]),
         &input,
     )
@@ -1943,7 +2043,7 @@ fn test_hashjoin_parent_filter_pushdown_duplicate_child_columns() {
             let filters = join
                 .gather_filters_for_pushdown(
                     FilterPushdownPhase::Pre,
-                    vec![predicate],
+                    vec![FilterConjunct::required(predicate)],
                     &ConfigOptions::default(),
                 )
                 .unwrap()
@@ -2003,7 +2103,7 @@ fn test_hashjoin_parent_filter_pushdown_semi_join_key_mapping() {
         let filters = join
             .gather_filters_for_pushdown(
                 FilterPushdownPhase::Pre,
-                vec![predicate],
+                vec![FilterConjunct::required(predicate)],
                 &ConfigOptions::default(),
             )
             .unwrap()

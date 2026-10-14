@@ -8265,6 +8265,9 @@ impl serde::Serialize for FilterExecNode {
         if self.fetch.is_some() {
             len += 1;
         }
+        if !self.optional_conjuncts.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.FilterExecNode", len)?;
         if let Some(v) = self.input.as_ref() {
             struct_ser.serialize_field("input", v)?;
@@ -8284,6 +8287,9 @@ impl serde::Serialize for FilterExecNode {
         if let Some(v) = self.fetch.as_ref() {
             struct_ser.serialize_field("fetch", v)?;
         }
+        if !self.optional_conjuncts.is_empty() {
+            struct_ser.serialize_field("optionalConjuncts", &self.optional_conjuncts)?;
+        }
         struct_ser.end()
     }
 }
@@ -8302,6 +8308,8 @@ impl<'de> serde::Deserialize<'de> for FilterExecNode {
             "batch_size",
             "batchSize",
             "fetch",
+            "optional_conjuncts",
+            "optionalConjuncts",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -8312,6 +8320,7 @@ impl<'de> serde::Deserialize<'de> for FilterExecNode {
             Projection,
             BatchSize,
             Fetch,
+            OptionalConjuncts,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -8339,6 +8348,7 @@ impl<'de> serde::Deserialize<'de> for FilterExecNode {
                             "projection" => Ok(GeneratedField::Projection),
                             "batchSize" | "batch_size" => Ok(GeneratedField::BatchSize),
                             "fetch" => Ok(GeneratedField::Fetch),
+                            "optionalConjuncts" | "optional_conjuncts" => Ok(GeneratedField::OptionalConjuncts),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -8364,6 +8374,7 @@ impl<'de> serde::Deserialize<'de> for FilterExecNode {
                 let mut projection__ = None;
                 let mut batch_size__ = None;
                 let mut fetch__ = None;
+                let mut optional_conjuncts__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Input => {
@@ -8411,6 +8422,12 @@ impl<'de> serde::Deserialize<'de> for FilterExecNode {
                                 map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
+                        GeneratedField::OptionalConjuncts => {
+                            if optional_conjuncts__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("optionalConjuncts"));
+                            }
+                            optional_conjuncts__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(FilterExecNode {
@@ -8420,6 +8437,7 @@ impl<'de> serde::Deserialize<'de> for FilterExecNode {
                     projection: projection__.unwrap_or_default(),
                     batch_size: batch_size__.unwrap_or_default(),
                     fetch: fetch__,
+                    optional_conjuncts: optional_conjuncts__.unwrap_or_default(),
                 })
             }
         }
@@ -16909,6 +16927,9 @@ impl serde::Serialize for ParquetScanExecNode {
         if self.metadata_size_hint.is_some() {
             len += 1;
         }
+        if !self.optional_predicate_conjuncts.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.ParquetScanExecNode", len)?;
         if let Some(v) = self.base_conf.as_ref() {
             struct_ser.serialize_field("baseConf", v)?;
@@ -16929,6 +16950,9 @@ impl serde::Serialize for ParquetScanExecNode {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("metadataSizeHint", ToString::to_string(&v).as_str())?;
+        }
+        if !self.optional_predicate_conjuncts.is_empty() {
+            struct_ser.serialize_field("optionalPredicateConjuncts", &self.optional_predicate_conjuncts)?;
         }
         struct_ser.end()
     }
@@ -16951,6 +16975,8 @@ impl<'de> serde::Deserialize<'de> for ParquetScanExecNode {
             "reverseRowGroups",
             "metadata_size_hint",
             "metadataSizeHint",
+            "optional_predicate_conjuncts",
+            "optionalPredicateConjuncts",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -16961,6 +16987,7 @@ impl<'de> serde::Deserialize<'de> for ParquetScanExecNode {
             SortOrderForReorder,
             ReverseRowGroups,
             MetadataSizeHint,
+            OptionalPredicateConjuncts,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -16988,6 +17015,7 @@ impl<'de> serde::Deserialize<'de> for ParquetScanExecNode {
                             "sortOrderForReorder" | "sort_order_for_reorder" => Ok(GeneratedField::SortOrderForReorder),
                             "reverseRowGroups" | "reverse_row_groups" => Ok(GeneratedField::ReverseRowGroups),
                             "metadataSizeHint" | "metadata_size_hint" => Ok(GeneratedField::MetadataSizeHint),
+                            "optionalPredicateConjuncts" | "optional_predicate_conjuncts" => Ok(GeneratedField::OptionalPredicateConjuncts),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -17013,6 +17041,7 @@ impl<'de> serde::Deserialize<'de> for ParquetScanExecNode {
                 let mut sort_order_for_reorder__ = None;
                 let mut reverse_row_groups__ = None;
                 let mut metadata_size_hint__ = None;
+                let mut optional_predicate_conjuncts__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::BaseConf => {
@@ -17053,6 +17082,12 @@ impl<'de> serde::Deserialize<'de> for ParquetScanExecNode {
                                 map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
+                        GeneratedField::OptionalPredicateConjuncts => {
+                            if optional_predicate_conjuncts__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("optionalPredicateConjuncts"));
+                            }
+                            optional_predicate_conjuncts__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(ParquetScanExecNode {
@@ -17062,6 +17097,7 @@ impl<'de> serde::Deserialize<'de> for ParquetScanExecNode {
                     sort_order_for_reorder: sort_order_for_reorder__,
                     reverse_row_groups: reverse_row_groups__.unwrap_or_default(),
                     metadata_size_hint: metadata_size_hint__,
+                    optional_predicate_conjuncts: optional_predicate_conjuncts__.unwrap_or_default(),
                 })
             }
         }

@@ -39,6 +39,7 @@ use datafusion_common::{Result, Statistics, internal_err};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_physical_expr::filter::FilterConjunct;
 use datafusion_physical_expr_common::metrics::{
     ExecutionPlanMetricsSet, MetricBuilder, MetricCategory, MetricsSet,
 };
@@ -300,7 +301,7 @@ impl ExecutionPlan for BufferExec {
     fn gather_filters_for_pushdown(
         &self,
         _phase: FilterPushdownPhase,
-        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        parent_filters: Vec<FilterConjunct>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
         FilterDescription::from_children(parent_filters, &self.children())
