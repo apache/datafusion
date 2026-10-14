@@ -27,7 +27,7 @@ pub async fn from_substrait_func_args(
     arguments: &Vec<FunctionArgument>,
     input_schema: &DFSchema,
 ) -> datafusion::common::Result<Vec<Expr>> {
-    let mut args: Vec<Expr> = vec![];
+    let mut args: Vec<Expr> = Vec::with_capacity(arguments.len());
     for arg in arguments {
         let arg_expr = match &arg.arg_type {
             Some(ArgType::Value(e)) => consumer.consume_expression(e, input_schema).await,

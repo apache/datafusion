@@ -47,7 +47,7 @@ pub fn from_aggregate_function(
         .iter()
         .map(|expr| to_substrait_sort_field(producer, expr, schema))
         .collect::<datafusion::common::Result<Vec<_>>>()?;
-    let mut arguments: Vec<FunctionArgument> = vec![];
+    let mut arguments: Vec<FunctionArgument> = Vec::with_capacity(args.len());
     for arg in args {
         arguments.push(FunctionArgument {
             arg_type: Some(ArgType::Value(producer.handle_expr(arg, schema)?)),

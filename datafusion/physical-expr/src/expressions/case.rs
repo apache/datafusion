@@ -1348,7 +1348,7 @@ impl PhysicalExpr for CaseExpr {
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
-        let mut children = vec![];
+        let mut children = Vec::with_capacity(self.body.when_then_expr.len() * 2 + 2);
         if let Some(expr) = &self.body.expr {
             children.push(expr)
         }

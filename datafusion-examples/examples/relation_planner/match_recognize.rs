@@ -74,16 +74,16 @@ use std::{any::Any, cmp::Ordering, hash::Hasher, sync::Arc};
 
 use arrow::array::{ArrayRef, Float64Array, Int32Array, StringArray};
 use arrow::record_batch::RecordBatch;
-use datafusion::prelude::*;
-use datafusion_common::{DFSchemaRef, Result};
-use datafusion_expr::{
+use datafusion::common::{DFSchemaRef, Result};
+use datafusion::logical_expr::{
     Expr, UserDefinedLogicalNode,
     logical_plan::{Extension, InvariantLevel, LogicalPlan},
     planner::{
         PlannedRelation, RelationPlanner, RelationPlannerContext, RelationPlanning,
     },
 };
-use datafusion_sql::sqlparser::ast::TableFactor;
+use datafusion::prelude::*;
+use datafusion::sql::sqlparser::ast::TableFactor;
 use insta::assert_snapshot;
 
 // ============================================================================
@@ -281,14 +281,14 @@ impl UserDefinedLogicalNode for MiniMatchRecognizeNode {
     ) -> Result<Arc<dyn UserDefinedLogicalNode>> {
         let expected_len = self.measures.len() + self.definitions.len();
         if exprs.len() != expected_len {
-            return Err(datafusion_common::plan_datafusion_err!(
+            return Err(datafusion::common::plan_datafusion_err!(
                 "MiniMatchRecognize: expected {expected_len} expressions, got {}",
                 exprs.len()
             ));
         }
 
         let input = inputs.into_iter().next().ok_or_else(|| {
-            datafusion_common::plan_datafusion_err!(
+            datafusion::common::plan_datafusion_err!(
                 "MiniMatchRecognize requires exactly one input"
             )
         })?;
