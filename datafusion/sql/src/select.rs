@@ -708,7 +708,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             let null_handling = collect_unnest_null_handling(&intermediate_expr_groups)?;
             let mut unnest_options =
                 UnnestOptions::new().with_null_handling(null_handling);
-            let mut unnest_col_vec = vec![];
+            let mut unnest_col_vec = Vec::with_capacity(unnest_columns.len());
 
             for (col, maybe_list_unnest) in unnest_columns.into_iter() {
                 if let Some(list_unnest) = maybe_list_unnest {
@@ -867,7 +867,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 };
                 projection_exprs.extend(inner_projection_exprs.into_exprs());
 
-                let mut unnest_col_vec = vec![];
+                let mut unnest_col_vec = Vec::with_capacity(unnest_columns.len());
 
                 for (col, maybe_list_unnest) in unnest_columns.into_iter() {
                     if let Some(list_unnest) = maybe_list_unnest {
@@ -1001,7 +1001,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         empty_from: bool,
         planner_context: &mut PlannerContext,
     ) -> Result<Vec<SelectExpr>> {
-        let mut prepared_select_exprs = vec![];
+        let mut prepared_select_exprs = Vec::with_capacity(projection.len());
         let mut error_builder = DataFusionErrorBuilder::new();
 
         for expr in projection {
@@ -1251,7 +1251,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         // combine the original grouping and aggregate expressions into one list (note that
         // we do not add the "having" expression since that is not part of the projection)
-        let mut aggr_projection_exprs = vec![];
+        let mut aggr_projection_exprs =
+            Vec::with_capacity(group_by_exprs.len() + aggr_exprs.len());
         for expr in group_by_exprs {
             match expr {
                 Expr::GroupingSet(GroupingSet::Rollup(exprs)) => {

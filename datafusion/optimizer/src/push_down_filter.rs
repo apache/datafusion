@@ -52,8 +52,8 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
-    Column, DFSchema, Result, assert_eq_or_internal_err, internal_err, plan_err,
-    qualified_name,
+    Column, DFSchema, Result, ScalarValue, assert_eq_or_internal_err, internal_err,
+    plan_err, qualified_name,
 };
 use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::expr_rewriter::replace_col;
@@ -62,7 +62,7 @@ use datafusion_expr::utils::{
     conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
 };
 use datafusion_expr::{
-    BinaryExpr, Distinct, Expr, Filter, Operator, Projection,
+    BinaryExpr, Distinct, EmptyRelation, Expr, Filter, Operator, Projection,
     TableProviderFilterPushDown, and, or,
 };
 
@@ -783,8 +783,9 @@ fn infer_join_predicates_impl<
     input_predicates: &[Expr],
     inferred_predicates: &mut InferredPredicates,
 ) -> Result<()> {
+    let mut join_cols_to_replace = HashMap::new();
     for predicate in input_predicates {
-        let mut join_cols_to_replace = HashMap::new();
+        join_cols_to_replace.clear();
 
         for &col in &predicate.column_refs() {
             for (l, r) in join_col_keys.iter() {
@@ -856,10 +857,6 @@ impl OptimizerRule for PushDownFilter {
         Some(ApplyOrder::TopDown)
     }
 
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     fn rewrite(
         &self,
         plan: LogicalPlan,
@@ -892,8 +889,25 @@ impl OptimizerRule for PushDownFilter {
         // predicates on rows that have already been filtered out.
         let (new_predicates, reorder_changed) = reorder_predicates(new_predicates);
 
-        let count_changed = old_predicate_len != new_predicates.len();
-        if count_changed || reorder_changed {
+        // An OR branch can change without changing the number of conjuncts.
+        // Ignore permutations from grouping comparisons by column: the cost
+        // reordering above decides when to change predicate evaluation order.
+        let predicates_changed = if old_predicate_len != new_predicates.len() {
+            true
+        } else {
+            let old_predicates = split_conjunction(&filter.predicate);
+            new_predicates
+                .iter()
+                .zip(&old_predicates)
+                .any(|(new, old)| new != *old)
+                && {
+                    let new_predicates: IndexSet<_> = new_predicates.iter().collect();
+                    old_predicates
+                        .iter()
+                        .any(|old| !new_predicates.contains(old))
+                }
+        };
+        if predicates_changed || reorder_changed {
             let Some(new_predicate) = conjunction(new_predicates) else {
                 // new_predicates is empty - remove the filter entirely
                 // Return the child plan without the filter
@@ -902,14 +916,32 @@ impl OptimizerRule for PushDownFilter {
             filter.predicate = new_predicate;
         }
 
+        // A provider accepting Exact pushdown would absorb FALSE into its scan,
+        // hiding the contradiction from EliminateFilter and still invoking scan().
+        if matches!(
+            filter.predicate,
+            Expr::Literal(ScalarValue::Boolean(Some(false)), _)
+        ) {
+            return Ok(Transformed::yes(LogicalPlan::EmptyRelation(
+                EmptyRelation {
+                    produce_one_row: false,
+                    schema: Arc::clone(filter.input.schema()),
+                },
+            )));
+        }
+
         // If the child has a fetch (limit) or skip (offset), pushing a filter
         // below it would change semantics: the limit/offset should apply before
         // the filter, not after.
         if filter.input.fetch()?.is_some() || filter.input.skip()?.is_some() {
-            return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+            return Ok(Transformed::new(
+                LogicalPlan::Filter(filter),
+                predicates_changed || reorder_changed,
+                TreeNodeRecursion::Continue,
+            ));
         }
 
-        match Arc::unwrap_or_clone(filter.input) {
+        let result = match Arc::unwrap_or_clone(filter.input) {
             LogicalPlan::Filter(mut child_filter) => {
                 // Child filters first to preserve execution order.
                 // Use IndexSet to remove duplicates while preserving predicate order.
@@ -952,7 +984,8 @@ impl OptimizerRule for PushDownFilter {
                 Ok(Transformed::yes(LogicalPlan::Sort(sort)))
             }
             LogicalPlan::SubqueryAlias(mut subquery_alias) => {
-                let mut replace_map = HashMap::new();
+                let mut replace_map =
+                    HashMap::with_capacity(subquery_alias.input.schema().fields().len());
                 for (i, (qualifier, field)) in
                     subquery_alias.input.schema().iter().enumerate()
                 {
@@ -1003,9 +1036,10 @@ impl OptimizerRule for PushDownFilter {
                     }
                 }
 
+                let mut accum: HashSet<Column> = HashSet::new();
                 for predicate in predicates {
                     // collect all the Expr::Column in predicate recursively
-                    let mut accum: HashSet<Column> = HashSet::new();
+                    accum.clear();
                     expr_to_columns(&predicate, &mut accum)?;
 
                     let contains_list_columns =
@@ -1026,7 +1060,11 @@ impl OptimizerRule for PushDownFilter {
                 // If no non-unnest predicates exist, early return
                 if non_unnest_predicates.is_empty() {
                     filter.input = Arc::new(LogicalPlan::Unnest(unnest));
-                    return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                    return Ok(Transformed::new(
+                        LogicalPlan::Filter(filter),
+                        predicates_changed || reorder_changed,
+                        TreeNodeRecursion::Continue,
+                    ));
                 }
 
                 // Push down non-unnest filter predicate
@@ -1051,8 +1089,9 @@ impl OptimizerRule for PushDownFilter {
             }
             LogicalPlan::Union(mut union) => {
                 let mut inputs = Vec::with_capacity(union.inputs.len());
+                let mut replace_map = HashMap::with_capacity(union.schema.fields().len());
                 for input in union.inputs {
-                    let mut replace_map = HashMap::new();
+                    replace_map.clear();
                     for (i, (qualifier, field)) in input.schema().iter().enumerate() {
                         let (union_qualifier, union_field) =
                             union.schema.qualified_field(i);
@@ -1089,7 +1128,7 @@ impl OptimizerRule for PushDownFilter {
                 // As for plan Filter: Column(a+b) > 0 -- Agg: groupby:[Column(a)+Column(b)]
                 // After push, we need to replace `a+b` with Column(a)+Column(b)
                 // So we need create a replace_map, add {`a+b` --> Expr(Column(a)+Column(b))}
-                let mut replace_map = HashMap::new();
+                let mut replace_map = HashMap::with_capacity(agg.group_expr.len());
                 for expr in &agg.group_expr {
                     replace_map.insert(expr.schema_name().to_string(), unalias(expr));
                 }
@@ -1135,8 +1174,8 @@ impl OptimizerRule for PushDownFilter {
                 // multiple window functions, each with potentially different partition keys.
                 // Therefore, we need to ensure that any potential partition key returned is used in
                 // ALL window functions. Otherwise, filters cannot be pushed by through that column.
-                fn extract_partition_keys(func: &WindowFunction) -> HashSet<Column> {
-                    expr_columns(&func.params.partition_by)
+                fn extract_partition_keys(func: &WindowFunction) -> HashSet<&Expr> {
+                    func.params.partition_by.iter().collect()
                 }
 
                 let potential_partition_keys = window
@@ -1172,8 +1211,11 @@ impl OptimizerRule for PushDownFilter {
                 let mut keep_predicates = vec![];
                 let mut push_predicates = vec![];
                 for expr in predicates {
-                    let cols = expr.column_refs();
-                    if cols.iter().all(|c| potential_partition_keys.contains(c)) {
+                    // A volatile predicate has to stay above the window: pushing it
+                    // changes which rows the window function sees.
+                    if !expr.is_volatile()
+                        && reads_only_partition_keys(&expr, &potential_partition_keys)?
+                    {
                         push_predicates.push(expr);
                     } else {
                         keep_predicates.push(expr);
@@ -1181,12 +1223,11 @@ impl OptimizerRule for PushDownFilter {
                 }
 
                 // Unlike with aggregations, there are no cases where we have to replace, e.g.,
-                // `a+b` with Column(a)+Column(b). This is because partition expressions are not
-                // available as standalone columns to the user. For example, while an aggregation on
-                // `a+b` becomes Column(a + b), in a window partition it becomes
-                // `func() PARTITION BY [a + b] ...`. Thus, filters on expressions always remain in
-                // place, so we can use `push_predicates` directly. This is consistent with other
-                // optimizers, such as the one used by Postgres.
+                // `a+b` with Column(a+b). This is because partition expressions are not available
+                // as standalone columns to the user: while an aggregation on `a+b` becomes
+                // Column(a + b), in a window partition it stays `func() PARTITION BY [a + b] ...`.
+                // That is why the predicate is matched against the key expressions themselves and
+                // can be pushed unchanged.
 
                 // If we have a filter to push, we push it down to the input of the aggregate
                 let result = if let Some(predicate) = conjunction(push_predicates) {
@@ -1303,7 +1344,11 @@ impl OptimizerRule for PushDownFilter {
                     .all(|res| res == &TableProviderFilterPushDown::Unsupported)
                 {
                     filter.input = Arc::new(LogicalPlan::TableScan(scan));
-                    return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                    return Ok(Transformed::new(
+                        LogicalPlan::Filter(filter),
+                        predicates_changed || reorder_changed,
+                        TreeNodeRecursion::Continue,
+                    ));
                 }
 
                 // Compose scan filters from non-volatile filters of `Exact` or `Inexact` pushdown type
@@ -1329,7 +1374,11 @@ impl OptimizerRule for PushDownFilter {
                     && scan.filters == new_scan_filters
                 {
                     filter.input = Arc::new(LogicalPlan::TableScan(scan));
-                    return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                    return Ok(Transformed::new(
+                        LogicalPlan::Filter(filter),
+                        predicates_changed || reorder_changed,
+                        TreeNodeRecursion::Continue,
+                    ));
                 } else {
                     scan.filters = new_scan_filters;
                 }
@@ -1354,7 +1403,11 @@ impl OptimizerRule for PushDownFilter {
                 // so we return the original Filter unchanged.
                 if extension_plan.node.inputs().is_empty() {
                     filter.input = Arc::new(LogicalPlan::Extension(extension_plan));
-                    return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                    return Ok(Transformed::new(
+                        LogicalPlan::Filter(filter),
+                        predicates_changed || reorder_changed,
+                        TreeNodeRecursion::Continue,
+                    ));
                 }
                 let prevent_cols =
                     extension_plan.node.prevent_predicate_push_down_columns();
@@ -1371,7 +1424,11 @@ impl OptimizerRule for PushDownFilter {
                 // all predicates are kept, no changes needed
                 if predicate_push_or_keep.iter().all(|&x| !x) {
                     filter.input = Arc::new(LogicalPlan::Extension(extension_plan));
-                    return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                    return Ok(Transformed::new(
+                        LogicalPlan::Filter(filter),
+                        predicates_changed || reorder_changed,
+                        TreeNodeRecursion::Continue,
+                    ));
                 }
 
                 // going to push some predicates down, so split the predicates
@@ -1412,7 +1469,11 @@ impl OptimizerRule for PushDownFilter {
                 filter.input = Arc::new(child);
                 Ok(Transformed::no(LogicalPlan::Filter(filter)))
             }
-        }
+        };
+        result.map(|mut result| {
+            result.transformed |= predicates_changed || reorder_changed;
+            result
+        })
     }
 }
 
@@ -1583,6 +1644,54 @@ fn with_filters(predicates: Vec<Expr>, plan: LogicalPlan) -> LogicalPlan {
     } else {
         plan
     }
+}
+
+/// Can `expr` be evaluated below a window with these `PARTITION BY` keys?
+///
+/// A predicate that reads only the partition keys is constant within each
+/// partition, so filtering before the window drops whole partitions and leaves
+/// the surviving rows' window values unchanged. "Reads only the keys" is checked
+/// structurally: every column reference must sit inside a subtree that is equal
+/// to one of the keys. Given `PARTITION BY a, b + c`:
+///
+/// * `a < 5`, `b + c = 4` and `(b + c) + 1 > 10` can be pushed down
+/// * `d < 5` and `b < 5` cannot (`b` on its own is not a key), and neither can
+///   `c + b = 4` (the match is structural, `c + b` is not `b + c`)
+///
+/// A predicate containing a subquery is never pushed: what the subquery reads is
+/// not visible from the expression tree.
+fn reads_only_partition_keys(
+    expr: &Expr,
+    partition_keys: &HashSet<&Expr>,
+) -> Result<bool> {
+    let mut reads_something_else = false;
+    expr.apply(|node| {
+        Ok(if partition_keys.contains(&node) {
+            // the whole key was matched, so whatever it reads is accounted for
+            TreeNodeRecursion::Jump
+        } else if reads_beyond_this_node(node) {
+            reads_something_else = true;
+            TreeNodeRecursion::Stop
+        } else {
+            TreeNodeRecursion::Continue
+        })
+    })?;
+    Ok(!reads_something_else)
+}
+
+/// Does this node read data that walking its children cannot account for? A
+/// column reads itself; a subquery reads whatever its plan reads, which
+/// `Expr::apply` does not visit.
+fn reads_beyond_this_node(node: &Expr) -> bool {
+    matches!(
+        node,
+        Expr::Column(_)
+            | Expr::OuterReferenceColumn(..)
+            | Expr::ScalarSubquery(_)
+            | Expr::Exists(_)
+            | Expr::InSubquery(_)
+            | Expr::SetComparison(_)
+    )
 }
 
 fn expr_columns(exprs: &[Expr]) -> HashSet<Column> {
@@ -1956,10 +2065,12 @@ mod tests {
         )
     }
 
-    /// verifies that filters on partition expressions are not pushed, as the single expression
-    /// column is not available to the user, unlike with aggregations
+    /// verifies that a filter on an expression partition key is pushed; the
+    /// remaining shapes (mixed keys, operand order, subqueries, volatile
+    /// predicates, several windows) are covered in
+    /// `push_down_filter_regression.slt`
     #[test]
-    fn filter_expression_keep_window() -> Result<()> {
+    fn filter_expression_move_window() -> Result<()> {
         let table_scan = test_table_scan()?;
 
         let window = Expr::from(WindowFunction::new(
@@ -1975,49 +2086,14 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .window(vec![window])?
-            // unlike with aggregations, single partition column "test.a + test.b" is not available
-            // to the plan, so we use multiple columns when filtering
-            .filter(add(col("a"), col("b")).gt(lit(10i64)))?
+            .filter(add(col("a"), col("b")).gt(lit(10i64)))? // a + b > 10
             .build()?;
 
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Filter: test.a + test.b > Int64(10)
-          WindowAggr: windowExpr=[[rank() PARTITION BY [test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-            TableScan: test
-        "
-        )
-    }
-
-    /// verifies that filters are not pushed on order by columns (that are not used in partitioning)
-    #[test]
-    fn filter_order_keep_window() -> Result<()> {
-        let table_scan = test_table_scan()?;
-
-        let window = Expr::from(WindowFunction::new(
-            WindowFunctionDefinition::WindowUDF(
-                datafusion_functions_window::rank::rank_udwf(),
-            ),
-            vec![],
-        ))
-        .partition_by(vec![col("a")])
-        .order_by(vec![col("c").sort(true, true)])
-        .build()
-        .unwrap();
-
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .window(vec![window])?
-            .filter(col("c").gt(lit(10i64)))?
-            .build()?;
-        assert_plan_not_transformed!(plan.clone());
-
-        assert_optimized_plan_equal!(
-            plan,
-            @r"
-        Filter: test.c > Int64(10)
-          WindowAggr: windowExpr=[[rank() PARTITION BY [test.a] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-            TableScan: test
+        WindowAggr: windowExpr=[[rank() PARTITION BY [test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+          TableScan: test, full_filters=[test.a + test.b > Int64(10)]
         "
         )
     }
@@ -4636,14 +4712,8 @@ mod tests {
           TestUserNode
         ",
         );
-        // Check that the filter is pushed down to the user-defined node
-        assert_optimized_plan_equal!(
-            plan,
-            @r"
-        Filter: Boolean(false)
-          TestUserNode
-        "
-        )
+        // An impossible filter eliminates even a leaf extension before pushdown.
+        assert_optimized_plan_equal!(plan, @"EmptyRelation: rows=0")
     }
 
     /// Test that filters are NOT pushed through MoveTowardsLeafNodes projections.

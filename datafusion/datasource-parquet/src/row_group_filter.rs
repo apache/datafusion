@@ -367,7 +367,8 @@ impl RowGroupAccessPlanFilter {
         // try to prune the row groups in a single call
         match predicate.prune(&pruning_stats) {
             Ok(values) => {
-                let mut fully_contained_candidates_original_idx: Vec<usize> = Vec::new();
+                let mut fully_contained_candidates_original_idx: Vec<usize> =
+                    Vec::with_capacity(row_group_indexes.len());
                 for (idx, &value) in row_group_indexes.iter().zip(values.iter()) {
                     if !value {
                         self.access_plan.skip(*idx);

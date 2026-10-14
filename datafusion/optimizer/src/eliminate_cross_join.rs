@@ -75,10 +75,6 @@ impl EliminateCrossJoin {
 ///
 /// This fix helps to improve the performance of TPCH Q19. issue#78
 impl OptimizerRule for EliminateCrossJoin {
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn rewrite(
         &self,

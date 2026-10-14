@@ -137,6 +137,7 @@ To get started, see
    :caption: Library User Guide
    
    library-user-guide/index
+   library-user-guide/securing-datafusion
    library-user-guide/upgrading/index
    library-user-guide/extensions
    library-user-guide/using-the-sql-api
