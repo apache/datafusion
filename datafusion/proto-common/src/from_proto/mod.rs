@@ -1303,6 +1303,15 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             }).transpose()?,
             content_defined_chunking: value.content_defined_chunking.map(ParquetCdcOptions::try_from).transpose()?.unwrap_or_default(),
             enable_rle_to_dictionary: value.enable_rle_to_dictionary,
+            rle_to_dictionary_max_distinct_values: value
+                .rle_to_dictionary_max_distinct_values_opt
+                .as_ref()
+                .map(|opt| match opt {
+                    protobuf::parquet_options::RleToDictionaryMaxDistinctValuesOpt::RleToDictionaryMaxDistinctValues(v) => {
+                        to_usize(*v, "rle_to_dictionary_max_distinct_values")
+                    }
+                })
+                .transpose()?,
         })
     }
 }
@@ -1696,6 +1705,17 @@ mod tests {
             ParquetOptions::try_from(&proto).unwrap(),
             ParquetOptions::default()
         );
+    }
+
+    #[test]
+    fn test_parquet_options_rle_dictionary_max_distinct_values_round_trip() {
+        let opts = ParquetOptions {
+            enable_rle_to_dictionary: true,
+            rle_to_dictionary_max_distinct_values: Some(200),
+            ..ParquetOptions::default()
+        };
+        let recovered = parquet_options_proto_round_trip(opts.clone());
+        assert_eq!(recovered, opts);
     }
 
     #[test]
