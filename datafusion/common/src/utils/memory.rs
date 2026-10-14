@@ -300,6 +300,7 @@ impl RecordBatchMemoryCounter {
 
     /// Apply `op` to `buffer`: increment or decrement its reference count and
     /// adjust `memory_usage` accordingly.
+    #[inline(always)]
     fn apply_buffer_op(&mut self, buffer: &Buffer, op: BufferOp) {
         let addr = buffer.data_ptr().addr();
         match op {
@@ -635,6 +636,7 @@ impl Default for BufferIdMap {
 impl BufferIdMap {
     /// Increment the reference count for `buffer_id`. Returns `true` when the
     /// count went from 0 to 1 (i.e., the buffer is newly tracked).
+    #[inline(always)]
     fn increment(&mut self, buffer_id: NonZero<usize>) -> bool {
         if let Some(overflow) = &mut self.overflow {
             let count = overflow.entry(buffer_id).or_insert(0);
@@ -643,12 +645,12 @@ impl BufferIdMap {
         }
 
         // Search inline slots.
-        let target = Some(buffer_id);
-        for i in 0..self.len {
-            if self.ids[i] == target {
-                self.counts[i] += 1;
-                return false; // Already tracked, count > 1 now.
-            }
+        if let Some(i) = self.ids[..self.len]
+            .iter()
+            .position(|id| *id == Some(buffer_id))
+        {
+            self.counts[i] += 1;
+            return false; // Already tracked, count > 1 now.
         }
 
         // New buffer: try inline first.
