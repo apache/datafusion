@@ -28,12 +28,15 @@ use datafusion_common::{
 
 use arrow::array::{
     Array, ArrayAccessor, ArrayDataBuilder, ArrayRef, BinaryArray, BinaryViewArray,
-    ByteView, GenericStringArray, LargeBinaryArray, LargeStringArray,
-    MAX_INLINE_VIEW_LEN, OffsetSizeTrait, StringArray, StringViewArray,
-    as_largestring_array, make_view,
+    ByteView, GenericByteArray, GenericByteViewArray, GenericStringArray,
+    LargeBinaryArray, LargeStringArray, MAX_INLINE_VIEW_LEN, OffsetSizeTrait,
+    StringArray, StringViewArray, as_largestring_array, make_view,
 };
 use arrow::buffer::{Buffer, MutableBuffer, NullBuffer, ScalarBuffer};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{
+    ByteArrayType, ByteViewType, DataType, GenericBinaryType, GenericStringType,
+    LargeUtf8Type, StringViewType, Utf8Type,
+};
 use arrow_buffer::ArrowNativeType;
 use datafusion_common::cast::{
     as_binary_array, as_binary_view_array, as_large_binary_array, as_string_array,
@@ -54,8 +57,26 @@ pub(crate) trait ConcatBuilder {
     fn finish(self, null_buffer: Option<NullBuffer>) -> Result<ArrayRef>;
 }
 
-/// Builder used by `concat`/`concat_ws` to assemble a [`GenericStringArray<O>`]
-/// (`StringArray` or `LargeStringArray`) one row at a time from multiple input columns.
+/// A [`ByteArrayType`] that [`ConcatByteArrayBuilder`] can build.
+///
+/// Like [`ByteViewType::IS_UTF8`], `IS_UTF8` tells string types from binary
+/// ones. Using `T::DATA_TYPE.is_string()` in [`ColumnarValueRef::write_bytes`]
+/// instead would build a `DataType` and call its destructor for every value.
+pub(crate) trait ConcatByteArrayType: ByteArrayType {
+    const IS_UTF8: bool;
+}
+
+impl<O: OffsetSizeTrait> ConcatByteArrayType for GenericStringType<O> {
+    const IS_UTF8: bool = true;
+}
+
+impl<O: OffsetSizeTrait> ConcatByteArrayType for GenericBinaryType<O> {
+    const IS_UTF8: bool = false;
+}
+
+/// Builder used by `concat`/`concat_ws` to assemble a [`GenericByteArray<T>`]
+/// (`StringArray`, `LargeStringArray`, `BinaryArray` or `LargeBinaryArray`)
+/// one row at a time from multiple input columns.
 ///
 /// Each row is written via repeated `write` calls (one per input fragment)
 /// followed by a single `append_offset` to commit the row.  The output null
@@ -64,24 +85,24 @@ pub(crate) trait ConcatBuilder {
 ///
 /// For the common "produce one `&str` per row" pattern, prefer
 /// `GenericStringArrayBuilder` instead.
-pub(crate) struct ConcatGenericStringBuilder<O: OffsetSizeTrait + ArrowNativeType> {
+pub(crate) struct ConcatByteArrayBuilder<T: ConcatByteArrayType> {
     offsets_buffer: MutableBuffer,
     value_buffer: MutableBuffer,
-    _phantom: PhantomData<O>,
+    _phantom: PhantomData<T>,
 }
-pub(crate) type ConcatStringBuilder = ConcatGenericStringBuilder<i32>;
-pub(crate) type ConcatLargeStringBuilder = ConcatGenericStringBuilder<i64>;
+pub(crate) type ConcatStringBuilder = ConcatByteArrayBuilder<Utf8Type>;
+pub(crate) type ConcatLargeStringBuilder = ConcatByteArrayBuilder<LargeUtf8Type>;
 
-impl<O: OffsetSizeTrait + ArrowNativeType> ConcatGenericStringBuilder<O> {
+impl<T: ConcatByteArrayType> ConcatByteArrayBuilder<T> {
     pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
         let capacity = item_capacity
             .checked_add(1)
-            .map(|i| i.saturating_mul(size_of::<O>()))
+            .map(|i| i.saturating_mul(size_of::<T::Offset>()))
             .expect("capacity integer overflow");
 
         let mut offsets_buffer = MutableBuffer::with_capacity(capacity);
         // SAFETY: the first offset value is definitely not going to exceed the bounds.
-        unsafe { offsets_buffer.push_unchecked(O::usize_as(0)) };
+        unsafe { offsets_buffer.push_unchecked(T::Offset::usize_as(0)) };
         Self {
             offsets_buffer,
             value_buffer: MutableBuffer::with_capacity(data_capacity),
@@ -90,68 +111,25 @@ impl<O: OffsetSizeTrait + ArrowNativeType> ConcatGenericStringBuilder<O> {
     }
 }
 
-impl<O: OffsetSizeTrait + ArrowNativeType> ConcatBuilder
-    for ConcatGenericStringBuilder<O>
-{
+impl<T: ConcatByteArrayType> ConcatBuilder for ConcatByteArrayBuilder<T> {
     fn write<const CHECK_VALID: bool>(
         &mut self,
         column: &ColumnarValueRef,
         i: usize,
     ) -> Result<()> {
-        match column {
-            ColumnarValueRef::Scalar(s) => {
-                std::str::from_utf8(s).map_err(|_| {
-                    exec_datafusion_err!("concat: scalar bytes are not valid UTF-8")
-                })?;
-                self.value_buffer.extend_from_slice(s);
-            }
-            ColumnarValueRef::NullableArray(array) => {
-                if !CHECK_VALID || array.is_valid(i) {
-                    self.value_buffer
-                        .extend_from_slice(array.value(i).as_bytes());
-                }
-            }
-            ColumnarValueRef::NullableLargeStringArray(array) => {
-                if !CHECK_VALID || array.is_valid(i) {
-                    self.value_buffer
-                        .extend_from_slice(array.value(i).as_bytes());
-                }
-            }
-            ColumnarValueRef::NullableStringViewArray(array) => {
-                if !CHECK_VALID || array.is_valid(i) {
-                    self.value_buffer
-                        .extend_from_slice(array.value(i).as_bytes());
-                }
-            }
-            ColumnarValueRef::NonNullableArray(array) => {
-                self.value_buffer
-                    .extend_from_slice(array.value(i).as_bytes());
-            }
-            ColumnarValueRef::NonNullableLargeStringArray(array) => {
-                self.value_buffer
-                    .extend_from_slice(array.value(i).as_bytes());
-            }
-            ColumnarValueRef::NonNullableStringViewArray(array) => {
-                self.value_buffer
-                    .extend_from_slice(array.value(i).as_bytes());
-            }
-            _ => {
-                return exec_err!(
-                    "concat: unexpected column type for string builder: {column:?}"
-                );
-            }
-        }
-        Ok(())
+        column.write_bytes::<CHECK_VALID>(i, T::IS_UTF8, |bytes| {
+            self.value_buffer.extend_from_slice(bytes)
+        })
     }
 
     fn append_offset(&mut self) -> Result<()> {
-        let next_offset: O = O::from_usize(self.value_buffer.len())
+        let next_offset = T::Offset::from_usize(self.value_buffer.len())
             .ok_or_else(|| exec_datafusion_err!("byte array offset overflow"))?;
         self.offsets_buffer.push(next_offset);
         Ok(())
     }
 
-    /// Finalize the builder into a concrete [`GenericStringArray<O>`].
+    /// Finalize the builder into a concrete [`GenericByteArray<T>`].
     ///
     /// # Errors
     ///
@@ -159,7 +137,7 @@ impl<O: OffsetSizeTrait + ArrowNativeType> ConcatBuilder
     ///
     /// - the provided `null_buffer` is not the same length as the `offsets_buffer`.
     fn finish(self, null_buffer: Option<NullBuffer>) -> Result<ArrayRef> {
-        let row_count = self.offsets_buffer.len() / size_of::<O>() - 1;
+        let row_count = self.offsets_buffer.len() / size_of::<T::Offset>() - 1;
         if let Some(ref null_buffer) = null_buffer
             && null_buffer.len() != row_count
         {
@@ -167,96 +145,65 @@ impl<O: OffsetSizeTrait + ArrowNativeType> ConcatBuilder
                 "Null buffer and offsets buffer must be the same length"
             );
         }
-        let array_builder = ArrayDataBuilder::new(GenericStringArray::<O>::DATA_TYPE)
+        let array_builder = ArrayDataBuilder::new(T::DATA_TYPE)
             .len(row_count)
             .add_buffer(self.offsets_buffer.into())
             .add_buffer(self.value_buffer.into())
             .nulls(null_buffer);
-        // SAFETY: all data that was appended was valid UTF8 and the values
-        // and offsets were created correctly
+        // SAFETY: the values and offsets were created correctly, and when `T`
+        // is a string type, `write_bytes` only wrote valid UTF-8
         let array_data = unsafe { array_builder.build_unchecked() };
-        let array = GenericStringArray::<O>::from(array_data);
+        let array = GenericByteArray::<T>::from(array_data);
         Ok(Arc::new(array))
     }
 }
 
-/// Builder used by `concat`/`concat_ws` to assemble a [`StringViewArray`] one
+/// Builder used by `concat`/`concat_ws` to assemble a
+/// [`GenericByteViewArray<T>`] (`StringViewArray` or `BinaryViewArray`) one
 /// row at a time from multiple input columns.
 ///
 /// Each row is written via repeated `write` calls (one per input
 /// fragment) followed by a single `append_offset` to commit the row
-/// as a single string view. The output null buffer is supplied by the caller
+/// as a single view. The output null buffer is supplied by the caller
 /// at `finish` time, avoiding per-row NULL handling work.
 ///
 /// For the common "produce one `&str` per row" pattern, prefer
 /// [`StringViewArrayBuilder`] instead.
-pub(crate) struct ConcatStringViewBuilder {
+pub(crate) struct ConcatByteViewBuilder<T: ByteViewType> {
     views: Vec<u128>,
     data: Vec<u8>,
     block: Vec<u8>,
+    _phantom: PhantomData<T>,
 }
+pub(crate) type ConcatStringViewBuilder = ConcatByteViewBuilder<StringViewType>;
 
-impl ConcatStringViewBuilder {
+impl<T: ByteViewType> ConcatByteViewBuilder<T> {
     pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
         Self {
             views: Vec::with_capacity(item_capacity),
             data: Vec::with_capacity(data_capacity),
             block: vec![],
+            _phantom: PhantomData,
         }
     }
 }
 
-impl ConcatBuilder for ConcatStringViewBuilder {
+impl<T: ByteViewType> ConcatBuilder for ConcatByteViewBuilder<T> {
     fn write<const CHECK_VALID: bool>(
         &mut self,
         column: &ColumnarValueRef,
         i: usize,
     ) -> Result<()> {
-        match column {
-            ColumnarValueRef::Scalar(s) => {
-                std::str::from_utf8(s).map_err(|_| {
-                    exec_datafusion_err!("concat: scalar bytes are not valid UTF-8")
-                })?;
-                self.block.extend_from_slice(s);
-            }
-            ColumnarValueRef::NullableArray(array) => {
-                if !CHECK_VALID || array.is_valid(i) {
-                    self.block.extend_from_slice(array.value(i).as_bytes());
-                }
-            }
-            ColumnarValueRef::NullableLargeStringArray(array) => {
-                if !CHECK_VALID || array.is_valid(i) {
-                    self.block.extend_from_slice(array.value(i).as_bytes());
-                }
-            }
-            ColumnarValueRef::NullableStringViewArray(array) => {
-                if !CHECK_VALID || array.is_valid(i) {
-                    self.block.extend_from_slice(array.value(i).as_bytes());
-                }
-            }
-            ColumnarValueRef::NonNullableArray(array) => {
-                self.block.extend_from_slice(array.value(i).as_bytes());
-            }
-            ColumnarValueRef::NonNullableLargeStringArray(array) => {
-                self.block.extend_from_slice(array.value(i).as_bytes());
-            }
-            ColumnarValueRef::NonNullableStringViewArray(array) => {
-                self.block.extend_from_slice(array.value(i).as_bytes());
-            }
-            _ => {
-                return exec_err!(
-                    "concat: unexpected column type for string view builder: {column:?}"
-                );
-            }
-        }
-        Ok(())
+        column.write_bytes::<CHECK_VALID>(i, T::IS_UTF8, |bytes| {
+            self.block.extend_from_slice(bytes)
+        })
     }
 
     /// Finalizes the current row by converting the accumulated data into a
-    /// StringView and appending it to the views buffer.
+    /// view and appending it to the views buffer.
     fn append_offset(&mut self) -> Result<()> {
         let v = &self.block;
-        if v.len() > 12 {
+        if v.len() > MAX_INLINE_LEN {
             let offset: u32 = self
                 .data
                 .len()
@@ -272,7 +219,7 @@ impl ConcatBuilder for ConcatStringViewBuilder {
         Ok(())
     }
 
-    /// Finalize the builder into a concrete [`StringViewArray`].
+    /// Finalize the builder into a concrete [`GenericByteViewArray<T>`].
     ///
     /// # Errors
     ///
@@ -297,10 +244,10 @@ impl ConcatBuilder for ConcatStringViewBuilder {
         };
 
         // SAFETY: views were constructed with correct lengths, offsets, and
-        // prefixes. All input fragments came from string arrays or string
-        // scalars, all of which are valid UTF-8.
+        // prefixes, and when `T` is `StringViewType`, `write_bytes` only
+        // wrote valid UTF-8.
         let array = unsafe {
-            StringViewArray::new_unchecked(
+            GenericByteViewArray::<T>::new_unchecked(
                 ScalarBuffer::from(self.views),
                 buffers.into(),
                 null_buffer,
@@ -1313,6 +1260,81 @@ impl ColumnarValueRef<'_> {
         }
     }
 
+    /// Calls `write` with the bytes of the value at row `i`, for appending to a
+    /// string (`utf8`) or binary array, unless the value is null.
+    ///
+    /// Validity is only checked if `CHECK_VALID` is true, so callers passing
+    /// `false` must have checked it already.
+    ///
+    /// # Errors
+    ///
+    /// String arrays only take values from string arrays and valid UTF-8
+    /// scalars, and binary arrays only from binary arrays and scalars. Returns
+    /// an error, without calling `write`, for any other value.
+    #[inline]
+    pub fn write_bytes<const CHECK_VALID: bool>(
+        &self,
+        i: usize,
+        utf8: bool,
+        write: impl FnOnce(&[u8]),
+    ) -> Result<()> {
+        match self {
+            Self::Scalar(s) => {
+                if utf8 && std::str::from_utf8(s).is_err() {
+                    return exec_err!("concat: scalar bytes are not valid UTF-8");
+                }
+                write(s)
+            }
+            Self::NullableArray(array) if utf8 => {
+                if !CHECK_VALID || array.is_valid(i) {
+                    write(array.value(i).as_bytes())
+                }
+            }
+            Self::NonNullableArray(array) if utf8 => write(array.value(i).as_bytes()),
+            Self::NullableLargeStringArray(array) if utf8 => {
+                if !CHECK_VALID || array.is_valid(i) {
+                    write(array.value(i).as_bytes())
+                }
+            }
+            Self::NonNullableLargeStringArray(array) if utf8 => {
+                write(array.value(i).as_bytes())
+            }
+            Self::NullableStringViewArray(array) if utf8 => {
+                if !CHECK_VALID || array.is_valid(i) {
+                    write(array.value(i).as_bytes())
+                }
+            }
+            Self::NonNullableStringViewArray(array) if utf8 => {
+                write(array.value(i).as_bytes())
+            }
+            Self::NullableBinaryArray(array) if !utf8 => {
+                if !CHECK_VALID || array.is_valid(i) {
+                    write(array.value(i))
+                }
+            }
+            Self::NonNullableBinaryArray(array) if !utf8 => write(array.value(i)),
+            Self::NullableLargeBinaryArray(array) if !utf8 => {
+                if !CHECK_VALID || array.is_valid(i) {
+                    write(array.value(i))
+                }
+            }
+            Self::NonNullableLargeBinaryArray(array) if !utf8 => write(array.value(i)),
+            Self::NullableBinaryViewArray(array) if !utf8 => {
+                if !CHECK_VALID || array.is_valid(i) {
+                    write(array.value(i))
+                }
+            }
+            Self::NonNullableBinaryViewArray(array) if !utf8 => write(array.value(i)),
+            _ => {
+                let kind = if utf8 { "string" } else { "binary" };
+                return exec_err!(
+                    "concat: unexpected column type for {kind} builder: {self:?}"
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Parse a [`ColumnarValue`] argument into `ColumnarValueRef`.
     /// Returns `None` when the argument is null or null scalar
     /// Returns an error when a columnar value type is not supported.
@@ -1468,6 +1490,9 @@ pub(crate) fn widest_string_type(types: &[DataType]) -> DataType {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::binaries::{
+        ConcatBinaryBuilder, ConcatBinaryViewBuilder, ConcatLargeBinaryBuilder,
+    };
     use crate::utils::test::sliced_byte_array;
 
     #[test]
@@ -1599,6 +1624,90 @@ mod tests {
     #[should_panic(expected = "capacity integer overflow")]
     fn test_overflow_concat_large_string_builder() {
         let _builder = ConcatLargeStringBuilder::with_capacity(usize::MAX, usize::MAX);
+    }
+
+    /// Asserts that builders made by `new` accept the `valid` columns and
+    /// reject the `invalid` ones.
+    fn check_concat_inputs<B: ConcatBuilder>(
+        new: impl Fn() -> B,
+        valid: &[&ColumnarValueRef],
+        invalid: &[&ColumnarValueRef],
+    ) {
+        for column in valid {
+            assert!(new().write::<true>(column, 0).is_ok(), "{column:?}");
+        }
+        for column in invalid {
+            assert!(new().write::<true>(column, 0).is_err(), "{column:?}");
+        }
+    }
+
+    #[test]
+    fn concat_builders_check_input_types() {
+        let strings = StringArray::from(vec!["a"]);
+        let large_strings = LargeStringArray::from(vec!["a"]);
+        let string_views = StringViewArray::from(vec!["a"]);
+        let binaries = BinaryArray::from_vec(vec![b"a"]);
+        let large_binaries = LargeBinaryArray::from_vec(vec![b"a"]);
+        let binary_views = BinaryViewArray::from_iter_values([b"a"]);
+        let string_columns = [
+            ColumnarValueRef::NullableArray(&strings),
+            ColumnarValueRef::NonNullableArray(&strings),
+            ColumnarValueRef::NullableLargeStringArray(&large_strings),
+            ColumnarValueRef::NonNullableLargeStringArray(&large_strings),
+            ColumnarValueRef::NullableStringViewArray(&string_views),
+            ColumnarValueRef::NonNullableStringViewArray(&string_views),
+        ];
+        let binary_columns = [
+            ColumnarValueRef::NullableBinaryArray(&binaries),
+            ColumnarValueRef::NonNullableBinaryArray(&binaries),
+            ColumnarValueRef::NullableLargeBinaryArray(&large_binaries),
+            ColumnarValueRef::NonNullableLargeBinaryArray(&large_binaries),
+            ColumnarValueRef::NullableBinaryViewArray(&binary_views),
+            ColumnarValueRef::NonNullableBinaryViewArray(&binary_views),
+        ];
+        let utf8_scalar = ColumnarValueRef::Scalar(b"a");
+        let non_utf8_scalar = ColumnarValueRef::Scalar(&[0xff]);
+
+        // String builders take string arrays and UTF-8 scalars
+        let valid: Vec<_> = string_columns.iter().chain([&utf8_scalar]).collect();
+        let invalid: Vec<_> = binary_columns.iter().chain([&non_utf8_scalar]).collect();
+        check_concat_inputs(
+            || ConcatStringBuilder::with_capacity(1, 1),
+            &valid,
+            &invalid,
+        );
+        check_concat_inputs(
+            || ConcatLargeStringBuilder::with_capacity(1, 1),
+            &valid,
+            &invalid,
+        );
+        check_concat_inputs(
+            || ConcatStringViewBuilder::with_capacity(1, 1),
+            &valid,
+            &invalid,
+        );
+
+        // Binary builders take binary arrays and any scalar
+        let valid: Vec<_> = binary_columns
+            .iter()
+            .chain([&utf8_scalar, &non_utf8_scalar])
+            .collect();
+        let invalid: Vec<_> = string_columns.iter().collect();
+        check_concat_inputs(
+            || ConcatBinaryBuilder::with_capacity(1, 1),
+            &valid,
+            &invalid,
+        );
+        check_concat_inputs(
+            || ConcatLargeBinaryBuilder::with_capacity(1, 1),
+            &valid,
+            &invalid,
+        );
+        check_concat_inputs(
+            || ConcatBinaryViewBuilder::with_capacity(1, 1),
+            &valid,
+            &invalid,
+        );
     }
 
     #[test]
