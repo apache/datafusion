@@ -610,32 +610,12 @@ fn null_columns(schema: &Schema, len: usize) -> impl Iterator<Item = ArrayRef> +
         .map(move |f| new_null_array(f.data_type(), len))
 }
 
-// Below this average run length, `copy_runs` gathers rows with `take` rather than copying runs.
-const MIN_COPIED_RUN_LEN: usize = 4;
-
 // Copies `runs` of `batch`'s rows into new columns of `num_rows` rows.
-//
-// Copying a run costs a `MutableArrayData` extend per column, which dominates when runs are
-// a few rows long; there, gathering the rows by index is faster for every type. Longer runs
-// are copied, which beats a per-row gather for fixed-width and offset-based types.
 fn copy_runs(
     batch: &RecordBatch,
     runs: &[(usize, usize)],
     num_rows: usize,
 ) -> Result<Vec<ArrayRef>> {
-    if num_rows < MIN_COPIED_RUN_LEN * runs.len()
-        && u32::try_from(batch.num_rows()).is_ok()
-    {
-        let indices = UInt32Array::from_iter_values(
-            runs.iter()
-                .flat_map(|&(start, len)| start as u32..(start + len) as u32),
-        );
-        return batch
-            .columns()
-            .iter()
-            .map(|column| Ok(take(column.as_ref(), &indices, None)?))
-            .collect();
-    }
     batch
         .columns()
         .iter()
@@ -2214,46 +2194,6 @@ mod tests {
         | 2  | 2  | 8  | 40 | 5  | 100 |
         | 3  | 1  | 9  | 40 | 5  | 100 |
         +----+----+----+----+----+-----+
-        ");
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn join_inner_less_than_long_runs_are_copied() -> Result<()> {
-        // b1=6 pairs with all five buffered rows and b1=5 with four, so the batch holds two
-        // runs averaging 4.5 rows: at `MIN_COPIED_RUN_LEN` they are copied, not gathered.
-        let left = build_table(
-            ("a1", &vec![1, 2, 3, 4, 5]),
-            ("b1", &vec![5, 4, 3, 2, 1]),
-            ("c1", &vec![7, 8, 9, 10, 11]),
-        );
-        let right = build_table(
-            ("a2", &vec![10, 20]),
-            ("b1", &vec![6, 5]),
-            ("c2", &vec![70, 80]),
-        );
-        let on = (
-            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
-            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
-        );
-
-        let (_, batches, _) =
-            join_collect(left, right, on, Operator::Lt, JoinType::Inner).await?;
-
-        assert_snapshot!(batches_to_string(&batches), @r"
-        +----+----+----+----+----+----+
-        | a1 | b1 | c1 | a2 | b1 | c2 |
-        +----+----+----+----+----+----+
-        | 1  | 5  | 7  | 10 | 6  | 70 |
-        | 2  | 4  | 8  | 10 | 6  | 70 |
-        | 3  | 3  | 9  | 10 | 6  | 70 |
-        | 4  | 2  | 10 | 10 | 6  | 70 |
-        | 5  | 1  | 11 | 10 | 6  | 70 |
-        | 2  | 4  | 8  | 20 | 5  | 80 |
-        | 3  | 3  | 9  | 20 | 5  | 80 |
-        | 4  | 2  | 10 | 20 | 5  | 80 |
-        | 5  | 1  | 11 | 20 | 5  | 80 |
-        +----+----+----+----+----+----+
         ");
         Ok(())
     }
