@@ -2466,6 +2466,35 @@ mod tests {
         "#)
     }
 
+    /// When the merge appends a needed column that the projection does not
+    /// keep, it must append the input's qualified column (`test.b`), not the
+    /// bare `b` that the caller asked for.
+    #[test]
+    fn test_merge_appends_qualified_column_for_bare_request() -> Result<()> {
+        let projection = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![col("test.a")])?
+            .build()?;
+        let target_schema = Arc::clone(projection.schema());
+        let columns_needed: IndexSet<Column> =
+            IndexSet::from([Column::new_unqualified("b")]);
+
+        let merged = build_extraction_projection_impl(
+            &[],
+            &columns_needed,
+            &Arc::new(projection),
+            &target_schema,
+        )?;
+
+        assert_eq!(
+            merged.expr,
+            vec![
+                Expr::Column(Column::new(Some("test"), "a")),
+                Expr::Column(Column::new(Some("test"), "b")),
+            ]
+        );
+        Ok(())
+    }
+
     /// A projection can spell a pass-through column as a same-name alias
     /// (`test.a AS a`). Merging an extraction into it must treat that alias as
     /// the pass-through it is, and not add `test.a` beside the `a` it outputs,
