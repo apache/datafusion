@@ -15,34 +15,38 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Microbenchmark for `power(decimal_array, int_*)`.
+//! Microbenchmark for `power`.
 //!
-//! Covers both array- and scalar-shaped integer exponents on a Decimal
-//! base. Both shapes are dispatched to the native per-row decimal kernel;
-//! the bench guards against any future change that routes either shape
-//! through a Float64 round-trip, which is measurably slower than the
-//! decimal kernel for the cases the kernel can handle.
+//! `power` coerces both arguments to Float64, so the inputs are Float64.
+//! Covers a different exponent for each row, as in `power(x, y)`, and a
+//! constant exponent, as in `power(x, 2)`.
 
-use arrow::array::{Decimal128Array, Int64Array};
+use std::hint::black_box;
+use std::ops::Range;
+use std::sync::Arc;
+
+use arrow::array::Float64Array;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use criterion::{Criterion, criterion_group};
 use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDF};
 use datafusion_functions::math::power;
-use std::hint::black_box;
-use std::sync::Arc;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 
-fn make_decimal_array(size: usize, precision: u8, scale: i8) -> Decimal128Array {
-    // Use a fixed unscaled value (250) so the bench is independent of `scale`.
-    // The four-arm dispatch in `power` only cares about the Decimal variant
-    // and the exponent's shape, not the numeric value.
-    let arr = Decimal128Array::from(vec![250i128; size]);
-    arr.with_precision_and_scale(precision, scale).unwrap()
-}
+const NULL_DENSITY: f64 = 0.1;
 
-fn make_int_array(size: usize, value: i64) -> Int64Array {
-    Int64Array::from(vec![value; size])
+fn make_f64_array(rng: &mut StdRng, size: usize, range: Range<f64>) -> Float64Array {
+    (0..size)
+        .map(|_| {
+            if rng.random_bool(NULL_DENSITY) {
+                None
+            } else {
+                Some(rng.random_range(range.clone()))
+            }
+        })
+        .collect()
 }
 
 fn run_power(
@@ -69,54 +73,41 @@ fn run_power(
 fn criterion_benchmark(c: &mut Criterion) {
     let power_fn = power();
     let config_options = Arc::new(ConfigOptions::default());
-    let precision: u8 = 20;
-    let scale: i8 = 2;
-    let decimal_ty = DataType::Decimal128(precision, scale);
-
-    // Exponents are bounded by what the native decimal kernel can handle
-    // without overflowing the i128 intermediate; see
-    // <https://github.com/apache/datafusion/issues/22480>
-    let exponents = [2i64, 4, 8];
+    let base_field: FieldRef = Field::new("base", DataType::Float64, true).into();
+    let exp_field: FieldRef = Field::new("exp", DataType::Float64, true).into();
+    let return_field: FieldRef = Field::new("r", DataType::Float64, true).into();
+    let arg_fields = vec![base_field, exp_field];
 
     for size in [1024usize, 8192] {
-        let base_arr = Arc::new(make_decimal_array(size, precision, scale));
-        let base_field: FieldRef = Field::new("base", decimal_ty.clone(), true).into();
-        let exp_field: FieldRef = Field::new("exp", DataType::Int64, true).into();
-        let return_field: FieldRef = Field::new("r", decimal_ty.clone(), true).into();
-        let arg_fields = vec![base_field, exp_field];
+        let mut rng = StdRng::seed_from_u64(42);
+        // Bases are positive: a zero base with a negative exponent is an error.
+        let base_arr = Arc::new(make_f64_array(&mut rng, size, 0.1..100.0));
+        let exp_arr = Arc::new(make_f64_array(&mut rng, size, -4.0..4.0));
 
-        for &exp in &exponents {
-            let exp_arr = Arc::new(make_int_array(size, exp));
-            let array_args = vec![
-                ColumnarValue::Array(base_arr.clone()),
-                ColumnarValue::Array(exp_arr),
-            ];
-            c.bench_function(
-                &format!(
-                    "power decimal({precision},{scale}) array x int array, exp={exp}, n={size}"
-                ),
-                |b| {
-                    b.iter(|| {
-                        run_power(
-                            &power_fn,
-                            &array_args,
-                            &arg_fields,
-                            &return_field,
-                            &config_options,
-                            size,
-                        )
-                    })
-                },
-            );
+        let array_args = vec![
+            ColumnarValue::Array(Arc::clone(&base_arr) as _),
+            ColumnarValue::Array(exp_arr),
+        ];
+        c.bench_function(&format!("power f64 array x f64 array, n={size}"), |b| {
+            b.iter(|| {
+                run_power(
+                    &power_fn,
+                    &array_args,
+                    &arg_fields,
+                    &return_field,
+                    &config_options,
+                    size,
+                )
+            })
+        });
 
+        for exp in [2.0, 0.5] {
             let scalar_args = vec![
-                ColumnarValue::Array(base_arr.clone()),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(exp))),
+                ColumnarValue::Array(Arc::clone(&base_arr) as _),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(exp))),
             ];
             c.bench_function(
-                &format!(
-                    "power decimal({precision},{scale}) array x int scalar, exp={exp}, n={size}"
-                ),
+                &format!("power f64 array x f64 scalar, exp={exp}, n={size}"),
                 |b| {
                     b.iter(|| {
                         run_power(

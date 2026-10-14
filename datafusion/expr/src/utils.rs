@@ -70,8 +70,8 @@ pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
 /// Returns an iterator of index vectors, where each vector contains the indices
 /// of elements to include in that subset.
 fn powerset_indices(len: usize) -> impl Iterator<Item = Vec<usize>> {
-    (0..(1 << len)).map(move |mask| {
-        let mut indices = vec![];
+    (0..(1 << len)).map(move |mask: u64| {
+        let mut indices = Vec::with_capacity(mask.count_ones() as usize);
         let mut bitset = mask;
         while bitset > 0 {
             let rightmost: u64 = bitset & !(bitset - 1);
@@ -373,7 +373,7 @@ fn get_excluded_columns(
         return plan_err!("EXCLUDE or EXCEPT contains duplicate column names");
     }
 
-    let mut result = vec![];
+    let mut result = Vec::with_capacity(unique_idents.len());
     for ident in unique_idents.into_iter() {
         let col_name = ident.value.as_str();
         let (qualifier, field) = schema.qualified_field_with_name(qualifier, col_name)?;
@@ -525,8 +525,9 @@ pub fn generate_sort_key(
         })
         .collect::<Vec<_>>();
 
-    let mut final_sort_keys = vec![];
-    let mut is_partition_flag = vec![];
+    let num_keys = partition_by.len() + order_by.len();
+    let mut final_sort_keys = Vec::with_capacity(num_keys);
+    let mut is_partition_flag = Vec::with_capacity(num_keys);
     for e in partition_by {
         // By default, create sort key with ASC is true and NULLS LAST to be consistent with
         // PostgreSQL's rule: https://www.postgresql.org/docs/current/queries-order.html
@@ -963,20 +964,38 @@ pub fn exprlist_to_fields<'a>(
 /// .project(vec![col("c1"), col("SUM(c2)")?
 /// ```
 pub fn columnize_expr(e: Expr, input: &LogicalPlan) -> Result<Expr> {
-    let output_exprs = match input.columnized_output_exprs() {
-        Ok(exprs) if !exprs.is_empty() => exprs,
-        _ => return Ok(e),
-    };
-    let exprs_map: HashMap<&Expr, Column> = output_exprs.into_iter().collect();
-    e.transform_down(|node: Expr| match exprs_map.get(&node) {
-        Some(column) => Ok(Transformed::new(
-            Expr::Column(column.clone()),
-            true,
-            TreeNodeRecursion::Jump,
-        )),
-        None => Ok(Transformed::no(node)),
-    })
-    .data()
+    Columnizer::new(input).columnize(e)
+}
+
+/// Applies [`columnize_expr`] to many expressions over the same input plan,
+/// building the lookup of the input's output expressions only once.
+pub(crate) struct Columnizer<'a> {
+    output_exprs: HashMap<&'a Expr, Column>,
+}
+
+impl<'a> Columnizer<'a> {
+    pub(crate) fn new(input: &'a LogicalPlan) -> Self {
+        let output_exprs = input
+            .columnized_output_exprs()
+            .map(|exprs| exprs.into_iter().collect())
+            .unwrap_or_default();
+        Self { output_exprs }
+    }
+
+    pub(crate) fn columnize(&self, e: Expr) -> Result<Expr> {
+        if self.output_exprs.is_empty() {
+            return Ok(e);
+        }
+        e.transform_down(|node: Expr| match self.output_exprs.get(&node) {
+            Some(column) => Ok(Transformed::new(
+                Expr::Column(column.clone()),
+                true,
+                TreeNodeRecursion::Jump,
+            )),
+            None => Ok(Transformed::no(node)),
+        })
+        .data()
+    }
 }
 
 /// Collect all deeply nested `Expr::Column`'s. They are returned in order of
@@ -1525,14 +1544,12 @@ pub fn collect_subquery_cols(
     subquery_schema: &DFSchema,
 ) -> Result<BTreeSet<Column>> {
     exprs.iter().try_fold(BTreeSet::new(), |mut cols, expr| {
-        let mut using_cols: Vec<Column> = vec![];
         for col in expr.column_refs().into_iter() {
             if subquery_schema.has_column(col) {
-                using_cols.push(col.clone());
+                cols.insert(col.clone());
             }
         }
 
-        cols.extend(using_cols);
         Result::<_>::Ok(cols)
     })
 }

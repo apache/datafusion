@@ -89,10 +89,6 @@ impl OptimizerRule for OptimizeProjections {
         None
     }
 
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     fn rewrite(
         &self,
         plan: LogicalPlan,
@@ -446,7 +442,8 @@ fn optimize_projections(
                 RequiredIndices::new().with_plan_exprs(&plan, input.schema())?;
 
             // Add additional required indices from the parent
-            let mut additional_necessary_child_indices = Vec::new();
+            let mut additional_necessary_child_indices =
+                Vec::with_capacity(indices.indices().len());
             indices.indices().iter().for_each(|idx| {
                 if let Some(index) = dependency_indices.get(*idx) {
                     additional_necessary_child_indices.push(*index);
@@ -603,7 +600,7 @@ fn merge_consecutive_projections_one_level(
     // Try to rewrite the expressions in the current projection using the
     // previous projection as input:
     let name_preserver = NamePreserver::new_for_projection();
-    let mut original_names = vec![];
+    let mut original_names = Vec::with_capacity(expr.len());
     let new_exprs = expr.map_elements(|expr| {
         original_names.push(name_preserver.save(&expr));
 

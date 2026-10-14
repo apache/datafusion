@@ -605,8 +605,8 @@ fn try_reorder(
         return (join_keys, None);
     };
 
-    let mut new_left_keys = vec![];
-    let mut new_right_keys = vec![];
+    let mut new_left_keys = Vec::with_capacity(positions.len());
+    let mut new_right_keys = Vec::with_capacity(positions.len());
     for pos in positions.iter() {
         new_left_keys.push(Arc::clone(&join_keys.left_keys[*pos]));
         new_right_keys.push(Arc::clone(&join_keys.right_keys[*pos]));
@@ -1003,14 +1003,14 @@ fn get_repartition_requirement_status(
     let children = plan.children();
     let rr_beneficial = plan.benefits_from_input_partitioning();
     let requirements = plan.input_distribution_requirements().into_per_child();
-    let mut repartition_status_flags = vec![];
+    let mut repartition_status_flags = Vec::with_capacity(children.len());
     for (child, requirement, roundrobin_beneficial) in
         izip!(children.into_iter(), requirements, rr_beneficial)
     {
         // Decide whether adding a round robin is beneficial depending on
         // the statistical information we have on the number of rows:
         let roundrobin_beneficial_stats = match stats_ctx
-            .compute(child.as_ref(), &StatisticsArgs::new())?
+            .compute_arc(child, &StatisticsArgs::new())?
             .num_rows
         {
             Precision::Exact(n_rows) => n_rows > batch_size,
@@ -1063,10 +1063,8 @@ struct PlanSize {
 }
 
 impl PlanSize {
-    fn from_plan(plan: &dyn ExecutionPlan) -> Self {
-        let stats = StatisticsContext::new()
-            .compute(plan, &StatisticsArgs::new())
-            .ok();
+    fn from_plan(plan: &Arc<dyn ExecutionPlan>, stats_ctx: &StatisticsContext) -> Self {
+        let stats = stats_ctx.compute_arc(plan, &StatisticsArgs::new()).ok();
         Self {
             byte_size: stats
                 .as_ref()
@@ -1124,6 +1122,7 @@ fn enforce_distribution_relationships(
     input_distributions: &InputDistributionRequirements,
     children: &mut [DistributionChildState],
     target_partitions: usize,
+    stats_ctx: &StatisticsContext,
 ) -> Result<()> {
     let mut repartitioned_for_relationship = vec![false; children.len()];
 
@@ -1162,55 +1161,52 @@ fn enforce_distribution_relationships(
             }
         }
 
-        let best_satisfied_child: Option<(usize, Partitioning)> = match satisfied_children
-            .len()
-        {
-            0 => None,
-            1 => satisfied_children
-                .into_iter()
-                .next()
-                .map(|(i, p, _)| (i, p)),
-            _ => {
-                // Prefer native partitioned children over newly repartitioned ones
-                let native_children: Vec<_> = satisfied_children
-                    .iter()
-                    .filter(|(_, _, is_native)| *is_native)
-                    .collect();
-                if native_children.len() == 1 {
-                    let (i, p, _) = native_children[0];
-                    Some((*i, p.clone()))
-                } else {
-                    let pool = if !native_children.is_empty() {
-                        native_children
-                    } else {
-                        satisfied_children.iter().collect()
-                    };
-                    let candidates: Vec<_> = pool
-                        .into_iter()
-                        .map(|(idx, part, _)| {
-                            let size =
-                                PlanSize::from_plan(children[*idx].context.plan.as_ref());
-                            (size, *idx, part.clone())
-                        })
-                        .collect();
-
-                    // Only select a reference candidate if there is a unique, strictly
-                    // larger winner (`size_a > size_b`). If candidates have equal or
-                    // incomparable sizes (e.g. non-overlapping metrics), return None
-                    // so the optimizer avoids arbitrary tie-breaking and falls back to
-                    // standard distribution.
-                    candidates
+        let best_satisfied_child: Option<(usize, Partitioning)> =
+            match satisfied_children.len() {
+                0 => None,
+                1 => satisfied_children
+                    .into_iter()
+                    .next()
+                    .map(|(i, p, _)| (i, p)),
+                _ => {
+                    // Prefer native partitioned children over newly repartitioned ones
+                    let native_children: Vec<_> = satisfied_children
                         .iter()
-                        .find(|(size_a, idx_a, _)| {
-                            size_a.is_known()
-                                && candidates.iter().all(|(size_b, idx_b, _)| {
-                                    idx_a == idx_b || size_a > size_b
-                                })
-                        })
-                        .map(|(_, idx, part)| (*idx, part.clone()))
+                        .filter(|(_, _, is_native)| *is_native)
+                        .collect();
+                    if native_children.len() == 1 {
+                        let (i, p, _) = native_children[0];
+                        Some((*i, p.clone()))
+                    } else {
+                        let pool = if !native_children.is_empty() {
+                            native_children
+                        } else {
+                            satisfied_children.iter().collect()
+                        };
+                        let candidates: Vec<_> = pool
+                            .into_iter()
+                            .map(|(idx, part, _)| {
+                                let plan = &children[*idx].context.plan;
+                                let size = PlanSize::from_plan(plan, stats_ctx);
+                                (size, *idx, part.clone())
+                            })
+                            .collect();
+
+                        // Prefer a unique, strictly larger winner (`size_a > size_b`).
+                        // Otherwise, fall back to standard distribution rather
+                        // than choosing an arbitrary reference.
+                        candidates
+                            .iter()
+                            .find(|(size_a, idx_a, _)| {
+                                size_a.is_known()
+                                    && candidates.iter().all(|(size_b, idx_b, _)| {
+                                        idx_a == idx_b || size_a > size_b
+                                    })
+                            })
+                            .map(|(_, idx, part)| (*idx, part.clone()))
+                    }
                 }
-            }
-        };
+            };
 
         // Validate that best_satisfied_child can be adapted across all unsatisfied children in the group
         let best_satisfied_child =
@@ -1282,7 +1278,9 @@ fn enforce_distribution_relationships(
                         .map(|s| s.is_satisfied())
                         .unwrap_or(false)
                 }
-                (Partitioning::Range(r1), Partitioning::Range(r2)) if r1 == r2 => true,
+                (Partitioning::Range(r1), Partitioning::Range(r2)) => {
+                    r1.has_same_layout(r2)
+                }
                 _ => false,
             };
 
@@ -1353,9 +1351,7 @@ pub fn ensure_distribution(
 /// `stats_ctx` carries the memoization cache used to answer the child
 /// statistics queries behind the repartition decisions. Share one context
 /// across the whole traversal so each subtree is computed once rather than
-/// once per ancestor. The cache is keyed by raw plan-node pointers, so reset
-/// it (via [`StatisticsContext::reset_cache`]) after any node whose plan
-/// pointer actually changed.
+/// once per ancestor.
 #[expect(
     deprecated,
     reason = "HashPartitioned is accepted during the KeyPartitioned migration"
@@ -1559,8 +1555,7 @@ pub fn ensure_distribution_with_stats(
                 Distribution::SinglePartition => {
                     child = add_merge_on_top(child);
                 }
-                Distribution::HashPartitioned(exprs)
-                | Distribution::KeyPartitioned(exprs) => {
+                Distribution::HashPartitioned(_) | Distribution::KeyPartitioned(_) => {
                     let child_partitions =
                         child.plan.output_partitioning().partition_count();
                     let partitioning_satisfied = input_distributions
@@ -1578,21 +1573,54 @@ pub fn ensure_distribution_with_stats(
                             && target_partitions > child_partitions;
 
                     // When subset satisfaction is enabled, preserve an
-                    // already-satisfying partitioning. Otherwise, hash
+                    // already-satisfying partitioning. Otherwise,
                     // repartition may also increase parallelism.
-                    let needs_hash_repartition = if allow_subset_satisfy_partitioning {
+                    let needs_repartition = if allow_subset_satisfy_partitioning {
                         !partitioning_satisfied
                     } else {
                         !partitioning_satisfied
                             || (target_partitions > child_partitions
                                 && !preserve_satisfying_file_partitioning)
                     };
-                    let should_add_hash_repartition =
-                        hash_necessary && needs_hash_repartition;
+                    let should_add_repartition = hash_necessary && needs_repartition;
 
                     // See https://github.com/apache/datafusion/issues/18341#issuecomment-3503238325 for background
-                    // When inserting hash is necessary to satisfy hash requirement, insert hash repartition.
-                    if should_add_hash_repartition {
+                    // Enforce unmet requirements, or increase parallelism when beneficial.
+                    if should_add_repartition {
+                        let partitioning = match child.plan.output_partitioning() {
+                            Partitioning::Range(range) if partitioning_satisfied => {
+                                match range.scale(target_partitions) {
+                                    Some(range) => {
+                                        let scaled = Partitioning::Range(range);
+                                        // A single partition satisfies any key requirement,
+                                        // but scaling it must still use compatible keys.
+                                        if scaled
+                                            .satisfaction(
+                                                &requirement,
+                                                child.plan.equivalence_properties(),
+                                                false,
+                                            )
+                                            .is_satisfied()
+                                        {
+                                            scaled
+                                        } else {
+                                            requirement
+                                                .clone()
+                                                .create_partitioning(target_partitions)
+                                        }
+                                    }
+                                    // Insufficient samples are expected. Preserve
+                                    // main's policy by falling back to key
+                                    // repartitioning at the requested parallelism.
+                                    None => requirement
+                                        .clone()
+                                        .create_partitioning(target_partitions),
+                                }
+                            }
+                            _ => {
+                                requirement.clone().create_partitioning(target_partitions)
+                            }
+                        };
                         // When there is an existing ordering, we preserve ordering during
                         // repartition. This will be rolled back in the future if any of the
                         // following conditions is true:
@@ -1600,8 +1628,6 @@ pub fn ensure_distribution_with_stats(
                         //   requirements.
                         // - Usage of order preserving variants is not desirable (per the flag
                         //   `config.optimizer.prefer_existing_sort`).
-                        let partitioning = Distribution::KeyPartitioned(exprs.to_vec())
-                            .create_partitioning(target_partitions);
                         let repartition = RepartitionExec::try_new(
                             Arc::clone(&child.plan),
                             partitioning,
@@ -1638,6 +1664,7 @@ pub fn ensure_distribution_with_stats(
         &input_distributions,
         &mut children,
         target_partitions,
+        stats_ctx,
     )?;
 
     let children = children
