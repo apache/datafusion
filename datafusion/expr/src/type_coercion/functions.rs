@@ -559,9 +559,13 @@ fn get_valid_types_with_udf<F: UDFCoercionExt>(
                 }
             }
 
-            // Every signature failed, return the joined error
+            // Every signature failed. That means the caller passed the wrong
+            // number or types of arguments, which is a user mistake rather than
+            // a bug in DataFusion, so report it as a planning error. Reporting it
+            // as an internal error told users to file a bug report for their own
+            // typo, and the caller appends the candidate signatures anyway.
             if res.is_empty() {
-                return internal_err!(
+                return plan_err!(
                     "Function '{}' failed to match any signature, errors: {}",
                     func.name(),
                     errors.join(",")
@@ -1489,6 +1493,45 @@ mod tests {
         assert_eq!(got, [DataType::Int32, DataType::Int32]);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_one_of_signature_mismatch_is_not_an_internal_error() {
+        // Mirrors the production signature of `substr`: one branch rejects the
+        // argument type, the other rejects the arity, so every branch fails and
+        // the whole `OneOf` resolution fails with it.
+        //
+        // That is a bad call, not a bug in DataFusion, so it has to surface as an
+        // ordinary planning error rather than an internal error telling the user
+        // to file a bug report for their own typo.
+        let string = Coercion::new_exact(TypeSignatureClass::Native(logical_string()));
+        let int64 = Coercion::new_exact(TypeSignatureClass::Native(logical_int64()));
+        let signature = Signature::one_of(
+            vec![
+                TypeSignature::Coercible(vec![string.clone(), int64.clone()]),
+                TypeSignature::Coercible(vec![string, int64.clone(), int64]),
+            ],
+            Volatility::Immutable,
+        );
+        let current_fields = vec![
+            Arc::new(Field::new("a", DataType::Date32, true)),
+            Arc::new(Field::new("b", DataType::Date32, true)),
+        ];
+
+        let err = fields_with_udf(&current_fields, &MockUdf(signature)).unwrap_err();
+
+        assert_contains!(
+            err.to_string(),
+            "Function 'test' failed to match any signature"
+        );
+        assert!(
+            matches!(err, datafusion_common::DataFusionError::Plan(_)),
+            "expected a planning error, got: {err:?}"
+        );
+        assert!(
+            !err.to_string().contains("Internal error"),
+            "a signature mismatch must not be reported as an internal error: {err}"
+        );
     }
 
     #[test]
