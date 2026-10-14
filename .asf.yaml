@@ -112,6 +112,49 @@ github:
     branch-55:
       required_pull_request_reviews:
         required_approving_review_count: 1
+  # GitHub merge queue settings for `main`.
+  #
+  # The merge queue itself was originally enabled by ASF Infra in classic
+  # branch protection (INFRA-27154), which .asf.yaml can not express. Rulesets
+  # can, and .asf.yaml passes raw Rulesets API payloads through unchanged, so
+  # the queue parameters are managed here. See
+  # https://github.com/apache/infrastructure-asfyaml#rulesets
+  #
+  # Merge queue rules do not support wildcard ref patterns, so only the default
+  # branch is covered; release branches keep plain branch protection above.
+  rulesets:
+    - name: Merge Queue
+      target: branch
+      enforcement: active
+      conditions:
+        ref_name:
+          include:
+            - "~DEFAULT_BRANCH"
+          exclude: []
+      rules:
+        - type: merge_queue
+          parameters:
+            # Matches enabled_merge_buttons above.
+            merge_method: SQUASH
+            # Every entry's own build must be green, not only the head of the
+            # group.
+            grouping_strategy: ALLGREEN
+            # How many queue entries are built and tested concurrently.
+            max_entries_to_build: 5
+            # How many green entries may land in one merge operation. This
+            # does not combine CI builds; each entry is always built on its
+            # own.
+            max_entries_to_merge: 1
+            min_entries_to_merge: 1
+            min_entries_to_merge_wait_minutes: 5
+            # How long the queue waits for a required check to report before
+            # treating it as failed and evicting the entry. The queue's CI
+            # finishes in 10-25 minutes once it is running, but jobs can sit
+            # waiting for a shared ASF runner for well over an hour. With the
+            # default of 60 minutes, healthy entries were evicted and all of
+            # their CI rerun from scratch (see #26292). 360 is the maximum
+            # GitHub allows.
+            check_response_timeout_minutes: 360
   pull_requests:
     # enable updating head branches of pull requests
     allow_update_branch: true
