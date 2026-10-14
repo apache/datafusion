@@ -373,7 +373,7 @@ impl FileGroupPartitioner {
 /// Partition column statistics are derived from the individual file partition values:
 /// - `min` = minimum partition value across all files in the group
 /// - `max` = maximum partition value across all files in the group
-/// - `null_count` = 0 (partition values are never null)
+/// - `null_count` = the number of rows in files with a null partition value
 ///
 /// This allows query optimizers to prune entire file groups based on partition bounds.
 #[derive(Debug, Clone)]

@@ -1126,7 +1126,7 @@ impl ListingTable {
 
         // Note: Statistics already include both file columns and partition columns.
         // PartitionedFile::with_statistics automatically appends exact partition column
-        // statistics (min=max=partition_value, null_count=0, distinct_count=1) computed
+        // statistics (e.g. min=max=partition_value, null_count=0, distinct_count=1) computed
         // from partition_values.
         Ok(ListFilesResult {
             file_groups,
