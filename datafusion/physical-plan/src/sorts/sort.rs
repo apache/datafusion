@@ -19,8 +19,10 @@
 //! It will do in-memory sorting if it has enough memory budget
 //! but spills to disk if needed.
 
+use std::cmp::Ordering as CmpOrdering;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
+use std::ops::Range;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
@@ -57,9 +59,10 @@ use crate::{
     PlanProperties, ReplaceChildrenOptions, SendableRecordBatchStream, Statistics,
 };
 
-use arrow::array::{RecordBatch, RecordBatchOptions};
-use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
+use arrow::array::{Array, RecordBatch, RecordBatchOptions, UInt32Array};
+use arrow::compute::{SortColumn, concat_batches, lexsort_to_indices, take_arrays};
 use arrow::datatypes::SchemaRef;
+use arrow_ord::sort::LexicographicalComparator;
 use datafusion_common::config::SpillCompression;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
@@ -73,7 +76,11 @@ use datafusion_execution::memory_pool::{
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
+use datafusion_physical_expr::expressions::{
+    Column, DynamicFilterPhysicalExpr, Literal, lit,
+};
+use datafusion_physical_expr::projection::ProjectionExprs;
+use datafusion_physical_expr::utils::collect_columns;
 
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
@@ -229,6 +236,7 @@ struct ExternalSorter {
     /// the data will be concatenated and sorted in place rather than
     /// sort/merged.
     sort_in_place_threshold_bytes: usize,
+    sort_stages: Option<Arc<[SortStage]>>,
 
     // ========================================================================
     // STATE BUFFERS:
@@ -325,7 +333,63 @@ impl ExternalSorter {
             batch_size,
             sort_spill_reservation_bytes,
             sort_in_place_threshold_bytes,
+            sort_stages: None,
         })
+    }
+
+    fn with_staged_sort(mut self, enabled: bool, group_size: usize) -> Result<Self> {
+        if enabled && group_size == 0 {
+            return Err(DataFusionError::Configuration(
+                "datafusion.execution.sort_key_group_size must be greater than zero when datafusion.execution.enable_staged_sort is true".to_string(),
+            ));
+        }
+        self.sort_stages = if enabled
+            && self
+                .expr
+                .iter()
+                .skip(group_size)
+                .any(|key| !key.expr.is::<Column>() && !key.expr.is::<Literal>())
+        {
+            let stages = self
+                .expr
+                .chunks(group_size)
+                .enumerate()
+                .map(|(index, keys)| {
+                    if index == 0 {
+                        return Ok(SortStage {
+                            columns: vec![],
+                            expressions: keys.to_vec(),
+                        });
+                    }
+                    let mut columns = keys
+                        .iter()
+                        .flat_map(|key| collect_columns(&key.expr))
+                        .map(|column| column.index())
+                        .collect::<Vec<_>>();
+                    columns.sort_unstable();
+                    columns.dedup();
+                    let projection =
+                        ProjectionExprs::from_indices(&columns, &self.schema);
+                    let expressions = keys
+                        .iter()
+                        .map(|key| {
+                            Ok(PhysicalSortExpr::new(
+                                projection.project_expr(&key.expr)?,
+                                key.options,
+                            ))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    Ok(SortStage {
+                        columns,
+                        expressions,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Some(stages.into())
+        } else {
+            None
+        };
+        Ok(self)
     }
 
     /// Appends an unsorted [`RecordBatch`] to `in_mem_batches`
@@ -648,6 +712,8 @@ impl ExternalSorter {
         let elapsed_compute = self.metrics.baseline.elapsed_compute().clone();
         let _timer = elapsed_compute.timer();
 
+        let staged = is_output_stream && self.sort_stages.is_some();
+
         // Please pay attention that any operation inside of `in_mem_sort_stream` will
         // not perform any memory reservation. This is for avoiding the need of handling
         // reservation failure and spilling in the middle of the sort/merge. The memory
@@ -657,7 +723,7 @@ impl ExternalSorter {
         if self.in_mem_batches.len() == 1 {
             let batch = self.in_mem_batches.swap_remove(0);
             let reservation = self.reservation.take();
-            let sorted_stream = self.sort_batch_stream(batch, reservation)?;
+            let sorted_stream = self.sort_batch_stream(batch, reservation, staged)?;
             return Ok(self.observe_if_output(sorted_stream, is_output_stream));
         }
 
@@ -674,7 +740,7 @@ impl ExternalSorter {
                 .try_resize(get_reserved_bytes_for_record_batch(&batch)?)
                 .map_err(Self::err_with_oom_context)?;
             let reservation = self.reservation.take();
-            let sorted_stream = self.sort_batch_stream(batch, reservation)?;
+            let sorted_stream = self.sort_batch_stream(batch, reservation, staged)?;
             return Ok(self.observe_if_output(sorted_stream, is_output_stream));
         }
 
@@ -696,7 +762,7 @@ impl ExternalSorter {
                 let reservation = self
                     .reservation
                     .split(get_reserved_bytes_for_record_batch(&batch)?);
-                let input = self.sort_batch_stream(batch, reservation)?;
+                let input = self.sort_batch_stream(batch, reservation, staged)?;
                 Ok(spawn_buffered(input, 1))
             })
             .collect::<Result<_>>()?;
@@ -781,6 +847,7 @@ impl ExternalSorter {
         &self,
         batch: RecordBatch,
         reservation: MemoryReservation,
+        staged: bool,
     ) -> Result<SendableRecordBatchStream> {
         assert_eq!(
             get_reserved_bytes_for_record_batch(&batch)?,
@@ -790,13 +857,22 @@ impl ExternalSorter {
         let schema = batch.schema();
         let expressions = self.expr.clone();
         let batch_size = self.batch_size;
+        let stages = if staged {
+            self.sort_stages.clone()
+        } else {
+            None
+        };
         let merge_pool = Arc::clone(&self.merge_pool);
 
         let stream = futures::stream::once(async move {
             let schema = batch.schema();
 
             // Sort the batch immediately and get all output batches
-            let sorted_batches = sort_batch_chunked(&batch, &expressions, batch_size)?;
+            let sorted_batches = if let Some(stages) = stages {
+                staged_sort_batch_chunked(&batch, &expressions, batch_size, &stages)?
+            } else {
+                sort_batch_chunked(&batch, &expressions, batch_size)?
+            };
 
             // Chunked output can retain shared buffers in every batch and
             // exceed the input estimate. Borrow only already-reserved spill
@@ -954,6 +1030,144 @@ impl Debug for ExternalSorter {
             .field("spilled_rows", &self.spilled_rows())
             .field("spill_count", &self.spill_count())
             .finish()
+    }
+}
+
+struct SortStage {
+    columns: Vec<usize>,
+    expressions: Vec<PhysicalSortExpr>,
+}
+
+fn staged_sort_batch_chunked(
+    batch: &RecordBatch,
+    expressions: &LexOrdering,
+    batch_size: usize,
+    stages: &[SortStage],
+) -> Result<Vec<RecordBatch>> {
+    let indices = staged_sort_indices(batch, stages)?;
+    IncrementalSortIterator::new(batch.clone(), expressions.clone(), batch_size)
+        .with_sorted_indices(indices)
+        .collect()
+}
+
+/// Compute a complete permutation by evaluating successive key groups only for ties.
+fn staged_sort_indices(batch: &RecordBatch, stages: &[SortStage]) -> Result<UInt32Array> {
+    let mut indices = Vec::new();
+    // Ranges address positions in `indices`, whose values address the input batch.
+    let mut unresolved: Vec<_> = std::iter::once(0..batch.num_rows()).collect();
+    for (index, stage) in stages.iter().enumerate() {
+        if unresolved.is_empty() {
+            break;
+        }
+        unresolved = refine_tied_groups(
+            batch,
+            stage,
+            &mut indices,
+            &unresolved,
+            index == 0,
+            index + 1 < stages.len(),
+        )?;
+    }
+
+    Ok(UInt32Array::from(indices))
+}
+
+/// Evaluate keys once for all unresolved rows, then sort each tied group independently.
+fn refine_tied_groups(
+    batch: &RecordBatch,
+    stage: &SortStage,
+    indices: &mut Vec<u32>,
+    unresolved: &[Range<usize>],
+    first_stage: bool,
+    find_ties: bool,
+) -> Result<Vec<Range<usize>>> {
+    let selected = if first_stage {
+        batch.clone()
+    } else {
+        let mut selection = Vec::with_capacity(unresolved.iter().map(Range::len).sum());
+        for range in unresolved {
+            selection.extend_from_slice(&indices[range.clone()]);
+        }
+        arrow::compute::take_record_batch(
+            &batch.project(&stage.columns)?,
+            &UInt32Array::from(selection),
+        )?
+    };
+    let sort_columns = stage
+        .expressions
+        .iter()
+        .map(|expr| expr.evaluate_to_sort_column(&selected))
+        .collect::<Result<Vec<_>>>()?;
+
+    // Key arrays are already evaluated above. This comparator finds ties that
+    // need the next stage.
+    let comparator = find_ties
+        .then(|| LexicographicalComparator::try_new(&sort_columns))
+        .transpose()?;
+
+    let mut next_unresolved = Vec::new();
+    if first_stage {
+        let order = lexsort_to_indices(&sort_columns, None)?;
+        if let Some(comparator) = &comparator {
+            append_tied_ranges(comparator, &order, 0, 0, &mut next_unresolved);
+        }
+        let (_, values, _) = order.into_parts();
+        *indices = values.into();
+        return Ok(next_unresolved);
+    }
+
+    let mut selected_offset = 0;
+    for range in unresolved {
+        let columns = sort_columns
+            .iter()
+            .map(|column| SortColumn {
+                values: column.values.slice(selected_offset, range.len()),
+                options: column.options,
+            })
+            .collect::<Vec<_>>();
+        let local_order = lexsort_to_indices(&columns, None)?;
+        let previous = indices[range.clone()].to_vec();
+        for (output, local) in indices[range.clone()].iter_mut().zip(local_order.values())
+        {
+            *output = previous[*local as usize];
+        }
+        if let Some(comparator) = &comparator {
+            append_tied_ranges(
+                comparator,
+                &local_order,
+                selected_offset,
+                range.start,
+                &mut next_unresolved,
+            );
+        }
+        selected_offset += range.len();
+    }
+    Ok(next_unresolved)
+}
+
+/// Find consecutive equal keys in a sorted group; only these rows need later keys.
+/// For sorted keys `[a, a, b]` at output offset 5, append the range `5..7`.
+fn append_tied_ranges(
+    comparator: &LexicographicalComparator,
+    order: &UInt32Array,
+    selected_offset: usize,
+    output_offset: usize,
+    ties: &mut Vec<Range<usize>>,
+) {
+    let mut start = 0;
+    while start < order.len() {
+        let first = selected_offset + order.value(start) as usize;
+        let mut end = start + 1;
+        while end < order.len()
+            && comparator.compare(first, selected_offset + order.value(end) as usize)
+                == CmpOrdering::Equal
+        {
+            end += 1;
+        }
+        if end - start > 1 {
+            ties.push((output_offset + start)..(output_offset + end));
+        }
+        start = end;
     }
 }
 
@@ -1517,6 +1731,10 @@ impl ExecutionPlan for SortExec {
                     context.session_config().spill_compression(),
                     &self.metrics_set,
                     context.runtime_env(),
+                )?
+                .with_staged_sort(
+                    execution_options.enable_staged_sort,
+                    execution_options.sort_key_group_size,
                 )?;
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
@@ -3608,6 +3826,273 @@ mod tests {
         }
 
         Ok((sorted_batches, metrics))
+    }
+
+    // Exercise SortExec directly so the planner cannot project the sort expressions
+    // into columns before they reach the sorter. Each key is a separate stage.
+    async fn staged_sort_test_output(
+        batch: &RecordBatch,
+        ordering: &LexOrdering,
+        enabled: bool,
+        input_batches: usize,
+        in_place_threshold: usize,
+    ) -> Result<Vec<RecordBatch>> {
+        let rows_per_batch = batch.num_rows() / input_batches;
+        let batches = (0..input_batches)
+            .map(|i| batch.slice(i * rows_per_batch, rows_per_batch))
+            .collect();
+        let input = TestMemoryExec::try_new_exec(&[batches], batch.schema(), None)?;
+        let sort = Arc::new(SortExec::new(ordering.clone(), input));
+        let config = SessionConfig::new()
+            .with_batch_size(2)
+            .with_sort_in_place_threshold_bytes(in_place_threshold)
+            .set_bool("datafusion.execution.enable_staged_sort", enabled)
+            .set_usize("datafusion.execution.sort_key_group_size", 1);
+        let result = collect(
+            Arc::clone(&sort) as Arc<dyn ExecutionPlan>,
+            Arc::new(TaskContext::default().with_session_config(config)),
+        )
+        .await;
+        assert_eq!(sort.metrics().unwrap().spill_count().unwrap_or(0), 0);
+        if let Ok(batches) = &result {
+            assert_eq!(
+                batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+                batch.num_rows()
+            );
+            assert!(batches.iter().all(|b| (1..=2).contains(&b.num_rows())));
+        }
+        result
+    }
+
+    #[tokio::test]
+    async fn test_staged_sort_matches_eager() -> Result<()> {
+        use datafusion_physical_expr::expressions::CastExpr;
+
+        // Keep payload columns between the keys to exercise projected column remapping.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("suffix", DataType::Utf8, true),
+            Field::new("payload", DataType::Utf8, false),
+            Field::new("prefix", DataType::Int32, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from_iter_values(0..10)),
+                Arc::new(StringArray::from(vec![
+                    Some("3"),
+                    Some("2"),
+                    Some("5"),
+                    None,
+                    Some("3"),
+                    Some("10"),
+                    None,
+                    Some("2"),
+                    Some("0"),
+                    Some("10"),
+                ])),
+                Arc::new(StringArray::from_iter_values(
+                    (0..10).map(|i| format!("payload-{i}")),
+                )),
+                Arc::new(Int32Array::from(vec![
+                    Some(2),
+                    Some(1),
+                    None,
+                    Some(1),
+                    Some(2),
+                    Some(1),
+                    None,
+                    Some(1),
+                    Some(3),
+                    Some(1),
+                ])),
+            ],
+        )?;
+        let ordering = [
+            PhysicalSortExpr::new(
+                col("prefix", &schema)?,
+                SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                },
+            ),
+            PhysicalSortExpr::new(
+                Arc::new(CastExpr::new(
+                    col("suffix", &schema)?,
+                    DataType::Int32,
+                    None,
+                )),
+                SortOptions {
+                    descending: true,
+                    nulls_first: true,
+                },
+            ),
+            PhysicalSortExpr::new_default(col("id", &schema)?),
+        ]
+        .into();
+        // Prefix ties survive the numeric suffix stage and must be ordered by id.
+        let expected = arrow::compute::take_record_batch(
+            &batch,
+            &UInt32Array::from(vec![3, 5, 9, 1, 7, 0, 4, 8, 6, 2]),
+        )?;
+
+        // Single batch, concatenated batches, and separate runs followed by a merge.
+        for (input_batches, threshold) in [(1, 1), (2, usize::MAX), (2, 1)] {
+            for enabled in [false, true] {
+                let output = staged_sort_test_output(
+                    &batch,
+                    &ordering,
+                    enabled,
+                    input_batches,
+                    threshold,
+                )
+                .await?;
+                assert_eq!(
+                    concat_batches(&schema, &output)?,
+                    expected,
+                    "enabled={enabled}, input_batches={input_batches}, threshold={threshold}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_staged_sort_expression_errors() -> Result<()> {
+        use datafusion_physical_expr::expressions::CastExpr;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("prefix", DataType::Int32, false),
+            Field::new("invalid", DataType::Utf8, false),
+        ]));
+        let ordering = [
+            PhysicalSortExpr::new_default(col("prefix", &schema)?),
+            PhysicalSortExpr::new_default(Arc::new(CastExpr::new(
+                col("invalid", &schema)?,
+                DataType::Int32,
+                None,
+            ))),
+        ]
+        .into();
+        for all_tied in [false, true] {
+            let prefix = if all_tied {
+                vec![1; 6]
+            } else {
+                vec![3, 1, 6, 2, 5, 4]
+            };
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(prefix)),
+                    Arc::new(StringArray::from(vec!["invalid"; 6])),
+                ],
+            )?;
+            for (input_batches, threshold) in [(1, 1), (2, usize::MAX), (2, 1)] {
+                for enabled in [false, true] {
+                    let result = staged_sort_test_output(
+                        &batch,
+                        &ordering,
+                        enabled,
+                        input_batches,
+                        threshold,
+                    )
+                    .await;
+                    // A merge evaluates all keys again, even if each run skipped the cast.
+                    let merge = input_batches == 2 && threshold == 1;
+                    if !enabled || all_tied || merge {
+                        let error = result.unwrap_err().strip_backtrace();
+                        assert!(
+                            error.contains("Cannot cast string 'invalid'"),
+                            "{error}"
+                        );
+                    } else {
+                        let output = concat_batches(&schema, &result?)?;
+                        assert_eq!(
+                            output.column(0).as_ref(),
+                            &Int32Array::from_iter_values(1..=6),
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_staged_sort_volatile_evaluation() -> Result<()> {
+        use datafusion_expr::{Volatility, create_udf};
+        use datafusion_physical_expr::ScalarFunctionExpr;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("prefix", DataType::Int32, false),
+            Field::new("id", DataType::Int32, false),
+        ]));
+        // Count rows, not calls: expression evaluation is batched. The middle
+        // case has four tied rows, with two in each of the split input batches.
+        for (prefix, tied_rows) in [
+            (vec![3, 1, 6, 2, 5, 4], 0),
+            (vec![2, 1, 1, 3, 4, 4], 4),
+            (vec![1; 6], 6),
+        ] {
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(prefix)),
+                    Arc::new(Int32Array::from_iter_values(0..6)),
+                ],
+            )?;
+            for (input_batches, threshold) in [(1, 1), (2, usize::MAX), (2, 1)] {
+                for enabled in [false, true] {
+                    let rows_evaluated = Arc::new(AtomicUsize::new(0));
+                    let counter = Arc::clone(&rows_evaluated);
+                    let function = create_udf(
+                        "count_evaluations",
+                        vec![DataType::Int32],
+                        DataType::Int32,
+                        Volatility::Volatile,
+                        Arc::new(move |args| {
+                            counter.fetch_add(
+                                args[0].clone().into_array(1)?.len(),
+                                AtomicOrdering::Relaxed,
+                            );
+                            Ok(args[0].clone())
+                        }),
+                    );
+                    let ordering = [
+                        PhysicalSortExpr::new_default(col("prefix", &schema)?),
+                        PhysicalSortExpr::new_default(Arc::new(
+                            ScalarFunctionExpr::try_new(
+                                Arc::new(function),
+                                vec![col("id", &schema)?],
+                                &schema,
+                                Arc::new(ConfigOptions::default()),
+                            )?,
+                        )),
+                    ]
+                    .into();
+                    staged_sort_test_output(
+                        &batch,
+                        &ordering,
+                        enabled,
+                        input_batches,
+                        threshold,
+                    )
+                    .await?;
+                    let merge_rows = if input_batches == 2 && threshold == 1 {
+                        6
+                    } else {
+                        0
+                    };
+                    let sort_rows = if enabled { tied_rows } else { 6 };
+                    assert_eq!(
+                        rows_evaluated.load(AtomicOrdering::Relaxed),
+                        sort_rows + merge_rows,
+                        "enabled={enabled}, tied_rows={tied_rows}, input_batches={input_batches}, threshold={threshold}"
+                    );
+                }
+            }
+        }
+        Ok(())
     }
 
     #[tokio::test]
