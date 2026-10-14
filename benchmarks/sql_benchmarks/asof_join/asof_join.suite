@@ -29,3 +29,7 @@ description = "Run the selective left-filter ASOF join query."
 [[examples]]
 command = "cargo run --release --bin benchmark_runner -- asof_join --query 9"
 description = "Run the equality-key filter ASOF join query."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- asof_join --query 10"
+description = "Run the compound equality-key filter ASOF join query."

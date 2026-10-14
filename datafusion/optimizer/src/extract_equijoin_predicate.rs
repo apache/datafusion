@@ -49,10 +49,6 @@ impl ExtractEquijoinPredicate {
 }
 
 impl OptimizerRule for ExtractEquijoinPredicate {
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     fn name(&self) -> &str {
         "extract_equijoin_predicate"
     }
@@ -77,6 +73,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                 schema,
                 null_equality,
                 null_aware,
+                null_aware_value_keys,
             }) => {
                 let left_schema = left.schema();
                 let right_schema = right.schema();
@@ -119,6 +116,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                             // safe to override it
                             null_equality: NullEquality::NullEqualsNull,
                             null_aware,
+                            null_aware_value_keys,
                         })));
                     }
                 }
@@ -135,6 +133,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                         schema,
                         null_equality,
                         null_aware,
+                        null_aware_value_keys,
                     })))
                 } else {
                     Ok(Transformed::no(LogicalPlan::Join(Join {
@@ -147,6 +146,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                         schema,
                         null_equality,
                         null_aware,
+                        null_aware_value_keys,
                     })))
                 }
             }

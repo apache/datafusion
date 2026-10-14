@@ -100,6 +100,21 @@ use futures::{
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use tonic::async_trait;
 
+use datafusion::common::{
+    DFSchemaRef, DataFusionError, Result, Statistics, internal_err, not_impl_err,
+    plan_datafusion_err, plan_err, tree_node::TreeNodeRecursion,
+};
+use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
+use datafusion::logical_expr::{
+    UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
+    logical_plan::{Extension, LogicalPlan, LogicalPlanBuilder},
+    planner::{
+        PlannedRelation, RelationPlanner, RelationPlannerContext, RelationPlanning,
+    },
+};
+use datafusion::sql::sqlparser::ast::{
+    self, TableFactor, TableSampleMethod, TableSampleUnit,
+};
 use datafusion::{
     catalog::Session,
     execution::{
@@ -118,21 +133,6 @@ use datafusion::{
 use datafusion::{
     optimizer::simplify_expressions::simplify_literal::parse_literal,
     physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions},
-};
-use datafusion_common::{
-    DFSchemaRef, DataFusionError, Result, Statistics, internal_err, not_impl_err,
-    plan_datafusion_err, plan_err, tree_node::TreeNodeRecursion,
-};
-use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
-use datafusion_expr::{
-    UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
-    logical_plan::{Extension, LogicalPlan, LogicalPlanBuilder},
-    planner::{
-        PlannedRelation, RelationPlanner, RelationPlannerContext, RelationPlanning,
-    },
-};
-use datafusion_sql::sqlparser::ast::{
-    self, TableFactor, TableSampleMethod, TableSampleUnit,
 };
 use insta::assert_snapshot;
 

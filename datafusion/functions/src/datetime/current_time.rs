@@ -116,7 +116,7 @@ impl ScalarUDFImpl for CurrentTimeFunc {
             .execution
             .time_zone
             .as_ref()
-            .and_then(|tz| tz.parse::<Tz>().ok())
+            .and_then(|tz| tz.as_str().parse::<Tz>().ok())
             .map_or_else(
                 || datetime_to_time_nanos(&now_ts),
                 |tz| {
@@ -158,7 +158,7 @@ mod tests {
         config.execution.time_zone = if tz.is_empty() {
             None
         } else {
-            Some(tz.to_string())
+            Some(tz.parse().unwrap())
         };
         let schema = Arc::new(DFSchema::empty());
         SimplifyContext::builder()
