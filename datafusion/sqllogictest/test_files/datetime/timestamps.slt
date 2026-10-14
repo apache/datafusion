@@ -3490,6 +3490,129 @@ SELECT value FROM ts_data_nanos
 WHERE date_trunc('month', ts) = arrow_cast('2024-05-15T00:00:00', 'Timestamp(Nanosecond, None)');
 ----
 
+# Boundary check: the rewritten half-open interval must include the
+# bucket start and the last instant of the bucket, and exclude the first
+# instant of the next bucket.
+statement ok
+create table ts_bounds as select arrow_cast(column1, 'Timestamp(Nanosecond, None)') as ts
+from (values
+  ('2024-04-30T23:59:59.999999999'),
+  ('2024-05-01T00:00:00'),
+  ('2024-05-31T23:59:59.999999999'),
+  ('2024-06-01T00:00:00')
+);
+
+query P rowsort
+SELECT ts FROM ts_bounds
+WHERE date_trunc('month', ts) = arrow_cast('2024-05-01T00:00:00', 'Timestamp(Nanosecond, None)');
+----
+2024-05-01T00:00:00
+2024-05-31T23:59:59.999999999
+
+query P rowsort
+SELECT ts FROM ts_bounds
+WHERE date_trunc('month', ts) != arrow_cast('2024-05-01T00:00:00', 'Timestamp(Nanosecond, None)');
+----
+2024-04-30T23:59:59.999999999
+2024-06-01T00:00:00
+
+query P rowsort
+SELECT ts FROM ts_bounds
+WHERE date_trunc('month', ts) > arrow_cast('2024-05-01T00:00:00', 'Timestamp(Nanosecond, None)');
+----
+2024-06-01T00:00:00
+
+query P rowsort
+SELECT ts FROM ts_bounds
+WHERE date_trunc('month', ts) <= arrow_cast('2024-05-01T00:00:00', 'Timestamp(Nanosecond, None)');
+----
+2024-04-30T23:59:59.999999999
+2024-05-01T00:00:00
+2024-05-31T23:59:59.999999999
+
+query P rowsort
+SELECT ts FROM ts_bounds
+WHERE date_trunc('month', ts) IN (
+  arrow_cast('2024-04-01T00:00:00', 'Timestamp(Nanosecond, None)'),
+  arrow_cast('2024-06-01T00:00:00', 'Timestamp(Nanosecond, None)')
+);
+----
+2024-04-30T23:59:59.999999999
+2024-06-01T00:00:00
+
+statement ok
+drop table ts_bounds;
+
+# Test timezone whose DST shift is not a whole hour.
+# Australia/Lord_Howe springs forward by 30 minutes at 2024-10-06 02:00
+# local (+10:30 -> +11:00)
+#
+# So for example date_trunc('2024-10-05T15:30:00Z') truncates in local time,
+# so the bucket that starts at 15:30Z (02:30+11:00,
+# right after the gap) is only 30 minutes wide: 16:00Z is local 03:00 and
+# belongs to the next bucket. A fixed one-hour step would be wrong here.
+statement ok
+create table ts_lord_howe as select arrow_cast(column1, 'Timestamp(Nanosecond, Some("Australia/Lord_Howe"))') as ts
+from (values
+  ('2024-10-05T15:00:00Z'),
+  ('2024-10-05T15:30:00Z'),
+  ('2024-10-05T15:45:00Z'),
+  ('2024-10-05T16:00:00Z'),
+  ('2024-10-05T16:15:00Z')
+);
+
+# Demonstrate what date_trunc produces
+query PP
+SELECT ts, date_trunc('hour', ts) FROM ts_lord_howe ORDER BY ts;
+----
+2024-10-06T01:30:00+10:30 2024-10-06T01:00:00+10:30
+2024-10-06T02:30:00+11:00 2024-10-06T02:30:00+11:00
+2024-10-06T02:45:00+11:00 2024-10-06T02:30:00+11:00
+2024-10-06T03:00:00+11:00 2024-10-06T03:00:00+11:00
+2024-10-06T03:15:00+11:00 2024-10-06T03:00:00+11:00
+
+# Equality on the 30 minute bucket: only the two rows inside it match.
+query P rowsort
+SELECT ts FROM ts_lord_howe
+WHERE date_trunc('hour', ts) = arrow_cast('2024-10-05T15:30:00Z', 'Timestamp(Nanosecond, Some("Australia/Lord_Howe"))');
+----
+2024-10-06T02:30:00+11:00
+2024-10-06T02:45:00+11:00
+
+# Greater-than: the next bucket starts at 16:00Z, not 16:30Z.
+query P rowsort
+SELECT ts FROM ts_lord_howe
+WHERE date_trunc('hour', ts) > arrow_cast('2024-10-05T15:30:00Z', 'Timestamp(Nanosecond, Some("Australia/Lord_Howe"))');
+----
+2024-10-06T03:00:00+11:00
+2024-10-06T03:15:00+11:00
+
+statement ok
+drop table ts_lord_howe;
+
+# Time column: the last bucket of the day. The exclusive upper bound is
+# 24:00:00, which is outside the range of valid Time values.
+statement ok
+create table t32 as select arrow_cast(column1, 'Time32(Second)') as t
+from (values ('22:59:59'), ('23:00:00'), ('23:59:59'));
+
+query D rowsort
+SELECT t FROM t32
+WHERE date_trunc('hour', t) = arrow_cast('23:00:00', 'Time32(Second)');
+----
+23:00:00
+23:59:59
+
+query D rowsort
+SELECT t FROM t32
+WHERE date_trunc('hour', t) > arrow_cast('22:00:00', 'Time32(Second)');
+----
+23:00:00
+23:59:59
+
+statement ok
+drop table t32;
+
 ##########
 ## Test binary temporal coercion for Date and Timestamp
 ##########
