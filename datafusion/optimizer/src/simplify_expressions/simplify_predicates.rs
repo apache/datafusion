@@ -29,10 +29,17 @@
 
 use super::utils::{is_false, is_null};
 use datafusion_common::utils::normalize_float_zero_scalar;
-use datafusion_common::{Column, Result, ScalarValue, internal_err};
+use datafusion_common::{Column, DataFusionError, Result, ScalarValue, internal_err};
+use datafusion_expr::utils::{
+    conjunction, disjunction, split_binary_owned, split_conjunction_owned,
+};
 use datafusion_expr::{BinaryExpr, Expr, Operator, lit};
+use indexmap::IndexSet;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
+
+const MAX_DISJUNCTION_WORK: usize = 4096;
+const MAX_DISJUNCTION_DEPTH: usize = 32;
 
 /// Simplifies a list of predicates by removing redundancies.
 ///
@@ -41,6 +48,9 @@ use std::collections::BTreeMap;
 /// are analyzed to remove redundant conditions. For instance, `x > 5 AND x > 6` is simplified to
 /// `x > 6`. Predicates that contradict each other, such as `x > 6 AND x < 5`, reduce the whole
 /// conjunction to `false`. Other predicates that do not fit this pattern are retained as-is.
+/// Comparisons in an enclosing conjunction also constrain each branch of an `OR`:
+/// `x >= 10 AND (x < 3 OR x < 7)` cannot be true. This simplification preserves
+/// which rows pass a filter, rather than Boolean values in projection expressions.
 ///
 /// # Arguments
 /// * `predicates` - A vector of `Expr` representing the predicates to simplify.
@@ -48,6 +58,117 @@ use std::collections::BTreeMap;
 /// # Returns
 /// A `Result` containing a vector of simplified `Expr` predicates.
 pub fn simplify_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
+    let mut remaining = MAX_DISJUNCTION_WORK;
+    simplify_with_context(predicates, &[], 0, &mut remaining)
+}
+
+/// Only descend through positive AND/OR expressions. In particular, replacing a
+/// nullable, unsatisfiable predicate with false below NOT would change its truth set.
+/// Keep assumptions outside the expressions they simplify, and never distribute
+/// conjunctions over disjunctions. The budget bounds repeated comparison work.
+fn simplify_with_context(
+    predicates: Vec<Expr>,
+    assumptions: &[Expr],
+    depth: usize,
+    remaining: &mut usize,
+) -> Result<Vec<Expr>> {
+    let predicates = simplify_conjunction(predicates)?;
+    if predicates.iter().any(is_false) {
+        return Ok(always_false());
+    }
+    let has_disjunction = predicates.iter().any(|expr| {
+        matches!(
+            expr,
+            Expr::BinaryExpr(BinaryExpr {
+                op: Operator::Or,
+                ..
+            })
+        )
+    });
+    if assumptions.is_empty() && !has_disjunction {
+        return Ok(predicates);
+    }
+    let cost = assumptions.len().saturating_add(predicates.len());
+    if depth >= MAX_DISJUNCTION_DEPTH || cost > *remaining {
+        return Ok(predicates);
+    }
+    *remaining -= cost;
+
+    let context = assumptions
+        .iter()
+        .chain(predicates.iter().filter(|expr| is_column_comparison(expr)))
+        .cloned()
+        .collect();
+    let context = simplify_conjunction(context)?;
+    if context.iter().any(is_false) {
+        return Ok(always_false());
+    }
+
+    let mut result = Vec::with_capacity(predicates.len());
+    for predicate in predicates {
+        let predicate = simplify_disjunction(predicate, &context, depth, remaining)?;
+        if is_false(&predicate) {
+            return Ok(always_false());
+        }
+        result.push(predicate);
+    }
+    Ok(result)
+}
+
+fn simplify_disjunction(
+    predicate: Expr,
+    assumptions: &[Expr],
+    depth: usize,
+    remaining: &mut usize,
+) -> Result<Expr> {
+    if !matches!(
+        predicate,
+        Expr::BinaryExpr(BinaryExpr {
+            op: Operator::Or,
+            ..
+        })
+    ) {
+        return Ok(predicate);
+    }
+    let mut simplify_branch = |branch| {
+        let original = split_conjunction_owned(branch);
+        let predicates =
+            simplify_with_context(original.clone(), assumptions, depth + 1, remaining)?;
+        // Grouping comparisons by column can merely permute an AND branch.
+        // Preserve its evaluation order when no predicates were simplified.
+        let predicates = if original.len() == predicates.len()
+            && original != predicates
+            && original.iter().collect::<IndexSet<_>>()
+                == predicates.iter().collect::<IndexSet<_>>()
+        {
+            original
+        } else {
+            predicates
+        };
+        Ok::<_, DataFusionError>(conjunction(predicates).unwrap_or_else(|| lit(true)))
+    };
+    // Flatten OR chains so the depth limit counts AND/OR nesting, not disjuncts.
+    let mut branches = Vec::new();
+    for branch in split_binary_owned(predicate, Operator::Or) {
+        let branch = simplify_branch(branch)?;
+        if !is_false(&branch) {
+            branches.push(branch);
+        }
+    }
+    Ok(disjunction(branches).unwrap_or_else(|| lit(false)))
+}
+
+fn is_column_comparison(expr: &Expr) -> bool {
+    matches!(expr,
+        Expr::BinaryExpr(BinaryExpr { left, op, right })
+            if matches!(op, Operator::Eq | Operator::NotEq | Operator::Lt
+                | Operator::LtEq | Operator::Gt | Operator::GtEq)
+            && ((matches!(left.as_ref(), Expr::Column(_)) && right.as_literal().is_some())
+                || (matches!(right.as_ref(), Expr::Column(_)) && left.as_literal().is_some()))
+    )
+}
+
+fn simplify_conjunction(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
     // Early return for simple cases
     if predicates.len() <= 1 {
         return Ok(predicates);
@@ -391,6 +512,33 @@ mod tests {
     use super::*;
     use arrow::datatypes::DataType;
     use datafusion_expr::{cast, col, lit};
+
+    #[test]
+    fn test_context_budget_exhaustion_is_conservative() -> Result<()> {
+        let bound = col("x").gt_eq(lit(10));
+        let disjunction = col("x").lt(lit(3)).or(col("x").lt(lit(7)));
+        let predicates = vec![bound.clone(), disjunction.clone()];
+        let result = simplify_with_context(predicates.clone(), &[], 0, &mut 0)?;
+        assert_eq!(result.len(), 2);
+        assert!(result.contains(&bound));
+        assert!(result.contains(&disjunction));
+        assert_eq!(simplify_predicates(predicates)?, vec![lit(false)]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_context_depth_limit_is_conservative() -> Result<()> {
+        let disjunction = col("x").lt(lit(3)).or(col("x").lt(lit(7)));
+        let mut remaining = MAX_DISJUNCTION_WORK;
+        let result = simplify_with_context(
+            vec![disjunction.clone()],
+            &[col("x").gt_eq(lit(10))],
+            MAX_DISJUNCTION_DEPTH,
+            &mut remaining,
+        )?;
+        assert_eq!(result, vec![disjunction]);
+        Ok(())
+    }
 
     #[test]
     fn test_simplify_predicates_with_cast() {

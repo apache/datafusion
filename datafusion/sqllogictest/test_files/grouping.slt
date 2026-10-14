@@ -445,3 +445,38 @@ query TT
 SELECT MIN(p), MAX(p) FROM (SELECT p FROM hive_partitioned_empty GROUP BY p)
 ----
 NULL NULL
+
+# Grouping-set keys keep their names when type coercion rewrites a member.
+# `date_bin('5 minutes', ts)` has its Utf8 stride literal coerced to an interval,
+# which renames the member expression.
+statement ok
+CREATE TABLE grouping_coerced (ts TIMESTAMP, k VARCHAR, calls BIGINT) AS VALUES
+  ('1970-01-01T00:00:00'::timestamp, 'a', 1),
+  ('1970-01-01T00:01:00'::timestamp, 'b', 2),
+  ('1970-01-01T00:05:00'::timestamp, 'a', 4);
+
+query PII
+SELECT date_bin('5 minutes', ts) AS bucket, grouping(date_bin('5 minutes', ts)), SUM(calls)
+FROM grouping_coerced GROUP BY ROLLUP(bucket) ORDER BY bucket NULLS FIRST
+----
+NULL 1 7
+1970-01-01T00:00:00 0 3
+1970-01-01T00:05:00 0 4
+
+# A qualified column next to the coerced member, with the coerced member repeated
+# across sets
+query TPI
+SELECT grouping_coerced.k, date_bin('5 minutes', grouping_coerced.ts) AS bucket, SUM(calls)
+FROM grouping_coerced
+GROUP BY GROUPING SETS ((grouping_coerced.k, bucket), (bucket), ())
+ORDER BY grouping_coerced.k NULLS FIRST, bucket NULLS FIRST
+----
+NULL NULL 7
+NULL 1970-01-01T00:00:00 3
+NULL 1970-01-01T00:05:00 4
+a 1970-01-01T00:00:00 1
+a 1970-01-01T00:05:00 4
+b 1970-01-01T00:00:00 2
+
+statement ok
+DROP TABLE grouping_coerced;
