@@ -1114,9 +1114,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<Vec<SelectExpr>> {
         let mut prepared_select_exprs = Vec::with_capacity(projection.len());
         let mut error_builder = DataFusionErrorBuilder::new();
+        let using_columns = plan.using_columns()?;
 
         for expr in projection {
-            match self.sql_select_to_rex(expr, plan, empty_from, planner_context) {
+            match self.sql_select_to_rex(
+                expr,
+                plan,
+                &using_columns,
+                empty_from,
+                planner_context,
+            ) {
                 Ok(expr) => prepared_select_exprs.push(expr),
                 Err(err) => error_builder.add_error(err),
             }
@@ -1129,6 +1136,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         &self,
         sql: SelectItem,
         plan: &LogicalPlan,
+        using_columns: &[HashSet<Column>],
         empty_from: bool,
         planner_context: &mut PlannerContext,
     ) -> Result<SelectExpr> {
@@ -1138,7 +1146,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let col = normalize_col_with_schemas_and_ambiguity_check(
                     expr,
                     &[&[plan.schema()]],
-                    &plan.using_columns()?,
+                    using_columns,
                 )?;
 
                 Ok(SelectExpr::Expression(col))
@@ -1149,7 +1157,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let col = normalize_col_with_schemas_and_ambiguity_check(
                     select_expr,
                     &[&[plan.schema()]],
-                    &plan.using_columns()?,
+                    using_columns,
                 )?;
                 let name = self.ident_normalizer.normalize(alias);
                 // avoiding adding an alias if the column name is the same.
@@ -1241,6 +1249,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             rename: options.opt_rename,
         };
         if let Some(replace) = options.opt_replace {
+            let using_columns = plan.using_columns()?;
             let replace_expr = replace
                 .items
                 .iter()
@@ -1248,6 +1257,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     self.sql_select_to_rex(
                         SelectItem::UnnamedExpr(item.expr.clone()),
                         plan,
+                        &using_columns,
                         empty_from,
                         planner_context,
                     )
