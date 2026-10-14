@@ -2519,6 +2519,119 @@ mod tests {
     use insta::assert_snapshot;
     use tokio::sync::Notify;
 
+    #[tokio::test]
+    async fn sort_run_records_compute_before_consumption() -> Result<()> {
+        let batch = RecordBatch::try_from_iter([(
+            "a",
+            Arc::new(Int32Array::from_iter_values((0..4096).rev())) as ArrayRef,
+        )])?;
+        let sorter = ExternalSorter::new(
+            0,
+            batch.schema(),
+            [PhysicalSortExpr::new_default(col("a", &batch.schema())?)].into(),
+            1024,
+            0,
+            0,
+            SpillCompression::Uncompressed,
+            &ExecutionPlanMetricsSet::new(),
+            Arc::new(RuntimeEnv::default()),
+        )?;
+        let elapsed_compute = sorter.metrics.baseline.elapsed_compute();
+        for spawned in [false, true] {
+            let reservation = sorter.reservation.new_empty();
+            reservation.try_grow(get_reserved_bytes_for_record_batch(&batch)?)?;
+            let before = elapsed_compute.value();
+            let sort = sorter.sort_run(batch.clone(), reservation, None)?;
+            assert_eq!(elapsed_compute.value(), before);
+
+            let stream = if spawned {
+                ExternalSorter::prepare_sort_run(sort, Arc::new(Semaphore::new(1)))
+                    .await?
+            } else {
+                sort.await?
+            };
+            assert!(elapsed_compute.value() > before);
+            drop(stream);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sort_preparation_holds_permit_and_releases_on_drop() {
+        let permits = Arc::new(Semaphore::new(1));
+        let held = permits.acquire().await.unwrap();
+        let started = Arc::new(Notify::new());
+        let sort = {
+            let started = Arc::clone(&started);
+            async move {
+                started.notify_one();
+                futures::future::pending::<Result<SendableRecordBatchStream>>().await
+            }
+        };
+        let mut preparation =
+            ExternalSorter::prepare_sort_run(sort, Arc::clone(&permits)).boxed();
+        assert_is_pending(&mut preparation);
+        assert_eq!(Handle::current().metrics().num_alive_tasks(), 0);
+        drop(held);
+        assert_is_pending(&mut preparation);
+        started.notified().await;
+        assert_eq!(permits.available_permits(), 0);
+        drop(preparation);
+        let _permit =
+            tokio::time::timeout(std::time::Duration::from_secs(10), permits.acquire())
+                .await
+                .expect("cancelled preparation must release its permit")
+                .unwrap();
+    }
+
+    #[tokio::test]
+    async fn sort_preparation_propagates_errors_and_releases_permit() {
+        let permits = Arc::new(Semaphore::new(1));
+        let sort = async { Err(internal_datafusion_err!("sort failed")) };
+        let error = ExternalSorter::prepare_sort_run(sort, Arc::clone(&permits))
+            .await
+            .err()
+            .expect("preparation must propagate the sort error");
+        assert!(error.to_string().contains("sort failed"), "{error}");
+        assert_eq!(permits.available_permits(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn sort_execution_initializes_and_resets_concurrency() -> Result<()> {
+        let batch = RecordBatch::try_from_iter([(
+            "a",
+            Arc::new(Int32Array::from(vec![2, 1])) as ArrayRef,
+        )])?;
+        let input = TestMemoryExec::try_new_exec(
+            &[vec![batch.clone(); 2], vec![batch.clone(); 2]],
+            batch.schema(),
+            None,
+        )?;
+        let sort = SortExec::new(
+            [PhysicalSortExpr::new_default(col("a", &batch.schema())?)].into(),
+            input,
+        )
+        .with_preserve_partitioning(true);
+        let context = Arc::new(TaskContext::default().with_session_config(
+            SessionConfig::new().with_sort_in_place_threshold_bytes(0),
+        ));
+
+        // Execution must initialize the cell owned by the plan, not a private sorter cell.
+        collect(Arc::new(sort.clone()), Arc::clone(&context)).await?;
+        assert!(sort.sort_concurrency.get().is_some());
+        let reset = Arc::new(sort.clone()).reset_state()?;
+        assert!(
+            reset
+                .downcast_ref::<SortExec>()
+                .unwrap()
+                .sort_concurrency
+                .get()
+                .is_none()
+        );
+
+        Ok(())
+    }
+
     struct PendingWriteTempFileFactory {
         write_started: Arc<Notify>,
         aborted: Arc<Notify>,
