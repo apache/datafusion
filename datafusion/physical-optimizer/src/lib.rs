@@ -25,6 +25,7 @@
 #![deny(clippy::clone_on_ref_ptr)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
+pub mod adaptive_hash_join;
 pub mod aggregate_statistics;
 pub mod combine_partial_final_agg;
 pub mod ensure_coop;

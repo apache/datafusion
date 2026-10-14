@@ -17,6 +17,7 @@
 
 //! [`HashJoinExec`] Partitioned Hash Join Operator
 
+pub use adaptive::AdaptiveHashJoinExec;
 pub use exec::{HashJoinExec, HashJoinExecBuilder, PreparedHashJoinBuild};
 /// # Public Only for Internal Use:
 ///
@@ -27,6 +28,7 @@ pub use exec::{HashJoinExec, HashJoinExecBuilder, PreparedHashJoinBuild};
 pub use partitioned_hash_eval::HashTableLookupExpr;
 pub use partitioned_hash_eval::{HashExpr, SeededRandomState};
 
+mod adaptive;
 mod exec;
 mod inlist_builder;
 mod partitioned_hash_eval;

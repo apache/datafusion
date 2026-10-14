@@ -22,7 +22,6 @@ use super::{
     TPCH_QUERY_END_ID, TPCH_QUERY_START_ID, TPCH_TABLES, get_query_sql_for_scale_factor,
     get_tbl_tpch_table_schema, get_tpch_table_schema, table_constraints,
 };
-use crate::util::adaptive::{AdaptiveOptions, make_adaptive};
 use crate::util::{BenchmarkRun, CommonOpt, QueryResult, print_memory_stats};
 
 use arrow::record_batch::RecordBatch;
@@ -117,25 +116,10 @@ pub struct RunOpt {
     #[arg(long, default_value = "0")]
     hash_join_buffering_capacity: usize,
 
-    /// Choose the mode of each partitioned hash join at runtime, from the exact
-    /// size of its build side (adaptive query execution).
+    /// Let partitioned hash joins pick their mode at runtime, from the exact
+    /// size of their build side (`datafusion.optimizer.enable_adaptive_hash_join`)
     #[arg(long)]
     adaptive: bool,
-
-    /// With `--adaptive`, collect the build side of a hash join into a single
-    /// hash table when it has at most this many rows.
-    #[arg(long, default_value = "4194304")]
-    adaptive_broadcast_rows: usize,
-
-    /// With `--adaptive`, the same for joins that track matched build-side
-    /// rows (left, left semi/anti/mark and full joins).
-    #[arg(long, default_value = "131072")]
-    adaptive_broadcast_rows_tracking: usize,
-
-    /// With `--adaptive`, also require the build side to have at most this
-    /// fraction of the estimated probe-side rows to collect it (0 disables).
-    #[arg(long, default_value = "0.05")]
-    adaptive_broadcast_probe_ratio: f64,
 }
 
 impl RunOpt {
@@ -156,6 +140,9 @@ impl RunOpt {
             self.enable_piecewise_merge_join;
         config.options_mut().execution.hash_join_buffering_capacity =
             self.hash_join_buffering_capacity;
+        if self.adaptive {
+            config.options_mut().optimizer.enable_adaptive_hash_join = true;
+        }
         let rt = self.common.build_runtime()?;
         let ctx = SessionContext::new_with_config_rt(config, rt);
         benchmark_run.set_memory_pool(&ctx.runtime_env().memory_pool);
@@ -275,16 +262,7 @@ impl RunOpt {
         if debug {
             println!("=== Optimized logical plan ===\n{plan}\n");
         }
-        let mut physical_plan = state.create_physical_plan(&plan).await?;
-        if self.adaptive {
-            let options = AdaptiveOptions {
-                broadcast_max_rows: self.adaptive_broadcast_rows,
-                broadcast_max_rows_tracking: self.adaptive_broadcast_rows_tracking,
-                broadcast_max_probe_ratio: self.adaptive_broadcast_probe_ratio,
-                ..Default::default()
-            };
-            physical_plan = make_adaptive(physical_plan, &options)?;
-        }
+        let physical_plan = state.create_physical_plan(&plan).await?;
         if debug {
             println!(
                 "=== Physical plan ===\n{}\n",
@@ -520,9 +498,6 @@ mod tests {
             sorted: false,
             hash_join_buffering_capacity: 0,
             adaptive: false,
-            adaptive_broadcast_rows: 0,
-            adaptive_broadcast_rows_tracking: 0,
-            adaptive_broadcast_probe_ratio: 0.0,
         };
         opt.register_tables(&ctx).await?;
         let queries = crate::tpch::get_query_sql(query)?;
@@ -565,9 +540,6 @@ mod tests {
             sorted: false,
             hash_join_buffering_capacity: 0,
             adaptive: false,
-            adaptive_broadcast_rows: 0,
-            adaptive_broadcast_rows_tracking: 0,
-            adaptive_broadcast_probe_ratio: 0.0,
         };
         opt.register_tables(&ctx).await?;
         let queries = crate::tpch::get_query_sql(query)?;
