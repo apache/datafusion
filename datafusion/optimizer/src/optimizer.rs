@@ -93,12 +93,6 @@ pub trait OptimizerRule: Debug {
         None
     }
 
-    /// Does this rule support rewriting owned plans (rather than by reference)?
-    #[deprecated(since = "47.0.0", note = "This method is no longer used")]
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     /// Try to rewrite `plan` to an optimized form, returning [`Transformed::yes`]
     /// if the plan was rewritten and [`Transformed::no`] if it was not.
     ///
@@ -251,7 +245,10 @@ impl OptimizerConfig for OptimizerContext {
     }
 }
 
-/// A rule-based optimizer.
+/// A rule-based logical optimizer.
+///
+/// Applies rules in order for up to `datafusion.optimizer.max_passes` passes,
+/// stopping early if the plan repeats.
 #[derive(Clone, Debug)]
 pub struct Optimizer {
     /// All optimizer rules to apply
@@ -466,9 +463,7 @@ fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
                         Ok(plan)
                     })
                     .collect::<Result<Vec<_>>>()?;
-                if changed {
-                    *node = node.with_exprs_and_inputs(exprs, new_inputs)?;
-                }
+                *node = node.with_exprs_and_inputs(exprs, new_inputs)?;
                 changed
             }
         }
@@ -480,10 +475,12 @@ fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
         | LogicalPlan::Ddl(DdlStatement::CreateExternalTable(_))
         | LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(_))
         | LogicalPlan::Ddl(DdlStatement::CreateCatalog(_))
+        | LogicalPlan::Ddl(DdlStatement::CreateExternalCatalog(_))
         | LogicalPlan::Ddl(DdlStatement::CreateIndex(_))
         | LogicalPlan::Ddl(DdlStatement::DropTable(_))
         | LogicalPlan::Ddl(DdlStatement::DropView(_))
         | LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(_))
+        | LogicalPlan::Ddl(DdlStatement::DropCatalog(_))
         | LogicalPlan::Ddl(DdlStatement::CreateFunction(_))
         | LogicalPlan::Ddl(DdlStatement::DropFunction(_))
         | LogicalPlan::Statement(_) => false,
@@ -992,10 +989,6 @@ mod tests {
             "bad rule"
         }
 
-        fn supports_rewrite(&self) -> bool {
-            true
-        }
-
         fn rewrite(
             &self,
             _plan: LogicalPlan,
@@ -1012,10 +1005,6 @@ mod tests {
     impl OptimizerRule for GetTableScanRule {
         fn name(&self) -> &str {
             "get table_scan rule"
-        }
-
-        fn supports_rewrite(&self) -> bool {
-            true
         }
 
         fn rewrite(
@@ -1040,10 +1029,6 @@ mod tests {
 
         fn apply_order(&self) -> Option<ApplyOrder> {
             Some(ApplyOrder::TopDown)
-        }
-
-        fn supports_rewrite(&self) -> bool {
-            true
         }
 
         fn rewrite(
@@ -1087,10 +1072,6 @@ mod tests {
 
         fn apply_order(&self) -> Option<ApplyOrder> {
             Some(ApplyOrder::TopDown)
-        }
-
-        fn supports_rewrite(&self) -> bool {
-            true
         }
 
         fn rewrite(

@@ -34,9 +34,11 @@ use arrow::array::{
     StringArray, StringBuilder, StringViewArray,
 };
 use arrow::datatypes::{DataType, Field};
+use datafusion_common::arrow::datatypes::FieldRef;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 
 use crate::function::error_utils::{
@@ -73,6 +75,17 @@ impl ScalarUDFImpl for SparkConcatWs {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Utf8)
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        // Spark skips null values after the separator, so only the separator controls nullability:
+        // https://github.com/apache/spark/blob/32f7299601108917fb01920a54e084595b7b3bf8/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/stringExpressions.scala#L94-L96
+        let separator = &args.arg_fields[0];
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::Utf8,
+            separator.is_nullable(),
+        )))
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {

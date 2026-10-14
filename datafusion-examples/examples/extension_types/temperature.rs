@@ -23,15 +23,15 @@ use arrow::datatypes::{Float32Type, Float64Type};
 use arrow::util::display::{ArrayFormatter, DisplayIndex, FormatOptions, FormatResult};
 use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef};
+use datafusion::common::internal_err;
+use datafusion::common::types::DFExtensionType;
 use datafusion::dataframe::DataFrame;
 use datafusion::error::Result;
 use datafusion::execution::SessionStateBuilder;
-use datafusion::prelude::SessionContext;
-use datafusion_common::internal_err;
-use datafusion_common::types::DFExtensionType;
-use datafusion_expr::registry::{
+use datafusion::logical_expr::registry::{
     ExtensionTypeRegistration, ExtensionTypeRegistry, MemoryExtensionTypeRegistry,
 };
+use datafusion::prelude::SessionContext;
 use std::collections::HashMap;
 use std::fmt::{Display, Write};
 use std::sync::Arc;

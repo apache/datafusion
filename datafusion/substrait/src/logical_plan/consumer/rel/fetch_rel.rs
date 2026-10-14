@@ -22,6 +22,10 @@ use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder, lit};
 use substrait::proto::{FetchRel, fetch_rel};
 
 #[async_recursion]
+#[expect(
+    clippy::double_must_use,
+    reason = "`async_recursion` adds `#[must_use]` to the boxed future it returns"
+)]
 pub async fn from_fetch_rel(
     consumer: &impl SubstraitConsumer,
     fetch: &FetchRel,

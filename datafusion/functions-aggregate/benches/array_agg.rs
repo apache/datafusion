@@ -19,21 +19,25 @@ use std::hint::black_box;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, ArrowPrimitiveType, AsArray, ListArray, NullBufferBuilder,
-    StringArray,
+    Array, ArrayRef, ArrowPrimitiveType, AsArray, Int64Array, ListArray,
+    NullBufferBuilder, StringArray,
 };
-use arrow::datatypes::{DataType, Field, Int64Type};
-use criterion::{Criterion, criterion_group, criterion_main};
-use datafusion_expr::Accumulator;
+use arrow::datatypes::{DataType, Field, FieldRef, Int64Type, Schema};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
+use datafusion_expr::function::AccumulatorArgs;
+use datafusion_expr::{Accumulator, AggregateUDFImpl};
 use datafusion_functions_aggregate::array_agg::{
-    ArrayAggAccumulator, DistinctArrayAggAccumulator,
+    ArrayAgg, ArrayAggAccumulator, DistinctArrayAggAccumulator,
 };
+use datafusion_physical_expr::{PhysicalSortExpr, expressions::col};
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 use arrow::buffer::OffsetBuffer;
 use arrow::util::bench_util::create_primitive_array;
 use rand::Rng;
 use rand::SeedableRng;
 use rand::prelude::StdRng;
+use rand::seq::SliceRandom;
 
 /// Returns fixed seedable RNG
 pub fn seedable_rng() -> StdRng {
@@ -223,29 +227,40 @@ const DB_NAMES: &[&str] = &[
 
 /// Low-cardinality: every row is drawn uniformly from `DB_NAMES` (~25 distinct
 /// values across 8 192 rows). Exercises the hot duplicate path.
-fn create_string_array_low_cardinality(size: usize) -> StringArray {
+/// `null_density` is the fraction of rows that are null instead.
+fn create_string_array_low_cardinality(size: usize, null_density: f32) -> StringArray {
     let mut rng = StdRng::seed_from_u64(42);
-    StringArray::from_iter_values(
-        (0..size).map(|_| DB_NAMES[rng.random_range(0..DB_NAMES.len())]),
-    )
+    StringArray::from_iter((0..size).map(|_| {
+        if null_density > 0.0 && rng.random::<f32>() < null_density {
+            return None;
+        }
+        Some(DB_NAMES[rng.random_range(0..DB_NAMES.len())])
+    }))
 }
 
 /// High-cardinality: `db_name_pct` fraction of rows are drawn from `DB_NAMES`;
 /// the rest are near-unique random hex strings ("id_XXXXXXXX").
 /// With 8 192 rows and a 32-bit space the collision probability among the
 /// random strings is < 1 %, giving ~7 800 distinct values in total.
-fn create_string_array_high_cardinality(size: usize, db_name_pct: f32) -> StringArray {
+/// `null_density` is the fraction of rows that are null instead.
+fn create_string_array_high_cardinality(
+    size: usize,
+    db_name_pct: f32,
+    null_density: f32,
+) -> StringArray {
     let mut rng = StdRng::seed_from_u64(42);
-    let strings: Vec<String> = (0..size)
+    let strings: Vec<Option<String>> = (0..size)
         .map(|_| {
-            if rng.random::<f32>() < db_name_pct {
-                DB_NAMES[rng.random_range(0..DB_NAMES.len())].to_string()
+            if null_density > 0.0 && rng.random::<f32>() < null_density {
+                None
+            } else if rng.random::<f32>() < db_name_pct {
+                Some(DB_NAMES[rng.random_range(0..DB_NAMES.len())].to_string())
             } else {
-                format!("id_{:08x}", rng.random::<u32>())
+                Some(format!("id_{:08x}", rng.random::<u32>()))
             }
         })
         .collect();
-    StringArray::from_iter_values(strings.iter().map(String::as_str))
+    StringArray::from_iter(strings.iter().map(Option::as_deref))
 }
 
 fn distinct_update_batch_bench(
@@ -268,7 +283,7 @@ fn distinct_array_agg_benchmark(c: &mut Criterion) {
     // --- Low cardinality: ~25 distinct DB names in 8 192 rows ---------------
     // Realistic production scenario: most rows are duplicates, the HashSet
     // saturates quickly and the rest of the batch is pure dedup overhead.
-    let values = Arc::new(create_string_array_low_cardinality(8192)) as ArrayRef;
+    let values = Arc::new(create_string_array_low_cardinality(8192, 0.0)) as ArrayRef;
     distinct_update_batch_bench(
         c,
         "distinct_array_agg utf8 low cardinality (~25 distinct)",
@@ -279,14 +294,258 @@ fn distinct_array_agg_benchmark(c: &mut Criterion) {
     // --- High cardinality: ~5 % DB names, ~95 % near-unique random strings --
     // Worst-case scenario: almost every row is a new distinct value, so the
     // accumulator pays the full insertion cost for nearly every row.
-    let values = Arc::new(create_string_array_high_cardinality(8192, 0.05)) as ArrayRef;
+    let values =
+        Arc::new(create_string_array_high_cardinality(8192, 0.05, 0.0)) as ArrayRef;
     distinct_update_batch_bench(
         c,
         "distinct_array_agg utf8 high cardinality (~7800 distinct, 5% db names)",
         &values,
         false,
     );
+
+    // --- With nulls and IGNORE NULLS: the accumulator drops the null rows
+    // before deduplicating, so these cover that filtering step.
+    let values = Arc::new(create_string_array_low_cardinality(8192, 0.1)) as ArrayRef;
+    distinct_update_batch_bench(
+        c,
+        "distinct_array_agg utf8 low cardinality (~25 distinct), 10% nulls, ignore nulls",
+        &values,
+        true,
+    );
+
+    let values =
+        Arc::new(create_string_array_high_cardinality(8192, 0.05, 0.1)) as ArrayRef;
+    distinct_update_batch_bench(
+        c,
+        "distinct_array_agg utf8 high cardinality (~7800 distinct, 5% db names), 10% nulls, ignore nulls",
+        &values,
+        true,
+    );
 }
 
-criterion_group!(benches, array_agg_benchmark, distinct_array_agg_benchmark);
+/// Precomputes the schema, physical expressions, sort expression, and aggregate
+/// metadata so each benchmark iteration can focus on accumulator operations.
+struct OrderedArrayAggBenchFixture {
+    schema: Schema,
+    value_expr: Arc<dyn PhysicalExpr>,
+    value_field: FieldRef,
+    order_by: PhysicalSortExpr,
+    array_agg: Arc<dyn AggregateUDFImpl>,
+    return_field: FieldRef,
+}
+
+impl OrderedArrayAggBenchFixture {
+    fn new(value_type: &DataType, input_preordered: bool) -> Self {
+        let schema = Schema::new(vec![
+            Field::new("value", value_type.clone(), false),
+            Field::new("ordering", DataType::Int64, false),
+        ]);
+
+        let value_expr = col("value", &schema).unwrap();
+        let ordering_expr = col("ordering", &schema).unwrap();
+
+        let value_field = value_expr.return_field(&schema).unwrap();
+
+        let order_by = PhysicalSortExpr::new(
+            ordering_expr,
+            arrow::compute::SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        );
+
+        let array_agg = Arc::new(ArrayAgg::default())
+            .with_beneficial_ordering(input_preordered)
+            .unwrap()
+            .unwrap();
+
+        let return_field = Field::new(
+            "array_agg",
+            DataType::List(Field::new_list_field(value_type.clone(), true).into()),
+            true,
+        )
+        .into();
+
+        Self {
+            schema,
+            value_expr,
+            value_field,
+            order_by,
+            array_agg,
+            return_field,
+        }
+    }
+    fn create_accumulator(&self) -> Box<dyn Accumulator> {
+        self.array_agg
+            .accumulator(AccumulatorArgs {
+                return_field: Arc::clone(&self.return_field),
+                schema: &self.schema,
+                expr_fields: std::slice::from_ref(&self.value_field),
+                ignore_nulls: false,
+                order_bys: std::slice::from_ref(&self.order_by),
+                is_reversed: false,
+                name: "array_agg(value ORDER BY ordering)",
+                is_distinct: false,
+                exprs: std::slice::from_ref(&self.value_expr),
+            })
+            .unwrap()
+    }
+}
+
+const ORDERED_ARRAY_AGG_ROWS: usize = 2048;
+
+fn create_ordered_array_agg_batches(
+    rows_per_batch: usize,
+    input_preordered: bool,
+) -> Vec<[ArrayRef; 2]> {
+    assert!(
+        rows_per_batch > 0,
+        "rows_per_batch must be greater than zero"
+    );
+
+    let upper_value: i64 = ORDERED_ARRAY_AGG_ROWS.try_into().unwrap();
+    let mut values = (0..upper_value).collect::<Vec<i64>>();
+
+    if !input_preordered {
+        let mut rng = StdRng::seed_from_u64(42);
+        values.shuffle(&mut rng);
+    }
+
+    values
+        .chunks(rows_per_batch)
+        .map(|batch_values| {
+            let values = Arc::new(Int64Array::from(batch_values.to_vec())) as ArrayRef;
+
+            [
+                Arc::clone(&values),
+                values, // Reuse the payload values as ordering keys.
+            ]
+        })
+        .collect()
+}
+
+fn ordered_array_agg_bench(
+    c: &mut Criterion,
+    name: &str,
+    value_type: &DataType,
+    batches: &[[ArrayRef; 2]],
+    input_preordered: bool,
+) {
+    c.bench_function(name, |b| {
+        let fixture = OrderedArrayAggBenchFixture::new(value_type, input_preordered);
+        b.iter(|| {
+            let mut accumulator = fixture.create_accumulator();
+
+            for batch in batches {
+                accumulator
+                    .update_batch(batch)
+                    .expect("update_batch should succeed");
+            }
+
+            let result = accumulator.evaluate().expect("evaluate should succeed");
+
+            black_box(result);
+        })
+    });
+}
+
+fn ordered_array_agg_benchmark(c: &mut Criterion) {
+    for rows_per_batch in [1, 8, 64, ORDERED_ARRAY_AGG_ROWS] {
+        let ordered_batches = create_ordered_array_agg_batches(rows_per_batch, true);
+        ordered_array_agg_bench(
+            c,
+            &format!(
+                "ordered_array_agg i64 ordered input, \
+                   {rows_per_batch} rows per update_batch"
+            ),
+            &DataType::Int64,
+            &ordered_batches,
+            true,
+        );
+        let shuffled_batches = create_ordered_array_agg_batches(rows_per_batch, false);
+        ordered_array_agg_bench(
+            c,
+            &format!(
+                "ordered_array_agg i64 random input, \
+                   {rows_per_batch} rows per update_batch"
+            ),
+            &DataType::Int64,
+            &shuffled_batches,
+            false,
+        );
+    }
+}
+
+/// Creates preordered batches with a 4 KiB Utf8 payload per row.
+fn create_wide_utf8_batches(rows_per_batch: usize) -> Vec<[ArrayRef; 2]> {
+    assert!(
+        rows_per_batch > 0,
+        "rows_per_batch must be greater than zero"
+    );
+
+    let values = vec!["x".repeat(4 * 1_024); ORDERED_ARRAY_AGG_ROWS];
+
+    values
+        .chunks(rows_per_batch)
+        .enumerate()
+        .map(|(idx, batch_values)| {
+            let payload =
+                Arc::new(StringArray::from_iter_values(batch_values.iter())) as ArrayRef;
+            let start = idx * rows_per_batch;
+            let ordering_values = Arc::new(Int64Array::from(
+                (start..start + batch_values.len())
+                    .map(|row| i64::try_from(row).unwrap())
+                    .collect::<Vec<_>>(),
+            )) as ArrayRef;
+
+            [payload, ordering_values]
+        })
+        .collect()
+}
+
+fn ordered_array_agg_update_only_bench(
+    c: &mut Criterion,
+    name: &str,
+    value_type: &DataType,
+    batches: &[[ArrayRef; 2]],
+    input_preordered: bool,
+) {
+    let fixture = OrderedArrayAggBenchFixture::new(value_type, input_preordered);
+
+    c.bench_function(name, |b| {
+        b.iter_batched(
+            || fixture.create_accumulator(),
+            |mut accumulator| {
+                for batch in batches {
+                    accumulator
+                        .update_batch(batch)
+                        .expect("update_batch should succeed");
+                }
+
+                // Return the accumulator so Criterion drops it after timing the updates.
+                accumulator
+            },
+            BatchSize::PerIteration,
+        );
+    });
+}
+
+fn ordered_array_agg_wide_utf8_benchmark(c: &mut Criterion) {
+    let ordered_batches = create_wide_utf8_batches(1);
+    ordered_array_agg_update_only_bench(
+        c,
+        "ordered_array_agg utf8 4 KiB, 1 row per update_batch",
+        &DataType::Utf8,
+        &ordered_batches,
+        true,
+    );
+}
+
+criterion_group!(
+    benches,
+    array_agg_benchmark,
+    distinct_array_agg_benchmark,
+    ordered_array_agg_benchmark,
+    ordered_array_agg_wide_utf8_benchmark
+);
 criterion_main!(benches);

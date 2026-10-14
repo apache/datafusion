@@ -101,6 +101,45 @@ SLT_TIMING_SUMMARY=1 cargo test --test sqllogictests
 SLT_TIMING_DEBUG_SLOW_FILES=1 cargo test --test sqllogictests
 ```
 
+### Memory drift
+
+The runner compares the bytes reserved in `MemoryPool`s with the bytes actually
+allocated, to find operators whose memory is not tracked by the pool (see
+[#25650](https://github.com/apache/datafusion/issues/25650)). It is enabled by
+default and prints the largest drift seen at the end of the run. It only logs
+and never fails a test.
+
+Test files run concurrently by default, so the comparison is process-wide:
+allocated bytes across the whole process against reservations summed across all
+files. In this mode, the file in the output can be wrong. To attribute drift to
+one file, run one file at a time:
+
+```shell
+cargo test --test sqllogictests -- --test-threads 1
+```
+
+In both modes, the consumer in the output is the reservation change that took
+the sample, not necessarily the code that allocated the untracked memory. Most
+drift at this scale is memory that `MemoryPool` does not track by design (for
+example, in-flight batches and Parquet read buffers), so a large drift is a lead
+to investigate, not necessarily a bug.
+
+```shell
+# Log each 64 MB rise in drift, with the file and consumer that took the sample
+RUST_LOG=datafusion_execution::memory_pool=info cargo test --test sqllogictests
+```
+
+```shell
+# Log each 4 MB rise instead (also settable via SLT_MEMORY_DRIFT_LOG_THRESHOLD)
+RUST_LOG=datafusion_execution::memory_pool=info cargo test --test sqllogictests -- \
+  --test-threads 1 --memory-drift-log-threshold 4194304
+```
+
+```shell
+# Disable (allocations are still counted, but pools are not wrapped)
+cargo test --test sqllogictests -- --memory-drift false
+```
+
 ## Cookbook: Adding Tests
 
 1. Add queries
@@ -398,7 +437,8 @@ Not all statements will be round-tripped, some statements like CREATE, INSERT, S
 issued as is, but any other statement will be round-tripped to/from Substrait.
 
 _WARNING_: this mode lives behind the `substrait` feature, and the full suite still reports failures. CI therefore
-runs it over a single file, through `cargo xtask ci step test substrait`, which filters to `limit.slt`. Some of the
+runs `limit.slt` through `cargo xtask ci step test substrait` and optimized conditionless-join tests through
+`cargo xtask ci step test substrait-optimized`. Some of the
 failures are collected in https://github.com/apache/datafusion/issues/16248. To run the default suite in this mode:
 
 ```shell
@@ -409,6 +449,14 @@ For focusing on one specific failing test, a file:line filter can be used:
 
 ```shell
 cargo test --test sqllogictests --features substrait -- --substrait-round-trip binary.slt:23
+```
+
+Add `--substrait-optimize` to optimize the logical plan before serialization. This exercises
+producer inputs created by optimizer rewrites, such as conditionless joins from `LEFT JOIN ... ON true`
+and uncorrelated `WHERE EXISTS`:
+
+```shell
+cargo test --test sqllogictests --features substrait -- --substrait-round-trip --substrait-optimize joins_conditionless.slt
 ```
 
 ## `.slt` file format
