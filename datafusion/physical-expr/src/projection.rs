@@ -1294,8 +1294,10 @@ impl ProjectionMapping {
         input_schema: &SchemaRef,
     ) -> Result<Self> {
         // Construct a map from the input expressions to the output expression of the projection:
-        let mut map = IndexMap::<_, ProjectionTargets>::new();
-        for (expr_idx, (expr, name)) in expr.into_iter().enumerate() {
+        let exprs = expr.into_iter();
+        let mut map =
+            IndexMap::<_, ProjectionTargets>::with_capacity(exprs.size_hint().0);
+        for (expr_idx, (expr, name)) in exprs.enumerate() {
             let target_expr = Arc::new(Column::new(&name, expr_idx)) as _;
             let source_expr = expr.transform_down(|e| match e.downcast_ref::<Column>() {
                 Some(col) => {
@@ -1429,7 +1431,7 @@ pub fn project_orderings(
     orderings: &[LexOrdering],
     schema: &SchemaRef,
 ) -> Vec<LexOrdering> {
-    let mut projected_orderings = vec![];
+    let mut projected_orderings = Vec::with_capacity(orderings.len());
 
     for ordering in orderings {
         projected_orderings.extend(project_ordering(ordering, schema));
@@ -1471,7 +1473,7 @@ pub fn project_ordering(
     ordering: &LexOrdering,
     schema: &SchemaRef,
 ) -> Option<LexOrdering> {
-    let mut projected_exprs = vec![];
+    let mut projected_exprs = Vec::with_capacity(ordering.len());
     for PhysicalSortExpr { expr, options } in ordering.iter() {
         let transformed = Arc::clone(expr).transform_up(|expr| {
             let Some(col) = expr.downcast_ref::<Column>() else {
@@ -2489,6 +2491,81 @@ pub(crate) mod tests {
                 assert!(!is_within_extrema(
                     &bounds[0], &bounds[1], &bounds[2], &bounds[3],
                 ));
+            }
+        }
+    }
+
+    #[test]
+    fn test_project_statistics_lossless_cast() {
+        use Precision::{Absent, Exact, Inexact};
+
+        for (lower, upper, targets) in [
+            (
+                ScalarValue::UInt8(Some(0)),
+                ScalarValue::UInt8(Some(u8::MAX)),
+                vec![DataType::Int16, DataType::Int32, DataType::Int64],
+            ),
+            (
+                ScalarValue::UInt16(Some(0)),
+                ScalarValue::UInt16(Some(u16::MAX)),
+                vec![DataType::Int32, DataType::Int64],
+            ),
+            (
+                ScalarValue::UInt32(Some(0)),
+                ScalarValue::UInt32(Some(u32::MAX)),
+                vec![DataType::Int64],
+            ),
+            (
+                ScalarValue::Utf8(Some(String::new())),
+                ScalarValue::Utf8(Some("🦀".to_string())),
+                vec![DataType::Utf8View],
+            ),
+            (
+                ScalarValue::Binary(Some(vec![])),
+                ScalarValue::Binary(Some(vec![0xff])),
+                vec![DataType::LargeBinary, DataType::BinaryView],
+            ),
+        ] {
+            for target in targets {
+                // A globally safe cast does not need two exact extrema. Preserve
+                // whichever bounds are available without upgrading their precision.
+                for (min_value, max_value) in [
+                    (Exact(lower.clone()), Exact(upper.clone())),
+                    (Exact(lower.clone()), Absent),
+                    (Absent, Exact(upper.clone())),
+                    (Inexact(lower.clone()), Inexact(upper.clone())),
+                    (Inexact(lower.clone()), Absent),
+                    (Absent, Inexact(upper.clone())),
+                ] {
+                    let input = ColumnStatistics {
+                        min_value: min_value.clone(),
+                        max_value: max_value.clone(),
+                        null_count: Exact(1),
+                        distinct_count: Inexact(3),
+                        sum_value: Absent,
+                        byte_size: Absent,
+                    };
+                    let expr = CastExpr::new(
+                        Arc::new(Column::new("a", 0)),
+                        target.clone(),
+                        None,
+                    );
+                    let output =
+                        project_column_statistics_through_expr(&expr, &[input], None);
+                    assert_eq!(
+                        output,
+                        ColumnStatistics {
+                            min_value: min_value.cast_to(&target).unwrap(),
+                            max_value: max_value.cast_to(&target).unwrap(),
+                            null_count: Exact(1),
+                            distinct_count: Inexact(3),
+                            sum_value: Absent,
+                            byte_size: Absent,
+                        },
+                        "{} -> {target}, {min_value:?}..{max_value:?}",
+                        lower.data_type()
+                    );
+                }
             }
         }
     }

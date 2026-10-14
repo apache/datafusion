@@ -29,7 +29,7 @@
 //!   [`RowGroupPruner`] is consulted; row groups it proves unwinnable are
 //!   dropped from the head of `rg_plan` and the decoder is rebuilt via
 //!   [`ParquetPushDecoder::into_builder`] +
-//!   [`ParquetPushDecoderBuilder::with_row_groups`] so the skipped RGs are
+//!   [`ParquetPushDecoderBuilder::with_row_group_selections`] so the skipped RGs are
 //!   bypassed entirely — no decode, no row-filter eval.
 //!
 //! The opener constructs both halves and hands the state off to
@@ -50,7 +50,9 @@ use parquet::arrow::arrow_reader::{
     ArrowReaderMetadata, ParquetRecordBatchReader, RowFilter, RowSelectionPolicy,
 };
 use parquet::arrow::async_reader::AsyncFileReader;
-use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
+use parquet::arrow::push_decoder::{
+    ParquetPushDecoder, ParquetPushDecoderBuilder, RowGroupSelection,
+};
 use parquet::file::metadata::ParquetMetaData;
 
 use datafusion_common::{DataFusionError, Result, internal_err};
@@ -60,7 +62,6 @@ use datafusion_physical_plan::metrics::{BaselineMetrics, Count, Gauge};
 use datafusion_pruning::{PruningPredicate, PruningPredicateBuilder};
 
 use crate::ParquetFileMetrics;
-use crate::access_plan::PreparedAccessPlan;
 use crate::decoder_projection::DecoderProjection;
 use crate::metrics::{ByteProgress, RowFilterSkippedFullyMatchedMetric};
 use crate::row_filter::{
@@ -83,14 +84,14 @@ pub(crate) struct DecoderBuilderConfig<'a> {
 }
 
 impl DecoderBuilderConfig<'_> {
-    /// Build a [`ParquetPushDecoderBuilder`] from a prepared access plan.
+    /// Build a [`ParquetPushDecoderBuilder`] from row-group-local selections.
     ///
     /// The caller is expected to attach the
     /// [`RowFilter`] and predicate
     /// cache size on the returned builder.
     pub(crate) fn build(
         &self,
-        prepared_access_plan: PreparedAccessPlan,
+        row_group_selections: Vec<RowGroupSelection>,
         metadata: ArrowReaderMetadata,
     ) -> ParquetPushDecoderBuilder {
         let mut builder = ParquetPushDecoderBuilder::new_with_metadata(metadata)
@@ -100,10 +101,7 @@ impl DecoderBuilderConfig<'_> {
         if self.force_filter_selections {
             builder = builder.with_row_selection_policy(RowSelectionPolicy::Selectors);
         }
-        if let Some(row_selection) = prepared_access_plan.row_selection {
-            builder = builder.with_row_selection(row_selection);
-        }
-        builder = builder.with_row_groups(prepared_access_plan.row_group_indexes);
+        builder = builder.with_row_group_selections(row_group_selections);
         if let Some(limit) = self.decoder_limit {
             builder = builder.with_limit(limit);
         }
@@ -301,7 +299,7 @@ pub(crate) struct PushDecoderStreamState {
     /// statistics and drop RGs the current threshold proves cannot
     /// contribute. The decoder is rebuilt via
     /// [`ParquetPushDecoder::into_builder`] +
-    /// [`ParquetPushDecoderBuilder::with_row_groups`] so the skipped RGs are
+    /// [`ParquetPushDecoderBuilder::with_row_group_selections`] so the skipped RGs are
     /// bypassed entirely. `None` when the scan has no watching dynamic
     /// predicate or only one row group remains.
     pub(crate) row_group_pruner: Option<RowGroupPruner>,
@@ -565,6 +563,9 @@ impl PushDecoderStreamState {
     /// removed every page — which would otherwise leave `rg_plan` trailing the
     /// decoder by one: a later prune/rebuild would then re-include an
     /// already-delivered row group (#24352) or toggle the filter for the wrong RG.
+    /// Row-group-local selections keep selections and match status aligned when
+    /// preparing or reordering the plan, but do not prevent this decoder-side
+    /// advancement, so frontier synchronization is still required.
     fn sync_rg_plan_to_decoder_frontier(&mut self) -> Result<()> {
         match self
             .decoder
@@ -669,9 +670,18 @@ impl PushDecoderStreamState {
         }
 
         let decoder = self.decoder.take().expect("decoder present");
-        let new_indices: Vec<usize> = self.rg_plan.iter().map(|e| e.rg_index).collect();
         let mut builder = decoder.into_builder().map_err(DataFusionError::from)?;
-        builder = builder.with_row_groups(new_indices);
+        // Filter-only rebuilds preserve the decoder's remaining selections.
+        // Runtime pruning is disabled for scans with selections, so pruned
+        // plans can be rebuilt from row-group indexes alone.
+        if pruned_count > 0 {
+            let selections = self
+                .rg_plan
+                .iter()
+                .map(|e| RowGroupSelection::new(e.rg_index, None))
+                .collect();
+            builder = builder.with_row_group_selections(selections);
+        }
         if filter_needs_toggle {
             let want_filter = desired_filter.expect("filter_needs_toggle ⇒ desired Some");
             if want_filter {

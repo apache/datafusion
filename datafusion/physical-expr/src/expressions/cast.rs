@@ -24,6 +24,7 @@ use crate::physical_expr::PhysicalExpr;
 use arrow::compute::{CastOptions, can_cast_types};
 use arrow::datatypes::{DataType, DataType::*, Field, FieldRef, Metadata, Schema};
 use arrow::record_batch::RecordBatch;
+use arrow::util::display::{ArrayFormatterFactory, DurationFormat, FormatOptions};
 use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
@@ -44,6 +45,94 @@ const DEFAULT_SAFE_CAST_OPTIONS: CastOptions<'static> = CastOptions {
     safe: true,
     format_options: DEFAULT_FORMAT_OPTIONS,
 };
+
+/// Owns Arrow's borrowed format strings so protobuf decoding does not leak them.
+#[derive(Debug, Clone)]
+struct OwnedCastOptions {
+    safe: bool,
+    format_safe: bool,
+    null: String,
+    date_format: Option<String>,
+    datetime_format: Option<String>,
+    timestamp_format: Option<String>,
+    timestamp_tz_format: Option<String>,
+    time_format: Option<String>,
+    duration_format: DurationFormat,
+    types_info: bool,
+    quoted_strings: bool,
+    formatter_factory: Option<&'static dyn ArrayFormatterFactory>,
+}
+
+impl From<CastOptions<'static>> for OwnedCastOptions {
+    fn from(options: CastOptions<'static>) -> Self {
+        let CastOptions {
+            safe,
+            format_options,
+        } = options;
+        Self {
+            safe,
+            format_safe: format_options.safe(),
+            null: format_options.null().to_owned(),
+            date_format: format_options.date_format().map(str::to_owned),
+            datetime_format: format_options.datetime_format().map(str::to_owned),
+            timestamp_format: format_options.timestamp_format().map(str::to_owned),
+            timestamp_tz_format: format_options.timestamp_tz_format().map(str::to_owned),
+            time_format: format_options.time_format().map(str::to_owned),
+            duration_format: format_options.duration_format(),
+            types_info: format_options.types_info(),
+            quoted_strings: format_options.quoted_strings(),
+            formatter_factory: format_options.formatter_factory(),
+        }
+    }
+}
+
+impl OwnedCastOptions {
+    fn as_arrow(&self) -> CastOptions<'_> {
+        let Self {
+            safe,
+            format_safe,
+            null,
+            date_format,
+            datetime_format,
+            timestamp_format,
+            timestamp_tz_format,
+            time_format,
+            duration_format,
+            types_info,
+            quoted_strings,
+            formatter_factory,
+        } = self;
+        CastOptions {
+            safe: *safe,
+            format_options: FormatOptions::new()
+                .with_display_error(*format_safe)
+                .with_null(null)
+                .with_date_format(date_format.as_deref())
+                .with_datetime_format(datetime_format.as_deref())
+                .with_timestamp_format(timestamp_format.as_deref())
+                .with_timestamp_tz_format(timestamp_tz_format.as_deref())
+                .with_time_format(time_format.as_deref())
+                .with_duration_format(*duration_format)
+                .with_types_info(*types_info)
+                .with_quoted_strings(*quoted_strings)
+                .with_formatter_factory(*formatter_factory),
+        }
+    }
+}
+
+impl PartialEq for OwnedCastOptions {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_arrow() == other.as_arrow()
+    }
+}
+
+impl Eq for OwnedCastOptions {}
+
+impl Hash for OwnedCastOptions {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.as_arrow().hash(state);
+    }
+}
 
 /// Check if name-based struct casting is allowed by validating field compatibility.
 ///
@@ -73,7 +162,7 @@ pub struct CastExpr {
     /// nullability describe the output field exactly.
     explicit_target: bool,
     /// Cast options
-    cast_options: CastOptions<'static>,
+    cast_options: OwnedCastOptions,
 }
 
 // Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808
@@ -126,7 +215,7 @@ impl CastExpr {
             expr,
             target_field: cast_type.into_nullable_field_ref(),
             explicit_target: false,
-            cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS),
+            cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS).into(),
         }
     }
 
@@ -152,7 +241,7 @@ impl CastExpr {
             expr,
             target_field,
             explicit_target: true,
-            cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS),
+            cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS).into(),
         }
     }
 
@@ -194,9 +283,23 @@ impl CastExpr {
         &self.target_field
     }
 
-    /// The cast options
-    pub fn cast_options(&self) -> &CastOptions<'static> {
-        &self.cast_options
+    /// The cast options, borrowing custom format strings from this expression.
+    pub fn cast_options(&self) -> CastOptions<'_> {
+        self.cast_options.as_arrow()
+    }
+
+    /// Rebuild this cast with a new child and explicit target while preserving its options.
+    pub fn with_new_expr_and_target_field(
+        &self,
+        expr: Arc<dyn PhysicalExpr>,
+        target_field: FieldRef,
+    ) -> Self {
+        Self {
+            expr,
+            target_field,
+            explicit_target: true,
+            cast_options: self.cast_options.clone(),
+        }
     }
 
     /// Whether this cast has explicit metadata (vs pass-through from source).
@@ -250,7 +353,7 @@ impl CastExpr {
 
     /// Check if casting from the source type to the target type is known to be
     /// lossless and strictly order-preserving for all source values, preserving nulls.
-    /// This includes widening casts (e.g. `Int8` to `Int16`) and representation
+    /// This includes widening casts (e.g. `Int8` or `UInt8` to `Int16`) and representation
     /// conversions such as `Int32` to `Date32`, which interprets the same integer
     /// as days since the epoch, or `Int64` to `Date64`, which interprets the same
     /// integer as milliseconds since the epoch.
@@ -267,12 +370,13 @@ impl CastExpr {
                 | (Date32, Int32)
                 | (Int64, Date64)
                 | (Date64, Int64)
-                | (UInt8, UInt16 | UInt32 | UInt64)
-                | (UInt16, UInt32 | UInt64)
-                | (UInt32, UInt64)
+                | (UInt8, UInt16 | UInt32 | UInt64 | Int16 | Int32 | Int64)
+                | (UInt16, UInt32 | UInt64 | Int32 | Int64)
+                | (UInt32, UInt64 | Int64)
                 | (Int8 | Int16 | UInt8 | UInt16, Float32)
                 | (Int8 | Int16 | Int32 | UInt8 | UInt16 | UInt32, Float64)
-                | (Utf8, LargeUtf8)
+                | (Utf8, LargeUtf8 | Utf8View)
+                | (Binary, LargeBinary | BinaryView)
         )
     }
 
@@ -351,6 +455,114 @@ pub(crate) fn cast_expr_properties(
     }
 }
 
+#[cfg(feature = "proto")]
+fn serialize_cast_options(
+    options: &OwnedCastOptions,
+) -> Result<Option<datafusion_proto_models::protobuf::PhysicalCastOptions>> {
+    use datafusion_proto_models::protobuf;
+
+    let options = options.as_arrow();
+    if options.format_options.formatter_factory().is_some() {
+        return not_impl_err!(
+            "CastExpr serialization does not support a custom formatter_factory"
+        );
+    }
+    if options == DEFAULT_CAST_OPTIONS {
+        return Ok(None);
+    }
+
+    let CastOptions {
+        safe,
+        format_options,
+    } = options;
+    let duration_format = match format_options.duration_format() {
+        DurationFormat::ISO8601 => protobuf::PhysicalDurationFormat::Iso8601,
+        DurationFormat::Pretty => protobuf::PhysicalDurationFormat::Pretty,
+        _ => {
+            return not_impl_err!(
+                "CastExpr serialization does not support this duration format"
+            );
+        }
+    };
+
+    Ok(Some(protobuf::PhysicalCastOptions {
+        safe,
+        format_options: Some(protobuf::PhysicalFormatOptions {
+            safe: format_options.safe(),
+            null: format_options.null().to_owned(),
+            date_format: format_options.date_format().map(str::to_owned),
+            datetime_format: format_options.datetime_format().map(str::to_owned),
+            timestamp_format: format_options.timestamp_format().map(str::to_owned),
+            timestamp_tz_format: format_options.timestamp_tz_format().map(str::to_owned),
+            time_format: format_options.time_format().map(str::to_owned),
+            duration_format: duration_format.into(),
+            types_info: format_options.types_info(),
+            quoted_strings: format_options.quoted_strings(),
+        }),
+    }))
+}
+
+#[cfg(feature = "proto")]
+fn deserialize_cast_options(
+    options: Option<&datafusion_proto_models::protobuf::PhysicalCastOptions>,
+) -> Result<OwnedCastOptions> {
+    use datafusion_common::internal_datafusion_err;
+    use datafusion_proto_models::protobuf;
+
+    let Some(options) = options else {
+        return Ok(DEFAULT_CAST_OPTIONS.into());
+    };
+    let protobuf::PhysicalCastOptions {
+        safe,
+        format_options,
+    } = options;
+    let format_options = format_options.as_ref().ok_or_else(|| {
+        internal_datafusion_err!(
+            "CastExpr cast_options is missing required field 'format_options'"
+        )
+    })?;
+    let protobuf::PhysicalFormatOptions {
+        safe: format_safe,
+        null,
+        date_format,
+        datetime_format,
+        timestamp_format,
+        timestamp_tz_format,
+        time_format,
+        duration_format,
+        types_info,
+        quoted_strings,
+    } = format_options;
+    let duration_format = match protobuf::PhysicalDurationFormat::try_from(
+        *duration_format,
+    )
+    .map_err(|_| {
+        internal_datafusion_err!(
+            "CastExpr has invalid duration format value {duration_format}"
+        )
+    })? {
+        protobuf::PhysicalDurationFormat::Iso8601 => DurationFormat::ISO8601,
+        protobuf::PhysicalDurationFormat::Pretty => DurationFormat::Pretty,
+    };
+
+    Ok(OwnedCastOptions {
+        safe: *safe,
+        format_safe: *format_safe,
+        null: null.clone(),
+        date_format: date_format.clone(),
+        datetime_format: datetime_format.clone(),
+        timestamp_format: timestamp_format.clone(),
+        timestamp_tz_format: timestamp_tz_format.clone(),
+        time_format: time_format.clone(),
+        duration_format,
+        types_info: *types_info,
+        quoted_strings: *quoted_strings,
+        // Runtime formatter factories have no protobuf representation; the
+        // encoder rejects them rather than silently dropping behavior.
+        formatter_factory: None,
+    })
+}
+
 impl fmt::Display for CastExpr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "CAST({} AS {})", self.expr, self.cast_type())
@@ -375,8 +587,9 @@ impl PhysicalExpr for CastExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let value = self.expr.evaluate(batch)?;
+        let cast_options = self.cast_options();
         value
-            .cast_to(self.cast_type(), Some(&self.cast_options))
+            .cast_to(self.cast_type(), Some(&cast_options))
             .map_err(|error| {
                 let source = self
                     .expr
@@ -415,7 +628,7 @@ impl PhysicalExpr for CastExpr {
 
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
         // Cast current node's interval to the right type:
-        children[0].cast_to(self.cast_type(), &self.cast_options)
+        children[0].cast_to(self.cast_type(), &self.cast_options())
     }
 
     fn propagate_constraints(
@@ -453,12 +666,28 @@ impl PhysicalExpr for CastExpr {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
         use datafusion_proto_models::protobuf;
 
+        let Self {
+            expr,
+            target_field,
+            explicit_target,
+            cast_options,
+        } = self;
+        // Presence carries `explicit_target`, even for a default-shaped field.
+        let target_field_proto = if *explicit_target {
+            Some(target_field.as_ref().try_into()?)
+        } else {
+            None
+        };
+        let cast_options_proto = serialize_cast_options(cast_options)?;
+
         Ok(Some(protobuf::PhysicalExprNode {
             expr_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::Cast(Box::new(
                 protobuf::PhysicalCastNode {
-                    expr: Some(Box::new(ctx.encode_child(self.expr())?)),
-                    arrow_type: Some(self.cast_type().try_into()?),
+                    expr: Some(Box::new(ctx.encode_child(expr)?)),
+                    arrow_type: Some(target_field.data_type().try_into()?),
+                    target_field: target_field_proto,
+                    cast_options: cast_options_proto,
                 },
             ))),
         }))
@@ -491,27 +720,50 @@ impl CastExpr {
         node: &datafusion_proto_models::protobuf::PhysicalExprNode,
         ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        use datafusion_common::internal_datafusion_err;
         use datafusion_common::internal_err;
+        use datafusion_physical_expr_common::expect_expr_variant;
+        use datafusion_physical_expr_common::physical_expr::proto_decode::require_proto_field;
         use datafusion_proto_models::protobuf;
 
-        let cast_expr = match &node.expr_type {
-            Some(protobuf::physical_expr_node::ExprType::Cast(cast_expr)) => {
-                cast_expr.as_ref()
-            }
-            _ => return internal_err!("PhysicalExprNode is not a CastExpr"),
+        let cast_expr = expect_expr_variant!(
+            node,
+            protobuf::physical_expr_node::ExprType::Cast,
+            "CastExpr",
+        );
+        let protobuf::PhysicalCastNode {
+            expr,
+            arrow_type,
+            target_field,
+            cast_options,
+        } = &**cast_expr;
+        let expr = ctx.decode_required_expression(expr.as_deref(), "CastExpr", "expr")?;
+        let arrow_type =
+            require_proto_field(arrow_type.as_ref(), "CastExpr", "arrow_type")?;
+        let cast_type: DataType = arrow_type.try_into()?;
+        let target_field = target_field
+            .as_ref()
+            .map(|field| {
+                let field: Field = field.try_into()?;
+                if field.data_type() != &cast_type {
+                    return internal_err!(
+                        "CastExpr target_field type does not match arrow_type"
+                    );
+                }
+                Ok(Arc::new(field))
+            })
+            .transpose()?;
+        let cast_options = deserialize_cast_options(cast_options.as_ref())?;
+        let (target_field, explicit_target) = match target_field {
+            Some(target_field) => (target_field, true),
+            None => (cast_type.into_nullable_field_ref(), false),
         };
 
-        let expr = ctx.decode_required_expression(
-            cast_expr.expr.as_deref(),
-            "CastExpr",
-            "expr",
-        )?;
-        let arrow_type = cast_expr.arrow_type.as_ref().ok_or_else(|| {
-            internal_datafusion_err!("CastExpr is missing required field 'arrow_type'")
-        })?;
-
-        Ok(Arc::new(CastExpr::new(expr, arrow_type.try_into()?, None)))
+        Ok(Arc::new(CastExpr {
+            expr,
+            target_field,
+            explicit_target,
+            cast_options,
+        }))
     }
 }
 
@@ -1730,6 +1982,176 @@ mod tests {
     }
 
     #[test]
+    fn test_byte_representation_cast_preserves_values_and_ordering() -> Result<()> {
+        use arrow::array::{
+            BinaryArray, BinaryViewArray, LargeBinaryArray, StringViewArray,
+        };
+        use arrow::compute::SortOptions;
+        use datafusion_expr_common::sort_properties::SortProperties;
+
+        // Cover nulls, empty values, inline/long views, Unicode, and non-UTF8 bytes.
+        let strings = vec![
+            None,
+            Some(""),
+            Some("a"),
+            Some("a longer shared string"),
+            Some("a longer shared string"),
+            Some("🦀"),
+        ];
+        let bytes: Vec<Option<&[u8]>> = vec![
+            None,
+            Some(b""),
+            Some(b"\0"),
+            Some(b"a longer shared byte string"),
+            Some(b"a longer shared byte string"),
+            Some(b"\xff"),
+        ];
+        let binary: ArrayRef = Arc::new(BinaryArray::from(bytes.clone()));
+        let cases: [(ArrayRef, ArrayRef); 3] = [
+            (
+                Arc::new(StringArray::from(strings.clone())),
+                Arc::new(StringViewArray::from(strings)),
+            ),
+            (
+                Arc::clone(&binary),
+                Arc::new(LargeBinaryArray::from(bytes.clone())),
+            ),
+            (binary, Arc::new(BinaryViewArray::from(bytes))),
+        ];
+        for (input, expected) in cases {
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "a",
+                input.data_type().clone(),
+                true,
+            )]));
+            let expr =
+                CastExpr::new(col("a", &schema)?, expected.data_type().clone(), None);
+            assert!(expr.is_bigger_cast(input.data_type()));
+            for descending in [false, true] {
+                for nulls_first in [false, true] {
+                    let child = ExprProperties::new_unknown()
+                        .with_range(Interval::make_unbounded(input.data_type())?)
+                        .with_order(SortProperties::Ordered(SortOptions {
+                            descending,
+                            nulls_first,
+                        }))
+                        .with_strictly_order_preserving(true);
+                    let properties = expr.get_properties(std::slice::from_ref(&child))?;
+                    assert_eq!(properties.sort_properties, child.sort_properties);
+                    assert!(properties.strictly_order_preserving);
+                    assert_eq!(properties.range.data_type(), *expected.data_type());
+                }
+            }
+            let batch = RecordBatch::try_new(schema, vec![input])?;
+            let actual = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+            assert_eq!(actual.as_ref(), expected.as_ref());
+        }
+        for (source, target) in [
+            (Utf8View, Utf8),
+            (LargeBinary, Binary),
+            (BinaryView, Binary),
+        ] {
+            assert!(!CastExpr::check_bigger_cast(&target, &source));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_unsigned_to_signed_cast_preserves_values_and_ordering() {
+        use arrow::array::{UInt8Array, UInt16Array, UInt32Array};
+        use arrow::compute::SortOptions;
+        use datafusion_expr_common::sort_properties::SortProperties;
+
+        let inputs: [(ArrayRef, Vec<DataType>, i64); 3] = [
+            (
+                Arc::new(UInt8Array::from(vec![
+                    None,
+                    Some(0),
+                    Some(1),
+                    Some(u8::MAX),
+                ])),
+                vec![Int16, Int32, Int64],
+                i64::from(u8::MAX),
+            ),
+            (
+                Arc::new(UInt16Array::from(vec![
+                    None,
+                    Some(0),
+                    Some(1),
+                    Some(u16::MAX),
+                ])),
+                vec![Int32, Int64],
+                i64::from(u16::MAX),
+            ),
+            (
+                Arc::new(UInt32Array::from(vec![
+                    None,
+                    Some(0),
+                    Some(1),
+                    Some(u32::MAX),
+                ])),
+                vec![Int64],
+                i64::from(u32::MAX),
+            ),
+        ];
+        for (input, target_types, max) in inputs {
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "a",
+                input.data_type().clone(),
+                true,
+            )]));
+            let batch =
+                RecordBatch::try_new(Arc::clone(&schema), vec![Arc::clone(&input)])
+                    .expect("valid input batch");
+            for target_type in target_types {
+                let expr =
+                    CastExpr::new(col("a", &schema).unwrap(), target_type.clone(), None);
+                let actual = expr
+                    .evaluate(&batch)
+                    .unwrap()
+                    .into_array(batch.num_rows())
+                    .unwrap();
+                for (index, value) in
+                    [None, Some(0), Some(1), Some(max)].into_iter().enumerate()
+                {
+                    let expected = match target_type {
+                        Int16 => {
+                            ScalarValue::Int16(value.map(|v| i16::try_from(v).unwrap()))
+                        }
+                        Int32 => {
+                            ScalarValue::Int32(value.map(|v| i32::try_from(v).unwrap()))
+                        }
+                        Int64 => ScalarValue::Int64(value),
+                        _ => unreachable!(),
+                    };
+                    assert_eq!(
+                        ScalarValue::try_from_array(&actual, index).unwrap(),
+                        expected
+                    );
+                }
+                for descending in [false, true] {
+                    for nulls_first in [false, true] {
+                        let child = ExprProperties::new_unknown()
+                            .with_range(
+                                Interval::make_unbounded(input.data_type()).unwrap(),
+                            )
+                            .with_order(SortProperties::Ordered(SortOptions {
+                                descending,
+                                nulls_first,
+                            }))
+                            .with_strictly_order_preserving(true);
+                        let properties =
+                            expr.get_properties(std::slice::from_ref(&child)).unwrap();
+                        assert_eq!(properties.sort_properties, child.sort_properties);
+                        assert!(properties.strictly_order_preserving);
+                        assert_eq!(properties.range.data_type(), target_type);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_temporal_cast_ordering() {
         use TimeUnit::*;
         use arrow::compute::SortOptions;
@@ -1913,10 +2335,15 @@ mod tests {
         assert!(!CastExpr::check_bigger_cast(&Float64, &Int64));
         assert!(!CastExpr::check_bigger_cast(&Float64, &UInt64));
 
-        // Signed <-> Unsigned conversions should return false (not order-preserving due to negative values)
+        // Signed-to-unsigned and unsigned-to-signed casts whose target cannot
+        // represent the entire source range are not lossless for all values.
         assert!(!CastExpr::check_bigger_cast(&UInt16, &Int8));
         assert!(!CastExpr::check_bigger_cast(&UInt32, &Int16));
-        assert!(!CastExpr::check_bigger_cast(&Int16, &UInt8));
+        assert!(!CastExpr::check_bigger_cast(&Int8, &UInt8));
+        assert!(!CastExpr::check_bigger_cast(&Int16, &UInt16));
+        assert!(!CastExpr::check_bigger_cast(&Int32, &UInt32));
+        assert!(!CastExpr::check_bigger_cast(&Int64, &UInt64));
+        assert!(!CastExpr::check_bigger_cast(&Int8, &UInt16));
     }
 }
 
@@ -1937,6 +2364,25 @@ mod proto_tests {
         PhysicalCastNode, PhysicalExprNode, physical_expr_node,
     };
 
+    #[derive(Debug)]
+    struct TestFormatterFactory;
+
+    impl ArrayFormatterFactory for TestFormatterFactory {
+        fn create_array_formatter<'formatter>(
+            &self,
+            _array: &'formatter dyn arrow::array::Array,
+            _options: &FormatOptions<'formatter>,
+            _field: Option<&'formatter Field>,
+        ) -> std::result::Result<
+            Option<arrow::util::display::ArrayFormatter<'formatter>>,
+            arrow::error::ArrowError,
+        > {
+            Ok(None)
+        }
+    }
+
+    static TEST_FORMATTER_FACTORY: TestFormatterFactory = TestFormatterFactory;
+
     /// A `CastExpr` over an `Int32` column, casting to `Int64`.
     fn proto_cast_fixture() -> CastExpr {
         let schema = Schema::new(vec![Field::new("a", Int32, false)]);
@@ -1947,7 +2393,7 @@ mod proto_tests {
         (&Int64).try_into().unwrap()
     }
 
-    /// Build a `CastExpr` proto node with the given child and target type.
+    /// Build a legacy `CastExpr` proto node with the given child and target type.
     fn proto_cast_node(
         expr: Option<Box<PhysicalExprNode>>,
         arrow_type: Option<ArrowType>,
@@ -1955,8 +2401,56 @@ mod proto_tests {
         PhysicalExprNode {
             expr_id: None,
             expr_type: Some(physical_expr_node::ExprType::Cast(Box::new(
-                PhysicalCastNode { expr, arrow_type },
+                PhysicalCastNode {
+                    expr,
+                    arrow_type,
+                    target_field: None,
+                    cast_options: None,
+                },
             ))),
+        }
+    }
+
+    fn encode_cast(cast: &CastExpr) -> PhysicalCastNode {
+        let encoder = StubEncoder::ok();
+        let node = cast
+            .try_to_proto(&PhysicalExprEncodeCtx::new(&encoder))
+            .unwrap()
+            .expect("CastExpr should encode to Some(node)");
+        match node.expr_type {
+            Some(physical_expr_node::ExprType::Cast(cast)) => *cast,
+            other => panic!("expected a Cast node, got {other:?}"),
+        }
+    }
+
+    fn round_trip_cast(cast: &CastExpr, schema: &Schema) -> CastExpr {
+        let encoder = StubEncoder::ok();
+        let node = cast
+            .try_to_proto(&PhysicalExprEncodeCtx::new(&encoder))
+            .unwrap()
+            .expect("CastExpr should encode to Some(node)");
+        let decoder = StubDecoder::ok();
+        CastExpr::try_from_proto(&node, &PhysicalExprDecodeCtx::new(schema, &decoder))
+            .unwrap()
+            .downcast_ref::<CastExpr>()
+            .expect("decoded expr should be a CastExpr")
+            .clone()
+    }
+
+    fn non_default_cast_options() -> CastOptions<'static> {
+        CastOptions {
+            safe: true,
+            format_options: FormatOptions::new()
+                .with_display_error(false)
+                .with_null("NULL")
+                .with_date_format(Some("%d/%m/%Y"))
+                .with_datetime_format(Some("%d/%m/%Y %H:%M:%S"))
+                .with_timestamp_format(Some("%s"))
+                .with_timestamp_tz_format(Some("%+"))
+                .with_time_format(Some("%H-%M-%S"))
+                .with_duration_format(DurationFormat::ISO8601)
+                .with_types_info(true)
+                .with_quoted_strings(true),
         }
     }
 
@@ -1984,6 +2478,102 @@ mod proto_tests {
             .expect("cast type should be encoded");
         let data_type: DataType = arrow_type.try_into().unwrap();
         assert_eq!(data_type, Int64);
+        assert!(cast_node.target_field.is_none());
+        assert!(cast_node.cast_options.is_none());
+    }
+
+    #[test]
+    fn cast_target_field_survives_proto_round_trip() {
+        let schema = Schema::new(vec![Field::new("a", Int32, true)]);
+        let target = Arc::new(Field::new("target", Int64, false).with_metadata(
+            Metadata::from([("extension".to_string(), "value".to_string())]),
+        ));
+        let cast = CastExpr::new_with_target_field(
+            col("a", &schema).unwrap(),
+            Arc::clone(&target),
+            None,
+        );
+
+        assert!(encode_cast(&cast).target_field.is_some());
+        let decoded = round_trip_cast(&cast, &schema);
+
+        assert_eq!(decoded.target_field(), &target);
+        assert_eq!(decoded.target_metadata(), Some(target.metadata()));
+        assert_eq!(decoded.target_nullable(), Some(false));
+        assert!(!decoded.return_field(&schema).unwrap().is_nullable());
+    }
+
+    #[test]
+    fn explicit_default_shaped_cast_target_is_encoded() {
+        let schema = Schema::new(vec![Field::new("a", Int32, false).with_metadata(
+            Metadata::from([("source".to_string(), "value".to_string())]),
+        )]);
+        let cast = CastExpr::new_with_target_field(
+            col("a", &schema).unwrap(),
+            Int64.into_nullable_field_ref(),
+            None,
+        );
+
+        assert!(encode_cast(&cast).target_field.is_some());
+        let decoded = round_trip_cast(&cast, &schema);
+        assert_eq!(decoded.target_metadata(), Some(&Metadata::default()));
+        assert_eq!(decoded.target_nullable(), Some(true));
+        let output = decoded.return_field(&schema).unwrap();
+        assert!(output.metadata().is_empty());
+        assert!(output.is_nullable());
+    }
+
+    #[test]
+    fn type_only_cast_target_is_omitted_and_remains_type_only() {
+        let metadata = Metadata::from([("source".to_string(), "value".to_string())]);
+        let schema = Schema::new(vec![
+            Field::new("a", Int32, false).with_metadata(metadata.clone()),
+        ]);
+        let cast = CastExpr::new(col("a", &schema).unwrap(), Int64, None);
+
+        assert!(encode_cast(&cast).target_field.is_none());
+        let decoded = round_trip_cast(&cast, &schema);
+
+        assert_eq!(decoded.target_metadata(), None);
+        assert_eq!(decoded.target_nullable(), None);
+        let output = decoded.return_field(&schema).unwrap();
+        assert_eq!(output.metadata(), &metadata);
+        assert!(!output.is_nullable());
+    }
+
+    #[test]
+    fn cast_options_survive_proto_round_trip() {
+        let schema = Schema::new(vec![Field::new("a", Int32, false)]);
+        let options = non_default_cast_options();
+        let cast =
+            CastExpr::new(col("a", &schema).unwrap(), Int64, Some(options.clone()));
+
+        assert!(encode_cast(&cast).cast_options.is_some());
+        assert_eq!(round_trip_cast(&cast, &schema).cast_options(), options);
+    }
+
+    #[test]
+    fn custom_formatter_factory_is_rejected() {
+        let schema = Schema::new(vec![Field::new("a", Int32, false)]);
+        let cast = CastExpr::new(
+            col("a", &schema).unwrap(),
+            Int64,
+            Some(CastOptions {
+                safe: false,
+                format_options: DEFAULT_FORMAT_OPTIONS
+                    .with_formatter_factory(Some(&TEST_FORMATTER_FACTORY)),
+            }),
+        );
+        let encoder = StubEncoder::ok();
+
+        let err = cast
+            .try_to_proto(&PhysicalExprEncodeCtx::new(&encoder))
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            DataFusionError::NotImplemented(msg)
+                if msg.contains("custom formatter_factory")
+        ));
     }
 
     #[test]
@@ -2000,7 +2590,7 @@ mod proto_tests {
     }
 
     #[test]
-    fn try_from_proto_decodes_cast_expr() {
+    fn try_from_proto_decodes_legacy_cast_expr() {
         let node = proto_cast_node(
             Some(Box::new(column_node("a"))),
             Some(proto_int64_arrow_type()),
@@ -2016,6 +2606,32 @@ mod proto_tests {
 
         assert_eq!(cast.cast_type(), &Int64);
         assert!(cast.expr().downcast_ref::<Column>().is_some());
+        assert_eq!(cast.target_metadata(), None);
+        assert_eq!(cast.target_nullable(), None);
+        assert_eq!(cast.cast_options(), DEFAULT_CAST_OPTIONS);
+    }
+
+    #[test]
+    fn try_from_proto_rejects_mismatched_target_field_type() {
+        let mut node = proto_cast_node(
+            Some(Box::new(column_node("a"))),
+            Some(proto_int64_arrow_type()),
+        );
+        let Some(physical_expr_node::ExprType::Cast(cast)) = node.expr_type.as_mut()
+        else {
+            unreachable!()
+        };
+        cast.target_field =
+            Some((&Field::new("target", Int32, true)).try_into().unwrap());
+        let schema = Schema::empty();
+        let decoder = StubDecoder::ok();
+
+        let err = CastExpr::try_from_proto(
+            &node,
+            &PhysicalExprDecodeCtx::new(&schema, &decoder),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("target_field type"));
     }
 
     #[test]
