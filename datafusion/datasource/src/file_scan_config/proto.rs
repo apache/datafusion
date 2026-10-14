@@ -125,7 +125,7 @@ impl FileScanConfig {
 
         // Partition fields must be added to the schema so they can persist in
         // protobuf and then be removed again in `parse_table_schema_from_proto`.
-        let mut fields = file_schema.fields().iter().cloned().collect::<Vec<_>>();
+        let mut fields = file_schema.fields().to_vec();
         fields.extend(table_partition_cols.iter().cloned());
         let schema = Schema::new(fields).with_metadata(file_schema.metadata.clone());
 
