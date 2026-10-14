@@ -642,12 +642,11 @@ mod tests {
         stream: RowCursorStream,
         pool: Arc<dyn MemoryPool>,
         schema: SchemaRef,
-        rows: usize,
-        str_width: usize,
+        /// `(rows, str_width)` of each batch, per partition.
+        shapes: Vec<Vec<(usize, usize)>>,
     }
 
-    /// Every batch has the same row count and string width, so each converts to
-    /// a `Rows` buffer of the same size regardless of `seq`.
+    /// The converted `Rows` size depends only on `rows` and `str_width`.
     fn make_batch(
         schema: &SchemaRef,
         seq: usize,
@@ -670,15 +669,28 @@ mod tests {
             rows: usize,
             str_width: usize,
         ) -> Result<Self> {
+            Self::with_shapes(vec![
+                vec![(rows, str_width); batches_per_partition];
+                partitions
+            ])
+        }
+
+        /// One partition per entry, one `(rows, str_width)` batch per element.
+        fn with_shapes(shapes: Vec<Vec<(usize, usize)>>) -> Result<Self> {
             let schema: SchemaRef = Arc::new(Schema::new(vec![
                 Field::new("a", DataType::Int32, false),
                 Field::new("b", DataType::Utf8, false),
             ]));
 
-            let streams: Vec<SendableRecordBatchStream> = (0..partitions)
-                .map(|_| {
-                    let batches: Vec<RecordBatch> = (0..batches_per_partition)
-                        .map(|seq| make_batch(&schema, seq, rows, str_width))
+            let streams: Vec<SendableRecordBatchStream> = shapes
+                .iter()
+                .map(|partition| {
+                    let batches: Vec<RecordBatch> = partition
+                        .iter()
+                        .enumerate()
+                        .map(|(seq, &(rows, str_width))| {
+                            make_batch(&schema, seq, rows, str_width)
+                        })
                         .collect();
                     Box::pin(
                         MemoryStream::try_new(batches, Arc::clone(&schema), None)
@@ -704,8 +716,7 @@ mod tests {
                 stream,
                 pool,
                 schema,
-                rows,
-                str_width,
+                shapes,
             })
         }
 
@@ -713,19 +724,34 @@ mod tests {
             self.pool.reserved()
         }
 
-        /// Converts one batch with a standalone converter over the same sort
-        /// key, returning `(converter size, size of one retained Rows buffer)`.
-        /// These are what the stream should reserve for its converter and for
-        /// each partition's cached buffer.
-        fn expected_sizes(&self) -> Result<(usize, usize)> {
-            let converter = RowConverter::new(vec![
+        fn converter(&self) -> Result<RowConverter> {
+            Ok(RowConverter::new(vec![
                 SortField::new(DataType::Int32),
                 SortField::new(DataType::Utf8),
-            ])?;
-            let batch = make_batch(&self.schema, 0, self.rows, self.str_width);
+            ])?)
+        }
+
+        /// `(converter size, retained Rows size)` when all batches share a shape.
+        fn expected_sizes(&self) -> Result<(usize, usize)> {
+            let converter = self.converter()?;
+            Ok((converter.size(), self.expected_retained_sizes(0)?[0]))
+        }
+
+        /// `Rows::size()` after each of `stream_idx`'s batches, reusing one
+        /// buffer like the stream does.
+        fn expected_retained_sizes(&self, stream_idx: usize) -> Result<Vec<usize>> {
+            let converter = self.converter()?;
             let mut rows = converter.empty_rows(0, 0);
-            converter.append(&mut rows, batch.columns())?;
-            Ok((converter.size(), rows.size()))
+            self.shapes[stream_idx]
+                .iter()
+                .enumerate()
+                .map(|(seq, &(num_rows, str_width))| {
+                    let batch = make_batch(&self.schema, seq, num_rows, str_width);
+                    rows.clear();
+                    converter.append(&mut rows, batch.columns())?;
+                    Ok(rows.size())
+                })
+                .collect()
         }
 
         /// Polls `stream_idx`, handing back the cursor so the caller controls when
@@ -838,6 +864,45 @@ mod tests {
         }
 
         // Only the converter is left.
+        assert_eq!(harness.reserved(), converter_size);
+
+        Ok(())
+    }
+
+    // A reused buffer keeps its capacity, so the reservation should track each
+    // partition's high-water mark and release it on exhaustion only.
+    #[test]
+    fn retained_buffer_reservation_tracks_high_water_mark() -> Result<()> {
+        let small = (64, 8);
+        let large = (2048, 128);
+        let mut harness =
+            RowCursorHarness::with_shapes(vec![vec![small, large, small], vec![small]])?;
+        let converter_size = harness.converter()?.size();
+        let growing = harness.expected_retained_sizes(0)?;
+        let cached = harness.expected_retained_sizes(1)?[0];
+
+        // The large batch grows the buffer; the next small one doesn't shrink it.
+        assert!(growing[1] > growing[0]);
+        assert_eq!(growing[2], growing[1]);
+
+        // Partition 1 keeps its buffer cached throughout.
+        assert!(harness.poll_and_drop_cursor(1)?);
+        assert_eq!(harness.reserved(), converter_size + cached);
+
+        for (seq, retained) in growing.iter().enumerate() {
+            assert!(harness.poll_and_drop_cursor(0)?);
+            assert_eq!(
+                harness.reserved(),
+                converter_size + cached + retained,
+                "after batch {seq}"
+            );
+        }
+
+        // Releasing partition 0 leaves partition 1 accounted for.
+        assert!(!harness.poll_and_drop_cursor(0)?);
+        assert_eq!(harness.reserved(), converter_size + cached);
+
+        assert!(!harness.poll_and_drop_cursor(1)?);
         assert_eq!(harness.reserved(), converter_size);
 
         Ok(())
