@@ -231,3 +231,75 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[(random() = 0 OR a@0 = 1) AND a@0 = 2 as c1, random() = 0 AND a@0 = 2 OR a@0 = 1 as c2, CASE WHEN random() = 0 THEN a@0 + 3 ELSE a@0 + 3 END as c3, CASE WHEN random() = 0 THEN 0 WHEN a@0 + 4 = 0 THEN a@0 + 4 ELSE 0 END as c4, CASE WHEN random() = 0 THEN 0 WHEN a@0 + 5 = 0 THEN 0 ELSE a@0 + 5 END as c5, CASE WHEN random() = 0 THEN 0 WHEN random() = 0 THEN a@0 + 6 ELSE a@0 + 6 END as c6]
 02)--DataSourceExec: partitions=1, partition_sizes=[0]
+
+# The arguments of an aggregate with a FILTER are evaluated only for the rows
+# that pass the filter. They must not be extracted into a projection, which
+# evaluates them for every row.
+statement ok
+CREATE TABLE cse_agg_filter AS
+SELECT * FROM (VALUES (CAST(-950 AS SMALLINT), 0), (CAST(5 AS SMALLINT), 1)) AS v(x, y)
+
+query TT
+EXPLAIN SELECT
+    sum(arrow_cast(x, 'UInt64')) FILTER (WHERE y > 0) AS s,
+    count(arrow_cast(x, 'UInt64')) FILTER (WHERE y > 0) AS c
+FROM cse_agg_filter
+----
+logical_plan
+01)Projection: sum(arrow_cast(cse_agg_filter.x,Utf8("UInt64"))) FILTER (WHERE cse_agg_filter.y > Int64(0)) AS s, count(arrow_cast(cse_agg_filter.x,Utf8("UInt64"))) FILTER (WHERE cse_agg_filter.y > Int64(0)) AS c
+02)--Aggregate: groupBy=[[]], aggr=[[sum(CAST(cse_agg_filter.x AS UInt64)) FILTER (WHERE __common_expr_1) AS sum(arrow_cast(cse_agg_filter.x,Utf8("UInt64"))) FILTER (WHERE cse_agg_filter.y > Int64(0)), count(CAST(cse_agg_filter.x AS UInt64)) FILTER (WHERE __common_expr_1) AS count(arrow_cast(cse_agg_filter.x,Utf8("UInt64"))) FILTER (WHERE cse_agg_filter.y > Int64(0))]]
+03)----Projection: cse_agg_filter.y > Int64(0) AS __common_expr_1, cse_agg_filter.x
+04)------TableScan: cse_agg_filter projection=[x, y]
+physical_plan
+01)ProjectionExec: expr=[sum(arrow_cast(cse_agg_filter.x,Utf8("UInt64"))) FILTER (WHERE cse_agg_filter.y > Int64(0))@0 as s, count(arrow_cast(cse_agg_filter.x,Utf8("UInt64"))) FILTER (WHERE cse_agg_filter.y > Int64(0))@1 as c]
+02)--AggregateExec: mode=Single, gby=[], aggr=[sum(cse_agg_filter.x) FILTER (WHERE __common_expr_1) as sum(arrow_cast(cse_agg_filter.x,Utf8("UInt64"))) FILTER (WHERE cse_agg_filter.y > Int64(0)), count(cse_agg_filter.x) FILTER (WHERE __common_expr_1) as count(arrow_cast(cse_agg_filter.x,Utf8("UInt64"))) FILTER (WHERE cse_agg_filter.y > Int64(0))]
+03)----ProjectionExec: expr=[y@1 > 0 as __common_expr_1, x@0 as x]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT
+    sum(arrow_cast(x, 'UInt64')) FILTER (WHERE y > 0) AS s,
+    count(arrow_cast(x, 'UInt64')) FILTER (WHERE y > 0) AS c
+FROM cse_agg_filter
+----
+5 1
+
+query III
+SELECT
+    y,
+    sum(arrow_cast(x, 'UInt64')) FILTER (WHERE y > 0) AS s,
+    count(arrow_cast(x, 'UInt64')) FILTER (WHERE y > 0) AS c
+FROM cse_agg_filter
+GROUP BY y
+ORDER BY y
+----
+0 NULL 0
+1 5 1
+
+# An aggregate without a FILTER evaluates the common argument for every row,
+# so the argument is extracted and the cast error is the correct result.
+query TT
+EXPLAIN SELECT
+    sum(arrow_cast(x, 'UInt64')) FILTER (WHERE y > 0) AS s,
+    count(arrow_cast(x, 'UInt64')) AS c
+FROM cse_agg_filter
+----
+logical_plan
+01)Projection: sum(arrow_cast(cse_agg_filter.x,Utf8("UInt64"))) FILTER (WHERE cse_agg_filter.y > Int64(0)) AS s, count(arrow_cast(cse_agg_filter.x,Utf8("UInt64"))) AS c
+02)--Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1) FILTER (WHERE cse_agg_filter.y > Int64(0)) AS sum(arrow_cast(cse_agg_filter.x,Utf8("UInt64"))) FILTER (WHERE cse_agg_filter.y > Int64(0)), count(__common_expr_1) AS count(arrow_cast(cse_agg_filter.x,Utf8("UInt64")))]]
+03)----Projection: CAST(cse_agg_filter.x AS UInt64) AS __common_expr_1, cse_agg_filter.y
+04)------TableScan: cse_agg_filter projection=[x, y]
+physical_plan
+01)ProjectionExec: expr=[sum(arrow_cast(cse_agg_filter.x,Utf8("UInt64"))) FILTER (WHERE cse_agg_filter.y > Int64(0))@0 as s, count(arrow_cast(cse_agg_filter.x,Utf8("UInt64")))@1 as c]
+02)--AggregateExec: mode=Single, gby=[], aggr=[sum(__common_expr_1) FILTER (WHERE cse_agg_filter.y > Int64(0)) as sum(arrow_cast(cse_agg_filter.x,Utf8("UInt64"))) FILTER (WHERE cse_agg_filter.y > Int64(0)), count(__common_expr_1) as count(arrow_cast(cse_agg_filter.x,Utf8("UInt64")))]
+03)----ProjectionExec: expr=[CAST(x@0 AS UInt64) as __common_expr_1, y@1 as y]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query error Can't cast value \-950 to type UInt64
+SELECT
+    sum(arrow_cast(x, 'UInt64')) FILTER (WHERE y > 0) AS s,
+    count(arrow_cast(x, 'UInt64')) AS c
+FROM cse_agg_filter
+
+statement ok
+DROP TABLE cse_agg_filter

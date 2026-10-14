@@ -925,6 +925,29 @@ config_namespace! {
         /// Support for build_side.num_rows() >= u32::MAX will be added in the future.
         pub perfect_hash_join_min_key_density: f64, default = 0.15
 
+        /// Enable an exact integer membership prefilter for hash joins with a single
+        /// integer key when the build side uses a hash table and the join is not
+        /// null-aware. It skips lookups for absent keys while retaining NULLs and
+        /// probe rows for the original join logic.
+        pub enable_join_integer_prefilter: bool, default = false
+
+        /// Maximum number of integer values covered by the join prefilter bitmap
+        /// (`max_key - min_key + 1`). Zero disables bitmap construction.
+        /// Larger ranges fall back to normal hash table lookups.
+        pub join_integer_prefilter_max_key_range: u64, default = 262144
+
+        /// The integer prefilter must prune more than this fraction of all sampled
+        /// probe rows, including NULLs, to keep filtering. Must be finite and in
+        /// [0, 1], validated when executing the join.
+        pub join_integer_prefilter_min_pruning_ratio: f64, default = 0.5
+
+        /// Minimum input probe rows in each integer prefilter sampling window,
+        /// including NULLs. Must be greater than zero. Windows end at batch boundaries.
+        /// Unprofitable samples initially pause for 10 times this many input rows;
+        /// consecutive failures double the pause up to 128 times. A profitable
+        /// sample resets the pause to 10 times this many rows.
+        pub join_integer_prefilter_sample_rows: ConfigNonZeroUsize, default = non_zero_usize_default(12288)
+
         /// When set to true, record batches will be examined between each operator and
         /// small batches will be coalesced into larger batches. This is helpful when there
         /// are highly selective filters or joins that could produce tiny output batches. The
@@ -943,7 +966,9 @@ config_namespace! {
 
         /// The default time zone
         ///
-        /// Some functions, e.g. `now` return timestamps in this time zone
+        /// Some functions, e.g. `now`, return timestamps in this time zone.
+        /// This is also used to interpret timezone-naive timestamps in
+        /// comparisons and subtraction with timezone-aware timestamps.
         pub time_zone: Option<ConfigTimeZone>, default = None
 
         /// Parquet options
@@ -1424,6 +1449,17 @@ config_namespace! {
         /// Defaults to 20.
         pub max_in_list_size: usize, default = 20
 
+        /// (reading) If true, top-level string and binary Parquet columns with
+        /// dictionary pages are inferred and scanned as
+        /// `Dictionary<Int32, Utf8>` / `Dictionary<Int32, Binary>` instead of
+        /// their plain value type.
+        ///
+        /// This applies only when DataFusion infers the table schema. Tables with
+        /// a user-supplied schema are not promoted because the Parquet footer is
+        /// not read at DDL time, so dictionary pages cannot be detected per column.
+        /// See <https://github.com/apache/datafusion/issues/24112>
+        pub enable_rle_to_dictionary: bool, default = false
+
         /// (reading) Which byte range of a split file reads each row group.
         /// `start_offset` picks the range containing the row group's start.
         /// `midpoint` picks the range containing its midpoint, as Spark does,
@@ -1520,6 +1556,12 @@ config_namespace! {
         /// (writing) Sets bloom filter number of distinct values. If NULL, uses
         /// default parquet writer setting
         pub bloom_filter_ndv: Option<u64>, default = None
+
+        /// (writing) Write the number of distinct values (NDV) for each column
+        /// in row group statistics when creating parquet files. Enabling this
+        /// improves NDV-based query optimizations at the cost of hashing every
+        /// non-null value during write.
+        pub write_row_group_number_distinct_values: bool, default = false
 
         /// (writing) Controls whether DataFusion will attempt to speed up writing
         /// parquet files by serializing them in parallel. Each column
@@ -1796,7 +1838,9 @@ config_namespace! {
         /// rule. When set to false, any rules that produce errors will cause the query to fail
         pub skip_failed_rules: bool, default = false
 
-        /// Number of times that the optimizer will attempt to optimize the plan
+        /// The logical optimizer applies rules in order for up to `max_passes` passes,
+        /// stopping early if a pass leaves the plan unchanged or repeats an earlier plan.
+        /// The physical optimizer always runs in one pass.
         pub max_passes: usize, default = 3
 
         /// When set to true, the physical plan optimizer will run a top down
@@ -3631,7 +3675,7 @@ impl From<&Arc<FileEncryptionProperties>> for ConfigFileEncryptionProperties {
         let mut column_encryption_properties: HashMap<
             String,
             ColumnEncryptionProperties,
-        > = HashMap::new();
+        > = HashMap::with_capacity(column_names_vec.len());
 
         for (i, column_name) in column_names_vec.iter().enumerate() {
             let column_key_as_hex = hex::encode(&column_keys_vec[i]);
@@ -3739,8 +3783,9 @@ impl TryFrom<ConfigFileDecryptionProperties> for FileDecryptionProperties {
     type Error = DataFusionError;
 
     fn try_from(val: ConfigFileDecryptionProperties) -> Result<Self> {
-        let mut column_names: Vec<&str> = Vec::new();
-        let mut column_keys: Vec<Vec<u8>> = Vec::new();
+        let num_columns = val.column_decryption_properties.len();
+        let mut column_names: Vec<&str> = Vec::with_capacity(num_columns);
+        let mut column_keys: Vec<Vec<u8>> = Vec::with_capacity(num_columns);
 
         for (col_name, decryption_properties) in val.column_decryption_properties.iter() {
             let column_key = hex::decode(&decryption_properties.column_key_as_hex).map_err(|e| {
@@ -3812,7 +3857,7 @@ impl TryFrom<&Arc<FileDecryptionProperties>> for ConfigFileDecryptionProperties 
         let mut column_decryption_properties: HashMap<
             String,
             ColumnDecryptionProperties,
-        > = HashMap::new();
+        > = HashMap::with_capacity(column_names_vec.len());
         for (i, column_name) in column_names_vec.iter().enumerate() {
             let props = ColumnDecryptionProperties {
                 column_key_as_hex: hex::encode(column_keys_vec[i].clone()),
