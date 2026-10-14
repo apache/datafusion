@@ -530,16 +530,14 @@ impl MinMaxBytesState {
             }
             EmitTo::First(n) => {
                 let first_min_maxes = split_vec_min_alloc(&mut self.min_max, n);
-                let first_data_bytes: usize = first_min_maxes
-                    .iter()
-                    .map(|opt| opt.as_ref().map(|s| s.len()).unwrap_or(0))
-                    .sum();
-                self.total_data_bytes -= first_data_bytes;
-                self.total_data_capacity -= first_min_maxes
+                let (first_data_bytes, first_data_capacity) = first_min_maxes
                     .iter()
                     .flatten()
-                    .map(Vec::capacity)
-                    .sum::<usize>();
+                    .fold((0, 0), |(bytes, capacity), value| {
+                        (bytes + value.len(), capacity + value.capacity())
+                    });
+                self.total_data_bytes -= first_data_bytes;
+                self.total_data_capacity -= first_data_capacity;
                 (first_data_bytes, first_min_maxes)
             }
         }
