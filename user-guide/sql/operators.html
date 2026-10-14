@@ -805,7 +805,7 @@
 <ul class="simple">
 <li><p><a class="reference internal" href="#op-bit-and">&amp; (bitwise and)</a></p></li>
 <li><p><a class="reference internal" href="#op-bit-or">| (bitwise or)</a></p></li>
-<li><p><a class="reference internal" href="#op-bit-xor"># (bitwise xor)</a></p></li>
+<li><p><a class="reference internal" href="#op-bit-xor">^ (bitwise xor)</a></p></li>
 <li><p><a class="reference internal" href="#op-shift-r">&gt;&gt; (bitwise shift right)</a></p></li>
 <li><p><a class="reference internal" href="#op-shift-l">&lt;&lt; (bitwise shift left)</a></p></li>
 </ul>
@@ -834,14 +834,14 @@
 </div>
 </section>
 <section id="op-bit-xor">
-<span id="id23"></span><h3><code class="docutils literal notranslate"><span class="pre">#</span></code><a class="headerlink" href="#op-bit-xor" title="Link to this heading">#</a></h3>
-<p>Bitwise Xor (interchangeable with <code class="docutils literal notranslate"><span class="pre">^</span></code>)</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">5</span><span class="w"> </span><span class="o">#</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
-<span class="o">+</span><span class="c1">---------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span><span class="w"> </span><span class="o">#</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">---------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="mi">6</span><span class="w">                   </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">---------------------+</span>
+<span id="id23"></span><h3><code class="docutils literal notranslate"><span class="pre">^</span></code><a class="headerlink" href="#op-bit-xor" title="Link to this heading">#</a></h3>
+<p>Bitwise Xor</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">5</span><span class="w"> </span><span class="o">^</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">---------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span><span class="w"> </span><span class="n">BIT_XOR</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">6</span><span class="w">                         </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -1051,7 +1051,7 @@ bar
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#bitwise-operators">Bitwise Operators</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#op-bit-and"><code class="docutils literal notranslate"><span class="pre">&amp;</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#op-bit-or"><code class="docutils literal notranslate"><span class="pre">|</span></code></a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#op-bit-xor"><code class="docutils literal notranslate"><span class="pre">#</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#op-bit-xor"><code class="docutils literal notranslate"><span class="pre">^</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#op-shift-r"><code class="docutils literal notranslate"><span class="pre">&gt;&gt;</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#op-shift-l"><code class="docutils literal notranslate"><span class="pre">&lt;&lt;</span></code></a></li>
 </ul>

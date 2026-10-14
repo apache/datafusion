@@ -502,6 +502,40 @@ a<span class="p">;</span>b
 </section>
 <section id="available-options">
 <h1>Available Options<a class="headerlink" href="#available-options" title="Link to this heading">#</a></h1>
+<section id="arrow-format-options">
+<h2>Arrow Format Options<a class="headerlink" href="#arrow-format-options" title="Link to this heading">#</a></h2>
+<p>The following options are available when writing <a class="reference external" href="https://arrow.apache.org/docs/format/Columnar.html#ipc-file-format">Arrow IPC</a> files. Note: If any unsupported option is specified, an error will be raised and the query will fail.</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Option</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Default Value</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>COMPRESSION</p></td>
+<td><p>Sets the compression codec used for the record batch bodies within the Arrow IPC file. Supported values are UNCOMPRESSED, LZ4_FRAME, and ZSTD.</p></td>
+<td><p>LZ4_FRAME</p></td>
+</tr>
+<tr class="row-odd"><td><p>COMPRESSION_LEVEL</p></td>
+<td><p>Sets the compression level to use with the <code class="docutils literal notranslate"><span class="pre">ZSTD</span></code> codec. Not supported by <code class="docutils literal notranslate"><span class="pre">LZ4_FRAME</span></code> or <code class="docutils literal notranslate"><span class="pre">UNCOMPRESSED</span></code>. If not specified, the default zstd compression level is used.</p></td>
+<td><p>None</p></td>
+</tr>
+<tr class="row-even"><td><p>ALIGNMENT</p></td>
+<td><p>Sets the byte alignment used to pad buffers when writing the Arrow IPC file. Must be one of 8, 16, 32, or 64.</p></td>
+<td><p>64</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><strong>Example:</strong></p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">COPY</span><span class="w"> </span><span class="n">source_table</span>
+<span class="w">  </span><span class="k">TO</span><span class="w"> </span><span class="s1">&#39;/tmp/foo.arrow&#39;</span>
+<span class="w">  </span><span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">ARROW</span>
+<span class="w">  </span><span class="k">OPTIONS</span><span class="p">(</span><span class="s1">&#39;COMPRESSION&#39;</span><span class="w"> </span><span class="s1">&#39;zstd&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;COMPRESSION_LEVEL&#39;</span><span class="w"> </span><span class="s1">&#39;15&#39;</span><span class="p">);</span>
+</pre></div>
+</div>
+</section>
 <section id="json-format-options">
 <h2>JSON Format Options<a class="headerlink" href="#json-format-options" title="Link to this heading">#</a></h2>
 <p>The following options are available when reading or writing JSON files. Note: If any unsupported option is specified, an error will be raised and the query will fail.</p>
@@ -911,6 +945,7 @@ a<span class="p">;</span>b
 </ul>
 </li>
 <li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#available-options">Available Options</a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#arrow-format-options">Arrow Format Options</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#json-format-options">JSON Format Options</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#csv-format-options">CSV Format Options</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#parquet-format-options">Parquet Format Options</a></li>
