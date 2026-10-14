@@ -2819,8 +2819,8 @@ DROP TABLE sq_count_orders;
 # NULL the predicate is never TRUE, so the query must return zero rows. This must
 # hold regardless of the chosen physical join operator. Previously, with
 # prefer_hash_join = false and multiple partitions, the planner routed the
-# null-aware anti join to SortMergeJoin (which is not null-aware) and returned
-# wrong results; null-aware anti joins must use the CollectLeft HashJoin.
+# null-aware anti join to an ordinary SortMergeJoin and returned wrong results.
+# The null-aware SortMergeJoin path must preserve the same NOT IN semantics.
 
 statement ok
 set datafusion.optimizer.prefer_hash_join = false;
@@ -2839,9 +2839,8 @@ query I
 SELECT x FROM nia_left WHERE x NOT IN (SELECT y FROM nia_right_with_null) ORDER BY x;
 ----
 
-# The null-aware anti join must be planned as a CollectLeft HashJoinExec even with
-# prefer_hash_join = false: SortMergeJoinExec is not null-aware and must not be used.
-# This test has no usable size statistics, so JoinSelection keeps LeftAnti.
+# With prefer_hash_join = false, this single-key, unfiltered null-aware LeftAnti
+# join uses SortMergeJoinExec with sorted, single-partition inputs.
 query TT
 EXPLAIN SELECT x FROM nia_left WHERE x NOT IN (SELECT y FROM nia_right_with_null);
 ----
@@ -2851,9 +2850,11 @@ logical_plan
 03)--SubqueryAlias: __correlated_sq_1
 04)----TableScan: nia_right_with_null projection=[y]
 physical_plan
-01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(x@0, y@0)], null_aware
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
-03)--DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortMergeJoinExec: join_type=LeftAnti, on=[(x@0, y@0)]
+02)--SortExec: expr=[x@0 ASC], preserve_partitioning=[false]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--SortExec: expr=[y@0 ASC], preserve_partitioning=[false]
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Subquery has no NULL -> NOT IN behaves like a normal anti join.
 query I
