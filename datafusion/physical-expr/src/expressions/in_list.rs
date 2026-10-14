@@ -456,7 +456,8 @@ impl PhysicalExpr for InListExpr {
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
-        let mut children = vec![&self.expr];
+        let mut children = Vec::with_capacity(self.list.len() + 1);
+        children.push(&self.expr);
         children.extend(&self.list);
         children
     }

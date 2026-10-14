@@ -1395,7 +1395,7 @@ impl TreeRenderVisitor<'_, '_> {
 
             let mut splits: Vec<String> = str.split('\n').map(String::from).collect();
             if splits.len() > max_lines {
-                let mut truncated_splits = Vec::new();
+                let mut truncated_splits = Vec::with_capacity(max_lines + 1);
                 for split in splits.iter().take(max_lines / 2) {
                     truncated_splits.push(split.clone());
                 }

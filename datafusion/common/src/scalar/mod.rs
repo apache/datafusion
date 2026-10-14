@@ -3745,7 +3745,6 @@ impl ScalarValue {
             ),
             ScalarValue::Union(value, fields, mode) => match value {
                 Some((v_id, value)) => {
-                    let mut new_fields = Vec::with_capacity(fields.len());
                     let mut child_arrays = Vec::<ArrayRef>::with_capacity(fields.len());
                     for (f_id, field) in fields.iter() {
                         let ar = if f_id == *v_id {
@@ -3759,9 +3758,7 @@ impl ScalarValue {
                                 UnionMode::Dense => new_null_array(dt, 0),
                             }
                         };
-                        let field = (**field).clone();
                         child_arrays.push(ar);
-                        new_fields.push(field.clone());
                     }
                     let type_ids = repeat_n(*v_id, size);
                     let type_ids = ScalarBuffer::<i8>::from_iter(type_ids);
@@ -5720,7 +5717,7 @@ impl fmt::Display for ScalarValue {
                         .iter()
                         .map(|struct_array| {
                             if let Some(arr) = struct_array {
-                                let mut buffer = VecDeque::new();
+                                let mut buffer = VecDeque::with_capacity(arr.len());
                                 for i in 0..arr.len() {
                                     let key =
                                         array_value_to_string(arr.column(0), i).unwrap();

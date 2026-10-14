@@ -3613,7 +3613,7 @@ pub(crate) fn group_id_array(
 /// three times the ordinals are 0, 1, 2 and this function returns 2.
 /// Returns 0 when no grouping set is duplicated.
 pub(crate) fn max_duplicate_ordinal(groups: &[Vec<bool>]) -> usize {
-    let mut counts: HashMap<&[bool], usize> = HashMap::new();
+    let mut counts: HashMap<&[bool], usize> = HashMap::with_capacity(groups.len());
     for group in groups {
         *counts.entry(group).or_insert(0) += 1;
     }
@@ -3661,7 +3661,8 @@ pub fn evaluate_group_by(
     batch: &RecordBatch,
 ) -> Result<Vec<Vec<ArrayRef>>> {
     let max_ordinal = max_duplicate_ordinal(&group_by.groups);
-    let mut ordinal_per_pattern: HashMap<&[bool], usize> = HashMap::new();
+    let mut ordinal_per_pattern: HashMap<&[bool], usize> =
+        HashMap::with_capacity(group_by.groups.len());
     let exprs = evaluate_expressions_to_arrays(
         group_by.expr.iter().map(|(expr, _)| expr),
         batch,
