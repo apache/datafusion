@@ -185,10 +185,19 @@ fn can_swap_hash_join(hash_join: &HashJoinExec) -> bool {
 /// When the `ignore_threshold` is false, this function will also check left
 /// and right sizes in bytes or rows.
 ///
+/// When `execution.isolated_partitions` is set, an orientation is only used if
+/// its join type does not emit build-side rows (see
+/// [`JoinType::emits_build_side_rows`]), since every isolated plan instance
+/// would emit them. If both sides are under the thresholds and only the
+/// swapped orientation is safe, the inputs are swapped; otherwise `None` is
+/// returned and the caller plans a partitioned join. Null-aware joins are not
+/// affected.
+///
 /// Used configurations
 /// - `optimizer.hash_join_single_partition_threshold`: byte threshold for `CollectLeft`
 /// - `optimizer.hash_join_single_partition_threshold_rows`: row threshold for `CollectLeft`
 /// - `optimizer.join_reordering`: allows or forbids input swapping
+/// - `execution.isolated_partitions`: forbids collecting a build side that emits rows
 pub(crate) fn try_collect_left(
     hash_join: &HashJoinExec,
     ignore_threshold: bool,
@@ -196,7 +205,8 @@ pub(crate) fn try_collect_left(
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     let left = hash_join.left();
     let right = hash_join.right();
-    let optimizer_config = &context.config_options().optimizer;
+    let config = context.config_options();
+    let optimizer_config = &config.optimizer;
 
     let left_can_collect = ignore_threshold
         || supports_collect_by_thresholds(
@@ -213,37 +223,46 @@ pub(crate) fn try_collect_left(
             context,
         );
 
-    match (left_can_collect, right_can_collect) {
+    let isolated = config.execution.isolated_partitions && !hash_join.null_aware;
+    let join_type = *hash_join.join_type();
+    let keep_is_safe = !isolated || !join_type.emits_build_side_rows();
+    let swap_is_safe = !isolated || !join_type.swap().emits_build_side_rows();
+    let can_swap = optimizer_config.join_reordering && can_swap_hash_join(hash_join);
+
+    // `Some(true)` collects the right side by swapping the inputs, `Some(false)`
+    // collects the left side, and `None` leaves the join to `partitioned_hash_join`.
+    let swap = match (left_can_collect, right_can_collect) {
         (true, true) => {
             // For null-aware joins, we only swap `LeftAnti` joins where the left side is > right side
-            if can_swap_hash_join(hash_join)
-                && should_swap_join_order(left, right, context)?
-            {
-                Ok(Some(hash_join.swap_inputs(PartitionMode::CollectLeft)?))
-            } else {
-                Ok(Some(Arc::new(
-                    hash_join
-                        .builder()
-                        .with_partition_mode(PartitionMode::CollectLeft)
-                        .build()?,
-                )))
+            let prefer_swap = can_swap_hash_join(hash_join)
+                && should_swap_join_order(left, right, context)?;
+            match (prefer_swap, keep_is_safe, swap_is_safe) {
+                (true, _, true) => Some(true),
+                (_, true, _) => Some(false),
+                // Only the swapped orientation is safe. With `ignore_threshold`
+                // the right side may be large, so prefer a partitioned join.
+                (false, false, true) if can_swap && !ignore_threshold => Some(true),
+                _ => None,
             }
         }
-        (true, false) => Ok(Some(Arc::new(
-            hash_join
-                .builder()
-                .with_partition_mode(PartitionMode::CollectLeft)
-                .build()?,
-        ))),
-        (false, true) => {
-            if optimizer_config.join_reordering && can_swap_hash_join(hash_join) {
-                hash_join.swap_inputs(PartitionMode::CollectLeft).map(Some)
-            } else {
-                Ok(None)
-            }
+        (true, false) => keep_is_safe.then_some(false),
+        (false, true) => (can_swap && swap_is_safe).then_some(true),
+        (false, false) => None,
+    };
+
+    swap.map(|swap| {
+        if swap {
+            hash_join.swap_inputs(PartitionMode::CollectLeft)
+        } else {
+            Ok(Arc::new(
+                hash_join
+                    .builder()
+                    .with_partition_mode(PartitionMode::CollectLeft)
+                    .build()?,
+            ) as Arc<dyn ExecutionPlan>)
         }
-        (false, false) => Ok(None),
-    }
+    })
+    .transpose()
 }
 
 /// Creates a partitioned hash join execution plan, swapping inputs if beneficial.
@@ -335,9 +354,24 @@ fn statistical_join_selection_subrule(
     } else if let Some(nl_join) = plan.downcast_ref::<NestedLoopJoinExec>() {
         let left = nl_join.left();
         let right = nl_join.right();
-        if nl_join.join_type().supports_swap()
-            && should_swap_join_order(left, right, context)?
-        {
+        let join_type = *nl_join.join_type();
+        // A nested loop join always collects its left side. Under
+        // `execution.isolated_partitions` that side must not emit rows: a join
+        // that does is swapped whatever the sizes, and a safe join is never
+        // swapped into one that does. `Full` joins emit rows from both sides
+        // and keep the size-based choice.
+        let isolated = context.config_options().execution.isolated_partitions;
+        let unsafe_now = isolated && join_type.emits_build_side_rows();
+        let unsafe_after_swap = isolated && join_type.swap().emits_build_side_rows();
+        let swap = if !join_type.supports_swap() {
+            false
+        } else if unsafe_now && !unsafe_after_swap {
+            true
+        } else {
+            (unsafe_now || !unsafe_after_swap)
+                && should_swap_join_order(left, right, context)?
+        };
+        if swap {
             nl_join.swap_inputs().map(Some)?
         } else {
             None

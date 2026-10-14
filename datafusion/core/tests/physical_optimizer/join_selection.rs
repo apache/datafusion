@@ -22,9 +22,13 @@ use std::{
     task::{Context, Poll},
 };
 
+use arrow::array::Int32Array;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use datafusion::datasource::MemTable;
+use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::test_util::batches_to_sort_string;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{ColumnStatistics, JoinType, ScalarValue, stats::Precision};
 use datafusion_common::{JoinSide, NullEquality};
@@ -58,7 +62,7 @@ use datafusion_physical_plan::{
     execution_plan::{Boundedness, EmissionType},
 };
 
-use futures::Stream;
+use futures::{Stream, TryStreamExt};
 use rstest::rstest;
 
 /// Return statistics for empty table
@@ -883,6 +887,406 @@ async fn test_join_no_swap() {
             .total_byte_size,
         Precision::Inexact(big_byte_size())
     );
+}
+
+/// A plan under the `CollectLeft` thresholds, but larger than [`small_statistics`].
+fn create_medium() -> Arc<dyn ExecutionPlan> {
+    let (threshold_num_rows, threshold_byte_size) = get_thresholds();
+    Arc::new(StatisticsExec::new(
+        Statistics {
+            num_rows: Precision::Inexact(threshold_num_rows / 64),
+            total_byte_size: Precision::Inexact(threshold_byte_size / 64),
+            column_statistics: vec![ColumnStatistics::new_unknown()],
+        },
+        Schema::new(vec![Field::new("medium_col", DataType::Int32, false)]),
+    ))
+}
+
+/// Hash joins the first column of `left` with the first column of `right`.
+fn hash_join_on_first_columns(
+    left: &Arc<dyn ExecutionPlan>,
+    right: &Arc<dyn ExecutionPlan>,
+    join_type: JoinType,
+    partition_mode: PartitionMode,
+    null_aware: bool,
+) -> Arc<dyn ExecutionPlan> {
+    let left_schema = left.schema();
+    let right_schema = right.schema();
+    Arc::new(
+        HashJoinExec::try_new(
+            Arc::clone(left),
+            Arc::clone(right),
+            vec![(
+                col(left_schema.field(0).name(), &left_schema).unwrap(),
+                col(right_schema.field(0).name(), &right_schema).unwrap(),
+            )],
+            None,
+            &join_type,
+            None,
+            partition_mode,
+            NullEquality::NullEqualsNothing,
+            null_aware,
+        )
+        .unwrap(),
+    )
+}
+
+fn isolated_config(isolated_partitions: bool) -> ConfigOptions {
+    let mut config = ConfigOptions::new();
+    config.execution.isolated_partitions = isolated_partitions;
+    config
+}
+
+fn plan_text(plan: &Arc<dyn ExecutionPlan>) -> String {
+    displayable(plan.as_ref())
+        .indent(true)
+        .to_string()
+        .trim()
+        .to_string()
+}
+
+#[test]
+fn isolated_partitions_partitions_unsafe_collect_left_candidate() -> Result<()> {
+    let (big, small) = create_big_and_small();
+    let join = hash_join_on_first_columns(
+        &small,
+        &big,
+        JoinType::Left,
+        PartitionMode::Auto,
+        false,
+    );
+
+    let default =
+        JoinSelection::new().optimize(Arc::clone(&join), &isolated_config(false))?;
+    assert_snapshot!(plan_text(&default), @r"
+    HashJoinExec: mode=CollectLeft, join_type=Left, on=[(small_col@0, big_col@0)]
+      StatisticsExec: col_count=1, row_count=Inexact(1024)
+      StatisticsExec: col_count=1, row_count=Inexact(262144)
+    ");
+
+    let isolated = JoinSelection::new().optimize(join, &isolated_config(true))?;
+    assert_snapshot!(plan_text(&isolated), @r"
+    HashJoinExec: mode=Partitioned, join_type=Left, on=[(small_col@0, big_col@0)]
+      StatisticsExec: col_count=1, row_count=Inexact(1024)
+      StatisticsExec: col_count=1, row_count=Inexact(262144)
+    ");
+    Ok(())
+}
+
+#[test]
+fn isolated_partitions_keeps_safe_swap_to_collect_left() -> Result<()> {
+    let (big, small) = create_big_and_small();
+    let join = hash_join_on_first_columns(
+        &big,
+        &small,
+        JoinType::Left,
+        PartitionMode::Auto,
+        false,
+    );
+
+    let isolated = JoinSelection::new().optimize(join, &isolated_config(true))?;
+    assert_snapshot!(plan_text(&isolated), @r"
+    ProjectionExec: expr=[big_col@1 as big_col, small_col@0 as small_col]
+      HashJoinExec: mode=CollectLeft, join_type=Right, on=[(small_col@0, big_col@0)]
+        StatisticsExec: col_count=1, row_count=Inexact(1024)
+        StatisticsExec: col_count=1, row_count=Inexact(262144)
+    ");
+
+    // Re-running the rule, as Ballista's adaptive planner does, is stable
+    let rerun =
+        JoinSelection::new().optimize(Arc::clone(&isolated), &isolated_config(true))?;
+    assert_eq!(plan_text(&rerun), plan_text(&isolated));
+    Ok(())
+}
+
+#[test]
+fn isolated_partitions_swaps_only_when_reordering_is_allowed() -> Result<()> {
+    let (_, small) = create_big_and_small();
+    let medium = create_medium();
+    let join = hash_join_on_first_columns(
+        &small,
+        &medium,
+        JoinType::Left,
+        PartitionMode::Auto,
+        false,
+    );
+
+    let default =
+        JoinSelection::new().optimize(Arc::clone(&join), &isolated_config(false))?;
+    assert_snapshot!(plan_text(&default), @r"
+    HashJoinExec: mode=CollectLeft, join_type=Left, on=[(small_col@0, medium_col@0)]
+      StatisticsExec: col_count=1, row_count=Inexact(1024)
+      StatisticsExec: col_count=1, row_count=Inexact(2048)
+    ");
+
+    // Both sides fit, and only the swapped orientation is safe
+    let isolated =
+        JoinSelection::new().optimize(Arc::clone(&join), &isolated_config(true))?;
+    assert_snapshot!(plan_text(&isolated), @r"
+    ProjectionExec: expr=[small_col@1 as small_col, medium_col@0 as medium_col]
+      HashJoinExec: mode=CollectLeft, join_type=Right, on=[(medium_col@0, small_col@0)]
+        StatisticsExec: col_count=1, row_count=Inexact(2048)
+        StatisticsExec: col_count=1, row_count=Inexact(1024)
+    ");
+
+    // Without join reordering there is no swap, so the join is partitioned
+    let mut config = isolated_config(true);
+    config.optimizer.join_reordering = false;
+    let no_reordering = JoinSelection::new().optimize(join, &config)?;
+    assert_snapshot!(plan_text(&no_reordering), @r"
+    HashJoinExec: mode=Partitioned, join_type=Left, on=[(small_col@0, medium_col@0)]
+      StatisticsExec: col_count=1, row_count=Inexact(1024)
+      StatisticsExec: col_count=1, row_count=Inexact(2048)
+    ");
+    Ok(())
+}
+
+#[test]
+fn isolated_partitions_partitions_unsafe_collect_left_input() -> Result<()> {
+    let (big, small) = create_big_and_small();
+    let join = hash_join_on_first_columns(
+        &small,
+        &big,
+        JoinType::Full,
+        PartitionMode::CollectLeft,
+        false,
+    );
+
+    let isolated = JoinSelection::new().optimize(join, &isolated_config(true))?;
+    assert_snapshot!(plan_text(&isolated), @r"
+    HashJoinExec: mode=Partitioned, join_type=Full, on=[(small_col@0, big_col@0)]
+      StatisticsExec: col_count=1, row_count=Inexact(1024)
+      StatisticsExec: col_count=1, row_count=Inexact(262144)
+    ");
+    Ok(())
+}
+
+#[test]
+fn isolated_partitions_never_swaps_safe_collect_left_into_unsafe() -> Result<()> {
+    let (big, small) = create_big_and_small();
+    let join = hash_join_on_first_columns(
+        &big,
+        &small,
+        JoinType::Right,
+        PartitionMode::CollectLeft,
+        false,
+    );
+
+    // Today the bigger build side is swapped away, which produces a Left join
+    let default =
+        JoinSelection::new().optimize(Arc::clone(&join), &isolated_config(false))?;
+    assert_snapshot!(plan_text(&default), @r"
+    ProjectionExec: expr=[big_col@1 as big_col, small_col@0 as small_col]
+      HashJoinExec: mode=CollectLeft, join_type=Left, on=[(small_col@0, big_col@0)]
+        StatisticsExec: col_count=1, row_count=Inexact(1024)
+        StatisticsExec: col_count=1, row_count=Inexact(262144)
+    ");
+
+    let isolated = JoinSelection::new().optimize(join, &isolated_config(true))?;
+    assert_snapshot!(plan_text(&isolated), @r"
+    HashJoinExec: mode=CollectLeft, join_type=Right, on=[(big_col@0, small_col@0)]
+      StatisticsExec: col_count=1, row_count=Inexact(262144)
+      StatisticsExec: col_count=1, row_count=Inexact(1024)
+    ");
+
+    let rerun =
+        JoinSelection::new().optimize(Arc::clone(&isolated), &isolated_config(true))?;
+    assert_eq!(plan_text(&rerun), plan_text(&isolated));
+    Ok(())
+}
+
+#[test]
+fn isolated_partitions_leaves_null_aware_anti_join() -> Result<()> {
+    let (big, small) = create_big_and_small();
+    let join = hash_join_on_first_columns(
+        &small,
+        &big,
+        JoinType::LeftAnti,
+        PartitionMode::CollectLeft,
+        true,
+    );
+
+    let isolated = JoinSelection::new().optimize(join, &isolated_config(true))?;
+    assert_snapshot!(plan_text(&isolated), @r"
+    HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(small_col@0, big_col@0)], null_aware
+      StatisticsExec: col_count=1, row_count=Inexact(1024)
+      StatisticsExec: col_count=1, row_count=Inexact(262144)
+    ");
+    Ok(())
+}
+
+fn nested_loop_join(
+    left: &Arc<dyn ExecutionPlan>,
+    right: &Arc<dyn ExecutionPlan>,
+    join_type: JoinType,
+) -> Arc<dyn ExecutionPlan> {
+    Arc::new(
+        NestedLoopJoinExec::try_new(
+            Arc::clone(left),
+            Arc::clone(right),
+            None,
+            &join_type,
+            None,
+        )
+        .unwrap(),
+    )
+}
+
+#[test]
+fn isolated_partitions_swaps_build_side_emitting_nested_loop_joins() -> Result<()> {
+    let (big, small) = create_big_and_small();
+
+    let left = nested_loop_join(&small, &big, JoinType::Left);
+    let default =
+        JoinSelection::new().optimize(Arc::clone(&left), &isolated_config(false))?;
+    assert_snapshot!(plan_text(&default), @r"
+    NestedLoopJoinExec: join_type=Left
+      StatisticsExec: col_count=1, row_count=Inexact(1024)
+      StatisticsExec: col_count=1, row_count=Inexact(262144)
+    ");
+    let isolated = JoinSelection::new().optimize(left, &isolated_config(true))?;
+    assert_snapshot!(plan_text(&isolated), @r"
+    ProjectionExec: expr=[small_col@1 as small_col, big_col@0 as big_col]
+      NestedLoopJoinExec: join_type=Right
+        StatisticsExec: col_count=1, row_count=Inexact(262144)
+        StatisticsExec: col_count=1, row_count=Inexact(1024)
+    ");
+    let rerun =
+        JoinSelection::new().optimize(Arc::clone(&isolated), &isolated_config(true))?;
+    assert_eq!(plan_text(&rerun), plan_text(&isolated));
+
+    // The safety swap does not depend on join reordering
+    let mut config = isolated_config(true);
+    config.optimizer.join_reordering = false;
+    let no_reordering = JoinSelection::new()
+        .optimize(nested_loop_join(&small, &big, JoinType::Left), &config)?;
+    assert_eq!(plan_text(&no_reordering), plan_text(&isolated));
+
+    // Anti joins keep a single side's columns, so no projection is needed
+    let anti = nested_loop_join(&small, &big, JoinType::LeftAnti);
+    let isolated = JoinSelection::new().optimize(anti, &isolated_config(true))?;
+    assert_snapshot!(plan_text(&isolated), @r"
+    NestedLoopJoinExec: join_type=RightAnti
+      StatisticsExec: col_count=1, row_count=Inexact(262144)
+      StatisticsExec: col_count=1, row_count=Inexact(1024)
+    ");
+    Ok(())
+}
+
+#[test]
+fn isolated_partitions_never_swaps_nested_loop_join_into_unsafe() -> Result<()> {
+    let (big, small) = create_big_and_small();
+    let join = nested_loop_join(&big, &small, JoinType::Right);
+
+    let default =
+        JoinSelection::new().optimize(Arc::clone(&join), &isolated_config(false))?;
+    assert_snapshot!(plan_text(&default), @r"
+    ProjectionExec: expr=[big_col@1 as big_col, small_col@0 as small_col]
+      NestedLoopJoinExec: join_type=Left
+        StatisticsExec: col_count=1, row_count=Inexact(1024)
+        StatisticsExec: col_count=1, row_count=Inexact(262144)
+    ");
+
+    let isolated = JoinSelection::new().optimize(join, &isolated_config(true))?;
+    assert_snapshot!(plan_text(&isolated), @r"
+    NestedLoopJoinExec: join_type=Right
+      StatisticsExec: col_count=1, row_count=Inexact(262144)
+      StatisticsExec: col_count=1, row_count=Inexact(1024)
+    ");
+    Ok(())
+}
+
+#[test]
+fn isolated_partitions_leaves_full_nested_loop_join() -> Result<()> {
+    let (big, small) = create_big_and_small();
+    let join = nested_loop_join(&big, &small, JoinType::Full);
+
+    let default =
+        JoinSelection::new().optimize(Arc::clone(&join), &isolated_config(false))?;
+    let isolated = JoinSelection::new().optimize(join, &isolated_config(true))?;
+    assert_eq!(plan_text(&isolated), plan_text(&default));
+    Ok(())
+}
+
+/// A session with a `small` table in one partition and a `big` table in four.
+/// It is configured like an executor that runs every partition as an isolated
+/// task: no round-robin repartitioning, and no dynamic join filters (their
+/// build-side barrier waits for sibling partitions, which is a separate issue).
+fn isolated_task_context(isolated_partitions: bool) -> Result<SessionContext> {
+    let config = SessionConfig::new()
+        .with_target_partitions(4)
+        .with_round_robin_repartition(false)
+        .set_bool("datafusion.optimizer.enable_dynamic_filter_pushdown", false)
+        .set_bool(
+            "datafusion.execution.isolated_partitions",
+            isolated_partitions,
+        );
+    let ctx = SessionContext::new_with_config(config);
+    let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int32, false)]));
+    let batch = |keys: Vec<i32>| {
+        RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(Int32Array::from(keys))])
+    };
+    let small = vec![vec![batch(vec![1, 2, 3, 50])?]];
+    let big = (0..4)
+        .map(|p| Ok(vec![batch((10 + p * 1000..10 + (p + 1) * 1000).collect())?]))
+        .collect::<Result<Vec<_>>>()?;
+    ctx.register_table(
+        "small",
+        Arc::new(MemTable::try_new(Arc::clone(&schema), small)?),
+    )?;
+    ctx.register_table("big", Arc::new(MemTable::try_new(schema, big)?))?;
+    Ok(ctx)
+}
+
+/// Plans `sql` once per output partition and runs each partition on its own
+/// plan instance, as an executor that runs partitions as isolated tasks does.
+async fn collect_as_isolated_tasks(
+    ctx: &SessionContext,
+    sql: &str,
+) -> Result<Vec<RecordBatch>> {
+    let partition_count = ctx
+        .sql(sql)
+        .await?
+        .create_physical_plan()
+        .await?
+        .output_partitioning()
+        .partition_count();
+    let mut batches = vec![];
+    for partition in 0..partition_count {
+        let plan = ctx.sql(sql).await?.create_physical_plan().await?;
+        let stream = plan.execute(partition, ctx.task_ctx())?;
+        batches.extend(stream.try_collect::<Vec<_>>().await?);
+    }
+    Ok(batches)
+}
+
+#[tokio::test]
+async fn isolated_partitions_join_results_match_single_process_execution() -> Result<()> {
+    for sql in [
+        // A hash join that collects `small` and emits its unmatched rows
+        "SELECT small.k, big.k FROM small LEFT JOIN big ON small.k = big.k",
+        // A nested loop join that collects `small` and emits its unmatched rows
+        "SELECT small.k, big.k FROM small LEFT JOIN big ON small.k > big.k",
+    ] {
+        let expected = batches_to_sort_string(
+            &isolated_task_context(false)?
+                .sql(sql)
+                .await?
+                .collect()
+                .await?,
+        );
+
+        // The default plan relies on all partitions sharing one build side,
+        // so isolated tasks lose the unmatched `small` rows
+        let ctx = isolated_task_context(false)?;
+        let actual = batches_to_sort_string(&collect_as_isolated_tasks(&ctx, sql).await?);
+        assert_ne!(actual, expected, "{sql}");
+
+        let ctx = isolated_task_context(true)?;
+        let actual = batches_to_sort_string(&collect_as_isolated_tasks(&ctx, sql).await?);
+        assert_eq!(actual, expected, "{sql}");
+    }
+    Ok(())
 }
 
 #[rstest(

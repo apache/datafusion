@@ -1,0 +1,296 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## Join selection with datafusion.execution.isolated_partitions
+##########
+
+# When every output partition may run as an isolated task, a join must not
+# collect (broadcast) a build side whose rows it emits: Left, LeftSemi,
+# LeftAnti, LeftMark and Full joins. With the thresholds below, `small` can be
+# collected and `big` cannot.
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold = 1024;
+
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold_rows = 100;
+
+statement ok
+CREATE TABLE small(k INT, v INT) AS VALUES (1, 10), (2, 20), (3, 30), (50, 500);
+
+statement ok
+CREATE TABLE big(k INT, w INT) AS
+SELECT CAST(value AS INT) AS k, CAST(value AS INT) AS w FROM generate_series(10, 4009);
+
+# 1. Without isolated partitions, the small build side of a Left join is collected
+statement ok
+set datafusion.execution.isolated_partitions = false;
+
+query TT
+EXPLAIN SELECT small.k, big.w FROM small LEFT JOIN big ON small.k = big.k;
+----
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Left, on=[(k@0, k@0)], projection=[k@0, w@2]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+
+statement ok
+set datafusion.execution.isolated_partitions = true;
+
+# With isolated partitions the join is partitioned instead
+query TT
+EXPLAIN SELECT small.k, big.w FROM small LEFT JOIN big ON small.k = big.k;
+----
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=Left, on=[(k@0, k@0)], projection=[k@0, w@2]
+02)--RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=1
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=4
+05)----DataSourceExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+
+query II rowsort
+SELECT small.k, big.w FROM small LEFT JOIN big ON small.k = big.k;
+----
+1 NULL
+2 NULL
+3 NULL
+50 50
+
+# 2. Swapping so that the small side is collected gives a Right join, which is safe
+query TT
+EXPLAIN SELECT big.k, small.v FROM big LEFT JOIN small ON big.k = small.k;
+----
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Right, on=[(k@0, k@0)], projection=[k@2, v@1]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+
+query II
+SELECT count(*), count(small.v) FROM big LEFT JOIN small ON big.k = small.k;
+----
+4000 1
+
+# 3. Full joins are partitioned
+query TT
+EXPLAIN SELECT small.k, big.k FROM small FULL JOIN big ON small.k = big.k;
+----
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=Full, on=[(k@0, k@0)]
+02)--RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=1
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=4
+05)----DataSourceExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+
+query III
+SELECT count(*), count(small.k), count(big.k) FROM small FULL JOIN big ON small.k = big.k;
+----
+4003 4 4000
+
+# 4. LeftSemi
+query TT
+EXPLAIN SELECT * FROM small WHERE k IN (SELECT k FROM big);
+----
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(k@0, k@0)]
+02)--RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=1
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=4
+05)----DataSourceExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+
+query II rowsort
+SELECT * FROM small WHERE k IN (SELECT k FROM big);
+----
+50 500
+
+# 5. LeftAnti
+query TT
+EXPLAIN SELECT * FROM small WHERE NOT EXISTS (SELECT 1 FROM big WHERE big.k = small.k);
+----
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(k@0, k@0)]
+02)--RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=1
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=4
+05)----DataSourceExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+
+query II rowsort
+SELECT * FROM small WHERE NOT EXISTS (SELECT 1 FROM big WHERE big.k = small.k);
+----
+1 10
+2 20
+3 30
+
+# 6. Null-aware joins (`NOT IN` subqueries) are left unchanged
+query TT
+EXPLAIN SELECT * FROM small WHERE k NOT IN (SELECT k FROM big);
+----
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(k@0, k@0)], null_aware
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+
+query II rowsort
+SELECT * FROM small WHERE k NOT IN (SELECT k FROM big);
+----
+1 10
+2 20
+3 30
+
+# 6b. So are null-aware mark joins, from `NOT IN` inside a disjunction
+query TT
+EXPLAIN SELECT * FROM small WHERE k NOT IN (SELECT k FROM big) OR v > 25;
+----
+physical_plan
+01)FilterExec: NOT mark@2 OR v@1 > 25, projection=[k@0, v@1]
+02)--HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(k@0, k@0)], null_aware
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----DataSourceExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+
+query II rowsort
+SELECT * FROM small WHERE k NOT IN (SELECT k FROM big) OR v > 25;
+----
+1 10
+2 20
+3 30
+50 500
+
+# 7. LeftMark, from a subquery inside a disjunction
+query TT
+EXPLAIN SELECT * FROM small WHERE k IN (SELECT k FROM big) OR v > 25;
+----
+physical_plan
+01)FilterExec: mark@2 OR v@1 > 25, projection=[k@0, v@1]
+02)--HashJoinExec: mode=Partitioned, join_type=LeftMark, on=[(k@0, k@0)]
+03)----RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=1
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)----RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=4
+06)------DataSourceExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+
+query II rowsort
+SELECT * FROM small WHERE k IN (SELECT k FROM big) OR v > 25;
+----
+3 30
+50 500
+
+# 8. The partitioned rewrite keeps the residual filter and the projection
+query TT
+EXPLAIN SELECT small.k FROM small LEFT JOIN big ON small.k = big.k AND small.v < big.w;
+----
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=Left, on=[(k@0, k@0)], filter=v@0 < w@1, projection=[k@0]
+02)--RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=1
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=4
+05)----DataSourceExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+
+query I rowsort
+SELECT small.k FROM small LEFT JOIN big ON small.k = big.k AND small.v < big.w;
+----
+1
+2
+3
+50
+
+# 9. A Left nested loop join is swapped to Right
+statement ok
+set datafusion.execution.isolated_partitions = false;
+
+query TT
+EXPLAIN SELECT small.k, big.k FROM small LEFT JOIN big ON small.k > big.k;
+----
+physical_plan
+01)NestedLoopJoinExec: join_type=Left, filter=k@0 > k@1
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+
+statement ok
+set datafusion.execution.isolated_partitions = true;
+
+query TT
+EXPLAIN SELECT small.k, big.k FROM small LEFT JOIN big ON small.k > big.k;
+----
+physical_plan
+01)NestedLoopJoinExec: join_type=Right, filter=k@0 > k@1, projection=[k@1, k@0]
+02)--CoalescePartitionsExec
+03)----DataSourceExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+04)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT count(*), count(big.k) FROM small LEFT JOIN big ON small.k > big.k;
+----
+43 40
+
+# 10. Full nested loop joins have no isolated form and are left unchanged
+query TT
+EXPLAIN SELECT small.k, big.k FROM small FULL JOIN big ON small.k > big.k;
+----
+physical_plan
+01)NestedLoopJoinExec: join_type=Full, filter=k@0 > k@1
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+
+query III
+SELECT count(*), count(small.k), count(big.k) FROM small FULL JOIN big ON small.k > big.k;
+----
+4003 43 4000
+
+# 11. isolated_partitions takes precedence over repartition_joins = false
+statement ok
+set datafusion.optimizer.repartition_joins = false;
+
+query TT
+EXPLAIN SELECT small.k, big.w FROM small LEFT JOIN big ON small.k = big.k;
+----
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=Left, on=[(k@0, k@0)], projection=[k@0, w@2]
+02)--RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=1
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=4
+05)----DataSourceExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+
+query II rowsort
+SELECT small.k, big.w FROM small LEFT JOIN big ON small.k = big.k;
+----
+1 NULL
+2 NULL
+3 NULL
+50 50
+
+statement ok
+set datafusion.optimizer.repartition_joins = true;
+
+statement ok
+RESET datafusion.execution.isolated_partitions;
+
+statement ok
+RESET datafusion.optimizer.hash_join_single_partition_threshold;
+
+statement ok
+RESET datafusion.optimizer.hash_join_single_partition_threshold_rows;
+
+statement ok
+RESET datafusion.explain.physical_plan_only;
+
+statement ok
+DROP TABLE small;
+
+statement ok
+DROP TABLE big;
