@@ -1267,6 +1267,40 @@ Build it with <code class="docutils literal notranslate"><span class="pre">Funct
 </pre></div>
 </div>
 </section>
+<section id="functional-dependency-helpers-take-field-indices-instead-of-names">
+<h3>Functional dependency helpers take field indices instead of names<a class="headerlink" href="#functional-dependency-helpers-take-field-indices-instead-of-names" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">aggregate_functional_dependencies</span></code>, <code class="docutils literal notranslate"><span class="pre">get_target_functional_dependencies</span></code>,
+<code class="docutils literal notranslate"><span class="pre">get_required_group_by_exprs_indices</span></code> and <code class="docutils literal notranslate"><span class="pre">get_required_sort_exprs_indices</span></code> in
+<code class="docutils literal notranslate"><span class="pre">datafusion_common</span></code> now take, for each GROUP BY or ORDER BY expression, the
+index of the input field it references (<code class="docutils literal notranslate"><span class="pre">Option&lt;usize&gt;</span></code>) instead of its name.
+Matching by name gave incorrect results, because different expressions can
+have the same name: <code class="docutils literal notranslate"><span class="pre">CAST(t.pk</span> <span class="pre">AS</span> <span class="pre">INT)</span></code> is named <code class="docutils literal notranslate"><span class="pre">t.pk</span></code>, but it does not
+determine the columns that <code class="docutils literal notranslate"><span class="pre">t.pk</span></code> does.</p>
+<p>Queries are affected too: only a column reference to the key carries its
+dependencies, so a query that selects other columns while grouping by an
+expression over the key is now rejected, as in PostgreSQL and DuckDB. Group by
+the key column itself instead:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- `id` is the INT PRIMARY KEY of `t`</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="k">CAST</span><span class="p">(</span><span class="n">id</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="nb">BIGINT</span><span class="p">);</span><span class="w"> </span><span class="c1">-- now an error</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">id</span><span class="p">;</span><span class="w">                 </span><span class="c1">-- ok</span>
+</pre></div>
+</div>
+<p><strong>Migration guide:</strong></p>
+<p>Pass <code class="docutils literal notranslate"><span class="pre">None</span></code> for an expression that computes a new value. For a column
+reference, <code class="docutils literal notranslate"><span class="pre">datafusion_expr::utils::passthrough_field_index</span></code> returns the index:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">names</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">exprs</span><span class="p">.</span><span class="n">iter</span><span class="p">().</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">e</span><span class="o">|</span><span class="w"> </span><span class="n">e</span><span class="p">.</span><span class="n">schema_name</span><span class="p">().</span><span class="n">to_string</span><span class="p">()).</span><span class="n">collect</span><span class="p">();</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">target</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_target_functional_dependencies</span><span class="p">(</span><span class="n">schema</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">names</span><span class="p">);</span>
+
+<span class="c1">// After</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">indices</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="nb">Option</span><span class="o">&lt;</span><span class="kt">usize</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">exprs</span>
+<span class="w">    </span><span class="p">.</span><span class="n">iter</span><span class="p">()</span>
+<span class="w">    </span><span class="p">.</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">e</span><span class="o">|</span><span class="w"> </span><span class="n">passthrough_field_index</span><span class="p">(</span><span class="n">e</span><span class="p">,</span><span class="w"> </span><span class="n">schema</span><span class="p">))</span>
+<span class="w">    </span><span class="p">.</span><span class="n">collect</span><span class="p">();</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">target</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_target_functional_dependencies</span><span class="p">(</span><span class="n">schema</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">indices</span><span class="p">);</span>
+</pre></div>
+</div>
+</section>
 <section id="filesource-exact-filter-controls-scan-equivalence-properties">
 <h3><code class="docutils literal notranslate"><span class="pre">FileSource::exact_filter</span></code> controls scan equivalence properties<a class="headerlink" href="#filesource-exact-filter-controls-scan-equivalence-properties" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code> no longer derives equivalence properties (constant columns
@@ -1452,6 +1486,7 @@ the API breaks.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#mergeintoopnode-protobuf-literals-require-target-qualifier"><code class="docutils literal notranslate"><span class="pre">MergeIntoOpNode</span></code> protobuf literals require <code class="docutils literal notranslate"><span class="pre">target_qualifier</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#null-aware-joins-record-their-not-in-value-key-count">Null-aware joins record their <code class="docutils literal notranslate"><span class="pre">NOT</span> <span class="pre">IN</span></code> value key count</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#functionaldependence-has-a-new-null-equality-field"><code class="docutils literal notranslate"><span class="pre">FunctionalDependence</span></code> has a new <code class="docutils literal notranslate"><span class="pre">null_equality</span></code> field</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#functional-dependency-helpers-take-field-indices-instead-of-names">Functional dependency helpers take field indices instead of names</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filesource-exact-filter-controls-scan-equivalence-properties"><code class="docutils literal notranslate"><span class="pre">FileSource::exact_filter</span></code> controls scan equivalence properties</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#tableprovider-scan-with-args-supports-skip-pushdown"><code class="docutils literal notranslate"><span class="pre">TableProvider::scan_with_args</span></code> supports skip pushdown</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#who-is-affected">Who is affected</a></li>
