@@ -442,6 +442,10 @@ jobs:
         env:
           RUST_BACKTRACE: 1
         run: cargo xtask ci step test workspace
+      - name: Run SQLLogicTests with coverage
+        env:
+          RUST_BACKTRACE: 1
+        run: cargo xtask ci step test slt-coverage
       - parallel:
           - name: Verify Working Directory Clean
             run: git diff --exit-code
@@ -454,10 +458,20 @@ jobs:
                 echo "$STATUS"
                 exit 1
               fi
-      - name: Upload coverage to codecov.io
+      - name: Upload all-test coverage to codecov.io
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
         with:
           files: target/codecov.json
+          flags: all-tests
+          disable_search: true
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+      - name: Upload SQLLogicTest coverage to codecov.io
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
+        with:
+          files: target/codecov-slt.json
+          flags: sqllogictests
+          disable_search: true
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
 
