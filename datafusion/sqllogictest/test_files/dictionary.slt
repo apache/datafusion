@@ -651,3 +651,26 @@ GROUP BY region;
 NULL 2
 east 4
 west 4
+
+# MIN/MAX unwrap a dictionary whose values are themselves encoded
+statement ok
+CREATE TABLE dict_encoded_values AS
+SELECT
+  arrow_cast(arrow_cast(arrow_cast(column1, 'UInt32'), 'Dictionary(Int32, UInt32)'),
+    'Dictionary(Int32, Dictionary(Int32, UInt32))') AS dict_of_dict,
+  arrow_cast(arrow_cast(arrow_cast(column1, 'UInt32'), 'Dictionary(Int32, UInt32)'),
+    'Dictionary(Int32, RunEndEncoded("run_ends": non-null Int32, "values": UInt32))') AS dict_of_ree
+FROM (VALUES (1), (1), (3)) AS t(column1);
+
+query IIT
+SELECT min(dict_of_dict), max(dict_of_dict), arrow_typeof(max(dict_of_dict)) FROM dict_encoded_values;
+----
+1 3 UInt32
+
+query IIT
+SELECT min(dict_of_ree), max(dict_of_ree), arrow_typeof(max(dict_of_ree)) FROM dict_encoded_values;
+----
+1 3 UInt32
+
+statement ok
+DROP TABLE dict_encoded_values;

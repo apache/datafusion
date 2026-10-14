@@ -57,7 +57,7 @@ fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
     match &input_types[0] {
         DataType::Dictionary(_, dict_value_type) => {
             // TODO add checker, if the value type is complex data type
-            Ok(vec![dict_value_type.deref().clone()])
+            get_min_max_result_type(&[dict_value_type.deref().clone()])
         }
         DataType::RunEndEncoded(_, values) => {
             get_min_max_result_type(&[values.data_type().clone()])
@@ -1507,6 +1507,19 @@ mod tests {
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
         let result = get_min_max_result_type(&[data_type])?;
         assert_eq!(result, vec![DataType::Utf8]);
+
+        let dict = |values: DataType| {
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(values))
+        };
+        let ree = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::UInt32, true)),
+        );
+        let result = get_min_max_result_type(&[dict(ree)])?;
+        assert_eq!(result, vec![DataType::UInt32]);
+
+        let result = get_min_max_result_type(&[dict(dict(DataType::UInt32))])?;
+        assert_eq!(result, vec![DataType::UInt32]);
         Ok(())
     }
 
