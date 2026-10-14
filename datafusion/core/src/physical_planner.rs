@@ -1758,6 +1758,10 @@ impl DefaultPhysicalPlanner {
                     && join_filter.is_none()
                     && *null_equality == NullEquality::NullEqualsNothing
                 {
+                    // Use null-aware sort-merge join for single-key LeftAnti joins
+                    // without a filter. Single-partition inputs and NULLS FIRST ordering
+                    // let the stream determine whether the entire RHS is empty or
+                    // contains NULL before emitting any rows.
                     Arc::new(
                         SortMergeJoinExec::try_new(
                             physical_left,
@@ -1774,12 +1778,17 @@ impl DefaultPhysicalPlanner {
                     && session_state.config().repartition_joins()
                     && !prefer_hash_join
                     && !*null_aware
-                // Null-aware joins (e.g. `NOT IN` with a nullable subquery) must
-                // use the CollectLeft HashJoin below: SortMergeJoinExec does not
-                // implement null-aware anti-join semantics and would return wrong
-                // results when the right side contains a null join key.
+                // Null-aware joins (e.g. `NOT IN` with a nullable subquery) that do not
+                // satisfy the conditions above must use the CollectLeft HashJoin below.
+                // SortMergeJoinExec currently supports null-aware semantics only for
+                // single-key LeftAnti joins without a filter, using NullEqualsNothing.
+                // Routing other null-aware joins through the ordinary sort-merge path
+                // would not preserve NOT IN semantics, including when the subquery
+                // contains a NULL key.
                 {
-                    // Use SortMergeJoin if hash join is not preferred
+                    // Use ordinary sort-merge join when hash join is not preferred.
+                    // Null-aware joins not handled above fall back to CollectLeft
+                    // HashJoin because their semantics are not supported by sort-merge join.
                     let join_on_len = join_on.len();
                     Arc::new(SortMergeJoinExec::try_new(
                         physical_left,
