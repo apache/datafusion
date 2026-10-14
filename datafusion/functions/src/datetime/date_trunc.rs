@@ -474,37 +474,26 @@ impl ScalarUDFImpl for DateTruncFunc {
             return Ok(PreimageResult::None);
         };
 
-        // If the column is a Date32/Date64 wrapped in the signature's implicit
-        // cast to Timestamp(ns), emit bounds in the Date type against the raw
-        // column. `unwrap_cast_in_comparison` doesn't currently support Date
-        // targets, so without this branch the cast survives in the plan and
-        // blocks pruning on Date partition columns.
+        // Try to extract bounds for date columns
         if let Some(result) = date_column_preimage(col_expr, lit_expr, granularity, info)
         {
             return Ok(result);
         }
 
-        // Time columns reach preimage as raw Time (the signature has a
-        // dedicated Coercible variant for Time, no implicit cast). All valid
-        // Time granularities are constant-step.
+        // Try to extract bounds for time columns
         if let Some(result) = time_column_preimage(col_expr, lit_expr, granularity, info)
         {
             return Ok(result);
         }
 
-        // The bounds must match the column's type. The simplifier coerces the
-        // literal to that type before calling `preimage`, but using
-        // `info.get_data_type` as the source of truth (and matches `date_part`).
-        // Date columns reach here as `Cast(_, Timestamp(ns))` and are fully
-        // handled by the Date arm above; Time columns are handled by the Time
-        // arm. Anything else bails.
+        // The bounds must match the column's type
         let target_type = info.get_data_type(col_expr)?;
         let (unit, tz_opt) = match &target_type {
             Timestamp(unit, tz) => (*unit, tz.clone()),
             _ => return Ok(PreimageResult::None),
         };
 
-        // Coarse, timezone-aware buckets can have variable widths around DST.
+        // timezone-aware buckets can have variable widths around DST.
         // Stay conservative for those.
         if tz_opt.is_some() && granularity.has_variable_width_in_tz() {
             return Ok(PreimageResult::None);
@@ -684,14 +673,18 @@ where
     1 + 3 * ((date.month() - 1) / 3)
 }
 
-/// Extract an `i64` timestamp value from a literal that matches the column's
-/// `(unit, tz)`. Returns `None` if the literal is null or not a matching
-/// `Timestamp*` variant — the simplifier is responsible for coercing the
-/// literal first, so a mismatch here means the rewrite is not applicable.
-/// Peel the signature-inserted `Cast(date_col, Timestamp(ns))` wrapper and
-/// emit Date-type preimage bounds against the raw column. Returns `None` if
-/// the column isn't a Date wrapped in the expected cast, or if the literal
-/// isn't a midnight-UTC value aligned to the granularity boundary.
+
+
+/// Extract an `i64` timestamp value from a date literal wrapped in a CAST
+/// (e.g. `Cast(date_col, Timestamp(ns))`)
+///
+/// Needed because `unwrap_cast_in_comparison` doesn't currently support Date
+/// targets, see https://github.com/apache/datafusion/issues/26289. Without this
+/// case, the plan contains a cast which blocks pruning on Date columns.
+///
+/// Returns `None` if the column isn't a Date wrapped in the expected cast, or
+/// if the literal isn't a midnight-UTC value aligned to the granularity
+/// boundary.
 fn date_column_preimage(
     col_expr: &Expr,
     lit_expr: &Expr,
@@ -887,9 +880,37 @@ fn timestamp_to_scalar(
 }
 
 /// Returns timestamp preimage bounds `[lower, upper)` for
-/// `date_trunc(granularity, expr) = lower`. Returns `None` if the literal is
-/// not aligned to the granularity (e.g. `date_trunc('month', col) = '2024-05-15'`,
-/// which is unsatisfiable) or if the upper bound would overflow.
+/// `date_trunc(granularity, expr) = lower`.
+///
+/// The caller turns the half-open interval into a range predicate on `expr`,
+/// for example:
+///
+/// ```text
+/// date_trunc('month', ts) = '2024-05-01'
+///   --> ts >= '2024-05-01' AND ts < '2024-06-01'
+///
+/// date_trunc('hour', ts) = '2024-05-01T10:00:00'
+///   --> ts >= '2024-05-01T10:00:00' AND ts < '2024-05-01T11:00:00'
+///
+/// date_trunc('day', ts) > '2024-05-01'
+///   --> ts >= '2024-05-02'
+///
+/// date_trunc('year', ts) != '2024-01-01'
+///   --> ts < '2024-01-01' OR ts >= '2025-01-01'
+/// ```
+///
+/// Returns `None` when:
+///
+/// * the literal is not aligned to the granularity. For example
+///   `date_trunc('month', ts) = '2024-05-15'` can never be true, since
+///   `date_trunc('month', ..)` always returns the first of a month.
+/// * the upper bound would overflow the timestamp range.
+/// * the bucket starting at `lower` is not the expected width.
+///
+///
+/// As an example of the last condition, the `Australia/Lord_Howe` timezone,
+/// moves its clocks by 30 minutes for daylight saving, so `date_trunc('hour',
+/// ts)` has a 30 minute bucket starting at `2024-10-05T15:30:00Z`
 fn timestamp_preimage_bounds(
     unit: TimeUnit,
     lower: i64,
@@ -913,6 +934,17 @@ fn timestamp_preimage_bounds(
     } else {
         next_calendar_boundary_utc(unit, lower, granularity)?
     };
+
+    // Verify that `[lower, upper)` is the same bucket starting at `lower` to
+    // catch timezones whose buckets are not a fixed number of `unit`s wide,
+    // such as an hour bucket that straddles a 30 minute DST shift
+    // (Australia/Lord_Howe), or a minute bucket that straddles a historical
+    // sub-minute offset change.
+    if general_date_trunc(unit, upper.checked_sub(1)?, tz, granularity).ok()? != lower
+        || general_date_trunc(unit, upper, tz, granularity).ok()? != upper
+    {
+        return None;
+    }
 
     Some((lower, upper))
 }
