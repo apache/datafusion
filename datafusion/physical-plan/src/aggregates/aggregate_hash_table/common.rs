@@ -34,6 +34,7 @@ use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use log::debug;
 
 use crate::PhysicalExpr;
+use crate::aggregates::aggregate_argument::AggregateArgument;
 use crate::aggregates::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
     GroupByMetrics, GroupValues, new_group_values,
@@ -156,12 +157,12 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         let input_schema = agg.input().schema();
         let metrics = AggregateTableMetrics::new(agg, partition);
         let aggregate_arguments = aggregate_expressions(
-            &agg.aggr_expr,
+            agg.aggr_expr(),
             &agg.mode,
-            agg.group_by.num_group_exprs(),
+            agg.group_by().num_group_exprs(),
         )?;
         let accumulators: Vec<_> = agg
-            .aggr_expr
+            .aggr_expr()
             .iter()
             .zip(aggregate_arguments)
             .zip(filters)
@@ -179,7 +180,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             })
             .collect::<Result<_>>()?;
 
-        let group_schema = agg.group_by.group_schema(&input_schema)?;
+        let group_schema = agg.group_by().group_schema(&input_schema)?;
         let group_values = new_group_values(group_schema, &GroupOrdering::None)?;
 
         Ok(Self {
@@ -192,7 +193,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             state_schema,
             batch_size,
             state: AggregateHashTableState::Building(AggregateHashTableBuffer {
-                group_by: Arc::clone(&agg.group_by),
+                group_by: Arc::clone(agg.group_by()),
                 group_values,
                 batch_group_indices: Default::default(),
                 accumulators,
@@ -203,10 +204,10 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
 
     /// See comments in [`EvaluatedAggregateBatch`]
     pub(super) fn evaluate_batch(
-        &self,
+        &mut self,
         batch: &RecordBatch,
     ) -> Result<EvaluatedAggregateBatch> {
-        let state = self.state.building();
+        let state = self.state.building_mut();
         // Outer vec: one per grouping set; inner vec: group-by expressions.
         let grouping_set_args = self
             .group_by_metrics
@@ -216,7 +217,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         let accumulator_args = self.group_by_metrics.time_aggregate_arguments(|| {
             state
                 .accumulators
-                .iter()
+                .iter_mut()
                 .enumerate()
                 .map(|(idx, acc)| {
                     self.aggregate_argument_metrics
@@ -410,10 +411,6 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         matches!(self.state, AggregateHashTableState::Building(_))
     }
 
-    pub(in crate::aggregates) fn is_done(&self) -> bool {
-        matches!(self.state, AggregateHashTableState::Done)
-    }
-
     pub(super) fn start_outputting(&mut self) {
         let AggregateHashTableState::Building(mut state) =
             std::mem::replace(&mut self.state, AggregateHashTableState::Done)
@@ -454,7 +451,8 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
         let any_interned = group_by_metrics.time_group_key_preparation(|| {
             let max_ordinal = max_duplicate_ordinal(state.group_by.groups());
-            let mut ordinals: HashMap<&[bool], usize> = HashMap::new();
+            let mut ordinals: HashMap<&[bool], usize> =
+                HashMap::with_capacity(state.group_by.groups().len());
             let group_schema = state.group_by.group_schema(&self.input_schema)?;
             let n_expr = state.group_by.expr().len();
             let mut any_interned = false;
@@ -526,8 +524,8 @@ pub(super) struct HashAggregateAccumulator {
 
     /// Arguments to pass to this accumulator.
     ///
-    /// Example: `CORR(x, y)` stores two expressions here, while `SUM(x)` stores one.
-    arguments: Vec<Arc<dyn PhysicalExpr>>,
+    /// Example: `CORR(x, y)` stores two arguments here, while `SUM(x)` stores one.
+    arguments: Vec<AggregateArgument>,
 
     /// Optional `FILTER` expression for this accumulator.
     ///
@@ -720,7 +718,7 @@ impl HashAggregateAccumulator {
     ) -> Self {
         Self {
             aggregate_expr,
-            arguments,
+            arguments: arguments.into_iter().map(AggregateArgument::new).collect(),
             filter,
             accumulator,
             submetrics,
@@ -734,7 +732,10 @@ impl HashAggregateAccumulator {
             create_group_accumulator(&self.aggregate_expr, Arc::clone(&self.submetrics))?;
         Ok(Self::new(
             Arc::clone(&self.aggregate_expr),
-            self.arguments.clone(),
+            self.arguments
+                .iter()
+                .map(|argument| Arc::clone(argument.expr()))
+                .collect(),
             self.filter.clone(),
             accumulator,
             Arc::clone(&self.submetrics),
@@ -750,7 +751,7 @@ impl HashAggregateAccumulator {
     /// Before updating [`GroupsAccumulator`], the retained selection is used to
     /// compact the matching group IDs and is not passed through.
     pub(super) fn evaluate_compacted_args(
-        &self,
+        &mut self,
         batch: &RecordBatch,
     ) -> Result<CompactedAccumulatorArgs> {
         let selection = self.evaluate_filter(batch)?;
@@ -771,13 +772,13 @@ impl HashAggregateAccumulator {
         };
         let arguments = self
             .arguments
-            .iter()
-            .map(|expr| {
+            .iter_mut()
+            .map(|argument| {
                 if let Some(argument_batch) = argument_batch {
-                    expr.evaluate(argument_batch)
-                        .and_then(|value| value.into_array(argument_batch.num_rows()))
+                    argument.evaluate(argument_batch)
                 } else {
-                    let data_type = expr.data_type(batch.schema_ref().as_ref())?;
+                    let data_type =
+                        argument.expr().data_type(batch.schema_ref().as_ref())?;
                     Ok(new_empty_array(&data_type))
                 }
             })
@@ -795,21 +796,17 @@ impl HashAggregateAccumulator {
     /// rows remain as null argument values and the filter is passed to
     /// [`GroupsAccumulator::convert_to_state`].
     pub(super) fn evaluate_row_aligned_args(
-        &self,
+        &mut self,
         batch: &RecordBatch,
     ) -> Result<RowAlignedAccumulatorArgs> {
         let filter = self.evaluate_filter(batch)?;
         let selection = filter.as_ref();
         let arguments = self
             .arguments
-            .iter()
-            .map(|expr| {
-                selection
-                    .map_or_else(
-                        || expr.evaluate(batch),
-                        |selection| expr.evaluate_selection(batch, selection),
-                    )
-                    .and_then(|value| value.into_array(batch.num_rows()))
+            .iter_mut()
+            .map(|argument| match selection {
+                Some(selection) => argument.evaluate_selection(batch, selection),
+                None => argument.evaluate(batch),
             })
             .collect::<Result<_>>()?;
 
@@ -899,8 +896,8 @@ impl HashAggregateAccumulator {
     ) -> Result<Vec<ArrayRef>> {
         self.arguments
             .iter()
-            .map(|expr| {
-                let data_type = expr.data_type(input_schema)?;
+            .map(|argument| {
+                let data_type = argument.expr().data_type(input_schema)?;
                 Ok(new_null_array(&data_type, num_rows))
             })
             .collect()
@@ -997,7 +994,7 @@ mod tests {
         let submetrics = aggregate_sub_metrics(&metrics, 0, ["SUM(value)"])
             .pop()
             .expect("one aggregate submetric factory");
-        let accumulator = sum_accumulator(&schema, "include", 1, submetrics)?;
+        let mut accumulator = sum_accumulator(&schema, "include", 1, submetrics)?;
         let group_by_metrics = GroupByMetrics::new(&metrics, 0);
         let argument_metrics = AggregateArgumentMetrics::new(&metrics, 0, ["SUM(value)"]);
         let accumulator_metrics = AggregateAccumulatorMetrics::new(

@@ -70,8 +70,8 @@ pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
 /// Returns an iterator of index vectors, where each vector contains the indices
 /// of elements to include in that subset.
 fn powerset_indices(len: usize) -> impl Iterator<Item = Vec<usize>> {
-    (0..(1 << len)).map(move |mask| {
-        let mut indices = vec![];
+    (0..(1 << len)).map(move |mask: u64| {
+        let mut indices = Vec::with_capacity(mask.count_ones() as usize);
         let mut bitset = mask;
         while bitset > 0 {
             let rightmost: u64 = bitset & !(bitset - 1);
@@ -373,7 +373,7 @@ fn get_excluded_columns(
         return plan_err!("EXCLUDE or EXCEPT contains duplicate column names");
     }
 
-    let mut result = vec![];
+    let mut result = Vec::with_capacity(unique_idents.len());
     for ident in unique_idents.into_iter() {
         let col_name = ident.value.as_str();
         let (qualifier, field) = schema.qualified_field_with_name(qualifier, col_name)?;
@@ -525,8 +525,9 @@ pub fn generate_sort_key(
         })
         .collect::<Vec<_>>();
 
-    let mut final_sort_keys = vec![];
-    let mut is_partition_flag = vec![];
+    let num_keys = partition_by.len() + order_by.len();
+    let mut final_sort_keys = Vec::with_capacity(num_keys);
+    let mut is_partition_flag = Vec::with_capacity(num_keys);
     for e in partition_by {
         // By default, create sort key with ASC is true and NULLS LAST to be consistent with
         // PostgreSQL's rule: https://www.postgresql.org/docs/current/queries-order.html
@@ -616,28 +617,45 @@ pub fn compare_sort_expr(
     Ordering::Equal
 }
 
-/// Group a slice of window expression expr by their order by expressions
+/// Group window expressions by their sort keys, preserving any outer alias.
 pub fn group_window_expr_by_sort_keys(
     window_expr: impl IntoIterator<Item = Expr>,
 ) -> Result<Vec<(WindowSortKey, Vec<Expr>)>> {
     let mut result = vec![];
-    window_expr.into_iter().try_for_each(|expr| match &expr {
-        Expr::WindowFunction(window_fun) => {
-            let WindowFunctionParams{ partition_by, order_by, ..} = &window_fun.as_ref().params;
-            let sort_key = generate_sort_key(partition_by, order_by)?;
-            if let Some((_, values)) = result.iter_mut().find(
-                |group: &&mut (WindowSortKey, Vec<Expr>)| matches!(group, (key, _) if *key == sort_key),
-            ) {
-                values.push(expr);
-            } else {
-                result.push((sort_key, vec![expr]))
-            }
-            Ok(())
+
+    window_expr.into_iter().try_for_each(|expr| {
+        // Read the window's settings through one alias.
+        // Keep `expr` intact so its output name is preserved.
+        let inner = match &expr {
+            Expr::Alias(alias) => alias.expr.as_ref(),
+            _ => &expr,
+        };
+
+        let Expr::WindowFunction(window_fun) = inner else {
+            return internal_err!("Impossibly got non-window expr {expr:?}");
+        };
+
+        let WindowFunctionParams {
+            partition_by,
+            order_by,
+            ..
+        } = &window_fun.as_ref().params;
+
+        let sort_key = generate_sort_key(partition_by, order_by)?;
+
+        if let Some((_, values)) = result.iter_mut().find(
+            |group: &&mut (WindowSortKey, Vec<Expr>)| {
+                matches!(group, (key, _) if *key == sort_key)
+            },
+        ) {
+            values.push(expr);
+        } else {
+            result.push((sort_key, vec![expr]));
         }
-        other => internal_err!(
-            "Impossibly got non-window expr {other:?}"
-        ),
+
+        Ok(())
     })?;
+
     Ok(result)
 }
 
@@ -946,20 +964,38 @@ pub fn exprlist_to_fields<'a>(
 /// .project(vec![col("c1"), col("SUM(c2)")?
 /// ```
 pub fn columnize_expr(e: Expr, input: &LogicalPlan) -> Result<Expr> {
-    let output_exprs = match input.columnized_output_exprs() {
-        Ok(exprs) if !exprs.is_empty() => exprs,
-        _ => return Ok(e),
-    };
-    let exprs_map: HashMap<&Expr, Column> = output_exprs.into_iter().collect();
-    e.transform_down(|node: Expr| match exprs_map.get(&node) {
-        Some(column) => Ok(Transformed::new(
-            Expr::Column(column.clone()),
-            true,
-            TreeNodeRecursion::Jump,
-        )),
-        None => Ok(Transformed::no(node)),
-    })
-    .data()
+    Columnizer::new(input).columnize(e)
+}
+
+/// Applies [`columnize_expr`] to many expressions over the same input plan,
+/// building the lookup of the input's output expressions only once.
+pub(crate) struct Columnizer<'a> {
+    output_exprs: HashMap<&'a Expr, Column>,
+}
+
+impl<'a> Columnizer<'a> {
+    pub(crate) fn new(input: &'a LogicalPlan) -> Self {
+        let output_exprs = input
+            .columnized_output_exprs()
+            .map(|exprs| exprs.into_iter().collect())
+            .unwrap_or_default();
+        Self { output_exprs }
+    }
+
+    pub(crate) fn columnize(&self, e: Expr) -> Result<Expr> {
+        if self.output_exprs.is_empty() {
+            return Ok(e);
+        }
+        e.transform_down(|node: Expr| match self.output_exprs.get(&node) {
+            Some(column) => Ok(Transformed::new(
+                Expr::Column(column.clone()),
+                true,
+                TreeNodeRecursion::Jump,
+            )),
+            None => Ok(Transformed::no(node)),
+        })
+        .data()
+    }
 }
 
 /// Collect all deeply nested `Expr::Column`'s. They are returned in order of
@@ -1508,14 +1544,12 @@ pub fn collect_subquery_cols(
     subquery_schema: &DFSchema,
 ) -> Result<BTreeSet<Column>> {
     exprs.iter().try_fold(BTreeSet::new(), |mut cols, expr| {
-        let mut using_cols: Vec<Column> = vec![];
         for col in expr.column_refs().into_iter() {
             if subquery_schema.has_column(col) {
-                using_cols.push(col.clone());
+                cols.insert(col.clone());
             }
         }
 
-        cols.extend(using_cols);
         Result::<_>::Ok(cols)
     })
 }
@@ -1567,6 +1601,31 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_group_window_expr_by_sort_keys_aliased_window_expr() -> Result<()> {
+        let age_asc = Sort::new(col("age"), true, true);
+        let max1 = Expr::from(WindowFunction::new(
+            WindowFunctionDefinition::AggregateUDF(max_udaf()),
+            vec![col("name")],
+        ))
+        .order_by(vec![age_asc.clone()])
+        .build()
+        .unwrap();
+        // The same window function under an alias, as the Substrait consumer
+        // produces when a window column's default name collides with an
+        // input column. It must be grouped by the inner function's sort key
+        // and kept aliased.
+        let max1_aliased = max1.clone().alias("max_name");
+
+        let result =
+            group_window_expr_by_sort_keys(vec![max1.clone(), max1_aliased.clone()])?;
+
+        let key = vec![(age_asc, false)];
+        let expected: Vec<(WindowSortKey, Vec<Expr>)> =
+            vec![(key, vec![max1, max1_aliased])];
+        assert_eq!(expected, result);
+        Ok(())
+    }
     #[test]
     fn test_group_window_expr_by_sort_keys() -> Result<()> {
         let age_asc = Sort::new(col("age"), true, true);

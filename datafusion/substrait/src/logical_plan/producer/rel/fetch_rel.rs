@@ -28,6 +28,7 @@ pub fn from_limit(
 ) -> datafusion::common::Result<Box<Rel>> {
     let input = producer.handle_plan(limit.input.as_ref())?;
     let empty_schema = Arc::new(DFSchema::empty());
+
     let offset_mode = limit
         .skip
         .as_ref()
