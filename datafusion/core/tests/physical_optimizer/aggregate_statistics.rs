@@ -905,3 +905,54 @@ async fn aggregate_statistics_consults_statistics_providers() -> Result<()> {
     );
     Ok(())
 }
+
+/// A provider reporting fewer column statistics than the scan has columns must
+/// not make `AggregateStatistics` index out of bounds: the rule falls back and
+/// the count is still computed from the data.
+#[tokio::test]
+async fn aggregate_statistics_falls_back_on_short_column_statistics() -> Result<()> {
+    let provider = ClosureStatisticsProvider::with_matches(
+        |plan| plan.is::<DataSourceExec>(),
+        |plan, child_stats| {
+            let child_stats = child_stats
+                .iter()
+                .map(|c| Arc::clone(c.base_arc()))
+                .collect::<Vec<_>>();
+            let mut stats = Arc::unwrap_or_clone(
+                plan.statistics_from_inputs(&child_stats, &StatisticsArgs::new())?,
+            );
+            // Drop the trailing column's statistics so every scan reports one
+            // fewer entry than its schema has columns, whatever the projection.
+            stats.column_statistics.pop();
+            Ok(StatisticsResult::Computed(stats.into()))
+        },
+    );
+    let state = SessionStateBuilder::new()
+        .with_default_features()
+        .with_statistics_registry(StatisticsRegistry::with_providers(vec![Arc::new(
+            provider,
+        )]))
+        .build();
+    let ctx = SessionContext::new_with_state(state);
+    ctx.sql(
+        "CREATE TABLE t AS SELECT * FROM \
+         (VALUES (1, 10), (2, 10), (3, NULL), (4, 20)) AS v(a, b)",
+    )
+    .await?
+    .collect()
+    .await?;
+
+    // NULL and duplicate values make a wrong fallback visible in the count.
+    let batches = ctx.sql("SELECT count(b) FROM t").await?.collect().await?;
+    assert_batches_eq!(
+        &[
+            "+------------+",
+            "| count(t.b) |",
+            "+------------+",
+            "| 3          |",
+            "+------------+"
+        ],
+        &batches
+    );
+    Ok(())
+}
