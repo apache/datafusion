@@ -29,7 +29,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Schema, SchemaRef};
+use arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
 use datafusion_functions::core::input_file_name::InputFileNameFunc;
 use parquet::arrow::ProjectionMask;
 use parquet::schema::types::SchemaDescriptor;
@@ -37,10 +37,10 @@ use parquet::schema::types::SchemaDescriptor;
 use datafusion_common::Result;
 use datafusion_common::nested_struct::requires_nested_struct_cast;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
+use datafusion_expr::{FieldPath, NestedInputAccess, ReturnFieldArgs};
 use datafusion_functions::core::file_row_index::FileRowIndexFunc;
-use datafusion_functions::core::getfield::GetFieldFunc;
 use datafusion_physical_expr::expressions::{CastExpr, Column, Literal};
-use datafusion_physical_expr::utils::collect_columns;
+use datafusion_physical_expr::utils::{collect_columns, reassign_expr_columns};
 use datafusion_physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 
 use crate::nested_schema_pruning::{
@@ -64,7 +64,8 @@ pub(crate) struct ParquetReadPlan {
     pub projected_schema: SchemaRef,
 }
 
-/// Records a struct field access via `get_field(struct_col, 'field1', 'field2', ...)`.
+/// Records a struct field read by a call such as `get_field(struct_col, 'field1', 'field2', ...)`,
+/// or by any other function with the `NestedInputAccess` capability.
 ///
 /// This allows the row filter to project only the specific Parquet leaf columns
 /// needed by the filter, rather than all leaves of the struct.
@@ -162,8 +163,9 @@ impl<'a> StructAccessTree<'a> {
 ///   not covered by the supported predicate set)
 /// - Columns that don't exist in the file schema
 ///
-/// Struct field access via `get_field` is supported when the resolved leaf type
-/// is primitive (e.g. `get_field(struct_col, 'field') > 5`).
+/// Calls that read only part of a struct, such as `get_field(struct_col, 'field') > 5`
+/// or other functions with the `NestedInputAccess` capability, are supported when
+/// the fields they read obey the nested pushdown policy.
 pub(crate) struct PushdownChecker<'schema> {
     /// Does the expression require any non-primitive columns (like structs)?
     non_primitive_columns: bool,
@@ -173,9 +175,9 @@ pub(crate) struct PushdownChecker<'schema> {
     /// and therefore can't be pushed down into the row-filter.
     has_unpushable_udfs: bool,
     /// Indices into the file schema of columns required to evaluate the expression.
-    /// Does not include struct columns accessed via `get_field`.
+    /// Does not include struct columns read only through nested field accesses.
     required_columns: Vec<usize>,
-    /// Struct field accesses via `get_field`.
+    /// Nested struct field accesses, e.g. via `get_field`.
     struct_field_accesses: Vec<StructFieldAccess>,
     /// Whole-column casts to a narrower nested type
     /// (`CAST(col AS narrower_struct)`), collected either when
@@ -185,8 +187,8 @@ pub(crate) struct PushdownChecker<'schema> {
     cast_accesses: Vec<CastColumnAccess>,
     /// Whether to collect [`Self::cast_accesses`].
     collect_cast_accesses: bool,
-    /// Allow `get_field(CAST(struct_column AS Struct(...)), 'field', ...)`
-    /// after schema adaptation, preserving the cast and reading the leaves its
+    /// Allow nested field accesses on `CAST(struct_column AS Struct(...))`, such as
+    /// `get_field(CAST(..), 'field', ...)`, after schema adaptation, preserving the cast and reading the leaves its
     /// target names. Both source and target must be Struct types.
     /// Planning keeps this disabled so explicit casts retain a residual filter.
     allow_struct_casts: bool,
@@ -222,103 +224,132 @@ impl<'schema> PushdownChecker<'schema> {
         self
     }
 
-    /// Checks whether a struct's root column exists in the file schema and, if so,
-    /// records its index so the entire struct is decoded for filter evaluation.
+    /// Handles a call to a function with the [`NestedInputAccess`] capability,
+    /// such as `get_field`, recording only the nested fields it reads.
     ///
-    /// This is called when we see a `get_field` expression that resolves to a
-    /// primitive leaf type. We only need the *root* column index because the
-    /// Parquet reader decodes all leaves of a struct together.
+    /// Returns `Some(Jump)` when the call was handled: every argument with a
+    /// valid requirement is recorded as struct field accesses (or a retained
+    /// cast, see below), and every other argument is visited normally, so
+    /// columns it references are read whole and expressions it contains are
+    /// still checked. Returns `None` when the function declares no
+    /// requirement, so that normal traversal reads its arguments whole.
     ///
-    /// # Example
-    ///
-    /// Given file schema `{a: Int32, s: Struct(foo: Utf8, bar: Int64)}` and the
-    /// expression `get_field(s, 'foo') = 'hello'`:
-    ///
-    /// - `column_name` = `"s"` (the root struct column)
-    /// - `file_schema.index_of("s")` returns `1`
-    /// - We push `1` into `required_columns`
-    /// - Return `None` (no issue — traversal continues in the caller)
-    ///
-    /// If `"s"` is not in the file schema (e.g. a projected-away column), we set
-    /// `projected_columns = true` and return `Jump` to skip the subtree.
-    fn check_struct_field_column(
-        &mut self,
-        column_name: &str,
-        field_path: Vec<String>,
-    ) -> Option<TreeNodeRecursion> {
-        let Ok(idx) = self.file_schema.index_of(column_name) else {
-            self.projected_columns = true;
-            return Some(TreeNodeRecursion::Jump);
-        };
-
-        self.struct_field_accesses.push(StructFieldAccess {
-            root_index: idx,
-            field_path,
-        });
-
-        None
-    }
-
-    /// Preserve a Struct cast retained by schema adaptation and record the
-    /// leaves its target consumes.
-    ///
-    /// The cast is kept intact — moving it could change errors or nulls — but
-    /// the target itself names every field the conversion touches, so the read
-    /// can be clipped to those leaves. `cast_struct_column` resolves source
+    /// A requirement on an argument of the form `CAST(struct_col AS
+    /// Struct(..))`, as retained by schema adaptation, is accepted only when
+    /// [`Self::allow_struct_casts`] is set. The cast is then kept intact,
+    /// since moving it could change errors or nulls, and the read is clipped to
+    /// the leaves its target names. `cast_struct_column` resolves source
     /// children by name and ignores the rest, so a leaf the target does not
-    /// name cannot affect the result. Note this clips by the *cast target*, not
-    /// by the `get_field` key: an explicit query cast names every field the
-    /// user asked to convert, so its siblings stay in the read and their
-    /// conversions still run.
-    fn check_cast_struct_field_access(
+    /// name cannot affect the result. This clips by the *cast target*, not by
+    /// the required paths: an explicit query cast names every field the user
+    /// asked to convert, so its siblings stay in the read and their conversions
+    /// still run.
+    fn check_nested_input_access(
         &mut self,
         func: &ScalarFunctionExpr,
-    ) -> Option<TreeNodeRecursion> {
-        if !self.allow_struct_casts {
-            return None;
-        }
-        let (source, field_names) = func.args().split_first()?;
-        if field_names.is_empty() {
-            return None;
-        }
-        let cast = source.downcast_ref::<CastExpr>()?;
-        let column = cast.expr().downcast_ref::<Column>()?;
-        let index = self.file_schema.index_of(column.name()).ok()?;
-        if !matches!(
-            self.file_schema.field(index).data_type(),
-            DataType::Struct(_)
-        ) {
-            return None;
-        }
-        let return_type = func.return_type();
-        if DataType::is_nested(return_type) && !self.is_nested_type_supported(return_type)
-        {
-            return None;
-        }
-
-        // Every key must resolve through Struct fields in the cast target.
-        // In particular, a key following a Map field is a runtime lookup.
-        let mut data_type = cast.cast_type();
-        for field_name in field_names {
-            let name = field_name
-                .downcast_ref::<Literal>()?
-                .value()
-                .try_as_str()
-                .flatten()?;
-            let DataType::Struct(fields) = data_type else {
-                return None;
-            };
-            data_type = fields
-                .iter()
-                .find(|field| field.name() == name)?
-                .data_type();
-        }
-
-        self.cast_accesses.push(CastColumnAccess {
-            root_index: index,
-            target_type: cast.cast_type().clone(),
+        access: &dyn NestedInputAccess,
+    ) -> Result<Option<TreeNodeRecursion>> {
+        let args = func.args();
+        // Resolve argument fields against the file schema. Column indices may
+        // still refer to an earlier schema, so columns are resolved by name.
+        let Some(arg_fields) = args
+            .iter()
+            .map(|arg| self.argument_field(arg))
+            .collect::<Option<Vec<_>>>()
+        else {
+            return Ok(None);
+        };
+        let literals = args
+            .iter()
+            .map(|arg| arg.downcast_ref::<Literal>().map(Literal::value))
+            .collect::<Vec<_>>();
+        let required = access.required_fields(&ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &literals,
         });
-        Some(TreeNodeRecursion::Jump)
+        if !required.iter().any(Option::is_some) {
+            return Ok(None);
+        }
+
+        for (index, arg) in args.iter().enumerate() {
+            let paths = required.get(index).and_then(Option::as_ref);
+            if let Some(paths) = paths
+                && self.record_required_paths(arg, arg_fields[index].data_type(), paths)
+            {
+                continue;
+            }
+            // No (usable) requirement: read this argument as usual.
+            arg.visit(self)?;
+        }
+        Ok(Some(TreeNodeRecursion::Jump))
+    }
+
+    /// Returns the field of a function argument in the file schema.
+    fn argument_field(&self, arg: &Arc<dyn PhysicalExpr>) -> Option<FieldRef> {
+        if let Some(column) = arg.downcast_ref::<Column>() {
+            let index = self.file_schema.index_of(column.name()).ok()?;
+            return Some(Arc::clone(&self.file_schema.fields()[index]));
+        }
+        reassign_expr_columns(Arc::clone(arg), self.file_schema)
+            .and_then(|arg| arg.return_field(self.file_schema))
+            .ok()
+    }
+
+    /// Records the struct field `paths` required from `arg`, whose type is
+    /// `arg_type`. Returns `false`, recording nothing, when the paths cannot
+    /// be used, in which case the caller reads the argument whole.
+    fn record_required_paths(
+        &mut self,
+        arg: &Arc<dyn PhysicalExpr>,
+        arg_type: &DataType,
+        paths: &[FieldPath],
+    ) -> bool {
+        // Every path must name a field reached through struct fields only. The
+        // selected field must be primitive, or a nested type the current
+        // pushdown policy supports (lists, for supported list predicates).
+        // Selecting a whole struct subtree is not supported yet: such paths
+        // read the argument whole.
+        let valid = !paths.is_empty()
+            && paths.iter().all(|path| {
+                !path.is_empty()
+                    && resolve_struct_path(arg_type, path).is_some_and(|selected| {
+                        !selected.is_nested() || self.is_nested_type_supported(selected)
+                    })
+            });
+        if !valid {
+            return false;
+        }
+
+        if let Some(column) = arg.downcast_ref::<Column>()
+            && let Ok(root_index) = self.file_schema.index_of(column.name())
+        {
+            self.struct_field_accesses.extend(paths.iter().map(|path| {
+                StructFieldAccess {
+                    root_index,
+                    field_path: path.clone(),
+                }
+            }));
+            return true;
+        }
+
+        if self.allow_struct_casts
+            && let Some(cast) = arg.downcast_ref::<CastExpr>()
+            && let Some(column) = cast.expr().downcast_ref::<Column>()
+            && let Ok(root_index) = self.file_schema.index_of(column.name())
+            && matches!(
+                self.file_schema.field(root_index).data_type(),
+                DataType::Struct(_)
+            )
+            && matches!(cast.cast_type(), DataType::Struct(_))
+        {
+            self.cast_accesses.push(CastColumnAccess {
+                root_index,
+                target_type: cast.cast_type().clone(),
+            });
+            return true;
+        }
+
+        false
     }
 
     fn check_single_column(&mut self, column_name: &str) -> Option<TreeNodeRecursion> {
@@ -394,90 +425,19 @@ impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
     type Node = Arc<dyn PhysicalExpr>;
 
     fn f_down(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
-        // Handle struct field access like `s['foo']['bar'] > 10`.
+        // Handle calls that read only part of a nested argument, like
+        // `s['foo']['bar'] > 10`, which is `get_field(Column("s"), "foo", "bar")`.
         //
-        // DataFusion represents nested field access as `get_field(Column("s"), "foo")`
-        // (or chained: `get_field(get_field(Column("s"), "foo"), "bar")`).
-        //
-        // We intercept the outermost `get_field` on the way *down* the tree so
-        // the visitor never reaches the raw `Column("s")` node. Without this,
-        // `check_single_column` would see that `s` is a Struct and reject it.
-        //
-        // The strategy:
-        //   1. Match `get_field` whose first arg is a `Column` (the struct root).
-        //   2. Check that the *resolved* return type is primitive — meaning we've
-        //      drilled all the way to a leaf (e.g. `s['foo']` → Utf8).
-        //   3. Record the root column index via `check_struct_field_column` and
-        //      return `Jump` to skip visiting the children (the Column and the
-        //      literal field-name args), since we've already handled them.
-        //
-        // If the return type is still nested (e.g. `s['nested_struct']` → Struct),
-        // we fall through and let normal traversal continue, which will
-        // eventually reject the expression when it hits the struct Column.
-        if let Some(func) =
-            ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(node.as_ref())
+        // We intercept such calls on the way *down* the tree so the visitor
+        // does not reach the raw `Column("s")` node: `check_single_column`
+        // would see that `s` is a Struct and read (or, for filters, reject) it
+        // whole. Instead the fields the call reads are recorded, and only their
+        // leaves are decoded.
+        if let Some(func) = node.downcast_ref::<ScalarFunctionExpr>()
+            && let Some(access) = func.fun().as_nested_input_access()
+            && let Some(recursion) = self.check_nested_input_access(func, access)?
         {
-            if let Some(recursion) = self.check_cast_struct_field_access(func) {
-                return Ok(recursion);
-            }
-            let args = func.args();
-
-            if let Some(column) = args.first().and_then(|a| a.downcast_ref::<Column>()) {
-                // for Map columns, get_field performs a runtime key lookup rather than a
-                // schema-level field access so the entire Map column must be read,
-                // we skip the struct field optimization and defer to normal Column traversal
-                let is_map_column = self
-                    .file_schema
-                    .index_of(column.name())
-                    .ok()
-                    .map(|idx| {
-                        matches!(
-                            self.file_schema.field(idx).data_type(),
-                            DataType::Map(_, _)
-                        )
-                    })
-                    .unwrap_or(false);
-
-                let return_type = func.return_type();
-
-                if !is_map_column
-                    && (!DataType::is_nested(return_type)
-                        || self.is_nested_type_supported(return_type))
-                {
-                    // if any field name argument is not a string literal we cannot
-                    // determine the exact leaf path, so we fall back to reading the
-                    // entire struct root column
-                    let field_path = args[1..]
-                        .iter()
-                        .map(|arg| {
-                            arg.downcast_ref::<Literal>().and_then(|lit| {
-                                lit.value().try_as_str().flatten().map(|s| s.to_string())
-                            })
-                        })
-                        .collect();
-
-                    match field_path {
-                        Some(path) => {
-                            if let Some(recursion) =
-                                self.check_struct_field_column(column.name(), path)
-                            {
-                                return Ok(recursion);
-                            }
-                        }
-                        None => {
-                            // Could not resolve field path — fall back to
-                            // reading the entire struct root column.
-                            if let Some(recursion) =
-                                self.check_single_column(column.name())
-                            {
-                                return Ok(recursion);
-                            }
-                        }
-                    }
-
-                    return Ok(TreeNodeRecursion::Jump);
-                }
-            }
+            return Ok(recursion);
         }
 
         // Handle whole-column casts to a narrower nested type, e.g.
@@ -521,14 +481,32 @@ impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
     }
 }
 
+/// Resolves `path` through the struct fields of `data_type`, returning the
+/// type of the field it names. Returns `None` if a component is missing, is
+/// ambiguous (several fields share the name), or follows a non-struct type.
+fn resolve_struct_path<'a>(
+    data_type: &'a DataType,
+    path: &[String],
+) -> Option<&'a DataType> {
+    path.iter().try_fold(data_type, |data_type, name| {
+        let DataType::Struct(fields) = data_type else {
+            return None;
+        };
+        let mut matches = fields.iter().filter(|field| field.name() == name);
+        let field = matches.next()?;
+        matches.next().is_none().then_some(field.data_type())
+    })
+}
+
 /// Result of checking which columns are required for filter pushdown.
 #[derive(Debug)]
 pub(crate) struct PushdownColumns {
     /// Sorted, unique column indices into the file schema required to evaluate
     /// the filter expression. Must be in ascending order for correct schema
-    /// projection matching. Does not include struct columns accessed via `get_field`.
+    /// projection matching. Does not include struct columns read only through
+    /// nested field accesses.
     pub(crate) required_columns: Vec<usize>,
-    /// Struct field accesses via `get_field`. Each entry records the root struct
+    /// Nested struct field accesses, e.g. via `get_field`. Each entry records the root struct
     /// column index and the field path being accessed.
     pub(crate) struct_field_accesses: Vec<StructFieldAccess>,
     /// Whole-column casts to a narrower nested type, collected for projections
@@ -2175,5 +2153,177 @@ mod test {
             read_plan.projection_mask, expected_mask,
             "whole-root reference must select every leaf under the root"
         );
+    }
+
+    /// A function other than `get_field` that reads fixed paths from its first
+    /// (struct) argument and reads its second argument whole.
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct ReadPaths {
+        signature: datafusion_expr::Signature,
+        /// Paths to declare for argument 0, or `None` for no capability.
+        paths: Option<Vec<FieldPath>>,
+    }
+
+    impl ReadPaths {
+        fn new(paths: Option<&[&[&str]]>) -> Self {
+            Self {
+                signature: datafusion_expr::Signature::any(
+                    2,
+                    datafusion_expr::Volatility::Immutable,
+                ),
+                paths: paths.map(|paths| {
+                    paths
+                        .iter()
+                        .map(|path| path.iter().map(|name| name.to_string()).collect())
+                        .collect()
+                }),
+            }
+        }
+    }
+
+    impl NestedInputAccess for ReadPaths {
+        fn required_fields(&self, _: &ReturnFieldArgs) -> Vec<Option<Vec<FieldPath>>> {
+            vec![self.paths.clone()]
+        }
+    }
+
+    impl datafusion_expr::ScalarUDFImpl for ReadPaths {
+        fn name(&self) -> &str {
+            "read_paths"
+        }
+
+        fn signature(&self) -> &datafusion_expr::Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int32)
+        }
+
+        fn invoke_with_args(
+            &self,
+            _: datafusion_expr::ScalarFunctionArgs,
+        ) -> Result<datafusion_expr::ColumnarValue> {
+            unimplemented!("only planned, never evaluated")
+        }
+
+        fn as_nested_input_access(&self) -> Option<&dyn NestedInputAccess> {
+            self.paths.as_ref().map(|_| self as &dyn NestedInputAccess)
+        }
+    }
+
+    /// Builds `read_paths(s, id)` against `schema` (`id` at 0, `s` at 1).
+    fn read_paths_call(udf: ReadPaths, schema: &Schema) -> Arc<dyn PhysicalExpr> {
+        Arc::new(
+            ScalarFunctionExpr::try_new(
+                Arc::new(datafusion_expr::ScalarUDF::from(udf)),
+                vec![
+                    Arc::new(PhysicalColumn::new("s", 1)),
+                    Arc::new(PhysicalColumn::new("id", 0)),
+                ],
+                schema,
+                Arc::new(datafusion_common::config::ConfigOptions::default()),
+            )
+            .unwrap(),
+        )
+    }
+
+    /// A function with the capability reads only the declared struct leaves,
+    /// and arguments without a requirement are read whole.
+    #[test]
+    fn nested_input_access_reads_only_required_leaves() {
+        let (file_schema, metadata) = write_id_struct_file();
+        let schema_descr = metadata.file_metadata().schema_descr();
+
+        let udf = ReadPaths::new(Some(&[&["value"], &["label"]]));
+        let exprs = vec![read_paths_call(udf, &file_schema)];
+        let read_plan = build_projection_read_plan(exprs, &file_schema, schema_descr);
+
+        // id (0) is read whole; s.value (1) and s.label (2) but not s.pad (3).
+        assert_eq!(
+            read_plan.projection_mask,
+            ProjectionMask::leaves(schema_descr, [0, 1, 2])
+        );
+        assert_eq!(
+            read_plan
+                .projected_schema
+                .field_with_name("s")
+                .unwrap()
+                .data_type(),
+            &DataType::Struct(
+                vec![
+                    Arc::new(Field::new("value", DataType::Int32, false)),
+                    Arc::new(Field::new("label", DataType::Utf8, false)),
+                ]
+                .into()
+            ),
+        );
+    }
+
+    /// The capability is found through aliases.
+    #[test]
+    fn nested_input_access_is_forwarded_through_aliases() {
+        let (file_schema, metadata) = write_id_struct_file();
+        let schema_descr = metadata.file_metadata().schema_descr();
+
+        let udf = datafusion_expr::ScalarUDF::from(ReadPaths::new(Some(&[&["label"]])))
+            .with_aliases(["read_paths_alias"]);
+        let expr = Arc::new(
+            ScalarFunctionExpr::try_new(
+                Arc::new(udf),
+                vec![
+                    Arc::new(PhysicalColumn::new("s", 1)),
+                    Arc::new(PhysicalColumn::new("id", 0)),
+                ],
+                &file_schema,
+                Arc::new(datafusion_common::config::ConfigOptions::default()),
+            )
+            .unwrap(),
+        ) as Arc<dyn PhysicalExpr>;
+        let read_plan = build_projection_read_plan([expr], &file_schema, schema_descr);
+
+        assert_eq!(
+            read_plan.projection_mask,
+            ProjectionMask::leaves(schema_descr, [0, 2])
+        );
+    }
+
+    /// Without the capability, or with a path that does not resolve through
+    /// struct fields, the struct argument is read whole.
+    #[test]
+    fn nested_input_access_falls_back_to_whole_argument() {
+        let (file_schema, metadata) = write_id_struct_file();
+        let schema_descr = metadata.file_metadata().schema_descr();
+        let all_leaves = ProjectionMask::leaves(schema_descr, [0, 1, 2, 3]);
+
+        for udf in [
+            ReadPaths::new(None),
+            ReadPaths::new(Some(&[&["missing"]])),
+            ReadPaths::new(Some(&[&["value", "below_a_primitive"]])),
+            ReadPaths::new(Some(&[&[]])),
+            ReadPaths::new(Some(&[])),
+        ] {
+            let exprs = vec![read_paths_call(udf, &file_schema)];
+            let read_plan = build_projection_read_plan(exprs, &file_schema, schema_descr);
+            assert_eq!(read_plan.projection_mask, all_leaves);
+        }
+    }
+
+    /// Filter pushdown accepts a call reading only primitive struct leaves,
+    /// and rejects it when the struct argument would be read whole.
+    #[test]
+    fn nested_input_access_allows_filter_pushdown() {
+        let (file_schema, _) = write_id_struct_file();
+        let pushable = |udf: ReadPaths| {
+            let mut checker = PushdownChecker::new(&file_schema, false, false);
+            read_paths_call(udf, &file_schema)
+                .visit(&mut checker)
+                .unwrap();
+            !checker.prevents_pushdown()
+        };
+
+        assert!(pushable(ReadPaths::new(Some(&[&["value"], &["label"]]))));
+        assert!(!pushable(ReadPaths::new(None)));
+        assert!(!pushable(ReadPaths::new(Some(&[&["missing"]]))));
     }
 }

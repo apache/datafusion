@@ -30,6 +30,7 @@ mod decoder_projection;
 pub mod file_format;
 pub mod metadata;
 mod metrics;
+mod nested_pruning;
 mod nested_schema_pruning;
 mod opener;
 mod page_filter;

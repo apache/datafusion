@@ -21,13 +21,16 @@ use std::sync::Arc;
 use super::{ParquetAccessPlan, ParquetFileMetrics, RowGroupAccess};
 use crate::bloom_filter::BloomFilterStatistics;
 use crate::metadata::{has_untrusted_byte_array_stats, has_untrusted_min_max_order};
+use crate::nested_pruning::{
+    LeafStatistics, NestedLeaf, NestedPruning, NestedPruningCall,
+};
 use crate::pruning::build_inverted_predicate;
 use arrow::array::{ArrayRef, BooleanArray, UInt64Array};
 use arrow::compute::nullif;
 use arrow::datatypes::Schema;
 use datafusion_common::parquet_config::RowGroupRangeAssignment;
 use datafusion_common::pruning::PruningStatistics;
-use datafusion_common::{Column, Result, ScalarValue};
+use datafusion_common::{Column, ColumnStatistics, Result, ScalarValue};
 use datafusion_datasource::FileRange;
 use datafusion_pruning::PruningPredicate;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
@@ -307,6 +310,7 @@ impl RowGroupAccessPlanFilter {
             groups,
             None,
             predicate,
+            None,
             metrics,
         );
     }
@@ -326,6 +330,27 @@ impl RowGroupAccessPlanFilter {
         predicate: &PruningPredicate,
         metrics: &ParquetFileMetrics,
     ) {
+        self.prune_by_statistics_with_nested(
+            arrow_schema,
+            metadata,
+            predicate,
+            None,
+            metrics,
+        );
+    }
+
+    /// [`Self::prune_by_statistics_with_metadata`] for a predicate in which
+    /// calls to nested input access functions were replaced by the
+    /// placeholder columns of `nested`. `arrow_schema` must then be
+    /// [`NestedPruning::schema`].
+    pub(crate) fn prune_by_statistics_with_nested(
+        &mut self,
+        arrow_schema: &Schema,
+        metadata: &ParquetMetaData,
+        predicate: &PruningPredicate,
+        nested: Option<&NestedPruning>,
+        metrics: &ParquetFileMetrics,
+    ) {
         let file_metadata = metadata.file_metadata();
         self.prune_by_statistics_inner(
             arrow_schema,
@@ -333,10 +358,12 @@ impl RowGroupAccessPlanFilter {
             metadata.row_groups(),
             file_metadata.column_orders().map(Vec::as_slice),
             predicate,
+            nested,
             metrics,
         );
     }
 
+    #[expect(clippy::too_many_arguments)]
     fn prune_by_statistics_inner(
         &mut self,
         arrow_schema: &Schema,
@@ -344,6 +371,7 @@ impl RowGroupAccessPlanFilter {
         groups: &[RowGroupMetaData],
         column_orders: Option<&[ColumnOrder]>,
         predicate: &PruningPredicate,
+        nested: Option<&NestedPruning>,
         metrics: &ParquetFileMetrics,
     ) {
         // scoped timer updates on drop
@@ -362,6 +390,7 @@ impl RowGroupAccessPlanFilter {
             column_orders,
             row_group_metadatas,
             arrow_schema,
+            nested,
         };
 
         // try to prune the row groups in a single call
@@ -430,6 +459,7 @@ impl RowGroupAccessPlanFilter {
                 .map(|&i| &groups[i])
                 .collect::<Vec<_>>(),
             arrow_schema,
+            nested: pruning_stats.nested,
         };
 
         let Ok(inverted_values) = inverted_predicate.prune(&inverted_pruning_stats)
@@ -518,12 +548,68 @@ pub(crate) struct RowGroupPruningStatistics<'a> {
     pub(crate) column_orders: Option<&'a [ColumnOrder]>,
     pub(crate) row_group_metadatas: Vec<&'a RowGroupMetaData>,
     pub(crate) arrow_schema: &'a Schema,
+    /// Placeholder columns standing for nested input access calls, if any.
+    pub(crate) nested: Option<&'a NestedPruning>,
 }
 
 impl<'a> RowGroupPruningStatistics<'a> {
     /// Return an iterator over the row group metadata
     fn metadata_iter(&self) -> impl Iterator<Item = &'a RowGroupMetaData> + '_ {
         self.row_group_metadatas.iter().copied()
+    }
+
+    /// Output statistics of the call behind placeholder `column`, per row
+    /// group, or `None` if `column` is not a placeholder.
+    fn nested_output_statistics(
+        &self,
+        column: &Column,
+    ) -> Option<(&'a NestedPruningCall, Vec<Option<ColumnStatistics>>)> {
+        let call = self.nested?.call(&column.name)?;
+        let inputs = call
+            .inputs()
+            .iter()
+            .map(|leaf| self.leaf_statistics(leaf.as_ref()?))
+            .collect::<Vec<_>>();
+        let num_rows = self
+            .metadata_iter()
+            .map(|group| usize::try_from(group.num_rows()).ok())
+            .collect::<Vec<_>>();
+        Some((call, call.output_statistics(&num_rows, &inputs)))
+    }
+
+    /// Row group statistics of one Parquet leaf, with the same trust rules as
+    /// for top-level columns.
+    fn leaf_statistics(&self, leaf: &NestedLeaf) -> Option<LeafStatistics> {
+        let converter = StatisticsConverter::from_column_index(
+            leaf.parquet_index,
+            &leaf.field,
+            self.parquet_schema,
+        )
+        .ok()?
+        .with_missing_null_counts_as_zero(false);
+        let trusted_order = !has_untrusted_min_max_order(
+            self.parquet_schema,
+            self.column_orders,
+            leaf.parquet_index,
+        );
+        let bounds = |values: Result<ArrayRef>| {
+            values.ok().filter(|_| trusted_order).and_then(|values| {
+                self.mask_untrusted_byte_array_stats(Some(leaf.parquet_index), values)
+            })
+        };
+        Some(LeafStatistics {
+            mins: bounds(
+                converter
+                    .row_group_mins(self.metadata_iter())
+                    .map_err(Into::into),
+            ),
+            maxes: bounds(
+                converter
+                    .row_group_maxes(self.metadata_iter())
+                    .map_err(Into::into),
+            ),
+            null_counts: converter.row_group_null_counts(self.metadata_iter()).ok(),
+        })
     }
 
     fn statistics_converter(&self, column: &Column) -> Result<StatisticsConverter<'a>> {
@@ -574,12 +660,18 @@ impl<'a> RowGroupPruningStatistics<'a> {
 
 impl PruningStatistics for RowGroupPruningStatistics<'_> {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
+        if let Some((call, outputs)) = self.nested_output_statistics(column) {
+            return call.bound_array(&outputs, false);
+        }
         let converter = self.min_max_statistics_converter(column)?;
         let values = converter.row_group_mins(self.metadata_iter()).ok()?;
         self.mask_untrusted_byte_array_stats(converter.parquet_column_index(), values)
     }
 
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
+        if let Some((call, outputs)) = self.nested_output_statistics(column) {
+            return call.bound_array(&outputs, true);
+        }
         let converter = self.min_max_statistics_converter(column)?;
         let values = converter.row_group_maxes(self.metadata_iter()).ok()?;
         self.mask_untrusted_byte_array_stats(converter.parquet_column_index(), values)
@@ -590,6 +682,9 @@ impl PruningStatistics for RowGroupPruningStatistics<'_> {
     }
 
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
+        if let Some((call, outputs)) = self.nested_output_statistics(column) {
+            return call.null_count_array(&outputs);
+        }
         self.statistics_converter(column)
             .and_then(|c| Ok(c.row_group_null_counts(self.metadata_iter())?))
             .ok()

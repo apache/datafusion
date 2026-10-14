@@ -27,6 +27,7 @@ use self::encryption::EncryptionContext;
 use crate::access_plan::PreparedAccessPlan;
 use crate::decoder_projection::DecoderProjection;
 use crate::metrics::{ByteProgress, RowFilterSkippedFullyMatchedMetric};
+use crate::nested_pruning::NestedPruning;
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::push_decoder::{
     DecoderBuilderConfig, InitialDecoderState, PushDecoderStreamState, RgPlanEntry,
@@ -525,6 +526,9 @@ struct MetadataLoadedParquetOpen {
 struct FiltersPreparedParquetOpen {
     loaded: MetadataLoadedParquetOpen,
     pruning_predicate: Option<Arc<PruningPredicate>>,
+    /// Placeholder columns standing for nested input access calls in
+    /// `pruning_predicate`, if any.
+    nested_pruning: Option<Arc<NestedPruning>>,
     page_pruning_predicate: Option<Arc<PagePruningAccessPlanFilter>>,
 }
 
@@ -1228,23 +1232,44 @@ impl MetadataLoadedParquetOpen {
             prepared.stats_prove_unsatisfiable = false;
         }
 
-        // Build predicates for this specific file
+        // Build predicates for this specific file. Calls that read only part
+        // of a nested column, such as `get_field(s, 'a')`, are replaced by
+        // placeholder columns whose statistics are derived from the leaves
+        // they read (see `NestedPruning`).
+        let nested_pruning = match prepared.predicate.as_ref() {
+            Some(predicate) => NestedPruning::rewrite(
+                predicate,
+                &physical_file_schema,
+                reader_metadata.parquet_schema(),
+            )?,
+            None => None,
+        };
+        let (pruning_expr, nested_pruning) = match nested_pruning {
+            Some((predicate, nested)) => (Some(predicate), Some(Arc::new(nested))),
+            None => (prepared.predicate.clone(), None),
+        };
+        let pruning_schema = nested_pruning
+            .as_ref()
+            .map_or(&physical_file_schema, |nested| nested.schema());
         let pruning_predicate = build_pruning_predicates(
-            prepared.predicate.as_ref(),
-            &physical_file_schema,
+            pruning_expr.as_ref(),
+            pruning_schema,
             &prepared.predicate_creation_errors,
             prepared.max_in_list_size,
         );
 
         // Only build page pruning predicate if page index is enabled
         let page_pruning_predicate = if prepared.enable_page_index {
-            prepared.predicate.as_ref().and_then(|predicate| {
-                let p = build_page_pruning_predicate(
+            pruning_expr.as_ref().and_then(|predicate| {
+                let mut p = PagePruningAccessPlanFilter::new_with_max_in_list_size(
                     predicate,
-                    &physical_file_schema,
+                    pruning_schema,
                     prepared.max_in_list_size,
                 );
-                (p.filter_number() > 0).then_some(p)
+                if let Some(nested) = &nested_pruning {
+                    p = p.with_nested(Arc::clone(nested));
+                }
+                (p.filter_number() > 0).then(|| Arc::new(p))
             })
         } else {
             None
@@ -1257,6 +1282,7 @@ impl MetadataLoadedParquetOpen {
                 options,
             },
             pruning_predicate,
+            nested_pruning,
             page_pruning_predicate,
         })
     }
@@ -1322,10 +1348,13 @@ impl FiltersPreparedParquetOpen {
         // If there is a predicate that can be evaluated against the metadata
         if let Some(predicate) = self.pruning_predicate.as_ref().map(|p| p.as_ref()) {
             if prepared.enable_row_group_stats_pruning {
-                row_groups.prune_by_statistics_with_metadata(
-                    &prepared.physical_file_schema,
+                let nested = self.nested_pruning.as_deref();
+                row_groups.prune_by_statistics_with_nested(
+                    nested
+                        .map_or(&prepared.physical_file_schema, |nested| nested.schema()),
                     &file_metadata,
                     predicate,
+                    nested,
                     &prepared.file_metrics,
                 );
             } else {
@@ -1436,15 +1465,23 @@ impl RowGroupsPrunedParquetOpen {
         let arrow_schema = &self.prepared.loaded.prepared.physical_file_schema;
         let parquet_schema = parquet_metadata.file_metadata().schema_descr();
         Ok(page_pruning_predicate.predicate_column_names().any(|name| {
-            let Some((leaf_idx, _)) = parquet_column(parquet_schema, arrow_schema, name)
-            else {
-                return false;
+            // A placeholder for a nested input access call needs the page
+            // index of every leaf the call reads.
+            let leaf_indexes = match page_pruning_predicate.nested_leaf_indexes(name) {
+                Some(leaf_indexes) => leaf_indexes,
+                None => match parquet_column(parquet_schema, arrow_schema, name) {
+                    Some((leaf_idx, _)) => vec![leaf_idx],
+                    None => return false,
+                },
             };
-            row_groups.row_group_indexes().any(|rg_idx| {
-                let column = parquet_metadata.row_group(rg_idx).column(leaf_idx);
-                column.column_index_offset().is_some()
-                    && column.offset_index_offset().is_some()
-            })
+            !leaf_indexes.is_empty()
+                && row_groups.row_group_indexes().any(|rg_idx| {
+                    leaf_indexes.iter().all(|&leaf_idx| {
+                        let column = parquet_metadata.row_group(rg_idx).column(leaf_idx);
+                        column.column_index_offset().is_some()
+                            && column.offset_index_offset().is_some()
+                    })
+                })
         }))
     }
 
@@ -1612,6 +1649,7 @@ impl RowGroupsPrunedParquetOpen {
         let FiltersPreparedParquetOpen {
             loaded,
             pruning_predicate: _,
+            nested_pruning,
             page_pruning_predicate,
         } = prepared;
         let MetadataLoadedParquetOpen {
@@ -1643,7 +1681,9 @@ impl RowGroupsPrunedParquetOpen {
             let page_pruning_result = page_pruning_predicate
                 .prune_plan_with_page_index_and_metrics(
                     access_plan,
-                    &prepared.physical_file_schema,
+                    nested_pruning
+                        .as_ref()
+                        .map_or(&prepared.physical_file_schema, |nested| nested.schema()),
                     reader_metadata.parquet_schema(),
                     file_metadata.as_ref(),
                     &prepared.file_metrics,
@@ -2069,6 +2109,7 @@ fn create_initial_plan(
 /// Build a page pruning predicate from an optional predicate expression.
 /// If the predicate is None or the predicate cannot be converted to a page pruning
 /// predicate, return None.
+#[cfg(test)]
 pub(crate) fn build_page_pruning_predicate(
     predicate: &Arc<dyn PhysicalExpr>,
     file_schema: &SchemaRef,
@@ -2405,6 +2446,7 @@ mod test {
                     options,
                 },
                 pruning_predicate: None,
+                nested_pruning: None,
                 page_pruning_predicate,
             },
             row_groups: RowGroupAccessPlanFilter::new(plan),
