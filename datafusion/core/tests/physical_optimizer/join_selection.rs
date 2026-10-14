@@ -1111,6 +1111,99 @@ fn isolated_partitions_leaves_null_aware_anti_join() -> Result<()> {
     Ok(())
 }
 
+fn nested_loop_join(
+    left: &Arc<dyn ExecutionPlan>,
+    right: &Arc<dyn ExecutionPlan>,
+    join_type: JoinType,
+) -> Arc<dyn ExecutionPlan> {
+    Arc::new(
+        NestedLoopJoinExec::try_new(
+            Arc::clone(left),
+            Arc::clone(right),
+            None,
+            &join_type,
+            None,
+        )
+        .unwrap(),
+    )
+}
+
+#[test]
+fn isolated_partitions_swaps_build_side_emitting_nested_loop_joins() -> Result<()> {
+    let (big, small) = create_big_and_small();
+
+    let left = nested_loop_join(&small, &big, JoinType::Left);
+    let default =
+        JoinSelection::new().optimize(Arc::clone(&left), &isolated_config(false))?;
+    assert_snapshot!(plan_text(&default), @r"
+    NestedLoopJoinExec: join_type=Left
+      StatisticsExec: col_count=1, row_count=Inexact(1024)
+      StatisticsExec: col_count=1, row_count=Inexact(262144)
+    ");
+    let isolated = JoinSelection::new().optimize(left, &isolated_config(true))?;
+    assert_snapshot!(plan_text(&isolated), @r"
+    ProjectionExec: expr=[small_col@1 as small_col, big_col@0 as big_col]
+      NestedLoopJoinExec: join_type=Right
+        StatisticsExec: col_count=1, row_count=Inexact(262144)
+        StatisticsExec: col_count=1, row_count=Inexact(1024)
+    ");
+    let rerun =
+        JoinSelection::new().optimize(Arc::clone(&isolated), &isolated_config(true))?;
+    assert_eq!(plan_text(&rerun), plan_text(&isolated));
+
+    // The safety swap does not depend on join reordering
+    let mut config = isolated_config(true);
+    config.optimizer.join_reordering = false;
+    let no_reordering = JoinSelection::new()
+        .optimize(nested_loop_join(&small, &big, JoinType::Left), &config)?;
+    assert_eq!(plan_text(&no_reordering), plan_text(&isolated));
+
+    // Anti joins keep a single side's columns, so no projection is needed
+    let anti = nested_loop_join(&small, &big, JoinType::LeftAnti);
+    let isolated = JoinSelection::new().optimize(anti, &isolated_config(true))?;
+    assert_snapshot!(plan_text(&isolated), @r"
+    NestedLoopJoinExec: join_type=RightAnti
+      StatisticsExec: col_count=1, row_count=Inexact(262144)
+      StatisticsExec: col_count=1, row_count=Inexact(1024)
+    ");
+    Ok(())
+}
+
+#[test]
+fn isolated_partitions_never_swaps_nested_loop_join_into_unsafe() -> Result<()> {
+    let (big, small) = create_big_and_small();
+    let join = nested_loop_join(&big, &small, JoinType::Right);
+
+    let default =
+        JoinSelection::new().optimize(Arc::clone(&join), &isolated_config(false))?;
+    assert_snapshot!(plan_text(&default), @r"
+    ProjectionExec: expr=[big_col@1 as big_col, small_col@0 as small_col]
+      NestedLoopJoinExec: join_type=Left
+        StatisticsExec: col_count=1, row_count=Inexact(1024)
+        StatisticsExec: col_count=1, row_count=Inexact(262144)
+    ");
+
+    let isolated = JoinSelection::new().optimize(join, &isolated_config(true))?;
+    assert_snapshot!(plan_text(&isolated), @r"
+    NestedLoopJoinExec: join_type=Right
+      StatisticsExec: col_count=1, row_count=Inexact(262144)
+      StatisticsExec: col_count=1, row_count=Inexact(1024)
+    ");
+    Ok(())
+}
+
+#[test]
+fn isolated_partitions_leaves_full_nested_loop_join() -> Result<()> {
+    let (big, small) = create_big_and_small();
+    let join = nested_loop_join(&big, &small, JoinType::Full);
+
+    let default =
+        JoinSelection::new().optimize(Arc::clone(&join), &isolated_config(false))?;
+    let isolated = JoinSelection::new().optimize(join, &isolated_config(true))?;
+    assert_eq!(plan_text(&isolated), plan_text(&default));
+    Ok(())
+}
+
 #[rstest(
     join_type,
     case::inner(JoinType::Inner),

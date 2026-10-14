@@ -354,9 +354,24 @@ fn statistical_join_selection_subrule(
     } else if let Some(nl_join) = plan.downcast_ref::<NestedLoopJoinExec>() {
         let left = nl_join.left();
         let right = nl_join.right();
-        if nl_join.join_type().supports_swap()
-            && should_swap_join_order(left, right, context)?
-        {
+        let join_type = *nl_join.join_type();
+        // A nested loop join always collects its left side. Under
+        // `execution.isolated_partitions` that side must not emit rows: a join
+        // that does is swapped whatever the sizes, and a safe join is never
+        // swapped into one that does. `Full` joins emit rows from both sides
+        // and keep the size-based choice.
+        let isolated = context.config_options().execution.isolated_partitions;
+        let unsafe_now = isolated && join_type.emits_build_side_rows();
+        let unsafe_after_swap = isolated && join_type.swap().emits_build_side_rows();
+        let swap = if !join_type.supports_swap() {
+            false
+        } else if unsafe_now && !unsafe_after_swap {
+            true
+        } else {
+            (unsafe_now || !unsafe_after_swap)
+                && should_swap_join_order(left, right, context)?
+        };
+        if swap {
             nl_join.swap_inputs().map(Some)?
         } else {
             None
