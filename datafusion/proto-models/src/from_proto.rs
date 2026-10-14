@@ -30,6 +30,7 @@ use datafusion_common::config::{
     ParquetOptions, TableParquetOptions,
 };
 use datafusion_common::display::{PlanType, StringifiedPlan};
+use datafusion_common::parquet_config::RowGroupRangeAssignment;
 use datafusion_common::parsers::{CompressionTypeVariant, CsvQuoteStyle};
 use datafusion_common::utils::usize_from_wire;
 use datafusion_common::{
@@ -380,11 +381,16 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
             )?,
             write_batch_size: to_usize(proto.write_batch_size, "write_batch_size")?,
             writer_version,
-            compression: proto.compression_opt.as_ref().map(|opt| match opt {
-                parquet_options::CompressionOpt::Compression(compression) => {
-                    compression.clone()
-                }
-            }),
+            compression: proto
+                .compression_opt
+                .as_ref()
+                .map(|opt| match opt {
+                    parquet_options::CompressionOpt::Compression(compression) => {
+                        compression.parse()
+                    }
+                })
+                .transpose()?,
+            enable_rle_to_dictionary: proto.enable_rle_to_dictionary,
             dictionary_enabled: proto.dictionary_enabled_opt.as_ref().map(|opt| {
                 match opt {
                     parquet_options::DictionaryEnabledOpt::DictionaryEnabled(
@@ -407,6 +413,9 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
                 .transpose()?,
             max_row_group_size: to_usize(proto.max_row_group_size, "max_row_group_size")?,
             max_in_list_size: to_usize(proto.max_in_list_size, "max_in_list_size")?,
+            row_group_range_assignment: RowGroupRangeAssignment::from_proto_str(
+                &proto.row_group_range_assignment,
+            )?,
             created_by: proto.created_by.clone(),
             column_index_truncate_length: proto
                 .column_index_truncate_length_opt
@@ -461,6 +470,8 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
             schema_force_view_types: proto.schema_force_view_types,
             binary_as_string: proto.binary_as_string,
             skip_arrow_metadata: proto.skip_arrow_metadata,
+            write_row_group_number_distinct_values: proto
+                .write_row_group_number_distinct_values,
             coerce_int96: proto.coerce_int96_opt.as_ref().map(|opt| match opt {
                 parquet_options::CoerceInt96Opt::CoerceInt96(coerce_int96) => {
                     coerce_int96.clone()

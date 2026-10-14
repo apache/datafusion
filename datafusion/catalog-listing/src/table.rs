@@ -53,6 +53,7 @@ use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;
+use datafusion_physical_plan::limit::GlobalLimitExec;
 use futures::future::BoxFuture;
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use object_store::ObjectStore;
@@ -79,7 +80,7 @@ pub struct ListFilesResult {
 /// * Reading multiple files as a single table
 /// * Hive style partitioning (e.g., directories named `date=2024-06-01`)
 /// * Merges schemas from files with compatible but not identical schemas (see [`ListingTableConfig::file_schema`])
-/// * `limit`, `filter` and `projection` pushdown for formats that support it (e.g.,
+/// * `limit`, `skip`, `filter` and `projection` pushdown for formats that support it (e.g.,
 ///   Parquet)
 /// * Statistics collection and pruning based on file metadata
 /// * Pre-existing sort order (see [`ListingOptions::file_sort_order`])
@@ -224,6 +225,32 @@ impl ListingTable {
         let options = config
             .options
             .ok_or_else(|| internal_datafusion_err!("No ListingOptions provided"))?;
+
+        // Files may physically contain the partition columns, for example when
+        // they were written with `keep_partition_by_columns = true`. Partition
+        // column values are always taken from the path, so drop such columns
+        // from the file schema to avoid duplicated fields in the table schema.
+        let file_schema = if options
+            .table_partition_cols
+            .iter()
+            .any(|(name, _)| file_schema.field_with_name(name).is_ok())
+        {
+            let indices: Vec<usize> = file_schema
+                .fields()
+                .iter()
+                .enumerate()
+                .filter(|(_, field)| {
+                    !options
+                        .table_partition_cols
+                        .iter()
+                        .any(|(name, _)| name == field.name())
+                })
+                .map(|(idx, _)| idx)
+                .collect();
+            Arc::new(file_schema.project(&indices)?)
+        } else {
+            file_schema
+        };
 
         // Add the partition columns to the file schema
         let mut builder = SchemaBuilder::from(file_schema.as_ref().to_owned());
@@ -552,6 +579,10 @@ impl TableProvider for ListingTable {
             .collect()
     }
 
+    fn supports_skip_pushdown(&self) -> bool {
+        true
+    }
+
     fn get_table_definition(&self) -> Option<&str> {
         self.definition.as_deref()
     }
@@ -594,6 +625,10 @@ impl ListingTable {
         let projection = args.projection().map(|p| p.to_vec());
         let filters = args.filters().map(|f| f.to_vec()).unwrap_or_default();
         let limit = args.limit();
+        let skip = args.skip();
+        // The scan must read enough rows to satisfy `skip + limit`, not
+        // just `limit`, before any rows are skipped below.
+        let inflated_limit = limit.map(|l| l.saturating_add(skip.unwrap_or(0)));
 
         // extract types of partition columns
         let table_partition_cols = self
@@ -621,7 +656,7 @@ impl ListingTable {
         // or before applying non-partition filters.
         let statistic_file_limit =
             if filters.is_empty() && declared_output_partitioning.is_none() {
-                limit
+                inflated_limit
             } else {
                 None
             };
@@ -737,7 +772,7 @@ impl ListingTable {
             .with_constraints(self.constraints.clone())
             .with_statistics(statistics)
             .with_projection_indices(projection)?
-            .with_limit(limit)
+            .with_limit(inflated_limit)
             .with_output_ordering(output_ordering)
             .with_output_partitioning(output_partitioning)
             .with_expr_adapter(self.expr_adapter_factory.clone())
@@ -749,6 +784,11 @@ impl ListingTable {
             .format
             .create_physical_plan(state, scan_config)
             .await?;
+
+        let plan: Arc<dyn ExecutionPlan> = match skip {
+            Some(skip) => Arc::new(GlobalLimitExec::new(plan, skip, limit)),
+            None => plan,
+        };
 
         Ok(ScanResult::new(plan))
     }
@@ -823,11 +863,23 @@ impl ListingTable {
 
         // Invalidate cache entries for this table if they exist
         if let Some(lfc) = state.runtime_env().cache_manager.get_list_files_cache() {
-            let key = TableScopedPath {
-                table: table_path.get_table_ref().clone(),
-                path: table_path.prefix().clone(),
-            };
-            let _ = lfc.remove(&key);
+            if let Some(table_ref) = table_path.get_table_ref() {
+                lfc.drop_table_entries(table_ref)?;
+            } else {
+                let table_prefix = table_path.prefix();
+                let keys: Vec<_> = lfc
+                    .list_entries()
+                    .into_keys()
+                    .filter(|key| {
+                        key.table.is_none()
+                            && (key.path.prefix_matches(table_prefix)
+                                || table_prefix.prefix_matches(&key.path))
+                    })
+                    .collect();
+                for key in keys {
+                    let _ = lfc.remove(&key);
+                }
+            }
         }
 
         // Sink related option, apart from format

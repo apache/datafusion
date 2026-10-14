@@ -28,7 +28,7 @@ use datafusion_expr::test::function_stub::{
 };
 use datafusion_expr::{
     ColumnarValue, EmptyRelation, Expr, Extension, LogicalPlan, LogicalPlanBuilder,
-    ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Union,
+    ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TableScanBuilder, Union,
     UserDefinedLogicalNode, UserDefinedLogicalNodeCore, Volatility, WindowFrame,
     WindowFunctionDefinition, cast, col, exists, in_subquery, lit, scalar_subquery,
     table_scan, wildcard,
@@ -56,6 +56,7 @@ use std::{fmt, vec};
 use crate::common::{MockContextProvider, MockSessionState};
 use datafusion_expr::builder::{
     project, subquery_alias, table_scan_with_filter_and_fetch, table_scan_with_filters,
+    table_source,
 };
 use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions::unicode::planner::UnicodeFunctionPlanner;
@@ -241,7 +242,14 @@ fn roundtrip_statement() -> Result<()> {
             "SELECT left[1] FROM array",
             "SELECT {a:1, b:2}",
             "SELECT s.a FROM (SELECT {a:1, b:2} AS s)",
-            "SELECT MAP {'a': 1, 'b': 2}"
+            "SELECT MAP {'a': 1, 'b': 2}",
+            // Ordered aggregates, both spellings of the ordering.
+            "SELECT first_name, last_value(age ORDER BY salary) FROM person GROUP BY first_name",
+            "SELECT first_name, first_value(age ORDER BY salary DESC) FROM person GROUP BY first_name",
+            "SELECT first_name, array_agg(age ORDER BY salary) FROM person GROUP BY first_name",
+            "SELECT first_name, array_agg(DISTINCT age ORDER BY salary, id) FROM person GROUP BY first_name",
+            "SELECT first_name, string_agg(CAST(age AS VARCHAR), ',' ORDER BY salary) FROM person GROUP BY first_name",
+            "SELECT first_name, percentile_cont(0.5) WITHIN GROUP (ORDER BY age) FROM person GROUP BY first_name",
     ];
 
     // For each test sql string, we transform as follows:
@@ -261,6 +269,21 @@ fn roundtrip_statement() -> Result<()> {
             .with_aggregate_function(sum_udaf())
             .with_aggregate_function(count_udaf())
             .with_aggregate_function(max_udaf())
+            .with_aggregate_function(
+                datafusion_functions_aggregate::array_agg::array_agg_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::first_last::first_value_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::first_last::last_value_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::string_agg::string_agg_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::percentile_cont::percentile_cont_udaf(),
+            )
             .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
             .with_expr_planner(Arc::new(NestedFunctionPlanner))
             .with_expr_planner(Arc::new(FieldAccessPlanner));
@@ -342,6 +365,18 @@ macro_rules! roundtrip_statement_with_dialect_helper {
             )
             .with_aggregate_function(
                 datafusion_functions_aggregate::percentile_cont::percentile_cont_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::array_agg::array_agg_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::first_last::first_value_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::first_last::last_value_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::string_agg::string_agg_udaf(),
             )
             .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
             .with_expr_planner(Arc::new(NestedFunctionPlanner))
@@ -4611,6 +4646,45 @@ fn roundtrip_approx_percentile_cont_within_group_with_centroids()
     Ok(())
 }
 
+/// Ordered aggregates spell their ordering in one of two ways: an argument-list
+/// clause (`array_agg(x ORDER BY y)`) or a `WITHIN GROUP` clause. The
+/// `roundtrip_*_within_group` tests above cover the `WITHIN GROUP` variant;
+/// this covers the argument-list variant.
+#[test]
+fn roundtrip_ordered_aggregate_order_by() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT first_name, last_value(age ORDER BY salary) FROM person GROUP BY first_name",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT person.first_name, last_value(person.age ORDER BY person.salary ASC NULLS LAST) FROM person GROUP BY person.first_name",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT first_name, first_value(age ORDER BY salary DESC) FROM person GROUP BY first_name",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT person.first_name, first_value(person.age ORDER BY person.salary DESC NULLS FIRST) FROM person GROUP BY person.first_name",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT first_name, array_agg(age ORDER BY salary) FROM person GROUP BY first_name",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT person.first_name, array_agg(person.age ORDER BY person.salary ASC NULLS LAST) FROM person GROUP BY person.first_name",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT first_name, string_agg(CAST(age AS VARCHAR), ',' ORDER BY salary) FROM person GROUP BY first_name",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT person.first_name, string_agg(CAST(person.age AS VARCHAR), ',' ORDER BY person.salary ASC NULLS LAST) FROM person GROUP BY person.first_name",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT first_name, array_agg(DISTINCT age ORDER BY salary, id) FROM person GROUP BY first_name",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT person.first_name, array_agg(DISTINCT person.age ORDER BY person.salary ASC NULLS LAST, person.id ASC NULLS LAST) FROM person GROUP BY person.first_name",
+    );
+    Ok(())
+}
+
 #[test]
 fn snowflake_flatten_multiple_unnest_cross_join() -> Result<(), DataFusionError> {
     // Realistic Snowflake pattern:
@@ -4628,5 +4702,26 @@ fn snowflake_flatten_multiple_unnest_cross_join() -> Result<(), DataFusionError>
         unparser_dialect: snowflake,
         expected: @r#"SELECT "a"."VALUE", "b"."VALUE" FROM "multi_array_table" CROSS JOIN LATERAL FLATTEN(INPUT => "multi_array_table"."column_a") AS "a" CROSS JOIN LATERAL FLATTEN(INPUT => "multi_array_table"."column_b") AS "b""#,
     );
+    Ok(())
+}
+
+#[test]
+fn test_table_scan_with_skip() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("age", DataType::Utf8, false),
+    ]);
+    let scan = |skip, fetch| -> Result<String> {
+        let scan = TableScanBuilder::new("t1", table_source(&schema))
+            .with_skip(skip)
+            .with_fetch(fetch)
+            .build()?;
+        let plan = LogicalPlanBuilder::table_scan(scan)?.build()?;
+        Ok(plan_to_sql(&plan)?.to_string())
+    };
+
+    assert_snapshot!(scan(Some(5), Some(10))?, @"SELECT * FROM t1 LIMIT 10 OFFSET 5");
+    assert_snapshot!(scan(Some(5), None)?, @"SELECT * FROM t1 OFFSET 5");
+    assert_snapshot!(scan(None, Some(10))?, @"SELECT * FROM t1 LIMIT 10");
     Ok(())
 }
