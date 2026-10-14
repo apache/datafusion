@@ -1215,13 +1215,14 @@ impl BitwiseSortMergeJoinStream {
         self.initialized_null_aware().await?;
         match self.null_aware {
             None => {}
-            Some(NullAwareMode::LeftAnti) => {
+            Some(NullAwareMode::LeftAnti)
+                if self.subquery_state == SubqueryState::HasNull =>
+            {
                 // NOT IN cannot be TRUE for any outer row when the inner
                 // input contains a NULL key. (following NOT IN semetic)
-                if self.subquery_state == SubqueryState::HasNull {
-                    return Ok(());
-                }
+                return Ok(());
             }
+            Some(NullAwareMode::LeftAnti) => {}
         }
 
         // The `has_current_*` / `has_completed_batch` fast paths keep async
