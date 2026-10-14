@@ -1027,7 +1027,7 @@ async fn test_single_batch_spill_returns_live_workspace_loan_on_drop() -> Result
     sorter.merge_reservation.free();
     let merge_pool = Arc::clone(&sorter.merge_pool);
     assert_eq!(sorter.in_mem_batches.len(), 1);
-    let mut stream = sorter.in_mem_sort_stream(false, false)?;
+    let mut stream = sorter.in_mem_sort_stream(false, false).await?;
     assert!(sorter.in_mem_batches.is_empty());
     drop(sorter);
 
