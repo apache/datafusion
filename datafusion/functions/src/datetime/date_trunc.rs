@@ -457,6 +457,27 @@ impl ScalarUDFImpl for DateTruncFunc {
     /// `date_trunc` floors a timestamp to the start of the given period, so
     /// for any aligned literal `L` the preimage is the half-open interval
     /// `[L, L + 1 granularity)`.
+    ///
+    /// The simplifier turns that interval into a range predicate on `col`,
+    /// for example:
+    ///
+    /// ```text
+    /// date_trunc('month', ts) = '2024-05-01'
+    ///   --> ts >= '2024-05-01' AND ts < '2024-06-01'
+    ///
+    /// date_trunc('hour', ts) = '2024-05-01T10:00:00'
+    ///   --> ts >= '2024-05-01T10:00:00' AND ts < '2024-05-01T11:00:00'
+    ///
+    /// date_trunc('day', ts) > '2024-05-01'
+    ///   --> ts >= '2024-05-02'
+    ///
+    /// date_trunc('year', ts) != '2024-01-01'
+    ///   --> ts < '2024-01-01' OR ts >= '2025-01-01'
+    /// ```
+    ///
+    /// Returns [`PreimageResult::None`], leaving the predicate unchanged, when
+    /// no exact interval exists. See `timestamp_preimage_bounds` for the
+    /// conditions.
     fn preimage(
         &self,
         args: &[Expr],
@@ -677,7 +698,7 @@ where
 /// (e.g. `Cast(date_col, Timestamp(ns))`)
 ///
 /// Needed because `unwrap_cast_in_comparison` doesn't currently support Date
-/// targets, see https://github.com/apache/datafusion/issues/26289. Without this
+/// targets, see <https://github.com/apache/datafusion/issues/26289>. Without this
 /// case, the plan contains a cast which blocks pruning on Date columns.
 ///
 /// Returns `None` if the column isn't a Date wrapped in the expected cast, or
@@ -852,22 +873,8 @@ fn timestamp_to_scalar(
 /// Returns timestamp preimage bounds `[lower, upper)` for
 /// `date_trunc(granularity, expr) = lower`.
 ///
-/// The caller turns the half-open interval into a range predicate on `expr`,
-/// for example:
-///
-/// ```text
-/// date_trunc('month', ts) = '2024-05-01'
-///   --> ts >= '2024-05-01' AND ts < '2024-06-01'
-///
-/// date_trunc('hour', ts) = '2024-05-01T10:00:00'
-///   --> ts >= '2024-05-01T10:00:00' AND ts < '2024-05-01T11:00:00'
-///
-/// date_trunc('day', ts) > '2024-05-01'
-///   --> ts >= '2024-05-02'
-///
-/// date_trunc('year', ts) != '2024-01-01'
-///   --> ts < '2024-01-01' OR ts >= '2025-01-01'
-/// ```
+/// See [`DateTruncFunc::preimage`] for examples of the rewrites these bounds
+/// enable.
 ///
 /// Returns `None` when:
 ///
