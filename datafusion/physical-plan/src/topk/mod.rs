@@ -882,6 +882,10 @@ impl TopK {
     fn size(&self) -> usize {
         size_of::<Self>()
             + self.row_converter.size()
+            + self
+                .common_sort_prefix_converter
+                .as_ref()
+                .map_or(0, RowConverter::size)
             + self.scratch_rows.size()
             + self.heap.size()
     }
@@ -3155,6 +3159,46 @@ mod tests {
             &ExecutionPlanMetricsSet::new(),
             filter,
         )
+    }
+
+    #[test]
+    fn test_topk_size_common_sort_prefix_converter() -> Result<()> {
+        let schema = make_ab_schema();
+        let sort_expr = PhysicalSortExpr {
+            expr: col("a", schema.as_ref())?,
+            options: SortOptions::default(),
+        };
+        let make_topk = |common_sort_prefix| {
+            TopK::try_new(
+                0,
+                Arc::clone(&schema),
+                common_sort_prefix,
+                LexOrdering::from([sort_expr.clone()]),
+                3,
+                2,
+                Arc::new(RuntimeEnv::default()),
+                &ExecutionPlanMetricsSet::new(),
+                make_topk_filter(),
+            )
+        };
+        let without_prefix = make_topk(vec![])?;
+        let with_prefix = make_topk(vec![sort_expr.clone()])?;
+        let converter_size = with_prefix
+            .common_sort_prefix_converter
+            .as_ref()
+            .expect("common sort prefix converter")
+            .size();
+        assert!(converter_size > 0);
+        assert!(without_prefix.common_sort_prefix_converter.is_none());
+        assert_eq!(
+            without_prefix.size(),
+            size_of::<TopK>()
+                + without_prefix.row_converter.size()
+                + without_prefix.scratch_rows.size()
+                + without_prefix.heap.size()
+        );
+        assert_eq!(with_prefix.size(), without_prefix.size() + converter_size);
+        Ok(())
     }
 
     /// Reads the `output_batches` and `output_rows` metrics recorded by an emit.
