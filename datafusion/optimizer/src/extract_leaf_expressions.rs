@@ -752,17 +752,11 @@ fn build_extraction_projection_impl(
         // by alias expressions (e.g., CSE's __common_expr_N) exist in the output but
         // not the input, and cannot be added as pass-through Column references.
         //
-        // Resolve the pass-through columns of `existing` and the columns in
-        // `columns_needed` against the input schema before comparing them (see
-        // `resolve_against`). Without this, a bare `c` in one set and a
-        // qualified `t.c` in the other do not match, so the merged projection
-        // holds both, and `Projection::try_new` rejects it as ambiguous.
-        //
-        // This shape occurs when the optimizer removes the empty input of a
-        // `UNION ALL` (for example `... UNION ALL SELECT ... WHERE 1 = 2`): the
-        // projection that remains lists bare column names over a qualified
-        // input. A same-name alias (`t.c AS c`) counts as a pass-through of
-        // `t.c`.
+        // Resolve the pass-through columns of `existing` (including same-name
+        // aliases such as `t.c AS c`) and the columns in `columns_needed`
+        // against the input schema before comparing them. Otherwise a bare `c`
+        // and a qualified `t.c` do not match, and the merged projection holds
+        // both, which `Projection::try_new` rejects as ambiguous.
         let input_schema = existing.input.schema();
         let existing_cols: IndexSet<Column> = existing
             .expr
@@ -779,7 +773,9 @@ fn build_extraction_projection_impl(
             {
                 proj_exprs.push(Expr::Column(input_col));
             }
-            // If resolved to non-column expr, it's already computed by existing projection
+            // Skip a column that resolves to a non-column expr: the existing
+            // projection already computes it. Also skip a column that is not in
+            // the input or is ambiguous there: no single spelling is correct.
         }
 
         Projection::try_new(proj_exprs, Arc::clone(&existing.input))
@@ -2426,8 +2422,9 @@ mod tests {
     }
 
     /// A filter can name a column bare (`a`) while the projection below it
-    /// outputs the qualified `test.a`, as eliminating the empty side of a union
-    /// leaves behind. The merge must match the two, and not add a bare `a`
+    /// outputs the qualified `test.a`. The optimizer leaves this shape when it
+    /// removes the empty input of a `UNION ALL` (for example
+    /// `... UNION ALL SELECT ... WHERE 1 = 2`). The merge must match the two, and not add a bare `a`
     /// beside `test.a`, which is an ambiguous schema.
     #[test]
     fn test_merge_bare_column_into_qualified_projection() -> Result<()> {
