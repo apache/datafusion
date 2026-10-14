@@ -16,6 +16,7 @@
 // under the License.
 
 //! Shared benchmark utilities
+pub mod adaptive;
 pub mod latency_object_store;
 mod memory;
 mod options;

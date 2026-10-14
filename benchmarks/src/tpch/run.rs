@@ -22,6 +22,7 @@ use super::{
     TPCH_QUERY_END_ID, TPCH_QUERY_START_ID, TPCH_TABLES, get_query_sql_for_scale_factor,
     get_tbl_tpch_table_schema, get_tpch_table_schema, table_constraints,
 };
+use crate::util::adaptive::{AdaptiveOptions, make_adaptive};
 use crate::util::{BenchmarkRun, CommonOpt, QueryResult, print_memory_stats};
 
 use arrow::record_batch::RecordBatch;
@@ -115,6 +116,26 @@ pub struct RunOpt {
     /// How many bytes to buffer on the probe side of hash joins.
     #[arg(long, default_value = "0")]
     hash_join_buffering_capacity: usize,
+
+    /// Choose the mode of each partitioned hash join at runtime, from the exact
+    /// size of its build side (adaptive query execution).
+    #[arg(long)]
+    adaptive: bool,
+
+    /// With `--adaptive`, collect the build side of a hash join into a single
+    /// hash table when it has at most this many rows.
+    #[arg(long, default_value = "4194304")]
+    adaptive_broadcast_rows: usize,
+
+    /// With `--adaptive`, the same for joins that track matched build-side
+    /// rows (left, left semi/anti/mark and full joins).
+    #[arg(long, default_value = "131072")]
+    adaptive_broadcast_rows_tracking: usize,
+
+    /// With `--adaptive`, also require the build side to have at most this
+    /// fraction of the estimated probe-side rows to collect it (0 disables).
+    #[arg(long, default_value = "0.05")]
+    adaptive_broadcast_probe_ratio: f64,
 }
 
 impl RunOpt {
@@ -254,7 +275,16 @@ impl RunOpt {
         if debug {
             println!("=== Optimized logical plan ===\n{plan}\n");
         }
-        let physical_plan = state.create_physical_plan(&plan).await?;
+        let mut physical_plan = state.create_physical_plan(&plan).await?;
+        if self.adaptive {
+            let options = AdaptiveOptions {
+                broadcast_max_rows: self.adaptive_broadcast_rows,
+                broadcast_max_rows_tracking: self.adaptive_broadcast_rows_tracking,
+                broadcast_max_probe_ratio: self.adaptive_broadcast_probe_ratio,
+                ..Default::default()
+            };
+            physical_plan = make_adaptive(physical_plan, &options)?;
+        }
         if debug {
             println!(
                 "=== Physical plan ===\n{}\n",
@@ -489,6 +519,10 @@ mod tests {
             enable_piecewise_merge_join: false,
             sorted: false,
             hash_join_buffering_capacity: 0,
+            adaptive: false,
+            adaptive_broadcast_rows: 0,
+            adaptive_broadcast_rows_tracking: 0,
+            adaptive_broadcast_probe_ratio: 0.0,
         };
         opt.register_tables(&ctx).await?;
         let queries = crate::tpch::get_query_sql(query)?;
@@ -530,6 +564,10 @@ mod tests {
             enable_piecewise_merge_join: false,
             sorted: false,
             hash_join_buffering_capacity: 0,
+            adaptive: false,
+            adaptive_broadcast_rows: 0,
+            adaptive_broadcast_rows_tracking: 0,
+            adaptive_broadcast_probe_ratio: 0.0,
         };
         opt.register_tables(&ctx).await?;
         let queries = crate::tpch::get_query_sql(query)?;
