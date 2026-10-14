@@ -165,6 +165,66 @@ Dictionary(Int32, Utf8) Utf8View
 statement ok
 DROP TABLE thresholded_dict;
 
+# The cap uses the sum of row-group NDVs as a conservative upper bound.
+# Each row group has two distinct values, but their summed NDV exceeds the cap.
+query I
+COPY (
+  SELECT column1 AS category
+  FROM (VALUES ('a'), ('b'), ('a'), ('b'))
+)
+TO 'test_files/scratch/parquet_rle_to_dictionary/threshold_multi_rg.parquet'
+STORED AS PARQUET
+OPTIONS (
+  'format.dictionary_enabled' true,
+  'format.max_row_group_size' 2
+);
+----
+4
+
+statement ok
+CREATE EXTERNAL TABLE threshold_multi_rg
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_rle_to_dictionary/threshold_multi_rg.parquet';
+
+query T
+SELECT DISTINCT arrow_typeof(category) FROM threshold_multi_rg;
+----
+Utf8View
+
+statement ok
+DROP TABLE threshold_multi_rg;
+
+# A column remains dictionary encoded only when every file containing it
+# proves that its NDV is within the cap.
+query I
+COPY (SELECT column1 AS category FROM (VALUES ('a'), ('b')))
+TO 'test_files/scratch/parquet_rle_to_dictionary/threshold_mixed/low.parquet'
+STORED AS PARQUET
+OPTIONS ('format.dictionary_enabled' true);
+----
+2
+
+query I
+COPY (SELECT column1 AS category FROM (VALUES ('a'), ('b'), ('c')))
+TO 'test_files/scratch/parquet_rle_to_dictionary/threshold_mixed/high.parquet'
+STORED AS PARQUET
+OPTIONS ('format.dictionary_enabled' true);
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE threshold_mixed
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_rle_to_dictionary/threshold_mixed/';
+
+query TI
+SELECT arrow_typeof(category), COUNT(*) FROM threshold_mixed GROUP BY arrow_typeof(category);
+----
+Utf8View 5
+
+statement ok
+DROP TABLE threshold_mixed;
+
 statement ok
 reset datafusion.execution.parquet.write_row_group_number_distinct_values;
 
