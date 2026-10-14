@@ -59,8 +59,6 @@ use datafusion_expr::{
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
 
-use crate::datetime::common::date_to_scalar;
-
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
     description = "Returns the specified part of the date as an integer.",
@@ -306,8 +304,8 @@ impl ScalarUDFImpl for DatePartFunc {
 
         // Convert to ScalarValues
         let (Some(lower), Some(upper)) = (
-            date_to_scalar(start_time, target_type),
-            date_to_scalar(end_time, target_type),
+            ScalarValue::try_from_date(start_time, target_type),
+            ScalarValue::try_from_date(end_time, target_type),
         ) else {
             return Ok(PreimageResult::None);
         };

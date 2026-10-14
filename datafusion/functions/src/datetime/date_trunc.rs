@@ -52,8 +52,6 @@ use datafusion_expr::{
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
 
-use crate::datetime::common::date_to_scalar;
-
 use chrono::{
     DateTime, Datelike, Duration, LocalResult, Months, NaiveDate, NaiveDateTime, Offset,
     TimeDelta, Timelike, Weekday,
@@ -731,8 +729,8 @@ fn date_column_preimage(
         expr: inner.as_ref().clone(),
         interval: Box::new(
             Interval::try_new(
-                date_to_scalar(lower, &inner_type)?,
-                date_to_scalar(upper, &inner_type)?,
+                ScalarValue::try_from_date(lower, &inner_type)?,
+                ScalarValue::try_from_date(upper, &inner_type)?,
             )
             .ok()?,
         ),
@@ -874,7 +872,7 @@ fn timestamp_value(
 }
 
 /// Wrap a raw `i64` timestamp value back into the matching `ScalarValue` for
-/// the given `(unit, tz)`. Mirrors `date_part::date_to_scalar`.
+/// the given `(unit, tz)`. Mirrors [`ScalarValue::try_from_date`].
 fn timestamp_to_scalar(
     unit: TimeUnit,
     value: i64,

@@ -59,6 +59,7 @@ use crate::scalar::consts::{
 };
 use crate::utils::SingleRowListArrayBuilder;
 use crate::{_internal_datafusion_err, arrow_datafusion_err};
+use arrow::array::timezone::Tz;
 use arrow::array::{
     Array, ArrayData, ArrayDataBuilder, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType,
     AsArray, BinaryArray, BinaryViewArray, BinaryViewBuilder, BooleanArray, Date32Array,
@@ -83,10 +84,10 @@ use arrow::compute::kernels::numeric::{
 };
 use arrow::datatypes::{
     ArrowDictionaryKeyType, ArrowNativeType, ArrowTimestampType, DataType, Date32Type,
-    Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, DecimalType, Field,
-    FieldRef, Float32Type, Int8Type, Int16Type, Int32Type, Int64Type, IntervalDayTime,
-    IntervalDayTimeType, IntervalMonthDayNano, IntervalMonthDayNanoType, IntervalUnit,
-    IntervalYearMonthType, MAX_DECIMAL32_FOR_EACH_PRECISION,
+    Date64Type, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type,
+    DecimalType, Field, FieldRef, Float32Type, Int8Type, Int16Type, Int32Type, Int64Type,
+    IntervalDayTime, IntervalDayTimeType, IntervalMonthDayNano, IntervalMonthDayNanoType,
+    IntervalUnit, IntervalYearMonthType, MAX_DECIMAL32_FOR_EACH_PRECISION,
     MAX_DECIMAL64_FOR_EACH_PRECISION, MAX_DECIMAL128_FOR_EACH_PRECISION,
     MAX_DECIMAL256_FOR_EACH_PRECISION, MIN_DECIMAL32_FOR_EACH_PRECISION,
     MIN_DECIMAL64_FOR_EACH_PRECISION, MIN_DECIMAL128_FOR_EACH_PRECISION,
@@ -1431,6 +1432,103 @@ impl ScalarValue {
             TimeUnit::Microsecond => ScalarValue::TimestampMicrosecond(value, tz_opt),
             TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(value, tz_opt),
         }
+    }
+
+    /// Returns a [`ScalarValue`] of type `target_type` representing `date`.
+    ///
+    /// For `Timestamp` types the result is midnight on `date` in the type's
+    /// timezone (or UTC when the type has no timezone).
+    ///
+    /// Returns `None` if `target_type` is not a date or timestamp type, or if
+    /// midnight on `date` cannot be represented such as when the timezone skips
+    /// midnight that day (for example a daylight saving transition at 00:00).
+    ///
+    /// # Example
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow::datatypes::{DataType, TimeUnit};
+    /// # use chrono::NaiveDate;
+    /// # use datafusion_common::ScalarValue;
+    /// let date = NaiveDate::from_ymd_opt(2024, 5, 1).unwrap();
+    ///
+    /// // Dates
+    /// assert_eq!(
+    ///     ScalarValue::try_from_date(date, &DataType::Date32),
+    ///     Some(ScalarValue::Date32(Some(19844)))
+    /// );
+    ///
+    /// // Timestamps without a timezone are midnight UTC
+    /// assert_eq!(
+    ///     ScalarValue::try_from_date(date, &DataType::Timestamp(TimeUnit::Second, None)),
+    ///     Some(ScalarValue::TimestampSecond(Some(1714521600), None))
+    /// );
+    ///
+    /// // Timestamps with a timezone are midnight in that timezone
+    /// let tz: Arc<str> = Arc::from("+02:00");
+    /// assert_eq!(
+    ///     ScalarValue::try_from_date(
+    ///         date,
+    ///         &DataType::Timestamp(TimeUnit::Second, Some(Arc::clone(&tz)))
+    ///     ),
+    ///     Some(ScalarValue::TimestampSecond(Some(1714514400), Some(tz)))
+    /// );
+    ///
+    /// // Other types are not supported
+    /// assert_eq!(ScalarValue::try_from_date(date, &DataType::Int32), None);
+    /// ```
+    pub fn try_from_date(date: NaiveDate, target_type: &DataType) -> Option<Self> {
+        Some(match target_type {
+            DataType::Date32 => {
+                ScalarValue::Date32(Some(Date32Type::from_naive_date(date)))
+            }
+            DataType::Date64 => {
+                ScalarValue::Date64(Some(Date64Type::from_naive_date(date)))
+            }
+            DataType::Timestamp(unit, tz_opt) => {
+                let naive_midnight = date.and_hms_opt(0, 0, 0)?;
+                let tz: Option<Tz> = tz_opt.clone().and_then(|s| s.parse().ok());
+
+                // Midnight has no representation when the date falls outside
+                // the unit's range, or when the zone skips it.
+                let value = match unit {
+                    TimeUnit::Second => TimestampSecondType::from_naive_datetime(
+                        naive_midnight,
+                        tz.as_ref(),
+                    )?,
+                    TimeUnit::Millisecond => {
+                        TimestampMillisecondType::from_naive_datetime(
+                            naive_midnight,
+                            tz.as_ref(),
+                        )?
+                    }
+                    TimeUnit::Microsecond => {
+                        TimestampMicrosecondType::from_naive_datetime(
+                            naive_midnight,
+                            tz.as_ref(),
+                        )?
+                    }
+                    TimeUnit::Nanosecond => TimestampNanosecondType::from_naive_datetime(
+                        naive_midnight,
+                        tz.as_ref(),
+                    )?,
+                };
+                match unit {
+                    TimeUnit::Second => {
+                        ScalarValue::TimestampSecond(Some(value), tz_opt.clone())
+                    }
+                    TimeUnit::Millisecond => {
+                        ScalarValue::TimestampMillisecond(Some(value), tz_opt.clone())
+                    }
+                    TimeUnit::Microsecond => {
+                        ScalarValue::TimestampMicrosecond(Some(value), tz_opt.clone())
+                    }
+                    TimeUnit::Nanosecond => {
+                        ScalarValue::TimestampNanosecond(Some(value), tz_opt.clone())
+                    }
+                }
+            }
+            _ => return None,
+        })
     }
 
     /// Returns a [`ScalarValue`] representing PI
