@@ -365,7 +365,7 @@ pub fn value_fields_with_higher_order_udf_and_lambdas(
                 ValueOrLambda::Lambda(_) => {}
             }
         }
-    };
+    }
 
     Ok(new_fields)
 }
@@ -688,7 +688,7 @@ fn get_valid_types(
 
         if !fixed_size {
             list_sizes.clear()
-        };
+        }
 
         let mut list_sizes = list_sizes.into_iter();
         let valid_types = arguments
@@ -816,13 +816,21 @@ fn get_valid_types(
         TypeSignature::Numeric(number) => {
             function_length_check(function_name, current_types.len(), *number)?;
 
+            let non_nulls = current_types
+                .iter()
+                .filter(|&t| NativeType::from(t) != NativeType::Null)
+                .collect::<Vec<_>>();
+            let mut valid_type = non_nulls
+                .first()
+                .copied()
+                .cloned()
+                // Fallback to default type if we don't know which type to coerced to
+                // f64 is chosen since most of the math functions utilize Signature::numeric,
+                // and their default type is double precision
+                .unwrap_or(DataType::Float64);
             // Find common numeric type among given types except string
-            let mut valid_type = current_types.first().unwrap().to_owned();
-            for t in current_types.iter().skip(1) {
+            for &t in non_nulls.iter().skip(1) {
                 let logical_data_type: NativeType = t.into();
-                if logical_data_type == NativeType::Null {
-                    continue;
-                }
 
                 if !logical_data_type.is_numeric() {
                     return plan_err!(
@@ -840,12 +848,7 @@ fn get_valid_types(
             }
 
             let logical_data_type: NativeType = valid_type.clone().into();
-            // Fallback to default type if we don't know which type to coerced to
-            // f64 is chosen since most of the math functions utilize Signature::numeric,
-            // and their default type is double precision
-            if logical_data_type == NativeType::Null {
-                valid_type = DataType::Float64;
-            } else if !logical_data_type.is_numeric() {
+            if !logical_data_type.is_numeric() {
                 return plan_err!(
                     "Function '{function_name}' expects Numeric but received {logical_data_type}"
                 );
@@ -1158,6 +1161,16 @@ fn coerced_from<'a>(
         {
             Some(type_into.clone())
         }
+        (_, RunEndEncoded(_, value_type))
+            if coerced_from(type_into, value_type.data_type()).is_some() =>
+        {
+            Some(type_into.clone())
+        }
+        (RunEndEncoded(_, value_type), _)
+            if coerced_from(value_type.data_type(), type_from).is_some() =>
+        {
+            Some(type_into.clone())
+        }
         // coerced into type_into
         (Int8, Null | Int8) => Some(type_into.clone()),
         (Int16, Null | Int8 | Int16 | UInt8) => Some(type_into.clone()),
@@ -1198,13 +1211,11 @@ fn coerced_from<'a>(
         ) => Some(type_into.clone()),
         (
             Timestamp(TimeUnit::Nanosecond, None),
-            Null | Timestamp(_, None) | Date32 | Utf8 | LargeUtf8,
+            Null | Timestamp(_, None) | Date32 | Date64 | Utf8 | LargeUtf8 | Utf8View,
         ) => Some(type_into.clone()),
-        (Interval(_), Null | Utf8 | LargeUtf8) => Some(type_into.clone()),
-        // We can go into a Utf8View from a Utf8 or LargeUtf8
-        (Utf8View, Utf8 | LargeUtf8 | Null) => Some(type_into.clone()),
+        (Interval(_), Null | Utf8 | LargeUtf8 | Utf8View) => Some(type_into.clone()),
         // Any type can be coerced into strings
-        (Utf8 | LargeUtf8, _) => Some(type_into.clone()),
+        (Utf8 | LargeUtf8 | Utf8View, _) => Some(type_into.clone()),
         // We can go into a BinaryView from a Binary or LargeBinary
         (BinaryView, Binary | LargeBinary | Null) => Some(type_into.clone()),
         (Null, _) if can_cast_types(type_from, type_into) => Some(type_into.clone()),
@@ -1443,6 +1454,13 @@ mod tests {
         );
         assert_eq!(got, [DataType::Float64]);
 
+        let got = get_valid_types_flatten(
+            "test",
+            &TypeSignature::Numeric(2),
+            &[DataType::Null, DataType::Null],
+        );
+        assert_eq!(got, [DataType::Float64, DataType::Float64]);
+
         // Rejects non-numeric arg.
         let got = get_valid_types(
             "test",
@@ -1454,6 +1472,21 @@ mod tests {
             got.to_string(),
             "Function 'test' expects Numeric but received Timestamp(s)"
         );
+
+        // Nulls should get ignored among other valid types
+        let got = get_valid_types_flatten(
+            "test",
+            &TypeSignature::Numeric(2),
+            &[DataType::Null, DataType::Int32],
+        );
+        assert_eq!(got, [DataType::Int32, DataType::Int32]);
+
+        let got = get_valid_types_flatten(
+            "test",
+            &TypeSignature::Numeric(2),
+            &[DataType::Int32, DataType::Null],
+        );
+        assert_eq!(got, [DataType::Int32, DataType::Int32]);
 
         Ok(())
     }
@@ -1613,6 +1646,50 @@ mod tests {
         let type_from =
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::UInt32));
         let type_into = DataType::Int64;
+        assert_eq!(
+            coerced_from(&type_into, &type_from),
+            Some(type_into.clone())
+        );
+    }
+
+    #[test]
+    fn test_coerced_from_run_end_encoded() {
+        let run_end_encoded_of = |value_type: DataType| {
+            DataType::RunEndEncoded(
+                Field::new("run_ends", DataType::Int32, false).into(),
+                Field::new("values", value_type, true).into(),
+            )
+        };
+
+        let type_into = run_end_encoded_of(DataType::UInt32);
+        let type_from = DataType::Int64;
+        assert_eq!(coerced_from(&type_into, &type_from), None);
+
+        let type_from = run_end_encoded_of(DataType::UInt32);
+        let type_into = DataType::Int64;
+        assert_eq!(
+            coerced_from(&type_into, &type_from),
+            Some(type_into.clone())
+        );
+
+        // Signature candidates for functions like `date_bin` are plain
+        // Timestamp, but a REE-encoded column (e.g. a segment written with
+        // REE-dict encoding for that field) should still coerce against
+        // them via the wrapped value type.
+        let type_from =
+            run_end_encoded_of(DataType::Timestamp(TimeUnit::Nanosecond, None));
+        let type_into = DataType::Timestamp(TimeUnit::Nanosecond, None);
+        assert_eq!(
+            coerced_from(&type_into, &type_from),
+            Some(type_into.clone())
+        );
+
+        // The reverse direction: a plain type coercing into an REE target
+        // (e.g. a signature that happens to require RunEndEncoded) should
+        // succeed whenever the plain type coerces into the wrapped value
+        // type.
+        let type_into = run_end_encoded_of(DataType::Int64);
+        let type_from = DataType::Int32;
         assert_eq!(
             coerced_from(&type_into, &type_from),
             Some(type_into.clone())

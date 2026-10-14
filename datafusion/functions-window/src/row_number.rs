@@ -143,7 +143,7 @@ impl PartitionEvaluator for NumRowsEvaluator {
         num_rows: usize,
     ) -> Result<ArrayRef> {
         Ok(Arc::new(UInt64Array::from_iter_values(
-            1..(num_rows as u64) + 1,
+            1..=(num_rows as u64),
         )))
     }
 

@@ -21,7 +21,7 @@
 
 [Apache DataFusion] is an extensible query execution framework, written in Rust, that uses [Apache Arrow] as its in-memory format.
 
-This crate provides **session-related abstractions** used in the DataFusion query engine. A _session_ represents the runtime context for query execution, including configuration, runtime environment, function registry, and planning.
+This crate defines the **session-related APIs and extension points** used in the DataFusion query engine. A _session_ represents the runtime context for query execution, including configuration, runtime environment, function registry, and planning. This crate focuses on shared interfaces; concrete query-engine implementations live in higher-level DataFusion crates.
 
 Most projects should use the [`datafusion`] crate directly, which re-exports
 this module. If you are already using the [`datafusion`] crate, there is no

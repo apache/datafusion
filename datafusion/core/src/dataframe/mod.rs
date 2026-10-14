@@ -70,6 +70,7 @@ use datafusion_functions_aggregate::expr_fn::{
 use async_trait::async_trait;
 use datafusion_catalog::Session;
 use datafusion_expr::extension_types::DFArrayFormatterFactory;
+use futures::future::BoxFuture;
 
 /// Contains options that control how data is
 /// written out from a DataFrame
@@ -1106,8 +1107,9 @@ impl DataFrame {
         let mut array_ref_vec: Vec<ArrayRef> = vec![Arc::new(StringArray::from(
             supported_describe_functions.clone(),
         ))];
+        let mut array_datas = Vec::with_capacity(describe_record_batch.len());
         for field in original_schema_fields {
-            let mut array_datas = vec![];
+            array_datas.clear();
             for result in describe_record_batch.iter() {
                 let array_ref = match result {
                     Ok(df) => {
@@ -1371,6 +1373,107 @@ impl DataFrame {
     ) -> Result<DataFrame> {
         let plan = LogicalPlanBuilder::from(self.plan)
             .join_on(right.plan, join_type, on_exprs)?
+            .build()?;
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+            projection_requires_validation: true,
+        })
+    }
+
+    /// Join this `DataFrame` to the closest eligible row in `right`.
+    ///
+    /// Every left row is emitted exactly once, with `NULL` values for the right
+    /// columns when no eligible row exists. `NULL` ordered values and equality
+    /// keys never match. When present, `on` must contain equality comparisons
+    /// combined with `AND`. `match_condition` must be a single `<`, `<=`, `>`,
+    /// or `>=` comparison whose left and right operands reference this
+    /// `DataFrame` and `right`, respectively.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion::arrow::array::record_batch;
+    /// # use datafusion::error::Result;
+    /// # use datafusion::prelude::*;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// # let ctx = SessionContext::new();
+    /// # let trades = ctx.read_batch(record_batch!(
+    /// #     ("symbol", Utf8, ["A"]),
+    /// #     ("ts", Int64, [4])
+    /// # )?)?.alias("trades")?;
+    /// # let prices = ctx.read_batch(record_batch!(
+    /// #     ("symbol", Utf8, ["A"]),
+    /// #     ("ts", Int64, [2]),
+    /// #     ("price", Int32, [20])
+    /// # )?)?.alias("prices")?;
+    /// // For each trade, find the latest price at or before its timestamp.
+    /// let joined = trades.join_asof(
+    ///     prices,
+    ///     Some(col("trades.symbol").eq(col("prices.symbol"))),
+    ///     col("trades.ts").gt_eq(col("prices.ts")),
+    /// )?;
+    /// # let _ = joined;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn join_asof(
+        self,
+        right: DataFrame,
+        on: Option<Expr>,
+        match_condition: Expr,
+    ) -> Result<DataFrame> {
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .asof_join_on(right.plan, on, match_condition)?
+            .build()?;
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+            projection_requires_validation: true,
+        })
+    }
+
+    /// Join this `DataFrame` to the closest eligible row in `right` using
+    /// same-named equality keys.
+    ///
+    /// This has the same matching behavior as [`join_asof`](Self::join_asof),
+    /// but accepts columns that appear under the same name on both inputs.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion::arrow::array::record_batch;
+    /// # use datafusion::error::Result;
+    /// # use datafusion::prelude::*;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// # let ctx = SessionContext::new();
+    /// # let trades = ctx.read_batch(record_batch!(
+    /// #     ("symbol", Utf8, ["A"]),
+    /// #     ("ts", Int64, [4])
+    /// # )?)?.alias("trades")?;
+    /// # let prices = ctx.read_batch(record_batch!(
+    /// #     ("symbol", Utf8, ["A"]),
+    /// #     ("ts", Int64, [2]),
+    /// #     ("price", Int32, [20])
+    /// # )?)?.alias("prices")?;
+    /// // Same-named equality keys can be specified once.
+    /// let joined = trades.join_asof_using(
+    ///     prices,
+    ///     vec![Column::from_name("symbol")],
+    ///     col("trades.ts").gt_eq(col("prices.ts")),
+    /// )?;
+    /// # let _ = joined;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn join_asof_using(
+        self,
+        right: DataFrame,
+        using_keys: Vec<Column>,
+        match_condition: Expr,
+    ) -> Result<DataFrame> {
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .asof_join_using(right.plan, using_keys, match_condition)?
             .build()?;
         Ok(DataFrame {
             session_state: self.session_state,
@@ -2599,34 +2702,44 @@ impl DataFrame {
             .collect()
     }
 
-    /// Helper for creating DataFrame.
+    /// Create a DataFrame from named Arrow arrays.
+    ///
     /// # Example
+    ///
     /// ```
+    /// use std::sync::Arc;
     /// use arrow::array::{ArrayRef, Int32Array, StringArray};
     /// use datafusion::prelude::DataFrame;
-    /// use std::sync::Arc;
+    /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
     /// let id: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
     /// let name: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar", "baz"]));
-    /// let df = DataFrame::from_columns(vec![("id", id), ("name", name)]).unwrap();
-    /// // +----+------+,
-    /// // | id | name |,
-    /// // +----+------+,
-    /// // | 1  | foo  |,
-    /// // | 2  | bar  |,
-    /// // | 3  | baz  |,
-    /// // +----+------+,
+    /// let df = DataFrame::from_columns([("id", id), ("name", name)])?;
+    /// let expected = vec![
+    ///     "+----+------+",
+    ///     "| id | name |",
+    ///     "+----+------+",
+    ///     "| 1  | foo  |",
+    ///     "| 2  | bar  |",
+    ///     "| 3  | baz  |",
+    ///     "+----+------+",
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
+    /// # Ok(())
+    /// # }
     /// ```
-    pub fn from_columns(columns: Vec<(&str, ArrayRef)>) -> Result<Self> {
-        let fields = columns
-            .iter()
-            .map(|(name, array)| Field::new(*name, array.data_type().clone(), true))
-            .collect::<Vec<_>>();
-
-        let arrays = columns
+    pub fn from_columns<'a, I>(columns: I) -> Result<Self>
+    where
+        I: IntoIterator<Item = (&'a str, ArrayRef)>,
+    {
+        let (fields, arrays): (Vec<_>, Vec<_>) = columns
             .into_iter()
-            .map(|(_, array)| array)
-            .collect::<Vec<_>>();
-
+            .map(|(name, array)| {
+                (Field::new(name, array.data_type().clone(), true), array)
+            })
+            .unzip();
         let schema = Arc::new(Schema::new(fields));
         let batch = RecordBatch::try_new(schema, arrays)?;
         let ctx = SessionContext::new();
@@ -2635,28 +2748,33 @@ impl DataFrame {
     }
 }
 
-/// Macro for creating DataFrame.
+/// Create a DataFrame from column names and values.
+///
 /// # Example
+///
 /// ```
 /// use datafusion::prelude::dataframe;
 /// # use datafusion::error::Result;
+/// # use datafusion_common::assert_batches_sorted_eq;
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
 /// let df = dataframe!(
-///    "id" => [1, 2, 3],
-///    "name" => ["foo", "bar", "baz"]
-///  )?;
-/// df.show().await?;
-/// // +----+------+,
-/// // | id | name |,
-/// // +----+------+,
-/// // | 1  | foo  |,
-/// // | 2  | bar  |,
-/// // | 3  | baz  |,
-/// // +----+------+,
-/// let df_empty = dataframe!()?; // empty DataFrame
-/// assert_eq!(df_empty.schema().fields().len(), 0);
-/// assert_eq!(df_empty.count().await?, 0);
+///     "id" => [1, 2, 3],
+///     "name" => ["foo", "bar", "baz"]
+/// )?;
+/// let expected = vec![
+///     "+----+------+",
+///     "| id | name |",
+///     "+----+------+",
+///     "| 1  | foo  |",
+///     "| 2  | bar  |",
+///     "| 3  | baz  |",
+///     "+----+------+",
+/// ];
+/// # assert_batches_sorted_eq!(expected, &df.collect().await?);
+/// # let df_empty = dataframe!()?;
+/// # assert_eq!(df_empty.schema().fields().len(), 0);
+/// # assert_eq!(df_empty.count().await?, 0);
 /// # Ok(())
 /// # }
 /// ```
@@ -2678,7 +2796,7 @@ macro_rules! dataframe {
         use datafusion::prelude::DataFrame;
         use datafusion::common::test_util::IntoArrayRef;
 
-        let columns = vec![
+        let columns = [
             $(
                 ($name, $data.into_array_ref()),
             )+
@@ -2716,10 +2834,41 @@ impl TableProvider for DataFrameTableProvider {
         self.table_type
     }
 
-    async fn scan(
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(
+        &'life0 self,
+        state: &'life1 dyn Session,
+        projection: Option<&'life2 [usize]>,
+        filters: &'life3 [Expr],
+        limit: Option<usize>,
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        'life3: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.scan_boxed(state, projection, filters, limit)
+    }
+}
+
+impl DataFrameTableProvider {
+    fn scan_boxed<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        filters: &'a [Expr],
+        limit: Option<usize>,
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(self.scan_inner(state, projection, filters, limit))
+    }
+
+    async fn scan_inner(
         &self,
         state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {

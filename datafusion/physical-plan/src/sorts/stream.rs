@@ -76,7 +76,8 @@ impl FusedStreams {
             let poll_result = self.0[stream_idx].poll_next_unpin(cx);
             match &poll_result {
                 Poll::Pending => return Poll::Pending,
-                Poll::Ready(Some(Ok(b))) if b.num_rows() == 0 => continue,
+                // Skip empty batches
+                Poll::Ready(Some(Ok(b))) if b.num_rows() == 0 => {}
                 Poll::Ready(Some(Ok(_))) => return poll_result,
                 Poll::Ready(None) | Poll::Ready(Some(Err(_))) => {
                     let stream_schema = self.0[stream_idx].get_ref().schema();
@@ -93,22 +94,17 @@ impl FusedStreams {
     }
 }
 
-/// A pair of `Arc<Rows>` that can be reused
+/// An `Arc<Rows>` that can be reused
 #[derive(Debug)]
 struct ReusableRows {
-    // inner[stream_idx] holds a two Arcs:
-    // at start of a new poll
-    // .0 is the rows from the previous poll (at start),
-    // .1 is the one that is being written to
-    // at end of a poll, .0 will be swapped with .1,
-    inner: Vec<[Option<Arc<Rows>>; 2]>,
+    inner: Vec<Option<Arc<Rows>>>,
 }
 
 impl ReusableRows {
     // return a Rows for writing,
     // does not clone if the existing rows can be reused
     fn take_next(&mut self, stream_idx: usize) -> Result<Rows> {
-        Arc::try_unwrap(self.inner[stream_idx][1].take().unwrap()).map_err(|_| {
+        Arc::try_unwrap(self.inner[stream_idx].take().unwrap()).map_err(|_| {
             internal_datafusion_err!(
                 "Rows from RowCursorStream is still in use by consumer"
             )
@@ -116,16 +112,13 @@ impl ReusableRows {
     }
     // save the Rows
     fn save(&mut self, stream_idx: usize, rows: &Arc<Rows>) {
-        self.inner[stream_idx][1] = Some(Arc::clone(rows));
-        // swap the current with the previous one, so that the next poll can reuse the Rows from the previous poll
-        let [a, b] = &mut self.inner[stream_idx];
-        mem::swap(a, b);
+        self.inner[stream_idx] = Some(Arc::clone(rows));
     }
 }
 
 /// A [`PartitionedStream`] that wraps a set of [`SendableRecordBatchStream`]
 /// and computes [`RowValues`] based on the provided [`PhysicalSortExpr`]
-/// Note: the stream returns an error if the consumer buffers more than one RowValues (i.e. holds on to two RowValues
+/// Note: the stream returns an error if the consumer buffers even one RowValues (i.e. holds on to one RowValues
 /// from the same partition at the same time).
 #[derive(Debug)]
 pub struct RowCursorStream {
@@ -137,8 +130,9 @@ pub struct RowCursorStream {
     streams: FusedStreams,
     /// Tracks the memory used by `converter`
     reservation: MemoryReservation,
-    /// Allocated rows for each partition, we keep two to allow for buffering one
-    /// in the consumer of the stream
+    /// Reused `Rows` allocation for each partition. The consumer must not
+    /// buffer the `RowValues` returned for a partition, since the old
+    /// `Arc<Rows>` must be dropped before that partition can be polled again.
     rows: ReusableRows,
 }
 
@@ -162,10 +156,7 @@ impl RowCursorStream {
         let mut rows = Vec::with_capacity(streams.len());
         for _ in &streams {
             // Initialize each stream with an empty Rows
-            rows.push([
-                Some(Arc::new(converter.empty_rows(0, 0))),
-                Some(Arc::new(converter.empty_rows(0, 0))),
-            ]);
+            rows.push(Some(Arc::new(converter.empty_rows(0, 0))));
         }
         Ok(Self {
             converter,
@@ -385,8 +376,10 @@ impl Iterator for IncrementalSortIterator {
         }
     }
 
+    // Not implementing ExactSizeIterator since in case of an error we stop and don't emit any more
+    // so the length would be wrong
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let num_rows = self.batch.num_rows();
+        let num_rows = self.batch.num_rows().saturating_sub(self.cursor);
         let batch_size = self.batch_size;
         let num_batches = num_rows.div_ceil(batch_size);
         (num_batches, Some(num_batches))
@@ -407,6 +400,29 @@ mod tests {
     use futures::Stream;
     use std::pin::Pin;
 
+    fn create_incremental_sort_iter_on(
+        input_batch_len: usize,
+        output_batch_size: usize,
+    ) -> Result<(IncrementalSortIterator, RecordBatch)> {
+        // Build a batch with a single Int32 column of descending values
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let col_a: Int32Array =
+            Int32Array::from_iter_values((0..input_batch_len as i32).rev());
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(col_a)])?;
+
+        // Sort ascending on column "a"
+        let expressions = LexOrdering::new(vec![PhysicalSortExpr::new_default(col(
+            "a",
+            &batch.schema(),
+        )?)])
+        .unwrap();
+
+        let iter =
+            IncrementalSortIterator::new(batch.clone(), expressions, output_batch_size);
+
+        Ok((iter, batch))
+    }
+
     /// Verifies that `take_record_batch` in `IncrementalSortIterator` actually
     /// copies the data into a new allocation rather than returning a zero-copy
     /// slice of the original batch. If the output arrays were slices, their
@@ -417,20 +433,11 @@ mod tests {
         let original_len = 10;
         let batch_size = 3;
 
-        // Build a batch with a single Int32 column of descending values
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
-        let col_a: Int32Array = Int32Array::from(vec![0; original_len]);
-        let batch = RecordBatch::try_new(schema, vec![Arc::new(col_a)])?;
-
-        // Sort ascending on column "a"
-        let expressions = LexOrdering::new(vec![PhysicalSortExpr::new_default(col(
-            "a",
-            &batch.schema(),
-        )?)])
-        .unwrap();
+        let (mut iter, batch) =
+            create_incremental_sort_iter_on(original_len, batch_size)?;
 
         let mut total_rows = 0;
-        IncrementalSortIterator::new(batch.clone(), expressions, batch_size).try_for_each(
+        iter.try_for_each(
             |result| {
                 let chunk = result?;
                 total_rows += chunk.num_rows();
@@ -539,5 +546,45 @@ mod tests {
             assert!(matches!(poll, Poll::Ready(None)));
             assert_eq!(Arc::strong_count(&hold_ref), 1);
         }
+    }
+
+    fn assert_iterator_size_hint(iter: &IncrementalSortIterator, expected_len: usize) {
+        assert_eq!(iter.size_hint(), (expected_len, Some(expected_len)));
+    }
+
+    #[test]
+    fn incremental_sort_iterator_report_correct_len() -> Result<()> {
+        let original_len = 10;
+        let batch_size = 3;
+
+        let (mut iterator, _) =
+            create_incremental_sort_iter_on(original_len, batch_size)?;
+
+        assert_iterator_size_hint(&iterator, 4);
+
+        let batch = iterator.next().unwrap()?;
+        assert_eq!(batch.num_rows(), batch_size);
+
+        assert_iterator_size_hint(&iterator, 3);
+
+        let batch = iterator.next().unwrap()?;
+        assert_eq!(batch.num_rows(), batch_size);
+
+        assert_iterator_size_hint(&iterator, 2);
+
+        let batch = iterator.next().unwrap()?;
+        assert_eq!(batch.num_rows(), batch_size);
+
+        assert_iterator_size_hint(&iterator, 1);
+
+        let batch = iterator.next().unwrap()?;
+        // left over
+        assert_eq!(batch.num_rows(), 1);
+
+        assert_iterator_size_hint(&iterator, 0);
+
+        assert!(iterator.next().is_none());
+
+        Ok(())
     }
 }

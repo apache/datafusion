@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::ops::Deref;
 use std::sync::Arc;
 
 use arrow::array::{Int32Builder, Int64Array};
@@ -35,11 +34,13 @@ use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
 use datafusion_catalog::Session;
 use datafusion_common::cast::as_primitive_array;
-use datafusion_common::{DataFusionError, internal_err, not_impl_err};
+use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::{DataFusionError, assert_batches_eq, internal_err, not_impl_err};
 use datafusion_expr::expr::{BinaryExpr, Cast};
 use datafusion_functions_aggregate::expr_fn::count;
 use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion_physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
 
 use async_trait::async_trait;
 
@@ -93,7 +94,7 @@ impl DisplayAs for CustomPlan {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "CustomPlan: batch_size={}", self.batches.len(),)
+                write!(f, "CustomPlan: batch_size={}", self.batches.len())
             }
             DisplayFormatType::TreeRender => {
                 // TODO: collect info
@@ -116,9 +117,10 @@ impl ExecutionPlan for CustomPlan {
         vec![]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // CustomPlan has no children
         if children.is_empty() {
@@ -126,6 +128,16 @@ impl ExecutionPlan for CustomPlan {
         } else {
             internal_err!("Children cannot be replaced in {self:?}")
         }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -148,6 +160,15 @@ impl ExecutionPlan for CustomPlan {
             })),
         )))
     }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(
+            &Arc<dyn datafusion::physical_plan::PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -169,7 +190,7 @@ impl TableProvider for CustomProvider {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         _: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -182,7 +203,7 @@ impl TableProvider for CustomProvider {
                     Expr::Literal(ScalarValue::Int16(Some(i)), _) => *i as i64,
                     Expr::Literal(ScalarValue::Int32(Some(i)), _) => *i as i64,
                     Expr::Literal(ScalarValue::Int64(Some(i)), _) => *i,
-                    Expr::Cast(Cast { expr, field: _ }) => match expr.deref() {
+                    Expr::Cast(Cast { expr, field: _ }) => match &**expr {
                         Expr::Literal(lit_value, _) => match lit_value {
                             ScalarValue::Int8(Some(v)) => *v as i64,
                             ScalarValue::Int16(Some(v)) => *v as i64,
@@ -267,5 +288,80 @@ async fn test_filter_pushdown_results() -> Result<()> {
     assert_provider_row_count(0, 10).await?;
     assert_provider_row_count(1, 5).await?;
     assert_provider_row_count(2, 0).await?;
+    Ok(())
+}
+
+/// Fail at physical planning time if an impossible branch reaches its provider.
+#[derive(Debug)]
+struct RejectScanProvider {
+    pushdown: TableProviderFilterPushDown,
+}
+
+#[async_trait]
+impl TableProvider for RejectScanProvider {
+    fn schema(&self) -> SchemaRef {
+        Arc::new(Schema::new(vec![Field::new("x", DataType::Int64, true)]))
+    }
+
+    fn table_type(&self) -> TableType {
+        TableType::Base
+    }
+
+    async fn scan(
+        &self,
+        _state: &dyn Session,
+        _projection: Option<&[usize]>,
+        _filters: &[Expr],
+        _limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        internal_err!("An unsatisfiable branch must not call scan()")
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> Result<Vec<TableProviderFilterPushDown>> {
+        Ok(vec![self.pushdown.clone(); filters.len()])
+    }
+}
+
+#[tokio::test]
+async fn contradictory_disjunction_eliminates_provider_scan() -> Result<()> {
+    for pushdown in [
+        TableProviderFilterPushDown::Exact,
+        TableProviderFilterPushDown::Inexact,
+        TableProviderFilterPushDown::Unsupported,
+    ] {
+        let ctx = SessionContext::new();
+        ctx.register_table("backfill", Arc::new(RejectScanProvider { pushdown }))?;
+        let df = ctx
+            .sql(
+                "SELECT value FROM (
+                    SELECT CAST(20 AS BIGINT) AS value
+                    UNION ALL
+                    SELECT x AS value FROM backfill
+                    WHERE (x >= 1 AND x < 3) OR (x >= 5 AND x < 7)
+                ) u WHERE value >= 10 ORDER BY value LIMIT 1",
+            )
+            .await?;
+        let plan = df
+            .clone()
+            .into_optimized_plan()?
+            .display_indent()
+            .to_string();
+        assert!(!plan.contains("TableScan: backfill"), "{plan}");
+        assert!(!plan.contains("Union"), "{plan}");
+        let batches = df.collect().await?;
+        assert_batches_eq!(
+            [
+                "+-------+",
+                "| value |",
+                "+-------+",
+                "| 20    |",
+                "+-------+"
+            ],
+            &batches
+        );
+    }
     Ok(())
 }

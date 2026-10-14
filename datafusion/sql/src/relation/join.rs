@@ -15,13 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::expr::reject_window_functions;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{Column, Result, not_impl_err, plan_datafusion_err};
+use datafusion_common::{
+    Column, HashMap, Result, not_impl_err, plan_datafusion_err, plan_err,
+};
 use datafusion_expr::{JoinType, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{
     Join, JoinConstraint, JoinOperator, ObjectName, TableFactor, TableWithJoins,
 };
 use std::collections::HashSet;
+
+const JOIN_ON_HELP: &str =
+    "Compute the window function in a subquery and join on its result";
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(crate) fn plan_table_with_joins(
@@ -98,7 +104,74 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             JoinOperator::CrossJoin(JoinConstraint::None) => {
                 self.parse_cross_join(left, right)
             }
+            JoinOperator::AsOf {
+                match_condition,
+                constraint,
+            } => self.parse_asof_join(
+                left,
+                right,
+                match_condition,
+                constraint,
+                planner_context,
+            ),
             other => not_impl_err!("Unsupported JOIN operator {other:?}"),
+        }
+    }
+
+    fn parse_asof_join(
+        &self,
+        left: LogicalPlan,
+        right: LogicalPlan,
+        sql_match_condition: sqlparser::ast::Expr,
+        constraint: JoinConstraint,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan> {
+        let join_schema = left.schema().join(right.schema())?;
+        let match_condition =
+            self.sql_to_expr(sql_match_condition, &join_schema, planner_context)?;
+
+        match constraint {
+            JoinConstraint::On(sql_on) => {
+                let window_span = self.window_function_span(&sql_on, &HashMap::new());
+                let on = self.sql_to_expr(sql_on, &join_schema, planner_context)?;
+                reject_window_functions(&on, "JOIN ON", JOIN_ON_HELP, window_span)?;
+                LogicalPlanBuilder::from(left)
+                    .asof_join_on(right, Some(on), match_condition)?
+                    .build()
+            }
+            JoinConstraint::Using(object_names) => {
+                let keys = object_names
+                    .into_iter()
+                    .map(|object_name| {
+                        let ObjectName(mut object_names) = object_name;
+                        if object_names.len() != 1 {
+                            return not_impl_err!(
+                                "Invalid identifier in ASOF USING clause. Expected single identifier, got {}",
+                                ObjectName(object_names)
+                            );
+                        }
+                        let id = object_names.swap_remove(0);
+                        id.as_ident()
+                            .ok_or_else(|| {
+                                plan_datafusion_err!(
+                                    "Expected identifier in ASOF USING clause"
+                                )
+                            })
+                            .map(|ident| {
+                                Column::from_name(
+                                    self.ident_normalizer.normalize(ident.clone()),
+                                )
+                            })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                LogicalPlanBuilder::from(left)
+                    .asof_join_using(right, keys, match_condition)?
+                    .build()
+            }
+            JoinConstraint::None => LogicalPlanBuilder::from(left)
+                .asof_join_on(right, None, match_condition)?
+                .build(),
+            JoinConstraint::Natural => plan_err!("NATURAL ASOF JOIN is not supported"),
         }
     }
 
@@ -123,7 +196,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let join_schema = left.schema().join(right.schema())?;
                 // parse ON expression
                 self.warn_on_null_equality_predicate(&sql_expr);
+                let window_span = self.window_function_span(&sql_expr, &HashMap::new());
                 let expr = self.sql_to_expr(sql_expr, &join_schema, planner_context)?;
+                // A join condition is evaluated before window functions are
+                // computed, so they may not appear in it
+                reject_window_functions(&expr, "JOIN ON", JOIN_ON_HELP, window_span)?;
                 LogicalPlanBuilder::from(left)
                     .join_on(right, join_type, Some(expr))?
                     .build()

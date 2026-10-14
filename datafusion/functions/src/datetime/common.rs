@@ -36,7 +36,7 @@ use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err,
-    internal_datafusion_err,
+    internal_datafusion_err, internal_err,
 };
 use datafusion_expr::ColumnarValue;
 
@@ -59,30 +59,38 @@ pub(crate) fn date_to_scalar(
         DataType::Timestamp(unit, tz_opt) => {
             let naive_midnight = date.and_hms_opt(0, 0, 0)?;
             let tz: Option<Tz> = tz_opt.clone().and_then(|s| s.parse().ok());
+
+            // Midnight has no representation when the date falls outside the
+            // unit's range, or when the zone skips it. Reporting no bound keeps
+            // the caller on the original predicate; a NULL bound here would make
+            // the rewritten comparison NULL on every row.
             match unit {
                 TimeUnit::Second => ScalarValue::TimestampSecond(
-                    TimestampSecondType::from_naive_datetime(naive_midnight, tz.as_ref()),
+                    Some(TimestampSecondType::from_naive_datetime(
+                        naive_midnight,
+                        tz.as_ref(),
+                    )?),
                     tz_opt.clone(),
                 ),
                 TimeUnit::Millisecond => ScalarValue::TimestampMillisecond(
-                    TimestampMillisecondType::from_naive_datetime(
+                    Some(TimestampMillisecondType::from_naive_datetime(
                         naive_midnight,
                         tz.as_ref(),
-                    ),
+                    )?),
                     tz_opt.clone(),
                 ),
                 TimeUnit::Microsecond => ScalarValue::TimestampMicrosecond(
-                    TimestampMicrosecondType::from_naive_datetime(
+                    Some(TimestampMicrosecondType::from_naive_datetime(
                         naive_midnight,
                         tz.as_ref(),
-                    ),
+                    )?),
                     tz_opt.clone(),
                 ),
                 TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(
-                    TimestampNanosecondType::from_naive_datetime(
+                    Some(TimestampNanosecondType::from_naive_datetime(
                         naive_midnight,
                         tz.as_ref(),
-                    ),
+                    )?),
                     tz_opt.clone(),
                 ),
             }
@@ -106,10 +114,10 @@ pub(crate) fn date_to_scalar(
 ///   value is out of range (between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804)
 ///   or the parsed value does not correspond to an unambiguous time.
 pub(crate) fn string_to_timestamp_nanos_with_timezone(
-    timezone: &Option<Tz>,
+    timezone: Option<&Tz>,
     s: &str,
 ) -> Result<i64> {
-    let tz = timezone.as_ref().unwrap_or(&UTC);
+    let tz = timezone.unwrap_or(&UTC);
     let dt = string_to_datetime(tz, s)?;
     let parsed = dt
         .timestamp_nanos_opt()
@@ -261,11 +269,11 @@ pub(crate) fn string_to_datetime_formatted<T: TimeZone>(
 /// [`chrono::format::strftime`]: https://docs.rs/chrono/latest/chrono/format/strftime/index.html
 #[inline]
 pub(crate) fn string_to_timestamp_nanos_formatted_with_timezone(
-    timezone: &Option<Tz>,
+    timezone: Option<&Tz>,
     s: &str,
     format: &str,
 ) -> Result<i64, DataFusionError> {
-    let dt = string_to_datetime_formatted(timezone.as_ref().unwrap_or(&UTC), s, format)?;
+    let dt = string_to_datetime_formatted(timezone.unwrap_or(&UTC), s, format)?;
     let parsed = dt
         .timestamp_nanos_opt()
         .ok_or_else(|| exec_datafusion_err!("{ERR_NANOSECONDS_NOT_SUPPORTED}"))?;
@@ -308,27 +316,30 @@ where
     F: Fn(&str) -> Result<O::Native>,
 {
     match &args[0] {
-        ColumnarValue::Array(a) => match a.data_type() {
-            DataType::Utf8View => Ok(ColumnarValue::Array(Arc::new(
-                unary_string_to_primitive_function::<&StringViewArray, O, _>(
-                    &a.as_string_view(),
-                    op,
-                )?,
-            ))),
-            DataType::LargeUtf8 => Ok(ColumnarValue::Array(Arc::new(
-                unary_string_to_primitive_function::<&GenericStringArray<i64>, O, _>(
-                    &a.as_string::<i64>(),
-                    op,
-                )?,
-            ))),
-            DataType::Utf8 => Ok(ColumnarValue::Array(Arc::new(
-                unary_string_to_primitive_function::<&GenericStringArray<i32>, O, _>(
-                    &a.as_string::<i32>(),
-                    op,
-                )?,
-            ))),
-            other => exec_err!("Unsupported data type {other:?} for function {name}"),
-        },
+        ColumnarValue::Array(a) => {
+            let result: PrimitiveArray<O> = match a.data_type() {
+                DataType::Utf8View => {
+                    let strings = a.as_string_view();
+                    unary_string_to_primitive_function(&strings, op)?
+                }
+                DataType::LargeUtf8 => {
+                    let strings = a.as_string::<i64>();
+                    unary_string_to_primitive_function(&strings, op)?
+                }
+                DataType::Utf8 => {
+                    let strings = a.as_string::<i32>();
+                    unary_string_to_primitive_function(&strings, op)?
+                }
+                other => {
+                    return exec_err!(
+                        "Unsupported data type {other:?} for function {name}"
+                    );
+                }
+            };
+            Ok(ColumnarValue::Array(Arc::new(with_return_type(
+                result, dt,
+            )?)))
+        }
         ColumnarValue::Scalar(scalar) => match scalar.try_as_str() {
             Some(a) => {
                 let result = a
@@ -392,9 +403,11 @@ where
                     }
                 }
 
-                Ok(ColumnarValue::Array(Arc::new(
-                    strings_to_primitive_function::<O, _, _>(args, op, op2, name)?,
-                )))
+                let result =
+                    strings_to_primitive_function::<O, _, _>(args, op, op2, name)?;
+                Ok(ColumnarValue::Array(Arc::new(with_return_type(
+                    result, dt,
+                )?)))
             }
             other => {
                 exec_err!("Unsupported data type {other:?} for function {name}")
@@ -566,7 +579,7 @@ where
                         val = Some(r);
                     }
                 }
-            };
+            }
 
             val.transpose()
         })
@@ -593,6 +606,30 @@ where
     array.iter().map(|x| x.map(&op).transpose()).collect()
 }
 
+/// Re-annotates `array` with the return type `dt` declared by the calling
+/// function.
+///
+/// The parsing kernels build the array from `O::DATA_TYPE`, which for timestamps
+/// carries no timezone. `dt` is what the function advertised in `return_type`,
+/// so it may additionally carry the execution timezone; without this the array
+/// and the schema disagree and execution fails when the column is materialized.
+fn with_return_type<O: ArrowPrimitiveType>(
+    array: PrimitiveArray<O>,
+    dt: &DataType,
+) -> Result<PrimitiveArray<O>> {
+    let from = array.data_type().clone();
+    match (&from, dt) {
+        // Only the timezone may differ, which `with_data_type` adjusts in place.
+        (DataType::Timestamp(from_unit, _), DataType::Timestamp(to_unit, _))
+            if from_unit == to_unit =>
+        {
+            Ok(array.with_data_type(dt.clone()))
+        }
+        _ if &from == dt => Ok(array),
+        _ => internal_err!("Cannot return {from} array as {dt}"),
+    }
+}
+
 fn scalar_value(dt: &DataType, r: Option<i64>) -> Result<ScalarValue> {
     match dt {
         DataType::Date32 => Ok(ScalarValue::Date32(r.and_then(|v| v.to_i32()))),
@@ -604,4 +641,16 @@ fn scalar_value(dt: &DataType, r: Option<i64>) -> Result<ScalarValue> {
         },
         t => Err(internal_datafusion_err!("Unsupported data type: {t:?}")),
     }
+}
+
+/// Parse the optional timezone string carried by [`DataType::Timestamp`] into a
+/// [`Tz`].
+///
+/// Returns `Ok(None)` when the timestamp type is timezone-naive.
+pub(crate) fn parse_tz(tz: Option<&Arc<str>>) -> Result<Option<Tz>> {
+    tz.map(|tz| {
+        tz.parse::<Tz>()
+            .map_err(|op| exec_datafusion_err!("failed on timezone {tz}: {op:?}"))
+    })
+    .transpose()
 }

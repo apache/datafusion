@@ -1,0 +1,21 @@
+description = "Hash join SQL benchmarks derived from TPC-H"
+
+query_pattern = "q{QUERY_ID_PADDED}.benchmark"
+
+[path_replacements]
+DATA_DIR = "../../data"
+
+[[options]]
+name = "scale-factor"
+env = "BENCH_SIZE"
+default = "1"
+values = ["1", "10", "..."]
+help = "Selects the TPC-H scale factor used by the hash join benchmarks."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- hj"
+description = "Run all hash join queries at scale factor 1."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- hj --query 16 --scale-factor 10"
+description = "Run hash join query 16 at scale factor 10."

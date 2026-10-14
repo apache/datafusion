@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -18,6 +18,182 @@
 ##########
 ## Prepare Statement Tests
 ##########
+
+statement ok
+PREPARE page AS SELECT value FROM (VALUES (10), (20), (30)) AS t(value) ORDER BY value LIMIT $1 OFFSET $2;
+
+query I
+EXECUTE page(1, 1);
+----
+20
+
+statement ok
+DEALLOCATE page;
+
+statement ok
+PREPARE page AS SELECT 20 AS value LIMIT $1;
+
+query I
+EXECUTE page(1);
+----
+20
+
+statement ok
+DEALLOCATE page;
+
+statement ok
+PREPARE page AS SELECT value FROM (VALUES (10), (20)) AS t(value) ORDER BY value OFFSET $1;
+
+query I
+EXECUTE page(1);
+----
+20
+
+statement ok
+DEALLOCATE page;
+
+statement ok
+PREPARE page AS SELECT $1 AS value LIMIT $1;
+
+query I
+EXECUTE page(1);
+----
+1
+
+statement ok
+DEALLOCATE page;
+
+statement ok
+PREPARE page AS SELECT $1 AS value FROM (VALUES (0), (0)) AS t(dummy) OFFSET $1;
+
+query I
+EXECUTE page(1);
+----
+1
+
+statement ok
+DEALLOCATE page;
+
+statement ok
+PREPARE page AS SELECT value FROM (SELECT 20 AS value LIMIT $1) AS t;
+
+query I
+EXECUTE page(1);
+----
+20
+
+statement ok
+DEALLOCATE page;
+
+statement ok
+PREPARE page AS SELECT (SELECT value FROM (VALUES (10), (20)) AS t(value) ORDER BY value LIMIT $1) AS value;
+
+query I
+EXECUTE page(1);
+----
+10
+
+statement ok
+DEALLOCATE page;
+
+statement ok
+PREPARE page AS SELECT 20 AS value WHERE EXISTS (SELECT value FROM (VALUES (10), (20)) AS t(value) OFFSET $1);
+
+query I
+EXECUTE page(1);
+----
+20
+
+statement ok
+DEALLOCATE page;
+
+statement ok
+PREPARE page AS SELECT $1 AS value LIMIT CAST($1 AS INT);
+
+query T
+EXECUTE page('1');
+----
+1
+
+statement ok
+DEALLOCATE page;
+
+statement ok
+PREPARE page AS SELECT $1 AS value LIMIT CAST($1 AS BIGINT);
+
+query T
+EXECUTE page('1');
+----
+1
+
+statement ok
+DEALLOCATE page;
+
+statement ok
+PREPARE page AS SELECT $1 AS value FROM (VALUES (1), (2)) AS t(v) OFFSET CAST($1 AS BIGINT);
+
+query T
+EXECUTE page('1');
+----
+1
+
+statement ok
+DEALLOCATE page;
+
+statement ok
+PREPARE page AS SELECT $1 AS value FROM (SELECT 1 LIMIT CAST($1 AS BIGINT)) AS t;
+
+query T
+EXECUTE page('1');
+----
+1
+
+statement ok
+DEALLOCATE page;
+
+statement ok
+PREPARE page AS SELECT $1 + CAST(1 AS INT) AS value FROM (SELECT $1) AS t LIMIT $1;
+
+query I
+EXECUTE page(1);
+----
+2
+
+statement ok
+DEALLOCATE page;
+
+statement ok
+PREPARE page AS SELECT $1 + CAST(1 AS INT) AS value LIMIT $1;
+
+query I
+EXECUTE page(1);
+----
+2
+
+statement ok
+DEALLOCATE page;
+
+statement ok
+PREPARE page AS SELECT $1 AS value LIMIT $2;
+
+query T
+EXECUTE page('row', 1);
+----
+row
+
+statement ok
+DEALLOCATE page;
+
+statement ok
+PREPARE page AS SELECT $1 AS value FROM (VALUES (0), (0)) AS t(dummy) OFFSET $2;
+
+query T
+EXECUTE page('row', 1);
+----
+row
+
+statement ok
+DEALLOCATE page;
 
 statement ok
 create table person (id int, first_name varchar, last_name varchar, age int, state varchar, salary double, birthday timestamp, "😀" int) as values (1, 'jane', 'smith', 20, 'MA', 100000.45, '2000-11-12T00:00:00'::timestamp, 99);
@@ -380,6 +556,28 @@ statement ok
 DEALLOCATE get_N_rand_ints_from_last_run;
 
 statement ok
+PREPARE limit_after_typed_filter AS SELECT id FROM test WHERE id = $1 LIMIT $2;
+
+query I
+EXECUTE limit_after_typed_filter(1, 1);
+----
+1
+
+statement ok
+DEALLOCATE limit_after_typed_filter;
+
+statement ok
+PREPARE limit_after_inferred_int32 AS SELECT $1 + CAST(1 AS INT) AS value LIMIT $1;
+
+query I
+EXECUTE limit_after_inferred_int32(1);
+----
+2
+
+statement ok
+DEALLOCATE limit_after_inferred_int32;
+
+statement ok
 DROP TABLE test;
 
 statement ok
@@ -472,3 +670,40 @@ EXECUTE my_plan(1, 2)
 
 statement ok
 DEALLOCATE my_plan
+
+# Untyped aliased placeholders in UNION arms
+statement ok
+PREPARE my_plan AS SELECT $1 AS a UNION ALL SELECT $2 AS a;
+
+query T rowsort
+EXECUTE my_plan('x', 'y')
+----
+x
+y
+
+statement ok
+DEALLOCATE my_plan
+
+statement ok
+create table keys_t (k1 varchar, k2 varchar) as values ('a0', 'b0'), ('a1', 'b1'), ('a2', 'b2');
+
+statement ok
+PREPARE my_plan AS
+WITH keys AS (
+  SELECT $1 AS k1, $2 AS k2
+  UNION ALL
+  SELECT $3 AS k1, $4 AS k2
+)
+SELECT t.k1 FROM keys_t t JOIN keys ON t.k1 = keys.k1 AND t.k2 = keys.k2;
+
+query T rowsort
+EXECUTE my_plan('a0', 'b0', 'a2', 'b2')
+----
+a0
+a2
+
+statement ok
+DEALLOCATE my_plan
+
+statement ok
+drop table keys_t

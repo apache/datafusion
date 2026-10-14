@@ -22,7 +22,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use super::{StandardWindowFunctionExpr, WindowExpr};
-use crate::window::window_expr::{WindowFn, get_orderby_values};
+use crate::window::window_expr::{WindowEvalContext, WindowFn, get_orderby_values};
 use crate::window::{PartitionBatches, PartitionWindowAggStates, WindowState};
 use crate::{EquivalenceProperties, PhysicalExpr};
 
@@ -117,7 +117,7 @@ impl WindowExpr for StandardWindowExpr {
         let num_rows = batch.num_rows();
         if evaluator.uses_window_frame() {
             let sort_options = self.order_by.iter().map(|o| o.options).collect();
-            let mut row_wise_results = vec![];
+            let mut row_wise_results = Vec::with_capacity(num_rows);
 
             let mut values = self.evaluate_args(batch)?;
             let order_bys = get_orderby_values(self.order_by_columns(batch)?);
@@ -157,6 +157,7 @@ impl WindowExpr for StandardWindowExpr {
         &self,
         partition_batches: &PartitionBatches,
         window_agg_state: &mut PartitionWindowAggStates,
+        _eval_ctx: &WindowEvalContext<'_>,
     ) -> Result<()> {
         let field = self.expr.field()?;
         let out_type = field.data_type();
@@ -175,11 +176,16 @@ impl WindowExpr for StandardWindowExpr {
                         .or_insert(WindowState {
                             state: new_state.clone(),
                             window_fn: WindowFn::Builtin(evaluator),
+                            published: false,
                         })
                 };
-            let evaluator = match &mut window_state.window_fn {
-                WindowFn::Builtin(evaluator) => evaluator,
-                _ => unreachable!(),
+            // Skip partitions whose input is unchanged since the last
+            // evaluation pass.
+            if window_state.state.is_input_unchanged(partition_batch_state) {
+                continue;
+            }
+            let WindowFn::Builtin(evaluator) = &mut window_state.window_fn else {
+                unreachable!()
             };
             let state = &mut window_state.state;
 
@@ -197,7 +203,8 @@ impl WindowExpr for StandardWindowExpr {
             // We iterate on each row to perform a running calculation.
             let record_batch = &partition_batch_state.record_batch;
             let num_rows = record_batch.num_rows();
-            let mut row_wise_results: Vec<ScalarValue> = vec![];
+            let mut row_wise_results: Vec<ScalarValue> =
+                Vec::with_capacity(num_rows.saturating_sub(state.last_calculated_index));
             let is_causal = if evaluator.uses_window_frame() {
                 self.window_frame.is_causal()
             } else {

@@ -60,7 +60,7 @@ async fn test_tracer_injection() {
         info!("Caught expected panic: {e}");
     } else {
         panic!("Expected the task to panic, but it completed successfully");
-    };
+    }
 
     // Initialize the asserting tracer and run the query.
     info!("Initializing tracer and re-running query");

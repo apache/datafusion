@@ -211,6 +211,7 @@ impl RunOpt {
         let ctx = SessionContext::new_with_config_rt(config, rt);
 
         let mut benchmark_run = BenchmarkRun::new();
+        benchmark_run.set_memory_pool(&ctx.runtime_env().memory_pool);
         for query_id in query_range {
             let query_index = query_id - 1; // Convert 1-based to 0-based index
 
@@ -225,7 +226,7 @@ impl RunOpt {
                 }
                 Err(e) => {
                     return Err(DataFusionError::Context(
-                        "NLJ benchmark Q{query_id} failed with error:".to_string(),
+                        format!("NLJ benchmark Q{query_id} failed with error:"),
                         Box::new(e),
                     ));
                 }

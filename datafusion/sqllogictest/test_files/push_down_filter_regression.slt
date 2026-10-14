@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -393,29 +393,41 @@ statement ok
 drop table agg_dyn_two_col;
 
 # --- mixed expressions: MIN(a), MAX(a), MAX(b), MIN(c+1) ---
-# Supported aggregates (MIN(a), MAX(a), MAX(b)) should drive a filter;
-# MIN(c+1) is unsupported and must not contribute.
-# Every file shares the same per-file min(a)=1, max(a)=8 and max(b)=12 so the
-# DynamicFilter content is deterministic regardless of publish order (see #22621).
+# MIN(c+1) cannot contribute a dynamic-filter predicate. Ignoring it could prune
+# rows that still improve MIN(c+1), so the aggregate must not produce a filter.
+# Each file starts with a row group that establishes all supported bounds,
+# followed by a row group containing the minimum c. With two rows per batch,
+# the old filter prunes the required rows in both files regardless of which
+# partition runs first.
+
+statement ok
+set datafusion.execution.batch_size = 2;
 
 statement ok
 COPY (
-  SELECT * FROM (VALUES (1, 12, 100), (8, 4, 70)) AS v(a, b, c)
+  SELECT * FROM (VALUES (1, 12, 100), (8, 4, 100), (1, 6, 70), (8, 12, 110)) AS v(a, b, c)
 ) TO 'test_files/scratch/push_down_filter_regression/agg_dyn_mixed/file_0.parquet'
-STORED AS PARQUET;
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' '2');
 
 statement ok
 COPY (
-  SELECT * FROM (VALUES (1, 6, 90), (8, 12, 110)) AS v(a, b, c)
+  SELECT * FROM (VALUES (1, 12, 100), (8, 4, 100), (1, 6, 70), (8, 12, 110)) AS v(a, b, c)
 ) TO 'test_files/scratch/push_down_filter_regression/agg_dyn_mixed/file_1.parquet'
-STORED AS PARQUET;
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' '2');
 
 statement ok
 CREATE EXTERNAL TABLE agg_dyn_mixed (a INT, b INT, c INT)
 STORED AS PARQUET
 LOCATION 'test_files/scratch/push_down_filter_regression/agg_dyn_mixed/';
 
-# -> DynamicFilter [ a < 1 OR a > 8 OR b > 12 ] (MIN(c+1) dropped as unsupported)
+query IIII
+SELECT MIN(a), MAX(a), MAX(b), MIN(c + 1) FROM agg_dyn_mixed;
+----
+1 8 12 71
+
+# No dynamic filter because not every aggregate has a safe predicate.
 query TT
 EXPLAIN ANALYZE SELECT MIN(a), MAX(a), MAX(b), MIN(c + 1) FROM agg_dyn_mixed;
 ----
@@ -423,10 +435,62 @@ Plan with Metrics
 01)AggregateExec: mode=Final, gby=[], aggr=[min(agg_dyn_mixed.a), max(agg_dyn_mixed.a), max(agg_dyn_mixed.b), min(agg_dyn_mixed.c + Int64(1))], metrics=[]
 02)--CoalescePartitionsExec, metrics=[]
 03)----AggregateExec: mode=Partial, gby=[], aggr=[min(agg_dyn_mixed.a), max(agg_dyn_mixed.a), max(agg_dyn_mixed.b), min(agg_dyn_mixed.c + Int64(1))], metrics=[]
-04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn_mixed/file_0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn_mixed/file_1.parquet]]}, projection=[a, b, c], file_type=parquet, predicate=DynamicFilter [ a@0 < 1 OR a@0 > 8 OR b@1 > 12 ], dynamic_rg_pruning=eligible, pruning_predicate=a_null_count@1 != row_count@2 AND a_min@0 < 1 OR a_null_count@1 != row_count@2 AND a_max@3 > 8 OR b_null_count@5 != row_count@2 AND b_max@4 > 12, required_guarantees=[], metrics=[]
+04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn_mixed/file_0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn_mixed/file_1.parquet]]}, projection=[a, b, c], file_type=parquet, metrics=[]
 
 statement ok
 drop table agg_dyn_mixed;
+
+statement ok
+reset datafusion.execution.batch_size;
+
+# --- one aggregate has a bound before another sees its first non-NULL value ---
+# Both files establish MIN(a)=1 and MAX(a)=8 in their first row group. Until b
+# has a non-NULL bound, filtering only on a would prune every remaining row and
+# incorrectly leave MIN(b) and MAX(b) NULL, regardless of partition order.
+
+statement ok
+set datafusion.execution.batch_size = 2;
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES (1, NULL), (8, NULL), (2, 5), (3, 7)) AS v(a, b)
+) TO 'test_files/scratch/push_down_filter_regression/agg_dyn_late_bound/file_0.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' '2');
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES (1, NULL), (8, NULL), (2, 5), (3, 7)) AS v(a, b)
+) TO 'test_files/scratch/push_down_filter_regression/agg_dyn_late_bound/file_1.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' '2');
+
+statement ok
+CREATE EXTERNAL TABLE agg_dyn_late_bound (a INT, b INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_regression/agg_dyn_late_bound/';
+
+statement ok
+set datafusion.optimizer.enable_aggregate_dynamic_filter_pushdown = false;
+
+query IIII
+SELECT MIN(a), MAX(a), MIN(b), MAX(b) FROM agg_dyn_late_bound;
+----
+1 8 5 7
+
+statement ok
+set datafusion.optimizer.enable_aggregate_dynamic_filter_pushdown = true;
+
+query IIII
+SELECT MIN(a), MAX(a), MIN(b), MAX(b) FROM agg_dyn_late_bound;
+----
+1 8 5 7
+
+statement ok
+drop table agg_dyn_late_bound;
+
+statement ok
+reset datafusion.execution.batch_size;
 
 # --- all-NULLs input: filter should stay `true` (no meaningful bound) ---
 
@@ -497,9 +561,9 @@ query TT
 EXPLAIN SELECT a, count(b) FROM agg_filter_pushdown WHERE a = 'x' GROUP BY a;
 ----
 physical_plan
-01)AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(agg_filter_pushdown.b)], ordering_mode=Sorted
+01)AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(agg_filter_pushdown.b)]
 02)--RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
-03)----AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(agg_filter_pushdown.b)], ordering_mode=Sorted
+03)----AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(agg_filter_pushdown.b)]
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_filter_pushdown.parquet]]}, projection=[a, b], file_type=parquet, predicate=a@0 = x, pruning_predicate=a_null_count@2 != row_count@3 AND a_min@0 <= x AND x <= a_max@1, required_guarantees=[a in (x)]
 
@@ -514,6 +578,44 @@ physical_plan
 04)------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
 05)--------AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(agg_filter_pushdown.b)]
 06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_filter_pushdown.parquet]]}, projection=[a, b], file_type=parquet
+
+# Mixed filters on an aggregate output and a grouping column must preserve their
+# parent filter result order. The grouping-column filter can push below the
+# aggregate, but the aggregate-output filter must remain above it.
+# Disable logical optimizer passes for this regression so the logical filter
+# pushdown rule does not split the mixed predicate before the physical
+# `AggregateExec::gather_filters_for_pushdown` path sees it.
+statement ok
+set datafusion.optimizer.max_passes = 0;
+
+query TT
+EXPLAIN SELECT a, b, cnt FROM (
+  SELECT a, b, count(b) AS cnt
+  FROM agg_filter_pushdown
+  GROUP BY a, b
+) q WHERE cnt = 2 AND b = 'foo';
+----
+physical_plan
+01)FilterExec: cnt@2 = 2
+02)--ProjectionExec: expr=[a@0 as a, b@1 as b, count(agg_filter_pushdown.b)@2 as cnt]
+03)----AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b], aggr=[count(agg_filter_pushdown.b)]
+04)------RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=4
+05)--------AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b], aggr=[count(agg_filter_pushdown.b)]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_filter_pushdown.parquet]]}, projection=[a, b], file_type=parquet, predicate=b@1 = CAST(foo AS Utf8View), pruning_predicate=b_null_count@2 != row_count@3 AND b_min@0 <= foo AND foo <= b_max@1, required_guarantees=[]
+
+# If the aggregate-output filter is incorrectly removed, this query returns 1.
+query I
+SELECT count(*) FROM (
+  SELECT a, b, count(b) AS cnt
+  FROM agg_filter_pushdown
+  GROUP BY a, b
+) q WHERE cnt = 2 AND b = 'foo';
+----
+0
+
+statement ok
+reset datafusion.optimizer.max_passes;
 
 statement ok
 drop table agg_filter_pushdown;
@@ -587,3 +689,325 @@ drop table t1;
 
 statement ok
 drop table t2;
+
+# A filter on a volatile group key must stay above the aggregate. Below the
+# aggregate, the filter evaluates the key again and sees a different value.
+query TT
+EXPLAIN SELECT k, c FROM (SELECT random() < 0.5 AS k, count(*) AS c FROM generate_series(1, 10000) GROUP BY 1) WHERE k;
+----
+logical_plan
+01)Projection: random() < Float64(0.5) AS k, count(Int64(1)) AS c
+02)--Filter: random() < Float64(0.5)
+03)----Aggregate: groupBy=[[random() < Float64(0.5)]], aggr=[[count(Int64(1))]]
+04)------TableScan: generate_series() projection=[]
+physical_plan
+01)ProjectionExec: expr=[random() < Float64(0.5)@0 as k, count(Int64(1))@1 as c]
+02)--FilterExec: random() < Float64(0.5)@0
+03)----AggregateExec: mode=FinalPartitioned, gby=[random() < Float64(0.5)@0 as random() < Float64(0.5)], aggr=[count(Int64(1))]
+04)------RepartitionExec: partitioning=Hash([random() < Float64(0.5)@0], 4), input_partitions=4
+05)--------AggregateExec: mode=Partial, gby=[random() < 0.5 as random() < Float64(0.5)], aggr=[count(Int64(1))]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=10000, batch_size=8192]
+
+query B
+SELECT k FROM (SELECT random() < 0.5 AS k, count(*) AS c FROM generate_series(1, 10000) GROUP BY random() < 0.5) WHERE k;
+----
+true
+
+query B
+SELECT k FROM (SELECT random() < 0.5 AS k, count(*) AS c FROM generate_series(1, 10000) GROUP BY k) WHERE NOT k;
+----
+false
+
+query I
+SELECT sum(c) FROM (SELECT random() < 0.5 AS k, count(*) AS c FROM generate_series(1, 10000) GROUP BY random() < 0.5) WHERE k OR NOT k;
+----
+10000
+
+# Window filter pushdown over expression PARTITION BY keys.
+#
+# A predicate that reads only the partition keys is constant within a partition,
+# so it is pushed below the window; anything else stays above it.
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+statement ok
+create table window_expr_key(k varchar, v int) as values
+  ('a', 1), ('a', 2), ('a', 3),
+  ('', 4), ('', 5),
+  ('b', 6);
+
+# Partitions under NULLIF(k, '') are 'a' => {1,2,3}, NULL => {4,5}, 'b' => {6}.
+query TII
+SELECT k, v, s FROM (
+  SELECT k, v, SUM(v) OVER (PARTITION BY NULLIF(k, '')) AS s
+  FROM window_expr_key
+)
+ORDER BY v;
+----
+a 1 6
+a 2 6
+a 3 6
+(empty) 4 9
+(empty) 5 9
+b 6 6
+
+# Pushed: the predicate reads only the partition key.
+query TT
+EXPLAIN SELECT k, v, s FROM (
+  SELECT k, v, SUM(v) OVER (PARTITION BY NULLIF(k, '')) AS s
+  FROM window_expr_key
+)
+WHERE NULLIF(k, '') = 'a';
+----
+logical_plan
+01)Projection: window_expr_key.k, window_expr_key.v, sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+02)--WindowAggr: windowExpr=[[sum(CAST(window_expr_key.v AS Int64)) PARTITION BY [nullif(window_expr_key.k, Utf8View(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+03)----Filter: nullif(window_expr_key.k, Utf8View("")) = Utf8View("a")
+04)------TableScan: window_expr_key projection=[k, v]
+
+query TII
+SELECT k, v, s FROM (
+  SELECT k, v, SUM(v) OVER (PARTITION BY NULLIF(k, '')) AS s
+  FROM window_expr_key
+)
+WHERE NULLIF(k, '') = 'a'
+ORDER BY v;
+----
+a 1 6
+a 2 6
+a 3 6
+
+# Pushed: a predicate built on top of the key still reads only the key.
+query TT
+EXPLAIN SELECT k, v, s FROM (
+  SELECT k, v, SUM(v) OVER (PARTITION BY NULLIF(k, '')) AS s
+  FROM window_expr_key
+)
+WHERE NULLIF(k, '') IS NOT NULL;
+----
+logical_plan
+01)Projection: window_expr_key.k, window_expr_key.v, sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+02)--WindowAggr: windowExpr=[[sum(CAST(window_expr_key.v AS Int64)) PARTITION BY [nullif(window_expr_key.k, Utf8View(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+03)----Filter: nullif(window_expr_key.k, Utf8View("")) IS NOT NULL
+04)------TableScan: window_expr_key projection=[k, v]
+
+query TII
+SELECT k, v, s FROM (
+  SELECT k, v, SUM(v) OVER (PARTITION BY NULLIF(k, '')) AS s
+  FROM window_expr_key
+)
+WHERE NULLIF(k, '') IS NOT NULL
+ORDER BY v;
+----
+a 1 6
+a 2 6
+a 3 6
+b 6 6
+
+# Kept: `v` is not a partition key. Pushing it would recompute the sums over the
+# surviving rows and report 5 instead of 6 for partition 'a'.
+query TT
+EXPLAIN SELECT k, v, s FROM (
+  SELECT k, v, SUM(v) OVER (PARTITION BY NULLIF(k, '')) AS s
+  FROM window_expr_key
+)
+WHERE v > 1;
+----
+logical_plan
+01)Projection: window_expr_key.k, window_expr_key.v, sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+02)--Filter: window_expr_key.v > Int32(1)
+03)----WindowAggr: windowExpr=[[sum(CAST(window_expr_key.v AS Int64)) PARTITION BY [nullif(window_expr_key.k, Utf8View(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+04)------TableScan: window_expr_key projection=[k, v]
+
+query TII
+SELECT k, v, s FROM (
+  SELECT k, v, SUM(v) OVER (PARTITION BY NULLIF(k, '')) AS s
+  FROM window_expr_key
+)
+WHERE v > 1
+ORDER BY v;
+----
+a 2 6
+a 3 6
+(empty) 4 9
+(empty) 5 9
+b 6 6
+
+# Kept: `k` on its own is not a key, only NULLIF(k, '') is.
+query TT
+EXPLAIN SELECT k, v, s FROM (
+  SELECT k, v, SUM(v) OVER (PARTITION BY NULLIF(k, '')) AS s
+  FROM window_expr_key
+)
+WHERE k = 'a';
+----
+logical_plan
+01)Projection: window_expr_key.k, window_expr_key.v, sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+02)--Filter: window_expr_key.k = Utf8View("a")
+03)----WindowAggr: windowExpr=[[sum(CAST(window_expr_key.v AS Int64)) PARTITION BY [nullif(window_expr_key.k, Utf8View(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+04)------TableScan: window_expr_key projection=[k, v]
+
+# Kept: a subquery, even one whose left-hand side is the key.
+query TT
+EXPLAIN SELECT k, v, s FROM (
+  SELECT k, v, SUM(v) OVER (PARTITION BY NULLIF(k, '')) AS s
+  FROM window_expr_key
+)
+WHERE NULLIF(k, '') IN (SELECT k FROM window_expr_key WHERE v > 5);
+----
+logical_plan
+01)LeftSemi Join: nullif(window_expr_key.k, Utf8View("")) = __correlated_sq_1.k
+02)--Projection: window_expr_key.k, window_expr_key.v, sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+03)----WindowAggr: windowExpr=[[sum(CAST(window_expr_key.v AS Int64)) PARTITION BY [nullif(window_expr_key.k, Utf8View(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+04)------TableScan: window_expr_key projection=[k, v]
+05)--SubqueryAlias: __correlated_sq_1
+06)----Projection: window_expr_key.k
+07)------Filter: window_expr_key.v > Int32(5)
+08)--------TableScan: window_expr_key projection=[k, v]
+
+query TII
+SELECT k, v, s FROM (
+  SELECT k, v, SUM(v) OVER (PARTITION BY NULLIF(k, '')) AS s
+  FROM window_expr_key
+)
+WHERE NULLIF(k, '') IN (SELECT k FROM window_expr_key WHERE v > 5)
+ORDER BY v;
+----
+b 6 6
+
+# Kept: a scalar subquery.
+query TT
+EXPLAIN SELECT k, v, s FROM (
+  SELECT k, v, SUM(v) OVER (PARTITION BY NULLIF(k, '')) AS s
+  FROM window_expr_key
+)
+WHERE NULLIF(k, '') = (SELECT max(k) FROM window_expr_key);
+----
+logical_plan
+01)Projection: window_expr_key.k, window_expr_key.v, sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+02)--Filter: nullif(window_expr_key.k, Utf8View("")) = (<subquery>)
+03)----Subquery:
+04)------Aggregate: groupBy=[[]], aggr=[[max(window_expr_key.k)]]
+05)--------TableScan: window_expr_key projection=[k]
+06)----WindowAggr: windowExpr=[[sum(CAST(window_expr_key.v AS Int64)) PARTITION BY [nullif(window_expr_key.k, Utf8View(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+07)------TableScan: window_expr_key projection=[k, v]
+
+# Kept: a volatile predicate, even one that reads no column at all.
+query TT
+EXPLAIN SELECT k, v, s FROM (
+  SELECT k, v, SUM(v) OVER (PARTITION BY NULLIF(k, '')) AS s
+  FROM window_expr_key
+)
+WHERE random() < 2;
+----
+logical_plan
+01)Projection: window_expr_key.k, window_expr_key.v, sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+02)--Filter: random() < Float64(2)
+03)----WindowAggr: windowExpr=[[sum(CAST(window_expr_key.v AS Int64)) PARTITION BY [nullif(window_expr_key.k, Utf8View(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+04)------TableScan: window_expr_key projection=[k, v]
+
+statement ok
+drop table window_expr_key;
+
+statement ok
+create table window_ab(a int, b int, c int) as values
+  (1, 1, 10), (1, 2, 20), (2, 2, 30), (3, 3, 40);
+
+# Pushed: an arithmetic expression key.
+query TT
+EXPLAIN SELECT a, b, s FROM (
+  SELECT a, b, SUM(c) OVER (PARTITION BY a + b) AS s FROM window_ab
+)
+WHERE a + b > 2;
+----
+logical_plan
+01)Projection: window_ab.a, window_ab.b, sum(window_ab.c) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+02)--WindowAggr: windowExpr=[[sum(CAST(window_ab.c AS Int64)) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+03)----Filter: window_ab.a + window_ab.b > Int32(2)
+04)------TableScan: window_ab projection=[a, b, c]
+
+# Pushed: the key appears twice in one predicate.
+query TT
+EXPLAIN SELECT a, b, s FROM (
+  SELECT a, b, SUM(c) OVER (PARTITION BY a + b) AS s FROM window_ab
+)
+WHERE a + b > 5 OR a + b < 3;
+----
+logical_plan
+01)Projection: window_ab.a, window_ab.b, sum(window_ab.c) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+02)--WindowAggr: windowExpr=[[sum(CAST(window_ab.c AS Int64)) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+03)----Projection: window_ab.a, window_ab.b, window_ab.c
+04)------Filter: __common_expr_3 > Int32(5) OR __common_expr_3 < Int32(3)
+05)--------Projection: window_ab.a + window_ab.b AS __common_expr_3, window_ab.a, window_ab.b, window_ab.c
+06)----------TableScan: window_ab projection=[a, b, c]
+
+# Pushed: a predicate over a column key and an expression key of the same window.
+query TT
+EXPLAIN SELECT a, b, s FROM (
+  SELECT a, b, SUM(c) OVER (PARTITION BY a, a + b) AS s FROM window_ab
+)
+WHERE a > 1 OR a + b > 4;
+----
+logical_plan
+01)Projection: window_ab.a, window_ab.b, sum(window_ab.c) PARTITION BY [window_ab.a, window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+02)--WindowAggr: windowExpr=[[sum(CAST(window_ab.c AS Int64)) PARTITION BY [window_ab.a, window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+03)----Filter: window_ab.a > Int32(1) OR window_ab.a + window_ab.b > Int32(4)
+04)------TableScan: window_ab projection=[a, b, c]
+
+# Kept: the match is structural, `b + a` is not the key `a + b`.
+query TT
+EXPLAIN SELECT a, b, s FROM (
+  SELECT a, b, SUM(c) OVER (PARTITION BY a + b) AS s FROM window_ab
+)
+WHERE b + a > 2;
+----
+logical_plan
+01)Projection: window_ab.a, window_ab.b, sum(window_ab.c) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+02)--Filter: window_ab.b + window_ab.a > Int32(2)
+03)----Projection: window_ab.a, window_ab.b, sum(window_ab.c) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+04)------WindowAggr: windowExpr=[[sum(CAST(window_ab.c AS Int64)) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+05)--------TableScan: window_ab projection=[a, b, c]
+
+# Pushed: every window function partitions by the key.
+query TT
+EXPLAIN SELECT a, b, s, r FROM (
+  SELECT a, b,
+    SUM(c) OVER (PARTITION BY a + b) AS s,
+    RANK() OVER (PARTITION BY a + b ORDER BY c) AS r
+  FROM window_ab
+)
+WHERE a + b > 2;
+----
+logical_plan
+01)Projection: window_ab.a, window_ab.b, sum(window_ab.c) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s, rank() PARTITION BY [window_ab.a + window_ab.b] ORDER BY [window_ab.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS r
+02)--WindowAggr: windowExpr=[[sum(CAST(window_ab.c AS Int64)) PARTITION BY [__common_expr_1 AS window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+03)----WindowAggr: windowExpr=[[rank() PARTITION BY [__common_expr_1 AS window_ab.a + window_ab.b] ORDER BY [window_ab.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------Projection: window_ab.a + window_ab.b AS __common_expr_1, window_ab.a, window_ab.b, window_ab.c
+05)--------Filter: window_ab.a + window_ab.b > Int32(2)
+06)----------TableScan: window_ab projection=[a, b, c]
+
+# Kept: one window function partitions by something else.
+query TT
+EXPLAIN SELECT a, b, s, r FROM (
+  SELECT a, b,
+    SUM(c) OVER (PARTITION BY a + b) AS s,
+    RANK() OVER (PARTITION BY a ORDER BY c) AS r
+  FROM window_ab
+)
+WHERE a + b > 2;
+----
+logical_plan
+01)Projection: window_ab.a, window_ab.b, sum(window_ab.c) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s, rank() PARTITION BY [window_ab.a] ORDER BY [window_ab.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS r
+02)--Filter: window_ab.a + window_ab.b > Int32(2)
+03)----Projection: window_ab.a, window_ab.b, sum(window_ab.c) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, rank() PARTITION BY [window_ab.a] ORDER BY [window_ab.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+04)------WindowAggr: windowExpr=[[rank() PARTITION BY [window_ab.a] ORDER BY [window_ab.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+05)--------WindowAggr: windowExpr=[[sum(CAST(window_ab.c AS Int64)) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+06)----------TableScan: window_ab projection=[a, b, c]
+
+statement ok
+drop table window_ab;
+
+statement ok
+set datafusion.explain.logical_plan_only = false;

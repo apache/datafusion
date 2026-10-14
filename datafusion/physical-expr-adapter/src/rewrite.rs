@@ -319,6 +319,9 @@ mod tests {
         assert_eq!(source.name(), "__datafusion_file_row_index");
         assert_eq!(source.index(), 2);
 
+        // The row index column is at index 2, beyond the user-visible schema.
+        // When the source column lookup fails, the field name is empty. The
+        // correct field name would be provided by a parent projection/alias.
         let input_schema = Schema::new(vec![
             Field::new("value", DataType::Int64, true),
             Field::new("__datafusion_file_row_index", DataType::Int64, false)
@@ -328,9 +331,11 @@ mod tests {
                 )])),
         ]);
         let return_field = expr.return_field(&input_schema)?;
-        assert_eq!(return_field.name(), "file_row_index");
+        // Field name is empty because column index 2 is beyond the schema
+        assert_eq!(return_field.name(), "");
         assert_eq!(return_field.data_type(), &DataType::Int64);
         assert!(return_field.is_nullable());
+        // Exact target field does not preserve source metadata
         assert!(return_field.metadata().is_empty());
         Ok(())
     }

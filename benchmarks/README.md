@@ -294,7 +294,7 @@ $ mkdir -p /tmp/output_branch
 $ git checkout my_branch
 $ cargo run --release --bin tpch -- benchmark datafusion --iterations 5 --path ./data --format parquet -o /tmp/output_branch/tpch.json
 # compare the results:
-./compare.py /tmp/output_main/tpch.json  /tmp/output_branch/tpch.json
+uv run ./compare.py /tmp/output_main/tpch.json  /tmp/output_branch/tpch.json
 ```
 
 This will produce output like:
@@ -483,6 +483,14 @@ Your benchmark should create and use an instance of `BenchmarkRun` defined in `b
 - Call its `start_new_case` method with a string that will appear in the "Query" column of the
   compare output.
 - Use `write_iter` to record elapsed times for the behavior you're benchmarking.
+- Call `set_memory_pool` with the `RuntimeEnv`'s memory pool (`ctx.runtime_env().memory_pool`),
+  and again for each new runtime if your benchmark builds one per query. Each case then reports a
+  `pool_peak_bytes` field: the peak `MemoryPool` reservation reached while running it, which is the
+  largest value across that case's iterations. The field is omitted when the benchmark runs without
+  `--memory-limit`, since no pool is installed to record. Comparing it against the peak RSS printed
+  by `print_memory_stats` shows how much of the run's memory the pool actually accounted for; the
+  pool only tracks the "large" allocations that scale with input size, so the two are expected to
+  differ.
 - When all cases are done, call the `BenchmarkRun`'s `maybe_write_json` method, giving it the value
   of the `--output` structopt field on `RunOpt`.
 
@@ -915,6 +923,21 @@ cargo run --release --bin dfbench -- h2o --join-paths ./benchmarks/data/h2o/J1_1
 
 # Micro-Benchmarks
 
+## ASOF Join
+
+This benchmark exercises ASOF joins across relative input sizes, available
+input ordering, equality-group cardinality and skew, match direction, and
+payload width. One keyed workload reads pre-sorted Parquet inputs from
+`benchmarks/data/asof_join` with declared ordering so it measures the join
+without including an input sort.
+
+### Example Run
+
+```bash
+./bench.sh data asof_join
+./bench.sh run asof_join
+```
+
 ## Nested Loop Join
 
 This benchmark focuses on the performance of queries with nested loop joins, minimizing other overheads such as scanning data sources or evaluating predicates.
@@ -943,9 +966,39 @@ Several queries are included to test hash joins under various workloads.
 ./bench.sh run hj
 ```
 
+## Null-Aware Join
+
+This benchmark focuses on `NOT IN` subqueries, which plan as null-aware joins: an
+outer row that finds no match is TRUE only if neither side has a NULL in scope,
+and UNKNOWN otherwise.
+
+Deciding which outer rows are UNKNOWN is cheap when the `NOT IN` is uncorrelated
+(Q01-Q03) and is linear in the table sizes. When the subquery is correlated, the
+correlation predicate stays behind as a join filter, and the join has to evaluate
+that filter per candidate (build row x probe row) pair to decide which rows the
+NULLs actually reach. A non-equality correlation leaves no equality key to narrow
+those pairs, so Q04-Q07 measure how that cost grows with the NULL fraction, while
+Q08 adds an equality correlation that turns the candidate pairs into a hash
+lookup.
+
+Both table sizes are knobs: `NAJ_ROWS` (default `10000`) sizes the correlated
+queries, whose cost grows with its square, and `NAJ_LARGE_ROWS` (default
+`1000000`) sizes the uncorrelated ones.
+
+### Example Run
+
+```bash
+# No need to generate data: this benchmark uses table function `range()` as the data source
+
+./bench.sh run null_aware_join
+
+# Or, with more rows for the correlated queries (~4x the per-pair filter work)
+NAJ_ROWS=20000 ./bench.sh run null_aware_join
+```
+
 ## Sort Merge Join
 
-This benchmark focuses on the performance of queries with sort merge joins joins, minimizing other overheads such as scanning data sources or evaluating predicates.
+This benchmark focuses on the performance of queries with sort merge joins, minimizing other overheads such as scanning data sources or evaluating predicates.
 
 Several queries are included to test sort merge joins under various workloads.
 
@@ -955,6 +1008,32 @@ Several queries are included to test sort merge joins under various workloads.
 # No need to generate data: this benchmark uses table function `range()` as the data source
 
 ./bench.sh run smj
+```
+
+## Projection Subquery
+
+This benchmark measures `IN`, `NOT IN` and `EXISTS` subqueries that sit in the `SELECT` list instead of a filter
+(see <https://github.com/apache/datafusion/issues/25341>).
+
+A projected `IN` must return `NULL`, and not `false`, when there is no match and the inner side holds a `NULL`.
+The decorrelation therefore turns one projected `IN` into more than one mark join.
+If a mark join has no hashable join predicate, it runs as a nested-loop join, and the cost grows with the outer row count times the inner row count.
+
+Every query projects the boolean subquery result and aggregates it, so the measured cost is the plan and not the size of the output.
+Query `q07` correlates on `<` instead of `=`, so it stays on the nested-loop path.
+It is the control: its time must not change when the hashable shapes get faster.
+
+The two tables are built inline by the suite's load SQL, so there is no data step.
+Set `PSQ_ROWS` to change the row count in each table.
+The default is 30,000, which keeps the nested-loop plans at a few hundred milliseconds.
+The checked-in result files hold the counts for that default, so `--result-mode validate` needs it.
+
+### Example Run
+
+```bash
+# No need to generate data: the suite's load SQL builds the two tables inline
+
+./bench.sh run projection_subquery
 ```
 ## Cancellation
 

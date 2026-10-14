@@ -110,11 +110,11 @@ impl TestParquetFile {
             canonical_path = canonical_path
                 .to_str()
                 .unwrap()
-                .replace("\\", "/")
+                .replace('\\', "/")
                 .strip_prefix("//?/")
                 .unwrap()
                 .into();
-        };
+        }
 
         let object_store_url =
             ListingTableUrl::parse(canonical_path.to_str().unwrap_or_default())?
@@ -150,7 +150,7 @@ impl TestParquetFile {
     /// ```
     ///
     /// Otherwise if `maybe_filter` is None, return just a `DataSourceExec`
-    pub async fn create_scan(
+    pub fn create_scan(
         &self,
         ctx: &SessionContext,
         maybe_filter: Option<Expr>,

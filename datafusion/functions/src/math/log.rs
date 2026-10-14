@@ -17,8 +17,6 @@
 
 //! Math function: `log()`.
 
-use super::power::PowerFunc;
-
 use crate::utils::calculate_binary_math;
 use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{
@@ -28,15 +26,13 @@ use arrow::datatypes::{
 use arrow::error::ArrowError;
 use arrow_buffer::i256;
 use datafusion_common::types::NativeType;
-use datafusion_common::{
-    Result, ScalarValue, exec_err, internal_err, plan_datafusion_err, plan_err,
-};
-use datafusion_expr::expr::ScalarFunction;
+use datafusion_common::{Result, ScalarValue, exec_err, plan_datafusion_err, plan_err};
+use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDF,
-    TypeSignature, TypeSignatureClass, lit,
+    Coercion, ColumnarValue, Documentation, Expr, ScalarFunctionArgs, TypeSignature,
+    TypeSignatureClass, lit,
 };
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
@@ -104,6 +100,14 @@ impl LogFunc {
 #[inline]
 fn is_valid_integer_base(base: f64) -> bool {
     base.trunc() == base && base >= 2.0 && base <= u32::MAX as f64
+}
+
+/// Returns true if every value in `range` is provably greater than one.
+fn is_gt_one(range: &Interval) -> bool {
+    ScalarValue::new_one(&range.data_type())
+        .and_then(|one| Interval::try_new(one.clone(), one))
+        .and_then(|one| range.gt(one))
+        .is_ok_and(|gt| gt == Interval::TRUE)
 }
 
 /// Calculate logarithm for Decimal32 values.
@@ -214,10 +218,20 @@ impl ScalarUDFImpl for LogFunc {
         } else {
             (input[0].sort_properties, input[1].sort_properties)
         };
+        // log_b(x) = ln(x) / ln(b) is increasing in x only when b > 1; for
+        // 0 < b < 1 it is decreasing. If the base cannot be proven to be > 1
+        // (e.g. `log(0.5, x)`, or a column with unknown bounds), make no claim.
+        // `log(x)` always uses base 10.
+        if input.len() == 2 && !is_gt_one(&input[0].range) {
+            return Ok(SortProperties::Unordered);
+        }
+
         match (num_sort_properties, base_sort_properties) {
+            // With b > 1, log_b(x) is decreasing in b only when x > 1
             (first @ SortProperties::Ordered(num), SortProperties::Ordered(base))
                 if num.descending != base.descending
-                    && num.nulls_first == base.nulls_first =>
+                    && num.nulls_first == base.nulls_first
+                    && is_gt_one(&input[1].range) =>
             {
                 Ok(first)
             }
@@ -225,7 +239,9 @@ impl ScalarUDFImpl for LogFunc {
                 first @ (SortProperties::Ordered(_) | SortProperties::Singleton),
                 SortProperties::Singleton,
             ) => Ok(first),
-            (SortProperties::Singleton, second @ SortProperties::Ordered(_)) => {
+            (SortProperties::Singleton, second @ SortProperties::Ordered(_))
+                if is_gt_one(&input[1].range) =>
+            {
                 Ok(-second)
             }
             _ => Ok(SortProperties::Unordered),
@@ -312,16 +328,12 @@ impl ScalarUDFImpl for LogFunc {
         self.doc()
     }
 
-    /// Simplify the `log` function by the relevant rules:
-    /// 1. Log(a, 1) ===> 0
-    /// 2. Log(a, Power(a, b)) ===> b
-    /// 3. Log(a, a) ===> 1
     fn simplify(
         &self,
-        mut args: Vec<Expr>,
+        args: Vec<Expr>,
         info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
-        let mut arg_types = args
+        let arg_types = args
             .iter()
             .map(|arg| info.get_data_type(arg))
             .collect::<Result<Vec<_>>>()?;
@@ -352,56 +364,10 @@ impl ScalarUDFImpl for LogFunc {
                 return Ok(ExprSimplifyResult::Original(args));
             }
             _ => (),
-        };
-
-        let number = args.pop().unwrap();
-        let number_datatype = arg_types.pop().unwrap();
-        // default to base 10
-        let base = if let Some(base) = args.pop() {
-            base
-        } else {
-            lit(ScalarValue::new_ten(&number_datatype)?)
-        };
-
-        match number {
-            Expr::Literal(value, _)
-                if value == ScalarValue::new_one(&number_datatype)? =>
-            {
-                Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::new_zero(
-                    &info.get_data_type(&base)?,
-                )?)))
-            }
-            Expr::ScalarFunction(ScalarFunction { func, mut args })
-                if is_pow(&func) && args.len() == 2 && base == args[0] =>
-            {
-                let b = args.pop().unwrap(); // length checked above
-                Ok(ExprSimplifyResult::Simplified(b))
-            }
-            number => {
-                if number == base {
-                    Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::new_one(
-                        &number_datatype,
-                    )?)))
-                } else {
-                    let args = match num_args {
-                        1 => vec![number],
-                        2 => vec![base, number],
-                        _ => {
-                            return internal_err!(
-                                "Unexpected number of arguments in log::simplify"
-                            );
-                        }
-                    };
-                    Ok(ExprSimplifyResult::Original(args))
-                }
-            }
         }
-    }
-}
 
-/// Returns true if the function is `PowerFunc`
-fn is_pow(func: &ScalarUDF) -> bool {
-    func.inner().is::<PowerFunc>()
+        Ok(ExprSimplifyResult::Original(args))
+    }
 }
 
 #[cfg(test)]
@@ -762,46 +728,46 @@ mod tests {
     }
 
     #[test]
-    // Test that non-simplifiable log() expressions are unchanged after simplification
     fn test_log_simplify_original() {
         let context = SimplifyContext::default();
-        // One argument with no simplifications
-        let result = LogFunc::new().simplify(vec![lit(2)], &context).unwrap();
-        let ExprSimplifyResult::Original(args) = result else {
-            panic!("Expected ExprSimplifyResult::Original")
-        };
-        assert_eq!(args.len(), 1);
-        assert_eq!(args[0], lit(2));
-        // Two arguments with no simplifications
-        let result = LogFunc::new()
-            .simplify(vec![lit(2), lit(3)], &context)
-            .unwrap();
-        let ExprSimplifyResult::Original(args) = result else {
-            panic!("Expected ExprSimplifyResult::Original")
-        };
-        assert_eq!(args.len(), 2);
-        assert_eq!(args[0], lit(2));
-        assert_eq!(args[1], lit(3));
+        for args in [
+            vec![lit(2)],
+            vec![lit(2), lit(3)],
+            vec![lit(2.0), lit(1.0)],
+            vec![lit(2.0), lit(2.0)],
+        ] {
+            let result = LogFunc::new().simplify(args.clone(), &context).unwrap();
+            let ExprSimplifyResult::Original(actual) = result else {
+                panic!("Expected ExprSimplifyResult::Original")
+            };
+            assert_eq!(actual, args);
+        }
     }
 
     #[test]
     fn test_log_output_ordering() {
+        // Range proving base > 1.0 and num > 1.0 (e.g. [2.0, 10.0])
+        let gt_one_range =
+            Interval::try_new(ScalarValue::from(2.0), ScalarValue::from(10.0)).unwrap();
+
         // [Unordered, Ascending, Descending, Literal]
         let orders = [
-            ExprProperties::new_unknown(),
-            ExprProperties::new_unknown().with_order(SortProperties::Ordered(
-                SortOptions {
+            ExprProperties::new_unknown().with_range(gt_one_range.clone()),
+            ExprProperties::new_unknown()
+                .with_range(gt_one_range.clone())
+                .with_order(SortProperties::Ordered(SortOptions {
                     descending: false,
                     nulls_first: true,
-                },
-            )),
-            ExprProperties::new_unknown().with_order(SortProperties::Ordered(
-                SortOptions {
+                })),
+            ExprProperties::new_unknown()
+                .with_range(gt_one_range.clone())
+                .with_order(SortProperties::Ordered(SortOptions {
                     descending: true,
                     nulls_first: true,
-                },
-            )),
-            ExprProperties::new_unknown().with_order(SortProperties::Singleton),
+                })),
+            ExprProperties::new_unknown()
+                .with_range(gt_one_range.clone())
+                .with_order(SortProperties::Singleton),
         ];
 
         let log = LogFunc::new();
@@ -874,20 +840,48 @@ mod tests {
         assert_eq!(results, expected);
 
         // Test with different `nulls_first`
-        let base_order = ExprProperties::new_unknown().with_order(
-            SortProperties::Ordered(SortOptions {
+        let base_order = ExprProperties::new_unknown()
+            .with_range(gt_one_range.clone())
+            .with_order(SortProperties::Ordered(SortOptions {
                 descending: true,
                 nulls_first: true,
-            }),
-        );
-        let num_order = ExprProperties::new_unknown().with_order(
-            SortProperties::Ordered(SortOptions {
+            }));
+        let num_order = ExprProperties::new_unknown()
+            .with_range(gt_one_range.clone())
+            .with_order(SortProperties::Ordered(SortOptions {
                 descending: false,
                 nulls_first: false,
-            }),
-        );
+            }));
         assert_eq!(
             log.output_ordering(&[base_order, num_order]).unwrap(),
+            SortProperties::Unordered
+        );
+
+        // Test base in (0, 1), e.g. base = 0.5:
+        // When base < 1.0, ln(base) < 0 which inverts monotonicity.
+        // It must NOT claim ascending order (must return Unordered to prevent invalid sort omission).
+        let sub_one_range =
+            Interval::try_new(ScalarValue::from(0.2), ScalarValue::from(0.8)).unwrap();
+        let sub_one_base = ExprProperties::new_unknown()
+            .with_range(sub_one_range)
+            .with_order(SortProperties::Singleton);
+        let asc_num = ExprProperties::new_unknown()
+            .with_range(gt_one_range.clone())
+            .with_order(SortProperties::Ordered(SortOptions {
+                descending: false,
+                nulls_first: true,
+            }));
+        assert_eq!(
+            log.output_ordering(&[sub_one_base, asc_num.clone()])
+                .unwrap(),
+            SortProperties::Unordered
+        );
+
+        // Test unknown / unbounded base: must return Unordered
+        let unknown_base =
+            ExprProperties::new_unknown().with_order(SortProperties::Singleton);
+        assert_eq!(
+            log.output_ordering(&[unknown_base, asc_num]).unwrap(),
             SortProperties::Unordered
         );
     }

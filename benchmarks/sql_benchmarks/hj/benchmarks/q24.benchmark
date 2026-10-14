@@ -1,0 +1,31 @@
+name Q24
+group hj
+
+init sql_benchmarks/hj/init/set_config_no_stats.sql
+
+load sql_benchmarks/hj/init/load.sql
+
+assert I
+SELECT count(*) > 0 FROM lineitem
+----
+true
+
+expect_plan HashJoinExec
+
+run
+-- Q24: single-hot-bucket long string-key inner join.
+-- Build rows all share one long string key, so each matching probe row fans
+-- out to the whole build side. count(*) focuses the benchmark on hash match
+-- and equality filtering without buffering joined rows.
+-- Thresholds zeroed to force Partitioned mode (simulates absent row-count stats).
+SELECT count(*)
+FROM (
+  SELECT 'single_hot_bucket_string_join_key' as k
+  FROM supplier
+  WHERE s_suppkey <= 3000
+) s
+JOIN (
+  SELECT 'single_hot_bucket_string_join_key' as k
+  FROM lineitem
+  WHERE l_orderkey % 3000 = 0
+) l ON s.k = l.k;

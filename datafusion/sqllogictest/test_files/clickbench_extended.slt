@@ -15,7 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-
 # DataFusion specific ClickBench "Extended" Queries
 # See data provenance notes in clickbench.slt
 
@@ -60,6 +59,76 @@ query I
 SELECT COUNT(*) AS ShareCount FROM hits WHERE "IsMobile" = 1 AND "MobilePhoneModel" LIKE 'iPhone%' AND "SocialAction" = 'share' AND "SocialSourceNetworkID" IN (5, 12) AND "ClientTimeZone" BETWEEN -5 AND 5 AND regexp_match("Referer", '\/campaign\/(spring|summer)_promo') IS NOT NULL AND CASE WHEN split_part(split_part("URL", 'resolution=', 2), '&', 1) ~ '^\d+$' THEN split_part(split_part("URL", 'resolution=', 2), '&', 1)::INT ELSE 0 END > 1920 AND levenshtein(CAST("UTMSource" AS STRING), CAST("UTMCampaign" AS STRING)) < 3;
 ----
 0
+
+query IIII
+SELECT "WatchID", MIN("ResolutionWidth") as wmin, MAX("ResolutionWidth") as wmax, SUM("IsRefresh") as srefresh FROM hits GROUP BY "WatchID" ORDER BY "WatchID" DESC LIMIT 10;
+----
+9110818468285196899 0 0 0
+8924809397503602651 0 0 0
+8740403056911509777 0 0 0
+8156744413230856864 0 0 0
+8120543446287442873 0 0 0
+6864353419233967042 0 0 0
+6635790769678439148 0 0 0
+6308646140879811077 0 0 0
+5206346422301499756 0 0 0
+4894690465724379622 0 0 0
+
+query III??
+SELECT "RegionID", "UserAgent", "OS", AVG(to_timestamp("ResponseEndTiming")-to_timestamp("ResponseStartTiming")) as avg_response_time, AVG(to_timestamp("ResponseEndTiming")-to_timestamp("ConnectTiming")) as avg_latency FROM hits GROUP BY "RegionID", "UserAgent", "OS" ORDER BY avg_latency DESC limit 10;
+----
+229 3 44 0 days 0 hours 0 mins 0.000000000 secs 0 days 0 hours 0 mins 0.000000000 secs
+197 7 39 0 days 0 hours 0 mins 0.000000000 secs 0 days 0 hours 0 mins 0.000000000 secs
+839 3 2 0 days 0 hours 0 mins 0.000000000 secs 0 days 0 hours 0 mins 0.000000000 secs
+839 0 0 0 days 0 hours 0 mins 0.000000000 secs 0 days 0 hours 0 mins 0.000000000 secs
+39 7 2 0 days 0 hours 0 mins 0.000000000 secs 0 days 0 hours 0 mins 0.000000000 secs
+
+query I
+SELECT MAX(len) FROM (
+    SELECT LENGTH(FIRST_VALUE("URL" ORDER BY "EventTime")) as len
+    FROM hits
+    GROUP BY "UserID"
+);
+----
+72
+
+query I
+SELECT MAX(len) FROM (
+    SELECT LENGTH(FIRST_VALUE("URL" ORDER BY "EventTime")) as len
+    FROM hits
+    GROUP BY "OS"
+);
+----
+57
+
+query I
+SELECT MAX(fv) FROM (
+    SELECT FIRST_VALUE("WatchID" ORDER BY "EventTime") as fv
+    FROM hits
+    GROUP BY "UserID"
+);
+----
+9110818468285196899
+
+query I
+SELECT MAX(fv) FROM (
+    SELECT FIRST_VALUE("WatchID" ORDER BY "EventTime") as fv
+    FROM hits
+    GROUP BY "OS"
+);
+----
+9110818468285196899
+
+query I
+SELECT SUM("CounterID") AS counter_id_sum
+FROM hits
+WHERE "URL" < 'zzzz';
+----
+173
+
+query TII
+SELECT "SearchPhrase", COUNT(*) AS c, COUNT(DISTINCT "MobilePhoneModel") AS models FROM hits WHERE "SearchPhrase" <> '' GROUP BY "SearchPhrase" ORDER BY c DESC LIMIT 10;
+----
 
 
 statement ok

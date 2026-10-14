@@ -1,0 +1,11 @@
+# DENSE_RANK top-2, ~10K partitions, heavy ties.
+
+subgroup window_sorted
+
+template sql_benchmarks/h2o/window_sorted.benchmark.template
+QPAD=16
+FN=DENSE_RANK
+PK_MOD=10000
+OB_EXPR=CAST(v2 AS BIGINT) % 10
+OB_BOUND=count(DISTINCT ob) = 10
+NAME=window_sorted_q16_dense_rank_10k_partitions_heavy_ties

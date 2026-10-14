@@ -16,7 +16,7 @@
 # under the License.
 
 ##########
-# End-user-facing happy-path coverage for nested list/struct Parquet schema evolution.
+# End-user-facing coverage for nested list/struct Parquet schema evolution.
 #
 # These tests generate mixed-schema parquet files through SQL COPY statements and
 # query them through CREATE EXTERNAL TABLE, rather than constructing batches
@@ -122,3 +122,128 @@ FROM large_list_messages;
 ----
 1 10 NULL
 2 30 eth
+
+##########
+# Schema adaptation widens x from Int32 to BIGINT. An explicit SQL Struct cast
+# also converts y, so selecting only x must not hide that invalid conversion.
+##########
+
+statement ok
+COPY (
+  SELECT named_struct('x', arrow_cast(1, 'Int32'), 'y', arrow_cast('bad', 'Utf8')) AS s
+) TO 'test_files/scratch/schema_evolution_nested/explicit_struct_cast/data.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE explicit_struct_cast (
+  s STRUCT<x BIGINT, y VARCHAR>
+)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/schema_evolution_nested/explicit_struct_cast/';
+
+statement error While casting struct field 'y'
+SELECT get_field(CAST(s AS STRUCT<x BIGINT, y INT>), 'x') FROM explicit_struct_cast;
+
+##########
+# An all-null Struct must stay null when a child evolves to a decimal whose
+# conversion is rejected while it is being set up, before any value is read.
+# A whole-Struct conversion never reaches the child; extracting the field first
+# would. This holds whether the decimal is the selected field itself or sits
+# inside a container below it.
+##########
+
+# Disable statistics-based shortcuts so the filters below evaluate the values.
+statement ok
+SET datafusion.execution.collect_statistics = false;
+
+statement ok
+SET datafusion.execution.parquet.pruning = false;
+
+statement ok
+SET datafusion.execution.parquet.enable_page_index = false;
+
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = false;
+
+statement ok
+COPY (
+  SELECT 1 AS row_id,
+         CASE WHEN false THEN named_struct('a', arrow_cast('x', 'Utf8')) END AS s
+) TO 'test_files/scratch/schema_evolution_nested/null_struct_decimal/data.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE null_struct_decimal (
+  row_id INT,
+  s STRUCT<a DECIMAL(10, -1)>
+)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/schema_evolution_nested/null_struct_decimal/';
+
+query IR
+SELECT row_id, get_field(s, 'a') FROM null_struct_decimal;
+----
+1 NULL
+
+statement ok
+COPY (
+  SELECT 1 AS row_id,
+         CASE WHEN false
+              THEN named_struct('a', arrow_cast(['x'], 'List(Utf8)'))
+         END AS s
+) TO 'test_files/scratch/schema_evolution_nested/null_struct_list_decimal/data.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE null_struct_list_decimal (
+  row_id INT,
+  s STRUCT<a ARRAY<DECIMAL(10, -1)>>
+)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/schema_evolution_nested/null_struct_list_decimal/';
+
+query I?
+SELECT row_id, s FROM null_struct_list_decimal;
+----
+1 NULL
+
+query I?
+SELECT row_id, get_field(s, 'a') FROM null_struct_list_decimal;
+----
+1 NULL
+
+# The same null-parent semantics apply with and without Parquet filter pushdown.
+query I
+SELECT row_id FROM null_struct_decimal WHERE get_field(s, 'a') IS NULL;
+----
+1
+
+query I
+SELECT row_id FROM null_struct_list_decimal WHERE get_field(s, 'a') IS NULL;
+----
+1
+
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = true;
+
+query I
+SELECT row_id FROM null_struct_decimal WHERE get_field(s, 'a') IS NULL;
+----
+1
+
+query I
+SELECT row_id FROM null_struct_list_decimal WHERE get_field(s, 'a') IS NULL;
+----
+1
+
+statement ok
+RESET datafusion.execution.collect_statistics;
+
+statement ok
+RESET datafusion.execution.parquet.pruning;
+
+statement ok
+RESET datafusion.execution.parquet.enable_page_index;
+
+statement ok
+RESET datafusion.execution.parquet.pushdown_filters;

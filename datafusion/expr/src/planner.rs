@@ -263,6 +263,13 @@ pub trait ExprPlanner: Debug + Send + Sync {
         )
     }
 
+    /// Plans scalar functions, such as `ABS(<expr>)`
+    ///
+    /// Returns the original scalar function if not possible
+    fn plan_scalar(&self, expr: RawScalarExpr) -> Result<PlannerResult<RawScalarExpr>> {
+        Ok(PlannerResult::Original(expr))
+    }
+
     /// Plans aggregate functions, such as `COUNT(<expr>)`
     ///
     /// Returns original expression arguments if not possible
@@ -316,6 +323,13 @@ pub struct RawFieldAccessExpr {
 pub struct RawDictionaryExpr {
     pub keys: Vec<Expr>,
     pub values: Vec<Expr>,
+}
+
+/// A scalar function to plan with [`ExprPlanner`].
+#[derive(Debug, Clone)]
+pub struct RawScalarExpr {
+    pub func: Arc<ScalarUDF>,
+    pub args: Vec<Expr>,
 }
 
 /// This structure is used by `AggregateFunctionPlanner` to plan operators with
@@ -415,6 +429,27 @@ pub trait RelationPlannerContext {
     /// Plans the specified relation through the full planner pipeline, starting
     /// from the first registered relation planner.
     fn plan(&mut self, relation: TableFactor) -> Result<LogicalPlan>;
+
+    /// Returns the common table expression (CTE) visible for the specified
+    /// table reference in the current query scope, if any.
+    ///
+    /// Relation planners run before DataFusion's built-in relation planning. A
+    /// planner that recognizes ordinary tables by name can use this method to
+    /// pass a same-named relation to the remaining planners. When every
+    /// ordinary name-based planner does so, built-in CTE resolution is
+    /// preserved. Use [`Self::object_name_to_table_reference`] to normalize an
+    /// [`ObjectName`] before looking it up.
+    ///
+    /// The lookup follows the same string-key matching as DataFusion's built-in
+    /// relation planning, including for qualified table references. Different
+    /// [`TableReference`] variants with the same string representation therefore
+    /// use the same CTE lookup key.
+    ///
+    /// The default implementation returns `None` for compatibility with custom
+    /// implementations of this context.
+    fn get_cte(&self, _name: &TableReference) -> Option<&LogicalPlan> {
+        None
+    }
 
     /// Converts a SQL expression into a logical expression using the current
     /// planner context.

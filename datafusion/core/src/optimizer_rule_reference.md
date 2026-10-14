@@ -56,12 +56,13 @@ Rule order matters. The default pipeline may change between releases.
 | 17    | `eliminate_outer_join`                    | Rewrites outer joins to inner joins when later filters reject the NULL-extended rows.                                       |
 | 18    | `push_down_limit`                         | Moves literal limits closer to scans and unions and merges adjacent limits.                                                 |
 | 19    | `push_down_filter`                        | Moves filters as early as possible through filter-commutative operators.                                                    |
-| 20    | `single_distinct_aggregation_to_group_by` | Rewrites single-column `DISTINCT` aggregations into two-stage `GROUP BY` plans.                                             |
-| 21    | `eliminate_group_by_constant`             | Removes constant or functionally redundant expressions from `GROUP BY`.                                                     |
-| 22    | `common_sub_expression_eliminate`         | Computes repeated subexpressions once and reuses the result.                                                                |
-| 23    | `extract_leaf_expressions`                | Pulls cheap leaf expressions closer to data sources so later pruning and filter rules can act earlier.                      |
-| 24    | `push_down_leaf_projections`              | Pushes the helper projections created by leaf extraction toward leaf inputs.                                                |
-| 25    | `optimize_projections`                    | Prunes unused columns and removes unnecessary logical projections.                                                          |
+| 20    | `eliminate_aggregate_distinct`            | Drops the `DISTINCT` modifier from aggregates whose result cannot change, such as `min`, `max` and `bit_or`.                |
+| 21    | `single_distinct_aggregation_to_group_by` | Rewrites single-column `DISTINCT` aggregations into two-stage `GROUP BY` plans.                                             |
+| 22    | `eliminate_group_by_constant`             | Removes constant or functionally redundant expressions from `GROUP BY`.                                                     |
+| 23    | `common_sub_expression_eliminate`         | Computes repeated subexpressions once and reuses the result.                                                                |
+| 24    | `extract_leaf_expressions`                | Pulls cheap leaf expressions closer to data sources so later pruning and filter rules can act earlier.                      |
+| 25    | `push_down_leaf_projections`              | Pushes the helper projections created by leaf extraction toward leaf inputs.                                                |
+| 26    | `optimize_projections`                    | Prunes unused columns and removes unnecessary logical projections.                                                          |
 
 ### Physical Optimizer Rules
 
@@ -75,10 +76,10 @@ in multiple phases.
 | 3     | `join_selection`               | -                       | Chooses join implementation, build side, and partition mode from statistics and stream properties.           |
 | 4     | `LimitedDistinctAggregation`   | -                       | Pushes limit hints into grouped distinct-style aggregations when only a small result is needed.              |
 | 5     | `FilterPushdown`               | pre-optimization phase  | Pushes supported physical filters down toward data sources before distribution and sorting are enforced.     |
-| 6     | `EnsureRequirements`           | -                       | Enforces both distribution and sorting requirements in a single idempotent rule.                             |
-| 7     | `CombinePartialFinalAggregate` | -                       | Collapses adjacent partial and final aggregates when the distributed shape makes them redundant.             |
-| 8     | `OptimizeAggregateOrder`       | -                       | Updates aggregate expressions to use the best ordering once sort requirements are known.                     |
-| 9     | `WindowTopN`                   | -                       | Replaces eligible row-number window and filter patterns with per-partition TopK execution.                   |
+| 6     | `WindowTopN`                   | -                       | Replaces eligible row-number window and filter patterns with per-partition TopK execution.                   |
+| 7     | `EnsureRequirements`           | -                       | Enforces both distribution and sorting requirements in a single idempotent rule.                             |
+| 8     | `CombinePartialFinalAggregate` | -                       | Collapses adjacent partial and final aggregates when the distributed shape makes them redundant.             |
+| 9     | `OptimizeAggregateOrder`       | -                       | Updates aggregate expressions to use the best ordering once sort requirements are known.                     |
 | 10    | `ProjectionPushdown`           | early pass              | Pushes projections toward inputs before later physical rewrites add more limit and TopK structure.           |
 | 11    | `OutputRequirements`           | remove phase            | Removes the temporary output-requirement helper nodes after requirement-sensitive planning is done.          |
 | 12    | `LimitAggregation`             | -                       | Passes a limit hint into eligible aggregations so they can keep fewer accumulator buckets.                   |

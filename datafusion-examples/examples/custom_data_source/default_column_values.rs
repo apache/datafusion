@@ -38,12 +38,12 @@ use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::file::properties::WriterProperties;
 use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion::prelude::{SessionConfig, lit};
-use datafusion_physical_expr_adapter::{
+use datafusion::physical_expr_adapter::{
     DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
     replace_columns_with_literals,
 };
+use datafusion::physical_plan::ExecutionPlan;
+use datafusion::prelude::{SessionConfig, lit};
 use futures::StreamExt;
 use object_store::memory::InMemory;
 use object_store::path::Path;
@@ -218,7 +218,7 @@ impl TableProvider for DefaultValueTableProvider {
     async fn scan(
         &self,
         state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -253,7 +253,7 @@ impl TableProvider for DefaultValueTableProvider {
             ObjectStoreUrl::parse("memory://")?,
             Arc::new(parquet_source),
         )
-        .with_projection_indices(projection.cloned())?
+        .with_projection_indices(projection.map(|p| p.to_vec()))?
         .with_limit(limit)
         .with_file_group(file_group)
         .with_expr_adapter(Some(Arc::new(DefaultValuePhysicalExprAdapterFactory) as _));

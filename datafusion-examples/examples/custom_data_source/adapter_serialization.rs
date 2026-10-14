@@ -21,11 +21,11 @@
 //! trait's interception methods (`execution_plan_to_proto` and
 //! `proto_to_execution_plan`) to implement custom serialization logic.
 //!
-//! The key insight is that `FileScanConfig::expr_adapter_factory` is NOT serialized by
-//! default. This example shows how to:
+//! The key insight is that a non-default `FileScanConfig::expr_adapter_factory`
+//! cannot be serialized by the default protobuf path. This example shows how to:
 //! 1. Detect plans with custom adapters during serialization
 //! 2. Wrap them as Extension nodes with JSON-serialized adapter metadata
-//! 3. Store the inner DataSourceExec (without adapter) as a child in the extension's inputs field
+//! 3. Explicitly remove the captured adapter from the inner `DataSourceExec`
 //! 4. Unwrap and restore the adapter during deserialization
 //!
 //! This demonstrates nested serialization (protobuf outer, JSON inner) and the
@@ -50,11 +50,11 @@ use datafusion::execution::context::SessionContext;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion::prelude::SessionConfig;
-use datafusion_physical_expr_adapter::{
+use datafusion::physical_expr_adapter::{
     DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
 };
+use datafusion::physical_plan::ExecutionPlan;
+use datafusion::prelude::SessionConfig;
 use datafusion_proto::bytes::{
     physical_plan_from_bytes_with_proto_converter,
     physical_plan_to_bytes_with_proto_converter,
@@ -333,10 +333,14 @@ impl PhysicalProtoConverterExtension for AdapterPreservingCodec {
             // 1. Create adapter metadata
             let adapter_metadata = AdapterMetadata { tag };
 
-            // 2. Serialize the inner plan to protobuf
-            //    Note that this will drop the custom adapter since the default serialization cannot handle it
+            // 2. The metadata is captured above, so explicitly remove the custom
+            //    adapter before using the guarded default serializer for the child.
+            let mut inner_config = config.clone();
+            inner_config.expr_adapter_factory = None;
+            let inner_plan: Arc<dyn ExecutionPlan> =
+                DataSourceExec::from_data_source(inner_config);
             let inner_proto = PhysicalPlanNode::try_from_physical_plan_with_converter(
-                Arc::clone(plan),
+                inner_plan,
                 extension_codec,
                 self,
             )?;

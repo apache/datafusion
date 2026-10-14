@@ -17,10 +17,8 @@
 
 //! [ScalarUDFImpl] definitions for array_distance function.
 
-use crate::utils::make_scalar_function;
-use arrow::array::{
-    Array, ArrayRef, Float64Array, LargeListArray, ListArray, OffsetSizeTrait,
-};
+use crate::utils::{make_scalar_function, needs_norm_scale, norm_scale};
+use arrow::array::{Array, ArrayRef, Float64Array, OffsetSizeTrait};
 use arrow::datatypes::{
     DataType,
     DataType::{FixedSizeList, LargeList, List, Null},
@@ -35,7 +33,6 @@ use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
 };
-use datafusion_functions::downcast_arg;
 use datafusion_macros::user_doc;
 use itertools::Itertools;
 use std::sync::Arc;
@@ -44,13 +41,13 @@ make_udf_expr_and_func!(
     ArrayDistance,
     array_distance,
     array,
-    "returns the Euclidean distance between two numeric arrays.",
+    "returns the Euclidean distance between two one-dimensional numeric arrays.",
     array_distance_udf
 );
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Returns the Euclidean distance between two input arrays of equal length.",
+    description = "Returns the Euclidean distance between two one-dimensional input arrays of equal length.",
     syntax_example = "array_distance(array1, array2)",
     sql_example = r#"```sql
 > select array_distance([1, 2], [1, 4]);
@@ -106,16 +103,30 @@ impl ScalarUDFImpl for ArrayDistance {
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         let [_, _] = take_function_args(self.name(), arg_types)?;
         let coercion = Some(&ListCoercion::FixedSizedListToList);
-        let arg_types = arg_types.iter().map(|arg_type| {
-            if matches!(arg_type, Null | List(_) | LargeList(_) | FixedSizeList(..)) {
+        let arg_types = arg_types.iter().map(|arg_type| match arg_type {
+            Null => Ok(coerced_type_with_base_type_only(
+                arg_type,
+                &DataType::Float64,
+                coercion,
+            )),
+            List(field) | LargeList(field) | FixedSizeList(field, _) => {
+                // Distance between nested lists is not supported
+                if matches!(
+                    field.data_type(),
+                    List(_) | LargeList(_) | FixedSizeList(..)
+                ) {
+                    return plan_err!(
+                        "{} only supports one-dimensional arrays, got {arg_type}",
+                        self.name()
+                    );
+                }
                 Ok(coerced_type_with_base_type_only(
                     arg_type,
                     &DataType::Float64,
                     coercion,
                 ))
-            } else {
-                plan_err!("{} does not support type {arg_type}", self.name())
             }
+            _ => plan_err!("{} does not support type {arg_type}", self.name()),
         });
 
         arg_types.try_collect()
@@ -163,51 +174,8 @@ fn compute_array_distance(
     arr1: Option<ArrayRef>,
     arr2: Option<ArrayRef>,
 ) -> Result<Option<f64>> {
-    let value1 = match arr1 {
-        Some(arr) => arr,
-        None => return Ok(None),
-    };
-    let value2 = match arr2 {
-        Some(arr) => arr,
-        None => return Ok(None),
-    };
-
-    let mut value1 = value1;
-    let mut value2 = value2;
-
-    loop {
-        match value1.data_type() {
-            List(_) => {
-                if downcast_arg!(value1, ListArray).null_count() > 0 {
-                    return Ok(None);
-                }
-                value1 = downcast_arg!(value1, ListArray).value(0);
-            }
-            LargeList(_) => {
-                if downcast_arg!(value1, LargeListArray).null_count() > 0 {
-                    return Ok(None);
-                }
-                value1 = downcast_arg!(value1, LargeListArray).value(0);
-            }
-            _ => break,
-        }
-
-        match value2.data_type() {
-            List(_) => {
-                if downcast_arg!(value2, ListArray).null_count() > 0 {
-                    return Ok(None);
-                }
-                value2 = downcast_arg!(value2, ListArray).value(0);
-            }
-            LargeList(_) => {
-                if downcast_arg!(value2, LargeListArray).null_count() > 0 {
-                    return Ok(None);
-                }
-                value2 = downcast_arg!(value2, LargeListArray).value(0);
-            }
-            _ => break,
-        }
-    }
+    let Some(value1) = arr1 else { return Ok(None) };
+    let Some(value2) = arr2 else { return Ok(None) };
 
     // Check for NULL values inside the arrays
     if value1.null_count() != 0 || value2.null_count() != 0 {
@@ -221,16 +189,33 @@ fn compute_array_distance(
         return exec_err!("Both arrays must have the same length");
     }
 
-    let sum_squares: f64 = values1
-        .iter()
-        .zip(values2.iter())
-        .map(|(v1, v2)| {
-            let diff = v1.unwrap_or(0.0) - v2.unwrap_or(0.0);
-            diff * diff
-        })
-        .sum();
+    let diffs = || {
+        values1
+            .values()
+            .iter()
+            .zip(values2.values().iter())
+            .map(|(v1, v2)| v1 - v2)
+    };
 
-    Ok(Some(sum_squares.sqrt()))
+    let sum_squares: f64 = diffs().map(|diff| diff * diff).sum();
+    if !needs_norm_scale(sum_squares, values1.len()) {
+        return Ok(Some(sum_squares.sqrt()));
+    }
+
+    let distance = match norm_scale(diffs()) {
+        Some(scale) => {
+            let scaled_sum_squares: f64 = diffs()
+                .map(|diff| {
+                    let scaled = diff * scale;
+                    scaled * scaled
+                })
+                .sum();
+            scaled_sum_squares.sqrt() / scale
+        }
+        None => sum_squares.sqrt(),
+    };
+
+    Ok(Some(distance))
 }
 
 /// Converts an array of any numeric type to a Float64Array.

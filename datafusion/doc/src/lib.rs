@@ -124,39 +124,44 @@ impl Documentation {
         let st_arg_token = " expression to operate on. Can be a constant, column, or function, and any combination of operators.";
         // Standard Arguments
         if let Some(args) = self.arguments.clone() {
-            args.iter().for_each(|(name, value)| {
+            for (name, value) in &args {
                 if value.contains(st_arg_token) {
                     if name.starts_with("The ") {
-                        result.push_str(format!("\n    standard_argument(\n        name = \"{name}\"),").as_ref());
+                        result.push_str(
+                            format!(
+                                "\n    standard_argument(\n        name = \"{name}\"),"
+                            )
+                            .as_ref(),
+                        );
                     } else {
                         result.push_str(format!("\n    standard_argument(\n        name = \"{}\",\n        prefix = \"{}\"\n    ),", name, value.replace(st_arg_token, "")).as_ref());
                     }
                 }
-            });
+            }
         }
 
         // Arguments
         if let Some(args) = self.arguments.clone() {
-            args.iter().for_each(|(name, value)| {
+            for (name, value) in &args {
                 if !value.contains(st_arg_token) {
                     result.push_str(format!("\n    argument(\n        name = \"{name}\",\n        description = \"{value}\"\n    ),").as_ref());
                 }
-            });
+            }
         }
 
         if let Some(alt_syntax) = self.alternative_syntax.clone() {
-            alt_syntax.iter().for_each(|syntax| {
+            for syntax in &alt_syntax {
                 result.push_str(
                     format!("\n    alternative_syntax = \"{syntax}\",").as_ref(),
                 );
-            });
+            }
         }
 
         // Related UDFs
         if let Some(related_udf) = self.related_udfs.clone() {
-            related_udf.iter().for_each(|udf| {
+            for udf in &related_udf {
                 result.push_str(format!("\n    related_udf(name = \"{udf}\"),").as_ref());
-            });
+            }
         }
 
         result.push_str("\n)]");

@@ -17,11 +17,22 @@
 
 //! DataFusion Join implementations
 
+use core::fmt;
+use std::fmt::{Display, Formatter};
+
 use arrow::array::BooleanBufferBuilder;
+pub use asof_join::{AsOfJoinExec, AsOfMatchExpr};
 pub use cross_join::CrossJoinExec;
 use datafusion_physical_expr::PhysicalExprRef;
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
+pub use hash_join::HashTableLookupExpr;
 pub use hash_join::{
-    HashExpr, HashJoinExec, HashJoinExecBuilder, HashTableLookupExpr, SeededRandomState,
+    HashExpr, HashJoinExec, HashJoinExecBuilder, PreparedHashJoinBuild, SeededRandomState,
 };
 pub use nested_loop_join::{NestedLoopJoinExec, NestedLoopJoinExecBuilder};
 use parking_lot::Mutex;
@@ -29,11 +40,16 @@ use parking_lot::Mutex;
 pub use piecewise_merge_join::PiecewiseMergeJoinExec;
 pub use sort_merge_join::SortMergeJoinExec;
 pub use symmetric_hash_join::SymmetricHashJoinExec;
-pub mod chain;
+mod asof_join;
+mod chain;
 mod cross_join;
 mod hash_join;
+mod integer_prefilter;
+mod logical_batch;
 mod nested_loop_join;
 mod piecewise_merge_join;
+#[cfg(feature = "proto")]
+mod proto;
 mod sort_merge_join;
 mod stream_join_utils;
 mod symmetric_hash_join;
@@ -43,9 +59,14 @@ mod array_map;
 mod join_filter;
 /// Hash map implementations for join operations.
 ///
-/// Note: This module is public for internal testing purposes only
-/// and is not guaranteed to be stable across versions.
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
 pub mod join_hash_map;
+pub mod key_range_bitmap;
 
 use array_map::ArrayMap;
 use utils::JoinHashMapType;
@@ -59,6 +80,13 @@ use utils::JoinHashMapType;
 /// contains rows.
 ///
 /// [`NullEquality::NullEqualsNothing`]: datafusion_common::NullEquality::NullEqualsNothing
+///
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
 pub enum Map {
     HashMap(Box<dyn JoinHashMapType>),
     ArrayMap(ArrayMap),
@@ -100,6 +128,17 @@ pub enum PartitionMode {
     /// mode(Partitioned/CollectLeft) is optimal based on statistics. It will
     /// also consider swapping the left and right inputs for the Join
     Auto,
+}
+
+impl Display for PartitionMode {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        let partition_mode = match self {
+            PartitionMode::Partitioned => "Partitioned",
+            PartitionMode::CollectLeft => "CollectLeft",
+            PartitionMode::Auto => "Auto",
+        };
+        write!(f, "{partition_mode}")
+    }
 }
 
 /// Partitioning mode to use for symmetric hash join

@@ -20,10 +20,10 @@ use crate::helpers::{
     expr_applicable_for_cols, filter_partitioned_file, pruned_partition_list,
 };
 use crate::{ListingOptions, ListingTableConfig};
-use arrow::datatypes::{Field, Schema, SchemaBuilder, SchemaRef};
+use arrow::datatypes::{Field, Metadata, Schema, SchemaBuilder, SchemaRef};
 use async_trait::async_trait;
 use datafusion_catalog::{ScanArgs, ScanResult, Session, TableProvider};
-use datafusion_common::stats::Precision;
+use datafusion_common::stats::{Precision, is_known_empty};
 use datafusion_common::{
     Constraints, DFSchema, SchemaExt, Statistics, internal_datafusion_err, plan_err,
     project_schema,
@@ -53,6 +53,8 @@ use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;
+use datafusion_physical_plan::limit::GlobalLimitExec;
+use futures::future::BoxFuture;
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use object_store::ObjectStore;
 use std::collections::{HashMap, HashSet};
@@ -78,7 +80,7 @@ pub struct ListFilesResult {
 /// * Reading multiple files as a single table
 /// * Hive style partitioning (e.g., directories named `date=2024-06-01`)
 /// * Merges schemas from files with compatible but not identical schemas (see [`ListingTableConfig::file_schema`])
-/// * `limit`, `filter` and `projection` pushdown for formats that support it (e.g.,
+/// * `limit`, `skip`, `filter` and `projection` pushdown for formats that support it (e.g.,
 ///   Parquet)
 /// * Statistics collection and pruning based on file metadata
 /// * Pre-existing sort order (see [`ListingOptions::file_sort_order`])
@@ -223,6 +225,32 @@ impl ListingTable {
         let options = config
             .options
             .ok_or_else(|| internal_datafusion_err!("No ListingOptions provided"))?;
+
+        // Files may physically contain the partition columns, for example when
+        // they were written with `keep_partition_by_columns = true`. Partition
+        // column values are always taken from the path, so drop such columns
+        // from the file schema to avoid duplicated fields in the table schema.
+        let file_schema = if options
+            .table_partition_cols
+            .iter()
+            .any(|(name, _)| file_schema.field_with_name(name).is_ok())
+        {
+            let indices: Vec<usize> = file_schema
+                .fields()
+                .iter()
+                .enumerate()
+                .filter(|(_, field)| {
+                    !options
+                        .table_partition_cols
+                        .iter()
+                        .any(|(name, _)| name == field.name())
+                })
+                .map(|(idx, _)| idx)
+                .collect();
+            Arc::new(file_schema.project(&indices)?)
+        } else {
+            file_schema
+        };
 
         // Add the partition columns to the file schema
         let mut builder = SchemaBuilder::from(file_schema.as_ref().to_owned());
@@ -399,6 +427,9 @@ fn derive_common_ordering_from_files(file_groups: &[FileGroup]) -> Option<LexOrd
     // Collect file orderings and track counts
     for group in file_groups {
         for file in group.iter() {
+            if file.statistics.as_deref().is_some_and(is_known_empty) {
+                continue;
+            }
             state = match (&state, &file.ordering) {
                 // If this is the first file with ordering, set it as current
                 (CurrentOrderingState::FirstFile, Some(ordering)) => {
@@ -489,28 +520,115 @@ impl TableProvider for ListingTable {
         TableType::Base
     }
 
-    async fn scan(
-        &self,
-        state: &dyn Session,
-        projection: Option<&Vec<usize>>,
-        filters: &[Expr],
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(
+        &'life0 self,
+        state: &'life1 dyn Session,
+        projection: Option<&'life2 [usize]>,
+        filters: &'life3 [Expr],
         limit: Option<usize>,
-    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
-        let options = ScanArgs::default()
-            .with_projection(projection.map(|p| p.as_slice()))
-            .with_filters(Some(filters))
-            .with_limit(limit);
-        Ok(self.scan_with_args(state, options).await?.into_inner())
+    ) -> BoxFuture<'async_trait, datafusion_common::Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        'life3: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.scan_boxed(state, projection, filters, limit)
     }
 
-    async fn scan_with_args<'a>(
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn scan_with_args<'a, 'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        state: &'life1 dyn Session,
+        args: ScanArgs<'a>,
+    ) -> BoxFuture<'async_trait, datafusion_common::Result<ScanResult>>
+    where
+        'a: 'async_trait,
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.scan_with_args_boxed(state, args)
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> datafusion_common::Result<Vec<TableProviderFilterPushDown>> {
+        let partition_column_names = self
+            .options
+            .table_partition_cols
+            .iter()
+            .map(|col| col.0.as_str())
+            .collect::<Vec<_>>();
+        filters
+            .iter()
+            .map(|filter| {
+                if can_be_evaluated_for_partition_pruning(&partition_column_names, filter)
+                {
+                    // if filter can be handled by partition pruning, it is exact
+                    return Ok(TableProviderFilterPushDown::Exact);
+                }
+
+                Ok(TableProviderFilterPushDown::Inexact)
+            })
+            .collect()
+    }
+
+    fn supports_skip_pushdown(&self) -> bool {
+        true
+    }
+
+    fn get_table_definition(&self) -> Option<&str> {
+        self.definition.as_deref()
+    }
+
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn insert_into<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        state: &'life1 dyn Session,
+        input: Arc<dyn ExecutionPlan>,
+        insert_op: InsertOp,
+    ) -> BoxFuture<'async_trait, datafusion_common::Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.insert_into_boxed(state, input, insert_op)
+    }
+
+    fn get_column_default(&self, column: &str) -> Option<&Expr> {
+        self.column_defaults.get(column)
+    }
+}
+
+impl ListingTable {
+    fn scan_with_args_boxed<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        args: ScanArgs<'a>,
+    ) -> BoxFuture<'a, datafusion_common::Result<ScanResult>> {
+        Box::pin(self.scan_with_args_inner(state, args))
+    }
+
+    async fn scan_with_args_inner(
         &self,
         state: &dyn Session,
-        args: ScanArgs<'a>,
+        args: ScanArgs<'_>,
     ) -> datafusion_common::Result<ScanResult> {
         let projection = args.projection().map(|p| p.to_vec());
         let filters = args.filters().map(|f| f.to_vec()).unwrap_or_default();
         let limit = args.limit();
+        let skip = args.skip();
+        // The scan must read enough rows to satisfy `skip + limit`, not
+        // just `limit`, before any rows are skipped below.
+        let inflated_limit = limit.map(|l| l.saturating_add(skip.unwrap_or(0)));
 
         // extract types of partition columns
         let table_partition_cols = self
@@ -538,7 +656,7 @@ impl TableProvider for ListingTable {
         // or before applying non-partition filters.
         let statistic_file_limit =
             if filters.is_empty() && declared_output_partitioning.is_none() {
-                limit
+                inflated_limit
             } else {
                 None
             };
@@ -593,7 +711,7 @@ impl TableProvider for ListingTable {
                 }
             }
             None => {} // no ordering required
-        };
+        }
 
         let output_partitioning = if let Some(output_partitioning) =
             declared_output_partitioning
@@ -654,7 +772,7 @@ impl TableProvider for ListingTable {
             .with_constraints(self.constraints.clone())
             .with_statistics(statistics)
             .with_projection_indices(projection)?
-            .with_limit(limit)
+            .with_limit(inflated_limit)
             .with_output_ordering(output_ordering)
             .with_output_partitioning(output_partitioning)
             .with_expr_adapter(self.expr_adapter_factory.clone())
@@ -667,38 +785,48 @@ impl TableProvider for ListingTable {
             .create_physical_plan(state, scan_config)
             .await?;
 
+        let plan: Arc<dyn ExecutionPlan> = match skip {
+            Some(skip) => Arc::new(GlobalLimitExec::new(plan, skip, limit)),
+            None => plan,
+        };
+
         Ok(ScanResult::new(plan))
     }
 
-    fn supports_filters_pushdown(
+    fn scan_boxed<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        filters: &'a [Expr],
+        limit: Option<usize>,
+    ) -> BoxFuture<'a, datafusion_common::Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(self.scan_inner(state, projection, filters, limit))
+    }
+
+    async fn scan_inner(
         &self,
-        filters: &[&Expr],
-    ) -> datafusion_common::Result<Vec<TableProviderFilterPushDown>> {
-        let partition_column_names = self
-            .options
-            .table_partition_cols
-            .iter()
-            .map(|col| col.0.as_str())
-            .collect::<Vec<_>>();
-        filters
-            .iter()
-            .map(|filter| {
-                if can_be_evaluated_for_partition_pruning(&partition_column_names, filter)
-                {
-                    // if filter can be handled by partition pruning, it is exact
-                    return Ok(TableProviderFilterPushDown::Exact);
-                }
-
-                Ok(TableProviderFilterPushDown::Inexact)
-            })
-            .collect()
+        state: &dyn Session,
+        projection: Option<&[usize]>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+        let options = ScanArgs::default()
+            .with_projection(projection)
+            .with_filters(Some(filters))
+            .with_limit(limit);
+        Ok(self.scan_with_args(state, options).await?.into_inner())
     }
 
-    fn get_table_definition(&self) -> Option<&str> {
-        self.definition.as_deref()
+    fn insert_into_boxed<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        input: Arc<dyn ExecutionPlan>,
+        insert_op: InsertOp,
+    ) -> BoxFuture<'a, datafusion_common::Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(self.insert_into_inner(state, input, insert_op))
     }
 
-    async fn insert_into(
+    async fn insert_into_inner(
         &self,
         state: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
@@ -735,11 +863,23 @@ impl TableProvider for ListingTable {
 
         // Invalidate cache entries for this table if they exist
         if let Some(lfc) = state.runtime_env().cache_manager.get_list_files_cache() {
-            let key = TableScopedPath {
-                table: table_path.get_table_ref().clone(),
-                path: table_path.prefix().clone(),
-            };
-            let _ = lfc.remove(&key);
+            if let Some(table_ref) = table_path.get_table_ref() {
+                lfc.drop_table_entries(table_ref)?;
+            } else {
+                let table_prefix = table_path.prefix();
+                let keys: Vec<_> = lfc
+                    .list_entries()
+                    .into_keys()
+                    .filter(|key| {
+                        key.table.is_none()
+                            && (key.path.prefix_matches(table_prefix)
+                                || table_prefix.prefix_matches(&key.path))
+                    })
+                    .collect();
+                for key in keys {
+                    let _ = lfc.remove(&key);
+                }
+            }
         }
 
         // Sink related option, apart from format
@@ -765,10 +905,6 @@ impl TableProvider for ListingTable {
             .format
             .create_writer_physical_plan(input, state, config, order_requirements)
             .await
-    }
-
-    fn get_column_default(&self, column: &str) -> Option<&Expr> {
-        self.column_defaults.get(column)
     }
 }
 
@@ -960,7 +1096,7 @@ impl ListingTable {
                 .iter()
                 .map(|(name, data_type)| Field::new(name, data_type.clone(), true))
                 .collect(),
-            Default::default(),
+            Metadata::new(),
         )?;
 
         file_groups
@@ -1156,6 +1292,14 @@ mod tests {
         PartitionedFile::new(name.to_string(), 1024).with_ordering(ordering)
     }
 
+    /// Helper to create an exact zero-row file with optional ordering
+    fn create_empty_file(name: &str, ordering: Option<LexOrdering>) -> PartitionedFile {
+        create_file(name, ordering).with_statistics(Arc::new(Statistics {
+            num_rows: Precision::Exact(0),
+            ..Default::default()
+        }))
+    }
+
     #[test]
     fn test_derive_common_ordering_all_files_same_ordering() {
         // All files have the same ordering -> returns that ordering
@@ -1225,6 +1369,19 @@ mod tests {
 
         let result = derive_common_ordering_from_files(&file_groups);
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_derive_common_ordering_ignores_empty_files() {
+        let ordering = lex_ordering(vec![sort_expr("a", 0, false, true)]);
+
+        let file_groups = vec![FileGroup::new(vec![
+            create_empty_file("empty.parquet", None),
+            create_file("data.parquet", Some(ordering.clone())),
+        ])];
+
+        let result = derive_common_ordering_from_files(&file_groups);
+        assert_eq!(result, Some(ordering));
     }
 
     #[test]

@@ -151,7 +151,7 @@ impl PrintOptions {
             return Err(DataFusionError::External(
                 "PrintFormat::Table is not implemented".to_string().into(),
             ));
-        };
+        }
 
         let stdout = io::stdout();
         let mut writer = stdout.lock();

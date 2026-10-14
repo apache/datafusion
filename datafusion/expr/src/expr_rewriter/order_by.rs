@@ -30,12 +30,18 @@ pub fn rewrite_sort_cols_by_aggs(
     sorts: impl IntoIterator<Item = impl Into<Sort>>,
     plan: &LogicalPlan,
 ) -> Result<Vec<Sort>> {
+    let plan_inputs = plan.inputs();
+    let proj_exprs = if plan_inputs.len() == 1 {
+        plan.expressions()
+    } else {
+        vec![]
+    };
     sorts
         .into_iter()
         .map(|e| {
             let sort = e.into();
             Ok(Sort::new(
-                rewrite_sort_col_by_aggs(sort.expr, plan)?,
+                rewrite_sort_col_by_aggs(sort.expr, &plan_inputs, &proj_exprs)?,
                 sort.asc,
                 sort.nulls_first,
             ))
@@ -43,14 +49,15 @@ pub fn rewrite_sort_cols_by_aggs(
         .collect()
 }
 
-fn rewrite_sort_col_by_aggs(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
-    let plan_inputs = plan.inputs();
-
+fn rewrite_sort_col_by_aggs(
+    expr: Expr,
+    plan_inputs: &[&LogicalPlan],
+    proj_exprs: &[Expr],
+) -> Result<Expr> {
     // Joins, and Unions are not yet handled (should have a projection
     // on top of them)
     if plan_inputs.len() == 1 {
-        let proj_exprs = plan.expressions();
-        rewrite_in_terms_of_projection(expr, &proj_exprs, plan_inputs[0])
+        rewrite_in_terms_of_projection(expr, proj_exprs, plan_inputs[0])
     } else {
         Ok(expr)
     }
@@ -89,9 +96,7 @@ fn rewrite_in_terms_of_projection(
         // (e.g. "c1" --> "t.c1") because that normalization is done
         // at the input of the aggregate.
 
-        let normalized_expr = if let Ok(e) = normalize_col(expr.clone(), input) {
-            e
-        } else {
+        let Ok(normalized_expr) = normalize_col(expr.clone(), input) else {
             // The expr is not based on Aggregate plan output. Skip it.
             return Ok(Transformed::no(expr));
         };

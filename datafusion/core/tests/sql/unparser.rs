@@ -51,8 +51,8 @@ use datafusion_catalog::memory::MemorySchemaProvider;
 use datafusion_catalog::{CatalogProvider, MemoryCatalogProvider, SchemaProvider};
 use datafusion_common::Column;
 use datafusion_expr::Expr;
-use datafusion_sql::unparser::Unparser;
-use datafusion_sql::unparser::dialect::{DefaultDialect, DuckDBDialect};
+use datafusion_sql::unparser::dialect::{DefaultDialect, DuckDBDialect, MySqlDialect};
+use datafusion_sql::unparser::{Unparser, plan_to_sql};
 use itertools::Itertools;
 use recursive::{set_minimum_stack_size, set_stack_allocation_size};
 
@@ -468,6 +468,59 @@ QUALIFY
     rn = 1 AND count(DISTINCT cs.customer_id) > 0
 "#;
 
+// https://github.com/apache/datafusion/issues/23668
+//
+// Extends the #23317 aggregate-scope fix to the window and ORDER BY clauses.
+// Reuses issue_23317_context() (same derived-projection shape).
+
+// Window sorting by an aggregate, over a derived-projection input. Already
+// correct today; this locks the OVER clause against keeping the out-of-scope
+// `cs` qualifier across the refactor.
+const ISSUE_23668_WINDOW_QUERY: &str = r#"
+SELECT
+    date_part('year', c.signup_date) AS signup_year,
+    count(DISTINCT cs.customer_id) AS customers,
+    row_number() OVER (ORDER BY count(DISTINCT cs.customer_id) DESC) AS rn
+FROM
+    "warehouse"."main"."sales" cs
+    JOIN "warehouse"."main"."customers" c USING (customer_id)
+GROUP BY
+    1
+"#;
+
+// ORDER BY an aggregate that is NOT selected, so it can't use a select alias
+// and is unprojected through the Aggregate. It must be normalized like the
+// SELECT list, not keep the out-of-scope `cs` qualifier.
+const ISSUE_23668_ORDER_BY_QUERY: &str = r#"
+SELECT
+    date_part('year', c.signup_date) AS signup_year,
+    count(DISTINCT cs.customer_id) AS customers
+FROM
+    "warehouse"."main"."sales" cs
+    JOIN "warehouse"."main"."customers" c USING (customer_id)
+GROUP BY
+    1
+ORDER BY
+    round(sum(cs.total_revenue), 2) DESC
+"#;
+
+// ORDER BY a selected aggregate keeps a top-level Sort (the direct `Sort` arm,
+// vs the projection-absorbed one above). It resolves to the select alias, so
+// this covers routing only -- the normalization in that arm isn't reachable
+// from SQL (an unselected aggregate takes the absorbed path above instead).
+const ISSUE_23668_TOP_LEVEL_SORT_QUERY: &str = r#"
+SELECT
+    date_part('year', c.signup_date) AS signup_year,
+    count(DISTINCT cs.customer_id) AS customers
+FROM
+    "warehouse"."main"."sales" cs
+    JOIN "warehouse"."main"."customers" c USING (customer_id)
+GROUP BY
+    1
+ORDER BY
+    customers DESC
+"#;
+
 fn issue_23317_context() -> Result<SessionContext> {
     let ctx = SessionContext::new();
 
@@ -607,6 +660,236 @@ async fn optimized_duckdb_unparse_qualify_unqualifies_agg_input() -> Result<()> 
     assert!(
         !sql.contains(r#"count(DISTINCT "cs"."customer_id")"#),
         "QUALIFY must not reference out-of-scope alias cs: {sql}",
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn optimized_duckdb_unparse_window_over_agg_unqualifies_input() -> Result<()> {
+    let ctx = issue_23317_context()?;
+    assert!(ctx.remove_optimizer_rule(SingleDistinctToGroupBy::new().name()));
+
+    let plan = ctx
+        .sql(ISSUE_23668_WINDOW_QUERY)
+        .await?
+        .into_optimized_plan()?;
+    let dialect = DuckDBDialect::new();
+    let unparser = Unparser::new(&dialect);
+    let sql = unparser.plan_to_sql(&plan)?.to_string();
+
+    assert_issue_23317_unparsed_sql_plans(&ctx, &sql).await?;
+
+    assert!(
+        sql.contains(r#"OVER (ORDER BY count(DISTINCT "customer_id")"#),
+        "window ORDER BY aggregate should resolve against the derived projection output: {sql}",
+    );
+    assert!(
+        !sql.contains(r#"count(DISTINCT "cs"."customer_id")"#),
+        "window OVER clause must not reference out-of-scope alias cs: {sql}",
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn optimized_duckdb_unparse_order_by_unqualifies_agg_input() -> Result<()> {
+    let ctx = issue_23317_context()?;
+    assert!(ctx.remove_optimizer_rule(SingleDistinctToGroupBy::new().name()));
+
+    let plan = ctx
+        .sql(ISSUE_23668_ORDER_BY_QUERY)
+        .await?
+        .into_optimized_plan()?;
+    let dialect = DuckDBDialect::new();
+    let unparser = Unparser::new(&dialect);
+    let sql = unparser.plan_to_sql(&plan)?.to_string();
+
+    assert_issue_23317_unparsed_sql_plans(&ctx, &sql).await?;
+
+    assert!(
+        sql.contains(r#"ORDER BY round(sum("total_revenue"), 2)"#),
+        "ORDER BY aggregate should resolve against the derived projection output: {sql}",
+    );
+    assert!(
+        !sql.contains(r#"sum("cs"."total_revenue")"#),
+        "ORDER BY must not reference out-of-scope alias cs: {sql}",
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn optimized_duckdb_unparse_top_level_sort_over_agg_uses_select_alias() -> Result<()>
+{
+    let ctx = issue_23317_context()?;
+    assert!(ctx.remove_optimizer_rule(SingleDistinctToGroupBy::new().name()));
+
+    let plan = ctx
+        .sql(ISSUE_23668_TOP_LEVEL_SORT_QUERY)
+        .await?
+        .into_optimized_plan()?;
+    let dialect = DuckDBDialect::new();
+    let unparser = Unparser::new(&dialect);
+    let sql = unparser.plan_to_sql(&plan)?.to_string();
+
+    assert_issue_23317_unparsed_sql_plans(&ctx, &sql).await?;
+
+    assert!(
+        sql.contains(r#"ORDER BY "customers""#),
+        "top-level ORDER BY should resolve to the select alias: {sql}",
+    );
+    assert!(
+        !sql.contains(r#""cs"."customer_id") AS "customers""#),
+        "aggregate output must not reference out-of-scope alias cs: {sql}",
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn optimized_filter_with_subquery_alias() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.sql("create table t (a int)").await?.collect().await?;
+    let df = ctx
+        .sql(
+            "
+            select *
+            from (
+                select a
+                from t
+            ) t2
+            where a = 1
+        ",
+        )
+        .await?;
+    let plan = df.into_optimized_plan()?;
+    let sql = plan_to_sql(&plan)?.to_string();
+    assert_eq!(
+        sql,
+        "SELECT * FROM (SELECT t.a FROM t WHERE (t.a = 1)) AS t2"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn optimized_filter_after_projection() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.sql("create table t (a bigint)")
+        .await?
+        .collect()
+        .await?;
+
+    // x=1 cannot be pushed to the inner subquery since it depends on the projection
+    let df = ctx
+        .sql(
+            "
+            select *
+            from (
+                select random() as x
+                from t
+            )
+            where x = 1
+        ",
+        )
+        .await?;
+    let plan = df.into_optimized_plan()?;
+    let sql = plan_to_sql(&plan)?.to_string();
+    assert_eq!(
+        sql,
+        "SELECT * FROM (SELECT random() AS x FROM t) WHERE (x = 1.0)"
+    );
+
+    // a=1 can be pushed since it does not depend on the projection
+    let df = ctx
+        .sql(
+            "
+            select *
+            from (
+                select a
+                from t
+            )
+            where a = 1
+        ",
+        )
+        .await?;
+    let plan = df.into_optimized_plan()?;
+    let sql = plan_to_sql(&plan)?.to_string();
+    assert_eq!(sql, "SELECT t.a FROM t WHERE (t.a = 1)");
+
+    // a=1 is pushed but x=1 is not
+    let df = ctx
+        .sql(
+            "
+            select *
+            from (
+                select a, random() as x
+                from t
+            )
+            where a = 1 and x = 1
+        ",
+        )
+        .await?;
+    let plan = df.into_optimized_plan()?;
+    let sql = plan_to_sql(&plan)?.to_string();
+    assert_eq!(
+        sql,
+        "SELECT * FROM (SELECT t.a, random() AS x FROM t WHERE (t.a = 1)) WHERE (x = 1.0)"
+    );
+
+    // b=1 is optimized into a+1=1 and pushed down
+    let df = ctx
+        .sql(
+            "
+            select *
+            from (
+                select a + 1 as b
+                from t
+            )
+            where b = 1
+        ",
+        )
+        .await?;
+    let plan = df.into_optimized_plan()?;
+    let sql = plan_to_sql(&plan)?.to_string();
+    assert_eq!(sql, "SELECT (t.a + 1) AS b FROM t WHERE ((t.a + 1) = 1)");
+
+    // a+1=1 is also optimized and pushed down
+    let df = ctx
+        .sql(
+            "
+            select *
+            from (
+                select a + 1 as a
+                from t
+            )
+            where a + 1 = 1
+        ",
+        )
+        .await?;
+    let plan = df.into_optimized_plan()?;
+    let sql = plan_to_sql(&plan)?.to_string();
+    assert_eq!(
+        sql,
+        "SELECT (t.a + 1) AS a FROM t WHERE (((t.a + 1) + 1) = 1)"
+    );
+
+    // x>a adds a subquery but converts "t.a" to "a"
+    let df = ctx
+        .sql("SELECT * FROM (SELECT a, random() AS x FROM t) WHERE x > a")
+        .await?;
+    let plan = df.into_optimized_plan()?;
+    let sql = plan_to_sql(&plan)?.to_string();
+    assert_eq!(
+        sql,
+        "SELECT * FROM (SELECT t.a, random() AS x FROM t) WHERE (x > CAST(a AS DOUBLE))"
+    );
+    // dialects like MySQL require aliasing subqueries
+    let unparser = Unparser::new(&MySqlDialect {});
+    let sql = unparser.plan_to_sql(&plan)?.to_string();
+    assert_eq!(
+        sql,
+        "SELECT * FROM (SELECT `t`.`a`, rand() AS `x` FROM `t`) AS `derived_projection` WHERE (`x` > CAST(`derived_projection`.`a` AS DOUBLE))"
     );
 
     Ok(())
@@ -835,14 +1118,13 @@ async fn run_roundtrip_tests<F, Fut>(
             println!("\x1b[32m✓\x1b[0m {} query: {}", suite_name, sql.name);
         }
     }
-    if !errors.is_empty() {
-        panic!(
-            "{} {} test(s) failed:\n\n{}",
-            errors.len(),
-            suite_name,
-            errors.join("\n\n---\n\n")
-        );
-    }
+    assert!(
+        errors.is_empty(),
+        "{} {} test(s) failed:\n\n{}",
+        errors.len(),
+        suite_name,
+        errors.join("\n\n---\n\n")
+    )
 }
 
 #[tokio::test]

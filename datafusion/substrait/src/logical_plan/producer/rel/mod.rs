@@ -51,6 +51,9 @@ pub fn to_substrait_rel(
         LogicalPlan::Aggregate(plan) => producer.handle_aggregate(plan),
         LogicalPlan::Sort(plan) => producer.handle_sort(plan),
         LogicalPlan::Join(plan) => producer.handle_join(plan),
+        LogicalPlan::AsOfJoin(plan) => {
+            not_impl_err!("Substrait ASOF join is not supported: {plan:?}")?
+        }
         LogicalPlan::Repartition(plan) => producer.handle_repartition(plan),
         LogicalPlan::Union(plan) => producer.handle_union(plan),
         LogicalPlan::TableScan(plan) => producer.handle_table_scan(plan),

@@ -423,14 +423,11 @@ fn spark_round(args: &[ColumnarValue], enable_ansi_mode: bool) -> Result<Columna
         return exec_err!("round requires 1 or 2 arguments, got {}", args.len());
     }
 
-    let scale = match get_scale(args)? {
-        Some(s) => s,
-        None => {
-            // NULL scale → return NULL with the same data type as the first argument
-            return Ok(ColumnarValue::Scalar(ScalarValue::try_from(
-                args[0].data_type(),
-            )?));
-        }
+    let Some(scale) = get_scale(args)? else {
+        // NULL scale → return NULL with the same data type as the first argument
+        return Ok(ColumnarValue::Scalar(ScalarValue::try_from(
+            args[0].data_type(),
+        )?));
     };
 
     match &args[0] {

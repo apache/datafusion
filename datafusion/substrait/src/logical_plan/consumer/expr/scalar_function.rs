@@ -88,7 +88,7 @@ pub async fn from_scalar_function(
         // In those cases we build a balanced tree of BinaryExprs
         arg_list_to_binary_op_tree(op, args)
     } else if let Some(builder) = BuiltinExprBuilder::try_from_name(fn_name) {
-        builder.build(consumer, f, args).await
+        builder.build(consumer, f, args)
     } else {
         not_impl_err!("Unsupported function name: {fn_name:?}")
     }
@@ -187,6 +187,32 @@ fn arg_list_to_binary_op_tree_inner(
     }))
 }
 
+/// Reads the `case_sensitivity` option of a `like` call.
+///
+/// Substrait says a consumer must use the first value it supports, and must
+/// reject the call when it supports none of them.
+fn case_insensitive_option(f: &ScalarFunction) -> Result<bool> {
+    let Some(option) = f
+        .options
+        .iter()
+        .find(|option| option.name.eq_ignore_ascii_case("case_sensitivity"))
+    else {
+        return Ok(false);
+    };
+    for preference in &option.preference {
+        if preference.eq_ignore_ascii_case("CASE_SENSITIVE") {
+            return Ok(false);
+        }
+        if preference.eq_ignore_ascii_case("CASE_INSENSITIVE") {
+            return Ok(true);
+        }
+    }
+    not_impl_err!(
+        "Unsupported case_sensitivity for `like`: {:?}",
+        option.preference
+    )
+}
+
 /// Build [`Expr`] from its name and required inputs.
 struct BuiltinExprBuilder {
     expr_name: String,
@@ -206,37 +232,37 @@ impl BuiltinExprBuilder {
         }
     }
 
-    pub async fn build(
+    pub fn build(
         self,
         consumer: &impl SubstraitConsumer,
         f: &ScalarFunction,
         args: Vec<Expr>,
     ) -> Result<Expr> {
         match self.expr_name.as_str() {
-            "like" => Self::build_like_expr(false, false, f, args).await,
-            "ilike" => Self::build_like_expr(true, false, f, args).await,
-            "like_match" => Self::build_like_expr(false, false, f, args).await,
-            "like_imatch" => Self::build_like_expr(true, false, f, args).await,
-            "like_not_match" => Self::build_like_expr(false, true, f, args).await,
-            "like_not_imatch" => Self::build_like_expr(true, true, f, args).await,
+            // `like` carries case sensitivity as an option. `ilike` is not a
+            // Substrait function, but DataFusion used to emit it, so plans
+            // written by an older version are still read.
+            "like" => Self::build_like_expr(case_insensitive_option(f)?, false, f, args),
+            "ilike" => Self::build_like_expr(true, false, f, args),
+            "like_match" => Self::build_like_expr(false, false, f, args),
+            "like_imatch" => Self::build_like_expr(true, false, f, args),
+            "like_not_match" => Self::build_like_expr(false, true, f, args),
+            "like_not_imatch" => Self::build_like_expr(true, true, f, args),
             "not" | "negative" | "negate" | "is_null" | "is_not_null" | "is_true"
             | "is_false" | "is_not_true" | "is_not_false" | "is_unknown"
-            | "is_not_unknown" => Self::build_unary_expr(&self.expr_name, args).await,
-            "and_not" | "xor" => Self::build_binary_expr(&self.expr_name, args).await,
-            "between" => Self::build_between_expr(&self.expr_name, args).await,
-            "logb" => {
-                Self::build_custom_handling_expr(consumer, &self.expr_name, args).await
-            }
+            | "is_not_unknown" => Self::build_unary_expr(&self.expr_name, args),
+            "and_not" | "xor" => Self::build_binary_expr(&self.expr_name, args),
+            "between" => Self::build_between_expr(&self.expr_name, args),
+            "logb" => Self::build_custom_handling_expr(consumer, &self.expr_name, args),
             _ => {
                 not_impl_err!("Unsupported builtin expression: {}", self.expr_name)
             }
         }
     }
 
-    async fn build_unary_expr(fn_name: &str, args: Vec<Expr>) -> Result<Expr> {
-        let [arg] = match args.try_into() {
-            Ok(args_arr) => args_arr,
-            Err(_) => return substrait_err!("Expected one argument for {fn_name} expr"),
+    fn build_unary_expr(fn_name: &str, args: Vec<Expr>) -> Result<Expr> {
+        let Ok([arg]) = <[Expr; 1]>::try_from(args) else {
+            return substrait_err!("Expected one argument for {fn_name} expr");
         };
         let arg = Box::new(arg);
 
@@ -257,7 +283,7 @@ impl BuiltinExprBuilder {
         Ok(expr)
     }
 
-    async fn build_like_expr(
+    fn build_like_expr(
         case_insensitive: bool,
         negated: bool,
         f: &ScalarFunction,
@@ -306,12 +332,9 @@ impl BuiltinExprBuilder {
         }))
     }
 
-    async fn build_binary_expr(fn_name: &str, args: Vec<Expr>) -> Result<Expr> {
-        let [a, b] = match args.try_into() {
-            Ok(args_arr) => args_arr,
-            Err(_) => {
-                return substrait_err!("Expected two arguments for `{fn_name}` expr");
-            }
+    fn build_binary_expr(fn_name: &str, args: Vec<Expr>) -> Result<Expr> {
+        let Ok([a, b]) = <[Expr; 2]>::try_from(args) else {
+            return substrait_err!("Expected two arguments for `{fn_name}` expr");
         };
         match fn_name {
             "and_not" => Ok(Self::build_and_not_expr(a, b)),
@@ -330,12 +353,9 @@ impl BuiltinExprBuilder {
         Self::build_and_not_expr(or_expr, and_expr)
     }
 
-    async fn build_between_expr(fn_name: &str, args: Vec<Expr>) -> Result<Expr> {
-        let [expression, low, high] = match args.try_into() {
-            Ok(args_arr) => args_arr,
-            Err(_) => {
-                return substrait_err!("Expected three arguments for `{fn_name}` expr");
-            }
+    fn build_between_expr(fn_name: &str, args: Vec<Expr>) -> Result<Expr> {
+        let Ok([expression, low, high]) = <[Expr; 3]>::try_from(args) else {
+            return substrait_err!("Expected three arguments for `{fn_name}` expr");
         };
 
         Ok(Expr::Between(Between {
@@ -347,18 +367,18 @@ impl BuiltinExprBuilder {
     }
 
     //This handles any functions that require custom handling
-    async fn build_custom_handling_expr(
+    fn build_custom_handling_expr(
         consumer: &impl SubstraitConsumer,
         fn_name: &str,
         args: Vec<Expr>,
     ) -> Result<Expr> {
         match fn_name {
-            "logb" => Self::build_logb_expr(consumer, args).await,
+            "logb" => Self::build_logb_expr(consumer, args),
             _ => not_impl_err!("Unsupported custom handled expression: {}", fn_name),
         }
     }
 
-    async fn build_logb_expr(
+    fn build_logb_expr(
         consumer: &impl SubstraitConsumer,
         args: Vec<Expr>,
     ) -> Result<Expr> {
@@ -383,7 +403,7 @@ impl BuiltinExprBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::arg_list_to_binary_op_tree;
+    use super::{arg_list_to_binary_op_tree, case_insensitive_option};
     use crate::extensions::Extensions;
     use crate::logical_plan::consumer::tests::TEST_SESSION_STATE;
     use crate::logical_plan::consumer::{DefaultSubstraitConsumer, SubstraitConsumer};
@@ -589,6 +609,85 @@ mod tests {
         } else {
             panic!("Expected Expr::Like (negated), got {result:?}");
         }
+
+        Ok(())
+    }
+
+    fn scalar_function_with_case_sensitivity_preference(
+        preference: &[&str],
+    ) -> ScalarFunction {
+        ScalarFunction {
+            options: vec![substrait::proto::FunctionOption {
+                name: "case_sensitivity".to_string(),
+                preference: preference.iter().map(|s| s.to_string()).collect(),
+            }],
+            ..Default::default()
+        }
+    }
+
+    /// Substrait says a consumer must use the first value it supports in the
+    /// `case_sensitivity` option's preference list, and must reject the call
+    /// when it supports none of them.
+    #[test]
+    fn case_insensitive_option_cases() -> Result<()> {
+        // No `case_sensitivity` option at all defaults to case-sensitive.
+        assert!(!case_insensitive_option(&ScalarFunction::default())?);
+
+        // A single supported preference, in either sensitivity.
+        assert!(!case_insensitive_option(
+            &scalar_function_with_case_sensitivity_preference(&["CASE_SENSITIVE"])
+        )?);
+        assert!(case_insensitive_option(
+            &scalar_function_with_case_sensitivity_preference(&["CASE_INSENSITIVE"])
+        )?);
+
+        // The option name and its preference values are matched
+        // case-insensitively (ASCII).
+        assert!(case_insensitive_option(&ScalarFunction {
+            options: vec![substrait::proto::FunctionOption {
+                name: "Case_Sensitivity".to_string(),
+                preference: vec!["case_insensitive".to_string()],
+            }],
+            ..Default::default()
+        })?);
+
+        // Preference ordering: a consumer must use the first value it
+        // supports, not necessarily the first value in the list.
+        // `CASE_INSENSITIVE_ASCII` is not a value this consumer supports, so
+        // it is skipped in favor of the next, supported preference.
+        assert!(case_insensitive_option(
+            &scalar_function_with_case_sensitivity_preference(&[
+                "CASE_INSENSITIVE_ASCII",
+                "CASE_INSENSITIVE"
+            ])
+        )?);
+        assert!(!case_insensitive_option(
+            &scalar_function_with_case_sensitivity_preference(&[
+                "CASE_INSENSITIVE_ASCII",
+                "CASE_SENSITIVE"
+            ])
+        )?);
+
+        // Rejection: every preference is unsupported.
+        let err =
+            case_insensitive_option(&scalar_function_with_case_sensitivity_preference(
+                &["CASE_INSENSITIVE_ASCII"],
+            ))
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Unsupported case_sensitivity"),
+            "unexpected error: {err}"
+        );
+
+        // Rejection: an empty preference list supports nothing.
+        let err = case_insensitive_option(
+            &scalar_function_with_case_sensitivity_preference(&[]),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("Unsupported case_sensitivity"),
+            "unexpected error: {err}"
+        );
 
         Ok(())
     }

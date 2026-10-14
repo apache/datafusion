@@ -36,7 +36,7 @@ impl Default for Float64DistinctAvgAccumulator {
     fn default() -> Self {
         Self {
             sum_accumulator: DistinctSumAccumulator::<Float64Type>::new(
-                &DataType::Float64,
+                DataType::Float64,
             ),
         }
     }

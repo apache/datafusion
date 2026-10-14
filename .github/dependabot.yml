@@ -62,8 +62,33 @@ updates:
         update-types:
           - "minor"
           - "patch"
+  # dev/depcheck is a standalone crate excluded from the workspace, so it is
+  # not covered by the workspace entry above
+  - package-ecosystem: cargo
+    directory: "/dev/depcheck"
+    schedule:
+      interval: weekly
+    target-branch: main
+    labels: [auto-dependencies]
+  # the wasm test app has its own npm lockfile
+  - package-ecosystem: npm
+    directory: "/datafusion/wasmtest/datafusion-wasm-app"
+    schedule:
+      interval: weekly
+    labels: [auto-dependencies]
+    groups:
+      # minor and patch bumps are grouped into a single PR
+      all-npm-deps:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
   - package-ecosystem: "github-actions"
-    directory: "/"
+    # "/" covers workflows in .github/workflows; the glob covers composite
+    # actions such as .github/actions/setup-builder
+    directories: ["/", "/.github/actions/*"]
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
@@ -72,8 +97,20 @@ updates:
       codeql-actions:
         patterns:
           - "github/codeql-action/*"
-  - package-ecosystem: "pip"
-    directory: "/docs"
+  # Python dependencies are managed as a uv workspace rooted at the top-level
+  # pyproject.toml with a shared uv.lock
+  - package-ecosystem: "uv"
+    directory: "/"
     schedule:
       interval: "weekly"
     labels: [auto-dependencies]
+    groups:
+      # all dependency bumps are grouped into a single PR
+      all-uv-deps:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "major"
+          - "minor"
+          - "patch"

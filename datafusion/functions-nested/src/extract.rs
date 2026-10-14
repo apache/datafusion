@@ -23,9 +23,8 @@ use arrow::array::{
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
-use arrow::datatypes::{
-    DataType::{FixedSizeList, LargeList, LargeListView, List, ListView, Null},
-    Field,
+use arrow::datatypes::DataType::{
+    FixedSizeList, LargeList, LargeListView, List, ListView, Null,
 };
 use datafusion_common::cast::as_large_list_array;
 use datafusion_common::cast::as_list_array;
@@ -34,6 +33,7 @@ use datafusion_common::cast::{
 };
 use datafusion_common::internal_err;
 use datafusion_common::utils::ListCoercion;
+use datafusion_common::utils::offset_span_len;
 use datafusion_common::{
     Result, exec_datafusion_err, exec_err, internal_datafusion_err, plan_err,
     utils::take_function_args,
@@ -48,7 +48,7 @@ use datafusion_expr::{
 use datafusion_macros::user_doc;
 use std::sync::Arc;
 
-use crate::utils::make_scalar_function;
+use crate::utils::{list_inner_field, make_scalar_function};
 
 // Create static instances of ScalarUDFs for each function
 make_udf_expr_and_func!(
@@ -136,15 +136,6 @@ impl ScalarUDFImpl for ArrayElement {
         "array_element"
     }
 
-    fn display_name(&self, args: &[Expr]) -> Result<String> {
-        let args_name = args.iter().map(ToString::to_string).collect::<Vec<_>>();
-        if args_name.len() != 2 {
-            return exec_err!("expect 2 args, got {}", args_name.len());
-        }
-
-        Ok(format!("{}[{}]", args_name[0], args_name[1]))
-    }
-
     fn schema_name(&self, args: &[Expr]) -> Result<String> {
         let args_name = args
             .iter()
@@ -223,7 +214,7 @@ where
     }
 
     let original_data = values.to_data();
-    let capacity = Capacities::Array(original_data.len());
+    let capacity = Capacities::Array(array.len());
 
     // use_nulls: true, we don't construct List for array_element, so we need explicit nulls.
     let mut mutable =
@@ -289,7 +280,7 @@ pub fn array_slice(array: Expr, begin: Expr, end: Expr, stride: Option<Expr>) ->
 #[user_doc(
     doc_section(label = "Array Functions"),
     description = "Returns a slice of the array based on 1-indexed start and end positions.",
-    syntax_example = "array_slice(array, begin, end)",
+    syntax_example = "array_slice(array, begin, end[, stride])",
     sql_example = r#"```sql
 > select array_slice([1, 2, 3, 4, 5, 6, 7, 8], 3, 6);
 +--------------------------------------------------------+
@@ -352,15 +343,6 @@ impl ArraySlice {
 }
 
 impl ScalarUDFImpl for ArraySlice {
-    fn display_name(&self, args: &[Expr]) -> Result<String> {
-        let args_name = args.iter().map(ToString::to_string).collect::<Vec<_>>();
-        if let Some((arr, indexes)) = args_name.split_first() {
-            Ok(format!("{arr}[{}]", indexes.join(":")))
-        } else {
-            exec_err!("no argument")
-        }
-    }
-
     fn schema_name(&self, args: &[Expr]) -> Result<String> {
         let args_name = args
             .iter()
@@ -527,9 +509,9 @@ enum SlicePlan<O: OffsetSizeTrait> {
     /// A contiguous run starting at `start` (relative to the row) with `len`
     /// elements can be copied in one go.
     Contiguous { start: O, len: O },
-    /// Arbitrary positions (already relative to the row) must be copied in
-    /// sequence.
-    Indices(Vec<O>),
+    /// Arbitrary positions (already relative to the row), written to the
+    /// caller's index buffer, must be copied in sequence.
+    Indices,
 }
 
 /// Produces a [`SlicePlan`] for the given logical slice parameters.
@@ -538,6 +520,7 @@ fn compute_slice_plan<O: OffsetSizeTrait>(
     from_raw: i64,
     to_raw: i64,
     stride_raw: Option<i64>,
+    indices: &mut Vec<O>,
 ) -> Result<SlicePlan<O>>
 where
     i64: TryInto<O>,
@@ -576,22 +559,22 @@ where
             let len = to - from + O::usize_as(1);
             Ok(SlicePlan::Contiguous { start: from, len })
         } else {
-            let mut indices = Vec::new();
+            indices.clear();
             let mut index = from;
             while index <= to {
                 indices.push(index);
                 index += stride;
             }
-            Ok(SlicePlan::Indices(indices))
+            Ok(SlicePlan::Indices)
         }
     } else {
-        let mut indices = Vec::new();
+        indices.clear();
         let mut index = from;
         while index >= to {
             indices.push(index);
             index += stride;
         }
-        Ok(SlicePlan::Indices(indices))
+        Ok(SlicePlan::Indices)
     }
 }
 
@@ -621,15 +604,24 @@ where
 {
     let values = array.values();
     let original_data = values.to_data();
-    let capacity = Capacities::Array(original_data.len());
+    let capacity = Capacities::Array(offset_span_len(array.offsets()));
+    // Carry the input's list field through to the output so that the returned
+    // type matches the one promised by `return_type` / `return_field_from_args`,
+    // including the field name, nullability and metadata.
+    let field = list_inner_field("general_array_slice", array.data_type())?;
 
+    // `use_nulls` is false because we never call `try_extend_nulls`: null rows are
+    // emitted as empty slices. Arrow still allocates a validity buffer on its own
+    // if the child array has nulls.
     let mut mutable =
-        MutableArrayData::with_capacities(vec![&original_data], true, capacity);
+        MutableArrayData::with_capacities(vec![&original_data], false, capacity);
 
     // We have the slice syntax compatible with DuckDB v0.8.1.
     // The rule `adjusted_from_index` and `adjusted_to_index` follows the rule of array_slice in duckdb.
 
-    let mut offsets = vec![O::usize_as(0)];
+    let mut offsets = Vec::with_capacity(array.len() + 1);
+    offsets.push(O::usize_as(0));
+    let mut indices = Vec::new();
 
     let nulls = combine_input_nulls(array, from_array, to_array, stride);
 
@@ -638,9 +630,11 @@ where
         let end = offset_window[1];
         let len = end - start;
 
+        // The row is null, so its contents are never observed. Emit an empty
+        // slice rather than a null child element: the input's list field may be
+        // non-nullable, in which case a null child would be invalid.
         if nulls.as_ref().is_some_and(|n| n.is_null(row_index)) {
-            mutable.try_extend_nulls(1)?;
-            offsets.push(offsets[row_index] + O::usize_as(1));
+            offsets.push(offsets[row_index]);
             continue;
         }
 
@@ -655,6 +649,7 @@ where
             from_array.value(row_index),
             to_array.value(row_index),
             stride.map(|s| s.value(row_index)),
+            &mut indices,
         )?;
 
         match slice_plan {
@@ -668,9 +663,9 @@ where
                 mutable.try_extend(0, start_index, end_index)?;
                 offsets.push(offsets[row_index] + slice_len);
             }
-            SlicePlan::Indices(indices) => {
+            SlicePlan::Indices => {
                 let count = indices.len();
-                for rel_index in indices {
+                for &rel_index in &indices {
                     let absolute_index = (start + rel_index).to_usize().unwrap();
                     mutable.try_extend(0, absolute_index, absolute_index + 1)?;
                 }
@@ -682,7 +677,7 @@ where
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new_list_field(array.value_type(), true)),
+        field,
         OffsetBuffer::<O>::new(offsets.into()),
         arrow::array::make_array(data),
         nulls,
@@ -704,18 +699,22 @@ where
     let field = match array.data_type() {
         ListView(field) | LargeListView(field) => Arc::clone(field),
         other => {
-            return internal_err!("array_slice got unexpected data type: {}", other);
+            return internal_err!(
+                "general_list_view_array_slice got unexpected data type: {other}"
+            );
         }
     };
 
+    // See the note on `use_nulls` in `general_array_slice`.
     let mut mutable =
-        MutableArrayData::with_capacities(vec![&original_data], true, capacity);
+        MutableArrayData::with_capacities(vec![&original_data], false, capacity);
 
     // We must build `offsets` and `sizes` buffers manually as ListView does not enforce
     // monotonically increasing offsets.
     let mut offsets = Vec::with_capacity(array.len());
     let mut sizes = Vec::with_capacity(array.len());
     let mut current_offset = O::usize_as(0);
+    let mut indices = Vec::new();
 
     let nulls = combine_input_nulls(array, from_array, to_array, stride);
 
@@ -740,6 +739,7 @@ where
             from_array.value(row_index),
             to_array.value(row_index),
             stride.map(|s| s.value(row_index)),
+            &mut indices,
         )?;
 
         let start = array.value_offset(row_index);
@@ -759,9 +759,9 @@ where
                 sizes.push(slice_len);
                 current_offset += slice_len;
             }
-            SlicePlan::Indices(indices) => {
+            SlicePlan::Indices => {
                 let count = indices.len();
-                for rel_index in indices {
+                for &rel_index in &indices {
                     let absolute_index = (start + rel_index).to_usize().unwrap();
                     mutable.try_extend(0, absolute_index, absolute_index + 1)?;
                 }
@@ -790,11 +790,11 @@ where
     syntax_example = "array_pop_front(array)",
     sql_example = r#"```sql
 > select array_pop_front([1, 2, 3]);
-+-------------------------------+
++--------------------------------+
 | array_pop_front(List([1,2,3])) |
-+-------------------------------+
-| [2, 3]                        |
-+-------------------------------+
++--------------------------------+
+| [2, 3]                         |
++--------------------------------+
 ```"#,
     argument(
         name = "array",
@@ -970,11 +970,11 @@ where
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Returns the first non-null element in the array.",
+    description = "Returns the first non-null element in the array. Returns NULL if the array is empty or NULL.",
     syntax_example = "array_any_value(array)",
     sql_example = r#"```sql
 > select array_any_value([NULL, 1, 2, 3]);
-+-------------------------------+
++-------------------------------------+
 | array_any_value(List([NULL,1,2,3])) |
 +-------------------------------------+
 | 1                                   |
@@ -1062,9 +1062,17 @@ where
 
     for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
         let start = offset_window[0];
+        let end = offset_window[1];
 
-        // array is null
+        // the list element is null
         if array.is_null(row_index) {
+            mutable.try_extend_nulls(1)?;
+            continue;
+        }
+
+        // the list element is empty; there is no value to take, so the result
+        // is NULL.
+        if start == end {
             mutable.try_extend_nulls(1)?;
             continue;
         }
@@ -1394,5 +1402,26 @@ mod tests {
         assert_eq!(first_row, vec![Some(1), None]);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_element_sliced_capacity() -> Result<()> {
+        crate::utils::tests::check_sliced_list_behavior(|input| {
+            super::array_element_inner(&[
+                Arc::clone(input),
+                Arc::new(Int64Array::from(vec![1; input.len()])),
+            ])
+        })
+    }
+
+    #[test]
+    fn test_slice_sliced_capacity() -> Result<()> {
+        crate::utils::tests::check_sliced_list_behavior(|input| {
+            super::array_slice_inner(&[
+                Arc::clone(input),
+                Arc::new(Int64Array::from(vec![1; input.len()])),
+                Arc::new(Int64Array::from(vec![3; input.len()])),
+            ])
+        })
     }
 }

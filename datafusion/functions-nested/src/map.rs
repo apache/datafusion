@@ -328,7 +328,7 @@ fn make_map_batch_internal(
     doc_section(label = "Map Functions"),
     description = "Returns an Arrow map with the specified key-value pairs.\n\n\
     The `make_map` function creates a map from two lists: one for keys and one for values. Each key must be unique and non-null.",
-    syntax_example = "map(key, value)\nmap(key: value)\nmake_map(['key1', 'key2'], ['value1', 'value2'])",
+    syntax_example = "map(key, value)\nmap {key: value}\nmake_map(['key1', 'key2'], ['value1', 'value2'])",
     sql_example = r#"
 ```sql
 -- Using map function
@@ -594,8 +594,8 @@ fn build_map_array(
         return exec_err!("map requires key and value lists to have the same length");
     }
 
-    let mut key_array_vec = vec![];
-    let mut value_array_vec = vec![];
+    let mut key_array_vec = Vec::with_capacity(keys.len());
+    let mut value_array_vec = Vec::with_capacity(values.len());
     for (k, v) in keys.iter().zip(values.iter()) {
         key_array_vec.push(k.as_ref());
         value_array_vec.push(v.as_ref());
@@ -606,7 +606,8 @@ fn build_map_array(
     // If it's not NULL, the offset advances by the number of entries in that map
     // NOTE: MapArray always requires i32 offsets, regardless of input list type
     let mut running_offset = 0i32;
-    let mut offset_buffer = vec![running_offset];
+    let mut offset_buffer = Vec::with_capacity(original_len + 1);
+    offset_buffer.push(running_offset);
     let mut non_null_idx = 0;
     for i in 0..original_len {
         let is_null = nulls_bitmap.as_ref().is_some_and(|nulls| nulls.is_null(i));
@@ -745,9 +746,8 @@ mod tests {
         assert!(result.is_ok(), "Should handle NULL maps correctly");
 
         // Verify the result
-        let map_array = match result.unwrap() {
-            ColumnarValue::Array(arr) => arr,
-            _ => panic!("Expected Array result"),
+        let ColumnarValue::Array(map_array) = result.unwrap() else {
+            panic!("Expected Array result")
         };
 
         assert_eq!(map_array.len(), 3, "Should have 3 maps");
@@ -851,9 +851,8 @@ mod tests {
         );
 
         // Verify the result
-        let map_array = match result.unwrap() {
-            ColumnarValue::Array(arr) => arr,
-            _ => panic!("Expected Array result"),
+        let ColumnarValue::Array(map_array) = result.unwrap() else {
+            panic!("Expected Array result")
         };
 
         assert_eq!(map_array.len(), 2, "Should have 2 maps");
@@ -924,9 +923,8 @@ mod tests {
         );
 
         // Verify the result
-        let map_array = match result.unwrap() {
-            ColumnarValue::Array(arr) => arr,
-            _ => panic!("Expected Array result"),
+        let ColumnarValue::Array(map_array) = result.unwrap() else {
+            panic!("Expected Array result")
         };
 
         assert_eq!(map_array.len(), 3, "Should have 3 maps");

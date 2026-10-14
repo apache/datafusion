@@ -1,0 +1,22 @@
+name Q14
+group clickbench_extended
+subgroup ${CLICKBENCH_TYPE:-single}
+
+init sql_benchmarks/clickbench/init/set_config.sql
+
+load sql_benchmarks/clickbench/init/load-${CLICKBENCH_TYPE:-single}.sql
+
+assert I
+SELECT COUNT(*) > 0 from hits;
+----
+true
+
+run
+SELECT "SearchPhrase", COUNT(*) AS c, COUNT(DISTINCT "MobilePhoneModel") AS models
+FROM hits
+WHERE "SearchPhrase" <> ''
+GROUP BY "SearchPhrase"
+ORDER BY c DESC
+LIMIT 10;
+
+result sql_benchmarks/clickbench_extended/results/q14.csv

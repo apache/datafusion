@@ -22,6 +22,10 @@ use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
 use substrait::proto::FilterRel;
 
 #[async_recursion]
+#[expect(
+    clippy::double_must_use,
+    reason = "`async_recursion` adds `#[must_use]` to the boxed future it returns"
+)]
 pub async fn from_filter_rel(
     consumer: &impl SubstraitConsumer,
     filter: &FilterRel,

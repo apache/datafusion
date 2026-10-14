@@ -129,7 +129,7 @@ impl TableProvider for SimpleCsvTable {
     async fn scan(
         &self,
         state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -156,7 +156,7 @@ impl TableProvider for SimpleCsvTable {
         Ok(MemorySourceConfig::try_new_exec(
             &[batches],
             TableProvider::schema(self),
-            projection.cloned(),
+            projection.map(|p| p.to_vec()),
         )?)
     }
 }

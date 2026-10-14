@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -85,3 +85,18 @@ FROM VALUES
 NULL
 NULL
 NULL
+
+# https://github.com/apache/datafusion/issues/23891
+# Far-future start dates whose next occurrence lands past chrono::NaiveDate::MAX
+# (epoch day 95026236) must still return a value, matching Spark's integer
+# arithmetic, rather than panicking. Cast the Date32 result to Int32 to assert
+# the epoch day directly (these dates are past the printable range).
+query I
+SELECT arrow_cast(next_day(arrow_cast(95026236, 'Date32'), 'Mon'::string), 'Int32');
+----
+95026243
+
+query I
+SELECT arrow_cast(next_day(arrow_cast(95026230, 'Date32'), 'Tue'::string), 'Int32');
+----
+95026237

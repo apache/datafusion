@@ -19,22 +19,135 @@
 //!
 //! This module provides membership tests for Arrow primitive types.
 
+use std::hash::{Hash, Hasher};
+use std::marker::PhantomData;
+use std::sync::Arc;
+
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray};
-use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::datatypes::*;
 use arrow::util::bit_iterator::BitIndexIterator;
 use datafusion_common::{HashSet, Result, exec_datafusion_err};
-use std::hash::{Hash, Hasher};
 
+use super::branchless_filter::{BranchlessFilter, BranchlessFilterType};
 use super::result::build_in_list_result;
-use super::static_filter::{StaticFilter, handle_dictionary};
+use super::static_filter::{StaticFilter, StaticFilterRef};
+
+/// Selects an optimized filter for a primitive representation.
+///
+/// Supported short lists use a branchless filter. Larger supported lists use a
+/// bitmap or hash-set filter. Returns `None` for primitive types without a
+/// specialized filter. Representation adapters call this after conversion and
+/// use the same cutoffs and fallback policy as native primitive arrays.
+pub(super) fn instantiate_primitive_filter(
+    in_array: &ArrayRef,
+) -> Result<Option<StaticFilterRef>> {
+    if let Some(filter) = instantiate_branchless_filter(in_array)? {
+        return Ok(Some(filter));
+    }
+
+    let filter: StaticFilterRef = match in_array.data_type() {
+        DataType::Int8 => Arc::new(BitmapFilter::<Int8Type>::try_new(in_array)?),
+        DataType::UInt8 => Arc::new(BitmapFilter::<UInt8Type>::try_new(in_array)?),
+        DataType::Int16 => Arc::new(BitmapFilter::<Int16Type>::try_new(in_array)?),
+        DataType::UInt16 => Arc::new(BitmapFilter::<UInt16Type>::try_new(in_array)?),
+        DataType::Float16 => Arc::new(BitmapFilter::<Float16Type>::try_new(in_array)?),
+        DataType::Int32 => {
+            Arc::new(PrimitiveHashSetFilter::<Int32Type>::try_new(in_array)?)
+        }
+        DataType::Int64 => {
+            Arc::new(PrimitiveHashSetFilter::<Int64Type>::try_new(in_array)?)
+        }
+        DataType::UInt32 => {
+            Arc::new(PrimitiveHashSetFilter::<UInt32Type>::try_new(in_array)?)
+        }
+        DataType::UInt64 => {
+            Arc::new(PrimitiveHashSetFilter::<UInt64Type>::try_new(in_array)?)
+        }
+        DataType::Decimal128(_, _) => {
+            Arc::new(PrimitiveHashSetFilter::<Decimal128Type>::try_new(in_array)?)
+        }
+        // Float primitive types use ordered wrapper keys for Hash/Eq.
+        DataType::Float32 => Arc::new(PrimitiveHashSetFilter::<
+            Float32Type,
+            OrderedFloat32,
+        >::try_new(in_array)?),
+        DataType::Float64 => Arc::new(PrimitiveHashSetFilter::<
+            Float64Type,
+            OrderedFloat64,
+        >::try_new(in_array)?),
+        _ => return Ok(None),
+    };
+
+    Ok(Some(filter))
+}
+
+fn instantiate_branchless_filter(in_array: &ArrayRef) -> Result<Option<StaticFilterRef>> {
+    let non_null_count = in_array.len() - in_array.null_count();
+
+    macro_rules! branchless {
+        ($arrow_type:ty) => {{
+            // Larger lists use the standard primitive filter. `try_new`
+            // checks the limit again when called directly.
+            if non_null_count > <$arrow_type as BranchlessFilterType>::MAX_LIST_LEN {
+                Ok(None)
+            } else {
+                let filter: StaticFilterRef =
+                    Arc::new(BranchlessFilter::<$arrow_type>::try_new(in_array)?);
+                Ok(Some(filter))
+            }
+        }};
+    }
+
+    match in_array.data_type() {
+        DataType::Int8 => branchless!(Int8Type),
+        DataType::UInt8 => branchless!(UInt8Type),
+        DataType::Int16 => branchless!(Int16Type),
+        DataType::UInt16 => branchless!(UInt16Type),
+        DataType::Float16 => branchless!(Float16Type),
+        DataType::Int32 => branchless!(Int32Type),
+        DataType::UInt32 => branchless!(UInt32Type),
+        DataType::Float32 => branchless!(Float32Type),
+        DataType::Date32 => branchless!(Date32Type),
+        DataType::Time32(unit) => match unit {
+            TimeUnit::Second => branchless!(Time32SecondType),
+            TimeUnit::Millisecond => branchless!(Time32MillisecondType),
+            _ => Ok(None),
+        },
+        DataType::Int64 => branchless!(Int64Type),
+        DataType::UInt64 => branchless!(UInt64Type),
+        DataType::Float64 => branchless!(Float64Type),
+        DataType::Date64 => branchless!(Date64Type),
+        DataType::Time64(unit) => match unit {
+            TimeUnit::Microsecond => branchless!(Time64MicrosecondType),
+            TimeUnit::Nanosecond => branchless!(Time64NanosecondType),
+            _ => Ok(None),
+        },
+        DataType::Timestamp(unit, _) => match unit {
+            TimeUnit::Second => branchless!(TimestampSecondType),
+            TimeUnit::Millisecond => branchless!(TimestampMillisecondType),
+            TimeUnit::Microsecond => branchless!(TimestampMicrosecondType),
+            TimeUnit::Nanosecond => branchless!(TimestampNanosecondType),
+        },
+        DataType::Duration(unit) => match unit {
+            TimeUnit::Second => branchless!(DurationSecondType),
+            TimeUnit::Millisecond => branchless!(DurationMillisecondType),
+            TimeUnit::Microsecond => branchless!(DurationMicrosecondType),
+            TimeUnit::Nanosecond => branchless!(DurationNanosecondType),
+        },
+        DataType::Decimal128(_, _) => branchless!(Decimal128Type),
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            branchless!(IntervalMonthDayNanoType)
+        }
+        _ => Ok(None),
+    }
+}
 
 /// Storage for the bits used by [`BitmapFilter`].
 ///
 /// `BitmapFilter` represents an `IN` list with one bit for each possible
 /// value, so membership checks become direct bit tests. This trait lets the
 /// same filter code use different storage sizes for different integer widths.
-pub(super) trait BitmapStorage: Send + Sync {
+trait BitmapStorage: Send + Sync {
     fn new_zeroed() -> Self;
     fn set_bit(&mut self, index: usize);
     fn get_bit(&self, index: usize) -> bool;
@@ -81,9 +194,7 @@ impl BitmapStorage for Box<[u64; 1024]> {
 /// supplies the bitmap storage size and maps values to their bit-pattern index
 /// for the primitive domains that are small enough to represent with one bit
 /// per possible value.
-pub(super) trait BitmapFilterType:
-    ArrowPrimitiveType + Send + Sync + 'static
-{
+trait BitmapFilterType: ArrowPrimitiveType + Send + Sync + 'static {
     type Storage: BitmapStorage;
 
     /// Returns the index in the bitmap to check for this value.
@@ -151,7 +262,7 @@ impl BitmapFilterType for Float16Type {
 /// the bit selected by each value. Evaluating input values checks the same bit
 /// position. Null handling and `NOT IN` inversion are handled by
 /// `build_in_list_result`.
-pub(super) struct BitmapFilter<T: BitmapFilterType> {
+struct BitmapFilter<T: BitmapFilterType> {
     null_count: usize,
     bits: T::Storage,
 }
@@ -160,7 +271,7 @@ impl<T> BitmapFilter<T>
 where
     T: BitmapFilterType,
 {
-    pub(super) fn try_new(in_array: &ArrayRef) -> Result<Self> {
+    fn try_new(in_array: &ArrayRef) -> Result<Self> {
         let prim_array = in_array.as_primitive_opt::<T>().ok_or_else(|| {
             exec_datafusion_err!("BitmapFilter: expected {} array", T::DATA_TYPE)
         })?;
@@ -201,7 +312,6 @@ where
     }
 
     fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
-        handle_dictionary!(self, v, negated);
         let v = v.as_primitive_opt::<T>().ok_or_else(|| {
             exec_datafusion_err!("BitmapFilter: expected {} array", T::DATA_TYPE)
         })?;
@@ -272,157 +382,75 @@ impl From<f64> for OrderedFloat64 {
     }
 }
 
-// Macro to generate specialized StaticFilter implementations for primitive types
-macro_rules! primitive_static_filter {
-    ($Name:ident, $ArrowType:ty) => {
-        primitive_static_filter!(
-            $Name,
-            $ArrowType,
-            <$ArrowType as ArrowPrimitiveType>::Native,
-            |v| v
-        );
-    };
-    ($Name:ident, $ArrowType:ty, $SetValueType:ty, $to_set_value:expr) => {
-        pub(super) struct $Name {
-            null_count: usize,
-            values: HashSet<$SetValueType>,
-        }
-
-        impl $Name {
-            pub(super) fn try_new(in_array: &ArrayRef) -> Result<Self> {
-                let in_array =
-                    in_array.as_primitive_opt::<$ArrowType>().ok_or_else(|| {
-                        exec_datafusion_err!(
-                            "Failed to downcast an array to a '{}' array",
-                            stringify!($ArrowType)
-                        )
-                    })?;
-
-                let mut values = HashSet::with_capacity(in_array.len());
-                let null_count = in_array.null_count();
-
-                for v in in_array.iter().flatten() {
-                    values.insert(($to_set_value)(v));
-                }
-
-                Ok(Self { null_count, values })
-            }
-        }
-
-        impl StaticFilter for $Name {
-            fn null_count(&self) -> usize {
-                self.null_count
-            }
-
-            fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
-                handle_dictionary!(self, v, negated);
-
-                let v = v.as_primitive_opt::<$ArrowType>().ok_or_else(|| {
-                    exec_datafusion_err!(
-                        "Failed to downcast an array to a '{}' array",
-                        stringify!($ArrowType)
-                    )
-                })?;
-
-                let haystack_has_nulls = self.null_count > 0;
-                let needle_values = v.values();
-                let needle_nulls = v.nulls();
-                let needle_has_nulls = v.null_count() > 0;
-
-                // Truth table for `value [NOT] IN (set)` with SQL three-valued logic:
-                // ("-" means the value doesn't affect the result)
-                //
-                // | needle_null | haystack_null | negated | in set? | result |
-                // |-------------|---------------|---------|---------|--------|
-                // | true        | -             | false   | -       | null   |
-                // | true        | -             | true    | -       | null   |
-                // | false       | true          | false   | yes     | true   |
-                // | false       | true          | false   | no      | null   |
-                // | false       | true          | true    | yes     | false  |
-                // | false       | true          | true    | no      | null   |
-                // | false       | false         | false   | yes     | true   |
-                // | false       | false         | false   | no      | false  |
-                // | false       | false         | true    | yes     | false  |
-                // | false       | false         | true    | no      | true   |
-
-                // Compute the "contains" result using collect_bool (fast batched approach)
-                // This ignores nulls - we handle them separately
-                let contains_buffer = if negated {
-                    BooleanBuffer::collect_bool(needle_values.len(), |i| {
-                        !self.values.contains(&($to_set_value)(needle_values[i]))
-                    })
-                } else {
-                    BooleanBuffer::collect_bool(needle_values.len(), |i| {
-                        self.values.contains(&($to_set_value)(needle_values[i]))
-                    })
-                };
-
-                // Compute the null mask
-                // Output is null when:
-                // 1. needle value is null, OR
-                // 2. needle value is not in set AND haystack has nulls
-                let result_nulls = match (needle_has_nulls, haystack_has_nulls) {
-                    (false, false) => {
-                        // No nulls anywhere
-                        None
-                    }
-                    (true, false) => {
-                        // Only needle has nulls - just use needle's null mask
-                        needle_nulls.cloned()
-                    }
-                    (false, true) => {
-                        // Only haystack has nulls - result is null when value not in set
-                        // Valid (not null) when original "in set" is true
-                        // For NOT IN: contains_buffer = !original, so validity = !contains_buffer
-                        let validity = if negated {
-                            !&contains_buffer
-                        } else {
-                            contains_buffer.clone()
-                        };
-                        Some(NullBuffer::new(validity))
-                    }
-                    (true, true) => {
-                        // Both have nulls - combine needle nulls with haystack-induced nulls
-                        let needle_validity =
-                            needle_nulls.map(|n| n.inner().clone()).unwrap_or_else(
-                                || BooleanBuffer::new_set(needle_values.len()),
-                            );
-
-                        // Valid when original "in set" is true (see above)
-                        let haystack_validity = if negated {
-                            !&contains_buffer
-                        } else {
-                            contains_buffer.clone()
-                        };
-
-                        // Combined validity: valid only where both are valid
-                        let combined_validity = &needle_validity & &haystack_validity;
-                        Some(NullBuffer::new(combined_validity))
-                    }
-                };
-
-                Ok(BooleanArray::new(contains_buffer, result_nulls))
-            }
-        }
-    };
+/// Hash-set membership for primitive types.
+///
+/// `K` defaults to the Arrow type's native value. Floats use an ordered wrapper
+/// key because their native values do not implement [`Eq`] and [`Hash`].
+struct PrimitiveHashSetFilter<
+    T: ArrowPrimitiveType,
+    K = <T as ArrowPrimitiveType>::Native,
+> {
+    null_count: usize,
+    values: HashSet<K>,
+    _marker: PhantomData<T>,
 }
 
-primitive_static_filter!(Int32StaticFilter, Int32Type);
-primitive_static_filter!(Int64StaticFilter, Int64Type);
-primitive_static_filter!(UInt32StaticFilter, UInt32Type);
-primitive_static_filter!(UInt64StaticFilter, UInt64Type);
+impl<T, K> PrimitiveHashSetFilter<T, K>
+where
+    T: ArrowPrimitiveType,
+    T::Native: Copy,
+    K: From<T::Native> + Eq + Hash,
+{
+    fn try_new(in_array: &ArrayRef) -> Result<Self> {
+        let in_array = in_array.as_primitive_opt::<T>().ok_or_else(|| {
+            exec_datafusion_err!(
+                "PrimitiveHashSetFilter: expected {} array",
+                T::DATA_TYPE
+            )
+        })?;
+        let mut values = HashSet::with_capacity(in_array.len() - in_array.null_count());
+        for value in in_array.iter().flatten() {
+            values.insert(K::from(value));
+        }
 
-// Macro to generate specialized StaticFilter implementations for float types
-// Floats require a wrapper type (OrderedFloat*) to implement Hash/Eq due to NaN semantics
-macro_rules! float_static_filter {
-    ($Name:ident, $ArrowType:ty, $OrderedType:ty) => {
-        primitive_static_filter!($Name, $ArrowType, $OrderedType, <$OrderedType>::from);
-    };
+        Ok(Self {
+            null_count: in_array.null_count(),
+            values,
+            _marker: PhantomData,
+        })
+    }
 }
 
-// Generate specialized filters for float types using ordered wrappers
-float_static_filter!(Float32StaticFilter, Float32Type, OrderedFloat32);
-float_static_filter!(Float64StaticFilter, Float64Type, OrderedFloat64);
+impl<T, K> StaticFilter for PrimitiveHashSetFilter<T, K>
+where
+    T: ArrowPrimitiveType + Send + Sync + 'static,
+    T::Native: Copy + Send + Sync,
+    K: From<T::Native> + Eq + Hash + Send + Sync + 'static,
+{
+    fn null_count(&self) -> usize {
+        self.null_count
+    }
+
+    fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
+        let v = v.as_primitive_opt::<T>().ok_or_else(|| {
+            exec_datafusion_err!(
+                "PrimitiveHashSetFilter: expected {} array",
+                T::DATA_TYPE
+            )
+        })?;
+        let input_values = v.values();
+        Ok(build_in_list_result(
+            v.len(),
+            v.nulls(),
+            self.null_count > 0,
+            negated,
+            |index| {
+                let key = K::from(input_values[index]);
+                self.values.contains(&key)
+            },
+        ))
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -430,9 +458,16 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::{
-        DictionaryArray, Float16Array, Int8Array, Int16Array, UInt8Array, UInt16Array,
+        DictionaryArray, Float16Array, Float32Array, Float64Array, Int8Array, Int16Array,
+        UInt8Array, UInt16Array, UInt32Array,
     };
     use half::f16;
+
+    use super::super::dictionary_filter::DictionaryFilter;
+
+    fn uint32_array(values: Vec<Option<u32>>) -> ArrayRef {
+        Arc::new(UInt32Array::from(values))
+    }
 
     fn assert_contains(
         filter: &dyn StaticFilter,
@@ -444,6 +479,60 @@ mod tests {
             BooleanArray::from(expected)
         );
         Ok(())
+    }
+
+    #[test]
+    fn branchless_routing_respects_max_list_len() -> Result<()> {
+        let max_len = <UInt32Type as BranchlessFilterType>::MAX_LIST_LEN;
+
+        let values = (0..max_len)
+            .map(|value| Some(value as u32))
+            .collect::<Vec<_>>();
+        assert!(instantiate_branchless_filter(&uint32_array(values))?.is_some());
+
+        let values = (0..=max_len)
+            .map(|value| Some(value as u32))
+            .collect::<Vec<_>>();
+        assert!(instantiate_branchless_filter(&uint32_array(values))?.is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn branchless_routing_handles_zero_non_null_values() -> Result<()> {
+        let array = uint32_array(vec![None; 3]);
+
+        assert!(instantiate_branchless_filter(&array)?.is_some());
+
+        Ok(())
+    }
+
+    #[test]
+    fn primitive_hash_filter_handles_float_keys() -> Result<()> {
+        let nan32 = f32::NAN;
+        let other_nan32 = f32::from_bits(nan32.to_bits() + 1);
+        let haystack: ArrayRef = Arc::new(Float32Array::from(vec![0.0, nan32]));
+        let filter =
+            PrimitiveHashSetFilter::<Float32Type, OrderedFloat32>::try_new(&haystack)?;
+        let needles = Float32Array::from(vec![
+            Some(0.0),
+            Some(-0.0),
+            Some(nan32),
+            Some(other_nan32),
+            None,
+        ]);
+        assert_contains(
+            &filter,
+            &needles,
+            vec![Some(true), Some(false), Some(true), Some(false), None],
+        )?;
+
+        let nan64 = f64::NAN;
+        let haystack: ArrayRef = Arc::new(Float64Array::from(vec![1.0, nan64]));
+        let filter =
+            PrimitiveHashSetFilter::<Float64Type, OrderedFloat64>::try_new(&haystack)?;
+        let needles = Float64Array::from(vec![Some(1.0), Some(nan64), Some(2.0)]);
+        assert_contains(&filter, &needles, vec![Some(true), Some(true), Some(false)])
     }
 
     #[test]
@@ -464,13 +553,19 @@ mod tests {
     #[test]
     fn bitmap_filter_u8_handles_dictionary_needles() -> Result<()> {
         let haystack: ArrayRef = Arc::new(UInt8Array::from(vec![Some(1), None, Some(3)]));
-        let filter = BitmapFilter::<UInt8Type>::try_new(&haystack)?;
+        let inner: StaticFilterRef =
+            Arc::new(BitmapFilter::<UInt8Type>::try_new(&haystack)?);
+        let filter = DictionaryFilter::new(inner);
 
         let keys = Int8Array::from(vec![Some(0), Some(1), None, Some(2)]);
         let values = Arc::new(UInt8Array::from(vec![Some(1), Some(2), Some(3)]));
         let needles = DictionaryArray::try_new(keys, values)?;
 
-        assert_contains(&filter, &needles, vec![Some(true), None, None, Some(true)])
+        assert_eq!(
+            filter.contains(&needles, false)?,
+            BooleanArray::from(vec![Some(true), None, None, Some(true)])
+        );
+        Ok(())
     }
 
     #[test]

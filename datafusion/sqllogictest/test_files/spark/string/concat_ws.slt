@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -52,6 +52,11 @@ query T
 SELECT concat_ws(',');
 ----
 (empty)
+
+query TTT
+DESCRIBE SELECT concat_ws(',') AS result;
+----
+result Utf8 NO
 
 ## Null separator returns null
 query T
@@ -113,6 +118,12 @@ SELECT concat_ws(sep) AS result FROM VALUES (CAST(NULL AS STRING)), (',') AS t(s
 NULL
 (empty)
 
+query TTT
+DESCRIBE SELECT concat_ws(sep) AS result
+FROM VALUES (CAST(NULL AS STRING)), (',') AS t(sep);
+----
+result Utf8 YES
+
 ## ── Column expressions ──────────────────────────────────────
 
 ## concat_ws on columns
@@ -129,6 +140,12 @@ SELECT concat_ws(',', a, b) AS result FROM VALUES ('a', 'b'), ('c', CAST(NULL AS
 a,b
 c
 d
+
+query TTT
+DESCRIBE SELECT concat_ws(',', a, b) AS result
+FROM VALUES ('a', 'b'), ('c', CAST(NULL AS STRING)), (CAST(NULL AS STRING), 'd') AS t(a, b);
+----
+result Utf8 NO
 
 ## Scalar-only arguments over multiple rows (broadcast test)
 query T

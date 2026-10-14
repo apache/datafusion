@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::logical_plan;
-use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow::datatypes::{DataType, Field, FieldRef, Metadata};
 use datafusion_common::{
     ParamValues, ScalarValue, assert_contains,
     metadata::{ScalarAndMetadata, format_type_and_metadata},
@@ -171,7 +171,7 @@ fn test_non_prepare_statement_should_infer_types() {
 
 #[test]
 #[should_panic(
-    expected = "Expected: [NOT] NULL | TRUE | FALSE | DISTINCT | [form] NORMALIZED FROM after IS, found: $1"
+    expected = "Expected: [NOT] NULL | TRUE | FALSE | DISTINCT | [NOT] JSON [VALUE | SCALAR | ARRAY | OBJECT] [WITH | WITHOUT UNIQUE [KEYS]] | [form] NORMALIZED FROM after IS, found: $1"
 )]
 fn test_prepare_statement_to_plan_panic_is_param() {
     let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age is $1";
@@ -732,9 +732,8 @@ fn test_prepare_statement_to_plan_one_param() {
 fn test_update_infer_with_metadata() {
     // Here the uuid field is inferred as nullable because it appears in the filter
     // (and not in the update values, where its nullability would be inferred)
-    let uuid_field = Field::new("", DataType::FixedSizeBinary(16), true).with_metadata(
-        [("ARROW:extension:name".to_string(), "arrow.uuid".to_string())].into(),
-    );
+    let uuid_field = Field::new("", DataType::FixedSizeBinary(16), true)
+        .with_metadata(Metadata::new().with("ARROW:extension:name", "arrow.uuid"));
     let uuid_bytes = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
     let expected_types = vec![
         (
@@ -801,9 +800,8 @@ fn test_update_infer_with_metadata() {
 
 #[test]
 fn test_insert_infer_with_metadata() {
-    let uuid_field = Field::new("", DataType::FixedSizeBinary(16), false).with_metadata(
-        [("ARROW:extension:name".to_string(), "arrow.uuid".to_string())].into(),
-    );
+    let uuid_field = Field::new("", DataType::FixedSizeBinary(16), false)
+        .with_metadata(Metadata::new().with("ARROW:extension:name", "arrow.uuid"));
     let uuid_bytes = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
     let expected_types = vec![
         ("$1", Some(uuid_field.clone().with_name("id").into())),
@@ -837,11 +835,11 @@ fn test_insert_infer_with_metadata() {
         @r#"
     ** Initial Plan:
     Dml: op=[Insert Into] table=[person_with_uuid_extension]
-      Projection: column1 AS id, column2 AS first_name, column3 AS last_name
+      Projection: CAST(column1 AS FixedSizeBinary(16)<{"ARROW:extension:name": "arrow.uuid"}>) AS id, column2 AS first_name, column3 AS last_name
         Values: ($1, $2, $3)
     ** Final Plan:
     Dml: op=[Insert Into] table=[person_with_uuid_extension]
-      Projection: column1 AS id, column2 AS first_name, column3 AS last_name
+      Projection: CAST(column1 AS FixedSizeBinary(16)<{"ARROW:extension:name": "arrow.uuid"}>) AS id, column2 AS first_name, column3 AS last_name
         Values: (FixedSizeBinary(16, "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16") FieldMetadata { inner: {"ARROW:extension:name": "arrow.uuid"} } AS $1, Utf8("Alan") AS $2, Utf8("Turing") AS $3)
     "#
     );
@@ -859,11 +857,11 @@ fn test_insert_infer_with_metadata() {
     ** Initial Plan:
     Prepare: "my_plan" [FixedSizeBinary(16)<{"ARROW:extension:name": "arrow.uuid"}>, Utf8, Utf8]
       Dml: op=[Insert Into] table=[person_with_uuid_extension]
-        Projection: column1 AS id, column2 AS first_name, column3 AS last_name
+        Projection: CAST(column1 AS FixedSizeBinary(16)<{"ARROW:extension:name": "arrow.uuid"}>) AS id, column2 AS first_name, column3 AS last_name
           Values: ($1, $2, $3)
     ** Final Plan:
     Dml: op=[Insert Into] table=[person_with_uuid_extension]
-      Projection: column1 AS id, column2 AS first_name, column3 AS last_name
+      Projection: CAST(column1 AS FixedSizeBinary(16)<{"ARROW:extension:name": "arrow.uuid"}>) AS id, column2 AS first_name, column3 AS last_name
         Values: (FixedSizeBinary(16, "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16") FieldMetadata { inner: {"ARROW:extension:name": "arrow.uuid"} } AS $1, Utf8("Alan") AS $2, Utf8("Turing") AS $3)
     "#
     );
@@ -989,32 +987,122 @@ fn test_prepare_statement_to_plan_having() {
 
 #[test]
 fn test_prepare_statement_to_plan_limit() {
-    let sql = "PREPARE my_plan(BIGINT, BIGINT) AS
-        SELECT id FROM person \
-        OFFSET $1 LIMIT $2";
-    let (plan, dt) = generate_prepare_stmt_and_data_types(sql);
-    assert_snapshot!(
-        plan,
-        @r#"
+    for sql in [
+        "PREPARE my_plan(BIGINT, BIGINT) AS SELECT id FROM person OFFSET $1 LIMIT $2",
+        "PREPARE my_plan AS SELECT id FROM person OFFSET $1 LIMIT $2",
+    ] {
+        let test = ParameterTest {
+            sql,
+            expected_types: vec![
+                ("$1", Some(DataType::Int64)),
+                ("$2", Some(DataType::Int64)),
+            ],
+            param_values: vec![
+                ScalarValue::Int64(Some(10)),
+                ScalarValue::Int64(Some(200)),
+            ],
+        };
+        insta::allow_duplicates! {
+        assert_snapshot!(test.run(), @r#"
+    ** Initial Plan:
     Prepare: "my_plan" [Int64, Int64]
       Limit: skip=$1, fetch=$2
         Projection: person.id
           TableScan: person
-    "#
-    );
-    assert_snapshot!(dt, @"Int64, Int64");
-
-    // replace params with values
-    let param_values = vec![ScalarValue::Int64(Some(10)), ScalarValue::Int64(Some(200))];
-    let plan_with_params = plan.with_param_values(param_values).unwrap();
-    assert_snapshot!(
-        plan_with_params,
-        @r"
+    ** Final Plan:
     Limit: skip=10, fetch=200
       Projection: person.id
         TableScan: person
-    "
-    );
+    "#);
+        }
+    }
+}
+
+#[test]
+fn test_limit_offset_parameters() {
+    let mut plans = Vec::new();
+    for sql in [
+        "SELECT 20 AS value LIMIT $1",
+        "SELECT 20 AS value OFFSET $1",
+        "SELECT $1 AS value LIMIT $1",
+        "SELECT $1 AS value FROM (VALUES (0), (0)) AS t(dummy) OFFSET $1",
+        "SELECT value FROM (SELECT 20 AS value LIMIT $1) AS t",
+        "SELECT (SELECT value FROM (VALUES (10), (20)) AS t(value) \
+         ORDER BY value LIMIT $1) AS value",
+        "SELECT 20 AS value WHERE EXISTS \
+         (SELECT value FROM (VALUES (10), (20)) AS t(value) OFFSET $1)",
+    ] {
+        let test = ParameterTest {
+            sql,
+            expected_types: vec![("$1", Some(DataType::Int64))],
+            param_values: vec![ScalarValue::Int64(Some(1))],
+        };
+        plans.push(format!("{sql}\n{}", test.run()));
+    }
+
+    let test = ParameterTest {
+        sql: "SELECT $1 + CAST(1 AS INT) AS value \
+              FROM (SELECT $1) AS t LIMIT $1",
+        expected_types: vec![("$1", Some(DataType::Int32))],
+        param_values: vec![ScalarValue::Int32(Some(1))],
+    };
+    plans.push(test.run());
+    assert_snapshot!(plans.join("\n"));
+}
+
+#[test]
+fn test_limit_offset_parameters_leave_cast_inputs_unresolved() {
+    let mut plans = Vec::new();
+    for sql in [
+        "SELECT $1 AS value",
+        "SELECT $1 AS value LIMIT CAST($1 AS INT)",
+        "SELECT $1 AS value LIMIT CAST($1 AS BIGINT)",
+        "SELECT $1 AS value FROM (VALUES (1), (2)) AS t(v) \
+         OFFSET CAST($1 AS BIGINT)",
+        "SELECT $1 AS value FROM (SELECT 1 LIMIT CAST($1 AS BIGINT)) AS t",
+    ] {
+        let test = ParameterTest {
+            sql,
+            expected_types: vec![("$1", None)],
+            param_values: vec![ScalarValue::from("1")],
+        };
+        plans.push(format!("{sql}\n{}", test.run()));
+    }
+    assert_snapshot!(plans.join("\n"));
+}
+
+#[test]
+fn test_limit_offset_parameters_keep_field_metadata() {
+    let field = Field::new("value", DataType::Utf8, true)
+        .with_metadata(Metadata::new().with("ARROW:extension:name", "example.string"));
+    let mut plans = Vec::new();
+    for clause in ["LIMIT", "OFFSET"] {
+        let sql = format!(
+            "SELECT $1 AS value FROM string_with_extension WHERE value = $1 {clause} $1"
+        );
+        let test = ParameterTestWithMetadata {
+            sql: &sql,
+            expected_types: vec![("$1", Some(field.clone().into()))],
+            param_values: vec![ScalarAndMetadata::new(
+                ScalarValue::from("1"),
+                Some(field.metadata().into()),
+            )],
+        };
+        plans.push(test.run());
+    }
+    assert_snapshot!(plans.join("\n"));
+}
+
+#[test]
+fn test_limit_offset_parameters_reject_type_conflicts() {
+    let plan = logical_plan(
+        "SELECT $1 + CAST(1 AS INT) AS a, $1 + CAST(1 AS DOUBLE) AS b LIMIT $1",
+    )
+    .unwrap();
+    let error = plan
+        .get_parameter_fields()
+        .expect_err("conflicting parameter types must fail");
+    assert_contains!(error.to_string(), "Conflicting types for id $1");
 }
 
 #[test]

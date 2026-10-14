@@ -36,7 +36,7 @@
 //! - `frontend`
 //!   (file: frontend.rs, desc: Build LogicalPlans from SQL)
 //!
-//! - `query`  
+//! - `query`
 //!   (file: query.rs, desc: Query data using SQL)
 
 mod analysis;

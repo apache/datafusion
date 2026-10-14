@@ -189,8 +189,8 @@ impl LiteralLookupTable {
 
         Some(Self {
             lookup,
-            then_and_else_values,
             else_index,
+            then_and_else_values,
         })
     }
 

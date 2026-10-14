@@ -34,7 +34,6 @@ pub mod levenshtein;
 pub mod lower;
 pub mod ltrim;
 pub mod octet_length;
-pub mod overlay;
 pub mod repeat;
 pub mod replace;
 pub mod rtrim;

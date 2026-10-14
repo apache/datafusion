@@ -162,7 +162,8 @@ pub async fn regexp() -> Result<()> {
         .collect()
         .await;
 
-    let expected = "Regular expression did not compile: CompiledTooBig";
+    let expected =
+        "Regular expression did not compile: Compiled regex exceeds size limit";
     assert_contains!(result.unwrap_err().to_string(), expected);
 
     //

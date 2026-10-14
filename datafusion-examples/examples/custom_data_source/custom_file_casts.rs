@@ -34,10 +34,10 @@ use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::expressions::CastExpr;
-use datafusion::prelude::SessionConfig;
-use datafusion_physical_expr_adapter::{
+use datafusion::physical_expr_adapter::{
     DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
 };
+use datafusion::prelude::SessionConfig;
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
@@ -188,10 +188,11 @@ impl PhysicalExprAdapter for CustomCastsPhysicalExprAdapter {
             if let Some(cast) = expr.downcast_ref::<CastExpr>() {
                 let input_data_type =
                     cast.expr().data_type(&self.physical_file_schema)?;
-                let output_data_type = cast.target_field().data_type();
+                let output_field = cast.target_field();
                 if !cast.is_bigger_cast(&input_data_type) {
                     return not_impl_err!(
-                        "Unsupported CAST from {input_data_type} to {output_data_type}"
+                        "Unsupported CAST from {input_data_type} to {}",
+                        output_field.data_type()
                     );
                 }
             }

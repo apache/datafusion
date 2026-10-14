@@ -89,10 +89,6 @@ impl OptimizerRule for OptimizeProjections {
         None
     }
 
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     fn rewrite(
         &self,
         plan: LogicalPlan,
@@ -282,7 +278,7 @@ fn optimize_projections(
         }
         // Other node types are handled below
         _ => {}
-    };
+    }
 
     // For other plan node types, calculate indices for columns they use and
     // try to rewrite their children
@@ -407,6 +403,26 @@ fn optimize_projections(
                 right_indices.with_projection_beneficial(),
             ]
         }
+        LogicalPlan::AsOfJoin(join) => {
+            let left_len = join.left.schema().fields().len();
+            let mut left_required = Vec::new();
+            let mut right_required = Vec::new();
+            for index in indices.indices() {
+                if *index < left_len {
+                    left_required.push(*index);
+                } else {
+                    right_required.push(*index - left_len);
+                }
+            }
+            let left_indices = RequiredIndices::new_from_indices(left_required)
+                .with_plan_exprs(&plan, join.left.schema())?;
+            let right_indices = RequiredIndices::new_from_indices(right_required)
+                .with_plan_exprs(&plan, join.right.schema())?;
+            vec![
+                left_indices.with_projection_beneficial(),
+                right_indices.with_projection_beneficial(),
+            ]
+        }
         // these nodes are explicitly rewritten in the match statement above
         LogicalPlan::Projection(_)
         | LogicalPlan::Aggregate(_)
@@ -426,7 +442,8 @@ fn optimize_projections(
                 RequiredIndices::new().with_plan_exprs(&plan, input.schema())?;
 
             // Add additional required indices from the parent
-            let mut additional_necessary_child_indices = Vec::new();
+            let mut additional_necessary_child_indices =
+                Vec::with_capacity(indices.indices().len());
             indices.indices().iter().for_each(|idx| {
                 if let Some(index) = dependency_indices.get(*idx) {
                     additional_necessary_child_indices.push(*index);
@@ -556,21 +573,11 @@ fn merge_consecutive_projections_one_level(
         return Projection::try_new_with_schema(expr, input, schema).map(Transformed::no);
     };
 
-    // A fast path: if the previous projection is same as the current projection
-    // we can directly remove the current projection and return child projection.
-    if prev_projection.expr == expr {
-        return Projection::try_new_with_schema(
-            expr,
-            Arc::clone(&prev_projection.input),
-            schema,
-        )
-        .map(Transformed::yes);
-    }
-
     // Count usages (referrals) of each projection expression in its input fields:
     let mut column_referral_map = HashMap::<&Column, usize>::new();
-    expr.iter()
-        .for_each(|expr| expr.add_column_ref_counts(&mut column_referral_map));
+    for expr in &expr {
+        expr.add_column_ref_counts(&mut column_referral_map);
+    }
 
     // If an expression is non-trivial (KeepInPlace) and appears more than once, do not merge
     // them as consecutive projections will benefit from a compute-once approach.
@@ -593,7 +600,7 @@ fn merge_consecutive_projections_one_level(
     // Try to rewrite the expressions in the current projection using the
     // previous projection as input:
     let name_preserver = NamePreserver::new_for_projection();
-    let mut original_names = vec![];
+    let mut original_names = Vec::with_capacity(expr.len());
     let new_exprs = expr.map_elements(|expr| {
         original_names.push(name_preserver.save(&expr));
 
@@ -1207,6 +1214,69 @@ mod tests {
           TableScan: test projection=[a]
         "
         )
+    }
+
+    #[test]
+    fn merge_structurally_equal_non_idempotent_projections() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("i", DataType::Int32, false)]);
+        let projection = || col("i").add(lit(1)).alias("i");
+        let plan = table_scan(TableReference::none(), &schema, None)?
+            .project(vec![projection()])?
+            .project(vec![projection()])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: ?table?.i + Int32(1) + Int32(1) AS i
+          TableScan: ?table? projection=[i]
+        "
+        )
+    }
+
+    #[test]
+    fn merge_deep_projection_chain_in_one_pass() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("i", DataType::Int32, false)]);
+        let mut plan = table_scan(TableReference::none(), &schema, None)?
+            .project(vec![col("i").add(lit(1)).alias("i")])?
+            .build()?;
+        for _ in 1..12 {
+            plan = LogicalPlanBuilder::from(plan)
+                .project(vec![col("i").add(lit(1)).alias("i")])?
+                .build()?;
+        }
+
+        let optimizer = Optimizer::with_rules(vec![Arc::new(OptimizeProjections::new())]);
+        let optimized = optimizer.optimize(
+            plan,
+            &OptimizerContext::new().with_max_passes(1),
+            observe,
+        )?;
+        let plan_string = format!("{optimized}");
+        assert_eq!(12, plan_string.matches("Int32(1)").count());
+        assert_eq!(1, plan_string.matches("Projection:").count());
+        Ok(())
+    }
+
+    #[test]
+    fn merge_columns_and_metadata_alias() -> Result<()> {
+        let metadata =
+            datafusion_common::metadata::FieldMetadata::from(HashMap::from([(
+                "key".to_string(),
+                "value".to_string(),
+            )]));
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![col("a")])?
+            .project(vec![col("a").alias_with_metadata("a", Some(metadata))])?
+            .build()?;
+
+        let optimized = optimize(plan)?;
+        assert_eq!(
+            "value",
+            optimized.schema().field(0).metadata().get("key").unwrap()
+        );
+        assert_eq!(1, format!("{optimized}").matches("Projection:").count());
+        Ok(())
     }
 
     #[test]

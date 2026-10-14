@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use crate::parquet::Unit::Page;
+use crate::parquet::Unit::{Page, RowGroupAndPage};
 use crate::parquet::{ContextWithParquet, Scenario};
 
 use arrow::array::{Int32Array, RecordBatch};
@@ -31,7 +31,7 @@ use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::context::SessionState;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::metrics::MetricValue;
-use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
 use datafusion_common::{ScalarValue, ToDFSchema};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{Expr, col, lit};
@@ -1051,6 +1051,237 @@ async fn test_pages_with_null_values() {
     .await;
 }
 
+async fn page_limit_context(values: Vec<Option<i32>>) -> ContextWithParquet {
+    let row_count = values.len();
+    page_limit_context_with_row_group(values, row_count).await
+}
+
+async fn page_limit_context_with_row_group(
+    values: Vec<Option<i32>>,
+    row_group_rows: usize,
+) -> ContextWithParquet {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int32Array::from(values))],
+    )
+    .unwrap();
+
+    ContextWithParquet::with_custom_data(
+        Scenario::Int,
+        RowGroupAndPage(row_group_rows, 3),
+        schema,
+        vec![batch],
+    )
+    .await
+}
+
+#[tokio::test]
+async fn page_level_limit_pruning() {
+    // The middle page is fully matched. The surrounding pages each contain a
+    // match, but their statistics cannot prove that every row matches.
+    let mut context = page_limit_context(vec![
+        Some(0),
+        Some(10),
+        Some(0),
+        Some(5),
+        Some(6),
+        Some(7),
+        Some(0),
+        Some(8),
+        Some(0),
+    ])
+    .await;
+
+    let output = context.query("SELECT a FROM t WHERE a >= 5 LIMIT 3").await;
+
+    assert_eq!(output.result_rows, 3);
+    for value in [5, 6, 7] {
+        assert!(output.pretty_results().contains(&format!("| {value} ")));
+    }
+    assert!(!output.pretty_results().contains("| 10 "));
+    assert_eq!(output.metric_value("limit_pruned_rows"), Some(6));
+}
+
+#[tokio::test]
+async fn page_level_limit_pruning_preserves_eliminated_sort() {
+    // File order is by id, not a. Skipping the first partially matched page
+    // would lose id=1 even though a later page can satisfy the entire LIMIT.
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("a", DataType::Int32, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int32Array::from_iter_values(0..9)),
+            Arc::new(Int32Array::from(vec![0, 10, 0, 5, 6, 7, 0, 8, 0])),
+        ],
+    )
+    .unwrap();
+    let mut context = ContextWithParquet::with_custom_data(
+        Scenario::Int,
+        RowGroupAndPage(9, 3),
+        schema,
+        vec![batch],
+    )
+    .await;
+    context.ctx.deregister_table("t").unwrap();
+    context
+        .ctx
+        .register_parquet(
+            "t",
+            context.file.path().to_str().unwrap(),
+            ParquetReadOptions::default()
+                .file_sort_order(vec![vec![col("id").sort(true, false)]]),
+        )
+        .await
+        .unwrap();
+
+    let sql = "SELECT id FROM t WHERE a >= 5 ORDER BY id LIMIT 3";
+    let plan = context
+        .ctx
+        .sql(sql)
+        .await
+        .unwrap()
+        .create_physical_plan()
+        .await
+        .unwrap();
+    let plan = datafusion::physical_plan::displayable(plan.as_ref())
+        .indent(true)
+        .to_string();
+    assert!(!plan.contains("SortExec"), "{plan}");
+    assert!(plan.contains("limit=3"), "{plan}");
+
+    let output = context.query(sql).await;
+    assert_eq!(output.result_rows, 3);
+    assert_eq!(
+        output.pretty_results(),
+        "+----+\n| id |\n+----+\n| 1  |\n| 3  |\n| 4  |\n+----+"
+    );
+    assert_eq!(output.metric_value("limit_pruned_rows"), None);
+}
+
+#[tokio::test]
+async fn page_level_limit_pruning_combines_row_groups_and_pages() {
+    // RG 0 is partial but has one fully matched page. RG 1 is fully matched,
+    // but is not large enough to satisfy LIMIT 8 on its own.
+    let mut context = page_limit_context_with_row_group(
+        vec![
+            Some(0),
+            Some(10),
+            Some(0),
+            Some(5),
+            Some(6),
+            Some(7),
+            Some(8),
+            Some(9),
+            Some(10),
+            Some(11),
+            Some(12),
+            Some(13),
+        ],
+        6,
+    )
+    .await;
+
+    let output = context.query("SELECT a FROM t WHERE a >= 5 LIMIT 8").await;
+
+    assert_eq!(output.result_rows, 8);
+    for value in 5..=12 {
+        assert!(output.pretty_results().contains(&format!("| {value} ")));
+    }
+    assert_eq!(output.metric_value("limit_pruned_rows"), Some(3));
+}
+
+#[tokio::test]
+async fn page_level_limit_pruning_is_null_safe() {
+    // Page 0 has min=5/max=6, but its NULL row does not pass `a >= 5`.
+    // Page 1 is the only page with three guaranteed matches.
+    let mut context = page_limit_context(vec![
+        None,
+        Some(5),
+        Some(6),
+        Some(7),
+        Some(8),
+        Some(9),
+        Some(0),
+        Some(10),
+        Some(0),
+    ])
+    .await;
+
+    let output = context.query("SELECT a FROM t WHERE a >= 5 LIMIT 3").await;
+
+    assert_eq!(output.result_rows, 3);
+    for value in [7, 8, 9] {
+        assert!(output.pretty_results().contains(&format!("| {value} ")));
+    }
+    assert_eq!(output.metric_value("limit_pruned_rows"), Some(6));
+}
+
+#[tokio::test]
+async fn page_level_limit_pruning_requires_every_conjunct() {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Int32, false),
+        Field::new("c", DataType::Int32, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int32Array::from(vec![5, 0, 0, 5, 6, 7, 8, 9, 0])),
+            Arc::new(Int32Array::from(vec![1, 0, 0, 0, 0, 0, 1, 1, 0])),
+            Arc::new(Int32Array::from(vec![1; 9])),
+        ],
+    )
+    .unwrap();
+    let mut context = ContextWithParquet::with_custom_data(
+        Scenario::Int,
+        RowGroupAndPage(9, 3),
+        schema,
+        vec![batch],
+    )
+    .await;
+
+    // `b = c` needs two columns and cannot be proven from one column's page
+    // statistics. The fully matched `a` page must therefore not be selected.
+    let output = context
+        .query("SELECT a FROM t WHERE a >= 5 AND b = c LIMIT 3")
+        .await;
+
+    assert_eq!(output.result_rows, 3);
+    for value in [5, 8, 9] {
+        assert!(output.pretty_results().contains(&format!("| {value} ")));
+    }
+    assert_eq!(output.metric_value("limit_pruned_rows"), None);
+}
+
+#[tokio::test]
+async fn page_level_limit_pruning_needs_enough_guaranteed_rows() {
+    // Only the final two-row page is fully matched, which is insufficient for
+    // LIMIT 4. The ordinary page-pruned plan must be retained.
+    let mut context = page_limit_context(vec![
+        Some(5),
+        Some(0),
+        Some(0),
+        Some(6),
+        Some(0),
+        Some(0),
+        Some(7),
+        Some(8),
+    ])
+    .await;
+
+    let output = context.query("SELECT a FROM t WHERE a >= 5 LIMIT 4").await;
+
+    assert_eq!(output.result_rows, 4);
+    for value in [5, 6, 7, 8] {
+        assert!(output.pretty_results().contains(&format!("| {value} ")));
+    }
+    assert_eq!(output.metric_value("limit_pruned_rows"), None);
+}
+
 fn cast_count_metric(metric: MetricValue) -> Option<usize> {
     match metric {
         MetricValue::Count { count, .. } => Some(count.value()),
@@ -1100,7 +1331,10 @@ async fn test_parquet_opener_without_page_index() {
 
     // Query the table
     // If the bug exists, this might fail because Opener tries to load PageIndex forcefully
-    let df = ctx.sql("SELECT * FROM t").await.unwrap();
+    let df = ctx
+        .sql("SELECT * FROM t WHERE a >= 2 LIMIT 1")
+        .await
+        .unwrap();
     let batches = df
         .collect()
         .await
@@ -1108,5 +1342,5 @@ async fn test_parquet_opener_without_page_index() {
 
     // We expect this to succeed, but currently it might fail
     assert_eq!(batches.len(), 1);
-    assert_eq!(batches[0].num_rows(), 3);
+    assert_eq!(batches[0].num_rows(), 1);
 }

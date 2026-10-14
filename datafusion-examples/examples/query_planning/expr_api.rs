@@ -58,12 +58,12 @@ use datafusion::prelude::*;
 /// 5. Analyze predicates for boundary ranges: [`range_analysis_demo`]
 /// 6. Get the types of the expressions: [`expression_type_demo`]
 /// 7. Apply type coercion to expressions: [`type_coercion_demo`]
-pub async fn expr_api() -> Result<()> {
+pub fn expr_api() -> Result<()> {
     // The easiest way to do create expressions is to use the
     // "fluent"-style API:
     let expr = col("a") + lit(5);
 
-    // The same same expression can be created directly, with much more code:
+    // The same expression can be created directly, with much more code:
     let expr2 = Expr::BinaryExpr(BinaryExpr::new(
         Box::new(col("a")),
         Operator::Plus,

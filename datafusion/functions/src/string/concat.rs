@@ -30,7 +30,6 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
-use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::{ColumnarValue, Documentation, Expr, Volatility, lit};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
@@ -252,10 +251,6 @@ impl ScalarUDFImpl for ConcatFunc {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
-    }
-
-    fn preserves_lex_ordering(&self, _inputs: &[ExprProperties]) -> Result<bool> {
-        Ok(true)
     }
 }
 
@@ -500,7 +495,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::Binary(Some(
                     "Café".as_bytes().into()
                 ))),
-                ColumnarValue::Scalar(ScalarValue::Binary(Some("cc".as_bytes().into()))),
+                ColumnarValue::Scalar(ScalarValue::Binary(Some(b"cc".into()))),
             ],
             Ok(Some("Cafécc".as_bytes())),
             &[u8],
@@ -513,9 +508,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::Binary(Some(
                     "Café".as_bytes().into()
                 ))),
-                ColumnarValue::Scalar(ScalarValue::LargeBinary(Some(
-                    "cc".as_bytes().into()
-                ))),
+                ColumnarValue::Scalar(ScalarValue::LargeBinary(Some(b"cc".into()))),
             ],
             Ok(Some("Cafécc".as_bytes())),
             &[u8],
@@ -528,9 +521,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::Binary(Some(
                     "Café".as_bytes().into()
                 ))),
-                ColumnarValue::Scalar(ScalarValue::BinaryView(Some(
-                    "cc".as_bytes().into()
-                ))),
+                ColumnarValue::Scalar(ScalarValue::BinaryView(Some(b"cc".into()))),
             ],
             Ok(Some("Cafécc".as_bytes())),
             &[u8],
@@ -543,9 +534,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::BinaryView(Some(
                     "Café".as_bytes().into()
                 ))),
-                ColumnarValue::Scalar(ScalarValue::BinaryView(Some(
-                    "cc".as_bytes().into()
-                ))),
+                ColumnarValue::Scalar(ScalarValue::BinaryView(Some(b"cc".into()))),
             ],
             Ok(Some("Cafécc".as_bytes())),
             &[u8],

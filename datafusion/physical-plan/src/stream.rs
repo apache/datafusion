@@ -133,14 +133,10 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
         let check = async move {
             while let Some(result) = join_set.join_next().await {
                 match result {
-                    Ok(task_result) => {
-                        match task_result {
-                            // Nothing to report
-                            Ok(_) => continue,
-                            // This means a blocking task error
-                            Err(error) => return Some(Err(error)),
-                        }
-                    }
+                    // Nothing to report
+                    Ok(Ok(())) => {}
+                    // This means a blocking task error
+                    Ok(Err(error)) => return Some(Err(error)),
                     // This means a tokio task error, likely a panic
                     Err(e) => {
                         if e.is_panic() {
@@ -574,7 +570,7 @@ impl ObservedStream {
                     self.release_inner();
                 }
                 return Poll::Ready(Some(Ok(batch)));
-            };
+            }
             self.produced += batch.num_rows()
         }
         poll
@@ -1030,9 +1026,8 @@ mod test {
                     assert_eq!(batch.num_rows(), 0);
                 }
                 Poll::Ready(Some(Err(e))) => panic!("Unexpected error: {e}"),
-                Poll::Pending => {
-                    continue;
-                }
+                // Keep polling
+                Poll::Pending => {}
             }
         }
 

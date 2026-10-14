@@ -1,0 +1,10 @@
+subgroup drift
+
+template sql_benchmarks/predicate_eval/predicate_eval.benchmark.template
+QUERY=drift/q83
+DATASET=drift_split
+NAME=drift_q83_per_partition_skew
+
+# One file per stream: each stream sees a single profile.
+init
+set datafusion.execution.target_partitions = 16;

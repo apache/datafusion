@@ -75,14 +75,11 @@ impl CliHelper {
 
     fn validate_input(&self, input: &str) -> Result<ValidationResult> {
         if let Some(sql) = input.strip_suffix(';') {
-            let dialect = match dialect_from_str(self.dialect) {
-                Some(dialect) => dialect,
-                None => {
-                    return Ok(ValidationResult::Invalid(Some(format!(
-                        "  🤔 Invalid dialect: {}",
-                        self.dialect
-                    ))));
-                }
+            let Some(dialect) = dialect_from_str(self.dialect) else {
+                return Ok(ValidationResult::Invalid(Some(format!(
+                    "  🤔 Invalid dialect: {}",
+                    self.dialect
+                ))));
             };
             let lines = split_from_semicolon(sql);
             for line in lines {
@@ -164,7 +161,7 @@ impl Completer for CliHelper {
         if is_open_quote_for_location(line, pos) {
             self.completer.complete(line, pos, ctx)
         } else {
-            Ok((0, Vec::with_capacity(0)))
+            Ok((0, Vec::new()))
         }
     }
 }
@@ -183,7 +180,7 @@ impl Helper for CliHelper {}
 /// Splits a string which consists of multiple queries.
 pub(crate) fn split_from_semicolon(sql: &str) -> Vec<String> {
     let mut commands = Vec::new();
-    let mut current_command = String::new();
+    let mut current_command = String::with_capacity(sql.len());
     let mut in_single_quote = false;
     let mut in_double_quote = false;
 
@@ -308,16 +305,14 @@ mod tests {
         let mut validator = CliHelper::default();
 
         // should be invalid in generic dialect
-        let result =
-            readline_direct(Cursor::new(r"select 1 # 2;".as_bytes()), &validator)?;
+        let result = readline_direct(Cursor::new(br"select 1 # 2;"), &validator)?;
         assert!(
             matches!(result, ValidationResult::Invalid(Some(e)) if e.contains("Invalid statement"))
         );
 
         // valid in postgresql dialect
         validator.set_dialect(&Dialect::PostgreSQL);
-        let result =
-            readline_direct(Cursor::new(r"select 1 # 2;".as_bytes()), &validator)?;
+        let result = readline_direct(Cursor::new(br"select 1 # 2;"), &validator)?;
         assert!(matches!(result, ValidationResult::Valid(None)));
 
         Ok(())

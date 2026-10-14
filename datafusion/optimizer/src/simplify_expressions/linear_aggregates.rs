@@ -149,7 +149,7 @@ fn candidate_linear_param(params: &AggregateFunctionParams) -> Option<&Expr> {
     let arg = args.first()?;
     if arg.is_volatile() {
         return None;
-    };
+    }
     Some(arg)
 }
 

@@ -21,6 +21,7 @@
 //! `README.md` content for `datafusion-examples`, including group
 //! sections and example tables.
 
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use datafusion::error::{DataFusionError, Result};
@@ -140,22 +141,24 @@ impl ExampleGroup {
     /// Renders this example group as a Markdown section for the README.
     pub fn render_markdown(&self) -> String {
         let mut out = String::new();
-        out.push_str(&format!("\n## {} Examples\n\n", self.name.title()));
-        out.push_str(&format!("### Group: `{}`\n\n", self.name.raw()));
-        out.push_str(&format!("#### Category: {}\n\n", self.category.name()));
+        write!(out, "\n## {} Examples\n\n", self.name.title()).ok();
+        write!(out, "### Group: `{}`\n\n", self.name.raw()).ok();
+        write!(out, "#### Category: {}\n\n", self.category.name()).ok();
         out.push_str("| Subcommand | File Path | Description |\n");
         out.push_str("| --- | --- | --- |\n");
 
         for example in &self.examples {
-            out.push_str(&format!(
-                "| {} | [`{}/{}`](examples/{}/{}) | {} |\n",
+            writeln!(
+                out,
+                "| {} | [`{}/{}`](examples/{}/{}) | {} |",
                 example.subcommand,
                 self.name.raw(),
                 example.file,
                 self.name.raw(),
                 example.file,
                 example.desc
-            ));
+            )
+            .ok();
         }
 
         out

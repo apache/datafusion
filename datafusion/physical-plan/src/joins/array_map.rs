@@ -319,7 +319,6 @@ impl ArrayMap {
                 build_indices.push((build_value - 1) as u64);
                 probe_indices.push(prob_idx as u32);
             }
-            Ok(None)
         } else {
             let mut remaining_output = limit;
             let to_skip = match current_offset {
@@ -376,8 +375,8 @@ impl ArrayMap {
                     return Ok(Some(offset));
                 }
             }
-            Ok(None)
         }
+        Ok(None)
     }
 
     pub fn contain_keys(&self, probe_side_keys: &[ArrayRef]) -> Result<BooleanArray> {

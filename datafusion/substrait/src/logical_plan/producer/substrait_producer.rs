@@ -21,10 +21,10 @@ use crate::logical_plan::producer::{
     from_case, from_cast, from_column, from_distinct, from_empty_relation, from_exists,
     from_filter, from_higher_order_function, from_in_list, from_in_subquery, from_join,
     from_lambda, from_lambda_variable, from_like, from_limit, from_literal,
-    from_placeholder, from_projection, from_repartition, from_scalar_function,
-    from_scalar_subquery, from_set_comparison, from_sort, from_subquery_alias,
-    from_table_scan, from_try_cast, from_unary_expr, from_union, from_values,
-    from_window, from_window_function, to_substrait_rel, to_substrait_rex,
+    from_outer_reference_column, from_placeholder, from_projection, from_repartition,
+    from_scalar_function, from_scalar_subquery, from_set_comparison, from_sort,
+    from_subquery_alias, from_table_scan, from_try_cast, from_unary_expr, from_union,
+    from_values, from_window, from_window_function, to_substrait_rel, to_substrait_rex,
     to_substrait_type_from_field,
 };
 use datafusion::arrow::datatypes::FieldRef;
@@ -433,12 +433,45 @@ pub trait SubstraitProducer: Send + Sync + Sized {
         from_exists(self, exists, schema)
     }
 
+    fn handle_outer_reference_column(
+        &mut self,
+        _field: &FieldRef,
+        column: &Column,
+        _schema: &DFSchemaRef,
+    ) -> datafusion::common::Result<Expression> {
+        from_outer_reference_column(self, column)
+    }
+
     fn handle_placeholder(
         &mut self,
         placeholder: &Placeholder,
         _schema: &DFSchemaRef,
     ) -> datafusion::common::Result<Expression> {
         from_placeholder(self, placeholder)
+    }
+
+    // Outer Schema management API.
+    //
+    // These methods manage a stack of outer schemas for correlated subquery support
+    // such as when entering a subquery, the enclosing query's schema is pushed onto
+    // the stack.
+    //
+    // Serializing an Expr::OuterReferenceColumn uses these to resolve the column
+    // against the correct enclosing query and emit an OuterReference field reference
+    // with the corresponding `steps_out`.
+
+    /// Push an outer schema onto the stack when entering a subquery.
+    fn push_outer_schema(&mut self, _schema: DFSchemaRef) {}
+
+    /// Pop an outer schema from the stack when leaving a subquery.
+    fn pop_outer_schema(&mut self) {}
+
+    /// Get the outer schema at the given nesting depth.
+    /// `steps_out = 1` is the immediately enclosing query, `steps_out = 2`
+    /// is two levels out, etc. Returns `None` if `steps_out` is 0 or
+    /// exceeds the current nesting depth.
+    fn get_outer_schema(&self, _steps_out: usize) -> Option<DFSchemaRef> {
+        None
     }
 
     fn handle_lambda(
@@ -499,6 +532,7 @@ pub struct DefaultSubstraitProducer<'a> {
     extensions: Extensions,
     serializer_registry: &'a dyn SerializerRegistry,
     lambda_producer: DefaultSubstraitLambdaProducer,
+    outer_schemas: Vec<DFSchemaRef>,
 }
 
 impl<'a> DefaultSubstraitProducer<'a> {
@@ -507,6 +541,7 @@ impl<'a> DefaultSubstraitProducer<'a> {
             extensions: Extensions::default(),
             serializer_registry: state.serializer_registry().as_ref(),
             lambda_producer: DefaultSubstraitLambdaProducer::new(),
+            outer_schemas: Vec::new(),
         }
     }
 }
@@ -560,6 +595,23 @@ impl SubstraitProducer for DefaultSubstraitProducer<'_> {
         Ok(Box::new(Rel {
             rel_type: Some(rel_type),
         }))
+    }
+
+    fn push_outer_schema(&mut self, schema: DFSchemaRef) {
+        self.outer_schemas.push(schema);
+    }
+
+    fn pop_outer_schema(&mut self) {
+        self.outer_schemas.pop();
+    }
+
+    fn get_outer_schema(&self, steps_out: usize) -> Option<DFSchemaRef> {
+        // steps_out=1 → last element, steps_out=2 → second-to-last, etc.
+        // Returns None for steps_out=0 or steps_out > stack depth.
+        self.outer_schemas
+            .len()
+            .checked_sub(steps_out)
+            .and_then(|idx| self.outer_schemas.get(idx).cloned())
     }
 
     fn push_lambda_parameters(
