@@ -84,7 +84,7 @@ impl TryFrom<&Vec<SimpleExtensionDeclaration>> for Extensions {
     fn try_from(
         value: &Vec<SimpleExtensionDeclaration>,
     ) -> datafusion::common::Result<Self> {
-        let mut functions = HashMap::new();
+        let mut functions = HashMap::with_capacity(value.len());
         let mut types = HashMap::new();
         let mut type_variations = HashMap::new();
 
@@ -114,7 +114,9 @@ impl TryFrom<&Vec<SimpleExtensionDeclaration>> for Extensions {
 
 impl From<Extensions> for Vec<SimpleExtensionDeclaration> {
     fn from(val: Extensions) -> Vec<SimpleExtensionDeclaration> {
-        let mut extensions = vec![];
+        let mut extensions = Vec::with_capacity(
+            val.functions.len() + val.types.len() + val.type_variations.len(),
+        );
         for (f_anchor, f_name) in val.functions {
             let function_extension = ExtensionFunction {
                 extension_urn_reference: u32::MAX,

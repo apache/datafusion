@@ -363,8 +363,8 @@ impl NthValueAccumulator {
     fn evaluate_orderings(&self) -> Result<ScalarValue> {
         let fields = ordering_fields(&self.ordering_req, &self.datatypes[1..]);
 
-        let mut column_wise_ordering_values = vec![];
         let num_columns = fields.len();
+        let mut column_wise_ordering_values = Vec::with_capacity(num_columns);
         for i in 0..num_columns {
             let column_values = self
                 .ordering_values

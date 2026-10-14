@@ -41,7 +41,7 @@ use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::filter::FilterExecBuilder;
 use crate::physical_plan::joins::utils as join_utils;
 use crate::physical_plan::joins::{
-    AsOfJoinExec, AsOfMatchExpr, CrossJoinExec, HashJoinExec, NestedLoopJoinExec,
+    AsOfJoinExec, AsOfMatchExpr, CrossJoinExec, HashJoinExecBuilder, NestedLoopJoinExec,
     PartitionMode, SortMergeJoinExec,
 };
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
@@ -57,18 +57,17 @@ use crate::physical_plan::{
 };
 use crate::schema_equivalence::schema_satisfied_by;
 
-use arrow::array::{RecordBatch, builder::StringBuilder};
+use arrow::array::{ArrayRef, RecordBatch, UInt64Array, builder::StringBuilder};
 use arrow::compute::SortOptions;
 use arrow::datatypes::Schema;
 use arrow_schema::Field;
 use datafusion_catalog::ScanArgs;
 use datafusion_common::Column;
 use datafusion_common::HashMap as DFHashMap;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::format::ExplainAnalyzeCategories;
-use datafusion_common::tree_node::{
-    Transformed, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
-};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{
     DFSchema, DFSchemaRef, ScalarValue, exec_err, internal_datafusion_err, internal_err,
     not_impl_err, plan_err,
@@ -105,9 +104,11 @@ use datafusion_physical_expr::{
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_plan::joins::PiecewiseMergeJoinExec;
+use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion_physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
+use datafusion_physical_plan::statistics::StatisticsContext;
 use datafusion_physical_plan::unnest::ListUnnest;
 use datafusion_session::{PhysicalOptimizerContext, PhysicalOptimizerRule, Session};
 
@@ -125,17 +126,33 @@ pub use datafusion_session::{ExtensionPlanner, PhysicalPlanner};
 
 struct SessionOptimizerContext<'a> {
     session: &'a dyn Session,
+    statistics_context: StatisticsContext,
+}
+
+impl<'a> SessionOptimizerContext<'a> {
+    fn new(session: &'a dyn Session) -> Self {
+        let statistics_context = match session.statistics_registry() {
+            Some(registry) => StatisticsContext::new_with_registry(registry.clone()),
+            None => StatisticsContext::new(),
+        };
+        Self {
+            session,
+            statistics_context,
+        }
+    }
 }
 
 impl PhysicalOptimizerContext for SessionOptimizerContext<'_> {
-    fn config_options(&self) -> &datafusion_common::config::ConfigOptions {
+    fn config_options(&self) -> &ConfigOptions {
         self.session.config_options()
     }
 
-    fn statistics_registry(
-        &self,
-    ) -> Option<&datafusion_physical_plan::operator_statistics::StatisticsRegistry> {
+    fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
         self.session.statistics_registry()
+    }
+
+    fn statistics_context(&self) -> Option<&StatisticsContext> {
+        Some(&self.statistics_context)
     }
 }
 
@@ -589,6 +606,7 @@ impl DefaultPhysicalPlanner {
                     projection,
                     filters,
                     fetch,
+                    skip: offset,
                     projected_schema,
                     statistics_requests,
                     ..
@@ -606,6 +624,7 @@ impl DefaultPhysicalPlanner {
                         .with_projection(projection.as_deref())
                         .with_filters(Some(&filters_vec))
                         .with_limit(*fetch)
+                        .with_skip(*offset)
                         .with_statistics_requests(&stats_requests);
                     let res = source.scan_with_args(session_state, opts).await?;
                     Arc::clone(res.plan())
@@ -794,17 +813,29 @@ impl DefaultPhysicalPlanner {
                 target,
                 op: WriteOp::Delete,
                 input,
-                ..
+                output_schema,
             }) => {
                 if let Some(provider) = target.downcast_ref::<DefaultTableSource>() {
-                    let filters = extract_dml_filters(input, table_name)?;
-                    provider
-                        .table_provider
-                        .delete_from(session_state, filters)
-                        .await
-                        .map_err(|e| {
-                            e.context(format!("DELETE operation on table '{table_name}'"))
-                        })?
+                    let allowed_refs = collect_dml_target_refs(input, table_name)?;
+                    match classify_dml_input(input, table_name, &allowed_refs, "DELETE")?
+                    {
+                        DmlInput::NoRows => {
+                            zero_rows_affected_exec(Arc::clone(output_schema.inner()))?
+                        }
+                        DmlInput::Filters => {
+                            let filters =
+                                extract_dml_filters(input, table_name, &allowed_refs)?;
+                            provider
+                                .table_provider
+                                .delete_from(session_state, filters)
+                                .await
+                                .map_err(|e| {
+                                    e.context(format!(
+                                        "DELETE operation on table '{table_name}'"
+                                    ))
+                                })?
+                        }
+                    }
                 } else {
                     return exec_err!(
                         "Table source can't be downcasted to DefaultTableSource"
@@ -816,21 +847,33 @@ impl DefaultPhysicalPlanner {
                 target,
                 op: WriteOp::Update,
                 input,
-                ..
+                output_schema,
             }) => {
                 if let Some(provider) = target.downcast_ref::<DefaultTableSource>() {
-                    // For UPDATE, the assignments are encoded in the projection of input
-                    // We pass the filters and let the provider handle the projection
-                    let filters = extract_dml_filters(input, table_name)?;
-                    // Extract assignments from the projection in input plan
-                    let assignments = extract_update_assignments(input)?;
-                    provider
-                        .table_provider
-                        .update(session_state, assignments, filters)
-                        .await
-                        .map_err(|e| {
-                            e.context(format!("UPDATE operation on table '{table_name}'"))
-                        })?
+                    let allowed_refs = collect_dml_target_refs(input, table_name)?;
+                    match classify_dml_input(input, table_name, &allowed_refs, "UPDATE")?
+                    {
+                        DmlInput::NoRows => {
+                            zero_rows_affected_exec(Arc::clone(output_schema.inner()))?
+                        }
+                        DmlInput::Filters => {
+                            // For UPDATE, the assignments are encoded in the projection of input
+                            // We pass the filters and let the provider handle the projection
+                            let filters =
+                                extract_dml_filters(input, table_name, &allowed_refs)?;
+                            // Extract assignments from the projection in input plan
+                            let assignments = extract_update_assignments(input)?;
+                            provider
+                                .table_provider
+                                .update(session_state, assignments, filters)
+                                .await
+                                .map_err(|e| {
+                                    e.context(format!(
+                                        "UPDATE operation on table '{table_name}'"
+                                    ))
+                                })?
+                        }
+                    }
                 } else {
                     return exec_err!(
                         "Table source can't be downcasted to DefaultTableSource"
@@ -1334,6 +1377,7 @@ impl DefaultPhysicalPlanner {
                 join_type,
                 null_equality,
                 null_aware,
+                null_aware_value_keys,
                 schema: join_schema,
                 ..
             }) => {
@@ -1766,17 +1810,20 @@ impl DefaultPhysicalPlanner {
                         PartitionMode::CollectLeft
                     };
 
-                    Arc::new(HashJoinExec::try_new(
-                        physical_left,
-                        physical_right,
-                        join_on,
-                        join_filter,
-                        join_type,
-                        None,
-                        partition_mode,
-                        *null_equality,
-                        *null_aware,
-                    )?)
+                    Arc::new(
+                        HashJoinExecBuilder::new(
+                            physical_left,
+                            physical_right,
+                            join_on,
+                            *join_type,
+                        )
+                        .with_filter(join_filter)
+                        .with_partition_mode(partition_mode)
+                        .with_null_equality(*null_equality)
+                        .with_null_aware(*null_aware)
+                        .with_null_aware_value_keys(*null_aware_value_keys)
+                        .build()?,
+                    )
                 };
 
                 // If plan was mutated previously then need to create the ExecutionPlan
@@ -1860,12 +1907,12 @@ impl DefaultPhysicalPlanner {
             LogicalPlan::Extension(Extension { node }) => {
                 let mut maybe_plan = None;
                 let children = children.vec();
+                let logical_input = node.inputs();
                 for planner in &self.extension_planners {
                     if maybe_plan.is_some() {
                         break;
                     }
 
-                    let logical_input = node.inputs();
                     maybe_plan = planner
                         .plan_extension(
                             self,
@@ -2252,6 +2299,149 @@ fn get_physical_expr_pair(
     Ok((physical_expr, physical_name))
 }
 
+/// How a DELETE or an UPDATE reaches its target table.
+///
+/// The `filters` argument of [`TableProvider::delete_from`] and
+/// [`TableProvider::update`] is the only channel that carries the `WHERE` clause
+/// to the provider, and an empty vector means "no `WHERE` clause, so every row".
+/// A plan whose row restriction cannot travel through that channel must
+/// therefore never reach the provider.
+///
+/// [`TableProvider::delete_from`]: datafusion_catalog::TableProvider::delete_from
+/// [`TableProvider::update`]: datafusion_catalog::TableProvider::update
+enum DmlInput {
+    /// Every row restriction of the statement reaches the provider as a filter.
+    Filters,
+    /// No row matches, so the statement affects no rows and the provider is not
+    /// called at all.
+    NoRows,
+}
+
+/// Collect the table references that a predicate of a DELETE or an UPDATE may
+/// name: the target table itself, and the alias of every scan of the target
+/// table in the input plan.
+///
+/// Both [`classify_dml_input`] and [`extract_dml_filters`] need this set, so the
+/// caller collects it once and passes it to each of them.
+fn collect_dml_target_refs(
+    input: &Arc<LogicalPlan>,
+    target: &TableReference,
+) -> Result<Vec<TableReference>> {
+    let mut allowed_refs = vec![target.clone()];
+    input.apply(|node| {
+        if let LogicalPlan::SubqueryAlias(alias) = node
+            // Check if this alias points to the target table
+            && let LogicalPlan::TableScan(scan) = alias.input.as_ref()
+            && scan.table_name.resolved_eq(target)
+        {
+            allowed_refs.push(TableReference::bare(alias.alias.to_string()));
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(allowed_refs)
+}
+
+/// Check that the input plan of a DELETE or an UPDATE can reach the table
+/// provider without losing part of its `WHERE` clause.
+///
+/// The optimizer rewrites an `IN` or an `EXISTS` subquery into a semi join, and
+/// it folds an always-false predicate into an empty relation. In both cases the
+/// condition leaves the `Filter` nodes that [`extract_dml_filters`] reads, and
+/// the provider would see an empty filter list and change every row.
+///
+/// # Parameters
+/// - `input`: the input plan of the DELETE or the UPDATE
+/// - `target`: the target table of the statement
+/// - `allowed_refs`: the target table and its aliases, from [`collect_dml_target_refs`]
+/// - `op`: `"DELETE"` or `"UPDATE"`, used in the error message
+///
+/// # Returns
+/// * [`DmlInput::Filters`] when the provider may be called
+/// * [`DmlInput::NoRows`] when the statement matches no row
+/// * a "not implemented" error when part of the `WHERE` clause cannot reach the provider.
+fn classify_dml_input(
+    input: &Arc<LogicalPlan>,
+    target: &TableReference,
+    allowed_refs: &[TableReference],
+    op: &str,
+) -> Result<DmlInput> {
+    let mut result = DmlInput::Filters;
+    input.apply(|node| {
+        match node {
+            // An empty relation means the optimizer proved that no row matches,
+            // so the statement affects no rows.
+            LogicalPlan::EmptyRelation(empty) if !empty.produce_one_row => {
+                result = DmlInput::NoRows;
+                return Ok(TreeNodeRecursion::Stop);
+            }
+            // A join carries the condition in its `on` clause, where
+            // `extract_dml_filters` cannot read it. The optimizer builds one for
+            // an `IN` or an `EXISTS` subquery.
+            LogicalPlan::Join(join) => {
+                return not_impl_err!(
+                    "{op} on table '{target}' with an IN or an EXISTS subquery in its \
+                     WHERE clause is not supported: the optimizer rewrites the subquery \
+                     into a {} join, and the condition does not reach the table provider",
+                    join.join_type
+                );
+            }
+            LogicalPlan::Filter(filter) => {
+                // A predicate on another table restricts the rows of the target
+                // table, and the provider cannot evaluate it.
+                for predicate in split_conjunction(&filter.predicate) {
+                    if !predicate_is_on_target_multi(predicate, allowed_refs)? {
+                        return not_impl_err!(
+                            "{op} on table '{target}' with a WHERE clause that \
+                             references another table is not supported"
+                        );
+                    }
+                }
+            }
+            // Plans that pass every row of the target table through, or that
+            // hold no row restriction of their own.
+            LogicalPlan::TableScan(_)
+            | LogicalPlan::Projection(_)
+            | LogicalPlan::SubqueryAlias(_)
+            | LogicalPlan::Sort(_)
+            | LogicalPlan::Repartition(_)
+            // A `Limit` carries no predicate, so it reaches the provider as no
+            // filter at all and `DELETE FROM t LIMIT n` deletes every matching
+            // row. `UPDATE ... LIMIT` is already rejected by the SQL planner.
+            // That gap is separate from this one, and it is tracked separately.
+            | LogicalPlan::Limit(_)
+            // A subquery expression that survives to this point fails later,
+            // when the provider compiles the filter it belongs to.
+            | LogicalPlan::Subquery(_) => {}
+            // Everything else either restricts or multiplies the rows of the
+            // target table in a way that no filter list can express.
+            other => {
+                return not_impl_err!(
+                    "{op} on table '{target}' is not supported: the statement plan \
+                     contains \"{}\", and its effect on the rows cannot reach the table \
+                     provider as a filter",
+                    other.display()
+                );
+            }
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+
+    Ok(result)
+}
+
+/// Build a plan that reports no rows affected, for a DELETE or an UPDATE that
+/// matches no row. `schema` is the output schema of the statement, one `count`
+/// column of type `UInt64`.
+fn zero_rows_affected_exec(schema: Arc<Schema>) -> Result<Arc<dyn ExecutionPlan>> {
+    let count = Arc::new(UInt64Array::from(vec![0_u64])) as ArrayRef;
+    let batch = RecordBatch::try_new(Arc::clone(&schema), vec![count])?;
+    Ok(MemorySourceConfig::try_new_exec(
+        &[vec![batch]],
+        schema,
+        None,
+    )?)
+}
+
 /// Extract filter predicates from a DML input plan (DELETE/UPDATE).
 ///
 /// Walks the logical plan tree and collects Filter predicates and any filters
@@ -2268,6 +2458,7 @@ fn get_physical_expr_pair(
 /// # Parameters
 /// - `input`: The logical plan tree to extract filters from (typically a DELETE or UPDATE plan)
 /// - `target`: The target table reference to scope filter extraction (prevents multi-table filter leakage)
+/// - `allowed_refs`: The target table and its aliases, from [`collect_dml_target_refs`]
 ///
 /// # Returns
 /// A vector of unqualified filter expressions that can be passed to the TableProvider for execution.
@@ -2277,28 +2468,16 @@ fn get_physical_expr_pair(
 fn extract_dml_filters(
     input: &Arc<LogicalPlan>,
     target: &TableReference,
+    allowed_refs: &[TableReference],
 ) -> Result<Vec<Expr>> {
     let mut filters = Vec::new();
-    let mut allowed_refs = vec![target.clone()];
-
-    // First pass: collect any alias references to the target table
-    input.apply(|node| {
-        if let LogicalPlan::SubqueryAlias(alias) = node
-            // Check if this alias points to the target table
-            && let LogicalPlan::TableScan(scan) = alias.input.as_ref()
-            && scan.table_name.resolved_eq(target)
-        {
-            allowed_refs.push(TableReference::bare(alias.alias.to_string()));
-        }
-        Ok(TreeNodeRecursion::Continue)
-    })?;
 
     input.apply(|node| {
         match node {
             LogicalPlan::Filter(filter) => {
                 // Split AND predicates into individual expressions
                 for predicate in split_conjunction(&filter.predicate) {
-                    if predicate_is_on_target_multi(predicate, &allowed_refs)? {
+                    if predicate_is_on_target_multi(predicate, allowed_refs)? {
                         filters.push(predicate.clone());
                     }
                 }
@@ -2359,10 +2538,11 @@ fn extract_dml_filters(
     //
     // Deduplication is necessary because filters may appear in both Filter nodes
     // and TableScan.filters when the optimizer performs partial (Inexact) pushdown.
-    let mut seen_filters = HashSet::new();
-    filters
-        .into_iter()
-        .try_fold(Vec::new(), |mut deduped, filter| {
+    let num_filters = filters.len();
+    let mut seen_filters = HashSet::with_capacity(num_filters);
+    filters.into_iter().try_fold(
+        Vec::with_capacity(num_filters),
+        |mut deduped, filter| {
             let unqualified = strip_column_qualifiers(filter).map_err(|e| {
                 e.context(format!(
                     "Failed to strip column qualifiers for DML filter on table '{target}'"
@@ -2372,7 +2552,8 @@ fn extract_dml_filters(
                 deduped.push(unqualified);
             }
             Ok(deduped)
-        })
+        },
+    )
 }
 
 /// Determine whether a predicate references only columns from the target table
@@ -2963,9 +3144,7 @@ impl DefaultPhysicalPlanner {
         InvariantChecker(InvariantLevel::Always).check(&plan)?;
 
         let mut new_plan = Arc::clone(&plan);
-        let optimizer_context = SessionOptimizerContext {
-            session: session_state,
-        };
+        let optimizer_context = SessionOptimizerContext::new(session_state);
         for optimizer in optimizers {
             let before_schema = new_plan.schema();
             new_plan = optimizer
@@ -3251,7 +3430,7 @@ impl<'a> OptimizationInvariantChecker<'a> {
     /// In debug mode, this recursively walks the entire physical plan
     /// and performs [`ExecutionPlan::check_invariants`].
     pub fn check(
-        &mut self,
+        &self,
         plan: &Arc<dyn ExecutionPlan>,
         previous_schema: &Arc<Schema>,
     ) -> Result<()> {
@@ -3268,7 +3447,14 @@ impl<'a> OptimizationInvariantChecker<'a> {
 
         // check invariants per each ExecutionPlan node
         #[cfg(debug_assertions)]
-        plan.visit(self)?;
+        plan.apply(|node| {
+            // Checks for the more permissive `InvariantLevel::Always`.
+            // Plans are not guaranteed to be executable after each physical optimizer run.
+            node.check_invariants(InvariantLevel::Always).map_err(|e|
+                e.context(format!("Invariant for ExecutionPlan node '{}' failed for PhysicalOptimizer rule '{}'", node.name(), self.rule.name()))
+            )?;
+            Ok(TreeNodeRecursion::Continue)
+        })?;
 
         Ok(())
     }
@@ -3323,43 +3509,24 @@ fn is_allowed_field_change(old_field: &Field, new_field: &Field) -> Result<()> {
     }
 }
 
-impl<'n> TreeNodeVisitor<'n> for OptimizationInvariantChecker<'_> {
-    type Node = Arc<dyn ExecutionPlan>;
-
-    fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
-        // Checks for the more permissive `InvariantLevel::Always`.
-        // Plans are not guaranteed to be executable after each physical optimizer run.
-        node.check_invariants(InvariantLevel::Always).map_err(|e|
-            e.context(format!("Invariant for ExecutionPlan node '{}' failed for PhysicalOptimizer rule '{}'", node.name(), self.rule.name()))
-        )?;
-        Ok(TreeNodeRecursion::Continue)
-    }
-}
-
 /// Check [`ExecutionPlan`] invariants per [`InvariantLevel`].
 struct InvariantChecker(InvariantLevel);
 
 impl InvariantChecker {
     /// Checks that the plan is executable, returning an Error if not.
-    pub fn check(&mut self, plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
+    pub fn check(&self, plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
         // check invariants per each ExecutionPlan node
-        plan.visit(self)?;
+        plan.apply(|node| {
+            node.check_invariants(self.0).map_err(|e| {
+                e.context(format!(
+                    "Invariant for ExecutionPlan node '{}' failed",
+                    node.name()
+                ))
+            })?;
+            Ok(TreeNodeRecursion::Continue)
+        })?;
 
         Ok(())
-    }
-}
-
-impl<'n> TreeNodeVisitor<'n> for InvariantChecker {
-    type Node = Arc<dyn ExecutionPlan>;
-
-    fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
-        node.check_invariants(self.0).map_err(|e| {
-            e.context(format!(
-                "Invariant for ExecutionPlan node '{}' failed",
-                node.name()
-            ))
-        })?;
-        Ok(TreeNodeRecursion::Continue)
     }
 }
 
@@ -3388,6 +3555,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Int32Type};
     use arrow_schema::{FieldRef, SchemaRef};
     use datafusion_catalog::CatalogProviderList;
+    use datafusion_common::Statistics;
     use datafusion_common::config::{ConfigOptions, TableOptions};
     use datafusion_common::{
         DFSchemaRef, ScalarValue, SplitPoint, TableReference, ToDFSchema as _,
@@ -3410,12 +3578,16 @@ mod tests {
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_physical_expr::EquivalenceProperties;
     use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+    use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
+    use datafusion_physical_plan::statistics::StatisticsArgs;
     use datafusion_physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
     use datafusion_session::QueryPlanner;
+    use parking_lot::Mutex as SyncMutex;
 
+    /// Records the root statistics computed with the shared statistics context
     #[derive(Debug)]
     struct ContextCheckingRule {
-        invoked: Arc<AtomicBool>,
+        recorded: Arc<SyncMutex<Vec<Arc<Statistics>>>>,
     }
 
     impl PhysicalOptimizerRule for ContextCheckingRule {
@@ -3433,7 +3605,12 @@ mod tests {
             context: &dyn PhysicalOptimizerContext,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             assert!(context.statistics_registry().is_some());
-            self.invoked.store(true, AtomicOrdering::Relaxed);
+            let statistics_context = context
+                .statistics_context()
+                .expect("the planner shares a statistics context");
+            let statistics =
+                statistics_context.compute_arc(&plan, &StatisticsArgs::new())?;
+            self.recorded.lock().push(statistics);
             Ok(plan)
         }
 
@@ -3496,10 +3673,7 @@ mod tests {
             self.inner.physical_optimizers()
         }
 
-        fn statistics_registry(
-            &self,
-        ) -> Option<&datafusion_physical_plan::operator_statistics::StatisticsRegistry>
-        {
+        fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
             self.inner.statistics_registry()
         }
 
@@ -3668,15 +3842,13 @@ mod tests {
 
     #[tokio::test]
     async fn plans_with_non_session_state_implementation() -> Result<()> {
-        let invoked = Arc::new(AtomicBool::new(false));
+        let recorded = Arc::new(SyncMutex::new(vec![]));
         let inner = SessionStateBuilder::new()
             .with_default_features()
             .with_physical_optimizer_rules(vec![Arc::new(ContextCheckingRule {
-                invoked: Arc::clone(&invoked),
+                recorded: Arc::clone(&recorded),
             })])
-            .with_statistics_registry(
-                datafusion_physical_plan::operator_statistics::StatisticsRegistry::new(),
-            )
+            .with_statistics_registry(StatisticsRegistry::new())
             .build();
         let query_planner_invoked = Arc::new(AtomicBool::new(false));
         let session = TestSession {
@@ -3691,7 +3863,31 @@ mod tests {
         let physical_plan = session.create_physical_plan(&logical_plan).await?;
         assert!(physical_plan.is::<EmptyExec>());
         assert!(query_planner_invoked.load(AtomicOrdering::Relaxed));
-        assert!(invoked.load(AtomicOrdering::Relaxed));
+        assert_eq!(recorded.lock().len(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn optimizer_rules_share_statistics_context() -> Result<()> {
+        let recorded = Arc::new(SyncMutex::new(vec![]));
+        let rule = || -> Arc<dyn PhysicalOptimizerRule + Send + Sync> {
+            Arc::new(ContextCheckingRule {
+                recorded: Arc::clone(&recorded),
+            })
+        };
+        let session_state = SessionStateBuilder::new()
+            .with_default_features()
+            .with_physical_optimizer_rules(vec![rule(), rule()])
+            .with_statistics_registry(StatisticsRegistry::new())
+            .build();
+
+        let logical_plan = LogicalPlanBuilder::empty(false).build()?;
+        session_state.create_physical_plan(&logical_plan).await?;
+
+        // The second rule reads the statistics the first rule cached
+        let recorded = recorded.lock();
+        assert_eq!(recorded.len(), 2);
+        assert!(Arc::ptr_eq(&recorded[0], &recorded[1]));
         Ok(())
     }
 

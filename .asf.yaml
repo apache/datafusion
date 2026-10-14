@@ -87,6 +87,7 @@ github:
           - "check Cargo.toml formatting"
           - "check configs.md and ***_functions.md is up-to-date"
           - "check example README is up-to-date"
+          - "Check datafusion crates used in datafusion-examples"
           - "Verify MSRV (Min Supported Rust Version)"
     # needs to be updated as part of the release process
     # .asf.yaml doesn't support wildcard branch protection rules, only exact branch names
@@ -117,6 +118,13 @@ github:
     allow_auto_merge: true
     # auto-delete head branches after being merged
     del_branch_on_merge: true
+    # Limit open pull requests per user without write access.
+    #
+    # With coding agents, the number of open PRs now far exceeds our review capacity.
+    # Setting a limit helps reviewers focus on fewer PRs at a time.
+    creation_cap:
+      enabled: true
+      max_open_pull_requests: 3
 
 # publishes the content of the `asf-site` branch to
 # https://datafusion.apache.org/

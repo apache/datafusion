@@ -522,8 +522,9 @@ impl LogicalPlan {
             };
             if let Some(on) = on {
                 // The join keys in using-join must be columns.
-                let columns =
-                    on.iter().try_fold(HashSet::new(), |mut accumu, (l, r)| {
+                let columns = on.iter().try_fold(
+                    HashSet::with_capacity(on.len() * 2),
+                    |mut accumu, (l, r)| {
                         let Some(l) = l.get_as_join_column() else {
                             return internal_err!(
                                 "Invalid join key. Expected column, found {l:?}"
@@ -537,7 +538,8 @@ impl LogicalPlan {
                         accumu.insert(l.to_owned());
                         accumu.insert(r.to_owned());
                         Result::<_, DataFusionError>::Ok(accumu)
-                    })?;
+                    },
+                )?;
                 using_columns.push(columns);
             }
             Ok(TreeNodeRecursion::Continue)
@@ -688,6 +690,7 @@ impl LogicalPlan {
                 schema: _,
                 null_equality,
                 null_aware,
+                null_aware_value_keys,
             }) => {
                 let schema =
                     build_join_schema(left.schema(), right.schema(), &join_type)?;
@@ -710,6 +713,7 @@ impl LogicalPlan {
                     schema: DFSchemaRef::new(schema),
                     null_equality,
                     null_aware,
+                    null_aware_value_keys,
                 }))
             }
             LogicalPlan::AsOfJoin(AsOfJoin {
@@ -991,6 +995,7 @@ impl LogicalPlan {
                 on,
                 null_equality,
                 null_aware,
+                null_aware_value_keys,
                 ..
             }) => {
                 let (left, right) = self.only_two_inputs(inputs)?;
@@ -1033,6 +1038,7 @@ impl LogicalPlan {
                     schema: DFSchemaRef::new(schema),
                     null_equality: *null_equality,
                     null_aware: *null_aware,
+                    null_aware_value_keys: *null_aware_value_keys,
                 }))
             }
             LogicalPlan::AsOfJoin(AsOfJoin {
@@ -1836,14 +1842,21 @@ impl LogicalPlan {
             .collect())
     }
 
-    /// Walk the logical plan, find any `Placeholder` tokens, and return a map of their IDs and FieldRefs
+    /// Walk the logical plan, find any `Placeholder` tokens, and return a map of their IDs and FieldRefs.
+    /// Bare `LIMIT`/`OFFSET` parameters default to `Int64` if no occurrence provides a type.
     pub fn get_parameter_fields(
         &self,
     ) -> Result<HashMap<String, Option<FieldRef>>, DataFusionError> {
         let mut param_types: HashMap<String, Option<FieldRef>> = HashMap::new();
+        let mut row_count_parameters: HashSet<String> = HashSet::new();
 
         self.apply_with_subqueries(|plan| {
             plan.apply_expressions(|expr| {
+                if matches!(plan, LogicalPlan::Limit(_))
+                    && let Expr::Placeholder(Placeholder { id, field: None }) = expr
+                {
+                    row_count_parameters.insert(id.clone());
+                }
                 expr.apply(|expr| {
                     if let Expr::Placeholder(Placeholder { id, field }) = expr {
                         let prev = param_types.get(id);
@@ -1860,15 +1873,22 @@ impl LogicalPlan {
                                 param_types.insert(id.clone(), Some(Arc::clone(field)));
                             }
                             _ => {
-                                param_types.insert(id.clone(), None);
+                                param_types.entry(id.clone()).or_insert(None);
                             }
                         }
                     }
                     Ok(TreeNodeRecursion::Continue)
                 })
             })
-        })
-        .map(|_| param_types)
+        })?;
+
+        for id in row_count_parameters {
+            param_types
+                .entry(id)
+                .or_default()
+                .get_or_insert_with(|| Arc::new(Field::new("", DataType::Int64, true)));
+        }
+        Ok(param_types)
     }
 
     // ------------
@@ -2109,6 +2129,7 @@ impl LogicalPlan {
                         projection,
                         filters,
                         fetch,
+                        skip,
                         ..
                     }) => {
                         let projected_fields = match projection {
@@ -2174,6 +2195,10 @@ impl LogicalPlan {
 
                         if let Some(n) = fetch {
                             write!(f, ", fetch={n}")?;
+                        }
+
+                        if let Some(n) = skip {
+                            write!(f, ", skip={n}")?;
                         }
 
                         Ok(())
@@ -2253,6 +2278,7 @@ impl LogicalPlan {
                         join_constraint,
                         join_type,
                         null_aware,
+                        null_aware_value_keys,
                         ..
                     }) => {
                         let join_expr: Vec<String> =
@@ -2261,8 +2287,12 @@ impl LogicalPlan {
                             .as_ref()
                             .map(|expr| format!(" Filter: {expr}"))
                             .unwrap_or_else(|| "".to_string());
-                        let null_aware_expr =
-                            if *null_aware { " null_aware" } else { "" };
+                        let null_aware_expr = match (*null_aware, *null_aware_value_keys)
+                        {
+                            (false, _) => "".to_string(),
+                            (true, 0 | 1) => " null_aware".to_string(),
+                            (true, n) => format!(" null_aware(value_keys={n})"),
+                        };
                         let join_type = if filter.is_none()
                             && keys.is_empty()
                             && *join_type == JoinType::Inner
@@ -2826,12 +2856,18 @@ impl Filter {
     /// Create a new filter operator.
     ///
     /// Skips the type-checking, window function check and dealiasing done in
-    /// [Self::try_new]. For internal use in DataFusion only.
+    /// [Self::try_new].
     ///
     /// **Preconditions:**
     /// - the `predicate` expression returns a boolean value
     /// - the `predicate` expression is not aliased
     /// - the `predicate` expression contains no window function calls
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
     #[doc(hidden)]
     pub fn new(predicate: Expr, input: Arc<LogicalPlan>) -> Self {
         Self { predicate, input }
@@ -3129,12 +3165,18 @@ pub struct TableScan {
     pub filters: Vec<Expr>,
     /// Optional number of rows to read
     pub fetch: Option<usize>,
+    /// Optional number of rows to skip
+    pub skip: Option<usize>,
     /// Statistics the planner would like the provider to answer for this
     /// scan, typically attached by a custom optimizer rule from the
     /// surrounding plan (e.g. Min/Max for sort keys).
     ///
     /// A [`BTreeSet`], not a `Vec` to keep the resulting plan deterministic.
-    pub statistics_requests: BTreeSet<StatisticsRequest>,
+    ///
+    // Boxed to keep this rarely-populated field from growing every
+    // `TableScan` (and thus `LogicalPlan`) by its own size;
+    // see `test_size_of_logical_plan`.
+    pub statistics_requests: Box<BTreeSet<StatisticsRequest>>,
 }
 
 impl Debug for TableScan {
@@ -3146,6 +3188,7 @@ impl Debug for TableScan {
             .field("projected_schema", &self.projected_schema)
             .field("filters", &self.filters)
             .field("fetch", &self.fetch)
+            .field("skip", &self.skip)
             .finish_non_exhaustive()
     }
 }
@@ -3238,7 +3281,9 @@ pub struct TableScanBuilder {
     projection: Option<Vec<usize>>,
     filters: Vec<Expr>,
     fetch: Option<usize>,
-    statistics_requests: BTreeSet<StatisticsRequest>,
+    skip: Option<usize>,
+    #[expect(clippy::box_collection)] // additional indirection for smaller size_of()
+    statistics_requests: Box<BTreeSet<StatisticsRequest>>,
 }
 
 impl TableScanBuilder {
@@ -3253,7 +3298,8 @@ impl TableScanBuilder {
             projection: None,
             filters: vec![],
             fetch: None,
-            statistics_requests: BTreeSet::new(),
+            skip: None,
+            statistics_requests: Box::default(),
         }
     }
 
@@ -3275,13 +3321,19 @@ impl TableScanBuilder {
         self
     }
 
+    /// Set the number of rows to skip.
+    pub fn with_skip(mut self, skip: Option<usize>) -> Self {
+        self.skip = skip;
+        self
+    }
+
     /// Set the statistics requests for the scan. See
     /// [`TableScan::statistics_requests`].
     pub fn with_statistics_requests(
         mut self,
         statistics_requests: BTreeSet<StatisticsRequest>,
     ) -> Self {
-        self.statistics_requests = statistics_requests;
+        self.statistics_requests = Box::new(statistics_requests);
         self
     }
 
@@ -3294,6 +3346,7 @@ impl TableScanBuilder {
             projection,
             filters,
             fetch,
+            skip,
             statistics_requests,
         } = self;
 
@@ -3335,6 +3388,7 @@ impl TableScanBuilder {
             projected_schema,
             filters,
             fetch,
+            skip,
             statistics_requests,
         })
     }
@@ -3348,6 +3402,7 @@ impl From<TableScan> for TableScanBuilder {
             projection: scan.projection,
             filters: scan.filters,
             fetch: scan.fetch,
+            skip: scan.skip,
             statistics_requests: scan.statistics_requests,
         }
     }
@@ -3543,13 +3598,13 @@ impl Union {
             }
         }
 
-        let mut name_counts: HashMap<String, usize> = HashMap::new();
+        let mut name_counts: HashMap<String, usize> =
+            HashMap::with_capacity(fields_count);
+        let mut fields: Vec<&FieldRef> = Vec::with_capacity(inputs.len());
         let union_fields = (0..fields_count)
             .map(|i| {
-                let fields = inputs
-                    .iter()
-                    .map(|input| input.schema().field(i))
-                    .collect::<Vec<_>>();
+                fields.clear();
+                fields.extend(inputs.iter().map(|input| input.schema().field(i)));
                 let first_field = fields[0];
                 let base_name = first_field.name().to_string();
 
@@ -4299,7 +4354,7 @@ impl PartialOrd for Aggregate {
 #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
 fn max_grouping_set_duplicate_ordinal(group_expr: &[Expr]) -> usize {
     if let Some(Expr::GroupingSet(GroupingSet::GroupingSets(sets))) = group_expr.first() {
-        let mut counts: HashMap<&[Expr], usize> = HashMap::new();
+        let mut counts: HashMap<&[Expr], usize> = HashMap::with_capacity(sets.len());
         for set in sets {
             *counts.entry(set).or_insert(0) += 1;
         }
@@ -4357,7 +4412,29 @@ fn calc_func_dependencies_for_project(
     // Sentinel for projection outputs that do not map back to any input field.
     const COMPUTED_EXPR_INDEX: usize = usize::MAX;
 
+    let input_func_dependencies = input.schema().functional_dependencies();
+    // Projecting an empty set of dependencies always yields an empty set, so
+    // skip resolving projection expressions against the input fields. This is
+    // the common case because table sources carry no constraints by default.
+    if input_func_dependencies.is_empty() {
+        return Ok(FunctionalDependencies::empty());
+    }
+
+    // Map each input field name to its first index so that projection
+    // expressions resolve with a hash lookup instead of a linear scan.
     let input_fields = input.schema().field_names();
+    let mut input_index_by_name: HashMap<&str, usize> =
+        HashMap::with_capacity(input_fields.len());
+    for (index, name) in input_fields.iter().enumerate() {
+        input_index_by_name.entry(name.as_str()).or_insert(index);
+    }
+    let input_index = |name: &str| {
+        input_index_by_name
+            .get(name)
+            .copied()
+            .unwrap_or(COMPUTED_EXPR_INDEX)
+    };
+
     // Map each projection output position to its input column index.
     // A projection expression can produce multiple output columns, such as `*`.
     let proj_indices = exprs
@@ -4379,39 +4456,20 @@ fn calc_func_dependencies_for_project(
                             let flat_name = qualifier
                                 .map(|t| format!("{}.{}", t, f.name()))
                                 .unwrap_or_else(|| f.name().clone());
-                            input_fields
-                                .iter()
-                                .position(|item| *item == flat_name)
-                                .unwrap_or(COMPUTED_EXPR_INDEX)
+                            input_index(&flat_name)
                         })
                         .collect::<Vec<_>>(),
                 )
             }
-            Expr::Alias(alias) => {
-                let name = format!("{}", alias.expr);
-                let input_index = input_fields
-                    .iter()
-                    .position(|item| *item == name)
-                    .unwrap_or(COMPUTED_EXPR_INDEX);
-                Ok(vec![input_index])
-            }
-            _ => {
-                let name = format!("{expr}");
-                let input_index = input_fields
-                    .iter()
-                    .position(|item| *item == name)
-                    .unwrap_or(COMPUTED_EXPR_INDEX);
-                Ok(vec![input_index])
-            }
+            Expr::Alias(alias) => Ok(vec![input_index(&format!("{}", alias.expr))]),
+            _ => Ok(vec![input_index(&format!("{expr}"))]),
         })
         .collect::<Result<Vec<_>>>()?
         .into_iter()
         .flatten()
         .collect::<Vec<_>>();
 
-    Ok(input
-        .schema()
-        .functional_dependencies()
+    Ok(input_func_dependencies
         .project_functional_dependencies(&proj_indices, exprs.len()))
 }
 
@@ -4453,6 +4511,17 @@ pub struct Join {
     /// For `LeftMark`, the generated `mark` column becomes nullable so unmatched rows can produce
     /// `NULL` rather than `false` when SQL three-valued logic requires it.
     pub null_aware: bool,
+    /// Number of `NOT IN` value keys of a null-aware join; ignored unless
+    /// [`Self::null_aware`] is set.
+    ///
+    /// A scalar `x NOT IN (SELECT y ...)` has one value key, a multi-column
+    /// `(a, b) NOT IN (SELECT x, y ...)` one per tuple element. The value keys
+    /// are the leading equi-join keys (`on[..n]`, or the leading equality
+    /// conjuncts of `filter` before they are extracted into `on`); any keys
+    /// after them are correlation scope keys of a correlated subquery. A NULL
+    /// in a value key follows SQL three-valued logic across the whole tuple,
+    /// while the scope keys only select which subquery rows are compared.
+    pub null_aware_value_keys: usize,
 }
 
 /// The ordered comparison used by an [`AsOfJoin`].
@@ -4680,7 +4749,15 @@ impl Join {
             schema: Arc::new(join_schema),
             null_equality,
             null_aware,
+            null_aware_value_keys: 1,
         })
+    }
+
+    /// Sets the number of `NOT IN` value keys of a null-aware join, see
+    /// [`Self::null_aware_value_keys`].
+    pub fn with_null_aware_value_keys(mut self, null_aware_value_keys: usize) -> Self {
+        self.null_aware_value_keys = null_aware_value_keys;
+        self
     }
 
     /// Create Join with input which wrapped with projection, this method is used in physical planning only to help
@@ -4735,6 +4812,7 @@ impl Join {
                 schema: Arc::new(join_schema),
                 null_equality: original_join.null_equality,
                 null_aware: original_join.null_aware,
+                null_aware_value_keys: original_join.null_aware_value_keys,
             },
             requalified,
         ))
@@ -5086,7 +5164,7 @@ impl Unnest {
 
         let input_schema = input.schema();
 
-        let mut dependency_indices = vec![];
+        let mut dependency_indices = Vec::with_capacity(input_schema.fields().len());
         // Transform input schema into new schema
         // Given this comprehensive example
         //
@@ -5125,7 +5203,7 @@ impl Unnest {
                                 ));
                                 Ok(get_unnested_columns(
                                     &r.output_column.name,
-                                    original_field.data_type(),
+                                    original_field,
                                     r.depth,
                                 )?
                                 .into_iter()
@@ -5136,7 +5214,7 @@ impl Unnest {
                         if transformed_columns.is_empty() {
                             transformed_columns = get_unnested_columns(
                                 &column_to_unnest.name,
-                                original_field.data_type(),
+                                original_field,
                                 1,
                             )?;
                             match original_field.data_type() {
@@ -5216,9 +5294,10 @@ impl Unnest {
 // the recursion level
 fn get_unnested_columns(
     col_name: &String,
-    data_type: &DataType,
+    field: &Field,
     depth: usize,
 ) -> Result<Vec<(Column, Arc<Field>)>> {
+    let data_type = field.data_type();
     let mut qualified_columns = Vec::with_capacity(1);
 
     match data_type {
@@ -5242,7 +5321,11 @@ fn get_unnested_columns(
             qualified_columns.extend(fields.iter().map(|f| {
                 let new_name = format!("{}.{}", col_name, f.name());
                 let column = Column::from_name(&new_name);
-                let new_field = f.as_ref().clone().with_name(new_name);
+                let new_field = f
+                    .as_ref()
+                    .clone()
+                    .with_name(new_name)
+                    .with_nullable(field.is_nullable() || f.is_nullable());
                 // let column = Column::from((None, &f));
                 (column, Arc::new(new_field))
             }))
@@ -5444,6 +5527,127 @@ mod tests {
         let deps = projection.schema.functional_dependencies();
         assert_eq!(deps.len(), 1);
         assert_eq!(deps[0].source_indices, vec![1]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn projection_with_alias_preserves_pk() -> Result<()> {
+        let constraints =
+            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]);
+        let source = Arc::new(
+            LogicalTableSource::new(Arc::new(employee_schema()))
+                .with_constraints(constraints),
+        );
+        let plan = LogicalPlanBuilder::scan("employee_csv", source, None)?
+            .project(vec![col("id").alias("emp_id"), col("first_name")])?
+            .build()?;
+
+        let deps = plan.schema().functional_dependencies();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].source_indices, vec![0]);
+        assert_eq!(deps[0].target_indices, vec![0, 1]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn projection_over_unconstrained_table_has_no_dependencies() -> Result<()> {
+        let source = Arc::new(LogicalTableSource::new(Arc::new(employee_schema())));
+        let plan = LogicalPlanBuilder::scan("employee_csv", source, None)?
+            .project(vec![col("id"), col("first_name")])?
+            .build()?;
+
+        let deps = plan.schema().functional_dependencies();
+        assert!(deps.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn projection_duplicate_flattened_name_uses_first_input_index() -> Result<()> {
+        // Build an input schema where a qualified field (`orders`.`id`) and an
+        // unqualified field that is literally named `"orders.id"` flatten to
+        // the exact same lookup key that `calc_func_dependencies_for_project`
+        // uses to resolve projection expressions against input fields. This is
+        // the only way two entries of `DFSchema::field_names()` can collide
+        // (`DFSchema::check_names` otherwise forbids duplicate names), and it
+        // pins that the hash-map based lookup resolves such a collision to the
+        // *first* matching index, exactly like the linear `position()` scan it
+        // replaces.
+        let schema = DFSchema::new_with_metadata(
+            vec![
+                (
+                    Some(TableReference::bare("orders")),
+                    Arc::new(Field::new("id", DataType::Int32, false)),
+                ),
+                (
+                    None,
+                    Arc::new(Field::new("orders.id", DataType::Int32, false)),
+                ),
+            ],
+            Metadata::default(),
+        )?
+        .with_functional_dependencies(FunctionalDependencies::new(vec![
+            FunctionalDependence::new(vec![0], vec![0, 1], false)
+                .with_mode(Dependency::Single),
+        ]))?;
+        let input = LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: true,
+            schema: Arc::new(schema),
+        });
+
+        // References the *unqualified* second field, whose flattened name
+        // ("orders.id") collides with the first (qualified) field's.
+        let exprs = vec![Expr::Column(Column::new_unqualified("orders.id"))];
+        let deps = calc_func_dependencies_for_project(&exprs, &input)?;
+
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].source_indices, vec![0]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn aggregate_group_by_on_primary_key_reports_single_dependency() -> Result<()> {
+        let constraints =
+            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]);
+        let source = Arc::new(
+            LogicalTableSource::new(Arc::new(employee_schema()))
+                .with_constraints(constraints),
+        );
+        let plan = LogicalPlanBuilder::scan("employee_csv", source, None)?
+            .aggregate(vec![col("id")], vec![count(lit(true))])?
+            .build()?;
+
+        let deps = plan.schema().functional_dependencies();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].source_indices, vec![0]);
+        assert_eq!(deps[0].mode, Dependency::Single);
+
+        Ok(())
+    }
+
+    #[test]
+    fn aggregate_group_by_without_constraints_still_reports_single_dependency()
+    -> Result<()> {
+        // Grouping guarantees uniqueness of the GROUP BY key regardless of
+        // whether the input table carries any PRIMARY KEY / UNIQUE
+        // constraints, so `aggregate_functional_dependencies` must still
+        // report a `Single` dependency spanning the whole aggregate output.
+        // This pins that behavior so the early return added for the (far
+        // more common) case of an input with no functional dependencies at
+        // all cannot be mistakenly widened to also skip this GROUP BY-only
+        // dependency.
+        let source = Arc::new(LogicalTableSource::new(Arc::new(employee_schema())));
+        let plan = LogicalPlanBuilder::scan("employee_csv", source, None)?
+            .aggregate(vec![col("id")], vec![count(lit(true))])?
+            .build()?;
+
+        let deps = plan.schema().functional_dependencies();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].source_indices, vec![0]);
+        assert_eq!(deps[0].mode, Dependency::Single);
 
         Ok(())
     }
@@ -6409,7 +6613,8 @@ mod tests {
             projected_schema: Arc::clone(&schema),
             filters: vec![],
             fetch: None,
-            statistics_requests: BTreeSet::new(),
+            skip: None,
+            statistics_requests: Box::default(),
         }));
         let col = schema.field_names()[0].clone();
 
@@ -6440,7 +6645,8 @@ mod tests {
             projected_schema: Arc::clone(&unique_schema),
             filters: vec![],
             fetch: None,
-            statistics_requests: BTreeSet::new(),
+            skip: None,
+            statistics_requests: Box::default(),
         }));
         let col = schema.field_names()[0].clone();
 
@@ -6773,6 +6979,7 @@ mod tests {
                 schema: Arc::new(left_schema.join(&right_schema)?),
                 null_equality: NullEquality::NullEqualsNothing,
                 null_aware: false,
+                null_aware_value_keys: 1,
             }))
         }
 

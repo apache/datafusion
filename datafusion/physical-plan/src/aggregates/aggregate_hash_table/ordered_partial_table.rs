@@ -57,7 +57,6 @@ impl OrderedAggregateTable<PartialMarker> {
         agg: &AggregateExec,
         partition: usize,
         output_schema: SchemaRef,
-        batch_size: usize,
     ) -> Result<Self> {
         let input_schema = agg.input().schema();
         let state_schema = Arc::clone(&output_schema);
@@ -67,10 +66,9 @@ impl OrderedAggregateTable<PartialMarker> {
             &input_schema,
             output_schema,
             state_schema,
-            batch_size,
             &agg.input_order_mode,
             &AggregateMode::Partial,
-            agg.filter_expr.iter().cloned().collect(),
+            agg.filter_expr().to_vec(),
             metrics,
         )
     }
