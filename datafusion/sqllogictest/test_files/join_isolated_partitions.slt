@@ -138,7 +138,7 @@ SELECT * FROM small WHERE NOT EXISTS (SELECT 1 FROM big WHERE big.k = small.k);
 2 20
 3 30
 
-# 6. Null-aware anti joins have no isolated form and are left unchanged
+# 6. Null-aware joins (`NOT IN` subqueries) are left unchanged
 query TT
 EXPLAIN SELECT * FROM small WHERE k NOT IN (SELECT k FROM big);
 ----
@@ -153,6 +153,24 @@ SELECT * FROM small WHERE k NOT IN (SELECT k FROM big);
 1 10
 2 20
 3 30
+
+# 6b. So are null-aware mark joins, from `NOT IN` inside a disjunction
+query TT
+EXPLAIN SELECT * FROM small WHERE k NOT IN (SELECT k FROM big) OR v > 25;
+----
+physical_plan
+01)FilterExec: NOT mark@2 OR v@1 > 25, projection=[k@0, v@1]
+02)--HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(k@0, k@0)], null_aware
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----DataSourceExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+
+query II rowsort
+SELECT * FROM small WHERE k NOT IN (SELECT k FROM big) OR v > 25;
+----
+1 10
+2 20
+3 30
+50 500
 
 # 7. LeftMark, from a subquery inside a disjunction
 query TT

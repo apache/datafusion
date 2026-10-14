@@ -190,8 +190,8 @@ fn can_swap_hash_join(hash_join: &HashJoinExec) -> bool {
 /// [`JoinType::emits_build_side_rows`]), since every isolated plan instance
 /// would emit them. If both sides are under the thresholds and only the
 /// swapped orientation is safe, the inputs are swapped; otherwise `None` is
-/// returned and the caller plans a partitioned join. Null-aware anti joins are
-/// not affected.
+/// returned and the caller plans a partitioned join. Null-aware joins are not
+/// affected.
 ///
 /// Used configurations
 /// - `optimizer.hash_join_single_partition_threshold`: byte threshold for `CollectLeft`

@@ -1158,12 +1158,20 @@ config_namespace! {
         ///
         /// Currently this only affects join selection: the build side of a join
         /// that emits build-side rows (`Left`, `LeftSemi`, `LeftAnti`,
-        /// `LeftMark`, `Full`) is never collected into a single shared hash
-        /// table. Such joins use `Partitioned` mode, or are swapped where that
-        /// produces a join type that does not emit build-side rows. Null-aware
-        /// anti joins and `Full` nested loop joins have no isolated form and
-        /// must still run in a single partition. See also
-        /// `enable_file_stream_work_stealing`.
+        /// `LeftMark`, `Full`) is never collected into one shared build side.
+        /// Such hash joins use `Partitioned` mode, or are swapped where the
+        /// swapped join type is safe; such nested loop joins are swapped.
+        /// Null-aware joins (`NOT IN` subqueries, planned as `LeftAnti` or
+        /// `LeftMark`), `Full` nested loop joins and piecewise merge joins are
+        /// not changed; engines must still handle them, e.g. by running them in
+        /// a single task.
+        ///
+        /// Execution-time coordination between the partitions of a plan
+        /// instance is not affected either: dynamic join filters and the
+        /// memory-limited nested loop join fallback still expect every partition
+        /// of the instance to run. See also `enable_file_stream_work_stealing`,
+        /// `optimizer.enable_dynamic_filter_pushdown` and
+        /// `enable_nlj_coordinated_fallback`.
         pub isolated_partitions: bool, default = false
 
         /// Aggregation ratio (number of distinct groups / number of input rows)
