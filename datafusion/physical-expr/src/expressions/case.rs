@@ -2833,6 +2833,63 @@ mod tests {
     }
 
     #[rstest::rstest]
+    #[case::and_over_or(false, false)]
+    #[case::not_and_over_or(true, true)]
+    fn test_case_expression_nullability_with_nested_predicates(
+        #[case] negated: bool,
+        #[case] nullable: bool,
+        #[values(false, true)] reverse: bool,
+    ) -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+        let a: Arc<dyn PhysicalExpr> = col("a", &schema)?;
+        let b: Arc<dyn PhysicalExpr> = col("b", &schema)?;
+
+        // a > 1 AND (b < 3 OR b IS NULL)
+        let a_gt_1: Arc<dyn PhysicalExpr> =
+            binary(Arc::clone(&a), Operator::Gt, lit(1), &schema)?;
+        let b_lt_3_or_null: Arc<dyn PhysicalExpr> = binary(
+            binary(Arc::clone(&b), Operator::Lt, lit(3), &schema)?,
+            Operator::Or,
+            expressions::is_null(b)?,
+            &schema,
+        )?;
+        let predicate: Arc<dyn PhysicalExpr> = if reverse {
+            binary(b_lt_3_or_null, Operator::And, a_gt_1, &schema)?
+        } else {
+            binary(a_gt_1, Operator::And, b_lt_3_or_null, &schema)?
+        };
+        let predicate: Arc<dyn PhysicalExpr> = if negated {
+            expressions::not(predicate)?
+        } else {
+            predicate
+        };
+        let expr = when_then_else(&predicate, &a, &lit(0))?;
+
+        assert_nullability(Arc::clone(&expr), &schema, nullable);
+
+        // Cross-check the inferred nullability against evaluation on every combination
+        // of NULL and non-NULL inputs. With a = NULL and b = 3 the negated predicate is
+        // TRUE, so the THEN branch yields NULL.
+        let rows: Vec<(Option<i32>, Option<i32>)> = [None, Some(1), Some(2)]
+            .into_iter()
+            .flat_map(|a| [None, Some(2), Some(3)].into_iter().map(move |b| (a, b)))
+            .collect();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from_iter(rows.iter().map(|(a, _)| *a))),
+                Arc::new(Int32Array::from_iter(rows.iter().map(|(_, b)| *b))),
+            ],
+        )?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        assert_eq!(result.null_count() > 0, nullable);
+        Ok(())
+    }
+
+    #[rstest::rstest]
     #[case::literal(lit("invalid"))]
     #[case::and_left(Arc::new(BinaryExpr::new(
         lit("invalid"),
