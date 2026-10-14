@@ -492,7 +492,8 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     )
                 })?;
 
-                let mut dict_by_id: HashMap<i64, ArrayRef> = HashMap::new();
+                let mut dict_by_id: HashMap<i64, ArrayRef> =
+                    HashMap::with_capacity(dictionaries.len());
                 for protobuf::scalar_nested_value::Dictionary {
                     ipc_message,
                     arrow_data,
@@ -1371,7 +1372,7 @@ impl TryFrom<&protobuf::TableParquetOptions> for TableParquetOptions {
         value: &protobuf::TableParquetOptions,
     ) -> datafusion_common::Result<Self, Self::Error> {
         let mut column_specific_options: HashMap<String, ParquetColumnOptions> =
-            HashMap::new();
+            HashMap::with_capacity(value.column_specific_options.len());
         for protobuf::ParquetColumnSpecificOptions {
             column_name,
             options: maybe_options,

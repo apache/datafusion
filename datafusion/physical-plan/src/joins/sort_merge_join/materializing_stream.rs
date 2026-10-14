@@ -1490,8 +1490,7 @@ impl MaterializingSortMergeJoinStream {
             })
             .collect::<Vec<_>>();
 
-        let buffered_indices =
-            UInt64Array::from_iter_values(not_matched_buffered_indices.iter().copied());
+        let buffered_indices = UInt64Array::from(not_matched_buffered_indices);
 
         if let Some(record_batch) = produce_buffered_null_batch(
             &self.schema,
@@ -1516,7 +1515,8 @@ impl MaterializingSortMergeJoinStream {
     // Matched chunks are collected and processed together in
     // freeze_streamed_matched() to amortize filter evaluation overhead.
     fn freeze_streamed(&mut self) -> Result<()> {
-        let mut matched_chunks: Vec<(usize, UInt64Array, UInt64Array)> = Vec::new();
+        let mut matched_chunks: Vec<(usize, UInt64Array, UInt64Array)> =
+            Vec::with_capacity(self.streamed_batch.output_indices.len());
         let mut total_matched_rows: usize = 0;
 
         for chunk in self.streamed_batch.output_indices.iter_mut() {
@@ -1816,7 +1816,8 @@ impl MaterializingSortMergeJoinStream {
         // Sentinel for "no source index assigned to this buffered batch yet".
         const UNSEEN: usize = usize::MAX;
         let mut source_of_batch = vec![UNSEEN; max_batch_idx - min_batch_idx + 1];
-        let mut source_batches: Vec<usize> = Vec::new();
+        let mut source_batches: Vec<usize> =
+            Vec::with_capacity(matched_chunks.len().min(source_of_batch.len()));
         let mut interleave_indices: Vec<(usize, usize)> =
             Vec::with_capacity(total_matched_rows);
         for (batch_idx, _, right) in matched_chunks {
@@ -1890,7 +1891,7 @@ impl MaterializingSortMergeJoinStream {
         let record_batch = self.joined_record_batches.concat_batches(&self.schema)?;
         let (mut out_indices, mut out_mask, mut batch_ids) =
             self.joined_record_batches.filter_metadata.finish_metadata();
-        let default_batch_ids = vec![0; record_batch.num_rows()];
+        let default_batch_ids: Vec<usize>;
 
         // If only nulls come in and indices sizes doesn't match with expected record batch count
         // generate missing indices
@@ -1900,6 +1901,7 @@ impl MaterializingSortMergeJoinStream {
         {
             out_mask = BooleanArray::from(vec![None; record_batch.num_rows()]);
             out_indices = UInt64Array::from(vec![None; record_batch.num_rows()]);
+            default_batch_ids = vec![0; record_batch.num_rows()];
             batch_ids = &default_batch_ids;
         }
 

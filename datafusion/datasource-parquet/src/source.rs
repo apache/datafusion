@@ -1003,8 +1003,7 @@ impl FileSource for ParquetSource {
         // is already in prefix order the stats-based reorder is mostly
         // a no-op anyway, so the trade-off is plainly bad.
         for prefix_len in 1..order.len() {
-            let prefix = order[..prefix_len].to_vec();
-            if eq_properties.ordering_satisfy(prefix.iter().cloned())? {
+            if eq_properties.ordering_satisfy(order[..prefix_len].iter().cloned())? {
                 return Ok(SortOrderPushdownResult::Unsupported);
             }
         }
