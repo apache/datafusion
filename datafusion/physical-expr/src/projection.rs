@@ -3717,6 +3717,53 @@ pub(crate) mod tests {
         Ok(())
     }
 
+    // A literal's distinct count depends on whether any row is present: an
+    // estimated row count cannot prove the value appears. NULLs are not
+    // counted as distinct values, matching `COUNT(DISTINCT)`.
+    #[test]
+    fn test_project_statistics_literal_distinct_count_by_row_count() -> Result<()> {
+        let input_schema = get_schema();
+        let projection = ProjectionExprs::new(vec![
+            ProjectionExpr {
+                expr: Arc::new(Literal::new(ScalarValue::Int64(Some(42)))),
+                alias: "constant".to_string(),
+            },
+            ProjectionExpr {
+                expr: Arc::new(Literal::new(ScalarValue::Int64(None))),
+                alias: "null_col".to_string(),
+            },
+        ]);
+        let output_schema = projection.project_schema(&input_schema)?;
+
+        let cases = [
+            (Precision::Exact(0), Precision::Exact(0)),
+            (Precision::Exact(5), Precision::Exact(1)),
+            (Precision::Inexact(0), Precision::Inexact(0)),
+            (Precision::Inexact(5), Precision::Inexact(1)),
+            (Precision::Absent, Precision::Inexact(1)),
+        ];
+        for (num_rows, expected) in cases {
+            let input_stats = Statistics {
+                num_rows,
+                total_byte_size: Precision::Absent,
+                column_statistics: Statistics::unknown_column(&input_schema),
+            };
+            let output_stats =
+                projection.project_statistics(input_stats, &output_schema)?;
+            assert_eq!(
+                output_stats.column_statistics[0].distinct_count, expected,
+                "non-null literal, num_rows={num_rows:?}"
+            );
+            assert_eq!(
+                output_stats.column_statistics[1].distinct_count,
+                Precision::Exact(0),
+                "NULL literal, num_rows={num_rows:?}"
+            );
+        }
+
+        Ok(())
+    }
+
     // Test statistics calculation for complex type literal (e.g., Utf8 string)
     #[test]
     fn test_project_statistics_with_complex_type_literal() -> Result<()> {

@@ -337,6 +337,104 @@ physical_plan
 statement ok
 DROP TABLE cast_stats_ints_overflow;
 
+######
+# Aggregate statistics through projected literals
+######
+
+# A projected literal has one distinct value only when some row is present.
+# Two COUNT(DISTINCT) aggregates keep SingleDistinctToGroupBy from rewriting
+# the query, so it can be answered from statistics.
+statement ok
+COPY (SELECT * FROM (VALUES (1, 10), (3, 30)) AS t(a, b))
+TO 'test_files/scratch/parquet_statistics/literal_ndv.parquet' STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE literal_ndv STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_statistics/literal_ndv.parquet';
+
+# No row has a = 2, but the filter only estimates its row count.
+query II
+SELECT count(DISTINCT x), count(DISTINCT y)
+FROM (SELECT 1 AS x, 2 AS y FROM literal_ndv WHERE a = 2);
+----
+0 0
+
+query TT
+EXPLAIN SELECT count(DISTINCT x), count(DISTINCT y)
+FROM (SELECT 1 AS x, 2 AS y FROM literal_ndv WHERE a = 2);
+----
+physical_plan
+01)AggregateExec: mode=Single, gby=[], aggr=[count(DISTINCT x), count(DISTINCT y)]
+02)--ProjectionExec: expr=[1 as x, 2 as y]
+03)----FilterExec: a@0 = 2
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/literal_ndv.parquet]]}, projection=[a], file_type=parquet, predicate=a@0 = 2, pruning_predicate=a_null_count@2 != row_count@3 AND a_min@0 <= 2 AND 2 <= a_max@1, required_guarantees=[a in (2)]
+
+# The filter estimates zero rows, but not exactly.
+query II
+SELECT count(DISTINCT x), count(DISTINCT y)
+FROM (SELECT 1 AS x, 2 AS y FROM literal_ndv WHERE a > 100);
+----
+0 0
+
+# An exact positive row count proves each literal is present once.
+query II
+SELECT count(DISTINCT x), count(DISTINCT y)
+FROM (SELECT 1 AS x, 2 AS y FROM literal_ndv);
+----
+1 1
+
+query TT
+EXPLAIN SELECT count(DISTINCT x), count(DISTINCT y)
+FROM (SELECT 1 AS x, 2 AS y FROM literal_ndv);
+----
+physical_plan
+01)ProjectionExec: expr=[1 as count(DISTINCT x), 1 as count(DISTINCT y)]
+02)--PlaceholderRowExec
+
+# COUNT(DISTINCT) does not count NULLs.
+query II
+SELECT count(DISTINCT x), count(DISTINCT y)
+FROM (SELECT NULL AS x, 2 AS y FROM literal_ndv);
+----
+0 1
+
+query TT
+EXPLAIN SELECT count(DISTINCT x), count(DISTINCT y)
+FROM (SELECT NULL AS x, 2 AS y FROM literal_ndv);
+----
+physical_plan
+01)ProjectionExec: expr=[0 as count(DISTINCT x), 1 as count(DISTINCT y)]
+02)--PlaceholderRowExec
+
+statement ok
+DROP TABLE literal_ndv;
+
+# An exactly empty file has no distinct values.
+statement ok
+COPY (SELECT * FROM (VALUES (1, 10)) AS t(a, b) WHERE a > 100)
+TO 'test_files/scratch/parquet_statistics/literal_ndv_empty.parquet' STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE literal_ndv_empty STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_statistics/literal_ndv_empty.parquet';
+
+query II
+SELECT count(DISTINCT x), count(DISTINCT y)
+FROM (SELECT 1 AS x, 2 AS y FROM literal_ndv_empty);
+----
+0 0
+
+query TT
+EXPLAIN SELECT count(DISTINCT x), count(DISTINCT y)
+FROM (SELECT 1 AS x, 2 AS y FROM literal_ndv_empty);
+----
+physical_plan
+01)ProjectionExec: expr=[0 as count(DISTINCT x), 0 as count(DISTINCT y)]
+02)--PlaceholderRowExec
+
+statement ok
+DROP TABLE literal_ndv_empty;
+
 statement ok
 SET datafusion.execution.target_partitions = 4;
 
