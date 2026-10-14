@@ -725,10 +725,7 @@ fn date_column_preimage(
     // The post-coercion literal is Timestamp(ns) with no tz. Anything not at
     // midnight UTC can never equal date_trunc(g, date_col); bail so the
     // unsimplified predicate runs and returns its (empty) result.
-    let ts_ns = match lit_expr.as_literal()? {
-        ScalarValue::TimestampNanosecond(Some(v), tz) if tz.is_none() => *v,
-        _ => return None,
-    };
+    let ts_ns = lit_expr.as_literal()?.try_as_timestamp(Nanosecond, None)?;
     let dt = timestamp_ns_to_datetime(ts_ns)?;
     if dt.time() != chrono::NaiveTime::from_hms_opt(0, 0, 0)? {
         return None;
