@@ -1150,6 +1150,22 @@ config_namespace! {
         /// runtime reassignment occurs.
         pub enable_file_stream_work_stealing: bool, default = true
 
+        /// Set to `true` when each output partition of a physical plan may run
+        /// as an isolated task: a separate plan instance, possibly in another
+        /// process, as in Ballista and datafusion-distributed. DataFusion then
+        /// avoids plans that rely on state shared between the partitions of a
+        /// single plan instance.
+        ///
+        /// Currently this only affects join selection: the build side of a join
+        /// that emits build-side rows (`Left`, `LeftSemi`, `LeftAnti`,
+        /// `LeftMark`, `Full`) is never collected into a single shared hash
+        /// table. Such joins use `Partitioned` mode, or are swapped where that
+        /// produces a join type that does not emit build-side rows. Null-aware
+        /// anti joins and `Full` nested loop joins have no isolated form and
+        /// must still run in a single partition. See also
+        /// `enable_file_stream_work_stealing`.
+        pub isolated_partitions: bool, default = false
+
         /// Aggregation ratio (number of distinct groups / number of input rows)
         /// threshold for skipping partial aggregation. If the value is greater
         /// then partial aggregation will skip aggregation for further input
