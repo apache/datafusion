@@ -341,6 +341,13 @@ impl SymmetricHashJoinExec {
     }
 
     /// Check if order information covers every column in the filter expression.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
     pub fn check_if_order_information_available(&self) -> Result<bool> {
         if let Some(filter) = self.filter() {
             let left = self.left();
@@ -1237,7 +1244,7 @@ pub(crate) fn build_side_determined_results(
         let empty_probe_batch = RecordBatch::new_empty(probe_schema);
         // Build the final result from the indices of build and probe sides:
         build_batch_from_indices(
-            output_schema.as_ref(),
+            output_schema,
             &build_hash_joiner.input_buffer,
             &empty_probe_batch,
             &build_indices,
@@ -1452,6 +1459,7 @@ fn lookup_join_hashmap(
         &build_join_values,
         &keys_values,
         null_equality,
+        &mut None,
     )?;
 
     Ok((build_indices, probe_indices))

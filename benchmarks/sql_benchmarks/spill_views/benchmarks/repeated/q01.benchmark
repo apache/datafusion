@@ -4,6 +4,6 @@ template sql_benchmarks/spill_views/spill_views.benchmark.template
 QPAD=01
 DATASET=low_card_1
 NAME=q01_sort_string_1_distinct
-SPILL_LIMIT=40M
+SPILL_LIMIT=${SPILL_VIEWS_LIMIT_REPEATED:-40M}
 VIEW_TYPE=Utf8View
 DISTINCT_S=1
