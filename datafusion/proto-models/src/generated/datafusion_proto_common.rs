@@ -917,6 +917,10 @@ pub struct ParquetOptions {
     pub bloom_filter_fpp_opt: ::core::option::Option<parquet_options::BloomFilterFppOpt>,
     #[prost(oneof = "parquet_options::BloomFilterNdvOpt", tags = "22")]
     pub bloom_filter_ndv_opt: ::core::option::Option<parquet_options::BloomFilterNdvOpt>,
+    #[prost(oneof = "parquet_options::RleToDictionaryMaxDistinctValuesOpt", tags = "42")]
+    pub rle_to_dictionary_max_distinct_values_opt: ::core::option::Option<
+        parquet_options::RleToDictionaryMaxDistinctValuesOpt,
+    >,
     #[prost(oneof = "parquet_options::CoerceInt96Opt", tags = "32")]
     pub coerce_int96_opt: ::core::option::Option<parquet_options::CoerceInt96Opt>,
     #[prost(oneof = "parquet_options::MaxPredicateCacheSizeOpt", tags = "33")]
@@ -980,6 +984,11 @@ pub mod parquet_options {
     pub enum BloomFilterNdvOpt {
         #[prost(uint64, tag = "22")]
         BloomFilterNdv(u64),
+    }
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum RleToDictionaryMaxDistinctValuesOpt {
+        #[prost(uint64, tag = "42")]
+        RleToDictionaryMaxDistinctValues(u64),
     }
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum CoerceInt96Opt {

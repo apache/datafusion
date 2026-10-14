@@ -1437,6 +1437,13 @@ config_namespace! {
         /// See <https://github.com/apache/datafusion/issues/24112>
         pub enable_rle_to_dictionary: bool, default = false
 
+        /// (reading) If set, only infer dictionary reads for top-level
+        /// string and binary Parquet columns whose row-group NDV statistics
+        /// prove their distinct-value count is at most this value.
+        /// This option only applies when `enable_rle_to_dictionary` is true.
+        /// Files without NDV statistics are not promoted when this is set.
+        pub rle_to_dictionary_max_distinct_values: Option<usize>, default = None
+
         /// (reading) Which byte range of a split file reads each row group.
         /// `start_offset` picks the range containing the row group's start.
         /// `midpoint` picks the range containing its midpoint, as Spark does,
