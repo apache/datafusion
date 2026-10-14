@@ -467,9 +467,16 @@ pub fn aggregate_functional_dependencies(
     // input has none. The GROUP BY-key dependency below always runs.
     if !func_dependencies.is_empty() {
         let aggr_input_fields = aggr_input_schema.field_names();
-        // Compute once: this does not change in the loop.
-        let existing_target_indices =
-            get_target_functional_dependencies(aggr_input_schema, group_by_expr_names);
+        // Compare the columns covered by every dependency, whatever its NULL
+        // semantics: leaving out the ones that do not hold across NULLs would
+        // hide GROUP BY expressions this determinant does not cover and
+        // upgrade its mode to `Single` wrongly. Compute once: this does not
+        // change in the loop.
+        let existing_target_indices = get_target_indices_from_dependencies(
+            func_dependencies.iter(),
+            &aggr_input_fields,
+            group_by_expr_names,
+        );
         for FunctionalDependence {
             source_indices,
             nullable,
@@ -495,8 +502,9 @@ pub fn aggregate_functional_dependencies(
                     new_source_field_names.push(group_by_expr_name.clone());
                 }
             }
-            let new_target_indices = get_target_functional_dependencies(
-                aggr_input_schema,
+            let new_target_indices = get_target_indices_from_dependencies(
+                func_dependencies.iter(),
+                &aggr_input_fields,
                 &new_source_field_names,
             );
             let mode = if existing_target_indices == new_target_indices
@@ -566,6 +574,12 @@ pub fn aggregate_functional_dependencies(
 
 /// Returns target indices, for the determinant keys that are inside
 /// group by expressions.
+///
+/// Only dependencies that hold when NULL determinant values are grouped
+/// together are considered (see
+/// [`FunctionalDependence::is_valid_across_nulls`]): a nullable `UNIQUE`
+/// column permits multiple NULL rows that may differ in the other columns,
+/// so it does not determine them across the single NULL group.
 pub fn get_target_functional_dependencies(
     schema: &DFSchema,
     group_by_expr_names: &[String],
@@ -574,15 +588,28 @@ pub fn get_target_functional_dependencies(
     if dependencies.is_empty() {
         return None;
     }
+    let dependencies = dependencies
+        .iter()
+        .filter(|dependency| dependency.is_valid_across_nulls(schema));
+    get_target_indices_from_dependencies(
+        dependencies,
+        &schema.field_names(),
+        group_by_expr_names,
+    )
+}
+
+/// Returns the combined target indices of the given `dependencies` whose
+/// determinant keys are all inside group by expressions. `field_names` are
+/// the names of the fields that the dependency indices refer to.
+fn get_target_indices_from_dependencies<'a>(
+    dependencies: impl IntoIterator<Item = &'a FunctionalDependence>,
+    field_names: &[String],
+    group_by_expr_names: &[String],
+) -> Option<Vec<usize>> {
     let mut combined_target_indices = HashSet::new();
-    let field_names = schema.field_names();
-    for FunctionalDependence {
-        source_indices,
-        target_indices,
-        ..
-    } in &dependencies.deps
-    {
-        let source_key_names = source_indices
+    for dependency in dependencies {
+        let source_key_names = dependency
+            .source_indices
             .iter()
             .map(|id_key_idx| &field_names[*id_key_idx])
             .collect::<Vec<_>>();
@@ -593,7 +620,7 @@ pub fn get_target_functional_dependencies(
             .iter()
             .all(|source_key_name| group_by_expr_names.contains(source_key_name))
         {
-            combined_target_indices.extend(target_indices.iter());
+            combined_target_indices.extend(dependency.target_indices.iter());
         }
     }
     (!combined_target_indices.is_empty()).then_some({
@@ -621,22 +648,21 @@ pub fn get_required_group_by_exprs_indices(
         .collect::<Option<Vec<_>>>()?;
 
     groupby_expr_indices.sort_unstable();
-    for FunctionalDependence {
-        source_indices,
-        target_indices,
-        ..
-    } in &dependencies.deps
-    {
-        if source_indices
+    for dependency in &dependencies.deps {
+        // If all source indices are among GROUP BY expression indices, we
+        // can remove target indices from GROUP BY expression indices and
+        // use source indices instead. The dependency must also hold across
+        // NULL keys, which GROUP BY collapses into a single group.
+        if dependency
+            .source_indices
             .iter()
             .all(|source_idx| groupby_expr_indices.contains(source_idx))
+            && dependency.is_valid_across_nulls(schema)
         {
-            // If all source indices are among GROUP BY expression indices, we
-            // can remove target indices from GROUP BY expression indices and
-            // use source indices instead.
-            groupby_expr_indices = set_difference(&groupby_expr_indices, target_indices);
             groupby_expr_indices =
-                merge_and_order_indices(groupby_expr_indices, source_indices);
+                set_difference(&groupby_expr_indices, &dependency.target_indices);
+            groupby_expr_indices =
+                merge_and_order_indices(groupby_expr_indices, &dependency.source_indices);
         }
     }
     groupby_expr_indices
