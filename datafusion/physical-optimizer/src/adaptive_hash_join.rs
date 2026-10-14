@@ -19,12 +19,11 @@
 
 use std::sync::Arc;
 
-use datafusion_common::config::{ConfigOptions, OptimizerOptions};
-use datafusion_common::{JoinType, Result};
+use datafusion_common::Result;
+use datafusion_common::config::ConfigOptions;
 use datafusion_physical_expr::{Distribution, Partitioning};
-use datafusion_physical_plan::execution_plan::{
-    ChildrenPropertiesMode, ReplaceChildrenOptions, replace_children_if_necessary,
-};
+use datafusion_physical_plan::execution_plan::replace_children_if_necessary;
+use datafusion_physical_plan::joins::utils::need_produce_result_in_final;
 use datafusion_physical_plan::joins::{
     AdaptiveHashJoinExec, HashJoinExec, PartitionMode,
 };
@@ -98,37 +97,47 @@ fn rewrite(
     required: bool,
     context: &dyn PhysicalOptimizerContext,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    if let Some(join) = plan.downcast_ref::<HashJoinExec>()
-        && *join.partition_mode() == PartitionMode::Partitioned
-        && !join.null_aware
-        && let Some(probe) = hash_repartition_input(join.right())
-    {
-        let options = &context.config_options().optimizer;
-        let probe_rows = context
-            .compute_statistics(probe, &StatisticsArgs::new())?
-            .num_rows
-            .get_value()
-            .copied();
-        let join = AdaptiveHashJoinExec::try_new(
-            join,
-            max_build_rows(join.join_type(), probe_rows, options),
-            options.adaptive_hash_join_threshold,
-            required,
-        )?;
+    let adaptive = match plan.downcast_ref::<HashJoinExec>() {
+        Some(join) => match AdaptiveHashJoinExec::probe_input(join) {
+            Some(probe) => Some(AdaptiveHashJoinExec::try_new(
+                join,
+                max_build_rows(join, probe, context)?,
+                context
+                    .config_options()
+                    .optimizer
+                    .adaptive_hash_join_threshold,
+                required,
+            )?),
+            None => None,
+        },
+        None => None,
+    };
+    let (plan, children_required) = match adaptive {
         // Without a repartition, the build side must stay hash partitioned
         // for the join to run `Partitioned`
-        let build_required = !join.repartitions_build();
-        let [build, probe] = [0, 1].map(|i| Arc::clone(join.children()[i]));
-        let children = vec![
-            rewrite(build, build_required, context)?,
-            rewrite(probe, false, context)?,
-        ];
-        return Arc::new(join).replace_children(
-            children,
-            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
-        );
-    }
+        Some(join) => {
+            let children_required = vec![!join.repartitions_build(), false];
+            (Arc::new(join) as Arc<dyn ExecutionPlan>, children_required)
+        }
+        None => {
+            let children_required = children_required(&plan, required);
+            (plan, children_required)
+        }
+    };
+    let children = plan
+        .children()
+        .into_iter()
+        .zip(children_required)
+        .map(|(child, required)| rewrite(Arc::clone(child), required, context))
+        .collect::<Result<_>>()?;
+    // The adaptive joins keep the properties of the joins they replace, so
+    // the ancestors keep theirs, and the dynamic filters they produce
+    replace_children_if_necessary(plan, children)
+}
 
+/// Whether each child of `plan` must stay hash partitioned, given whether
+/// `plan` must (`required`).
+fn children_required(plan: &Arc<dyn ExecutionPlan>, required: bool) -> Vec<bool> {
     // A node that is key partitioned without repartitioning got that from
     // its children, or only from its probe side for a `CollectLeft` join
     let inherits = required
@@ -142,52 +151,46 @@ fn rewrite(
         .is_some_and(|join| *join.partition_mode() == PartitionMode::CollectLeft);
     let requirements = plan.input_distribution_requirements();
     let co_partitioned = requirements.is_co_partitioned();
-    let children: Vec<_> = plan.children().into_iter().cloned().collect();
-    let mut new_children = Vec::with_capacity(children.len());
-    for (i, (child, distribution)) in children
-        .into_iter()
-        .zip(requirements.into_per_child())
+    requirements
+        .into_per_child()
+        .iter()
         .enumerate()
-    {
-        let child_required = co_partitioned
-            || is_key_distribution(&distribution)
-            || (inherits && !(collect_left && i == 0));
-        new_children.push(rewrite(child, child_required, context)?);
-    }
-    // The adaptive joins keep the properties of the joins they replace, so
-    // the ancestors keep theirs, and the dynamic filters they produce
-    replace_children_if_necessary(plan, new_children)
+        .map(|(i, distribution)| {
+            co_partitioned
+                || is_key_distribution(distribution)
+                || (inherits && !(collect_left && i == 0))
+        })
+        .collect()
 }
 
-/// The largest build side, in rows, that a join collects into a single
-/// partition at runtime.
+/// The largest build side, in rows, that `join` collects into a single
+/// partition at runtime, given the input of its probe side.
 fn max_build_rows(
-    join_type: &JoinType,
-    probe_rows: Option<usize>,
-    options: &OptimizerOptions,
-) -> usize {
+    join: &HashJoinExec,
+    probe: &Arc<dyn ExecutionPlan>,
+    context: &dyn PhysicalOptimizerContext,
+) -> Result<usize> {
+    let options = &context.config_options().optimizer;
     // With a single partition, these joins update one shared bitmap of matched
     // build-side rows from every probe thread, so only small ones pay off
-    let tracks_build_side = matches!(
-        join_type,
-        JoinType::Left
-            | JoinType::LeftSemi
-            | JoinType::LeftAnti
-            | JoinType::LeftMark
-            | JoinType::Full
-    );
-    let max_rows = if tracks_build_side {
+    let max_rows = if need_produce_result_in_final(*join.join_type()) {
         options.hash_join_single_partition_threshold_rows
     } else {
         options.adaptive_hash_join_threshold_rows
     };
-    match probe_rows {
-        Some(probe_rows) if options.adaptive_hash_join_max_probe_ratio > 0.0 => {
-            let limit = probe_rows as f64 * options.adaptive_hash_join_max_probe_ratio;
-            max_rows.min(limit as usize)
-        }
-        _ => max_rows,
+    let ratio = options.adaptive_hash_join_max_probe_ratio;
+    if ratio <= 0.0 {
+        return Ok(max_rows);
     }
+    let probe_rows = context
+        .compute_statistics(probe, &StatisticsArgs::new())?
+        .num_rows
+        .get_value()
+        .copied();
+    Ok(match probe_rows {
+        Some(probe_rows) => max_rows.min((probe_rows as f64 * ratio) as usize),
+        None => max_rows,
+    })
 }
 
 #[expect(
@@ -199,14 +202,4 @@ fn is_key_distribution(distribution: &Distribution) -> bool {
         distribution,
         Distribution::KeyPartitioned(_) | Distribution::HashPartitioned(_)
     )
-}
-
-/// Returns the input of `plan` if it is a hash repartition.
-fn hash_repartition_input(
-    plan: &Arc<dyn ExecutionPlan>,
-) -> Option<&Arc<dyn ExecutionPlan>> {
-    let repartition = plan.downcast_ref::<RepartitionExec>()?;
-    (matches!(repartition.partitioning(), Partitioning::Hash(..))
-        && !repartition.preserve_order())
-    .then(|| repartition.input())
 }

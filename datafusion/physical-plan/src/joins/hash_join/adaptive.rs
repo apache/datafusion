@@ -17,36 +17,33 @@
 
 //! [`AdaptiveHashJoinExec`], a hash join that picks its mode at runtime
 
-use std::collections::HashSet;
 use std::fmt;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
-use arrow::array::{Array, ArrayData, RecordBatch};
+use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::utils::memory::RecordBatchMemoryCounter;
 use datafusion_common::{DataFusionError, Result, Statistics, internal_err};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
+use datafusion_physical_expr::{Partitioning, PhysicalExpr};
 use futures::{StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
 use super::HashJoinExec;
-use crate::execution_plan::{
-    Boundedness, ChildrenPropertiesMode, EmissionType, ReplaceChildrenOptions,
-};
+use crate::execution_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
 use crate::joins::PartitionMode;
-use crate::joins::utils::{OnceAsync, OnceFut};
-use crate::memory::MemoryStream;
+use crate::joins::utils::OnceAsync;
 use crate::metrics::MetricsSet;
 use crate::repartition::RepartitionExec;
 use crate::statistics::StatisticsArgs;
 use crate::stream::RecordBatchStreamAdapter;
+use crate::streaming::{PartitionStream, StreamingTableExec};
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    execute_stream_partitioned, validate_child_count,
 };
 
 /// A hash join that picks its mode at runtime from the exact size of its
@@ -80,189 +77,158 @@ use crate::{
 /// `datafusion.optimizer.enable_adaptive_hash_join`.
 #[derive(Debug)]
 pub struct AdaptiveHashJoinExec {
-    /// The join chosen by the planner
+    inputs: Arc<Inputs>,
+    /// Runtime state, shared by all partitions
+    state: Arc<State>,
+}
+
+/// What creating the join to run needs, kept apart from the runtime state
+/// that holds the future creating it.
+#[derive(Debug, Clone)]
+struct Inputs {
+    /// The join chosen by the planner. Its children stay the planned ones,
+    /// including the hash repartitions that `build` and `probe` skip.
     join: Arc<HashJoinExec>,
-    /// The build-side input, without the hash repartition the planner added
+    /// The build-side input, without the hash repartition the planner added,
+    /// if any
     build: Arc<dyn ExecutionPlan>,
-    /// The partitioning of that repartition, if there was one
-    build_partitioning: Option<Partitioning>,
     /// The probe-side input, without the hash repartition the planner added
     probe: Arc<dyn ExecutionPlan>,
-    probe_partitioning: Partitioning,
     max_build_rows: usize,
     max_build_bytes: usize,
     /// Whether an ancestor relies on the output being hash partitioned
     required: bool,
-    /// Runtime state, shared by all partitions
-    state: Arc<State>,
 }
 
 /// The runtime state of an [`AdaptiveHashJoinExec`].
 #[derive(Debug, Default)]
 struct State {
     /// The join to run, created on first execution
-    join: OnceAsync<Arc<dyn ExecutionPlan>>,
+    join: OnceAsync<Prepared>,
     abandoned: Mutex<Abandoned>,
     decision: OnceLock<Decision>,
 }
 
 #[derive(Debug)]
+struct Prepared {
+    join: Arc<dyn ExecutionPlan>,
+    decision: Decision,
+}
+
+#[derive(Debug, Clone, Copy)]
 struct Decision {
     mode: PartitionMode,
     /// The number of build-side rows, if they were all collected
     build_rows: Option<usize>,
-    output_repartitioned: bool,
 }
 
 impl AdaptiveHashJoinExec {
-    /// Wraps `join`, which must run in `Partitioned` mode and hash repartition
-    /// its probe side.
+    /// Returns the probe-side input of `join` below its hash repartition, if
+    /// `join` can be wrapped: it runs in `Partitioned` mode, is not null
+    /// aware, and hash repartitions its probe side.
+    pub fn probe_input(join: &HashJoinExec) -> Option<&Arc<dyn ExecutionPlan>> {
+        if *join.partition_mode() != PartitionMode::Partitioned || join.null_aware {
+            return None;
+        }
+        hash_repartition_input(join.right())
+    }
+
+    /// Wraps `join`, which [`Self::probe_input`] must accept.
     pub fn try_new(
         join: &HashJoinExec,
         max_build_rows: usize,
         max_build_bytes: usize,
         required: bool,
     ) -> Result<Self> {
-        if *join.partition_mode() != PartitionMode::Partitioned {
-            return internal_err!("AdaptiveHashJoinExec requires a partitioned join");
-        }
-        let Some(probe) = hash_repartition_input(join.right()) else {
+        let Some(probe) = Self::probe_input(join) else {
             return internal_err!(
-                "AdaptiveHashJoinExec requires a hash repartitioned probe side"
+                "AdaptiveHashJoinExec requires a partitioned hash join that hash repartitions its probe side"
             );
         };
-        let (build, build_partitioning) = match hash_repartition_input(join.left()) {
-            Some(input) => (input, Some(join.left().output_partitioning().clone())),
-            None => (join.left(), None),
-        };
-        Ok(Self {
+        let build = hash_repartition_input(join.left()).unwrap_or_else(|| join.left());
+        let inputs = Inputs {
             build: Arc::clone(build),
-            build_partitioning,
             probe: Arc::clone(probe),
-            probe_partitioning: join.right().output_partitioning().clone(),
             join: Arc::new(join.builder().build()?),
             max_build_rows,
             max_build_bytes,
             required,
-            state: Default::default(),
-        })
+        };
+        Ok(Self::new(inputs))
     }
 
-    /// The wrapped join
-    pub fn join(&self) -> &HashJoinExec {
-        &self.join
+    fn new(inputs: Inputs) -> Self {
+        Self {
+            inputs: Arc::new(inputs),
+            state: Default::default(),
+        }
     }
 
     /// Whether the planner repartitioned the build side. If not, it relies
     /// on the build input being hash partitioned already, and so does this
     /// join in `Partitioned` mode.
     pub fn repartitions_build(&self) -> bool {
-        self.build_partitioning.is_some()
+        hash_repartition_input(self.inputs.join.left()).is_some()
     }
+}
 
-    /// Collects the build side, up to the thresholds, and creates the plan to
-    /// run.
-    async fn prepare(
-        self: Arc<Self>,
-        context: Arc<TaskContext>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let collected = collect_up_to(&self.build, &context, self.max_build_rows).await?;
-        let rows: usize = collected
-            .partitions
-            .iter()
-            .flat_map(|(batches, _)| batches)
-            .map(RecordBatch::num_rows)
-            .sum();
-        let complete = collected.partitions.iter().all(|(_, rest)| rest.is_none());
-        let broadcast = complete
-            && rows <= self.max_build_rows
-            && memory_size(collected.partitions.iter().flat_map(|(batches, _)| batches))
-                <= self.max_build_bytes;
-        // The join to run accounts for its own memory
-        drop(collected.reservation);
-
-        let schema = self.build.schema();
-        let output_partitioning = &self.join.properties().partitioning;
-        let output_partitions = output_partitioning.partition_count();
-        let (mode, build, probe) = if broadcast {
-            let batches = collected
-                .partitions
-                .into_iter()
-                .flat_map(|(batches, _)| batches)
-                .collect();
-            let properties = PlanProperties::new(
-                EquivalenceProperties::new(Arc::clone(&schema)),
-                Partitioning::UnknownPartitioning(1),
-                EmissionType::Incremental,
-                Boundedness::Bounded,
-            );
-            let build =
-                CollectedBuildExec::new(schema, vec![(batches, None)], properties);
-            let mut probe = Arc::clone(&self.probe);
-            if !self.required
-                && probe.output_partitioning().partition_count() != output_partitions
-            {
-                probe = Arc::new(RepartitionExec::try_new(
-                    probe,
-                    Partitioning::RoundRobinBatch(output_partitions),
-                )?);
-            }
-            (PartitionMode::CollectLeft, Arc::new(build) as _, probe)
+/// Collects the build side, up to the thresholds, and creates the join to run.
+async fn prepare(inputs: Arc<Inputs>, context: Arc<TaskContext>) -> Result<Prepared> {
+    let collected = collect_up_to(
+        &inputs.build,
+        &context,
+        inputs.max_build_rows,
+        inputs.max_build_bytes,
+    )
+    .await?;
+    let decision = Decision {
+        // Collection stops at the first threshold the build side exceeds, so
+        // it only completes when the build side fits in a single partition
+        mode: if collected.complete {
+            PartitionMode::CollectLeft
         } else {
-            let properties = PlanProperties::clone(self.build.properties());
-            let build = CollectedBuildExec::new(schema, collected.partitions, properties);
-            let build: Arc<dyn ExecutionPlan> = match &self.build_partitioning {
-                Some(partitioning) => Arc::new(RepartitionExec::try_new(
-                    Arc::new(build),
-                    partitioning.clone(),
-                )?),
-                None => Arc::new(build),
-            };
-            let probe = RepartitionExec::try_new(
-                Arc::clone(&self.probe),
-                self.probe_partitioning.clone(),
-            )?;
-            (PartitionMode::Partitioned, build, Arc::new(probe) as _)
-        };
+            PartitionMode::Partitioned
+        },
+        build_rows: collected.complete.then_some(collected.rows),
+    };
 
-        let mut plan: Arc<dyn ExecutionPlan> = Arc::new(
-            self.join
-                .builder()
-                .with_new_children(vec![build, probe])?
-                .recompute_properties()
-                .with_partition_mode(mode)
-                .build()?,
-        );
-        let output_repartitioned = self.required && mode == PartitionMode::CollectLeft;
-        if output_repartitioned {
-            plan = Arc::new(RepartitionExec::try_new(plan, output_partitioning.clone())?);
+    let join = &inputs.join;
+    let output_partitioning = &join.properties().partitioning;
+    let output_partitions = output_partitioning.partition_count();
+    let (build, probe) = if decision.mode == PartitionMode::CollectLeft {
+        let build = collected.into_single_partition()?;
+        let mut probe = Arc::clone(&inputs.probe);
+        if !inputs.required
+            && probe.output_partitioning().partition_count() != output_partitions
+        {
+            probe = Arc::new(RepartitionExec::try_new(
+                probe,
+                Partitioning::RoundRobinBatch(output_partitions),
+            )?);
         }
-        let _ = self.state.decision.set(Decision {
-            mode,
-            build_rows: complete.then_some(rows),
-            output_repartitioned,
-        });
-        Ok(plan)
-    }
+        (build, probe)
+    } else {
+        let mut build = collected.into_partitions()?;
+        if hash_repartition_input(join.left()).is_some() {
+            let partitioning = join.left().output_partitioning().clone();
+            build = Arc::new(RepartitionExec::try_new(build, partitioning)?);
+        }
+        let partitioning = join.right().output_partitioning().clone();
+        let probe = RepartitionExec::try_new(Arc::clone(&inputs.probe), partitioning)?;
+        (build, Arc::new(probe) as _)
+    };
 
-    fn with_children(
-        &self,
-        build: Arc<dyn ExecutionPlan>,
-        probe: Arc<dyn ExecutionPlan>,
-        join: Arc<HashJoinExec>,
-    ) -> Self {
-        Self {
-            join,
-            build,
-            build_partitioning: self.build_partitioning.clone(),
-            probe,
-            probe_partitioning: self.probe_partitioning.clone(),
-            max_build_rows: self.max_build_rows,
-            max_build_bytes: self.max_build_bytes,
-            required: self.required,
-            state: Default::default(),
-        }
+    let mut join: Arc<dyn ExecutionPlan> = Arc::new(
+        join.builder()
+            .with_new_children(vec![build, probe])?
+            .recompute_properties()
+            .with_partition_mode(decision.mode)
+            .build()?,
+    );
+    if inputs.required && decision.mode == PartitionMode::CollectLeft {
+        join = Arc::new(RepartitionExec::try_new(join, output_partitioning.clone())?);
     }
+    Ok(Prepared { join, decision })
 }
 
 /// Returns the input of `plan` if it is a hash repartition.
@@ -289,23 +255,29 @@ struct Abandoned {
     partitions: Vec<(usize, Arc<TaskContext>)>,
 }
 
-impl Abandoned {
+impl State {
     /// Records that the join to run exists, and cancels the partitions
     /// abandoned before that.
-    fn set_join(&mut self, join: &Arc<dyn ExecutionPlan>) {
-        if self.join.is_none() {
-            self.join = Some(Arc::clone(join));
-        }
-        for (partition, context) in self.partitions.drain(..) {
+    fn join_created(&self, join: &Arc<dyn ExecutionPlan>) {
+        let partitions = {
+            let mut abandoned = self.abandoned.lock();
+            abandoned.join.get_or_insert_with(|| Arc::clone(join));
+            std::mem::take(&mut abandoned.partitions)
+        };
+        for (partition, context) in partitions {
             drop(join.execute(partition, context));
         }
     }
 
-    fn abandon(&mut self, partition: usize, context: Arc<TaskContext>) {
-        match &self.join {
-            Some(join) => drop(join.execute(partition, context)),
-            None => self.partitions.push((partition, context)),
-        }
+    fn abandon(&self, partition: usize, context: Arc<TaskContext>) {
+        let join = {
+            let mut abandoned = self.abandoned.lock();
+            match &abandoned.join {
+                Some(join) => Arc::clone(join),
+                None => return abandoned.partitions.push((partition, context)),
+            }
+        };
+        drop(join.execute(partition, context));
     }
 }
 
@@ -320,60 +292,131 @@ struct PartitionGuard {
 impl Drop for PartitionGuard {
     fn drop(&mut self) {
         if !self.started {
-            let context = Arc::clone(&self.context);
-            self.state.abandoned.lock().abandon(self.partition, context);
+            self.state
+                .abandon(self.partition, Arc::clone(&self.context));
         }
     }
 }
 
-/// A partition's collected batches, and the rest of its stream if it did not
-/// finish.
-type CollectedPartition = (Vec<RecordBatch>, Option<SendableRecordBatchStream>);
+/// A build-side batch, and the memory first counted for it.
+type CountedBatch = (RecordBatch, usize);
 
+/// The build side collected so far.
 struct Collected {
-    partitions: Vec<CollectedPartition>,
-    /// Accounts for the collected batches
-    reservation: Arc<Mutex<MemoryReservation>>,
+    schema: SchemaRef,
+    /// The batches of each partition, and the rest of its stream if it did
+    /// not finish
+    partitions: Vec<(Vec<CountedBatch>, Option<SendableRecordBatchStream>)>,
+    /// Accounts for all the batches
+    reservation: MemoryReservation,
+    rows: usize,
+    /// Whether all partitions finished within the thresholds
+    complete: bool,
 }
 
-/// Runs all partitions of `plan` in parallel until they finish or have
-/// produced more than `max_rows` rows in total, or the memory pool cannot hold
-/// more.
+impl Collected {
+    /// Hands the batches over as a single partition. Only for a complete
+    /// build side, which has no rest of any stream.
+    fn into_single_partition(self) -> Result<Arc<dyn ExecutionPlan>> {
+        let batches = self.partitions.into_iter().flat_map(|(batches, rest)| {
+            debug_assert!(rest.is_none(), "build side not collected completely");
+            batches
+        });
+        let partition = CollectedPartition::new(
+            Arc::clone(&self.schema),
+            batches.collect(),
+            None,
+            self.reservation,
+        );
+        build_exec(self.schema, vec![Arc::new(partition)])
+    }
+
+    /// Hands the batches of each partition over, followed by the rest of its
+    /// stream.
+    fn into_partitions(self) -> Result<Arc<dyn ExecutionPlan>> {
+        let partitions = self
+            .partitions
+            .into_iter()
+            .map(|(batches, rest)| {
+                let size = batches.iter().map(|(_, size)| size).sum();
+                let reservation = self.reservation.split(size);
+                let partition = CollectedPartition::new(
+                    Arc::clone(&self.schema),
+                    batches,
+                    rest,
+                    reservation,
+                );
+                Arc::new(partition) as _
+            })
+            .collect();
+        build_exec(self.schema, partitions)
+    }
+}
+
+fn build_exec(
+    schema: SchemaRef,
+    partitions: Vec<Arc<dyn PartitionStream>>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let exec = StreamingTableExec::try_new(schema, partitions, None, [], false, None)?;
+    Ok(Arc::new(exec))
+}
+
+/// Counts what has been collected across all partitions.
+struct Counter {
+    memory: RecordBatchMemoryCounter,
+    rows: usize,
+    /// Set once collection must stop
+    full: bool,
+}
+
+/// Runs all partitions of `plan` in parallel until they finish, or have
+/// produced more than `max_rows` rows or `max_bytes` bytes in total, or the
+/// memory pool cannot hold more.
 async fn collect_up_to(
     plan: &Arc<dyn ExecutionPlan>,
     context: &Arc<TaskContext>,
     max_rows: usize,
+    max_bytes: usize,
 ) -> Result<Collected> {
-    let reservation = Arc::new(Mutex::new(
+    let reservation = Arc::new(
         MemoryConsumer::new("AdaptiveHashJoinExec").register(context.memory_pool()),
-    ));
-    let rows = Arc::new(AtomicUsize::new(0));
-    let full = Arc::new(AtomicBool::new(false));
-    let mut tasks = vec![];
-    for partition in 0..plan.output_partitioning().partition_count() {
-        let mut stream = plan.execute(partition, Arc::clone(context))?;
-        let rows = Arc::clone(&rows);
-        let full = Arc::clone(&full);
-        let reservation = Arc::clone(&reservation);
-        tasks.push(SpawnedTask::spawn(async move {
-            let mut batches = vec![];
-            while !full.load(Ordering::Relaxed) {
-                let Some(batch) = stream.next().await.transpose()? else {
-                    return Ok((batches, None));
-                };
-                let size = batch.get_array_memory_size();
-                let total_rows = rows.fetch_add(batch.num_rows(), Ordering::Relaxed)
-                    + batch.num_rows();
-                // Batches can share buffers, which `size` counts again, so the
-                // byte threshold is only checked once collection is complete
-                if reservation.lock().try_grow(size).is_err() || total_rows > max_rows {
-                    full.store(true, Ordering::Relaxed);
+    );
+    let counter = Arc::new(Mutex::new(Counter {
+        memory: RecordBatchMemoryCounter::new(),
+        rows: 0,
+        full: false,
+    }));
+    let streams = execute_stream_partitioned(Arc::clone(plan), Arc::clone(context))?;
+    let tasks: Vec<_> = streams
+        .into_iter()
+        .map(|mut stream| {
+            let reservation = Arc::clone(&reservation);
+            let counter = Arc::clone(&counter);
+            SpawnedTask::spawn(async move {
+                let mut batches = vec![];
+                while !counter.lock().full {
+                    let Some(batch) = stream.next().await.transpose()? else {
+                        return Ok::<_, DataFusionError>((batches, None));
+                    };
+                    let mut counter = counter.lock();
+                    let mut size = counter.memory.count_batch(&batch);
+                    counter.rows += batch.num_rows();
+                    if reservation.try_grow(size).is_err() {
+                        size = 0;
+                        counter.full = true;
+                    }
+                    if counter.rows > max_rows
+                        || counter.memory.memory_usage() > max_bytes
+                    {
+                        counter.full = true;
+                    }
+                    drop(counter);
+                    batches.push((batch, size));
                 }
-                batches.push(batch);
-            }
-            Ok::<_, DataFusionError>((batches, Some(stream)))
-        }));
-    }
+                Ok((batches, Some(stream)))
+            })
+        })
+        .collect();
     let mut partitions = Vec::with_capacity(tasks.len());
     for task in tasks {
         partitions.push(
@@ -382,37 +425,83 @@ async fn collect_up_to(
                 .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??,
         );
     }
+    let Ok(reservation) = Arc::try_unwrap(reservation) else {
+        return internal_err!("build-side reservation is still shared");
+    };
+    let rows = counter.lock().rows;
     Ok(Collected {
+        schema: plan.schema(),
+        complete: partitions.iter().all(|(_, rest)| rest.is_none()),
         partitions,
         reservation,
+        rows,
     })
 }
 
-/// Memory held by `batches`, counting buffers they share only once.
-fn memory_size<'a>(batches: impl Iterator<Item = &'a RecordBatch>) -> usize {
-    fn add(data: &ArrayData, seen: &mut HashSet<usize>, size: &mut usize) {
-        let nulls = data.nulls().map(|nulls| nulls.inner().inner());
-        for buffer in data.buffers().iter().chain(nulls) {
-            if seen.insert(buffer.data_ptr().as_ptr() as usize) {
-                *size += buffer.capacity();
+/// One partition of a collected build side: its batches, then the rest of its
+/// stream. It hands them over once, and releases each batch, and its memory,
+/// as soon as the join takes it.
+struct CollectedPartition {
+    schema: SchemaRef,
+    contents: Mutex<Option<CollectedContents>>,
+}
+
+type CollectedContents = (
+    Vec<CountedBatch>,
+    Option<SendableRecordBatchStream>,
+    MemoryReservation,
+);
+
+impl CollectedPartition {
+    fn new(
+        schema: SchemaRef,
+        batches: Vec<CountedBatch>,
+        rest: Option<SendableRecordBatchStream>,
+        reservation: MemoryReservation,
+    ) -> Self {
+        Self {
+            schema,
+            contents: Mutex::new(Some((batches, rest, reservation))),
+        }
+    }
+}
+
+impl fmt::Debug for CollectedPartition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CollectedPartition").finish_non_exhaustive()
+    }
+}
+
+impl PartitionStream for CollectedPartition {
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+        let schema = Arc::clone(&self.schema);
+        let Some((batches, rest, reservation)) = self.contents.lock().take() else {
+            let error = internal_err!("collected build-side partition executed twice");
+            return Box::pin(RecordBatchStreamAdapter::new(
+                schema,
+                futures::stream::once(async { error }),
+            ));
+        };
+        let batches = futures::stream::iter(batches).map(move |(batch, size)| {
+            reservation.shrink(size);
+            Ok(batch)
+        });
+        match rest {
+            None => Box::pin(RecordBatchStreamAdapter::new(schema, batches)),
+            Some(rest) => {
+                Box::pin(RecordBatchStreamAdapter::new(schema, batches.chain(rest)))
             }
         }
-        for child in data.child_data() {
-            add(child, seen, size);
-        }
     }
-    let mut seen = HashSet::new();
-    let mut size = 0;
-    for batch in batches {
-        for column in batch.columns() {
-            add(&column.to_data(), &mut seen, &mut size);
-        }
-    }
-    size
 }
 
 impl DisplayAs for AdaptiveHashJoinExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+        let inputs = &self.inputs;
         let decision = self.state.decision.get();
         let mode =
             decision.map_or_else(|| "pending".to_string(), |d| format!("{:?}", d.mode));
@@ -422,10 +511,12 @@ impl DisplayAs for AdaptiveHashJoinExec {
                 if let Some(rows) = decision.and_then(|d| d.build_rows) {
                     write!(f, ", build_rows={rows}")?;
                 }
-                if decision.is_some_and(|d| d.output_repartitioned) {
+                if inputs.required
+                    && decision.is_some_and(|d| d.mode == PartitionMode::CollectLeft)
+                {
                     write!(f, ", output_repartitioned=true")?;
                 }
-                let on = self
+                let on = inputs
                     .join
                     .on()
                     .iter()
@@ -435,13 +526,13 @@ impl DisplayAs for AdaptiveHashJoinExec {
                 write!(
                     f,
                     ", join_type={:?}, on=[{on}], max_build_rows={}",
-                    self.join.join_type(),
-                    self.max_build_rows
+                    inputs.join.join_type(),
+                    inputs.max_build_rows
                 )
             }
             DisplayFormatType::TreeRender => {
                 writeln!(f, "mode={mode}")?;
-                self.join.fmt_as(t, f)
+                inputs.join.fmt_as(t, f)
             }
         }
     }
@@ -453,26 +544,22 @@ impl ExecutionPlan for AdaptiveHashJoinExec {
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
-        self.join.properties()
+        self.inputs.join.properties()
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![&self.build, &self.probe]
+        vec![&self.inputs.build, &self.inputs.probe]
     }
 
     fn apply_expressions(
         &self,
         f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        self.join.apply_expressions(f)
+        self.inputs.join.apply_expressions(f)
     }
 
     fn dynamic_expressions_produced(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        self.join.dynamic_expressions_produced()
-    }
-
-    fn maintains_input_order(&self) -> Vec<bool> {
-        vec![false, false]
+        self.inputs.join.dynamic_expressions_produced()
     }
 
     fn replace_children(
@@ -480,16 +567,14 @@ impl ExecutionPlan for AdaptiveHashJoinExec {
         mut children: Vec<Arc<dyn ExecutionPlan>>,
         _options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if children.len() != 2 {
-            return internal_err!("AdaptiveHashJoinExec expects two children");
-        }
+        validate_child_count!(self, children);
         let probe = children.pop().unwrap();
         let build = children.pop().unwrap();
-        Ok(Arc::new(self.with_children(
+        Ok(Arc::new(Self::new(Inputs {
             build,
             probe,
-            Arc::clone(&self.join),
-        )))
+            ..Inputs::clone(&self.inputs)
+        })))
     }
 
     fn with_new_children(
@@ -503,12 +588,11 @@ impl ExecutionPlan for AdaptiveHashJoinExec {
     }
 
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
-        let join = Arc::new(self.join.builder().reset_state().build()?);
-        Ok(Arc::new(self.with_children(
-            Arc::clone(&self.build),
-            Arc::clone(&self.probe),
+        let join = Arc::new(self.inputs.join.builder().reset_state().build()?);
+        Ok(Arc::new(Self::new(Inputs {
             join,
-        )))
+            ..Inputs::clone(&self.inputs)
+        })))
     }
 
     fn execute(
@@ -516,12 +600,10 @@ impl ExecutionPlan for AdaptiveHashJoinExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let this = Arc::new(self.with_shared_state());
-        let prepare_context = Arc::clone(&context);
-        let mut join: OnceFut<Arc<dyn ExecutionPlan>> = self
+        let mut prepared = self
             .state
             .join
-            .try_once(move || Ok(Arc::clone(&this).prepare(prepare_context)))?;
+            .try_once(|| Ok(prepare(Arc::clone(&self.inputs), Arc::clone(&context))))?;
         let guard = PartitionGuard {
             state: Arc::clone(&self.state),
             partition,
@@ -531,10 +613,11 @@ impl ExecutionPlan for AdaptiveHashJoinExec {
         let stream = futures::stream::once(async move {
             // Move the whole guard in, not just the field set below
             let mut guard = guard;
-            let join = std::future::poll_fn(|cx| join.get_shared(cx)).await?;
-            guard.state.abandoned.lock().set_join(&join);
+            let prepared = std::future::poll_fn(|cx| prepared.get_shared(cx)).await?;
+            let _ = guard.state.decision.set(prepared.decision);
+            guard.state.join_created(&prepared.join);
             guard.started = true;
-            join.execute(partition, context)
+            prepared.join.execute(partition, context)
         })
         .try_flatten();
         Ok(Box::pin(RecordBatchStreamAdapter::new(
@@ -544,7 +627,7 @@ impl ExecutionPlan for AdaptiveHashJoinExec {
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
-        self.join.metrics()
+        self.inputs.join.metrics()
     }
 
     fn statistics_from_inputs(
@@ -553,154 +636,5 @@ impl ExecutionPlan for AdaptiveHashJoinExec {
         _args: &StatisticsArgs,
     ) -> Result<Arc<Statistics>> {
         Ok(Arc::new(Statistics::new_unknown(&self.schema())))
-    }
-}
-
-impl AdaptiveHashJoinExec {
-    /// A copy that shares the runtime state, for executing a partition.
-    fn with_shared_state(&self) -> Self {
-        Self {
-            join: Arc::clone(&self.join),
-            build: Arc::clone(&self.build),
-            build_partitioning: self.build_partitioning.clone(),
-            probe: Arc::clone(&self.probe),
-            probe_partitioning: self.probe_partitioning.clone(),
-            max_build_rows: self.max_build_rows,
-            max_build_bytes: self.max_build_bytes,
-            required: self.required,
-            state: Arc::clone(&self.state),
-        }
-    }
-}
-
-/// The batches a build side has produced so far, followed by the rest of its
-/// streams, handed over to the join to run.
-///
-/// Each partition can be executed only once: its batches move into the
-/// stream so the memory is released as soon as the join drops them.
-struct CollectedBuildExec {
-    schema: SchemaRef,
-    partitions: Vec<Mutex<Option<CollectedPartition>>>,
-    /// Rows collected so far
-    num_rows: usize,
-    complete: bool,
-    properties: Arc<PlanProperties>,
-}
-
-impl CollectedBuildExec {
-    fn new(
-        schema: SchemaRef,
-        partitions: Vec<CollectedPartition>,
-        properties: PlanProperties,
-    ) -> Self {
-        Self {
-            schema,
-            num_rows: partitions
-                .iter()
-                .flat_map(|(batches, _)| batches)
-                .map(RecordBatch::num_rows)
-                .sum(),
-            complete: partitions.iter().all(|(_, rest)| rest.is_none()),
-            partitions: partitions
-                .into_iter()
-                .map(|p| Mutex::new(Some(p)))
-                .collect(),
-            properties: Arc::new(properties),
-        }
-    }
-}
-
-impl fmt::Debug for CollectedBuildExec {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CollectedBuildExec")
-            .field("num_rows", &self.num_rows)
-            .field("complete", &self.complete)
-            .finish()
-    }
-}
-
-impl DisplayAs for CollectedBuildExec {
-    fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "CollectedBuildExec: rows={}{}, partitions={}",
-            if self.complete { "" } else { ">" },
-            self.num_rows,
-            self.partitions.len()
-        )
-    }
-}
-
-impl ExecutionPlan for CollectedBuildExec {
-    fn name(&self) -> &'static str {
-        "CollectedBuildExec"
-    }
-
-    fn properties(&self) -> &Arc<PlanProperties> {
-        &self.properties
-    }
-
-    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![]
-    }
-
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
-    }
-
-    fn replace_children(
-        self: Arc<Self>,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
-        _options: ReplaceChildrenOptions,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(self)
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(
-            children,
-            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
-        )
-    }
-
-    fn execute(
-        &self,
-        partition: usize,
-        _context: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream> {
-        let Some((batches, rest)) = self.partitions[partition].lock().take() else {
-            return internal_err!(
-                "CollectedBuildExec partition {partition} executed twice"
-            );
-        };
-        let collected = MemoryStream::try_new(batches, Arc::clone(&self.schema), None)?;
-        Ok(match rest {
-            None => Box::pin(collected),
-            Some(rest) => Box::pin(RecordBatchStreamAdapter::new(
-                Arc::clone(&self.schema),
-                collected.chain(rest),
-            )),
-        })
-    }
-
-    fn statistics_from_inputs(
-        &self,
-        _input_stats: &[Arc<Statistics>],
-        _args: &StatisticsArgs,
-    ) -> Result<Arc<Statistics>> {
-        let num_rows = if self.complete {
-            Precision::Exact(self.num_rows)
-        } else {
-            Precision::Absent
-        };
-        Ok(Arc::new(
-            Statistics::new_unknown(&self.schema).with_num_rows(num_rows),
-        ))
     }
 }

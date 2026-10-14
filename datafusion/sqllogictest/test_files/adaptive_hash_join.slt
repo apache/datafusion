@@ -57,40 +57,7 @@ physical_plan
 08)----------RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=1, maintains_sort_order=true
 09)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/adaptive_hash_join/fact.parquet]]}, projection=[k, v], output_ordering=[v@1 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 
-query II
-SELECT count(*), sum(v) FROM dim JOIN fact ON dim.k = fact.k;
-----
-5000 24752500
-
-query I
-SELECT count(*) FROM fact WHERE k IN (SELECT k FROM dim);
-----
-5000
-
-query I
-SELECT count(*) FROM fact WHERE k NOT IN (SELECT k FROM dim);
-----
-5000
-
-query I
-SELECT count(*) FROM dim WHERE k IN (SELECT k FROM fact WHERE v < 50);
-----
-49
-
-query I
-SELECT count(*) FROM dim WHERE NOT EXISTS (SELECT 1 FROM fact WHERE fact.k = dim.k AND v < 50);
-----
-51
-
-query II
-SELECT count(*), count(fact.k) FROM dim LEFT JOIN fact ON dim.k = fact.k AND v < 50;
-----
-100 49
-
-query III
-SELECT count(*), count(dim.k), count(fact.k) FROM dim FULL JOIN fact ON dim.k = fact.k AND v < 50;
-----
-10051 100 10000
+include ./adaptive_hash_join.slt.part
 
 statement ok
 set datafusion.optimizer.enable_adaptive_hash_join = true;
@@ -109,40 +76,7 @@ physical_plan
 07)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/adaptive_hash_join/fact.parquet]]}, projection=[k, v], output_ordering=[v@1 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 
 # The same results as without it
-query II
-SELECT count(*), sum(v) FROM dim JOIN fact ON dim.k = fact.k;
-----
-5000 24752500
-
-query I
-SELECT count(*) FROM fact WHERE k IN (SELECT k FROM dim);
-----
-5000
-
-query I
-SELECT count(*) FROM fact WHERE k NOT IN (SELECT k FROM dim);
-----
-5000
-
-query I
-SELECT count(*) FROM dim WHERE k IN (SELECT k FROM fact WHERE v < 50);
-----
-49
-
-query I
-SELECT count(*) FROM dim WHERE NOT EXISTS (SELECT 1 FROM fact WHERE fact.k = dim.k AND v < 50);
-----
-51
-
-query II
-SELECT count(*), count(fact.k) FROM dim LEFT JOIN fact ON dim.k = fact.k AND v < 50;
-----
-100 49
-
-query III
-SELECT count(*), count(dim.k), count(fact.k) FROM dim FULL JOIN fact ON dim.k = fact.k AND v < 50;
-----
-10051 100 10000
+include ./adaptive_hash_join.slt.part
 
 # Joins whose build side is over the threshold run partitioned, as planned
 statement ok
@@ -151,20 +85,7 @@ set datafusion.optimizer.adaptive_hash_join_threshold_rows = 0;
 statement ok
 set datafusion.optimizer.hash_join_single_partition_threshold_rows = 0;
 
-query II
-SELECT count(*), sum(v) FROM dim JOIN fact ON dim.k = fact.k;
-----
-5000 24752500
-
-query I
-SELECT count(*) FROM dim WHERE k IN (SELECT k FROM fact WHERE v < 50);
-----
-49
-
-query III
-SELECT count(*), count(dim.k), count(fact.k) FROM dim FULL JOIN fact ON dim.k = fact.k AND v < 50;
-----
-10051 100 10000
+include ./adaptive_hash_join.slt.part
 
 statement ok
 reset datafusion.optimizer.adaptive_hash_join_threshold_rows;

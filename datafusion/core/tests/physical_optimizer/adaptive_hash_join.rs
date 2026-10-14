@@ -23,8 +23,8 @@ use std::time::Duration;
 
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
-use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::{Result, assert_contains};
 use datafusion_physical_plan::{collect, displayable};
 
 /// Writes parquet tables, so that hash joins push dynamic filters into their
@@ -72,10 +72,6 @@ async fn context(
     Ok(ctx)
 }
 
-fn adaptive(options: &mut ConfigOptions) {
-    options.optimizer.enable_adaptive_hash_join = true;
-}
-
 /// Runs `sql` and returns its results and the plan after execution.
 async fn run(ctx: &SessionContext, sql: &str) -> Result<(String, String)> {
     let plan = ctx.sql(sql).await?.create_physical_plan().await?;
@@ -92,6 +88,26 @@ async fn run(ctx: &SessionContext, sql: &str) -> Result<(String, String)> {
     ))
 }
 
+/// Runs `sql` with and without `enable_adaptive_hash_join`, further
+/// configured by `configure`, checks that the results are the same, and
+/// returns the adaptive plan after execution.
+async fn run_adaptive(
+    sql: &str,
+    configure: impl FnOnce(&mut ConfigOptions),
+) -> Result<String> {
+    let dir = tempfile::tempdir()?;
+    write_tables(dir.path()).await?;
+    let (expected, _) = run(&context(dir.path(), |_| {}).await?, sql).await?;
+    let ctx = context(dir.path(), |options| {
+        options.optimizer.enable_adaptive_hash_join = true;
+        configure(options);
+    })
+    .await?;
+    let (results, plan) = run(&ctx, sql).await?;
+    assert_eq!(results, expected);
+    Ok(plan)
+}
+
 const JOIN: &str = "SELECT count(*), sum(f.v) FROM dim d JOIN fact f ON d.k = f.k";
 
 /// The outer join has a one-row build side, so all but one of its partitions
@@ -100,46 +116,27 @@ const NESTED_JOIN: &str = "SELECT count(*) FROM tiny t \
     JOIN (SELECT f.k FROM dim d JOIN fact f ON d.k = f.k) j ON t.k = j.k";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn disabled_by_default() -> Result<()> {
-    let dir = tempfile::tempdir()?;
-    write_tables(dir.path()).await?;
-    let ctx = context(dir.path(), |_| {}).await?;
-    let (_, plan) = run(&ctx, JOIN).await?;
-    assert!(plan.contains("HashJoinExec: mode=Partitioned"), "{plan}");
-    assert!(!plan.contains("AdaptiveHashJoinExec"), "{plan}");
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn small_build_side_is_collected() -> Result<()> {
-    let dir = tempfile::tempdir()?;
-    write_tables(dir.path()).await?;
-    let (expected, _) = run(&context(dir.path(), |_| {}).await?, JOIN).await?;
-    let (results, plan) = run(&context(dir.path(), adaptive).await?, JOIN).await?;
-    assert_eq!(results, expected);
-    assert!(
-        plan.contains("AdaptiveHashJoinExec: mode=CollectLeft, build_rows=1000,"),
-        "{plan}"
+    let plan = run_adaptive(JOIN, |_| {}).await?;
+    assert_contains!(
+        plan,
+        "AdaptiveHashJoinExec: mode=CollectLeft, build_rows=1000,"
     );
     Ok(())
 }
 
+/// The rest of the build side, after the batches collected up to the
+/// threshold, still reaches the join.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn large_build_side_stays_partitioned() -> Result<()> {
-    let dir = tempfile::tempdir()?;
-    write_tables(dir.path()).await?;
-    let (expected, _) = run(&context(dir.path(), |_| {}).await?, JOIN).await?;
-    let ctx = context(dir.path(), |options| {
-        adaptive(options);
+    let plan = run_adaptive(JOIN, |options| {
         options.optimizer.adaptive_hash_join_threshold_rows = 100;
+        options
+            .set("datafusion.execution.batch_size", "64")
+            .unwrap();
     })
     .await?;
-    let (results, plan) = run(&ctx, JOIN).await?;
-    assert_eq!(results, expected);
-    assert!(
-        plan.contains("AdaptiveHashJoinExec: mode=Partitioned,"),
-        "{plan}"
-    );
+    assert_contains!(plan, "AdaptiveHashJoinExec: mode=Partitioned,");
     Ok(())
 }
 
@@ -147,20 +144,14 @@ async fn large_build_side_stays_partitioned() -> Result<()> {
 /// `hash_join_single_partition_threshold_rows`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn semi_join_uses_single_partition_threshold() -> Result<()> {
-    let dir = tempfile::tempdir()?;
-    write_tables(dir.path()).await?;
     let sql = "SELECT count(*) FROM dim WHERE k IN (SELECT k FROM fact)";
-    let (expected, _) = run(&context(dir.path(), |_| {}).await?, sql).await?;
-    let ctx = context(dir.path(), |options| {
-        adaptive(options);
+    let plan = run_adaptive(sql, |options| {
         options.optimizer.hash_join_single_partition_threshold_rows = 500;
     })
     .await?;
-    let (results, plan) = run(&ctx, sql).await?;
-    assert_eq!(results, expected);
-    assert!(
-        plan.contains("AdaptiveHashJoinExec: mode=Partitioned, join_type=LeftSemi"),
-        "{plan}"
+    assert_contains!(
+        plan,
+        "AdaptiveHashJoinExec: mode=Partitioned, join_type=LeftSemi"
     );
     Ok(())
 }
@@ -169,16 +160,10 @@ async fn semi_join_uses_single_partition_threshold() -> Result<()> {
 /// that join collects its build side it repartitions its output instead.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn collected_join_keeps_required_partitioning() -> Result<()> {
-    let dir = tempfile::tempdir()?;
-    write_tables(dir.path()).await?;
-    let (expected, _) = run(&context(dir.path(), |_| {}).await?, NESTED_JOIN).await?;
-    let (results, plan) = run(&context(dir.path(), adaptive).await?, NESTED_JOIN).await?;
-    assert_eq!(results, expected);
-    assert!(
-        plan.contains(
-            "AdaptiveHashJoinExec: mode=CollectLeft, build_rows=1000, output_repartitioned=true,"
-        ),
-        "{plan}"
+    let plan = run_adaptive(NESTED_JOIN, |_| {}).await?;
+    assert_contains!(
+        plan,
+        "AdaptiveHashJoinExec: mode=CollectLeft, build_rows=1000, output_repartitioned=true,"
     );
     Ok(())
 }
@@ -187,19 +172,10 @@ async fn collected_join_keeps_required_partitioning() -> Result<()> {
 /// report to its partitioned join, whose dynamic filter waits for all of them.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn unpolled_partitions_do_not_hang() -> Result<()> {
-    let dir = tempfile::tempdir()?;
-    write_tables(dir.path()).await?;
-    let (expected, _) = run(&context(dir.path(), |_| {}).await?, NESTED_JOIN).await?;
-    let ctx = context(dir.path(), |options| {
-        adaptive(options);
+    let plan = run_adaptive(NESTED_JOIN, |options| {
         options.optimizer.adaptive_hash_join_threshold_rows = 0;
     })
     .await?;
-    let (results, plan) = run(&ctx, NESTED_JOIN).await?;
-    assert_eq!(results, expected);
-    assert!(
-        plan.contains("AdaptiveHashJoinExec: mode=Partitioned,"),
-        "{plan}"
-    );
+    assert_contains!(plan, "AdaptiveHashJoinExec: mode=Partitioned,");
     Ok(())
 }
