@@ -324,7 +324,7 @@ impl FunctionalDependencies {
         // to correctly associate a `Single`-mode dependence with the whole table.
         n_out: usize,
     ) -> FunctionalDependencies {
-        let mut projected_func_dependencies = vec![];
+        let mut projected_func_dependencies = Vec::with_capacity(self.deps.len());
         for FunctionalDependence {
             source_indices,
             target_indices,
@@ -658,8 +658,8 @@ pub fn get_required_sort_exprs_indices(
     let dependencies = schema.functional_dependencies();
     let field_names = schema.field_names();
 
-    let mut known_field_indices = HashSet::new();
-    let mut required_sort_expr_indices = Vec::new();
+    let mut known_field_indices = HashSet::with_capacity(sort_expr_names.len());
+    let mut required_sort_expr_indices = Vec::with_capacity(sort_expr_names.len());
 
     for (sort_expr_idx, sort_expr_name) in sort_expr_names.iter().enumerate() {
         // If the sort expression doesn't correspond to a known schema field

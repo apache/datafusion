@@ -258,6 +258,11 @@ pub enum StatisticsResult {
 /// estimation logic. The chain of providers is traversed until one returns
 /// [`StatisticsResult::Computed`].
 ///
+/// As for operators, `Exact` statistics must be guaranteed values, because
+/// optimizer rules use them for correctness, not just cost: they answer
+/// `COUNT(*)`, `MIN` and `MAX` without scanning and remove limits. Return
+/// `Inexact` for anything that is an estimate.
+///
 /// # Implementing a Custom Provider
 ///
 /// ```ignore
@@ -1983,6 +1988,22 @@ mod tests {
         let stats = compute(&registry, coalesce.as_ref())?;
         // PassthroughStatisticsProvider should propagate child row count unchanged
         assert_eq!(stats.base.num_rows, Precision::Exact(1000));
+        Ok(())
+    }
+
+    #[test]
+    fn test_passthrough_skips_coalesce_partitions_with_fetch() -> Result<()> {
+        use crate::coalesce_partitions::CoalescePartitionsExec;
+
+        let registry = StatisticsRegistry::with_providers(vec![Arc::new(
+            PassthroughStatisticsProvider,
+        )]);
+        let source = make_source(1000);
+        let coalesce: Arc<dyn ExecutionPlan> =
+            Arc::new(CoalescePartitionsExec::new(source).with_fetch(Some(10)));
+
+        let stats = compute(&registry, coalesce.as_ref())?;
+        assert_eq!(stats.base.num_rows, Precision::Exact(10));
         Ok(())
     }
 

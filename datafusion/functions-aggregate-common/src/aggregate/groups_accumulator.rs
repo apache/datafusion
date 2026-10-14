@@ -609,6 +609,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let vec_size_pre = self.states.allocated_size();
         let states = emit_to.take_needed(&mut self.states);
+        let num_states = states.len();
 
         // each accumulator produces a potential vector of values
         // which we need to form into columns
@@ -617,7 +618,8 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         for mut state in states {
             self.free_state_allocation(&state);
             let accumulator_state = state.accumulator.state()?;
-            results.resize_with(accumulator_state.len(), Vec::new);
+            results
+                .resize_with(accumulator_state.len(), || Vec::with_capacity(num_states));
             for (idx, state_val) in accumulator_state.into_iter().enumerate() {
                 results[idx].push(state_val);
             }
@@ -686,10 +688,12 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         // Each row has its respective group
         let mut results = vec![];
         let mut metric_recorder = None;
+        let mut prepared =
+            Vec::with_capacity(GROUPED_METRIC_PREPARATION_CHUNK_SIZE.min(num_rows));
         for chunk_start in (0..num_rows).step_by(GROUPED_METRIC_PREPARATION_CHUNK_SIZE) {
             let chunk_end =
                 (chunk_start + GROUPED_METRIC_PREPARATION_CHUNK_SIZE).min(num_rows);
-            let mut prepared = Vec::with_capacity(chunk_end - chunk_start);
+            prepared.clear();
 
             for row_idx in chunk_start..chunk_end {
                 // Create the empty accumulator and prepare adapter-owned input
@@ -718,7 +722,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
             };
             update_result?;
 
-            for (mut accumulator, _) in prepared {
+            for (mut accumulator, _) in prepared.drain(..) {
                 let states = accumulator.state()?;
 
                 // Resize results to have enough columns according to the converted states

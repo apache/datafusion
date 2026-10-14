@@ -681,7 +681,8 @@ impl PullUpCorrelatedExpr {
         exprs: &[Expr],
         correlated_subquery_cols: &BTreeSet<Column>,
     ) -> Result<Vec<Expr>> {
-        let mut missing_exprs = vec![];
+        let mut missing_exprs =
+            Vec::with_capacity(exprs.len() + correlated_subquery_cols.len());
         for expr in exprs {
             if !missing_exprs.contains(expr) {
                 missing_exprs.push(expr.clone())
@@ -835,7 +836,7 @@ fn collect_local_correlated_cols(
 ) {
     for child in plan.inputs() {
         if let Some(cols) = all_cols_map.get(child) {
-            local_cols.extend(cols.clone());
+            local_cols.extend(cols.iter().cloned());
         }
         // SubqueryAlias is treated as the leaf node
         if !matches!(child, LogicalPlan::SubqueryAlias(_)) {
@@ -884,6 +885,10 @@ fn agg_exprs_evaluation_result_on_empty_batch(
     schema: &DFSchemaRef,
     expr_result_map_for_count_bug: &mut ExprResultMap,
 ) -> Result<()> {
+    let info = SimplifyContext::builder()
+        .with_schema(Arc::clone(schema))
+        .build();
+    let simplifier = ExprSimplifier::new(info);
     for e in agg_expr.iter() {
         let result_expr = e
             .clone()
@@ -900,10 +905,6 @@ fn agg_exprs_evaluation_result_on_empty_batch(
             .data()?;
 
         let result_expr = result_expr.unalias();
-        let info = SimplifyContext::builder()
-            .with_schema(Arc::clone(schema))
-            .build();
-        let simplifier = ExprSimplifier::new(info);
         let result_expr = simplifier.simplify(result_expr)?;
         expr_result_map_for_count_bug.insert(e.schema_name().to_string(), result_expr);
     }
