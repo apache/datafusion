@@ -423,7 +423,7 @@ Logical Or
 
 - [& (bitwise and)](#op_bit_and)
 - [| (bitwise or)](#op_bit_or)
-- [# (bitwise xor)](#op_bit_xor)
+- [^ (bitwise xor)](#op_bit_xor)
 - [>> (bitwise shift right)](#op_shift_r)
 - [<< (bitwise shift left)](#op_shift_l)
 
@@ -459,17 +459,12 @@ Bitwise Or
 
 (op_bit_xor)=
 
-### `#`
+### `^`
 
-Bitwise Xor. Only the PostgreSQL and Redshift dialects parse `#` as an operator
-(see `datafusion.sql_parser.dialect`); the default dialect rejects it, and MySQL,
-Snowflake, Hive and BigQuery treat `#` as the start of a comment. With other
-dialects use `^`, which is bitwise xor everywhere except the PostgreSQL dialect,
-where it is exponentiation.
+Bitwise Xor
 
 ```sql
-> SET datafusion.sql_parser.dialect = 'PostgreSQL';
-> SELECT 5 # 3;
+> SELECT 5 ^ 3;
 +---------------------------+
 | Int64(5) BIT_XOR Int64(3) |
 +---------------------------+
