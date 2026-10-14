@@ -3982,6 +3982,7 @@ mod tests {
         test::exec::MockExec,
     };
 
+    use crate::joins::join_hash_map::ProbeOffset::AtRow;
     use arrow::array::{
         Array, ArrayRef, AsArray, BinaryViewArray, Date32Array, DictionaryArray,
         Float32Array, Float64Array, Int32Array, Int64Array, StringArray, StringViewArray,
@@ -7403,7 +7404,7 @@ mod tests {
             &hashes_buffer,
             None,
             8192,
-            (0, None),
+            AtRow { row: 0 },
             &mut probe_indices_buffer,
             &mut build_indices_buffer,
             &mut None,
@@ -7466,7 +7467,7 @@ mod tests {
             &hashes_buffer,
             None,
             8192,
-            (0, None),
+            AtRow { row: 0 },
             &mut probe_indices_buffer,
             &mut build_indices_buffer,
             &mut None,
