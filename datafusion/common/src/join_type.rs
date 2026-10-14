@@ -175,6 +175,26 @@ impl JoinType {
             JoinType::Inner | JoinType::LeftSemi | JoinType::RightSemi
         )
     }
+
+    /// Returns true if a join of this type emits rows of the left (build)
+    /// input that depend on matches against the *entire* right (probe)
+    /// input: unmatched left rows (`Left`, `LeftAnti`, `LeftMark`, `Full`) or
+    /// matched left rows (`LeftSemi`).
+    ///
+    /// A join that collects its left side (a `CollectLeft` hash join or a
+    /// nested loop join) must then share the left side's match state across
+    /// all output partitions, so it is only correct when every partition runs
+    /// in the same plan instance. See `datafusion.execution.isolated_partitions`.
+    pub fn emits_build_side_rows(self) -> bool {
+        matches!(
+            self,
+            JoinType::Left
+                | JoinType::LeftAnti
+                | JoinType::LeftSemi
+                | JoinType::LeftMark
+                | JoinType::Full
+        )
+    }
 }
 
 impl Display for JoinType {
@@ -255,6 +275,35 @@ impl JoinSide {
             JoinSide::Left => JoinSide::Right,
             JoinSide::Right => JoinSide::Left,
             JoinSide::None => JoinSide::None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn emits_build_side_rows() {
+        let emitting = [
+            JoinType::Left,
+            JoinType::LeftSemi,
+            JoinType::LeftAnti,
+            JoinType::LeftMark,
+            JoinType::Full,
+        ];
+        let not_emitting = [
+            JoinType::Inner,
+            JoinType::Right,
+            JoinType::RightSemi,
+            JoinType::RightAnti,
+            JoinType::RightMark,
+        ];
+        for join_type in emitting {
+            assert!(join_type.emits_build_side_rows(), "{join_type}");
+        }
+        for join_type in not_emitting {
+            assert!(!join_type.emits_build_side_rows(), "{join_type}");
         }
     }
 }

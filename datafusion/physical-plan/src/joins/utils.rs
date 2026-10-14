@@ -1185,14 +1185,7 @@ pub(crate) fn need_produce_right_in_final(join_type: JoinType) -> bool {
 /// For example of the `Left` join, in each iteration of right side, can get the matched result, but need
 /// to maintain the matched indices bit map to get the unmatched row for the left side.
 pub(crate) fn need_produce_result_in_final(join_type: JoinType) -> bool {
-    matches!(
-        join_type,
-        JoinType::Left
-            | JoinType::LeftAnti
-            | JoinType::LeftSemi
-            | JoinType::LeftMark
-            | JoinType::Full
-    )
+    join_type.emits_build_side_rows()
 }
 
 /// Whether the join emits left rows that found no match on the right side
