@@ -509,7 +509,10 @@ can be included in the SQL reference documentation (see below section)</p></li>
 <li><p>Scalar functions are further grouped into modules for families of functions (e.g. string, math, datetime).
 Functions should be added to the relevant module; if a new module needs to be created then a new <a class="reference external" href="https://doc.rust-lang.org/cargo/reference/features.html">Rust feature</a>
 should also be added to allow DataFusion users to conditionally compile the modules as needed</p></li>
-<li><p>Aggregate functions can optionally implement a <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.GroupsAccumulator.html"><code class="docutils literal notranslate"><span class="pre">GroupsAccumulator</span></code></a> for better performance</p></li>
+<li><p>Aggregate functions can optionally implement a <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.GroupsAccumulator.html"><code class="docutils literal notranslate"><span class="pre">GroupsAccumulator</span></code></a> for better performance. Built-in aggregate
+functions keep its intermediate state interchangeable with the state of the function’s <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.Accumulator.html"><code class="docutils literal notranslate"><span class="pre">Accumulator</span></code></a>: each must be
+able to merge state produced by the other. This is checked for all built-in aggregate functions by a test in
+<a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion/functions-aggregate/tests/state_compat.rs"><code class="docutils literal notranslate"><span class="pre">state_compat.rs</span></code></a>; if a new function cannot be exercised by that test, add it to <code class="docutils literal notranslate"><span class="pre">NOT_EXERCISED</span></code> with the reason</p></li>
 </ul>
 <p>Spark compatible functions are <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/spark">located in separate crate</a> but otherwise follow the same steps, though all
 function types (e.g. scalar, nested, aggregate) are grouped together in the single location.</p>
