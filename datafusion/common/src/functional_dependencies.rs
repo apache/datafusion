@@ -662,8 +662,8 @@ pub fn get_required_sort_exprs_indices(
 ) -> Vec<usize> {
     let dependencies = schema.functional_dependencies();
 
-    let mut known_field_indices = HashSet::with_capacity(sort_expr_names.len());
-    let mut required_sort_expr_indices = Vec::with_capacity(sort_expr_names.len());
+    let mut known_field_indices = HashSet::with_capacity(sort_input_indices.len());
+    let mut required_sort_expr_indices = Vec::with_capacity(sort_input_indices.len());
 
     for (sort_expr_idx, field_idx) in sort_input_indices.iter().enumerate() {
         // If the sort expression doesn't reference a schema field (e.g. a
