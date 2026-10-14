@@ -3675,7 +3675,7 @@ impl From<&Arc<FileEncryptionProperties>> for ConfigFileEncryptionProperties {
         let mut column_encryption_properties: HashMap<
             String,
             ColumnEncryptionProperties,
-        > = HashMap::new();
+        > = HashMap::with_capacity(column_names_vec.len());
 
         for (i, column_name) in column_names_vec.iter().enumerate() {
             let column_key_as_hex = hex::encode(&column_keys_vec[i]);
@@ -3783,8 +3783,9 @@ impl TryFrom<ConfigFileDecryptionProperties> for FileDecryptionProperties {
     type Error = DataFusionError;
 
     fn try_from(val: ConfigFileDecryptionProperties) -> Result<Self> {
-        let mut column_names: Vec<&str> = Vec::new();
-        let mut column_keys: Vec<Vec<u8>> = Vec::new();
+        let num_columns = val.column_decryption_properties.len();
+        let mut column_names: Vec<&str> = Vec::with_capacity(num_columns);
+        let mut column_keys: Vec<Vec<u8>> = Vec::with_capacity(num_columns);
 
         for (col_name, decryption_properties) in val.column_decryption_properties.iter() {
             let column_key = hex::decode(&decryption_properties.column_key_as_hex).map_err(|e| {
@@ -3856,7 +3857,7 @@ impl TryFrom<&Arc<FileDecryptionProperties>> for ConfigFileDecryptionProperties 
         let mut column_decryption_properties: HashMap<
             String,
             ColumnDecryptionProperties,
-        > = HashMap::new();
+        > = HashMap::with_capacity(column_names_vec.len());
         for (i, column_name) in column_names_vec.iter().enumerate() {
             let props = ColumnDecryptionProperties {
                 column_key_as_hex: hex::encode(column_keys_vec[i].clone()),

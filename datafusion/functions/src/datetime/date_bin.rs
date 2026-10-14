@@ -89,7 +89,10 @@ FROM VALUES (TIME '02:18:18'), (TIME '19:00:03')  t(time);
 +----------+
 2 row(s) fetched.
 ```"#,
-    argument(name = "interval", description = "Bin interval."),
+    argument(
+        name = "interval",
+        description = "Bin interval. Must be greater than zero."
+    ),
     argument(
         name = "expression",
         description = "Time expression to operate on. Can be a constant, column, or function."
@@ -273,19 +276,7 @@ impl ScalarUDFImpl for DateBinFunc {
         let reference = input.get(2);
 
         // DATE_BIN preserves the order of its second argument.
-        //
-        // A negative month stride can move a bin past its source (see
-        // `bin_months`), so its output is not monotonic, even for ordinary
-        // dates. See https://github.com/apache/datafusion/issues/25856
-        let monotonic_stride =
-            matches!(step.range.lower(), ScalarValue::IntervalDayTime(Some(_)))
-                || matches!(
-                    step.range.lower(),
-                    ScalarValue::IntervalMonthDayNano(Some(v)) if v.months >= 0
-                );
-
-        if monotonic_stride
-            && step.sort_properties == SortProperties::Singleton
+        if step.sort_properties == SortProperties::Singleton
             && reference
                 .map(|r| r.sort_properties == SortProperties::Singleton)
                 .unwrap_or(true)
@@ -381,30 +372,16 @@ fn date_bin_nanos_interval(stride_nanos: i64, source: i64, origin: i64) -> Resul
     })
 }
 
-// distance from origin to bin
+// distance from origin to bin, rounded down to a multiple of the positive
+// `stride`, so a source before the origin falls into the previous bin
 fn compute_distance(time_diff: i64, stride: i64) -> Result<i64> {
-    let remainder = time_diff.checked_rem(stride).ok_or_else(|| {
-        ArrowError::InvalidArgumentError(format!(
-            "date_bin compute_distance time_diff {time_diff} % stride {stride} overflows i64"
-        ))
-    })?;
-    let time_delta = time_diff.checked_sub(remainder).ok_or_else(|| {
+    let remainder = time_diff.rem_euclid(stride);
+    time_diff.checked_sub(remainder).ok_or_else(|| {
         ArrowError::InvalidArgumentError(format!(
             "date_bin compute_distance time_diff {time_diff} - remainder {remainder} overflows i64"
         ))
-    })?;
-
-    if time_diff < 0 && stride > 1 && time_delta != time_diff {
-        // The origin is later than the source timestamp, round down to the previous bin
-        time_delta.checked_sub(stride).ok_or_else(|| {
-            ArrowError::InvalidArgumentError(format!(
-                "date_bin compute_distance time_delta {time_delta} - stride {stride} overflows i64"
-            ))
-            .into()
-        })
-    } else {
-        Ok(time_delta)
-    }
+        .into()
+    })
 }
 
 // `date_bin_nanos_interval` in i128, which cannot overflow for an i64 source
@@ -419,19 +396,10 @@ fn date_bin_nanos_interval_wide(
     Some(origin + time_delta)
 }
 
-// `compute_distance` in i128. `stride` is non-zero, and `time_diff` is far
+// `compute_distance` in i128. `stride` is positive, and `time_diff` is far
 // from i128::MIN, so none of these operations can overflow.
 fn compute_distance_wide(time_diff: i128, stride: i128) -> i128 {
-    let time_delta = time_diff - time_diff % stride;
-    // `%` rounds toward zero, so a negative `time_diff` between two bins is
-    // rounded up to the later bin; move back one bin. This must match
-    // `compute_distance`, so it does not use `rem_euclid`, which rounds
-    // negative strides differently.
-    if time_diff < 0 && stride > 1 && time_delta != time_diff {
-        time_delta - stride
-    } else {
-        time_delta
-    }
+    time_diff - time_diff.rem_euclid(stride)
 }
 
 // Shift `origin_date` by `month_delta` months, mapping an out-of-range result to
@@ -726,13 +694,14 @@ fn date_bin_impl(
 
     let (stride, stride_fn) = stride.bin_fn();
 
-    // Return error if stride is 0
-    if stride == 0 {
-        return exec_err!("DATE_BIN stride must be non-zero");
+    // Like PostgreSQL, only positive strides are supported. The binning
+    // functions rely on this to round down to the bin start.
+    if stride <= 0 {
+        return exec_err!("DATE_BIN stride must be greater than zero");
     }
 
     // A TIME source requires a TIME origin. This shared-input check is ordered
-    // after stride/origin parsing and the zero-stride check so error ordering is
+    // after stride/origin parsing and the stride check so error ordering is
     // unchanged, and replaces the per-arm guards in the TIME branches below.
     if !is_time {
         match array.data_type() {
@@ -1014,7 +983,7 @@ mod tests {
     }
 
     #[test]
-    fn output_ordering_requires_monotonic_stride() {
+    fn output_ordering_requires_constant_stride() {
         use arrow::compute::SortOptions;
         use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 
@@ -1036,24 +1005,18 @@ mod tests {
             ordered
         );
         assert_eq!(
-            ordering(literal(ScalarValue::new_interval_dt(-1, 0))),
-            ordered
-        );
-        assert_eq!(
             ordering(literal(ScalarValue::new_interval_mdn(1, 0, 0))),
             ordered
         );
-        assert_eq!(
-            ordering(literal(ScalarValue::new_interval_mdn(0, -1, 0))),
-            ordered
-        );
-        assert_eq!(
-            ordering(literal(ScalarValue::new_interval_mdn(-1, 0, 0))),
-            SortProperties::Unordered
-        );
-        // A constant stride whose value is unknown may be a negative month.
+        // Strides that are not positive are rejected at execution, so a
+        // constant stride preserves the order whatever its value.
         assert_eq!(
             ordering(ExprProperties::new_unknown().with_order(SortProperties::Singleton)),
+            ordered
+        );
+        // A stride that is not constant does not.
+        assert_eq!(
+            ordering(ExprProperties::new_unknown().with_order(ordered)),
             SortProperties::Unordered
         );
     }
@@ -1158,8 +1121,25 @@ mod tests {
         let res = invoke_date_bin_with_args(args, 1, return_field);
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
-            "Execution error: DATE_BIN stride must be non-zero"
+            "Execution error: DATE_BIN stride must be greater than zero"
         );
+
+        // A negative day-time stride, which SQL interval literals cannot produce
+        for stride in [
+            ScalarValue::new_interval_dt(-1, 0),
+            ScalarValue::new_interval_dt(1, -86_400_001),
+        ] {
+            args = vec![
+                ColumnarValue::Scalar(stride),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ];
+            let res = invoke_date_bin_with_args(args, 1, return_field);
+            assert_eq!(
+                res.err().unwrap().strip_backtrace(),
+                "Execution error: DATE_BIN stride must be greater than zero"
+            );
+        }
 
         // stride: overflow of day-time interval
         args = vec![
@@ -1825,19 +1805,6 @@ mod tests {
             ],
             DataType::Time64(TimeUnit::Nanosecond),
             time64_msg,
-        );
-    }
-
-    #[test]
-    fn test_date_bin_compute_distance_rem_overflow() {
-        // Regression for #22215: `time_diff % stride` panics with "attempt to
-        // calculate the remainder with overflow" when `time_diff == i64::MIN`
-        // and `stride == -1`. Now it must return a normal Err that the scalar
-        // pipeline maps to NULL.
-        let result = date_bin_nanos_interval(-1, i64::MIN, 0);
-        assert!(
-            result.is_err(),
-            "expected Err for time_diff=i64::MIN, stride=-1, got {result:?}"
         );
     }
 }

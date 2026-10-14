@@ -70,8 +70,8 @@ pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
 /// Returns an iterator of index vectors, where each vector contains the indices
 /// of elements to include in that subset.
 fn powerset_indices(len: usize) -> impl Iterator<Item = Vec<usize>> {
-    (0..(1 << len)).map(move |mask| {
-        let mut indices = vec![];
+    (0..(1 << len)).map(move |mask: u64| {
+        let mut indices = Vec::with_capacity(mask.count_ones() as usize);
         let mut bitset = mask;
         while bitset > 0 {
             let rightmost: u64 = bitset & !(bitset - 1);
@@ -373,7 +373,7 @@ fn get_excluded_columns(
         return plan_err!("EXCLUDE or EXCEPT contains duplicate column names");
     }
 
-    let mut result = vec![];
+    let mut result = Vec::with_capacity(unique_idents.len());
     for ident in unique_idents.into_iter() {
         let col_name = ident.value.as_str();
         let (qualifier, field) = schema.qualified_field_with_name(qualifier, col_name)?;
@@ -525,8 +525,9 @@ pub fn generate_sort_key(
         })
         .collect::<Vec<_>>();
 
-    let mut final_sort_keys = vec![];
-    let mut is_partition_flag = vec![];
+    let num_keys = partition_by.len() + order_by.len();
+    let mut final_sort_keys = Vec::with_capacity(num_keys);
+    let mut is_partition_flag = Vec::with_capacity(num_keys);
     for e in partition_by {
         // By default, create sort key with ASC is true and NULLS LAST to be consistent with
         // PostgreSQL's rule: https://www.postgresql.org/docs/current/queries-order.html
@@ -1543,14 +1544,12 @@ pub fn collect_subquery_cols(
     subquery_schema: &DFSchema,
 ) -> Result<BTreeSet<Column>> {
     exprs.iter().try_fold(BTreeSet::new(), |mut cols, expr| {
-        let mut using_cols: Vec<Column> = vec![];
         for col in expr.column_refs().into_iter() {
             if subquery_schema.has_column(col) {
-                using_cols.push(col.clone());
+                cols.insert(col.clone());
             }
         }
 
-        cols.extend(using_cols);
         Result::<_>::Ok(cols)
     })
 }

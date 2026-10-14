@@ -390,6 +390,19 @@ fn unicode_case(s: &str, lower: bool) -> String {
     }
 }
 
+/// Like [`unicode_case`], but uppercases into `buf` so its allocation is reused
+/// across rows. Lowercasing still allocates, see [`write_unicode_case`].
+#[inline]
+fn unicode_case_into<'a>(s: &str, lower: bool, buf: &'a mut String) -> &'a str {
+    if lower {
+        *buf = s.to_lowercase();
+    } else {
+        buf.clear();
+        buf.extend(s.chars().flat_map(char::to_uppercase));
+    }
+    buf
+}
+
 /// Writes the case-converted form of `s` directly into `w`.
 ///
 /// Uppercasing is a context-free character mapping, so each character is
@@ -483,6 +496,7 @@ fn case_conversion_utf8view(array: &ArrayRef, lower: bool) -> Result<ArrayRef> {
     // Null-preserving: reuse the input null buffer as the output null buffer.
     let nulls = string_array.nulls().cloned();
     let mut builder = StringViewArrayBuilder::with_capacity(item_len);
+    let mut buf = String::new();
 
     if let Some(ref n) = nulls {
         for i in 0..item_len {
@@ -491,14 +505,14 @@ fn case_conversion_utf8view(array: &ArrayRef, lower: bool) -> Result<ArrayRef> {
             } else {
                 // SAFETY: `n.is_null(i)` was false in the branch above.
                 let s = unsafe { string_array.value_unchecked(i) };
-                builder.try_append_value(&unicode_case(s, lower))?;
+                builder.try_append_value(unicode_case_into(s, lower, &mut buf))?;
             }
         }
     } else {
         for i in 0..item_len {
             // SAFETY: no null buffer means every index is valid.
             let s = unsafe { string_array.value_unchecked(i) };
-            builder.try_append_value(&unicode_case(s, lower))?;
+            builder.try_append_value(unicode_case_into(s, lower, &mut buf))?;
         }
     }
 

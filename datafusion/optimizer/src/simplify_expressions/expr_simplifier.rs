@@ -1816,7 +1816,8 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 let rhs = to_inlist(*right).unwrap();
                 #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
                 // Expr contains Arc with interior mutability but is intentionally used as hash key
-                let mut seen: HashSet<Expr> = HashSet::new();
+                let mut seen: HashSet<Expr> =
+                    HashSet::with_capacity(lhs.list.len() + rhs.list.len());
                 let list = lhs
                     .list
                     .into_iter()

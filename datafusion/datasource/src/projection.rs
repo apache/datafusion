@@ -225,7 +225,8 @@ impl SplitProjection {
 
         // Separate file and partition columns, assigning final indices
         // Pre-create all remapped columns to avoid duplicate Arc'd expressions
-        let mut column_mapping = std::collections::HashMap::new();
+        let mut column_mapping =
+            std::collections::HashMap::with_capacity(sorted_columns.len());
         let mut file_idx = 0;
         let mut partition_idx = 0;
 
