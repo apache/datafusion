@@ -276,7 +276,11 @@ fn clear_metadata(
 /// produces a null parent, not a null value for each required child, so children
 /// are compared only across files in which their parent exists.
 fn mark_partially_present_fields_nullable(schema: Schema, sources: &[Schema]) -> Schema {
-    if sources.len() <= 1 {
+    if sources.len() <= 1
+        || sources[1..]
+            .iter()
+            .all(|source| source.fields() == sources[0].fields())
+    {
         return schema;
     }
     let fields = widen_fields(
@@ -287,6 +291,13 @@ fn mark_partially_present_fields_nullable(schema: Schema, sources: &[Schema]) ->
 }
 
 fn widen_fields(fields: &Fields, sources: &[&Fields]) -> Fields {
+    if !sources.is_empty()
+        && fields == sources[0]
+        && sources[1..].iter().all(|source| *source == sources[0])
+    {
+        return fields.clone();
+    }
+
     let mut present: HashMap<&str, Vec<&FieldRef>> = HashMap::new();
     for source in sources {
         for field in *source {
@@ -296,8 +307,12 @@ fn widen_fields(fields: &Fields, sources: &[&Fields]) -> Fields {
     fields
         .iter()
         .map(|field| {
-            let occurrences = &present[field.name().as_str()];
-            widen_field(field, occurrences, occurrences.len() < sources.len())
+            let occurrences = present
+                .get(field.name().as_str())
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let missing = occurrences.is_empty() || occurrences.len() < sources.len();
+            widen_field(field, occurrences, missing)
         })
         .collect()
 }
@@ -346,7 +361,8 @@ fn widen_nested_type(data_type: &DataType, sources: &[&DataType]) -> DataType {
                 DataType::LargeList(field)
             }
         }
-        // Arrow rejects evolution within other containers before this pass.
+        // Parquet cannot represent unions. Arrow rejects nested evolution in
+        // the remaining container types before this pass.
         _ => data_type.clone(),
     }
 }
@@ -956,5 +972,14 @@ mod schema_presence_tests {
             panic!()
         };
         assert!(children.iter().all(|f| !f.is_nullable()));
+    }
+
+    #[test]
+    fn missing_merged_field_is_defensively_nullable() {
+        let fields = Fields::from(vec![Field::new("missing", DataType::Int32, false)]);
+        let source = Fields::from(vec![Field::new("present", DataType::Int32, false)]);
+        let result = widen_fields(&fields, &[&source]);
+
+        assert!(result[0].is_nullable());
     }
 }
