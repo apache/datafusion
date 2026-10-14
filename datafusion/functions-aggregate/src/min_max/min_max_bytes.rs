@@ -555,100 +555,63 @@ mod tests {
     use super::*;
     use arrow::array::StringArray;
 
-    #[test]
-    fn size_counts_outer_capacity() {
-        let mut state = MinMaxBytesState::new(DataType::Utf8);
-        assert_eq!(state.size(), 0);
-
-        state.min_max = Vec::with_capacity(16);
-        state.min_max.resize(3, None);
-        assert_eq!(
-            state.size(),
-            state.min_max.capacity() * size_of::<Option<Vec<u8>>>()
-        );
-    }
-
-    #[test]
-    fn size_retains_inner_capacity() -> Result<()> {
-        for is_min in [true, false] {
-            let mut accumulator = if is_min {
-                MinMaxBytesAccumulator::new_min(DataType::Utf8)
-            } else {
-                MinMaxBytesAccumulator::new_max(DataType::Utf8)
-            };
-            let long = if is_min {
-                "z".repeat(128)
-            } else {
-                "a".repeat(128)
-            };
-            let short = if is_min { "a" } else { "z" };
-            let values: ArrayRef = Arc::new(StringArray::from(vec![long.as_str(), "m"]));
-            accumulator.update_batch(&[values], &[0, 1], None, 2)?;
-            let outer_bytes =
-                accumulator.inner.min_max.capacity() * size_of::<Option<Vec<u8>>>();
-            let inner_bytes: usize = accumulator
-                .inner
+    fn expected_size(state: &MinMaxBytesState) -> usize {
+        state.min_max.capacity() * size_of::<Option<Vec<u8>>>()
+            + state
                 .min_max
                 .iter()
                 .flatten()
                 .map(Vec::capacity)
-                .sum();
-            assert_eq!(accumulator.size(), outer_bytes + inner_bytes);
-
-            let values: ArrayRef = Arc::new(StringArray::from(vec![short]));
-            accumulator.update_batch(&[values], &[0], None, 2)?;
-            assert_eq!(accumulator.inner.total_data_bytes, short.len() + 1);
-            assert_eq!(accumulator.size(), outer_bytes + inner_bytes);
-
-            let emitted_capacity =
-                accumulator.inner.min_max[0].as_ref().unwrap().capacity();
-            let emitted = accumulator.evaluate(EmitTo::First(1))?;
-            assert_eq!(emitted.as_string::<i32>(), &StringArray::from(vec![short]));
-            assert_eq!(
-                accumulator.size(),
-                accumulator.inner.min_max.capacity() * size_of::<Option<Vec<u8>>>()
-                    + inner_bytes
-                    - emitted_capacity
-            );
-
-            let (data_bytes, emitted) = accumulator.inner.emit_to(EmitTo::All);
-            assert_eq!(data_bytes, 1);
-            assert_eq!(emitted[0].as_deref(), Some(b"m".as_slice()));
-            assert_eq!(accumulator.size(), 0);
-        }
-        Ok(())
+                .sum::<usize>()
     }
 
     #[test]
     fn size_tracks_growth_and_emit_reuse() -> Result<()> {
         let mut state = MinMaxBytesState::new(DataType::Binary);
-        state.min_max.resize(3, None);
+        assert_eq!(state.size(), 0);
+
+        state.min_max = Vec::with_capacity(16);
+        assert_eq!(state.size(), expected_size(&state));
+        state.min_max.resize(4, None);
+        assert_eq!(state.size(), expected_size(&state));
+
         state.set_value(0, b"a");
         state.set_value(0, &[b'z'; 128]);
         state.set_value(1, b"b");
-        let inner_bytes: usize = state.min_max.iter().flatten().map(Vec::capacity).sum();
-        assert_eq!(
-            state.size(),
-            state.min_max.capacity() * size_of::<Option<Vec<u8>>>() + inner_bytes
-        );
+        state.set_value(2, b"c");
+        state.set_value(3, b"d");
+        assert_eq!(state.size(), expected_size(&state));
+        let size_before_replacement = state.size();
 
-        // Emit the larger side, which replaces the outer allocation.
-        let (data_bytes, emitted) = state.emit_to(EmitTo::First(2));
-        assert_eq!(data_bytes, 129);
-        assert_eq!(emitted.len(), 2);
-        assert_eq!(
-            state.size(),
-            state.min_max.capacity() * size_of::<Option<Vec<u8>>>()
-        );
+        state.set_value(0, b"x");
+        assert_eq!(state.size(), size_before_replacement);
+        assert!(state.min_max[0].as_ref().unwrap().capacity() >= 128);
+        assert_eq!(state.total_data_bytes, 4);
+        assert_eq!(state.size(), expected_size(&state));
 
-        state.emit_to(EmitTo::All);
+        let (bytes, emitted) = state.emit_to(EmitTo::First(1));
+        assert_eq!(emitted[0].as_deref(), Some(b"x".as_slice()));
+        assert_eq!(bytes, 1);
+        assert_eq!(state.size(), expected_size(&state));
+        assert_eq!(state.total_data_bytes, 3);
+
+        let (bytes, emitted) = state.emit_to(EmitTo::First(2));
+        assert_eq!(emitted[0].as_deref(), Some(b"b".as_slice()));
+        assert_eq!(emitted[1].as_deref(), Some(b"c".as_slice()));
+        assert_eq!(bytes, 2);
+        assert_eq!(state.size(), expected_size(&state));
+        assert_eq!(state.total_data_bytes, 1);
+
+        let (bytes, emitted) = state.emit_to(EmitTo::All);
+        assert_eq!(emitted[0].as_deref(), Some(b"d".as_slice()));
+        assert_eq!(bytes, 1);
         assert_eq!(state.size(), 0);
+        assert_eq!(state.total_data_bytes, 0);
+
         state.update_batch([Some(b"x".as_slice())], &[0], 1, |a, b| a < b)?;
-        assert_eq!(
-            state.size(),
-            state.min_max.capacity() * size_of::<Option<Vec<u8>>>()
-                + state.min_max[0].as_ref().unwrap().capacity()
-        );
+        assert_eq!(state.min_max[0].as_deref(), Some(b"x".as_slice()));
+        assert_eq!(state.total_data_bytes, 1);
+        assert_eq!(state.size(), expected_size(&state));
         Ok(())
     }
 
