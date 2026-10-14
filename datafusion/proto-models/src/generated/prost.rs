@@ -264,10 +264,12 @@ pub struct HashRepartition {
     #[prost(uint64, tag = "2")]
     pub partition_count: u64,
 }
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EmptyRelationNode {
     #[prost(bool, tag = "1")]
     pub produce_one_row: bool,
+    #[prost(message, optional, tag = "2")]
+    pub schema: ::core::option::Option<super::datafusion_common::DfSchema>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateExternalTableNode {
