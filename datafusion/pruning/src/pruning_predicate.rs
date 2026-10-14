@@ -765,7 +765,7 @@ impl PruningPredicate {
     /// used in the predicate. For example, it can be used to avoid reading
     /// unneeded bloom filters (a non trivial operation).
     pub fn literal_columns(&self) -> Vec<String> {
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::with_capacity(self.literal_guarantees.len());
         self.literal_guarantees
             .iter()
             .map(|e| &e.column.name)
@@ -1063,7 +1063,7 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
     statistics: &S,
     required_columns: &RequiredColumns,
 ) -> Result<RecordBatch> {
-    let mut arrays = Vec::<ArrayRef>::new();
+    let mut arrays = Vec::<ArrayRef>::with_capacity(required_columns.columns.len());
     // For each needed statistics column:
     for (column, statistics_type, stat_field) in required_columns.iter() {
         let column = Column::from_name(column.name());

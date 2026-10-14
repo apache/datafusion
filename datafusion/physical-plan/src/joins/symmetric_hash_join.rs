@@ -336,6 +336,13 @@ impl SymmetricHashJoinExec {
     }
 
     /// Check if order information covers every column in the filter expression.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
     pub fn check_if_order_information_available(&self) -> Result<bool> {
         if let Some(filter) = self.filter() {
             let left = self.left();
