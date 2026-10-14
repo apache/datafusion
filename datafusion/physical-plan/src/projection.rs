@@ -54,7 +54,9 @@ use datafusion_expr::ExpressionPlacement;
 use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::projection::Projector;
-use datafusion_physical_expr_common::physical_expr::{PhysicalExprRef, fmt_sql};
+use datafusion_physical_expr_common::physical_expr::{
+    PhysicalExprRef, fmt_sql, is_volatile,
+};
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, LexRequirement, PhysicalSortExpr,
 };
@@ -535,7 +537,13 @@ impl ExecutionPlan for ProjectionExec {
             // output position.
             if let Some(reassigned) = remapper.try_remap(&filter)? {
                 let rewritten = self.projection_expr().unproject_expr(&reassigned)?;
-                child_parent_filters.push(PushedDownPredicate::supported(rewritten));
+                // A filter must use the projected value rather than evaluating
+                // a volatile projection expression again in the child.
+                if is_volatile(&rewritten) {
+                    child_parent_filters.push(PushedDownPredicate::unsupported(filter));
+                } else {
+                    child_parent_filters.push(PushedDownPredicate::supported(rewritten));
+                }
             } else {
                 child_parent_filters.push(PushedDownPredicate::unsupported(filter));
             }
