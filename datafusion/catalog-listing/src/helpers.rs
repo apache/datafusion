@@ -374,8 +374,6 @@ fn try_into_partitioned_file(
         .into_iter()
         .zip(partition_cols)
         .map(|(parsed, (_, datatype))| {
-            // Hive compliant writers spell a null partition value with a placeholder
-            // directory name, so there is nothing to parse: the value is NULL.
             if !null_partition_name.is_empty() && parsed == null_partition_name {
                 return ScalarValue::try_new_null(datatype);
             }
