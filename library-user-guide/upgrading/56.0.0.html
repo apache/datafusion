@@ -693,6 +693,16 @@ without a <code class="docutils literal notranslate"><span class="pre">constrain
 </div>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/24170">issue #24170</a> for details.</p>
 </section>
+<section id="castexpr-cast-options-now-returns-castoptions-by-value">
+<h3><code class="docutils literal notranslate"><span class="pre">CastExpr::cast_options</span></code> now returns <code class="docutils literal notranslate"><span class="pre">CastOptions</span></code> by value<a class="headerlink" href="#castexpr-cast-options-now-returns-castoptions-by-value" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">CastExpr</span></code> now owns format strings decoded from protobuf, so <code class="docutils literal notranslate"><span class="pre">cast_options()</span></code>
+returns a borrowing <code class="docutils literal notranslate"><span class="pre">CastOptions&lt;'_&gt;</span></code> value instead of <code class="docutils literal notranslate"><span class="pre">&amp;CastOptions&lt;'static&gt;</span></code>.
+Code that only reads the options generally needs no change. To replace only the
+child, use <code class="docutils literal notranslate"><span class="pre">PhysicalExpr::with_new_children</span></code> to preserve the options and whether
+the target is type-only or explicit. Use <code class="docutils literal notranslate"><span class="pre">CastExpr::with_new_expr_and_target_field</span></code>
+when replacing both the child and an explicit target field. Neither method
+requires a <code class="docutils literal notranslate"><span class="pre">'static</span></code> borrow of the options.</p>
+</section>
 <section id="executionoptions-has-a-new-enable-nlj-coordinated-fallback-field">
 <h3><code class="docutils literal notranslate"><span class="pre">ExecutionOptions</span></code> has a new <code class="docutils literal notranslate"><span class="pre">enable_nlj_coordinated_fallback</span></code> field<a class="headerlink" href="#executionoptions-has-a-new-enable-nlj-coordinated-fallback-field" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">ExecutionOptions</span></code> gained a public <code class="docutils literal notranslate"><span class="pre">enable_nlj_coordinated_fallback:</span> <span class="pre">bool</span></code> field
@@ -1417,6 +1427,7 @@ the API breaks.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#range-partitioning-supports-retained-samples-and-scaling">Range partitioning supports retained samples and scaling</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#groupcolumn-now-requires-values-preserving"><code class="docutils literal notranslate"><span class="pre">GroupColumn</span></code> now requires <code class="docutils literal notranslate"><span class="pre">values_preserving</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-proto-common-option-and-constraint-conversions-are-fallible"><code class="docutils literal notranslate"><span class="pre">datafusion-proto</span></code>: common option and constraint conversions are fallible</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#castexpr-cast-options-now-returns-castoptions-by-value"><code class="docutils literal notranslate"><span class="pre">CastExpr::cast_options</span></code> now returns <code class="docutils literal notranslate"><span class="pre">CastOptions</span></code> by value</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionoptions-has-a-new-enable-nlj-coordinated-fallback-field"><code class="docutils literal notranslate"><span class="pre">ExecutionOptions</span></code> has a new <code class="docutils literal notranslate"><span class="pre">enable_nlj_coordinated_fallback</span></code> field</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionoptions-time-zone-is-now-a-validated-configtimezone"><code class="docutils literal notranslate"><span class="pre">ExecutionOptions::time_zone</span></code> is now a validated <code class="docutils literal notranslate"><span class="pre">ConfigTimeZone</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionoptions-has-a-new-soft-max-bytes-per-output-file-field"><code class="docutils literal notranslate"><span class="pre">ExecutionOptions</span></code> has a new <code class="docutils literal notranslate"><span class="pre">soft_max_bytes_per_output_file</span></code> field</a></li>
