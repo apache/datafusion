@@ -492,6 +492,9 @@ pub fn aggregate_functional_dependencies(
                 // determinant key:
                 if let Some(input_idx) = input_idx
                     && source_indices.contains(input_idx)
+                    // A key column can be in the GROUP BY list more than one
+                    // time (`x, x AS k`). Count it one time.
+                    && !new_source_input_indices.contains(&Some(*input_idx))
                 {
                     new_source_indices.push(idx);
                     new_source_input_indices.push(Some(*input_idx));

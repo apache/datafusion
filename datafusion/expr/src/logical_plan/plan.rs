@@ -5543,6 +5543,31 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_group_by_repeated_key_keeps_key_dependency() -> Result<()> {
+        let constraints =
+            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]);
+        let source = Arc::new(
+            LogicalTableSource::new(Arc::new(employee_schema()))
+                .with_constraints(constraints),
+        );
+        // `id` is in the GROUP BY list two times: as itself and as `k`.
+        let plan = LogicalPlanBuilder::scan("employee_csv", source, None)?
+            .aggregate(
+                vec![col("id"), col("state"), col("id").alias("k")],
+                Vec::<Expr>::new(),
+            )?
+            .build()?;
+
+        // `id` alone still determines the row.
+        let deps = plan.schema().functional_dependencies();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].source_indices, vec![0]);
+        assert_eq!(deps[0].target_indices, vec![0, 1, 2]);
+
+        Ok(())
+    }
+
+    #[test]
     fn projection_resolves_columns_not_flattened_names() -> Result<()> {
         // Build an input schema where a qualified field (`orders`.`id`) and an
         // unqualified field that is literally named `"orders.id"` (the name of

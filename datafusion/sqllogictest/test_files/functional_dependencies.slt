@@ -441,6 +441,31 @@ SELECT y, count(*) FROM t_try_cast GROUP BY TRY_CAST(x AS INT);
 statement ok
 drop table t_try_cast;
 
+# 6.7 A key that comes from an inner GROUP BY: `x` is unique in the subquery,
+# but `CAST(x AS INT)` is not.
+statement ok
+CREATE TABLE t_inner (x DOUBLE, y VARCHAR) AS VALUES (1.1, 'b'), (1.2, 'a'), (2.1, 'c');
+
+query RT
+SELECT x, y FROM (SELECT x, max(y) AS y FROM t_inner GROUP BY x) ORDER BY CAST(x AS INT), y;
+----
+1.2 a
+1.1 b
+2.1 c
+
+query II rowsort
+SELECT CAST(x AS INT) k, count(*) n FROM (SELECT x, max(y) AS y FROM t_inner GROUP BY x) GROUP BY CAST(x AS INT), y;
+----
+1 1
+1 1
+2 1
+
+query error DataFusion error: Error during planning: Column in SELECT must be in GROUP BY or an aggregate function
+SELECT y, count(*) FROM (SELECT x, max(y) AS y FROM t_inner GROUP BY x) GROUP BY CAST(x AS INT);
+
+statement ok
+drop table t_inner;
+
 ##########
 ## Cleanup
 ##########
