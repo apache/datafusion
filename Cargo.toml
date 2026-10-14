@@ -46,7 +46,7 @@ members = [
     "datafusion/physical-optimizer",
     "datafusion/pruning",
     "datafusion/physical-plan",
-    "datafusion/physical-plan-checks",
+    "datafusion/property-tests",
     "datafusion/proto",
     "datafusion/proto-common",
     "datafusion/proto-common/gen",

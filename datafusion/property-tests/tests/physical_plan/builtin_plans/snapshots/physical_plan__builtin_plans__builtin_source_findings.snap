@@ -1,0 +1,600 @@
+---
+source: datafusion/property-tests/tests/physical_plan/builtin_plans/mod.rs
+expression: output
+---
+## DataSourceExec MemorySourceConfig
+  case default:
+    DataSourceExec: partitions=3, partition_sizes=[39, 0, 56]
+    [invariant] invalid_partition_errors at DataSourceExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case single partition:
+    DataSourceExec: partitions=1, partition_sizes=[85]
+    [invariant] invalid_partition_errors at DataSourceExec (root): the node has 1 output partitions, but execute(1) panicked: index out of bounds: the len is 1 but the index is 1; return an error for a partition at or past the partition count
+  case inexact statistics:
+    DataSourceExec: partitions=3, partition_sizes=[39, 0, 56]
+    [invariant] invalid_partition_errors at DataSourceExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case absent statistics:
+    DataSourceExec: partitions=3, partition_sizes=[39, 0, 56]
+    [invariant] invalid_partition_errors at DataSourceExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case empty input:
+    DataSourceExec: partitions=3, partition_sizes=[0, 0, 1]
+    [invariant] invalid_partition_errors at DataSourceExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case uniform constants:
+    DataSourceExec: partitions=3, partition_sizes=[34, 1, 57]
+    [invariant] invalid_partition_errors at DataSourceExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case constants per partition:
+    DataSourceExec: partitions=3, partition_sizes=[34, 1, 57]
+    [invariant] invalid_partition_errors at DataSourceExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case copied columns:
+    DataSourceExec: partitions=3, partition_sizes=[39, 0, 56]
+    [invariant] invalid_partition_errors at DataSourceExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case sorted by row id:
+    DataSourceExec: partitions=3, partition_sizes=[39, 0, 56], output_ordering=__row_id@3 ASC
+    [invariant] invalid_partition_errors at DataSourceExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case hash partitioned:
+    DataSourceExec: partitions=3, partition_sizes=[28, 33, 33]
+    [invariant] invalid_partition_errors at DataSourceExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+
+## DataSourceExec MemorySourceConfig with projection
+  case default:
+    DataSourceExec: partitions=3, partition_sizes=[39, 0, 56]
+    [invariant] invalid_partition_errors at DataSourceExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case single partition:
+    DataSourceExec: partitions=1, partition_sizes=[85]
+    [invariant] invalid_partition_errors at DataSourceExec (root): the node has 1 output partitions, but execute(1) panicked: index out of bounds: the len is 1 but the index is 1; return an error for a partition at or past the partition count
+  case inexact statistics:
+    DataSourceExec: partitions=3, partition_sizes=[39, 0, 56]
+    [invariant] invalid_partition_errors at DataSourceExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case absent statistics:
+    DataSourceExec: partitions=3, partition_sizes=[39, 0, 56]
+    [invariant] invalid_partition_errors at DataSourceExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case empty input:
+    DataSourceExec: partitions=3, partition_sizes=[0, 0, 1]
+    [invariant] invalid_partition_errors at DataSourceExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case uniform constants:
+    DataSourceExec: partitions=3, partition_sizes=[34, 1, 57]
+    [invariant] invalid_partition_errors at DataSourceExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case constants per partition:
+    DataSourceExec: partitions=3, partition_sizes=[34, 1, 57]
+    [invariant] invalid_partition_errors at DataSourceExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case copied columns:
+    DataSourceExec: partitions=3, partition_sizes=[39, 0, 56]
+    [invariant] invalid_partition_errors at DataSourceExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case sorted by row id:
+    DataSourceExec: partitions=3, partition_sizes=[39, 0, 56], output_ordering=__row_id@2 ASC
+    [invariant] invalid_partition_errors at DataSourceExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case hash partitioned:
+    DataSourceExec: partitions=3, partition_sizes=[28, 33, 33]
+    [invariant] invalid_partition_errors at DataSourceExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+
+## DataSourceExec MemorySourceConfig with limit
+  case default:
+    DataSourceExec: partitions=3, partition_sizes=[39, 0, 56], fetch=10
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but overall num_rows is Exact(600), which is more than the fetch allows (30)
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but partition 0 num_rows is Exact(200), which is more than the fetch allows (10)
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but partition 2 num_rows is Exact(400), which is more than the fetch allows (10)
+    [invariant] exact_statistics_hold at DataSourceExec (root): the overall statistics are false: num_rows is Exact(600), but the output has 20 rows; null_count of c@2 is Exact(54), but the output has Exact(1)
+    [invariant] exact_statistics_hold at DataSourceExec (root): the partition 0 statistics are false: num_rows is Exact(200), but the output has 10 rows; null_count of c@2 is Exact(18), but the output has Exact(0)
+    [invariant] exact_statistics_hold at DataSourceExec (root): the partition 2 statistics are false: num_rows is Exact(400), but the output has 10 rows; null_count of c@2 is Exact(36), but the output has Exact(1)
+    [invariant] invalid_partition_errors at DataSourceExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case single partition:
+    DataSourceExec: partitions=1, partition_sizes=[85], fetch=10
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but overall num_rows is Exact(600), which is more than the fetch allows (10)
+    [invariant] exact_statistics_hold at DataSourceExec (root): the overall statistics are false: num_rows is Exact(600), but the output has 10 rows; null_count of c@2 is Exact(54), but the output has Exact(0)
+    [invariant] exact_statistics_hold at DataSourceExec (root): the partition 0 statistics are false: num_rows is Exact(600), but the output has 10 rows; null_count of c@2 is Exact(54), but the output has Exact(0)
+    [invariant] invalid_partition_errors at DataSourceExec (root): the node has 1 output partitions, but execute(1) panicked: index out of bounds: the len is 1 but the index is 1; return an error for a partition at or past the partition count
+  case inexact statistics:
+    DataSourceExec: partitions=3, partition_sizes=[39, 0, 56], fetch=10
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but overall num_rows is Exact(600), which is more than the fetch allows (30)
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but partition 0 num_rows is Exact(200), which is more than the fetch allows (10)
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but partition 2 num_rows is Exact(400), which is more than the fetch allows (10)
+    [invariant] exact_statistics_hold at DataSourceExec (root): the overall statistics are false: num_rows is Exact(600), but the output has 20 rows; null_count of c@2 is Exact(54), but the output has Exact(1)
+    [invariant] exact_statistics_hold at DataSourceExec (root): the partition 0 statistics are false: num_rows is Exact(200), but the output has 10 rows; null_count of c@2 is Exact(18), but the output has Exact(0)
+    [invariant] exact_statistics_hold at DataSourceExec (root): the partition 2 statistics are false: num_rows is Exact(400), but the output has 10 rows; null_count of c@2 is Exact(36), but the output has Exact(1)
+    [invariant] invalid_partition_errors at DataSourceExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case absent statistics:
+    DataSourceExec: partitions=3, partition_sizes=[39, 0, 56], fetch=10
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but overall num_rows is Exact(600), which is more than the fetch allows (30)
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but partition 0 num_rows is Exact(200), which is more than the fetch allows (10)
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but partition 2 num_rows is Exact(400), which is more than the fetch allows (10)
+    [invariant] exact_statistics_hold at DataSourceExec (root): the overall statistics are false: num_rows is Exact(600), but the output has 20 rows; null_count of c@2 is Exact(54), but the output has Exact(1)
+    [invariant] exact_statistics_hold at DataSourceExec (root): the partition 0 statistics are false: num_rows is Exact(200), but the output has 10 rows; null_count of c@2 is Exact(18), but the output has Exact(0)
+    [invariant] exact_statistics_hold at DataSourceExec (root): the partition 2 statistics are false: num_rows is Exact(400), but the output has 10 rows; null_count of c@2 is Exact(36), but the output has Exact(1)
+    [invariant] invalid_partition_errors at DataSourceExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case empty input:
+    DataSourceExec: partitions=3, partition_sizes=[0, 0, 1], fetch=10
+    [invariant] invalid_partition_errors at DataSourceExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case uniform constants:
+    DataSourceExec: partitions=3, partition_sizes=[34, 1, 57], fetch=10
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but overall num_rows is Exact(600), which is more than the fetch allows (30)
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but partition 0 num_rows is Exact(200), which is more than the fetch allows (10)
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but partition 2 num_rows is Exact(400), which is more than the fetch allows (10)
+    [invariant] exact_statistics_hold at DataSourceExec (root): the overall statistics are false: num_rows is Exact(600), but the output has 20 rows
+    [invariant] exact_statistics_hold at DataSourceExec (root): the partition 0 statistics are false: num_rows is Exact(200), but the output has 10 rows
+    [invariant] exact_statistics_hold at DataSourceExec (root): the partition 2 statistics are false: num_rows is Exact(400), but the output has 10 rows
+    [invariant] invalid_partition_errors at DataSourceExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case constants per partition:
+    DataSourceExec: partitions=3, partition_sizes=[34, 1, 57], fetch=10
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but overall num_rows is Exact(600), which is more than the fetch allows (30)
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but partition 0 num_rows is Exact(200), which is more than the fetch allows (10)
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but partition 2 num_rows is Exact(400), which is more than the fetch allows (10)
+    [invariant] exact_statistics_hold at DataSourceExec (root): the overall statistics are false: num_rows is Exact(600), but the output has 20 rows
+    [invariant] exact_statistics_hold at DataSourceExec (root): the partition 0 statistics are false: num_rows is Exact(200), but the output has 10 rows
+    [invariant] exact_statistics_hold at DataSourceExec (root): the partition 2 statistics are false: num_rows is Exact(400), but the output has 10 rows
+    [invariant] invalid_partition_errors at DataSourceExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case copied columns:
+    DataSourceExec: partitions=3, partition_sizes=[39, 0, 56], fetch=10
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but overall num_rows is Exact(600), which is more than the fetch allows (30)
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but partition 0 num_rows is Exact(200), which is more than the fetch allows (10)
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but partition 2 num_rows is Exact(400), which is more than the fetch allows (10)
+    [invariant] exact_statistics_hold at DataSourceExec (root): the overall statistics are false: num_rows is Exact(600), but the output has 20 rows; null_count of c@2 is Exact(54), but the output has Exact(1); null_count of c__copy@5 is Exact(54), but the output has Exact(1)
+    [invariant] exact_statistics_hold at DataSourceExec (root): the partition 0 statistics are false: num_rows is Exact(200), but the output has 10 rows; null_count of c@2 is Exact(18), but the output has Exact(0); null_count of c__copy@5 is Exact(18), but the output has Exact(0)
+    [invariant] exact_statistics_hold at DataSourceExec (root): the partition 2 statistics are false: num_rows is Exact(400), but the output has 10 rows; null_count of c@2 is Exact(36), but the output has Exact(1); null_count of c__copy@5 is Exact(36), but the output has Exact(1)
+    [invariant] invalid_partition_errors at DataSourceExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case sorted by row id:
+    DataSourceExec: partitions=3, partition_sizes=[39, 0, 56], fetch=10, output_ordering=__row_id@3 ASC
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but overall num_rows is Exact(600), which is more than the fetch allows (30)
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but partition 0 num_rows is Exact(200), which is more than the fetch allows (10)
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but partition 2 num_rows is Exact(400), which is more than the fetch allows (10)
+    [invariant] exact_statistics_hold at DataSourceExec (root): the overall statistics are false: num_rows is Exact(600), but the output has 20 rows; null_count of c@2 is Exact(54), but the output has Exact(1)
+    [invariant] exact_statistics_hold at DataSourceExec (root): the partition 0 statistics are false: num_rows is Exact(200), but the output has 10 rows; null_count of c@2 is Exact(18), but the output has Exact(0)
+    [invariant] exact_statistics_hold at DataSourceExec (root): the partition 2 statistics are false: num_rows is Exact(400), but the output has 10 rows; null_count of c@2 is Exact(36), but the output has Exact(1)
+    [invariant] invalid_partition_errors at DataSourceExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case hash partitioned:
+    DataSourceExec: partitions=3, partition_sizes=[28, 33, 33], fetch=10
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but overall num_rows is Exact(600), which is more than the fetch allows (30)
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but partition 0 num_rows is Exact(146), which is more than the fetch allows (10)
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but partition 1 num_rows is Exact(236), which is more than the fetch allows (10)
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but partition 2 num_rows is Exact(218), which is more than the fetch allows (10)
+    [invariant] exact_statistics_hold at DataSourceExec (root): the overall statistics are false: num_rows is Exact(600), but the output has 30 rows; null_count of c@2 is Exact(54), but the output has Exact(4)
+    [invariant] exact_statistics_hold at DataSourceExec (root): the partition 0 statistics are false: num_rows is Exact(146), but the output has 10 rows; null_count of c@2 is Exact(14), but the output has Exact(2)
+    [invariant] exact_statistics_hold at DataSourceExec (root): the partition 1 statistics are false: num_rows is Exact(236), but the output has 10 rows; null_count of c@2 is Exact(21), but the output has Exact(2)
+    [invariant] exact_statistics_hold at DataSourceExec (root): the partition 2 statistics are false: num_rows is Exact(218), but the output has 10 rows; null_count of c@2 is Exact(19), but the output has Exact(0)
+    [invariant] invalid_partition_errors at DataSourceExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+
+## DataSourceExec values
+  case default:
+    DataSourceExec: partitions=1, partition_sizes=[1]
+    [invariant] invalid_partition_errors at DataSourceExec (root): the node has 1 output partitions, but execute(1) panicked: index out of bounds: the len is 1 but the index is 1; return an error for a partition at or past the partition count
+
+## DataSourceExec Parquet
+  allowed execution_succeeds: the files are not written, so the plan cannot run
+  allowed batch_schema: the files are not written, so the plan cannot run
+  allowed exact_statistics_hold: the files are not written, so the plan cannot run
+  allowed orderings_hold: the files are not written, so the plan cannot run
+  allowed constants_hold: the files are not written, so the plan cannot run
+  allowed equivalence_classes_hold: the files are not written, so the plan cannot run
+  allowed hash_partitioning_holds: the files are not written, so the plan cannot run
+  allowed invalid_partition_errors: the files are not written, so the plan cannot run
+  allowed cardinality_effect_holds: the files are not written, so the plan cannot run
+  allowed boundedness_holds: the files are not written, so the plan cannot run
+  allowed emission_type_holds: the files are not written, so the plan cannot run
+  allowed lazy_evaluation_holds: the files are not written, so the plan cannot run
+  allowed maintains_input_order_holds: the files are not written, so the plan cannot run
+  allowed maintains_input_order_missed: the files are not written, so the plan cannot run
+  allowed with_fetch_equivalent: the files are not written, so the plan cannot run
+  allowed limit_pushdown_equivalent: the files are not written, so the plan cannot run
+  allowed reset_state_reexecution: the files are not written, so the plan cannot run
+  allowed limit_pushdown_missed_at_runtime: the files are not written, so the plan cannot run
+  allowed batch_size_invariance: the files are not written, so the plan cannot run
+  allowed batch_boundary_invariance: the files are not written, so the plan cannot run
+  allowed memory_released: the files are not written, so the plan cannot run
+  allowed streams_released: the files are not written, so the plan cannot run
+  allowed errors_propagate: the files are not written, so the plan cannot run
+  case default: no violations
+  case single partition: no violations
+  case inexact statistics: no violations
+  case absent statistics: no violations
+  case empty input: no violations
+  case uniform constants: no violations
+  case constants per partition: no violations
+  case copied columns: no violations
+  case sorted by row id: no violations
+  case hash partitioned: no violations
+
+## DataSourceExec CSV
+  allowed execution_succeeds: the files are not written, so the plan cannot run
+  allowed batch_schema: the files are not written, so the plan cannot run
+  allowed exact_statistics_hold: the files are not written, so the plan cannot run
+  allowed orderings_hold: the files are not written, so the plan cannot run
+  allowed constants_hold: the files are not written, so the plan cannot run
+  allowed equivalence_classes_hold: the files are not written, so the plan cannot run
+  allowed hash_partitioning_holds: the files are not written, so the plan cannot run
+  allowed invalid_partition_errors: the files are not written, so the plan cannot run
+  allowed cardinality_effect_holds: the files are not written, so the plan cannot run
+  allowed boundedness_holds: the files are not written, so the plan cannot run
+  allowed emission_type_holds: the files are not written, so the plan cannot run
+  allowed lazy_evaluation_holds: the files are not written, so the plan cannot run
+  allowed maintains_input_order_holds: the files are not written, so the plan cannot run
+  allowed maintains_input_order_missed: the files are not written, so the plan cannot run
+  allowed with_fetch_equivalent: the files are not written, so the plan cannot run
+  allowed limit_pushdown_equivalent: the files are not written, so the plan cannot run
+  allowed reset_state_reexecution: the files are not written, so the plan cannot run
+  allowed limit_pushdown_missed_at_runtime: the files are not written, so the plan cannot run
+  allowed batch_size_invariance: the files are not written, so the plan cannot run
+  allowed batch_boundary_invariance: the files are not written, so the plan cannot run
+  allowed memory_released: the files are not written, so the plan cannot run
+  allowed streams_released: the files are not written, so the plan cannot run
+  allowed errors_propagate: the files are not written, so the plan cannot run
+  case default: no violations
+  case single partition: no violations
+  case inexact statistics: no violations
+  case absent statistics: no violations
+  case empty input: no violations
+  case uniform constants: no violations
+  case constants per partition: no violations
+  case copied columns: no violations
+  case sorted by row id: no violations
+  case hash partitioned: no violations
+
+## DataSourceExec JSON
+  allowed execution_succeeds: the files are not written, so the plan cannot run
+  allowed batch_schema: the files are not written, so the plan cannot run
+  allowed exact_statistics_hold: the files are not written, so the plan cannot run
+  allowed orderings_hold: the files are not written, so the plan cannot run
+  allowed constants_hold: the files are not written, so the plan cannot run
+  allowed equivalence_classes_hold: the files are not written, so the plan cannot run
+  allowed hash_partitioning_holds: the files are not written, so the plan cannot run
+  allowed invalid_partition_errors: the files are not written, so the plan cannot run
+  allowed cardinality_effect_holds: the files are not written, so the plan cannot run
+  allowed boundedness_holds: the files are not written, so the plan cannot run
+  allowed emission_type_holds: the files are not written, so the plan cannot run
+  allowed lazy_evaluation_holds: the files are not written, so the plan cannot run
+  allowed maintains_input_order_holds: the files are not written, so the plan cannot run
+  allowed maintains_input_order_missed: the files are not written, so the plan cannot run
+  allowed with_fetch_equivalent: the files are not written, so the plan cannot run
+  allowed limit_pushdown_equivalent: the files are not written, so the plan cannot run
+  allowed reset_state_reexecution: the files are not written, so the plan cannot run
+  allowed limit_pushdown_missed_at_runtime: the files are not written, so the plan cannot run
+  allowed batch_size_invariance: the files are not written, so the plan cannot run
+  allowed batch_boundary_invariance: the files are not written, so the plan cannot run
+  allowed memory_released: the files are not written, so the plan cannot run
+  allowed streams_released: the files are not written, so the plan cannot run
+  allowed errors_propagate: the files are not written, so the plan cannot run
+  case default: no violations
+  case single partition: no violations
+  case inexact statistics: no violations
+  case absent statistics: no violations
+  case empty input: no violations
+  case uniform constants: no violations
+  case constants per partition: no violations
+  case copied columns: no violations
+  case sorted by row id: no violations
+  case hash partitioned: no violations
+
+## DataSourceExec Arrow
+  allowed execution_succeeds: the files are not written, so the plan cannot run
+  allowed batch_schema: the files are not written, so the plan cannot run
+  allowed exact_statistics_hold: the files are not written, so the plan cannot run
+  allowed orderings_hold: the files are not written, so the plan cannot run
+  allowed constants_hold: the files are not written, so the plan cannot run
+  allowed equivalence_classes_hold: the files are not written, so the plan cannot run
+  allowed hash_partitioning_holds: the files are not written, so the plan cannot run
+  allowed invalid_partition_errors: the files are not written, so the plan cannot run
+  allowed cardinality_effect_holds: the files are not written, so the plan cannot run
+  allowed boundedness_holds: the files are not written, so the plan cannot run
+  allowed emission_type_holds: the files are not written, so the plan cannot run
+  allowed lazy_evaluation_holds: the files are not written, so the plan cannot run
+  allowed maintains_input_order_holds: the files are not written, so the plan cannot run
+  allowed maintains_input_order_missed: the files are not written, so the plan cannot run
+  allowed with_fetch_equivalent: the files are not written, so the plan cannot run
+  allowed limit_pushdown_equivalent: the files are not written, so the plan cannot run
+  allowed reset_state_reexecution: the files are not written, so the plan cannot run
+  allowed limit_pushdown_missed_at_runtime: the files are not written, so the plan cannot run
+  allowed batch_size_invariance: the files are not written, so the plan cannot run
+  allowed batch_boundary_invariance: the files are not written, so the plan cannot run
+  allowed memory_released: the files are not written, so the plan cannot run
+  allowed streams_released: the files are not written, so the plan cannot run
+  allowed errors_propagate: the files are not written, so the plan cannot run
+  case default: no violations
+  case single partition: no violations
+  case inexact statistics: no violations
+  case absent statistics: no violations
+  case empty input: no violations
+  case uniform constants: no violations
+  case constants per partition: no violations
+  case copied columns: no violations
+  case sorted by row id: no violations
+  case hash partitioned: no violations
+
+## DataSourceExec Parquet with projection and limit
+  allowed execution_succeeds: the files are not written, so the plan cannot run
+  allowed batch_schema: the files are not written, so the plan cannot run
+  allowed exact_statistics_hold: the files are not written, so the plan cannot run
+  allowed orderings_hold: the files are not written, so the plan cannot run
+  allowed constants_hold: the files are not written, so the plan cannot run
+  allowed equivalence_classes_hold: the files are not written, so the plan cannot run
+  allowed hash_partitioning_holds: the files are not written, so the plan cannot run
+  allowed invalid_partition_errors: the files are not written, so the plan cannot run
+  allowed cardinality_effect_holds: the files are not written, so the plan cannot run
+  allowed boundedness_holds: the files are not written, so the plan cannot run
+  allowed emission_type_holds: the files are not written, so the plan cannot run
+  allowed lazy_evaluation_holds: the files are not written, so the plan cannot run
+  allowed maintains_input_order_holds: the files are not written, so the plan cannot run
+  allowed maintains_input_order_missed: the files are not written, so the plan cannot run
+  allowed with_fetch_equivalent: the files are not written, so the plan cannot run
+  allowed limit_pushdown_equivalent: the files are not written, so the plan cannot run
+  allowed reset_state_reexecution: the files are not written, so the plan cannot run
+  allowed limit_pushdown_missed_at_runtime: the files are not written, so the plan cannot run
+  allowed batch_size_invariance: the files are not written, so the plan cannot run
+  allowed batch_boundary_invariance: the files are not written, so the plan cannot run
+  allowed memory_released: the files are not written, so the plan cannot run
+  allowed streams_released: the files are not written, so the plan cannot run
+  allowed errors_propagate: the files are not written, so the plan cannot run
+  case default:
+    DataSourceExec: file_groups={3 groups: [[data/part-0.parquet], [data/part-1.parquet], [data/part-2.parquet]]}, projection=[a, c, __row_id], limit=10, file_type=parquet
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but overall num_rows is Exact(600), which is more than the fetch allows (30)
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but partition 0 num_rows is Exact(200), which is more than the fetch allows (10)
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but partition 2 num_rows is Exact(400), which is more than the fetch allows (10)
+  case single partition:
+    DataSourceExec: file_groups={1 group: [[data/part-0.parquet]]}, projection=[a, c, __row_id], limit=10, file_type=parquet
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but overall num_rows is Exact(600), which is more than the fetch allows (10)
+  case inexact statistics:
+    DataSourceExec: file_groups={3 groups: [[data/part-0.parquet], [data/part-1.parquet], [data/part-2.parquet]]}, projection=[a, c, __row_id], limit=10, file_type=parquet
+    [lint] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but the overall num_rows estimate Inexact(600) is more than the fetch allows (30)
+    [lint] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but the partition 0 num_rows estimate Inexact(200) is more than the fetch allows (10)
+    [lint] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but the partition 2 num_rows estimate Inexact(400) is more than the fetch allows (10)
+  case absent statistics: no violations
+  case empty input: no violations
+  case uniform constants:
+    DataSourceExec: file_groups={3 groups: [[data/part-0.parquet], [data/part-1.parquet], [data/part-2.parquet]]}, projection=[a, c, __row_id], limit=10, file_type=parquet
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but overall num_rows is Exact(600), which is more than the fetch allows (30)
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but partition 0 num_rows is Exact(200), which is more than the fetch allows (10)
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but partition 2 num_rows is Exact(400), which is more than the fetch allows (10)
+  case constants per partition:
+    DataSourceExec: file_groups={3 groups: [[data/part-0.parquet], [data/part-1.parquet], [data/part-2.parquet]]}, projection=[a, c, __row_id], limit=10, file_type=parquet
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but overall num_rows is Exact(600), which is more than the fetch allows (30)
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but partition 0 num_rows is Exact(200), which is more than the fetch allows (10)
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but partition 2 num_rows is Exact(400), which is more than the fetch allows (10)
+  case copied columns:
+    DataSourceExec: file_groups={3 groups: [[data/part-0.parquet], [data/part-1.parquet], [data/part-2.parquet]]}, projection=[a, c, a__copy, b__copy, c__copy, __row_id], limit=10, file_type=parquet
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but overall num_rows is Exact(600), which is more than the fetch allows (30)
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but partition 0 num_rows is Exact(200), which is more than the fetch allows (10)
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but partition 2 num_rows is Exact(400), which is more than the fetch allows (10)
+  case sorted by row id:
+    DataSourceExec: file_groups={3 groups: [[data/part-0.parquet], [data/part-1.parquet], [data/part-2.parquet]]}, projection=[a, c, __row_id], limit=10, output_ordering=[__row_id@2 ASC], file_type=parquet
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but overall num_rows is Exact(600), which is more than the fetch allows (30)
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but partition 0 num_rows is Exact(200), which is more than the fetch allows (10)
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but partition 2 num_rows is Exact(400), which is more than the fetch allows (10)
+  case hash partitioned:
+    DataSourceExec: file_groups={3 groups: [[data/part-0.parquet], [data/part-1.parquet], [data/part-2.parquet]]}, projection=[a, c, __row_id], limit=10, output_partitioning=Hash([a@0], 3), file_type=parquet
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but overall num_rows is Exact(600), which is more than the fetch allows (30)
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but partition 0 num_rows is Exact(146), which is more than the fetch allows (10)
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but partition 1 num_rows is Exact(236), which is more than the fetch allows (10)
+    [invariant] fetch_bounds_num_rows at DataSourceExec (root): fetch() is Some(10), but partition 2 num_rows is Exact(218), which is more than the fetch allows (10)
+
+## LazyMemoryExec
+  case default: no violations
+  case single partition: no violations
+  case inexact statistics: no violations
+  case absent statistics: no violations
+  case empty input: no violations
+  case uniform constants: no violations
+  case constants per partition: no violations
+  case copied columns: no violations
+  case sorted by row id: no violations
+  case hash partitioned: no violations
+
+## LazyMemoryExec with projection
+  case default: no violations
+  case single partition: no violations
+  case inexact statistics: no violations
+  case absent statistics: no violations
+  case empty input: no violations
+  case uniform constants: no violations
+  case constants per partition: no violations
+  case copied columns: no violations
+  case sorted by row id: no violations
+  case hash partitioned: no violations
+
+## StreamingTableExec
+  case default:
+    StreamingTableExec: partition_sizes=3, projection=[a, b, c, __row_id]
+    [invariant] invalid_partition_errors at StreamingTableExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case single partition:
+    StreamingTableExec: partition_sizes=1, projection=[a, b, c, __row_id]
+    [invariant] invalid_partition_errors at StreamingTableExec (root): the node has 1 output partitions, but execute(1) panicked: index out of bounds: the len is 1 but the index is 1; return an error for a partition at or past the partition count
+  case inexact statistics:
+    StreamingTableExec: partition_sizes=3, projection=[a, b, c, __row_id]
+    [invariant] invalid_partition_errors at StreamingTableExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case absent statistics:
+    StreamingTableExec: partition_sizes=3, projection=[a, b, c, __row_id]
+    [invariant] invalid_partition_errors at StreamingTableExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case empty input:
+    StreamingTableExec: partition_sizes=3, projection=[a, b, c, __row_id]
+    [invariant] invalid_partition_errors at StreamingTableExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case uniform constants:
+    StreamingTableExec: partition_sizes=3, projection=[a, b, c, __row_id]
+    [invariant] invalid_partition_errors at StreamingTableExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case constants per partition:
+    StreamingTableExec: partition_sizes=3, projection=[a, b, c, __row_id]
+    [invariant] invalid_partition_errors at StreamingTableExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case copied columns:
+    StreamingTableExec: partition_sizes=3, projection=[a, b, c, a__copy, b__copy, c__copy, __row_id]
+    [invariant] invalid_partition_errors at StreamingTableExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case sorted by row id:
+    StreamingTableExec: partition_sizes=3, projection=[a, b, c, __row_id], output_ordering=[__row_id@3 ASC]
+    [invariant] invalid_partition_errors at StreamingTableExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case hash partitioned:
+    StreamingTableExec: partition_sizes=3, projection=[a, b, c, __row_id], output_partitioning=Hash([a@0], 3)
+    [invariant] invalid_partition_errors at StreamingTableExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+
+## StreamingTableExec with projection and limit
+  case default:
+    StreamingTableExec: partition_sizes=3, projection=[a, c, __row_id], fetch=10
+    [invariant] invalid_partition_errors at StreamingTableExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case single partition:
+    StreamingTableExec: partition_sizes=1, projection=[a, c, __row_id], fetch=10
+    [invariant] invalid_partition_errors at StreamingTableExec (root): the node has 1 output partitions, but execute(1) panicked: index out of bounds: the len is 1 but the index is 1; return an error for a partition at or past the partition count
+  case inexact statistics:
+    StreamingTableExec: partition_sizes=3, projection=[a, c, __row_id], fetch=10
+    [invariant] invalid_partition_errors at StreamingTableExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case absent statistics:
+    StreamingTableExec: partition_sizes=3, projection=[a, c, __row_id], fetch=10
+    [invariant] invalid_partition_errors at StreamingTableExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case empty input:
+    StreamingTableExec: partition_sizes=3, projection=[a, c, __row_id], fetch=10
+    [invariant] invalid_partition_errors at StreamingTableExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case uniform constants:
+    StreamingTableExec: partition_sizes=3, projection=[a, c, __row_id], fetch=10
+    [invariant] invalid_partition_errors at StreamingTableExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case constants per partition:
+    StreamingTableExec: partition_sizes=3, projection=[a, c, __row_id], fetch=10
+    [invariant] invalid_partition_errors at StreamingTableExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case copied columns:
+    StreamingTableExec: partition_sizes=3, projection=[a, c, a__copy, b__copy, c__copy, __row_id], fetch=10
+    [invariant] invalid_partition_errors at StreamingTableExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case sorted by row id:
+    StreamingTableExec: partition_sizes=3, projection=[a, c, __row_id], fetch=10, output_ordering=[__row_id@2 ASC]
+    [invariant] invalid_partition_errors at StreamingTableExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case hash partitioned:
+    StreamingTableExec: partition_sizes=3, projection=[a, c, __row_id], fetch=10
+    [invariant] invalid_partition_errors at StreamingTableExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+
+## StreamingTableExec infinite
+  case default:
+    StreamingTableExec: partition_sizes=3, projection=[a, b, c, __row_id], infinite_source=true
+    [invariant] invalid_partition_errors at StreamingTableExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case single partition:
+    StreamingTableExec: partition_sizes=1, projection=[a, b, c, __row_id], infinite_source=true
+    [invariant] invalid_partition_errors at StreamingTableExec (root): the node has 1 output partitions, but execute(1) panicked: index out of bounds: the len is 1 but the index is 1; return an error for a partition at or past the partition count
+  case inexact statistics:
+    StreamingTableExec: partition_sizes=3, projection=[a, b, c, __row_id], infinite_source=true
+    [invariant] invalid_partition_errors at StreamingTableExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case absent statistics:
+    StreamingTableExec: partition_sizes=3, projection=[a, b, c, __row_id], infinite_source=true
+    [invariant] invalid_partition_errors at StreamingTableExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case empty input:
+    StreamingTableExec: partition_sizes=3, projection=[a, b, c, __row_id], infinite_source=true
+    [invariant] invalid_partition_errors at StreamingTableExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case uniform constants:
+    StreamingTableExec: partition_sizes=3, projection=[a, b, c, __row_id], infinite_source=true
+    [invariant] invalid_partition_errors at StreamingTableExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case constants per partition:
+    StreamingTableExec: partition_sizes=3, projection=[a, b, c, __row_id], infinite_source=true
+    [invariant] invalid_partition_errors at StreamingTableExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case copied columns:
+    StreamingTableExec: partition_sizes=3, projection=[a, b, c, a__copy, b__copy, c__copy, __row_id], infinite_source=true
+    [invariant] invalid_partition_errors at StreamingTableExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case sorted by row id:
+    StreamingTableExec: partition_sizes=3, projection=[a, b, c, __row_id], infinite_source=true, output_ordering=[__row_id@3 ASC]
+    [invariant] invalid_partition_errors at StreamingTableExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+  case hash partitioned:
+    StreamingTableExec: partition_sizes=3, projection=[a, b, c, __row_id], infinite_source=true
+    [invariant] invalid_partition_errors at StreamingTableExec (root): the node has 3 output partitions, but execute(3) panicked: index out of bounds: the len is 3 but the index is 3; return an error for a partition at or past the partition count
+
+## DataSinkExec MemSink
+  case default:
+    DataSinkExec: sink=MemoryTable (partitions=1)
+      MockSourceExec: partitioning=UnknownPartitioning(1), partition_rows=[600], statistics=Exact
+    [invariant] emission_type_holds at DataSinkExec (root): rebuilt with child 0 unbounded, the node reports EmissionType::Incremental, but it produced no rows before timing out while the child kept delivering rows; report EmissionType::Final if the node waits for the end of its input
+  case single partition: no violations
+  case inexact statistics: no violations
+  case absent statistics: no violations
+  case empty input: no violations
+  case uniform constants: no violations
+  case constants per partition: no violations
+  case copied columns: no violations
+  case sorted by row id: no violations
+  case hash partitioned: no violations
+
+## DataSinkExec with a sort order
+  case default:
+    DataSinkExec: sink=MemoryTable (partitions=1)
+      MockSourceExec: partitioning=UnknownPartitioning(1), partition_rows=[600], statistics=Exact, output_ordering=[a@0 ASC]
+    [invariant] emission_type_holds at DataSinkExec (root): rebuilt with child 0 unbounded, the node reports EmissionType::Incremental, but it produced no rows before timing out while the child kept delivering rows; report EmissionType::Final if the node waits for the end of its input
+  case single partition: no violations
+  case inexact statistics: no violations
+  case absent statistics: no violations
+  case empty input: no violations
+  case uniform constants: no violations
+  case constants per partition: no violations
+  case copied columns: no violations
+  case sorted by row id: no violations
+  case hash partitioned: no violations
+
+## MemDeleteExec
+  case default:
+    MemDeleteExec: predicate=[a@0 > 5]
+    [invariant] reset_state_reexecution at MemDeleteExec (root): with a second execution after reset_plan_states: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] reset_state_reexecution at MemDeleteExec (root): with a second execution of the same plan, without a reset: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally; a plan executed again without reset_state must produce the same rows or return an error
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 1: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 2: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 7: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 8192: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+  case single partition:
+    MemDeleteExec: predicate=[a@0 > 5]
+    [invariant] reset_state_reexecution at MemDeleteExec (root): with a second execution after reset_plan_states: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] reset_state_reexecution at MemDeleteExec (root): with a second execution of the same plan, without a reset: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally; a plan executed again without reset_state must produce the same rows or return an error
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 1: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 2: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 7: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 8192: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+  case inexact statistics:
+    MemDeleteExec: predicate=[a@0 > 5]
+    [invariant] reset_state_reexecution at MemDeleteExec (root): with a second execution after reset_plan_states: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] reset_state_reexecution at MemDeleteExec (root): with a second execution of the same plan, without a reset: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally; a plan executed again without reset_state must produce the same rows or return an error
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 1: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 2: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 7: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 8192: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+  case absent statistics:
+    MemDeleteExec: predicate=[a@0 > 5]
+    [invariant] reset_state_reexecution at MemDeleteExec (root): with a second execution after reset_plan_states: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] reset_state_reexecution at MemDeleteExec (root): with a second execution of the same plan, without a reset: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally; a plan executed again without reset_state must produce the same rows or return an error
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 1: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 2: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 7: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 8192: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+  case empty input: no violations
+  case uniform constants:
+    MemDeleteExec: predicate=[a@0 > 5]
+    [invariant] reset_state_reexecution at MemDeleteExec (root): with a second execution after reset_plan_states: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] reset_state_reexecution at MemDeleteExec (root): with a second execution of the same plan, without a reset: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally; a plan executed again without reset_state must produce the same rows or return an error
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 1: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 2: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 7: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 8192: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+  case constants per partition:
+    MemDeleteExec: predicate=[a@0 > 5]
+    [invariant] reset_state_reexecution at MemDeleteExec (root): with a second execution after reset_plan_states: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] reset_state_reexecution at MemDeleteExec (root): with a second execution of the same plan, without a reset: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally; a plan executed again without reset_state must produce the same rows or return an error
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 1: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 2: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 7: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 8192: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+  case copied columns:
+    MemDeleteExec: predicate=[a@0 > 5]
+    [invariant] reset_state_reexecution at MemDeleteExec (root): with a second execution after reset_plan_states: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] reset_state_reexecution at MemDeleteExec (root): with a second execution of the same plan, without a reset: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally; a plan executed again without reset_state must produce the same rows or return an error
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 1: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 2: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 7: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 8192: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+  case sorted by row id:
+    MemDeleteExec: predicate=[a@0 > 5]
+    [invariant] reset_state_reexecution at MemDeleteExec (root): with a second execution after reset_plan_states: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] reset_state_reexecution at MemDeleteExec (root): with a second execution of the same plan, without a reset: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally; a plan executed again without reset_state must produce the same rows or return an error
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 1: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 2: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 7: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 8192: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+  case hash partitioned:
+    MemDeleteExec: predicate=[a@0 > 5]
+    [invariant] reset_state_reexecution at MemDeleteExec (root): with a second execution after reset_plan_states: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] reset_state_reexecution at MemDeleteExec (root): with a second execution of the same plan, without a reset: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally; a plan executed again without reset_state must produce the same rows or return an error
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 1: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 2: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 7: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+    [invariant] batch_size_invariance at MemDeleteExec (root): with batch size 8192: the node produced 1 rows, 1 of which do not appear in the normal output, instead of the 1 rows it produces normally
+
+## MemUpdateExec
+  case default: no violations
+  case single partition: no violations
+  case inexact statistics: no violations
+  case absent statistics: no violations
+  case empty input: no violations
+  case uniform constants: no violations
+  case constants per partition: no violations
+  case copied columns: no violations
+  case sorted by row id: no violations
+  case hash partitioned: no violations

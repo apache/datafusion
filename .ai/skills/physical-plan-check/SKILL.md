@@ -1,15 +1,17 @@
 ---
 name: physical-plan-check
-description: Implement or extend a check in the datafusion-physical-plan-checks crate (datafusion/physical-plan-checks), from its entry in CHECKS.md to generated test cases, snapshots and documented findings. Use when asked to implement a check code such as B5, finish a Partial check, or add a new check to the catalog.
+description: Implement or extend a check in the `physical_plan` module of the datafusion-property-tests crate (datafusion/property-tests), from its entry in CHECKS.md to generated test cases, snapshots and documented findings. Use when asked to implement a check code such as B5, finish a Partial check, or add a new check to the catalog.
 ---
 
 # Implementing a physical plan check
 
-The crate `datafusion/physical-plan-checks` checks that `ExecutionPlan`
-implementations keep the promises they make (statistics, orderings,
-constants, cardinality, ...). Each check has an entry in `CHECKS.md`, a row
-in `IMPLEMENTATION_STATUS.md`, and runs on every plan of the audit in
-`tests/builtin_plans.rs`, whose findings are recorded in insta snapshots.
+The `physical_plan` module of `datafusion/property-tests` checks that
+`ExecutionPlan` implementations keep the promises they make (statistics,
+orderings, constants, cardinality, ...). Each check has an entry in
+`CHECKS.md`, a row in `IMPLEMENTATION_STATUS.md` (both in
+`docs/physical_plan/`), and runs on every plan of the audit in
+`tests/physical_plan/builtin_plans/`, whose findings are recorded in insta
+snapshots.
 
 Read `DESIGN.md`, the check's entry in `CHECKS.md` and its row in
 `IMPLEMENTATION_STATUS.md` before writing code.
@@ -42,7 +44,7 @@ without checking anything.
 
 - Prefer making the generated inputs (`SourceSpec`, `MockSourceExec`) carry
   the property, and adding a `Profile` that turns it on for every factory,
-  over adding hand-written factories to `tests/builtin_plans.rs`.
+  over adding hand-written factories to `tests/physical_plan/builtin_plans/`.
 - **Bring attention to every case that cannot be generated automatically.**
   Say in the final reply which situations the generated cases do not reach
   and why, what would reach them, and record them in
@@ -57,7 +59,7 @@ without checking anything.
   claims with the output of a normal run), `Stream` (stream experiments,
   default case only) or `Variant` (reruns with another fetch, batch size,
   batch layout or limited inputs). The check goes in
-  `src/checks/<kind>_checks.rs`.
+  `src/physical_plan/checks/<kind>_checks.rs`.
 - Decide the severity: `Finding::invariant` for a false claim that can give
   wrong results, `Finding::lint` for a missed optimization or a heuristic.
 - If the catalog entry is ambiguous or wrong, update `CHECKS.md` in the same
@@ -66,8 +68,8 @@ without checking anything.
 ### 2. Put reference computations in `oracle/`
 
 A check that compares a claim with data computes the truth with a function
-in `src/oracle/` (pure, over `&[RecordBatch]` or one set of batches per
-partition, simple rather than fast). Examples: `exact_statistics`,
+in `src/physical_plan/oracle/` (pure, over `&[RecordBatch]` or one set of
+batches per partition, simple rather than fast). Examples: `exact_statistics`,
 `first_unsorted_row`, `constant_violations`, `first_unequal_row`.
 
 If the inputs should also declare the property (rule 2), `MockSourceExec`
@@ -78,7 +80,7 @@ the source agree on what the property means.
 
 - A function named after the check, with a doc comment that starts with
   its code (`/// B5: ...`), registered in `all_checks()` in
-  `src/checks/mod.rs` in catalog order.
+  `src/physical_plan/checks/mod.rs` in catalog order.
 - Use `CheckContext` for outputs (`output`, `child_outputs`,
   `variant_runs`, ...). A node that was not executed or failed has no
   output: return no findings, `execution_succeeds` reports it.
@@ -111,10 +113,11 @@ and does it reach the nodes above them?**
   `with_copy` (columns equal to another column).
 - Add a `Profile` in `Profile::defaults()` that applies it to every column
   of every input, as `uniform constants`, `constants per partition` and
-  `copied columns` do (`src/harness/requirements.rs`, `derive_case`). Use
-  `Profile::extended()` only for expensive variations.
-- Verify coverage with a temporary test in `tests/builtin_plans.rs` that
-  walks the plan of each case and prints, per node, how much of the
+  `copied columns` do (`src/physical_plan/harness/requirements.rs`,
+  `derive_case`). Use `Profile::extended()` only for expensive variations.
+- Verify coverage with a temporary test in
+  `tests/physical_plan/builtin_plans/` that walks the plan of each case and
+  prints, per node, how much of the
   property it reports (for example the number of constants or equivalence
   classes). Remove the probe afterwards, and report which nodes the property
   does and does not reach, and why.
@@ -137,23 +140,25 @@ and does it reach the nodes above them?**
 
 ### 5. Test the check
 
-- `tests/checks/<kind>_checks.rs`: a broken plan that is reported, with the
-  exact message, and a correct plan that is clean. `ConfigurableExec`
-  (`tests/checks/common.rs`) can claim properties a plan does not have, for
-  example `claimed_eq_properties`. Build explicit batches with
-  `MockSourceExec::try_new` when the message depends on the data.
-- `tests/checks/fixtures.rs`: new `SourceSpec` and `MockSourceExec` features
-  generate what they say, declare it, and reject false declarations.
+- `tests/physical_plan/<kind>_checks.rs`: a broken plan that is reported,
+  with the exact message, and a correct plan that is clean.
+  `ConfigurableExec` (`tests/physical_plan/common.rs`) can claim properties a
+  plan does not have, for example `claimed_eq_properties`. Build explicit
+  batches with `MockSourceExec::try_new` when the message depends on the
+  data.
+- `tests/physical_plan/fixtures.rs`: new `SourceSpec` and `MockSourceExec`
+  features generate what they say, declare it, and reject false
+  declarations.
 - Tests that count cases use `Profile::defaults().len()`, not a number.
 
 ### 6. Update the snapshots and review every change
 
 ```bash
-cd datafusion/physical-plan-checks
+cd datafusion/property-tests
 INSTA_UPDATE=always cargo test --no-fail-fast
-INSTA_UPDATE=always cargo test --features extended_tests --test builtin_plans
-rm -f tests/snapshots/*.snap.new
-git diff -- tests/snapshots
+INSTA_UPDATE=always cargo test --features extended_tests --test physical_plan builtin_plans
+rm -f tests/physical_plan/builtin_plans/snapshots/*.snap.new
+git diff -- tests/physical_plan/builtin_plans/snapshots
 ```
 
 Read every added and removed line. For each new finding decide: real bug in
@@ -188,9 +193,9 @@ audit show it.
 
 ```bash
 cargo fmt --all
-cargo clippy -p datafusion-physical-plan-checks --all-targets --all-features -- -D warnings
+cargo clippy -p datafusion-property-tests --all-targets --all-features -- -D warnings
 ./ci/scripts/doc_prettier_check.sh --write --allow-dirty
-cd datafusion/physical-plan-checks && cargo test --features extended_tests
+cd datafusion/property-tests && cargo test --features extended_tests
 ```
 
 If you changed code outside the crate (only to unblock the suite), also run
