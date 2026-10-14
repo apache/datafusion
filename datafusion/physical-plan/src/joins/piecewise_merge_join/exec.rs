@@ -793,6 +793,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
                     self.join_type,
                     self.operator,
                     streamed,
+                    self.buffered.schema(),
                     buffered_side,
                     PiecewiseMergeJoinStreamState::WaitBufferedSide,
                     self.sort_options,
