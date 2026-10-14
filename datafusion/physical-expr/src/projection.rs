@@ -753,14 +753,23 @@ impl ProjectionExprs {
                     ColumnStatistics {
                         min_value: Precision::Exact(literal.value().clone()),
                         max_value: Precision::Exact(literal.value().clone()),
-                        distinct_count: Precision::Exact(1),
+                        // NULLs are not distinct values, whatever the row count
+                        distinct_count: Precision::Exact(0),
                         null_count,
                         sum_value: Precision::Exact(literal.value().clone()),
                         byte_size: Precision::Exact(0),
                     }
                 } else {
                     let value = literal.value();
-                    let distinct_count = Precision::Exact(1);
+                    // The value is present only if some row is, so an estimated
+                    // or unknown row count gives an estimated distinct count.
+                    let distinct_count = match stats.num_rows {
+                        Precision::Exact(0) | Precision::Inexact(0) => stats.num_rows,
+                        Precision::Exact(_) => Precision::Exact(1),
+                        Precision::Inexact(_) | Precision::Absent => {
+                            Precision::Inexact(1)
+                        }
+                    };
                     let null_count = Precision::Exact(0);
 
                     let byte_size = if let Some(byte_width) = data_type.primitive_width()
@@ -3689,7 +3698,7 @@ pub(crate) mod tests {
         );
         assert_eq!(
             output_stats.column_statistics[0].distinct_count,
-            Precision::Exact(1) // All NULLs are considered the same
+            Precision::Exact(0) // NULLs are not counted as distinct values
         );
         assert_eq!(
             output_stats.column_statistics[0].null_count,
