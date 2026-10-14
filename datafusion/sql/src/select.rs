@@ -1231,12 +1231,34 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         group_by_exprs: &[Expr],
         aggr_exprs: &[Expr],
     ) -> Result<AggregatePlanResult> {
+        // Casts are not part of the schema name, so `sum(x)` and
+        // `sum(CAST(x AS FLOAT))` would both produce a field named `sum(x)`.
+        // Name aggregates that collide like this by their display string.
+        let mut name_counts: HashMap<String, usize> = HashMap::new();
+        for expr in aggr_exprs {
+            *name_counts
+                .entry(expr.schema_name().to_string())
+                .or_default() += 1;
+        }
+        let aggr_exprs: Vec<Expr> = aggr_exprs
+            .iter()
+            .map(|expr| {
+                let name = expr.schema_name().to_string();
+                let display_name = expr.to_string();
+                if name_counts[&name] > 1 && display_name != name {
+                    expr.clone().alias(display_name)
+                } else {
+                    expr.clone()
+                }
+            })
+            .collect();
+
         // create the aggregate plan
         let options =
             LogicalPlanBuilderOptions::new().with_add_implicit_group_by_exprs(true);
         let plan = LogicalPlanBuilder::from(input.clone())
             .with_options(options)
-            .aggregate(group_by_exprs.to_vec(), aggr_exprs.to_vec())?
+            .aggregate(group_by_exprs.to_vec(), aggr_exprs.clone())?
             .build()?;
         let group_by_exprs = if let LogicalPlan::Aggregate(agg) = &plan {
             &agg.group_expr
@@ -1269,7 +1291,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 _ => aggr_projection_exprs.push(expr.clone()),
             }
         }
-        aggr_projection_exprs.extend_from_slice(aggr_exprs);
+        aggr_projection_exprs.extend(aggr_exprs);
 
         // now attempt to resolve columns and replace with fully-qualified columns
         let aggr_projection_exprs = aggr_projection_exprs
