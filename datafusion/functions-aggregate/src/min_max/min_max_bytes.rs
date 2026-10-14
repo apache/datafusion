@@ -383,9 +383,10 @@ struct MinMaxBytesState {
     min_max: Vec<Option<Vec<u8>>>,
     /// The data type of the array
     data_type: DataType,
-    /// The total bytes of the string data (for pre-allocating the final array,
-    /// and tracking memory usage)
+    /// The total length of the string data, for pre-allocating the final array.
     total_data_bytes: usize,
+    /// The retained inner vector capacities, cached to keep `size()` O(1).
+    total_data_capacity: usize,
 }
 
 /// Implement the MinMaxBytesAccumulator with a comparison function
@@ -400,6 +401,7 @@ impl MinMaxBytesState {
             min_max: vec![],
             data_type,
             total_data_bytes: 0,
+            total_data_capacity: 0,
         }
     }
 
@@ -407,15 +409,19 @@ impl MinMaxBytesState {
     fn set_value(&mut self, group_index: usize, new_val: &[u8]) {
         match self.min_max[group_index].as_mut() {
             None => {
-                self.min_max[group_index] = Some(new_val.to_vec());
+                let value = new_val.to_vec();
+                self.total_data_capacity += value.capacity();
+                self.min_max[group_index] = Some(value);
                 self.total_data_bytes += new_val.len();
             }
             Some(existing_val) => {
                 // Copy data over to avoid re-allocating
                 self.total_data_bytes -= existing_val.len();
                 self.total_data_bytes += new_val.len();
+                self.total_data_capacity -= existing_val.capacity();
                 existing_val.clear();
                 existing_val.extend_from_slice(new_val);
+                self.total_data_capacity += existing_val.capacity();
             }
         }
     }
@@ -476,13 +482,14 @@ impl MinMaxBytesState {
 
     /// Emits the specified min_max values
     ///
-    /// Returns (data_capacity, min_maxes), updating the current value of total_data_bytes
+    /// Returns (data_bytes, min_maxes), updating the current value of total_data_bytes
     ///
-    /// - `data_capacity`: the total length of all strings and their contents,
+    /// - `data_bytes`: the total byte length of the emitted values,
     /// - `min_maxes`: the actual min/max values for each group
     fn emit_to(&mut self, emit_to: EmitTo) -> (usize, Vec<Option<Vec<u8>>>) {
         match emit_to {
             EmitTo::All => {
+                self.total_data_capacity = 0;
                 (
                     std::mem::take(&mut self.total_data_bytes), // reset total bytes and min_max
                     std::mem::take(&mut self.min_max),
@@ -490,17 +497,87 @@ impl MinMaxBytesState {
             }
             EmitTo::First(n) => {
                 let first_min_maxes = split_vec_min_alloc(&mut self.min_max, n);
-                let first_data_capacity: usize = first_min_maxes
+                let (first_data_bytes, first_data_capacity) = first_min_maxes
                     .iter()
-                    .map(|opt| opt.as_ref().map(|s| s.len()).unwrap_or(0))
-                    .sum();
-                self.total_data_bytes -= first_data_capacity;
-                (first_data_capacity, first_min_maxes)
+                    .flatten()
+                    .fold((0, 0), |(bytes, capacity), value| {
+                        (bytes + value.len(), capacity + value.capacity())
+                    });
+                self.total_data_bytes -= first_data_bytes;
+                self.total_data_capacity -= first_data_capacity;
+                (first_data_bytes, first_min_maxes)
             }
         }
     }
 
     fn size(&self) -> usize {
-        self.total_data_bytes + self.min_max.len() * size_of::<Option<Vec<u8>>>()
+        // Only retained heap allocations: the outer slots already include the
+        // inline Option<Vec<u8>> descriptors.
+        self.total_data_capacity + self.min_max.capacity() * size_of::<Option<Vec<u8>>>()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn expected_size(state: &MinMaxBytesState) -> usize {
+        state.min_max.capacity() * size_of::<Option<Vec<u8>>>()
+            + state
+                .min_max
+                .iter()
+                .flatten()
+                .map(Vec::capacity)
+                .sum::<usize>()
+    }
+
+    #[test]
+    fn size_tracks_growth_and_emit_reuse() -> Result<()> {
+        let mut state = MinMaxBytesState::new(DataType::Binary);
+        assert_eq!(state.size(), 0);
+
+        state.min_max = Vec::with_capacity(16);
+        assert_eq!(state.size(), expected_size(&state));
+        state.min_max.resize(4, None);
+        assert_eq!(state.size(), expected_size(&state));
+
+        state.set_value(0, b"a");
+        state.set_value(0, &[b'z'; 128]);
+        state.set_value(1, b"b");
+        state.set_value(2, b"c");
+        state.set_value(3, b"d");
+        assert_eq!(state.size(), expected_size(&state));
+        let size_before_replacement = state.size();
+
+        state.set_value(0, b"x");
+        assert_eq!(state.size(), size_before_replacement);
+        assert!(state.min_max[0].as_ref().unwrap().capacity() >= 128);
+        assert_eq!(state.total_data_bytes, 4);
+        assert_eq!(state.size(), expected_size(&state));
+
+        let (bytes, emitted) = state.emit_to(EmitTo::First(1));
+        assert_eq!(emitted[0].as_deref(), Some(b"x".as_slice()));
+        assert_eq!(bytes, 1);
+        assert_eq!(state.size(), expected_size(&state));
+        assert_eq!(state.total_data_bytes, 3);
+
+        let (bytes, emitted) = state.emit_to(EmitTo::First(2));
+        assert_eq!(emitted[0].as_deref(), Some(b"b".as_slice()));
+        assert_eq!(emitted[1].as_deref(), Some(b"c".as_slice()));
+        assert_eq!(bytes, 2);
+        assert_eq!(state.size(), expected_size(&state));
+        assert_eq!(state.total_data_bytes, 1);
+
+        let (bytes, emitted) = state.emit_to(EmitTo::All);
+        assert_eq!(emitted[0].as_deref(), Some(b"d".as_slice()));
+        assert_eq!(bytes, 1);
+        assert_eq!(state.size(), 0);
+        assert_eq!(state.total_data_bytes, 0);
+
+        state.update_batch([Some(b"x".as_slice())], &[0], 1, |a, b| a < b)?;
+        assert_eq!(state.min_max[0].as_deref(), Some(b"x".as_slice()));
+        assert_eq!(state.total_data_bytes, 1);
+        assert_eq!(state.size(), expected_size(&state));
+        Ok(())
     }
 }
