@@ -515,9 +515,9 @@ impl MinMaxBytesState {
 
     /// Emits the specified min_max values
     ///
-    /// Returns (data_capacity, min_maxes), updating the current value of total_data_bytes
+    /// Returns (data_bytes, min_maxes), updating the current value of total_data_bytes
     ///
-    /// - `data_capacity`: the total length of all strings and their contents,
+    /// - `data_bytes`: the total byte length of the emitted values,
     /// - `min_maxes`: the actual min/max values for each group
     fn emit_to(&mut self, emit_to: EmitTo) -> (usize, Vec<Option<Vec<u8>>>) {
         match emit_to {
@@ -530,17 +530,17 @@ impl MinMaxBytesState {
             }
             EmitTo::First(n) => {
                 let first_min_maxes = split_vec_min_alloc(&mut self.min_max, n);
-                let first_data_capacity: usize = first_min_maxes
+                let first_data_bytes: usize = first_min_maxes
                     .iter()
                     .map(|opt| opt.as_ref().map(|s| s.len()).unwrap_or(0))
                     .sum();
-                self.total_data_bytes -= first_data_capacity;
+                self.total_data_bytes -= first_data_bytes;
                 self.total_data_capacity -= first_min_maxes
                     .iter()
                     .flatten()
                     .map(Vec::capacity)
                     .sum::<usize>();
-                (first_data_capacity, first_min_maxes)
+                (first_data_bytes, first_min_maxes)
             }
         }
     }
