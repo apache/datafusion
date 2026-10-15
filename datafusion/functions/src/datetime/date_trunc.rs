@@ -125,9 +125,14 @@ impl DateTruncGranularityExt for DatePart {
         )
     }
 
-    /// Returns true if this granularity has variable width when expressed in a
-    /// timezone — i.e. it can span 23 or 25 wall-clock hours around DST.
-    /// Used by `preimage` to stay conservative for timezone-aware coarse buckets.
+    /// Returns true if `preimage` can not compute the bucket boundaries for
+    /// this granularity in a non-UTC timezone.
+    ///
+    /// * `Day` and `Week`: the bucket is normally a fixed number of hours, but
+    ///   can be 23 or 25 hours long on a DST transition day.
+    /// * `Month`, `Quarter` and `Year`: the bucket boundary is local midnight on
+    ///   for the first instance, but [`next_calendar_boundary_utc`] computes the
+    ///   boundary in UTC, which varies across timezones.
     fn has_variable_width_in_tz(&self) -> bool {
         matches!(
             self,
@@ -514,9 +519,12 @@ impl ScalarUDFImpl for DateTruncFunc {
             _ => return Ok(PreimageResult::None),
         };
 
-        // timezone-aware buckets can have variable widths around DST.
-        // Stay conservative for those, unless the timezone is explicitly UTC
-        // (which has no DST, so the buckets are the same as without a timezone)
+        // Some buckets in a timezone can not be computed with a fixed step
+        // (e.g. DST makes some days 23 or 25 hours long) or with UTC calendar
+        // arithmetic (local month boundaries are not UTC month boundaries).
+        //
+        // Stay conservative for those, unless the timezone is explicitly UTC,
+        // where the buckets are the same as without a timezone.
         if tz_opt.as_ref().is_some_and(|tz| !is_utc(tz))
             && granularity.has_variable_width_in_tz()
         {
