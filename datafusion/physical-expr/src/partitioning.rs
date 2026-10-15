@@ -642,6 +642,9 @@ fn range_transform_keeps_keys_local(
         return false;
     };
     let sort_options = range.ordering().first().options;
+    if validate_range_split_points(range.split_points(), &[sort_options]).is_err() {
+        return false;
+    }
     range.split_points().iter().all(|split_point| {
         let Some(split_value) = split_point.values().first() else {
             return false;
@@ -1650,6 +1653,68 @@ mod tests {
             &fixture.eq_properties,
             false,
         ));
+        Ok(())
+    }
+
+    #[test]
+    #[expect(
+        deprecated,
+        reason = "test intentionally constructs malformed range splits"
+    )]
+    fn range_transform_rejects_malformed_split_points() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        )])?;
+        let required = vec![date_trunc_of(fixture.col(0), "hour", None)];
+        let hour = 3_600_000_000_000;
+        let timestamp = |value| ScalarValue::TimestampNanosecond(Some(value), None);
+
+        for (description, descending, splits) in [
+            (
+                "reversed ascending splits",
+                false,
+                vec![vec![timestamp(2 * hour)], vec![timestamp(hour)]],
+            ),
+            (
+                "reversed descending splits",
+                true,
+                vec![vec![timestamp(hour - 1)], vec![timestamp(2 * hour - 1)]],
+            ),
+            (
+                "duplicate ascending splits",
+                false,
+                vec![vec![timestamp(hour)], vec![timestamp(hour)]],
+            ),
+            (
+                "duplicate descending splits",
+                true,
+                vec![vec![timestamp(hour - 1)], vec![timestamp(hour - 1)]],
+            ),
+            (
+                "overwide split tuple",
+                false,
+                vec![vec![timestamp(hour), ScalarValue::Int64(Some(0))]],
+            ),
+            ("empty split tuple", false, vec![vec![]]),
+        ] {
+            let range = Partitioning::Range(RangePartitioning::new(
+                [PhysicalSortExpr::new(
+                    fixture.col(0),
+                    SortOptions::new(descending, false),
+                )]
+                .into(),
+                splits.into_iter().map(SplitPoint::new).collect(),
+            ));
+            assert_key_locality(
+                description,
+                &range,
+                &required,
+                &fixture.eq_properties,
+                false,
+                false,
+            );
+        }
         Ok(())
     }
 
