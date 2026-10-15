@@ -163,6 +163,39 @@ select column1, column2, column3, column4, column5, column6, column7, column8, c
 1 2 3 4 5 6 7 8 9.1015625 10.1 11.1 2024-09-02 2024-09-02 false x
 11 22 33 44 55 66 77 88 9.203125 10.2 11.2 2024-09-03 2024-09-01 true y
 
+# Date partition values that cannot be written as a `yyyy-mm-dd` path segment
+# return an error instead of panicking
+statement error DataFusion error: Execution error: Date32 value 2147483647 of partition column 'column1' is out of range for a date
+COPY (VALUES (arrow_cast(2147483647, 'Date32'))) TO 'test_files/scratch/copy/partitioned_date_out_of_range/'
+STORED AS parquet PARTITIONED BY (column1);
+
+statement error DataFusion error: Execution error: Date32 value -2147483648 of partition column 'column1' is out of range for a date
+COPY (VALUES (arrow_cast(-2147483648, 'Date32'))) TO 'test_files/scratch/copy/partitioned_date_out_of_range/'
+STORED AS parquet PARTITIONED BY (column1);
+
+statement error DataFusion error: Execution error: Date64 value 9223372036854775807 of partition column 'column1' is out of range for a date
+COPY (VALUES (arrow_cast(9223372036854775807, 'Date64'))) TO 'test_files/scratch/copy/partitioned_date_out_of_range/'
+STORED AS parquet PARTITIONED BY (column1);
+
+# Date64 values that are not a whole number of days are written to the
+# partition of the day they fall on, including before the epoch
+query I
+COPY (VALUES (1, arrow_cast(-1, 'Date64')), (2, arrow_cast(-86400001, 'Date64')), (3, arrow_cast(86399999, 'Date64')))
+TO 'test_files/scratch/copy/partitioned_date64_pre_epoch/' STORED AS parquet PARTITIONED BY (column2);
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE validate_partitioned_date64_pre_epoch (column1 int, column2 date) STORED AS PARQUET
+LOCATION 'test_files/scratch/copy/partitioned_date64_pre_epoch/' PARTITIONED BY (column2);
+
+query ID
+select column1, column2 from validate_partitioned_date64_pre_epoch order by column1;
+----
+1 1969-12-31
+2 1969-12-30
+3 1970-01-01
+
 
 statement ok
 create table test ("'test'" varchar, "'test2'" varchar, "'test3'" varchar);
