@@ -109,7 +109,7 @@ fn plan_to_json() {
         schema: Arc::new(DFSchema::empty()),
     });
     let actual = logical_plan_to_json(&plan).unwrap();
-    let expected = r#"{"emptyRelation":{}}"#.to_string();
+    let expected = r#"{"emptyRelation":{"schema":{}}}"#.to_string();
     assert_eq!(actual, expected);
 }
 

@@ -23,7 +23,7 @@ use std::collections::{HashMap, VecDeque};
 use std::mem::size_of;
 use std::sync::Arc;
 
-use crate::joins::MapOffset;
+use crate::joins::join_hash_map::ProbeOffset;
 use crate::joins::join_hash_map::{
     contain_hashes, get_matched_indices, get_matched_indices_with_limit_offset,
     update_from_iter,
@@ -87,10 +87,10 @@ impl JoinHashMapType for PruningJoinHashMap {
         hash_values: &[u64],
         valid_keys: Option<&NullBuffer>,
         limit: usize,
-        offset: MapOffset,
+        offset: ProbeOffset,
         input_indices: &mut Vec<u32>,
         match_indices: &mut Vec<u64>,
-    ) -> Option<MapOffset> {
+    ) -> Option<ProbeOffset> {
         // Flatten the deque
         let next: Vec<u64> = self.next.iter().copied().collect();
         get_matched_indices_with_limit_offset::<u64>(
