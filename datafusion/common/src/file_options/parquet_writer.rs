@@ -228,6 +228,7 @@ impl ParquetOptions {
             bloom_filter_on_write,
             bloom_filter_fpp,
             bloom_filter_ndv,
+            write_row_group_number_distinct_values,
             content_defined_chunking,
 
             // not in WriterProperties
@@ -249,6 +250,8 @@ impl ParquetOptions {
             skip_arrow_metadata: _,
             max_predicate_cache_size: _,
             max_in_list_size: _,
+            enable_rle_to_dictionary: _,
+            row_group_range_assignment: _,
         } = self;
 
         let mut builder = WriterProperties::builder()
@@ -267,7 +270,10 @@ impl ParquetOptions {
             .set_column_index_truncate_length(*column_index_truncate_length)
             .set_statistics_truncate_length(*statistics_truncate_length)
             .set_data_page_row_count_limit(*data_page_row_count_limit)
-            .set_bloom_filter_enabled(*bloom_filter_on_write);
+            .set_bloom_filter_enabled(*bloom_filter_on_write)
+            .set_write_row_group_number_distinct_values(
+                *write_row_group_number_distinct_values,
+            );
 
         if let Some(bloom_filter_fpp) = bloom_filter_fpp {
             builder = builder.set_bloom_filter_fpp(*bloom_filter_fpp);
@@ -404,11 +410,14 @@ mod tests {
             bloom_filter_on_write: !defaults.bloom_filter_on_write,
             bloom_filter_fpp: Some(0.42),
             bloom_filter_ndv: Some(42),
+            write_row_group_number_distinct_values: !defaults
+                .write_row_group_number_distinct_values,
 
             // not in WriterProperties, but itemizing here to not skip newly added props
             enable_page_index: defaults.enable_page_index,
             pruning: defaults.pruning,
             max_in_list_size: defaults.max_in_list_size,
+            row_group_range_assignment: defaults.row_group_range_assignment,
             skip_metadata: defaults.skip_metadata,
             metadata_size_hint: defaults.metadata_size_hint,
             pushdown_filters: defaults.pushdown_filters,
@@ -427,6 +436,7 @@ mod tests {
             coerce_int96_tz: None,
             max_predicate_cache_size: defaults.max_predicate_cache_size,
             content_defined_chunking: defaults.content_defined_chunking.clone(),
+            enable_rle_to_dictionary: defaults.enable_rle_to_dictionary,
         }
     }
 
@@ -534,6 +544,8 @@ mod tests {
                 enable_page_index: global_options_defaults.enable_page_index,
                 pruning: global_options_defaults.pruning,
                 max_in_list_size: global_options_defaults.max_in_list_size,
+                row_group_range_assignment: global_options_defaults
+                    .row_group_range_assignment,
                 skip_metadata: global_options_defaults.skip_metadata,
                 metadata_size_hint: global_options_defaults.metadata_size_hint,
                 pushdown_filters: global_options_defaults.pushdown_filters,
@@ -551,9 +563,13 @@ mod tests {
                 schema_force_view_types: global_options_defaults.schema_force_view_types,
                 binary_as_string: global_options_defaults.binary_as_string,
                 skip_arrow_metadata: global_options_defaults.skip_arrow_metadata,
+                write_row_group_number_distinct_values: props
+                    .write_row_group_number_distinct_values(),
                 coerce_int96: None,
                 coerce_int96_tz: None,
                 content_defined_chunking: props.content_defined_chunking().into(),
+                enable_rle_to_dictionary: global_options_defaults
+                    .enable_rle_to_dictionary,
             },
             column_specific_options,
             key_value_metadata,

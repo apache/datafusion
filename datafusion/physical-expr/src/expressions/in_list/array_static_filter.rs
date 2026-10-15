@@ -67,7 +67,7 @@ impl ArrayStaticFilter {
         haystack: &ArrayRef,
         state: &RandomState,
     ) -> Result<HashTable<usize>> {
-        let mut table = HashTable::new();
+        let mut table = HashTable::with_capacity(haystack.len() - haystack.null_count());
 
         with_hashes([haystack.as_ref()], state, |hashes| -> Result<()> {
             let cmp = make_comparator(haystack, haystack, SortOptions::default())?;

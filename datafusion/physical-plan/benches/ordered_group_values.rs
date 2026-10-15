@@ -19,7 +19,8 @@
 //! existing streaming hash table on identical batches. Include emission and
 //! cross-batch continuation, not just lookup. Input preparation is untimed.
 //! The physical-plan benchmark includes aggregation but excludes SQL planning,
-//! sorting and I/O; the data already has a proven ordering.
+//! sorting and I/O; the data already has a proven ordering. A partially
+//! ordered case covers ordered prefixes that complete many groups at once.
 
 use std::hint::black_box;
 use std::sync::Arc;
@@ -186,6 +187,8 @@ fn check_case(schema: &SchemaRef, batches: &[Vec<ArrayRef>]) -> (usize, usize) {
 fn aggregate_plan(
     schema: &SchemaRef,
     keys: Vec<Vec<ArrayRef>>,
+    sort_columns: &[&str],
+    input_order_mode: &InputOrderMode,
 ) -> Arc<dyn ExecutionPlan> {
     let mut fields = schema.fields().to_vec();
     fields.push(Arc::new(Field::new("v", DataType::Int64, false)));
@@ -197,10 +200,11 @@ fn aggregate_plan(
             RecordBatch::try_new(Arc::clone(&schema), cols).unwrap()
         })
         .collect::<Vec<_>>();
-    let ordering = LexOrdering::new(vec![
-        PhysicalSortExpr::new_default(col("a", &schema).unwrap()),
-        PhysicalSortExpr::new_default(col("b", &schema).unwrap()),
-    ])
+    let ordering = LexOrdering::new(
+        sort_columns
+            .iter()
+            .map(|name| PhysicalSortExpr::new_default(col(name, &schema).unwrap())),
+    )
     .unwrap();
     let input =
         TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None).unwrap();
@@ -228,7 +232,7 @@ fn aggregate_plan(
         schema,
     )
     .unwrap();
-    assert_eq!(plan.input_order_mode(), &InputOrderMode::Sorted);
+    assert_eq!(plan.input_order_mode(), input_order_mode);
     Arc::new(plan)
 }
 
@@ -241,7 +245,8 @@ fn aggregation(c: &mut Criterion) {
     for strings in [false, true] {
         for run_length in [1, 8, 128, 8192] {
             let (schema, keys) = inputs(run_length, 8192, strings);
-            let plan = aggregate_plan(&schema, keys);
+            let plan =
+                aggregate_plan(&schema, keys, &["a", "b"], &InputOrderMode::Sorted);
             let name =
                 format!("{}_run{run_length}", if strings { "string" } else { "int" });
             group.bench_function(name, |b| {
@@ -261,5 +266,57 @@ fn aggregation(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, grouping, aggregation);
+/// Input ordered by `a` only. Each `a` value has 32768 distinct `b` values, so
+/// every `a` boundary completes four default batches of groups at once.
+fn partially_ordered_aggregation(c: &mut Criterion) {
+    const GROUPS_PER_KEY: usize = 32768;
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Int32, false),
+    ]));
+    let keys = (0..ROWS)
+        .step_by(8192)
+        .map(|start| {
+            let rows = start..(start + 8192).min(ROWS);
+            let a: ArrayRef = Arc::new(Int32Array::from_iter_values(
+                rows.clone().map(|row| (row / GROUPS_PER_KEY) as i32),
+            ));
+            let b: ArrayRef = Arc::new(Int32Array::from_iter_values(
+                rows.map(|row| (row % GROUPS_PER_KEY) as i32),
+            ));
+            vec![a, b]
+        })
+        .collect();
+    let plan = aggregate_plan(
+        &schema,
+        keys,
+        &["a"],
+        &InputOrderMode::PartiallySorted(vec![0]),
+    );
+    let runtime = Runtime::new().unwrap();
+    let mut group = c.benchmark_group("partially_ordered_aggregate_exec");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_millis(250));
+    group.measurement_time(Duration::from_secs(1));
+    group.bench_function("groups_per_key32768", |b| {
+        b.iter(|| {
+            black_box(
+                runtime
+                    .block_on(collect(
+                        Arc::clone(&plan),
+                        Arc::new(TaskContext::default()),
+                    ))
+                    .unwrap(),
+            )
+        });
+    });
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    grouping,
+    aggregation,
+    partially_ordered_aggregation
+);
 criterion_main!(benches);

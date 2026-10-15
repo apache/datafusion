@@ -789,7 +789,7 @@ impl TableFunctionImpl for GenerateSeriesFuncImpl {
 
 impl GenerateSeriesFuncImpl {
     fn call_int64(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
-        let mut normalize_args = Vec::new();
+        let mut normalize_args = Vec::with_capacity(exprs.len());
         for (expr_index, expr) in exprs.iter().enumerate() {
             match expr {
                 Expr::Literal(ScalarValue::Null, _) => {}
