@@ -34,10 +34,10 @@ use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::expressions::CastExpr;
-use datafusion::prelude::SessionConfig;
-use datafusion_physical_expr_adapter::{
+use datafusion::physical_expr_adapter::{
     DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
 };
+use datafusion::prelude::SessionConfig;
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt, PutPayload};

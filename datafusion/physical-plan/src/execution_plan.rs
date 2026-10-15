@@ -706,10 +706,9 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// [`MetricsSet`]s may change as execution progresses, the
     /// specific metrics will not.
     ///
-    /// Once `self.execute()` has returned (technically the future is
-    /// resolved) for all available partitions, the set of metrics
-    /// should be complete. If this function is called prior to
-    /// `execute()` new metrics may appear in subsequent calls.
+    /// New metrics may be registered during execution, including while streams
+    /// returned by [`Self::execute`] are being polled. Call again to obtain
+    /// metrics registered since the previous snapshot.
     fn metrics(&self) -> Option<MetricsSet> {
         None
     }
@@ -1616,7 +1615,7 @@ impl<'a> DefaultInvariantChecker<'a> {
         &self,
         dynamic_expressions: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<()> {
-        let mut produced_ids = HashSet::new();
+        let mut produced_ids = HashSet::with_capacity(dynamic_expressions.len());
         for expr in dynamic_expressions {
             let Some(expression_id) = expr.expression_id() else {
                 return internal_err!(
@@ -1836,7 +1835,7 @@ pub async fn collect_partitioned(
         });
     });
 
-    let mut batches = vec![];
+    let mut batches = Vec::with_capacity(join_set.len());
     // Note that currently this doesn't identify the thread that panicked
     //
     // TODO: Replace with [join_next_with_id](https://docs.rs/tokio/latest/tokio/task/struct.JoinSet.html#method.join_next_with_id

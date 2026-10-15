@@ -71,6 +71,12 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
         &[(20, 1, 200)],
         &[(30, 1, 300), (40, 4, 400)],
     ];
+    const COMPOSITE_RANGE_PARTITIONS: [&[(i32, i32, i32)]; 4] = [
+        &[(1, 1, 10), (10, 0, 90)],
+        &[(10, 1, 100), (10, 1, 101), (20, 0, 190)],
+        &[(20, 1, 200), (30, 0, 290)],
+        &[(30, 1, 300), (35, 2, 350)],
+    ];
 
     let schema = Arc::new(Schema::new(vec![
         Field::new("range_key", DataType::Int32, false),
@@ -187,6 +193,37 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
         sparse_output_partitioning,
         None,
     );
+    let composite_partitioning = Partitioning::Range(
+        RangePartitioning::try_new(
+            vec![
+                col("range_key").sort(true, true),
+                col("non_range_key").sort(true, true),
+            ],
+            [10, 20, 30]
+                .into_iter()
+                .map(|key| {
+                    SplitPoint::new(vec![
+                        ScalarValue::Int32(Some(key)),
+                        ScalarValue::Int32(Some(1)),
+                    ])
+                })
+                .collect(),
+        )
+        .expect("composite range partitioning should be valid"),
+    );
+
+    register_parquet_listing_table(
+        ctx,
+        "range_partitioned_composite",
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("test_files/scratch_range_partitioning/range_partitioned_composite"),
+        Arc::clone(&schema),
+        range_batches(&schema, COMPOSITE_RANGE_PARTITIONS),
+        composite_partitioning,
+        None,
+    );
+
+    register_sampled_range_stream_table(ctx, schema);
 }
 
 fn register_parquet_listing_table(
@@ -276,6 +313,48 @@ fn register_unbounded_range_stream_table(
         ),
     )
     .expect("test stream table registration should succeed");
+}
+
+/// A finite source with more retained samples than effective range boundaries.
+/// The physical metadata is needed because logical listing tables currently
+/// describe only their effective split points.
+fn register_sampled_range_stream_table(ctx: &SessionContext, schema: Arc<Schema>) {
+    const PARTITIONS: [&[(i32, i32, i32)]; 3] = [
+        &[(1, 1, 10), (10, 1, 100)],
+        &[(20, 1, 200), (30, 1, 300)],
+        &[(40, 1, 400), (50, 1, 500)],
+    ];
+
+    let output_partitioning = PhysicalPartitioning::Range(
+        PhysicalRangePartitioning::try_new_with_samples(
+            [PhysicalSortExpr {
+                expr: physical_col("range_key", &schema)
+                    .expect("range key should exist in stream schema"),
+                options: SortOptions::default(),
+            }]
+            .into(),
+            [10, 20, 30, 40, 50]
+                .into_iter()
+                .map(|value| SplitPoint::new(vec![ScalarValue::Int32(Some(value))]))
+                .collect(),
+            PARTITIONS.len(),
+        )
+        .expect("sampled range partitioning should be valid"),
+    );
+    let partitions = PARTITIONS
+        .into_iter()
+        .map(|rows| range_stream_partition(Arc::clone(&schema), rows))
+        .collect();
+
+    ctx.register_table(
+        "sampled_range_partitioned",
+        Arc::new(
+            StreamingTable::try_new(schema, partitions)
+                .expect("sampled range table should be valid")
+                .with_output_partitioning(output_partitioning),
+        ),
+    )
+    .expect("sampled range table registration should succeed");
 }
 
 fn range_stream_partition(

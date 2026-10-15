@@ -110,11 +110,12 @@ impl PhysicalExpr for IsNotNullExpr {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
         use datafusion_proto_models::protobuf;
 
+        let Self { arg } = self;
         Ok(Some(protobuf::PhysicalExprNode {
             expr_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::IsNotNullExpr(
                 Box::new(protobuf::PhysicalIsNotNull {
-                    expr: Some(Box::new(ctx.encode_child(&self.arg)?)),
+                    expr: Some(Box::new(ctx.encode_child(arg)?)),
                 }),
             )),
         }))
@@ -136,11 +137,9 @@ impl IsNotNullExpr {
             protobuf::physical_expr_node::ExprType::IsNotNullExpr,
             "IsNotNullExpr",
         );
-        let expr = ctx.decode_required_expression(
-            node.expr.as_deref(),
-            "IsNotNullExpr",
-            "expr",
-        )?;
+        let protobuf::PhysicalIsNotNull { expr } = node.as_ref();
+        let expr =
+            ctx.decode_required_expression(expr.as_deref(), "IsNotNullExpr", "expr")?;
 
         Ok(Arc::new(IsNotNullExpr::new(expr)))
     }

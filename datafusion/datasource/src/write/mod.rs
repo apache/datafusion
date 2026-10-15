@@ -18,19 +18,22 @@
 //! Module containing helper methods/traits related to enabling
 //! write support for the various file formats
 
-use std::io::Write;
-use std::sync::Arc;
-
 use crate::file_compression_type::FileCompressionType;
 use crate::file_sink_config::FileSinkConfig;
-use datafusion_common::error::Result;
-
+use crate::write::demux::FileSize;
 use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
 use bytes::Bytes;
+use datafusion_common::error::Result;
 use object_store::ObjectStore;
 use object_store::buffered::BufWriter;
 use object_store::path::Path;
+use pin_project_lite::pin_project;
+use std::io::{IoSlice, Write};
+use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::task::{Context, Poll, ready};
 use tokio::io::AsyncWrite;
 
 pub mod demux;
@@ -117,6 +120,8 @@ pub struct ObjectWriterBuilder {
     buffer_size: Option<usize>,
     /// The compression level for the object writer.
     compression_level: Option<u32>,
+    /// Counts the number of bytes actually written.
+    bytes_written_counter: Option<Arc<AtomicU64>>,
 }
 
 impl ObjectWriterBuilder {
@@ -132,6 +137,7 @@ impl ObjectWriterBuilder {
             object_store,
             buffer_size: None,
             compression_level: None,
+            bytes_written_counter: None,
         }
     }
 
@@ -205,6 +211,11 @@ impl ObjectWriterBuilder {
         self.compression_level
     }
 
+    pub fn with_bytes_written_counter(mut self, counter: FileSize) -> Self {
+        self.bytes_written_counter = Some(counter);
+        self
+    }
+
     /// Return a writer object that writes to the object store location.
     ///
     /// If a buffer size has not been set, the default buffer buffer size will
@@ -219,14 +230,77 @@ impl ObjectWriterBuilder {
             object_store,
             buffer_size,
             compression_level,
+            bytes_written_counter,
         } = self;
 
         let buf_writer = match buffer_size {
             Some(size) => BufWriter::with_capacity(object_store, location, size),
             None => BufWriter::new(object_store, location),
         };
+        if let Some(counter) = bytes_written_counter {
+            file_compression_type.convert_async_writer_with_level(
+                CountingWriter {
+                    inner: buf_writer,
+                    counter,
+                },
+                compression_level,
+            )
+        } else {
+            file_compression_type
+                .convert_async_writer_with_level(buf_writer, compression_level)
+        }
+    }
+}
 
-        file_compression_type
-            .convert_async_writer_with_level(buf_writer, compression_level)
+pin_project! {
+    /// [`AsyncWrite`] wrapper that counts the number of effectively written bytes
+    struct CountingWriter<W> {
+        #[pin]
+        inner: W,
+        counter: Arc<AtomicU64>,
+    }
+}
+
+impl<W: AsyncWrite> AsyncWrite for CountingWriter<W> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let this = self.project();
+        Poll::Ready(ready!(this.inner.poll_write(cx, buf)).inspect(|count| {
+            this.counter.fetch_add((*count) as u64, Ordering::Relaxed);
+        }))
+    }
+
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        self.project().inner.poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        self.project().inner.poll_shutdown(cx)
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[IoSlice<'_>],
+    ) -> Poll<std::io::Result<usize>> {
+        let this = self.project();
+        Poll::Ready(
+            ready!(this.inner.poll_write_vectored(cx, bufs)).inspect(|count| {
+                this.counter.fetch_add((*count) as u64, Ordering::Relaxed);
+            }),
+        )
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.inner.is_write_vectored()
     }
 }
