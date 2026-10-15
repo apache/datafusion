@@ -17,10 +17,14 @@
 
 mod data_utils;
 
+use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use criterion::{Criterion, criterion_group, criterion_main};
 use data_utils::create_table_provider;
+use datafusion::datasource::MemTable;
 use datafusion::error::Result;
-use datafusion::execution::context::SessionContext;
+use datafusion::execution::context::{SessionConfig, SessionContext};
+use datafusion::physical_plan::{collect, displayable};
+use datafusion_expr::col;
 use parking_lot::Mutex;
 use std::hint::black_box;
 use std::sync::Arc;
@@ -330,5 +334,185 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, criterion_benchmark);
+/// Measure the multi-column fully ordered grouping path, with data generation
+/// and sorting outside timing. Both keys vary, and the nullable second key
+/// changes type while the shape of the input stays the same.
+fn fully_ordered(c: &mut Criterion) {
+    use DataType::*;
+    use IntervalUnit::{DayTime, MonthDayNano};
+    use TimeUnit::{Microsecond, Millisecond, Nanosecond};
+
+    let cases = [
+        ("int64", "signed_key", Int64, 31),
+        (
+            "utf8_view",
+            "arrow_cast(lpad(CAST(key_value AS VARCHAR), 4, '0'), 'Utf8View')",
+            Utf8View,
+            31,
+        ),
+        (
+            "timestamp_ns",
+            "arrow_cast(signed_key, 'Timestamp(Nanosecond)')",
+            Timestamp(Nanosecond, None),
+            31,
+        ),
+        (
+            "timestamp_us_utc",
+            "arrow_cast(signed_key, 'Timestamp(Microsecond, Some(\"UTC\"))')",
+            Timestamp(Microsecond, Some("UTC".into())),
+            31,
+        ),
+        (
+            "date32",
+            "arrow_cast(CAST(signed_key AS INTEGER), 'Date32')",
+            Date32,
+            31,
+        ),
+        (
+            "time32_ms",
+            "arrow_cast(CAST(key_value AS INTEGER), 'Time32(Millisecond)')",
+            Time32(Millisecond),
+            31,
+        ),
+        (
+            "time64_ns",
+            "arrow_cast(key_value, 'Time64(Nanosecond)')",
+            Time64(Nanosecond),
+            31,
+        ),
+        (
+            "duration_ns",
+            "arrow_cast(signed_key, 'Duration(Nanosecond)')",
+            Duration(Nanosecond),
+            31,
+        ),
+        (
+            "interval_day_time",
+            "arrow_cast(concat(CAST(signed_key AS VARCHAR), ' days'), 'Interval(DayTime)')",
+            Interval(DayTime),
+            31,
+        ),
+        (
+            "interval_month_day_nano",
+            "arrow_cast(arrow_cast(signed_key, 'Duration(Nanosecond)'), 'Interval(MonthDayNano)')",
+            Interval(MonthDayNano),
+            31,
+        ),
+        (
+            "decimal128",
+            "arrow_cast(concat('123456789012345678901', lpad(CAST(key_value AS VARCHAR), 4, '0'), '.1250'), 'Decimal128(30, 4)')",
+            Decimal128(30, 4),
+            31,
+        ),
+        (
+            "decimal256",
+            "arrow_cast(concat('123456789012345678901234567890123456789012345678901', lpad(CAST(key_value AS VARCHAR), 4, '0'), '.1250'), 'Decimal256(60, 4)')",
+            Decimal256(60, 4),
+            31,
+        ),
+        (
+            "fixed_binary16",
+            "arrow_cast(decode(lpad(to_hex(key_value), 32, '0'), 'hex'), 'FixedSizeBinary(16)')",
+            FixedSizeBinary(16),
+            31,
+        ),
+        (
+            "fixed_binary7",
+            "arrow_cast(decode(lpad(to_hex(key_value), 14, '0'), 'hex'), 'FixedSizeBinary(7)')",
+            FixedSizeBinary(7),
+            31,
+        ),
+        (
+            "timestamp_ns_singleton",
+            "arrow_cast(signed_key, 'Timestamp(Nanosecond)')",
+            Timestamp(Nanosecond, None),
+            1,
+        ),
+        (
+            "timestamp_ns_long_runs",
+            "arrow_cast(signed_key, 'Timestamp(Nanosecond)')",
+            Timestamp(Nanosecond, None),
+            512,
+        ),
+    ];
+
+    let rt = Runtime::new().unwrap();
+    let mut group = c.benchmark_group("fully_ordered");
+    for (name, key_expr, key_type, run_length) in cases {
+        let ctx = rt
+            .block_on(fully_ordered_context(key_expr, &key_type, run_length))
+            .unwrap();
+        group.bench_function(name, |b| {
+            b.iter(|| query(ctx.clone(), &rt, FULLY_ORDERED_QUERY))
+        });
+    }
+    group.finish();
+}
+
+const FULLY_ORDERED_QUERY: &str = "SELECT k1, k2 FROM ordered_input GROUP BY k1, k2";
+
+async fn fully_ordered_context(
+    key_expr: &str,
+    key_type: &DataType,
+    run_length: usize,
+) -> Result<Arc<Mutex<SessionContext>>> {
+    const ROWS: usize = 2_097_152;
+    let config = SessionConfig::new()
+        .with_target_partitions(1)
+        .with_batch_size(8192)
+        .with_prefer_existing_sort(true);
+    let ctx = SessionContext::new_with_config(config);
+    // Runs of 31 cross batch boundaries; singleton and long-run cases vary
+    // cardinality without multiplying every type by every input shape.
+    let input = ctx
+        .sql(&format!(
+            "SELECT CAST(group_id / 32 AS INTEGER) AS k1, \
+             CASE WHEN key_value = 0 THEN NULL ELSE {key_expr} END AS k2 \
+             FROM (SELECT value / {run_length} AS group_id, \
+                          value / {run_length} % 32 AS key_value, \
+                          value / {run_length} % 32 - 16 AS signed_key \
+                   FROM range({ROWS})) \
+             ORDER BY k1 ASC NULLS FIRST, k2 ASC NULLS FIRST"
+        ))
+        .await?
+        .create_physical_plan()
+        .await?;
+    let schema = input.schema();
+    assert_eq!(schema.field(1).data_type(), key_type);
+    let batches = collect(input, ctx.task_ctx()).await?;
+    assert_eq!(
+        batches.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+        ROWS
+    );
+    // The setup query sorts both keys before materialization. Retain that
+    // known ordering explicitly when registering its results as a table.
+    let table = MemTable::try_new(schema, vec![batches])?.with_sort_order(vec![vec![
+        col("k1").sort(true, true),
+        col("k2").sort(true, true),
+    ]]);
+    ctx.register_table("ordered_input", Arc::new(table))?;
+
+    let plan = ctx
+        .sql(FULLY_ORDERED_QUERY)
+        .await?
+        .create_physical_plan()
+        .await?;
+    let description = displayable(plan.as_ref()).indent(true).to_string();
+    assert!(
+        description.contains("ordering_mode=Sorted"),
+        "{description}"
+    );
+    // Input is already sorted in one partition. Fail if the planner adds
+    // sorting or repartitioning to the measured query.
+    assert!(!description.contains("SortExec"), "{description}");
+    assert!(!description.contains("RepartitionExec"), "{description}");
+    let result = collect(plan, ctx.task_ctx()).await?;
+    assert_eq!(
+        result.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+        ROWS.div_ceil(run_length)
+    );
+    Ok(Arc::new(Mutex::new(ctx)))
+}
+
+criterion_group!(benches, criterion_benchmark, fully_ordered);
 criterion_main!(benches);
