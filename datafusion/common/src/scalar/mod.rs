@@ -1548,15 +1548,13 @@ impl ScalarValue {
         })
     }
 
-    /// Returns the raw `i64` value of a non-null timestamp with exactly the
-    /// given `unit` and `tz`.
+    /// Returns the internal Arrow representation of a timestamp.
     ///
-    /// Returns `None` if this value is not a timestamp, is `NULL`, or has a
-    /// different unit or timezone.
+    /// Returns `None` if this value is not a timestamp or is `NULL`.
     ///
-    /// The timezone is only used to check the type; it does not affect the
-    /// returned value. The returned value is always the offset in UTC in
-    /// `unit`s, regardless of `tz`.
+    /// Returns a tuple of (`i64` value, [`TimeUnit`], and timezone) for a
+    /// non-null timestamp. The `i64` is always the offset from the UTC epoch in
+    /// `unit`s, regardless of the timezone.
     ///
     /// # Example
     /// ```
@@ -1565,31 +1563,38 @@ impl ScalarValue {
     /// # use datafusion_common::ScalarValue;
     /// let utc: Arc<str> = Arc::from("UTC");
     /// let ts = ScalarValue::TimestampSecond(Some(1714521600), Some(Arc::clone(&utc)));
+    /// assert_eq!(
+    ///     ts.try_as_timestamp(),
+    ///     Some((1714521600, TimeUnit::Second, Some(&utc)))
+    /// );
     ///
-    /// // Same unit and timezone: the raw value
-    /// assert_eq!(ts.try_as_timestamp(TimeUnit::Second, Some(&utc)), Some(1714521600));
+    /// // Timestamps without a timezone
+    /// let ts = ScalarValue::TimestampMillisecond(Some(1714521600000), None);
+    /// assert_eq!(
+    ///     ts.try_as_timestamp(),
+    ///     Some((1714521600000, TimeUnit::Millisecond, None))
+    /// );
     ///
-    /// // Different unit
-    /// assert_eq!(ts.try_as_timestamp(TimeUnit::Millisecond, Some(&utc)), None);
-    ///
-    /// // Different timezone
-    /// assert_eq!(ts.try_as_timestamp(TimeUnit::Second, None), None);
+    /// // NULL timestamps and other types return None
+    /// assert_eq!(ScalarValue::TimestampSecond(None, None).try_as_timestamp(), None);
+    /// assert_eq!(ScalarValue::Int64(Some(1)).try_as_timestamp(), None);
     /// ```
-    pub fn try_as_timestamp(&self, unit: TimeUnit, tz: Option<&Arc<str>>) -> Option<i64> {
-        let (value, value_tz) = match (unit, self) {
-            (TimeUnit::Second, ScalarValue::TimestampSecond(Some(v), tz)) => (v, tz),
-            (TimeUnit::Millisecond, ScalarValue::TimestampMillisecond(Some(v), tz)) => {
-                (v, tz)
+    pub fn try_as_timestamp(&self) -> Option<(i64, TimeUnit, Option<&Arc<str>>)> {
+        match self {
+            ScalarValue::TimestampSecond(Some(v), tz) => {
+                Some((*v, TimeUnit::Second, tz.as_ref()))
             }
-            (TimeUnit::Microsecond, ScalarValue::TimestampMicrosecond(Some(v), tz)) => {
-                (v, tz)
+            ScalarValue::TimestampMillisecond(Some(v), tz) => {
+                Some((*v, TimeUnit::Millisecond, tz.as_ref()))
             }
-            (TimeUnit::Nanosecond, ScalarValue::TimestampNanosecond(Some(v), tz)) => {
-                (v, tz)
+            ScalarValue::TimestampMicrosecond(Some(v), tz) => {
+                Some((*v, TimeUnit::Microsecond, tz.as_ref()))
             }
-            _ => return None,
-        };
-        (value_tz.as_ref() == tz).then_some(*value)
+            ScalarValue::TimestampNanosecond(Some(v), tz) => {
+                Some((*v, TimeUnit::Nanosecond, tz.as_ref()))
+            }
+            _ => None,
+        }
     }
 
     /// Returns a [`ScalarValue`] representing PI

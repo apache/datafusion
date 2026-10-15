@@ -521,12 +521,14 @@ impl ScalarUDFImpl for DateTruncFunc {
         }
 
         // Extract the literal value and verify it matches the column's type.
-        let Some(value) = lit_expr
-            .as_literal()
-            .and_then(|lit| lit.try_as_timestamp(unit, tz_opt.as_ref()))
+        let Some((value, lit_unit, lit_tz)) =
+            lit_expr.as_literal().and_then(|lit| lit.try_as_timestamp())
         else {
             return Ok(PreimageResult::None);
         };
+        if lit_unit != unit || lit_tz != tz_opt.as_ref() {
+            return Ok(PreimageResult::None);
+        }
 
         let Some((lower, upper)) =
             timestamp_preimage_bounds(unit, value, tz_opt.as_ref(), granularity)
@@ -725,7 +727,9 @@ fn date_column_preimage(
     // The post-coercion literal is Timestamp(ns) with no tz. Anything not at
     // midnight UTC can never equal date_trunc(g, date_col); bail so the
     // unsimplified predicate runs and returns its (empty) result.
-    let ts_ns = lit_expr.as_literal()?.try_as_timestamp(Nanosecond, None)?;
+    let (ts_ns, Nanosecond, None) = lit_expr.as_literal()?.try_as_timestamp()? else {
+        return None;
+    };
     let dt = timestamp_ns_to_datetime(ts_ns)?;
     if dt.time() != chrono::NaiveTime::from_hms_opt(0, 0, 0)? {
         return None;
