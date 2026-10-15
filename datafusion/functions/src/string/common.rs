@@ -394,7 +394,15 @@ fn unicode_case(s: &str, lower: bool) -> String {
 ///
 /// An ASCII value is converted byte by byte straight into the builder. Other
 /// values go through `str::to_lowercase` / `str::to_uppercase`, which allocate
-/// a `String` but convert any leading run of ASCII bytes in bulk.
+/// a `String` but convert any leading run of ASCII bytes in bulk. Checking
+/// `is_ascii` first means a non-ASCII value is read up to its first non-ASCII
+/// byte before it is converted; that extra read is cheap compared with what an
+/// ASCII value saves by being written straight into the builder instead of
+/// through a temporary `String`.
+///
+/// Lowercasing needs the whole value: `Σ` becomes `ς` at the end of a word and
+/// `σ` elsewhere, so converting one character at a time, or converting the
+/// ASCII prefix separately, would give the wrong result.
 #[inline]
 fn append_case_converted<O: OffsetSizeTrait>(
     builder: &mut GenericStringArrayBuilder<O>,

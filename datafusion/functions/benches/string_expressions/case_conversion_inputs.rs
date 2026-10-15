@@ -137,15 +137,25 @@ pub fn inputs() -> Vec<(String, ArrayRef)> {
     let words = build_values(word_value);
     inputs.push((
         "non_ascii_words_utf8".to_string(),
-        Arc::new(StringArray::from(words.clone())),
+        Arc::new(words.iter().map(Option::as_deref).collect::<StringArray>()),
     ));
     inputs.push((
         "non_ascii_words_large_utf8".to_string(),
-        Arc::new(LargeStringArray::from(words.clone())),
+        Arc::new(
+            words
+                .iter()
+                .map(Option::as_deref)
+                .collect::<LargeStringArray>(),
+        ),
     ));
     inputs.push((
         "non_ascii_words_utf8view".to_string(),
-        Arc::new(StringViewArray::from(words)),
+        Arc::new(
+            words
+                .iter()
+                .map(Option::as_deref)
+                .collect::<StringViewArray>(),
+        ),
     ));
 
     for str_len in [8, 32, 128] {
@@ -163,11 +173,16 @@ pub fn inputs() -> Vec<(String, ArrayRef)> {
         ] {
             inputs.push((
                 format!("{shape}_utf8_len{str_len}"),
-                Arc::new(StringArray::from(values.clone())),
+                Arc::new(values.iter().map(Option::as_deref).collect::<StringArray>()),
             ));
             inputs.push((
                 format!("{shape}_utf8view_len{str_len}"),
-                Arc::new(StringViewArray::from(values)),
+                Arc::new(
+                    values
+                        .iter()
+                        .map(Option::as_deref)
+                        .collect::<StringViewArray>(),
+                ),
             ));
         }
     }
