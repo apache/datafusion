@@ -113,7 +113,7 @@ FROM (
 )
 ----
 <slt:ignore>
-04)------AggregateExec: mode=Single, gby=[group_alias_0@0 as group_alias_0], aggr=[count(alias1)], metrics=[<slt:ignore>spill_count=7,<slt:ignore>]
+04)------AggregateExec: mode=Single, gby=[v@0 * 7 % 100000 as t.v * Int64(7) % Int64(100000)], aggr=[count(DISTINCT t.v)], metrics=[<slt:ignore>spill_count=7,<slt:ignore>]
 <slt:ignore>
 
 # --- Case D: multiple aggregates (sum/min/max) under memory limit ---
