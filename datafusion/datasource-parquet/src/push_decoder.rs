@@ -36,6 +36,7 @@
 //! [`PushDecoderStreamState::into_stream`] for consumption.
 
 use std::collections::VecDeque;
+use std::ops::Range;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
@@ -320,6 +321,52 @@ pub(crate) struct PushDecoderStreamState {
     /// group at a time as they are decoded or skipped, and topped up to the
     /// full range when the stream is dropped.
     pub(crate) byte_progress: ByteProgress,
+    /// When true, each row group read with a pushed down [`RowFilter`] is
+    /// fetched with a single I/O request before the decoder starts on it: at
+    /// every row-group boundary the byte ranges that the decoder's
+    /// [`ScanPlan`] lists for the next row group (the columns of the filter
+    /// predicates and of the output projection) are fetched together and
+    /// pushed into the decoder, so it finds them buffered and never pauses
+    /// for I/O between evaluating the filters and decoding the output. This
+    /// is the same I/O pattern (one request per row group) as a scan without
+    /// a row filter. Filters are still evaluated before the output columns
+    /// are decoded.
+    ///
+    /// When false, data is fetched progressively, exactly as the decoder
+    /// requests it: the columns of each filter predicate first and, once the
+    /// filters are evaluated, the remaining projected columns of the rows
+    /// that passed. See
+    /// [`progressive_io`](datafusion_common::config::ParquetOptions::progressive_io).
+    ///
+    /// [`ScanPlan`]: parquet::arrow::push_decoder::ScanPlan
+    pub(crate) one_shot_io: bool,
+}
+
+/// Merge the byte ranges of each column chunk of a row group into contiguous
+/// runs, in file order.
+///
+/// `ranges` are `(leaf column index, byte range)` pairs, in any order. Ranges
+/// of different columns are never merged with each other, even when they are
+/// adjacent in the file, so the result has the same shape (one range per
+/// column chunk) as the request of a scan without a row filter.
+fn coalesce_column_ranges(
+    ranges: impl IntoIterator<Item = (usize, Range<u64>)>,
+) -> Vec<Range<u64>> {
+    let mut ranges: Vec<(usize, Range<u64>)> = ranges.into_iter().collect();
+    ranges.sort_unstable_by_key(|(column, range)| (*column, range.start));
+    let mut runs: Vec<(usize, Range<u64>)> = Vec::with_capacity(ranges.len());
+    for (column, range) in ranges {
+        match runs.last_mut() {
+            Some((last_column, last))
+                if *last_column == column && range.start <= last.end =>
+            {
+                last.end = last.end.max(range.end);
+            }
+            _ => runs.push((column, range)),
+        }
+    }
+    runs.sort_unstable_by_key(|(_, range)| range.start);
+    runs.into_iter().map(|(_, range)| range).collect()
 }
 
 /// A reusable, `Arc`-shared list of prebuilt row-filter candidates.
@@ -508,7 +555,40 @@ impl PushDecoderStreamState {
                 }
             }
 
-            // Step 3: drive the decoder.
+            // Step 3: with one-shot I/O, fetch everything the next row group
+            // needs in a single request *before* driving the decoder, so it
+            // finds the data buffered and never pauses for I/O between
+            // evaluating the filters and decoding the output. Only row groups
+            // read with a real row filter are prefetched: without one the
+            // decoder already fetches the row group with a single request.
+            // Anything the plan did not cover is fetched normally in step 4.
+            if at_boundary && self.one_shot_io && self.filter_installed {
+                let ranges = self.next_row_group_plan();
+                if !ranges.is_empty() {
+                    // I/O, not compute.
+                    timer.stop();
+                    let data = self
+                        .reader
+                        .get_byte_ranges(ranges.clone())
+                        .await
+                        .map_err(DataFusionError::from);
+                    timer.restart();
+                    let data = match data {
+                        Ok(data) => data,
+                        Err(e) => return Some((Err(e), self)),
+                    };
+                    if let Err(e) = self
+                        .decoder
+                        .as_mut()
+                        .expect("decoder present")
+                        .push_ranges(ranges, data)
+                    {
+                        return Some((Err(DataFusionError::from(e)), self));
+                    }
+                }
+            }
+
+            // Step 4: drive the decoder.
             let decoder = self.decoder.as_mut().expect("decoder present");
             match decoder.try_next_reader() {
                 Ok(DecodeResult::NeedsData(ranges)) => {
@@ -555,6 +635,39 @@ impl PushDecoderStreamState {
                 }
             }
         }
+    }
+
+    /// The byte ranges of the next row group the decoder will read, taken
+    /// from the decoder's own [`ScanPlan`], with the ranges of each column
+    /// chunk coalesced into contiguous runs. Returns an empty `Vec` when the
+    /// decoder has nothing left to read.
+    ///
+    /// The plan lists one range per page when the column has an offset index
+    /// (only the pages a row selection keeps) and one range per column chunk
+    /// otherwise. Without a row selection the decoder requests whole column
+    /// chunks, and it only uses a requested range that lies within a single
+    /// pushed buffer, so the pages of each column chunk are merged back into
+    /// contiguous runs before they are fetched: with no selection that is the
+    /// whole column chunk, with a selection each run of adjacent selected
+    /// pages. Any range the decoder later requests is therefore contained in
+    /// one pushed buffer.
+    ///
+    /// The plan is taken fresh at each boundary (rather than once per file)
+    /// because it reflects the decoder's current state: the stream rebuilds
+    /// the decoder at boundaries to skip pruned row groups and to toggle the
+    /// row filter, and a plan made before a rebuild is not valid after it.
+    ///
+    /// [`ScanPlan`]: parquet::arrow::push_decoder::ScanPlan
+    fn next_row_group_plan(&self) -> Vec<Range<u64>> {
+        let decoder = self.decoder.as_ref().expect("decoder present");
+        let mut plan = decoder.scan_plan().peekable();
+        let Some(row_group) = plan.peek().map(|planned| planned.row_group) else {
+            return vec![];
+        };
+        coalesce_column_ranges(
+            plan.take_while(|planned| planned.row_group == row_group)
+                .map(|planned| (planned.column, planned.range)),
+        )
     }
 
     /// Keep `rg_plan.front()` aligned with the row group the decoder will emit
@@ -930,6 +1043,43 @@ mod tests {
             300,
             "row groups finished without a reader must still credit their bytes",
         );
+    }
+
+    #[test]
+    fn coalesce_column_ranges_merges_pages_of_a_column_chunk() {
+        // Pages of two column chunks, interleaved by row as a `ScanPlan`
+        // lists them. Column 0: dictionary 0..10, data pages 10..20 and
+        // 20..30. Column 1: 30..40 and 40..50, adjacent to column 0.
+        let ranges = vec![
+            (0, 0..10),
+            (1, 30..40),
+            (0, 10..20),
+            (1, 40..50),
+            (0, 20..30),
+        ];
+        assert_eq!(
+            coalesce_column_ranges(ranges),
+            vec![0..30, 30..50],
+            "pages of one column chunk merge; adjacent column chunks do not",
+        );
+    }
+
+    #[test]
+    fn coalesce_column_ranges_keeps_selection_gaps() {
+        // A row selection skipped page 10..20 of column 0 and page 40..50 of
+        // column 1, so each column chunk has two runs.
+        let ranges = vec![
+            (0, 0..10),
+            (0, 20..30),
+            (1, 30..40),
+            (1, 50..60),
+            (1, 60..70),
+        ];
+        assert_eq!(
+            coalesce_column_ranges(ranges),
+            vec![0..10, 20..30, 30..40, 50..70],
+        );
+        assert!(coalesce_column_ranges(vec![]).is_empty());
     }
 
     #[test]
