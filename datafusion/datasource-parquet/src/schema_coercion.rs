@@ -550,8 +550,8 @@ fn coerce_int96_to_resolution_impl(
         .map(|f| f.path().string())
         .collect();
 
-    if int96_fields.is_empty() {
-        // The schema doesn't contain any int96 fields, so skip the remaining logic.
+    if file_schema.fields().is_empty() || int96_fields.is_empty() {
+        // The schema doesn't contain any fields or int96 fields, so skip the remaining logic.
         return None;
     }
 
@@ -560,7 +560,7 @@ fn coerce_int96_to_resolution_impl(
 
     type NestedFields = Rc<RefCell<Vec<FieldRef>>>;
     type StackContext<'a> = (
-        Vec<&'a str>, // The Parquet column path (e.g., "c0.list.element.c1") for the current field.
+        String, // The Parquet column path (e.g., "c0.list.element.c1") for the current field.
         &'a FieldRef, // The current field to be processed.
         NestedFields, // The parent's fields that this field will be (possibly) type-coerced and
         // inserted into. All fields have a parent, so this is not an Option type.
@@ -586,7 +586,7 @@ fn coerce_int96_to_resolution_impl(
             .fields()
             .iter()
             .rev()
-            .map(|f| (vec![f.name().as_str()], f, Rc::clone(&fields), None))
+            .map(|f| (f.name().clone(), f, Rc::clone(&fields), None))
             .collect();
 
         // Pop fields to DFS into until we have exhausted the stack.
@@ -613,11 +613,7 @@ fn coerce_int96_to_resolution_impl(
                     // Push all the children in reverse to maintain original schema order due to
                     // stack processing.
                     for child in unprocessed_children.into_iter().rev() {
-                        let mut child_path = parquet_path.clone();
-                        // Build up a normalized path that we'll use as a key into the original
-                        // int96_fields set above to test if this originated as int96.
-                        child_path.push(".");
-                        child_path.push(child.name());
+                        let child_path = format!("{parquet_path}.{}", child.name());
                         // Note that here we push the field onto the stack using the struct's
                         // new child_fields vector as the field's parent_fields.
                         stack.push((child_path, child, Rc::clone(&child_fields), None));
@@ -646,14 +642,13 @@ fn coerce_int96_to_resolution_impl(
                         parent_fields,
                         Some(Rc::clone(&child_fields)),
                     ));
-                    let mut child_path = parquet_path.clone();
-                    // Spark uses a definition for arrays/lists that results in a group
-                    // named "list" that is not maintained when parsing to Arrow. We just push
-                    // this name into the path.
-                    child_path.push(".list.");
-                    child_path.push(unprocessed_child.name());
+                    let child_path = resolve_list_child_path(
+                        &parquet_path,
+                        parquet_schema,
+                        unprocessed_child,
+                    );
                     stack.push((
-                        child_path.clone(),
+                        child_path,
                         unprocessed_child,
                         Rc::clone(&child_fields),
                         None,
@@ -671,6 +666,69 @@ fn coerce_int96_to_resolution_impl(
                     .with_metadata(current_field.metadata().clone());
                     parent_fields.borrow_mut().push(Arc::new(processed_list));
                 }
+                (DataType::LargeList(unprocessed_child), None) => {
+                    let child_fields = Rc::new(RefCell::new(Vec::with_capacity(1)));
+                    stack.push((
+                        parquet_path.clone(),
+                        current_field,
+                        parent_fields,
+                        Some(Rc::clone(&child_fields)),
+                    ));
+                    let child_path = resolve_list_child_path(
+                        &parquet_path,
+                        parquet_schema,
+                        unprocessed_child,
+                    );
+                    stack.push((
+                        child_path,
+                        unprocessed_child,
+                        Rc::clone(&child_fields),
+                        None,
+                    ));
+                }
+                (DataType::LargeList(_), Some(processed_children)) => {
+                    let processed_children = processed_children.borrow();
+                    assert_eq!(processed_children.len(), 1);
+                    let processed_list = Field::new_large_list(
+                        current_field.name(),
+                        Arc::clone(&processed_children[0]),
+                        current_field.is_nullable(),
+                    )
+                    .with_metadata(current_field.metadata().clone());
+                    parent_fields.borrow_mut().push(Arc::new(processed_list));
+                }
+                (DataType::FixedSizeList(unprocessed_child, _size), None) => {
+                    let child_fields = Rc::new(RefCell::new(Vec::with_capacity(1)));
+                    stack.push((
+                        parquet_path.clone(),
+                        current_field,
+                        parent_fields,
+                        Some(Rc::clone(&child_fields)),
+                    ));
+                    let child_path = resolve_list_child_path(
+                        &parquet_path,
+                        parquet_schema,
+                        unprocessed_child,
+                    );
+                    stack.push((
+                        child_path,
+                        unprocessed_child,
+                        Rc::clone(&child_fields),
+                        None,
+                    ));
+                }
+                (DataType::FixedSizeList(_, size), Some(processed_children)) => {
+                    let processed_children = processed_children.borrow();
+                    assert_eq!(processed_children.len(), 1);
+                    let processed_list = Field::new_fixed_size_list(
+                        current_field.name(),
+                        Arc::clone(&processed_children[0]),
+                        *size,
+                        current_field.is_nullable(),
+                    )
+                    .with_metadata(current_field.metadata().clone());
+                    parent_fields.borrow_mut().push(Arc::new(processed_list));
+                }
                 (DataType::Map(unprocessed_child, _), None) => {
                     // This is the first time popping off this map. See struct docs above.
                     let child_fields = Rc::new(RefCell::new(Vec::with_capacity(1)));
@@ -680,11 +738,10 @@ fn coerce_int96_to_resolution_impl(
                         parent_fields,
                         Some(Rc::clone(&child_fields)),
                     ));
-                    let mut child_path = parquet_path.clone();
-                    child_path.push(".");
-                    child_path.push(unprocessed_child.name());
+                    let child_path =
+                        format!("{parquet_path}.{}", unprocessed_child.name());
                     stack.push((
-                        child_path.clone(),
+                        child_path,
                         unprocessed_child,
                         Rc::clone(&child_fields),
                         None,
@@ -703,7 +760,7 @@ fn coerce_int96_to_resolution_impl(
                     parent_fields.borrow_mut().push(Arc::new(processed_map));
                 }
                 (DataType::Timestamp(TimeUnit::Nanosecond, None), None)
-                    if int96_fields.contains(parquet_path.concat().as_str()) =>
+                    if int96_fields.contains(parquet_path.as_str()) =>
                 // We found a timestamp(nanos) and it originated as int96. Coerce it to the correct
                 // time_unit, optionally attaching the requested timezone.
                 {
@@ -724,6 +781,69 @@ fn coerce_int96_to_resolution_impl(
     };
 
     Some(transformed_schema)
+}
+
+fn find_parquet_type<'a>(
+    root: &'a parquet::schema::types::Type,
+    path: &str,
+) -> Option<&'a parquet::schema::types::Type> {
+    if path.is_empty() {
+        return Some(root);
+    }
+    let mut current = root;
+    for part in path.split('.') {
+        if part.is_empty() {
+            continue;
+        }
+        if current.is_group() {
+            current = current
+                .get_fields()
+                .iter()
+                .find(|f| f.name() == part)?
+                .as_ref();
+        } else {
+            return None;
+        }
+    }
+    Some(current)
+}
+
+fn resolve_list_child_path(
+    parent_path: &str,
+    parquet_schema: &SchemaDescriptor,
+    unprocessed_child: &FieldRef,
+) -> String {
+    if parent_path.is_empty() {
+        return unprocessed_child.name().to_string();
+    }
+    if let Some(list_type) = find_parquet_type(parquet_schema.root_schema(), parent_path)
+    {
+        if list_type.is_group() {
+            let fields = list_type.get_fields();
+            if fields.len() == 1 {
+                let repeated_field = &fields[0];
+                if repeated_field.is_group() {
+                    let inner_fields = repeated_field.get_fields();
+                    if inner_fields.len() == 1 {
+                        // Standard 3-level list (e.g. list.element) or legacy 3-level (e.g. bag.array, bag.array_element)
+                        let element_field = &inner_fields[0];
+                        return format!(
+                            "{parent_path}.{}.{}",
+                            repeated_field.name(),
+                            element_field.name()
+                        );
+                    }
+                }
+                // 2-level list (e.g. repeated array or repeated element) or repeated group with multiple fields
+                return format!("{parent_path}.{}", repeated_field.name());
+            }
+        } else if list_type.is_primitive() {
+            // 1-level repeated primitive
+            return parent_path.to_string();
+        }
+    }
+    // Fallback if not matched: standard 3-level list convention
+    format!("{parent_path}.list.{}", unprocessed_child.name())
 }
 
 /// Create a new field with the specified data type, copying the other
@@ -1675,6 +1795,137 @@ mod tests {
         ]);
 
         assert_eq!(result, expected_schema);
+    }
+
+    #[test]
+    fn test_coerce_int96_legacy_lists() {
+        use parquet::arrow::parquet_to_arrow_schema;
+        use parquet::schema::parser::parse_message_type;
+
+        // 1. Spark legacy 3-level list: repeated group bag { optional int96 array; }
+        let spark_schema_str = "
+        message spark_schema {
+          optional group c0 (LIST) {
+            repeated group bag {
+              optional int96 array;
+            }
+          }
+        }
+        ";
+        let spark_schema = parse_message_type(spark_schema_str).expect("should parse");
+        let descr = SchemaDescriptor::new(Arc::new(spark_schema));
+        let arrow_schema = parquet_to_arrow_schema(&descr, None).unwrap();
+        let coerced = Int96Coercer::new(&descr, &arrow_schema, &TimeUnit::Microsecond)
+            .coerce()
+            .unwrap();
+        let expected = Schema::new(vec![Field::new_list(
+            "c0",
+            Field::new(
+                "array",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                true,
+            ),
+            true,
+        )]);
+        assert_eq!(coerced, expected);
+
+        // 2. Hive legacy 3-level list: repeated group bag { optional int96 array_element; }
+        let hive_schema_str = "
+        message hive_schema {
+          optional group c0 (LIST) {
+            repeated group bag {
+              optional int96 array_element;
+            }
+          }
+        }
+        ";
+        let hive_schema = parse_message_type(hive_schema_str).expect("should parse");
+        let descr = SchemaDescriptor::new(Arc::new(hive_schema));
+        let arrow_schema = parquet_to_arrow_schema(&descr, None).unwrap();
+        let coerced = Int96Coercer::new(&descr, &arrow_schema, &TimeUnit::Microsecond)
+            .coerce()
+            .unwrap();
+        let expected = Schema::new(vec![Field::new_list(
+            "c0",
+            Field::new(
+                "array_element",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                true,
+            ),
+            true,
+        )]);
+        assert_eq!(coerced, expected);
+
+        // 3. Two-level list: repeated int96 array;
+        let two_level_schema_str = "
+        message two_level_schema {
+          optional group c0 (LIST) {
+            repeated int96 array;
+          }
+        }
+        ";
+        let two_level_schema =
+            parse_message_type(two_level_schema_str).expect("should parse");
+        let descr = SchemaDescriptor::new(Arc::new(two_level_schema));
+        let arrow_schema = parquet_to_arrow_schema(&descr, None).unwrap();
+        let coerced = Int96Coercer::new(&descr, &arrow_schema, &TimeUnit::Microsecond)
+            .coerce()
+            .unwrap();
+        let expected = Schema::new(vec![Field::new_list(
+            "c0",
+            Field::new(
+                "array",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                false,
+            ),
+            true,
+        )]);
+        assert_eq!(coerced, expected);
+
+        // 4. Spark legacy list containing struct with INT96 and INT64
+        let spark_struct_list_str = "
+        message spark_struct_list {
+          optional group c0 (LIST) {
+            repeated group bag {
+              optional group array {
+                optional int96 ts;
+                optional int64 id;
+              }
+            }
+          }
+        }
+        ";
+        let spark_struct_schema =
+            parse_message_type(spark_struct_list_str).expect("should parse");
+        let descr = SchemaDescriptor::new(Arc::new(spark_struct_schema));
+        let arrow_schema = parquet_to_arrow_schema(&descr, None).unwrap();
+        let coerced = Int96Coercer::new(&descr, &arrow_schema, &TimeUnit::Microsecond)
+            .with_timezone(Some(Arc::from("UTC")))
+            .coerce()
+            .unwrap();
+        let expected = Schema::new(vec![Field::new_list(
+            "c0",
+            Field::new_struct(
+                "array",
+                vec![
+                    Field::new(
+                        "ts",
+                        DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                        true,
+                    ),
+                    Field::new("id", DataType::Int64, true),
+                ],
+                true,
+            ),
+            true,
+        )]);
+        assert_eq!(coerced, expected);
+
+        // 5. Empty schema defensive check
+        let empty_schema = Schema::empty();
+        let coerced_empty =
+            Int96Coercer::new(&descr, &empty_schema, &TimeUnit::Microsecond).coerce();
+        assert_eq!(coerced_empty, None);
     }
 
     #[test]
