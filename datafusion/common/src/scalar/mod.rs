@@ -1507,39 +1507,33 @@ impl ScalarValue {
                 // Note that a `NaiveDate` can only be out of range for
                 // `TimeUnit::Nanosecond` as the units cover the entire range of
                 // `NaiveDate`.
-                let value = match unit {
-                    TimeUnit::Second => TimestampSecondType::from_naive_datetime(
-                        naive_midnight,
-                        tz.as_ref(),
-                    )?,
-                    TimeUnit::Millisecond => {
-                        TimestampMillisecondType::from_naive_datetime(
-                            naive_midnight,
-                            tz.as_ref(),
-                        )?
-                    }
-                    TimeUnit::Microsecond => {
-                        TimestampMicrosecondType::from_naive_datetime(
-                            naive_midnight,
-                            tz.as_ref(),
-                        )?
-                    }
-                    TimeUnit::Nanosecond => TimestampNanosecondType::from_naive_datetime(
-                        naive_midnight,
-                        tz.as_ref(),
-                    )?,
-                };
                 match unit {
                     TimeUnit::Second => {
+                        let value = TimestampSecondType::from_naive_datetime(
+                            naive_midnight,
+                            tz.as_ref(),
+                        )?;
                         ScalarValue::TimestampSecond(Some(value), tz_opt.clone())
                     }
                     TimeUnit::Millisecond => {
+                        let value = TimestampMillisecondType::from_naive_datetime(
+                            naive_midnight,
+                            tz.as_ref(),
+                        )?;
                         ScalarValue::TimestampMillisecond(Some(value), tz_opt.clone())
                     }
                     TimeUnit::Microsecond => {
+                        let value = TimestampMicrosecondType::from_naive_datetime(
+                            naive_midnight,
+                            tz.as_ref(),
+                        )?;
                         ScalarValue::TimestampMicrosecond(Some(value), tz_opt.clone())
                     }
                     TimeUnit::Nanosecond => {
+                        let value = TimestampNanosecondType::from_naive_datetime(
+                            naive_midnight,
+                            tz.as_ref(),
+                        )?;
                         ScalarValue::TimestampNanosecond(Some(value), tz_opt.clone())
                     }
                 }
