@@ -727,3 +727,33 @@ async fn partitioned_topk_exec_exposes_metrics() -> Result<()> {
 
     Ok(())
 }
+
+/// `FilterExec::fetch` is applied after the predicate, and the rewritten plan
+/// has nowhere to carry it — a `PartitionedTopKExec` bounds rows *per
+/// partition*, which is a different thing. The rule must decline rather than
+/// return more rows than were asked for.
+///
+/// Not reachable from the default rule list, which runs `LimitPushdown` after
+/// `WindowTopN`; this pins the behaviour for pipelines that reorder the two.
+#[test]
+fn filter_with_fetch_is_declined() -> Result<()> {
+    let filter = build_window_topn_plan(3, Operator::LtEq)?;
+
+    // Non-vacuity: without the fetch, this very shape is rewritten.
+    assert!(
+        find_partitioned_topk(&optimize(Arc::clone(&filter))?).is_some(),
+        "the fixture must be a shape the rule rewrites, or the assertion below \
+         would hold for the wrong reason"
+    );
+
+    let with_fetch = filter
+        .with_fetch(Some(1))
+        .expect("FilterExec accepts a fetch");
+    let optimized = optimize(Arc::clone(&with_fetch))?;
+    assert_eq!(
+        plan_str(optimized.as_ref()),
+        plan_str(with_fetch.as_ref()),
+        "a FilterExec carrying a fetch must be left alone"
+    );
+    Ok(())
+}
