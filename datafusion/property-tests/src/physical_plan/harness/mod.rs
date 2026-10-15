@@ -204,6 +204,13 @@ pub struct Profile {
     /// [`SourceSpec::with_row_id_ordering`]), so that every node sees sorted
     /// input
     pub row_id_ordering: bool,
+    /// Whether every input that does not need another ordering, and whose base
+    /// spec has none, declares that its partitions are sorted by every column
+    /// of its base spec, in schema order, which they are. Unlike the row ids,
+    /// the values of these columns repeat, so that a node that reports an
+    /// ordering longer than the one it keeps between rows that tie on its
+    /// input's ordering is caught.
+    pub column_ordering: bool,
     /// Whether every input is hash partitioned on the first column of its
     /// base spec into one partition per weight of
     /// [`Self::partition_weights`], and declares it (see
@@ -220,8 +227,8 @@ pub struct Profile {
 impl Profile {
     /// A profile named `name` with three partitions, the second of them empty
     /// and the third with twice the rows of the first, exact statistics, seed
-    /// 0, no constant or copied columns, no ordering on the row ids and no
-    /// hash partitioning, that does not run the stream checks
+    /// 0, no constant or copied columns, no ordering on the row ids or the
+    /// columns and no hash partitioning, that does not run the stream checks
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -232,6 +239,7 @@ impl Profile {
             constants: None,
             copies: false,
             row_id_ordering: false,
+            column_ordering: false,
             hash_partitioning: false,
             stream_checks: false,
         }
@@ -252,7 +260,9 @@ impl Profile {
     /// value per partition), `copied columns` (every column has a copy
     /// that the input declares equal to it), `sorted by row id` (every input
     /// that does not need another ordering declares that it is sorted by its
-    /// row ids) and `hash partitioned` (every input that does not need
+    /// row ids), `sorted by columns` (every input that does not need another
+    /// ordering declares that it is sorted by its columns, whose values
+    /// repeat) and `hash partitioned` (every input that does not need
     /// another partitioning is hash partitioned on its first column)
     pub fn defaults() -> Vec<Self> {
         vec![
@@ -288,6 +298,10 @@ impl Profile {
             Self {
                 row_id_ordering: true,
                 ..Self::new("sorted by row id")
+            },
+            Self {
+                column_ordering: true,
+                ..Self::new("sorted by columns")
             },
             Self {
                 hash_partitioning: true,

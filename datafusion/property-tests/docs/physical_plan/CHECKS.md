@@ -102,6 +102,9 @@ Every check runs once per **case**, one per `Profile` in
   constant, the same in every partition or one per partition
 - `copied columns`: every column has a declared-equal `__copy` column
 - `sorted by row id`: inputs are sorted by `__row_id` and declare it
+- `sorted by columns`: inputs without an ordering of their own are sorted by
+  all their columns, in schema order, and declare it. Unlike row ids, the
+  values repeat, so orderings that only hold without ties are caught
 - `hash partitioned`: inputs are hash partitioned on their first column and
   declare it
 

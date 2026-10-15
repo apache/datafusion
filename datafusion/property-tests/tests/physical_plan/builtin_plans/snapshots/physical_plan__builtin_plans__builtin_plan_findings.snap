@@ -22,6 +22,7 @@ expression: output
   case constants per partition: no violations
   case copied columns: no violations
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned: no violations
 
 ## ProjectionExec with a literal
@@ -61,6 +62,10 @@ expression: output
     ProjectionExec: expr=[a@0 as a, 1 as one]
       MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, output_ordering=[__row_id@3 ASC]
     [invariant] exact_statistics_hold at ProjectionExec (root): the partition 1 statistics are false: distinct_count of one@1 is Exact(1), but the output has Exact(0)
+  case sorted by columns:
+    ProjectionExec: expr=[a@0 as a, 1 as one]
+      MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, output_ordering=[a@0 ASC, b@1 ASC, c@2 ASC]
+    [invariant] exact_statistics_hold at ProjectionExec (root): the partition 1 statistics are false: distinct_count of one@1 is Exact(1), but the output has Exact(0)
   case hash partitioned: no violations
 
 ## FilterExec
@@ -73,6 +78,7 @@ expression: output
   case constants per partition: no violations
   case copied columns: no violations
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned: no violations
 
 ## FilterExec with fetch
@@ -118,6 +124,12 @@ expression: output
     [lint] fetch_bounds_num_rows at FilterExec (root): fetch() is Some(10), but the overall num_rows estimate Inexact(120) is more than the fetch allows (30)
     [lint] fetch_bounds_num_rows at FilterExec (root): fetch() is Some(10), but the partition 0 num_rows estimate Inexact(40) is more than the fetch allows (10)
     [lint] fetch_bounds_num_rows at FilterExec (root): fetch() is Some(10), but the partition 2 num_rows estimate Inexact(80) is more than the fetch allows (10)
+  case sorted by columns:
+    FilterExec: b@1, fetch=10
+      MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, output_ordering=[a@0 ASC, b@1 ASC, c@2 ASC]
+    [lint] fetch_bounds_num_rows at FilterExec (root): fetch() is Some(10), but the overall num_rows estimate Inexact(120) is more than the fetch allows (30)
+    [lint] fetch_bounds_num_rows at FilterExec (root): fetch() is Some(10), but the partition 0 num_rows estimate Inexact(40) is more than the fetch allows (10)
+    [lint] fetch_bounds_num_rows at FilterExec (root): fetch() is Some(10), but the partition 2 num_rows estimate Inexact(80) is more than the fetch allows (10)
   case hash partitioned:
     FilterExec: b@1, fetch=10
       MockSourceExec: partitioning=Hash([a@0], 3), partition_rows=[146, 236, 218], statistics=Exact
@@ -137,6 +149,7 @@ expression: output
   case constants per partition: no violations
   case copied columns: no violations
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned:
     FilterExec: a@0 = 3
       MockSourceExec: partitioning=Hash([a@0], 3), partition_rows=[146, 236, 218], statistics=Exact
@@ -179,6 +192,10 @@ expression: output
   case sorted by row id:
     CoalesceBatchesExec: target_batch_size=8192
       MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, output_ordering=[__row_id@3 ASC]
+    [lint] limit_pushdown_missed at CoalesceBatchesExec (root): supports_limit_pushdown() is false, but the cardinality effect without a fetch is Equal, maintains_input_order() is true, and each output partition is made of at most one partition of the child, so a limit above the node could be pushed to its child; return true from supports_limit_pushdown, unless an output row depends on later input rows, as in a window function, or the node has side effects on the rows it reads
+  case sorted by columns:
+    CoalesceBatchesExec: target_batch_size=8192
+      MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, output_ordering=[a@0 ASC, b@1 ASC, c@2 ASC]
     [lint] limit_pushdown_missed at CoalesceBatchesExec (root): supports_limit_pushdown() is false, but the cardinality effect without a fetch is Equal, maintains_input_order() is true, and each output partition is made of at most one partition of the child, so a limit above the node could be pushed to its child; return true from supports_limit_pushdown, unless an output row depends on later input rows, as in a window function, or the node has side effects on the rows it reads
   case hash partitioned:
     CoalesceBatchesExec: target_batch_size=8192
@@ -250,6 +267,14 @@ expression: output
     [invariant] partition_statistics_sum at CoalesceBatchesExec (root): overall num_rows is Exact(10), but the exact per-partition num_rows [10, 0, 10] sum to 20
     [invariant] exact_statistics_hold at CoalesceBatchesExec (root): the overall statistics are false: num_rows is Exact(10), but the output has 20 rows
     [invariant] cardinality_effect_holds at CoalesceBatchesExec (root): cardinality_effect() is Equal, but the node produced 20 rows from 600 input rows
+  case sorted by columns:
+    CoalesceBatchesExec: target_batch_size=8192, fetch=10
+      MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, output_ordering=[a@0 ASC, b@1 ASC, c@2 ASC]
+    [invariant] fetch_not_equal_cardinality at CoalesceBatchesExec (root): fetch() is Some(10), but cardinality_effect() is Equal; a fetch can drop input rows, so the effect should be LowerEqual while a fetch is set
+    [lint] limit_pushdown_missed at CoalesceBatchesExec (root): supports_limit_pushdown() is false, but the cardinality effect without a fetch is Equal, maintains_input_order() is true, and each output partition is made of at most one partition of the child, so a limit above the node could be pushed to its child; return true from supports_limit_pushdown, unless an output row depends on later input rows, as in a window function, or the node has side effects on the rows it reads
+    [invariant] partition_statistics_sum at CoalesceBatchesExec (root): overall num_rows is Exact(10), but the exact per-partition num_rows [10, 0, 10] sum to 20
+    [invariant] exact_statistics_hold at CoalesceBatchesExec (root): the overall statistics are false: num_rows is Exact(10), but the output has 20 rows
+    [invariant] cardinality_effect_holds at CoalesceBatchesExec (root): cardinality_effect() is Equal, but the node produced 20 rows from 600 input rows
   case hash partitioned:
     CoalesceBatchesExec: target_batch_size=8192, fetch=10
       MockSourceExec: partitioning=Hash([a@0], 3), partition_rows=[146, 236, 218], statistics=Exact
@@ -272,6 +297,7 @@ expression: output
   case constants per partition: no violations
   case copied columns: no violations
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned: no violations
 
 ## CoalescePartitionsExec with fetch
@@ -321,6 +347,11 @@ expression: output
       MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, output_ordering=[__row_id@3 ASC]
     [invariant] fetch_not_equal_cardinality at CoalescePartitionsExec (root): fetch() is Some(10), but cardinality_effect() is Equal; a fetch can drop input rows, so the effect should be LowerEqual while a fetch is set
     [invariant] cardinality_effect_holds at CoalescePartitionsExec (root): cardinality_effect() is Equal, but the node produced 10 rows from 600 input rows
+  case sorted by columns:
+    CoalescePartitionsExec: fetch=10
+      MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, output_ordering=[a@0 ASC, b@1 ASC, c@2 ASC]
+    [invariant] fetch_not_equal_cardinality at CoalescePartitionsExec (root): fetch() is Some(10), but cardinality_effect() is Equal; a fetch can drop input rows, so the effect should be LowerEqual while a fetch is set
+    [invariant] cardinality_effect_holds at CoalescePartitionsExec (root): cardinality_effect() is Equal, but the node produced 10 rows from 600 input rows
   case hash partitioned:
     CoalescePartitionsExec: fetch=10
       MockSourceExec: partitioning=Hash([a@0], 3), partition_rows=[146, 236, 218], statistics=Exact
@@ -337,6 +368,7 @@ expression: output
   case constants per partition: no violations
   case copied columns: no violations
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned: no violations
 
 ## SortExec with fetch
@@ -370,6 +402,7 @@ expression: output
     SortExec: TopK(fetch=10), expr=[a@0 ASC], preserve_partitioning=[false]
       MockSourceExec: partitioning=UnknownPartitioning(1), partition_rows=[600], statistics=Exact, output_ordering=[__row_id@3 ASC]
     [invariant] reset_state_reexecution at SortExec(TopK) (root): with a second execution of the same plan, without a reset: executing the node panicked: TopK dynamic filter emitter completed more times than expected; return an error instead
+  case sorted by columns: no violations
   case hash partitioned:
     SortExec: TopK(fetch=10), expr=[a@0 ASC], preserve_partitioning=[false]
       MockSourceExec: partitioning=UnknownPartitioning(1), partition_rows=[600], statistics=Exact
@@ -385,6 +418,7 @@ expression: output
   case constants per partition: no violations
   case copied columns: no violations
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned: no violations
 
 ## SortExec on sorted input
@@ -397,6 +431,7 @@ expression: output
   case constants per partition: no violations
   case copied columns: no violations
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned: no violations
 
 ## SortExec with fetch on sorted input
@@ -412,6 +447,7 @@ expression: output
   case constants per partition: no violations
   case copied columns: no violations
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned: no violations
 
 ## SortExec with preserve_partitioning
@@ -424,6 +460,7 @@ expression: output
   case constants per partition: no violations
   case copied columns: no violations
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned: no violations
 
 ## SortExec with preserve_partitioning and fetch
@@ -471,6 +508,11 @@ expression: output
     [invariant] partition_statistics_sum at SortExec(TopK) (root): overall num_rows is Exact(10), but the exact per-partition num_rows [10, 0, 10] sum to 20
     [invariant] exact_statistics_hold at SortExec(TopK) (root): the partition 2 statistics are false: num_rows is Exact(10), but the output has 0 rows
     [invariant] reset_state_reexecution at SortExec(TopK) (root): with a second execution of the same plan, without a reset: executing the node panicked: TopK dynamic filter emitter completed more times than expected; return an error instead
+  case sorted by columns:
+    SortExec: TopK(fetch=10), expr=[a@0 ASC], preserve_partitioning=[true], sort_prefix=[a@0 ASC]
+      MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, output_ordering=[a@0 ASC, b@1 ASC, c@2 ASC]
+    [invariant] partition_statistics_sum at SortExec(TopK) (root): overall num_rows is Exact(10), but the exact per-partition num_rows [10, 0, 10] sum to 20
+    [invariant] exact_statistics_hold at SortExec(TopK) (root): the overall statistics are false: num_rows is Exact(10), but the output has 20 rows
   case hash partitioned:
     SortExec: TopK(fetch=10), expr=[a@0 ASC], preserve_partitioning=[true]
       MockSourceExec: partitioning=Hash([a@0], 3), partition_rows=[146, 236, 218], statistics=Exact
@@ -489,6 +531,10 @@ expression: output
   case constants per partition: no violations
   case copied columns: no violations
   case sorted by row id: no violations
+  case sorted by columns:
+    SortPreservingMergeExec: [a@0 ASC]
+      MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, output_ordering=[a@0 ASC, b@1 ASC, c@2 ASC]
+    [invariant] orderings_hold at SortPreservingMergeExec (root): the node reports the ordering [a@0 ASC, b@1 ASC, c@2 ASC], but partition 0 is not sorted by it at row 9
   case hash partitioned: no violations
 
 ## SortPreservingMergeExec with fetch
@@ -504,6 +550,10 @@ expression: output
   case constants per partition: no violations
   case copied columns: no violations
   case sorted by row id: no violations
+  case sorted by columns:
+    SortPreservingMergeExec: [a@0 ASC], fetch=10
+      MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, output_ordering=[a@0 ASC, b@1 ASC, c@2 ASC]
+    [invariant] orderings_hold at SortPreservingMergeExec (root): the node reports the ordering [a@0 ASC, b@1 ASC, c@2 ASC], but partition 0 is not sorted by it at row 9
   case hash partitioned: no violations
 
 ## RepartitionExec round robin
@@ -552,6 +602,11 @@ expression: output
   case sorted by row id:
     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=3
       MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, output_ordering=[__row_id@3 ASC]
+    [invariant] invalid_partition_errors at RepartitionExec (root): the node has 4 output partitions, but execute(4) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
+    [invariant] reset_state_reexecution at RepartitionExec (root): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
+  case sorted by columns:
+    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=3
+      MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, output_ordering=[a@0 ASC, b@1 ASC, c@2 ASC]
     [invariant] invalid_partition_errors at RepartitionExec (root): the node has 4 output partitions, but execute(4) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
     [invariant] reset_state_reexecution at RepartitionExec (root): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
   case hash partitioned:
@@ -608,6 +663,11 @@ expression: output
       MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, output_ordering=[__row_id@3 ASC]
     [invariant] invalid_partition_errors at RepartitionExec (root): the node has 4 output partitions, but execute(4) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
     [invariant] reset_state_reexecution at RepartitionExec (root): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
+  case sorted by columns:
+    RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=3
+      MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, output_ordering=[a@0 ASC, b@1 ASC, c@2 ASC]
+    [invariant] invalid_partition_errors at RepartitionExec (root): the node has 4 output partitions, but execute(4) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
+    [invariant] reset_state_reexecution at RepartitionExec (root): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
   case hash partitioned:
     RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=3
       MockSourceExec: partitioning=Hash([a@0], 3), partition_rows=[146, 236, 218], statistics=Exact
@@ -658,6 +718,11 @@ expression: output
     [invariant] invalid_partition_errors at RepartitionExec (root): the node has 4 output partitions, but execute(4) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
     [invariant] reset_state_reexecution at RepartitionExec (root): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
   case sorted by row id:
+    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=3, preserve_order=true, sort_exprs=a@0 ASC
+      MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, output_ordering=[a@0 ASC]
+    [invariant] invalid_partition_errors at RepartitionExec (root): the node has 4 output partitions, but execute(4) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
+    [invariant] reset_state_reexecution at RepartitionExec (root): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
+  case sorted by columns:
     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=3, preserve_order=true, sort_exprs=a@0 ASC
       MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, output_ordering=[a@0 ASC]
     [invariant] invalid_partition_errors at RepartitionExec (root): the node has 4 output partitions, but execute(4) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
@@ -716,6 +781,11 @@ expression: output
       MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, output_ordering=[a@0 ASC]
     [invariant] invalid_partition_errors at RepartitionExec (root): the node has 4 output partitions, but execute(4) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
     [invariant] reset_state_reexecution at RepartitionExec (root): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
+  case sorted by columns:
+    RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=3, preserve_order=true, sort_exprs=a@0 ASC
+      MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, output_ordering=[a@0 ASC]
+    [invariant] invalid_partition_errors at RepartitionExec (root): the node has 4 output partitions, but execute(4) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
+    [invariant] reset_state_reexecution at RepartitionExec (root): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
   case hash partitioned:
     RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=3, preserve_order=true, sort_exprs=a@0 ASC
       MockSourceExec: partitioning=Hash([a@0], 3), partition_rows=[146, 236, 218], statistics=Exact, output_ordering=[a@0 ASC]
@@ -732,6 +802,7 @@ expression: output
   case constants per partition: no violations
   case copied columns: no violations
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned: no violations
 
 ## GlobalLimitExec without fetch
@@ -747,6 +818,7 @@ expression: output
   case constants per partition: no violations
   case copied columns: no violations
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned: no violations
 
 ## LocalLimitExec
@@ -779,6 +851,11 @@ expression: output
       MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, output_ordering=[__row_id@3 ASC]
     [invariant] partition_statistics_sum at LocalLimitExec (root): overall num_rows is Exact(10), but the exact per-partition num_rows [10, 0, 10] sum to 20
     [invariant] exact_statistics_hold at LocalLimitExec (root): the overall statistics are false: num_rows is Exact(10), but the output has 20 rows
+  case sorted by columns:
+    LocalLimitExec: fetch=10
+      MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, output_ordering=[a@0 ASC, b@1 ASC, c@2 ASC]
+    [invariant] partition_statistics_sum at LocalLimitExec (root): overall num_rows is Exact(10), but the exact per-partition num_rows [10, 0, 10] sum to 20
+    [invariant] exact_statistics_hold at LocalLimitExec (root): the overall statistics are false: num_rows is Exact(10), but the output has 20 rows
   case hash partitioned:
     LocalLimitExec: fetch=10
       MockSourceExec: partitioning=Hash([a@0], 3), partition_rows=[146, 236, 218], statistics=Exact
@@ -795,6 +872,7 @@ expression: output
   case constants per partition: no violations
   case copied columns: no violations
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned: no violations
 
 ## BufferExec
@@ -834,6 +912,10 @@ expression: output
     BufferExec: capacity=1024
       MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, output_ordering=[__row_id@3 ASC]
     [lint] limit_pushdown_missed at BufferExec (root): supports_limit_pushdown() is false, but the cardinality effect without a fetch is Equal, maintains_input_order() is true, and each output partition is made of at most one partition of the child, so a limit above the node could be pushed to its child; return true from supports_limit_pushdown, unless an output row depends on later input rows, as in a window function, or the node has side effects on the rows it reads
+  case sorted by columns:
+    BufferExec: capacity=1024
+      MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, output_ordering=[a@0 ASC, b@1 ASC, c@2 ASC]
+    [lint] limit_pushdown_missed at BufferExec (root): supports_limit_pushdown() is false, but the cardinality effect without a fetch is Equal, maintains_input_order() is true, and each output partition is made of at most one partition of the child, so a limit above the node could be pushed to its child; return true from supports_limit_pushdown, unless an output row depends on later input rows, as in a window function, or the node has side effects on the rows it reads
   case hash partitioned:
     BufferExec: capacity=1024
       MockSourceExec: partitioning=Hash([a@0], 3), partition_rows=[146, 236, 218], statistics=Exact
@@ -849,6 +931,7 @@ expression: output
   case constants per partition: no violations
   case copied columns: no violations
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned: no violations
 
 ## PartialSortExec
@@ -861,6 +944,7 @@ expression: output
   case constants per partition: no violations
   case copied columns: no violations
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned: no violations
 
 ## PartialSortExec with preserve_partitioning
@@ -873,6 +957,7 @@ expression: output
   case constants per partition: no violations
   case copied columns: no violations
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned: no violations
 
 ## PartialSortExec with fetch
@@ -913,6 +998,12 @@ expression: output
     [invariant] exact_statistics_hold at PartialSortExec (root): the overall statistics are false: num_rows is Exact(600), but the output has 10 rows; distinct_count of a@0 is Exact(16), but the output has Exact(1); max_value of a@0 is Exact(Int32(15)), but the output has Exact(Int32(0)); sum_value of a@0 is Exact(Int64(4389)), but the output has Exact(Int64(0)); null_count of c@2 is Exact(54), but the output has Exact(3); distinct_count of c@2 is Exact(16), but the output has Exact(2); max_value of c@2 is Exact(Utf8("s015")), but the output has Exact(Utf8("s001")); distinct_count of a__copy@3 is Exact(16), but the output has Exact(1); max_value of a__copy@3 is Exact(Int32(15)), but the output has Exact(Int32(0)); sum_value of a__copy@3 is Exact(Int64(4389)), but the output has Exact(Int64(0)); null_count of c__copy@5 is Exact(54), but the output has Exact(3); distinct_count of c__copy@5 is Exact(16), but the output has Exact(2); max_value of c__copy@5 is Exact(Utf8("s015")), but the output has Exact(Utf8("s001")); distinct_count of __row_id@6 is Exact(600), but the output has Exact(10); min_value of __row_id@6 is Exact(UInt64(0)), but the output has Exact(UInt64(3)); max_value of __row_id@6 is Exact(UInt64(599)), but the output has Exact(UInt64(39)); sum_value of __row_id@6 is Exact(UInt64(179700)), but the output has Exact(UInt64(209))
     [invariant] exact_statistics_hold at PartialSortExec (root): the partition 0 statistics are false: num_rows is Exact(600), but the output has 10 rows; distinct_count of a@0 is Exact(16), but the output has Exact(1); max_value of a@0 is Exact(Int32(15)), but the output has Exact(Int32(0)); sum_value of a@0 is Exact(Int64(4389)), but the output has Exact(Int64(0)); null_count of c@2 is Exact(54), but the output has Exact(3); distinct_count of c@2 is Exact(16), but the output has Exact(2); max_value of c@2 is Exact(Utf8("s015")), but the output has Exact(Utf8("s001")); distinct_count of a__copy@3 is Exact(16), but the output has Exact(1); max_value of a__copy@3 is Exact(Int32(15)), but the output has Exact(Int32(0)); sum_value of a__copy@3 is Exact(Int64(4389)), but the output has Exact(Int64(0)); null_count of c__copy@5 is Exact(54), but the output has Exact(3); distinct_count of c__copy@5 is Exact(16), but the output has Exact(2); max_value of c__copy@5 is Exact(Utf8("s015")), but the output has Exact(Utf8("s001")); distinct_count of __row_id@6 is Exact(600), but the output has Exact(10); min_value of __row_id@6 is Exact(UInt64(0)), but the output has Exact(UInt64(3)); max_value of __row_id@6 is Exact(UInt64(599)), but the output has Exact(UInt64(39)); sum_value of __row_id@6 is Exact(UInt64(179700)), but the output has Exact(UInt64(209))
   case sorted by row id:
+    PartialSortExec: TopK(fetch=10), expr=[a@0 ASC, c@2 ASC], common_prefix_length=[1]
+      MockSourceExec: partitioning=UnknownPartitioning(1), partition_rows=[600], statistics=Exact, output_ordering=[a@0 ASC]
+    [invariant] fetch_bounds_num_rows at PartialSortExec (root): fetch() is Some(10), but overall num_rows is Exact(600), which is more than the fetch allows (10)
+    [invariant] exact_statistics_hold at PartialSortExec (root): the overall statistics are false: num_rows is Exact(600), but the output has 10 rows; distinct_count of a@0 is Exact(16), but the output has Exact(1); max_value of a@0 is Exact(Int32(15)), but the output has Exact(Int32(0)); sum_value of a@0 is Exact(Int64(4389)), but the output has Exact(Int64(0)); null_count of c@2 is Exact(54), but the output has Exact(3); distinct_count of c@2 is Exact(16), but the output has Exact(2); max_value of c@2 is Exact(Utf8("s015")), but the output has Exact(Utf8("s001")); distinct_count of __row_id@3 is Exact(600), but the output has Exact(10); min_value of __row_id@3 is Exact(UInt64(0)), but the output has Exact(UInt64(3)); max_value of __row_id@3 is Exact(UInt64(599)), but the output has Exact(UInt64(39)); sum_value of __row_id@3 is Exact(UInt64(179700)), but the output has Exact(UInt64(209))
+    [invariant] exact_statistics_hold at PartialSortExec (root): the partition 0 statistics are false: num_rows is Exact(600), but the output has 10 rows; distinct_count of a@0 is Exact(16), but the output has Exact(1); max_value of a@0 is Exact(Int32(15)), but the output has Exact(Int32(0)); sum_value of a@0 is Exact(Int64(4389)), but the output has Exact(Int64(0)); null_count of c@2 is Exact(54), but the output has Exact(3); distinct_count of c@2 is Exact(16), but the output has Exact(2); max_value of c@2 is Exact(Utf8("s015")), but the output has Exact(Utf8("s001")); distinct_count of __row_id@3 is Exact(600), but the output has Exact(10); min_value of __row_id@3 is Exact(UInt64(0)), but the output has Exact(UInt64(3)); max_value of __row_id@3 is Exact(UInt64(599)), but the output has Exact(UInt64(39)); sum_value of __row_id@3 is Exact(UInt64(179700)), but the output has Exact(UInt64(209))
+  case sorted by columns:
     PartialSortExec: TopK(fetch=10), expr=[a@0 ASC, c@2 ASC], common_prefix_length=[1]
       MockSourceExec: partitioning=UnknownPartitioning(1), partition_rows=[600], statistics=Exact, output_ordering=[a@0 ASC]
     [invariant] fetch_bounds_num_rows at PartialSortExec (root): fetch() is Some(10), but overall num_rows is Exact(600), which is more than the fetch allows (10)
@@ -1020,6 +1111,16 @@ expression: output
     [invariant] reset_state_reexecution at RepartitionExec (root/0): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
     [invariant] invalid_partition_errors at RepartitionExec (root/1): the node has 3 output partitions, but execute(3) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
     [invariant] reset_state_reexecution at RepartitionExec (root/1): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
+  case sorted by columns:
+    InterleaveExec
+      RepartitionExec: partitioning=Hash([a@0], 3), input_partitions=3
+        MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, output_ordering=[a@0 ASC, b@1 ASC, c@2 ASC]
+      RepartitionExec: partitioning=Hash([a@0], 3), input_partitions=3
+        MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, output_ordering=[a@0 ASC, b@1 ASC, c@2 ASC]
+    [invariant] invalid_partition_errors at RepartitionExec (root/0): the node has 3 output partitions, but execute(3) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
+    [invariant] reset_state_reexecution at RepartitionExec (root/0): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
+    [invariant] invalid_partition_errors at RepartitionExec (root/1): the node has 3 output partitions, but execute(3) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
+    [invariant] reset_state_reexecution at RepartitionExec (root/1): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
   case hash partitioned:
     InterleaveExec
       RepartitionExec: partitioning=Hash([a@0], 3), input_partitions=3
@@ -1056,6 +1157,7 @@ expression: output
       MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, equalities=[k@0 = k__copy@3, l@1 = l__copy@4, s@2 = s__copy@5]
     [lint] maintains_input_order_missed at UnnestExec (root): maintains_input_order()[0] is false, but every output partition only has rows of one partition of child 0, in the order of that partition; return true if the node never reorders the rows of this child, and keep the child's orderings in the output equivalence properties
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned:
     UnnestExec
       MockSourceExec: partitioning=Hash([k@0], 3), partition_rows=[146, 236, 218], statistics=Exact
@@ -1086,6 +1188,7 @@ expression: output
       MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, equalities=[k@0 = k__copy@3, l@1 = l__copy@4, s@2 = s__copy@5]
     [lint] maintains_input_order_missed at UnnestExec (root): maintains_input_order()[0] is false, but every output partition only has rows of one partition of child 0, in the order of that partition; return true if the node never reorders the rows of this child, and keep the child's orderings in the output equivalence properties
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned:
     UnnestExec
       MockSourceExec: partitioning=Hash([k@0], 3), partition_rows=[146, 236, 218], statistics=Exact
@@ -1116,6 +1219,7 @@ expression: output
       MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, equalities=[k@0 = k__copy@3, l@1 = l__copy@4, s@2 = s__copy@5]
     [lint] maintains_input_order_missed at UnnestExec (root): maintains_input_order()[0] is false, but every output partition only has rows of one partition of child 0, in the order of that partition; return true if the node never reorders the rows of this child, and keep the child's orderings in the output equivalence properties
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned:
     UnnestExec
       MockSourceExec: partitioning=Hash([k@0], 3), partition_rows=[146, 236, 218], statistics=Exact
@@ -1146,6 +1250,7 @@ expression: output
       MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, equalities=[k@0 = k__copy@3, l@1 = l__copy@4, s@2 = s__copy@5]
     [lint] maintains_input_order_missed at UnnestExec (root): maintains_input_order()[0] is false, but every output partition only has rows of one partition of child 0, in the order of that partition; return true if the node never reorders the rows of this child, and keep the child's orderings in the output equivalence properties
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned:
     UnnestExec
       MockSourceExec: partitioning=Hash([k@0], 3), partition_rows=[146, 236, 218], statistics=Exact
@@ -1182,6 +1287,7 @@ expression: output
       MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, equalities=[a@0 = a__copy@3, b@1 = b__copy@4, c@2 = c__copy@5]
     [lint] maintains_input_order_missed at async_func (root): maintains_input_order()[0] is false, but every output partition only has rows of one partition of child 0, in the order of that partition; return true if the node never reorders the rows of this child, and keep the child's orderings in the output equivalence properties
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned:
     AsyncFuncExec: async_expr=[async_expr(name=async_identity(a), expr=async_identity(a@0))]
       MockSourceExec: partitioning=Hash([a@0], 3), partition_rows=[146, 236, 218], statistics=Exact
@@ -1213,6 +1319,7 @@ expression: output
   case constants per partition: no violations
   case copied columns: no violations
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned: no violations
 
 ## OutputRequirementExec
@@ -1259,6 +1366,11 @@ expression: output
   case sorted by row id:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, output_ordering=[__row_id@3 ASC]
+    [invariant] execution_succeeds at OutputRequirementExec (root): executing the node failed: panicked: internal error: entered unreachable code
+    [invariant] invalid_partition_errors at OutputRequirementExec (root): the node has 3 output partitions, but execute(3) panicked: internal error: entered unreachable code; return an error for a partition at or past the partition count
+  case sorted by columns:
+    OutputRequirementExec: order_by=[], dist_by=Unspecified
+      MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, output_ordering=[a@0 ASC, b@1 ASC, c@2 ASC]
     [invariant] execution_succeeds at OutputRequirementExec (root): executing the node failed: panicked: internal error: entered unreachable code
     [invariant] invalid_partition_errors at OutputRequirementExec (root): the node has 3 output partitions, but execute(3) panicked: internal error: entered unreachable code; return an error for a partition at or past the partition count
   case hash partitioned:
@@ -1329,6 +1441,12 @@ expression: output
     [invariant] execution_succeeds at OutputRequirementExec (root): executing the node failed: panicked: internal error: entered unreachable code
     [invariant] invalid_partition_errors at OutputRequirementExec (root): the node has 1 output partitions, but execute(1) panicked: internal error: entered unreachable code; return an error for a partition at or past the partition count
     [invariant] reset_state_reexecution at SortExec(TopK) (root/0): with a second execution of the same plan, without a reset: executing the node panicked: TopK dynamic filter emitter completed more times than expected; return an error instead
+  case sorted by columns:
+    OutputRequirementExec: order_by=[(a@0, asc)], dist_by=SinglePartition
+      SortExec: TopK(fetch=10), expr=[a@0 ASC], preserve_partitioning=[false], sort_prefix=[a@0 ASC]
+        MockSourceExec: partitioning=UnknownPartitioning(1), partition_rows=[600], statistics=Exact, output_ordering=[a@0 ASC, b@1 ASC, c@2 ASC]
+    [invariant] execution_succeeds at OutputRequirementExec (root): executing the node failed: panicked: internal error: entered unreachable code
+    [invariant] invalid_partition_errors at OutputRequirementExec (root): the node has 1 output partitions, but execute(1) panicked: internal error: entered unreachable code; return an error for a partition at or past the partition count
   case hash partitioned:
     OutputRequirementExec: order_by=[(a@0, asc)], dist_by=SinglePartition
       SortExec: TopK(fetch=10), expr=[a@0 ASC], preserve_partitioning=[false]
@@ -1350,6 +1468,7 @@ expression: output
   case constants per partition: no violations
   case copied columns: no violations
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned: no violations
 
 ## ExplainExec
@@ -1429,6 +1548,14 @@ expression: output
           WorkTableExec: name=r
     [invariant] execution_succeeds at WorkTableExec (root/1/0/0): executing the node failed: Internal error: Unexpected empty work table.
     This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
+  case sorted by columns:
+    RecursiveQueryExec: name=r, is_distinct=false
+      MockSourceExec: partitioning=UnknownPartitioning(1), partition_rows=[600], statistics=Exact, output_ordering=[a@0 ASC, b@1 ASC, c@2 ASC]
+      ProjectionExec: expr=[a@0 + 1 as a, b@1 as b, c@2 as c, __row_id@3 as __row_id]
+        FilterExec: a@0 < 10
+          WorkTableExec: name=r
+    [invariant] execution_succeeds at WorkTableExec (root/1/0/0): executing the node failed: Internal error: Unexpected empty work table.
+    This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
   case hash partitioned:
     RecursiveQueryExec: name=r, is_distinct=false
       MockSourceExec: partitioning=UnknownPartitioning(1), partition_rows=[600], statistics=Exact
@@ -1463,6 +1590,7 @@ expression: output
       MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, equalities=[a@0 = a__copy@3, b@1 = b__copy@4, c@2 = c__copy@5]
     [lint] maintains_input_order_missed at FilterExec (root): maintains_input_order()[0] is false, but every output partition only has rows of one partition of child 0, in the order of that partition; return true if the node never reorders the rows of this child, and keep the child's orderings in the output equivalence properties
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned:
     FFI_ExecutionPlan: FilterExec, number_of_children=1
       MockSourceExec: partitioning=Hash([a@0], 3), partition_rows=[146, 236, 218], statistics=Exact
@@ -1478,6 +1606,7 @@ expression: output
   case constants per partition: no violations
   case copied columns: no violations
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned: no violations
 
 ## ForeignExecutionPlan of a RepartitionExec
@@ -1526,6 +1655,11 @@ expression: output
   case sorted by row id:
     FFI_ExecutionPlan: RepartitionExec, number_of_children=1
       MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, output_ordering=[__row_id@3 ASC]
+    [invariant] invalid_partition_errors at RepartitionExec (root): the node has 4 output partitions, but execute(4) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
+    [invariant] reset_state_reexecution at RepartitionExec (root): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
+  case sorted by columns:
+    FFI_ExecutionPlan: RepartitionExec, number_of_children=1
+      MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, output_ordering=[a@0 ASC, b@1 ASC, c@2 ASC]
     [invariant] invalid_partition_errors at RepartitionExec (root): the node has 4 output partitions, but execute(4) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
     [invariant] reset_state_reexecution at RepartitionExec (root): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
   case hash partitioned:

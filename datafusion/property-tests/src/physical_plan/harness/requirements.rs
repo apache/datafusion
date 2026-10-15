@@ -61,7 +61,7 @@ pub(super) fn derive_case(factory: &PlanFactory, profile: &Profile) -> Result<Ca
                 .fields()
                 .iter()
                 .map(|field| field.name())
-                .filter(|name| *name != ROW_ID_COLUMN && !name.ends_with(COPY_SUFFIX));
+                .filter(|name| is_base_column(name));
             for name in columns {
                 if let Some(values) = profile.constants {
                     spec = spec.with_constant(name, values);
@@ -69,6 +69,24 @@ pub(super) fn derive_case(factory: &PlanFactory, profile: &Profile) -> Result<Ca
                 if profile.copies {
                     spec = spec.with_copy(name);
                 }
+            }
+            if profile.column_ordering
+                && base.ordering().is_none()
+                && let Some(ordering) = LexOrdering::new(
+                    schema
+                        .fields()
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, field)| is_base_column(field.name()))
+                        .map(|(index, field)| {
+                            PhysicalSortExpr::new_default(Arc::new(Column::new(
+                                field.name(),
+                                index,
+                            )))
+                        }),
+                )
+            {
+                spec = spec.with_ordering(ordering);
             }
             if profile.row_id_ordering {
                 spec = spec.with_row_id_ordering();
@@ -130,6 +148,12 @@ pub(super) fn derive_case(factory: &PlanFactory, profile: &Profile) -> Result<Ca
             }
         }
     }
+}
+
+/// Whether `name` is a column of a base schema, rather than a column the spec
+/// adds to it
+fn is_base_column(name: &str) -> bool {
+    name != ROW_ID_COLUMN && !name.ends_with(COPY_SUFFIX)
 }
 
 /// A change to the spec of an input that meets a requirement

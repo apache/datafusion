@@ -13,6 +13,7 @@ expression: output
   case constants per partition: no violations
   case copied columns: no violations
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned: no violations
 
 ## BoundedWindowAggExec RANK, DENSE_RANK and a running SUM
@@ -26,6 +27,7 @@ expression: output
   case constants per partition: no violations
   case copied columns: no violations
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned: no violations
 
 ## BoundedWindowAggExec LAG and LEAD
@@ -39,6 +41,7 @@ expression: output
   case constants per partition: no violations
   case copied columns: no violations
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned: no violations
 
 ## BoundedWindowAggExec SUM over a RANGE frame
@@ -52,6 +55,7 @@ expression: output
   case constants per partition: no violations
   case copied columns: no violations
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned: no violations
 
 ## BoundedWindowAggExec ROW_NUMBER without PARTITION BY
@@ -65,6 +69,7 @@ expression: output
   case constants per partition: no violations
   case copied columns: no violations
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned: no violations
 
 ## BoundedWindowAggExec PartiallySorted
@@ -78,6 +83,7 @@ expression: output
   case constants per partition: no violations
   case copied columns: no violations
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned: no violations
 
 ## BoundedWindowAggExec Linear
@@ -91,6 +97,7 @@ expression: output
   case constants per partition: no violations
   case copied columns: no violations
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned: no violations
 
 ## WindowAggExec SUM over the whole window partition
@@ -104,6 +111,7 @@ expression: output
   case constants per partition: no violations
   case copied columns: no violations
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned: no violations
 
 ## WindowAggExec NTILE and CUME_DIST
@@ -117,6 +125,7 @@ expression: output
   case constants per partition: no violations
   case copied columns: no violations
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned: no violations
 
 ## WindowAggExec SUM without PARTITION BY
@@ -130,6 +139,7 @@ expression: output
   case constants per partition: no violations
   case copied columns: no violations
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned: no violations
 
 ## PartitionedTopKExec ROW_NUMBER
@@ -174,6 +184,13 @@ expression: output
     [invariant] batch_boundary_invariance at PartitionedTopKExec (root/0): with input rows in batches of 1 row: the node produced 80 rows, 2 of which do not appear in the normal output, instead of the 80 rows it produces normally
     [invariant] batch_boundary_invariance at PartitionedTopKExec (root/0): with input rows in random batches of up to 3 rows and empty batches: the node produced 80 rows, 2 of which do not appear in the normal output, instead of the 80 rows it produces normally
     [invariant] batch_boundary_invariance at PartitionedTopKExec (root/0): with input rows in one batch per partition: the node produced 80 rows, 2 of which do not appear in the normal output, instead of the 80 rows it produces normally
+  case sorted by columns:
+    BoundedWindowAggExec: wdw=[row_number() PARTITION BY [g] ORDER BY [v]: Field { "row_number() PARTITION BY [g] ORDER BY [v]": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      PartitionedTopKExec: fn=row_number, fetch=5, partition=[g@0], order=[v@2 ASC]
+        MockSourceExec: partitioning=Hash([g@0], 3), partition_rows=[146, 236, 218], statistics=Exact, output_ordering=[g@0 ASC, h@1 ASC, v@2 ASC, f@3 ASC]
+    [invariant] batch_boundary_invariance at PartitionedTopKExec (root/0): with input rows in batches of 1 row: the node produced 80 rows, 1 of which do not appear in the normal output, instead of the 80 rows it produces normally
+    [invariant] batch_boundary_invariance at PartitionedTopKExec (root/0): with input rows in random batches of up to 3 rows and empty batches: the node produced 80 rows, 2 of which do not appear in the normal output, instead of the 80 rows it produces normally
+    [invariant] batch_boundary_invariance at PartitionedTopKExec (root/0): with input rows in one batch per partition: the node produced 80 rows, 1 of which do not appear in the normal output, instead of the 80 rows it produces normally
   case hash partitioned:
     BoundedWindowAggExec: wdw=[row_number() PARTITION BY [g] ORDER BY [v]: Field { "row_number() PARTITION BY [g] ORDER BY [v]": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
       PartitionedTopKExec: fn=row_number, fetch=5, partition=[g@0], order=[v@2 ASC]
@@ -197,6 +214,7 @@ expression: output
   case constants per partition: no violations
   case copied columns: no violations
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned: no violations
 
 ## PartitionedTopKExec DENSE_RANK
@@ -214,4 +232,5 @@ expression: output
   case constants per partition: no violations
   case copied columns: no violations
   case sorted by row id: no violations
+  case sorted by columns: no violations
   case hash partitioned: no violations

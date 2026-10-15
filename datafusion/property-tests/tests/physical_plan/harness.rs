@@ -259,6 +259,14 @@ fn ordering_requirement_sorts_the_input() {
             // A constant column meets any ordering on it, so the input is
             // not sorted
             assert_eq!(ordering, None, "{}", case.profile.name);
+        } else if case.profile.column_ordering {
+            // The ordering on every column meets the requirement, and is kept
+            assert_eq!(
+                ordering.as_deref(),
+                Some("a@0 ASC, b@1 ASC"),
+                "{}",
+                case.profile.name
+            );
         } else {
             assert_eq!(
                 ordering.as_deref(),
@@ -553,6 +561,52 @@ fn row_id_ordering_and_hash_partitioning_profiles() {
         cases[0].inputs[0].ordering().unwrap().to_string(),
         "b@1 ASC"
     );
+}
+
+#[test]
+fn column_ordering_profile() {
+    let profile = Profile::defaults()
+        .into_iter()
+        .find(|profile| profile.name == "sorted by columns")
+        .unwrap();
+    let harness = static_harness().with_profiles(vec![profile]);
+
+    // Every input declares that it is sorted by its columns, in schema order,
+    // without the row id
+    let case = &harness.cases(&filter()).unwrap()[0];
+    let input = case.plan.children()[0];
+    assert_eq!(
+        input.properties().output_ordering().unwrap().to_string(),
+        "a@0 ASC, b@1 ASC"
+    );
+
+    // A base ordering is kept
+    let base_ordering = LexOrdering::new(vec![PhysicalSortExpr::new_default(
+        col("b", &schema()).unwrap(),
+    )])
+    .unwrap();
+    let factory = PlanFactory::new(
+        "FilterExec",
+        vec![spec().with_ordering(base_ordering)],
+        |inputs| {
+            let input = Arc::clone(&inputs[0]);
+            let predicate = Arc::new(IsNotNullExpr::new(col("b", &input.schema())?));
+            Ok(Arc::new(FilterExec::try_new(predicate, input)?) as Plan)
+        },
+    );
+    let case = &harness.cases(&factory).unwrap()[0];
+    assert_eq!(case.inputs[0].ordering().unwrap().to_string(), "b@1 ASC");
+
+    // An ordering the plan requires replaces it
+    let case = &harness
+        .cases(&one_input("SortPreservingMergeExec", |input| {
+            Ok(Arc::new(SortPreservingMergeExec::new(
+                ordering_on("b", &input)?,
+                input,
+            )))
+        }))
+        .unwrap()[0];
+    assert_eq!(case.inputs[0].ordering().unwrap().to_string(), "b@1 ASC");
 }
 
 #[test]
