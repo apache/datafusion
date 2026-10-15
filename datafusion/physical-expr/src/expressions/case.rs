@@ -1765,6 +1765,92 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn case_with_expr_fixed_size_binary() -> Result<()> {
+        let schema =
+            Schema::new(vec![Field::new("a", DataType::FixedSizeBinary(2), true)]);
+        let mut builder = FixedSizeBinaryBuilder::with_capacity(4, 2);
+        builder.append_value(b"aa")?;
+        builder.append_value(b"bb")?;
+        builder.append_null();
+        builder.append_value(b"cc")?;
+        let values = builder.finish();
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(values)])?;
+
+        let schema = batch.schema();
+
+        // CASE a WHEN b"aa" THEN 1 WHEN b"cc" THEN 2 ELSE 3 END
+        let when1 = lit(ScalarValue::FixedSizeBinary(2, Some(b"aa".to_vec())));
+        let then1 = lit(1i32);
+        let when2 = lit(ScalarValue::FixedSizeBinary(2, Some(b"cc".to_vec())));
+        let then2 = lit(2i32);
+        let else_expr = lit(3i32);
+
+        let expr = case(
+            Some(col("a", &schema)?),
+            vec![(when1, then1), (when2, then2)],
+            Some(else_expr),
+        )?;
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
+        let result = as_int32_array(&result)?;
+
+        let expected = &Int32Array::from(vec![Some(1), Some(3), Some(3), Some(2)]);
+
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn case_with_expr_fixed_size_binary_dictionary() -> Result<()> {
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(
+                Box::new(DataType::UInt8),
+                Box::new(DataType::FixedSizeBinary(2)),
+            ),
+            true,
+        )]);
+        let keys = UInt8Array::from(vec![0u8, 1u8, 2u8, 3u8]);
+        let mut builder = FixedSizeBinaryBuilder::with_capacity(4, 2);
+        builder.append_value(b"aa")?;
+        builder.append_value(b"bb")?;
+        builder.append_null();
+        builder.append_value(b"cc")?;
+        let values = builder.finish();
+        let dictionary = DictionaryArray::new(keys, Arc::new(values));
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(dictionary)])?;
+
+        let schema = batch.schema();
+
+        // CASE a WHEN b"aa" THEN 1 WHEN b"cc" THEN 2 ELSE 3 END
+        let when1 = lit(ScalarValue::FixedSizeBinary(2, Some(b"aa".to_vec())));
+        let then1 = lit(1i32);
+        let when2 = lit(ScalarValue::FixedSizeBinary(2, Some(b"cc".to_vec())));
+        let then2 = lit(2i32);
+        let else_expr = lit(3i32);
+
+        let expr = case(
+            Some(col("a", &schema)?),
+            vec![(when1, then1), (when2, then2)],
+            Some(else_expr),
+        )?;
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
+        let result = as_int32_array(&result)?;
+
+        let expected = &Int32Array::from(vec![Some(1), Some(3), Some(3), Some(2)]);
+
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
+
     // Make sure we are not failing when got literal in case when but input is dictionary encoded
     #[test]
     fn case_with_expr_boolean_dictionary() -> Result<()> {

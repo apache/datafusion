@@ -836,6 +836,63 @@ NULL 0 0 0 0 0
 63 0 0 0 0 0
 64 3 3 3 3 3
 
+# CASE with FixedSizeBinary WHEN literals (regression test for #26012)
+query ?II
+select
+    letter_binary as letter
+    ,CASE letter_fsb
+        WHEN arrow_cast(X'62', 'FixedSizeBinary(1)') THEN 1
+        WHEN arrow_cast(X'61', 'FixedSizeBinary(1)') THEN 2
+        WHEN arrow_cast(X'64', 'FixedSizeBinary(1)') THEN 3
+        ELSE 0
+    END as fsb_literals
+    ,CASE arrow_cast(letter_fsb, 'Dictionary(Int32, FixedSizeBinary(1))')
+        WHEN arrow_cast(X'62', 'FixedSizeBinary(1)') THEN 1
+        WHEN arrow_cast(X'61', 'FixedSizeBinary(1)') THEN 2
+        WHEN arrow_cast(X'64', 'FixedSizeBinary(1)') THEN 3
+        ELSE 0
+    END as fsb_dict_literals
+FROM letters_binary;
+----
+61 2 2
+62 1 1
+NULL 0 0
+63 0 0
+61 2 2
+63 0 0
+64 3 3
+
+# Minimal reproducer for issue #26012
+query I
+SELECT CASE x
+         WHEN arrow_cast(X'01', 'FixedSizeBinary(1)') THEN 1
+         WHEN arrow_cast(X'02', 'FixedSizeBinary(1)') THEN 2
+         ELSE 3
+       END AS r
+FROM (SELECT arrow_cast(X'03', 'FixedSizeBinary(1)') AS x);
+----
+3
+
+query I
+SELECT CASE x
+         WHEN arrow_cast(X'01', 'FixedSizeBinary(1)') THEN 1
+         WHEN arrow_cast(X'02', 'FixedSizeBinary(1)') THEN 2
+         ELSE 3
+       END AS r
+FROM (SELECT arrow_cast(X'01', 'FixedSizeBinary(1)') AS x);
+----
+1
+
+query I
+SELECT CASE x
+         WHEN arrow_cast(X'01', 'FixedSizeBinary(1)') THEN 1
+         WHEN arrow_cast(X'02', 'FixedSizeBinary(1)') THEN 2
+         ELSE 3
+       END AS r
+FROM (SELECT arrow_cast(X'02', 'FixedSizeBinary(1)') AS x);
+----
+2
+
 statement ok
 drop table source;
 
