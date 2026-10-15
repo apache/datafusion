@@ -103,6 +103,10 @@ message ListingTableScanNode {
     datafusion_common.ArrowFormat arrow = 16;
   }
   repeated SortExprNodeCollection file_sort_order = 13;
+  // Optional number of rows to read.
+  optional uint64 fetch = 17;
+  // Optional number of rows to skip.
+  optional uint64 skip = 18;
 }
 
 message ViewTableScanNode {
@@ -112,6 +116,10 @@ message ViewTableScanNode {
   datafusion_common.Schema schema = 3;
   ProjectionColumns projection = 4;
   string definition = 5;
+  // Optional number of rows to read.
+  optional uint64 fetch = 7;
+  // Optional number of rows to skip.
+  optional uint64 skip = 8;
 }
 
 // Logical Plan to Scan a CustomTableProvider registered at runtime
@@ -122,6 +130,10 @@ message CustomTableScanNode {
   datafusion_common.Schema schema = 3;
   repeated LogicalExprNode filters = 4;
   bytes custom_table_data = 5;
+  // Optional number of rows to read.
+  optional uint64 fetch = 7;
+  // Optional number of rows to skip.
+  optional uint64 skip = 8;
 }
 
 message ProjectionNode {
@@ -169,6 +181,7 @@ message HashRepartition {
 
 message EmptyRelationNode {
   bool produce_one_row = 1;
+  datafusion_common.DfSchema schema = 2;
 }
 
 message CreateExternalTableNode {
@@ -275,6 +288,10 @@ message JoinNode {
   datafusion_common.NullEquality null_equality = 7;
   LogicalExprNode filter = 8;
   bool null_aware = 9;
+  // Number of `NOT IN` value keys of a null-aware join (see
+  // `Join::null_aware_value_keys`). Messages predating this field decode it
+  // as 0, which is read as 1: they can only hold scalar `NOT IN` joins.
+  uint32 null_aware_value_keys = 10;
 }
 
 enum AsOfMatchOperator {
@@ -1033,6 +1050,12 @@ message ListUnnest {
 message PhysicalExtensionNode {
   bytes node = 1;
   repeated PhysicalPlanNode inputs = 2;
+  // Globally unique, namespaced name of the extension plan type (e.g.
+  // `my-crate.MyExec`), written by plans that serialize themselves through
+  // `ExecutionPlan::try_to_proto`. When present and registered on the decoding
+  // session, it selects the decoder directly; otherwise decoding falls back to
+  // the `PhysicalExtensionCodec` chain. Absent for codec-encoded plans.
+  optional string plan_name = 3;
 }
 
 // physical expressions
@@ -1093,7 +1116,13 @@ message PhysicalExprNode {
     PhysicalLambdaVariableExprNode lambda_variable = 26;
     PhysicalRangeExprNode range_expr = 27;
     PhysicalSqlSimilarToPatternNode sql_similar_to_pattern = 28;
+    PhysicalLiteralNode literal_with_metadata = 29;
   }
+}
+
+message PhysicalLiteralNode {
+  datafusion_common.ScalarValue value = 1;
+  map<string, string> metadata = 2;
 }
 
 message PhysicalDynamicFilterNode {
@@ -1228,11 +1257,42 @@ message PhysicalCaseNode {
 message PhysicalTryCastNode {
   PhysicalExprNode expr = 1;
   datafusion_common.ArrowType arrow_type = 2;
+  // Present only for an explicit target. Absent nodes retain the legacy
+  // type-only behavior, inheriting metadata from the input expression.
+  optional datafusion_common.Field target_field = 3;
 }
 
 message PhysicalCastNode {
   PhysicalExprNode expr = 1;
   datafusion_common.ArrowType arrow_type = 2;
+  // Present only for an explicit target. Absent nodes retain the legacy
+  // type-only behavior, inheriting metadata and nullability from the input.
+  optional datafusion_common.Field target_field = 3;
+  // Absent means DataFusion's default cast options.
+  optional PhysicalCastOptions cast_options = 4;
+}
+
+message PhysicalCastOptions {
+  bool safe = 1;
+  PhysicalFormatOptions format_options = 2;
+}
+
+enum PhysicalDurationFormat {
+  PHYSICAL_DURATION_FORMAT_ISO8601 = 0;
+  PHYSICAL_DURATION_FORMAT_PRETTY = 1;
+}
+
+message PhysicalFormatOptions {
+  bool safe = 1;
+  string null = 2;
+  optional string date_format = 3;
+  optional string datetime_format = 4;
+  optional string timestamp_format = 5;
+  optional string timestamp_tz_format = 6;
+  optional string time_format = 7;
+  PhysicalDurationFormat duration_format = 8;
+  bool types_info = 9;
+  bool quoted_strings = 10;
 }
 
 message PhysicalNegativeNode {
@@ -1413,6 +1473,11 @@ message HashJoinExecNode {
   // turning old plans into empty results. With `optional`, absent decodes to
   // `None`, which is the correct reading of an older message.
   optional uint64 fetch = 12;
+  // Number of `NOT IN` value keys of a null-aware join (see
+  // `HashJoinExec::null_aware_value_keys`). Messages predating this field
+  // decode it as 0, which is read as 1: they can only hold scalar `NOT IN`
+  // joins.
+  uint32 null_aware_value_keys = 13;
 }
 
 enum StreamPartitionMode {
@@ -1499,6 +1564,11 @@ message ProjectionExecNode {
   PhysicalPlanNode input = 1;
   repeated PhysicalExprNode expr = 2;
   repeated string expr_name = 3;
+  // Only field and schema metadata are used; output types are derived from expr.
+  // Present when the projection output has metadata or explicitly overrides
+  // inherited metadata, including an explicit clear. Absent for older plans
+  // and metadata-free projections.
+  datafusion_common.Schema schema = 4;
 }
 
 enum AggregateMode {
@@ -1621,7 +1691,12 @@ message PhysicalHashRepartition {
 
 message PhysicalRangePartitioning {
   repeated PhysicalSortExprNode sort_expr = 1;
+  // Effective split points. Kept for compatibility with older readers.
   repeated PhysicalRangeSplitPoint split_point = 2;
+  // Maximum-resolution sample points used to derive effective split points.
+  repeated PhysicalRangeSplitPoint sample_point = 3;
+  // Zero in legacy payloads means split_point.len() + 1.
+  uint64 partition_count = 4;
 }
 
 message PhysicalRangeSplitPoint {

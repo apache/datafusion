@@ -45,7 +45,7 @@ use std::io;
 use std::result;
 use std::sync::Arc;
 
-use crate::utils::datafusion_strsim::{levenshtein, normalized_levenshtein};
+use crate::utils::datafusion_strsim::{levenshtein_with_buffer, normalized_levenshtein};
 use crate::utils::quote_identifier;
 use crate::{Column, DFSchema, Diagnostic, TableReference};
 use arrow::error::ArrowError;
@@ -236,6 +236,7 @@ fn closest_valid_field<'a>(
     ];
 
     let mut best_match: Option<(usize, usize, usize, &Column)> = None;
+    let mut cache = Vec::new();
     for (index, valid_field) in valid_fields.iter().enumerate() {
         let valid_names = [
             valid_field.name().to_lowercase(),
@@ -243,7 +244,7 @@ fn closest_valid_field<'a>(
         ];
         for target in &target_names {
             for valid_name in &valid_names {
-                let distance = levenshtein(target, valid_name);
+                let distance = levenshtein_with_buffer(target, valid_name, &mut cache);
                 let max_len = target.chars().count().max(valid_name.chars().count());
                 // If there are no shared characters, or we would have to edit
                 // more than half of the longer name, don't suggest a potential match.

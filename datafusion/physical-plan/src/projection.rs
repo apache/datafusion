@@ -561,7 +561,7 @@ impl ExecutionPlan for ProjectionExec {
         order: &[PhysicalSortExpr],
     ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
         let child = self.input();
-        let mut child_order = Vec::new();
+        let mut child_order = Vec::with_capacity(order.len());
 
         // Check and transform sort expressions
         for sort_expr in order {
@@ -652,13 +652,25 @@ impl ExecutionPlan for ProjectionExec {
             metrics: _,
             // Derived plan properties, recomputed on decode.
             cache: _,
-            // Derived metadata comparison, recomputed with the projector.
-            overrides_metadata: _,
+            overrides_metadata,
         } = self;
         let projection_exprs = projector.projection().as_ref();
         let input = ctx.encode_child(input)?;
         let expr = ctx.encode_expressions(projection_exprs.iter().map(|p| &p.expr))?;
         let expr_name = projection_exprs.iter().map(|p| p.alias.clone()).collect();
+        let output_schema = projector.output_schema();
+        // Preserve explicit overrides and field metadata that cannot be
+        // reconstructed from the child. Inherited schema metadata can be.
+        let schema = if *overrides_metadata
+            || output_schema
+                .fields()
+                .iter()
+                .any(|field| !field.metadata().is_empty())
+        {
+            Some(output_schema.as_ref().try_into()?)
+        } else {
+            None
+        };
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Projection(Box::new(
@@ -666,6 +678,7 @@ impl ExecutionPlan for ProjectionExec {
                         input: Some(Box::new(input)),
                         expr,
                         expr_name,
+                        schema,
                     },
                 )),
             ),
@@ -701,6 +714,7 @@ impl ProjectionExec {
             input,
             expr,
             expr_name,
+            schema,
         } = &**projection;
         let input =
             ctx.decode_required_child(input.as_deref(), "ProjectionExec", "input")?;
@@ -715,7 +729,15 @@ impl ProjectionExec {
                 })
             })
             .collect::<Result<Vec<ProjectionExpr>>>()?;
-        Ok(Arc::new(ProjectionExec::try_new(exprs, input)?))
+        let projection = match schema {
+            Some(schema) => ProjectionExec::try_new_with_schema_metadata(
+                exprs,
+                input,
+                &Schema::try_from(schema)?,
+            )?,
+            None => ProjectionExec::try_new(exprs, input)?,
+        };
+        Ok(Arc::new(projection))
     }
 }
 
@@ -1128,7 +1150,7 @@ pub fn update_ordering(
     ordering: LexOrdering,
     projected_exprs: &[ProjectionExpr],
 ) -> Result<Option<LexOrdering>> {
-    let mut updated_exprs = vec![];
+    let mut updated_exprs = Vec::with_capacity(ordering.len());
     for mut sort_expr in ordering.into_iter() {
         let Some(updated_expr) = update_expr(&sort_expr.expr, projected_exprs, false)?
         else {
@@ -1146,7 +1168,7 @@ pub fn update_ordering_requirement(
     reqs: LexRequirement,
     projected_exprs: &[ProjectionExpr],
 ) -> Result<Option<LexRequirement>> {
-    let mut updated_exprs = vec![];
+    let mut updated_exprs = Vec::with_capacity(reqs.len());
     for mut sort_expr in reqs.into_iter() {
         let Some(updated_expr) = update_expr(&sort_expr.expr, projected_exprs, false)?
         else {

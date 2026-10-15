@@ -37,6 +37,7 @@ use datafusion::catalog::{
     CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, SchemaProvider, Session,
 };
 use datafusion::common::config::Dialect;
+use datafusion::common::stats::Precision;
 use datafusion::common::{DataFusionError, Result, not_impl_err};
 use datafusion::functions::math::abs;
 use datafusion::logical_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
@@ -61,8 +62,13 @@ use range_partitioning::{
 use async_trait::async_trait;
 use datafusion::common::cast::as_float64_array;
 use datafusion::execution::SessionStateBuilder;
-use datafusion::execution::runtime_env::RuntimeEnv;
-use datafusion::physical_plan::operator_statistics::StatisticsRegistry;
+use datafusion::execution::memory_pool::UnboundedMemoryPool;
+use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+use datafusion::physical_plan::joins::HashJoinExec;
+use datafusion::physical_plan::operator_statistics::{
+    ClosureStatisticsProvider, StatisticsRegistry, StatisticsResult,
+};
+use datafusion::physical_plan::statistics::StatisticsArgs;
 use log::info;
 use sqlparser::ast;
 use tempfile::TempDir;
@@ -110,7 +116,14 @@ impl TestContext {
         let config = SessionConfig::new()
             // hardcode target partitions so plans are deterministic
             .with_target_partitions(4);
-        let runtime = Arc::new(RuntimeEnv::default());
+        let pool = crate::memory_drift::wrap_pool(
+            Arc::new(UnboundedMemoryPool::default()),
+            &relative_path.display().to_string(),
+        );
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(pool)
+            .build_arc()
+            .expect("default runtime builds");
 
         let mut state_builder = SessionStateBuilder::new()
             .with_config(config)
@@ -136,9 +149,31 @@ impl TestContext {
             relative_path.file_name().and_then(|name| name.to_str()),
             Some("statistics_registry.slt")
         ) {
-            state_builder = state_builder.with_statistics_registry(
-                StatisticsRegistry::default_with_builtin_providers(),
+            // Replaces the join estimate with the Cartesian product
+            let join_provider = ClosureStatisticsProvider::with_matches(
+                |plan| plan.downcast_ref::<HashJoinExec>().is_some(),
+                |plan, child_stats| {
+                    let (Some(&left_rows), Some(&right_rows)) = (
+                        child_stats[0].base().num_rows.get_value(),
+                        child_stats[1].base().num_rows.get_value(),
+                    ) else {
+                        return Ok(StatisticsResult::Delegate);
+                    };
+                    let child_base = child_stats
+                        .iter()
+                        .map(|c| Arc::clone(c.base_arc()))
+                        .collect::<Vec<_>>();
+                    let mut stats = Arc::unwrap_or_clone(
+                        plan.statistics_from_inputs(&child_base, &StatisticsArgs::new())?,
+                    );
+                    stats.num_rows =
+                        Precision::Inexact(left_rows.saturating_mul(right_rows));
+                    Ok(StatisticsResult::Computed(stats.into()))
+                },
             );
+            let registry =
+                StatisticsRegistry::with_providers(vec![Arc::new(join_provider)]);
+            state_builder = state_builder.with_statistics_registry(registry);
         }
 
         let state = state_builder.build();

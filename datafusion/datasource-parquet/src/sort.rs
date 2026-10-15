@@ -119,7 +119,7 @@ fn extract_topk_sort_info(
         return vec![];
     };
     let leading_descending = sort_order.first().options.descending;
-    let mut keys = Vec::new();
+    let mut keys = Vec::with_capacity(sort_order.len());
     for sort_expr in sort_order.iter() {
         let Some(col) = sort_expr.expr.downcast_ref::<Column>() else {
             break;

@@ -111,7 +111,10 @@ async fn group_by_row_hash() {
             "Resources exhausted: Additional allocation failed",
             "for FinalHashAggregateStream[0]",
         ])
-        .with_memory_limit(2_000)
+        // Every aggregate stream reserves its initial table (~4 KB) when created, so
+        // pin the partition count and fit the two partial and two final tables.
+        .with_config(SessionConfig::new().with_target_partitions(2))
+        .with_memory_limit(20_000)
         .run()
         .await
 }
@@ -441,6 +444,36 @@ async fn group_by_count_distinct_utf8_view() {
         .with_expected_success()
         .run()
         .await
+}
+
+/// A grouped aggregate emits its output as zero-copy slices of one batch, and
+/// the sort that buffers them must reserve their shared buffers once rather
+/// than once per slice. For 100,000 groups that needs about 6 MB instead of
+/// about 24 MB, so 12 MB separates the two. The two orderings cover both ways
+/// the buffered slices are sorted: coalesced into runs for a single sort key,
+/// and one run per slice otherwise. The in-place threshold is below the slice
+/// size, so that coalescing keeps the slices as separate runs.
+#[tokio::test]
+async fn sort_after_group_by_reserves_shared_output_once() {
+    for order_by in ["group_key", "s desc, group_key"] {
+        TestCase::new()
+            .with_query(format!(
+                "select group_key, sum(payload) as s from t group by group_key order by {order_by}"
+            ))
+            .with_scenario(Scenario::GroupedDistinctStrings {
+                groups: 100_000,
+                string_view: false,
+            })
+            .with_config(
+                SessionConfig::new()
+                    .with_target_partitions(1)
+                    .with_sort_in_place_threshold_bytes(64 * 1024),
+            )
+            .with_memory_limit(12_000_000)
+            .with_expected_success()
+            .run()
+            .await
+    }
 }
 
 #[tokio::test]
