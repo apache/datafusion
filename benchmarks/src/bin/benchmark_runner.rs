@@ -2016,6 +2016,11 @@ description = "Run query one against CSV data."
                     ])
                     // Other CLI tests mutate environment variables concurrently.
                     .env_clear()
+                    // Keep subprocess coverage output in cargo-llvm-cov's directory.
+                    .envs(
+                        std::env::var_os("LLVM_PROFILE_FILE")
+                            .map(|value| ("LLVM_PROFILE_FILE", value)),
+                    )
                     .env(CHILD_ENV, mode)
                     .env("DEBUG", debug.to_string())
                     .output()
