@@ -41,7 +41,10 @@ use parquet::file::reader::{FileReader, SerializedFileReader};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 
 const ROW_COUNTS: &[usize] = &[1_000_000, 5_000_000];
-const CARDINALITIES: &[usize] = &[10, 100, 1_000, 20_000];
+const CARDINALITIES: &[usize] =
+    &[10, 100, 500, 1_000, 2_000, 2_500, 3_000, 5_000, 20_000];
+const AGGREGATE_CARDINALITIES: &[usize] =
+    &[10, 100, 500, 1_000, 2_000, 2_500, 3_000, 5_000];
 const STRING_LENGTH: usize = 24;
 const BATCH_SIZE: usize = 8192;
 const SEED: u64 = 0xC0FFEE;
@@ -230,7 +233,7 @@ fn criterion_benchmark(criterion: &mut Criterion) {
             });
             group.finish();
 
-            if cardinality <= 100 {
+            if AGGREGATE_CARDINALITIES.contains(&cardinality) {
                 let query = "SELECT value, COUNT(*) FROM strings GROUP BY value";
                 let mut group = criterion.benchmark_group(format!(
                     "parquet_rle_dictionary_aggregate/rows={rows}/cardinality={cardinality}"
