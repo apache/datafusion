@@ -1812,6 +1812,7 @@ mod tests {
 
         let nulls = Some(NullBuffer::from(vec![true, false, true, true, true]));
         let array = builder.finish(nulls).unwrap();
+        array.to_data().validate_full().unwrap();
         assert_eq!(array.value(0), "abc");
         assert!(array.is_null(1));
         assert_eq!(array.value(2), "a long string value");
