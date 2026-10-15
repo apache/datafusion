@@ -93,6 +93,11 @@ SELECT 1.0 / trunc(column1), 1.0 / trunc(column1, 0) FROM (VALUES (CAST(-0.0 AS 
 ----
 -Infinity -Infinity
 
+query RR
+SELECT 1.0 / trunc(column1), 1.0 / trunc(column1, 0) FROM (VALUES (CAST(-0.0 AS REAL)));
+----
+-Infinity -Infinity
+
 # Round signed and unsigned integer scalar widths
 query IIIIIIII
 SELECT
