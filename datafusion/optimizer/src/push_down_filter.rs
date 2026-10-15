@@ -1176,6 +1176,10 @@ impl OptimizerRule for PushDownFilter {
                 // Therefore, we need to ensure that any potential partition key returned is used in
                 // ALL window functions. Otherwise, filters cannot be pushed by through that column.
                 #[expect(
+                    clippy::allow_attributes,
+                    reason = "Mutable-key warnings depend on enabled features"
+                )]
+                #[allow(
                     clippy::mutable_key_type,
                     reason = "Expr's interior mutability does not affect hashing or equality"
                 )]
@@ -1184,6 +1188,10 @@ impl OptimizerRule for PushDownFilter {
                 }
 
                 #[expect(
+                    clippy::allow_attributes,
+                    reason = "Mutable-key warnings depend on enabled features"
+                )]
+                #[allow(
                     clippy::mutable_key_type,
                     reason = "Expr's interior mutability does not affect hashing or equality"
                 )]
@@ -1687,6 +1695,10 @@ fn with_filters(predicates: Vec<Expr>, plan: LogicalPlan) -> LogicalPlan {
 /// A predicate containing a subquery is never pushed: what the subquery reads is
 /// not visible from the expression tree.
 #[expect(
+    clippy::allow_attributes,
+    reason = "Mutable-key warnings depend on enabled features"
+)]
+#[allow(
     clippy::mutable_key_type,
     reason = "Expr's interior mutability does not affect hashing or equality"
 )]
