@@ -990,21 +990,21 @@ macro_rules! create_hashes_internal {
                 DataType::Struct(_) => {
                     let struct_array = col.as_any().downcast_ref::<StructArray>().unwrap();
                     // Hash each field of the struct - Spark hashes all fields recursively
-                    let columns: Vec<ArrayRef> = struct_array.columns().to_vec();
+                    let columns = struct_array.columns();
                     if !columns.is_empty() {
                         match struct_array.nulls().filter(|nulls| nulls.null_count() > 0) {
                             // A NULL struct leaves the hash unchanged like any other
                             // NULL, whatever its fields still hold.
                             Some(nulls) => {
                                 let before = $hashes_buffer.to_vec();
-                                $recursive_hash_method(&columns, $hashes_buffer)?;
+                                $recursive_hash_method(columns, $hashes_buffer)?;
                                 for (i, hash) in $hashes_buffer.iter_mut().enumerate() {
                                     if nulls.is_null(i) {
                                         *hash = before[i];
                                     }
                                 }
                             }
-                            None => $recursive_hash_method(&columns, $hashes_buffer)?,
+                            None => $recursive_hash_method(columns, $hashes_buffer)?,
                         }
                     }
                 }

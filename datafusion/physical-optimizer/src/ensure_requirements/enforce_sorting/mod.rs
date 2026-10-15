@@ -214,7 +214,7 @@ pub fn replace_with_partial_sort(
 
     let mut common_prefix_length = 0;
     while child_eq_properties
-        .ordering_satisfy(sort_exprs[0..=common_prefix_length].to_vec())?
+        .ordering_satisfy(sort_exprs[0..=common_prefix_length].iter().cloned())?
     {
         common_prefix_length += 1;
     }
@@ -420,7 +420,7 @@ pub fn ensure_sorting(
     };
 
     let plan = &requirements.plan;
-    let mut updated_children = vec![];
+    let mut updated_children = Vec::with_capacity(requirements.children.len());
     for (idx, (required_ordering, mut child)) in plan
         .required_input_ordering()
         .into_iter()

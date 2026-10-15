@@ -187,6 +187,19 @@ impl CrossJoinExec {
     /// This function should be called BEFORE inserting any repartitioning
     /// operators on the join's children. Check [`super::HashJoinExec::swap_inputs`]
     /// for more details.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// Direct use of this API in downstream projects is discouraged because
+    /// correctness depends on strict preconditions. See the notes above for
+    /// correct usage.
+    ///
+    /// This API may change frequently as internal join optimizations evolve.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
     pub fn swap_inputs(&self) -> Result<Arc<dyn ExecutionPlan>> {
         let new_join =
             CrossJoinExec::new(Arc::clone(&self.right), Arc::clone(&self.left));
@@ -613,22 +626,16 @@ fn build_batch(
     schema: &Schema,
 ) -> Result<RecordBatch> {
     // Repeat value on the left n times
-    let arrays = left_data
-        .columns()
-        .iter()
-        .map(|arr| {
-            let scalar = ScalarValue::try_from_array(arr, left_index)?;
-            scalar.to_array_of_size(batch.num_rows())
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let mut arrays = Vec::with_capacity(left_data.num_columns() + batch.num_columns());
+    for arr in left_data.columns() {
+        let scalar = ScalarValue::try_from_array(arr, left_index)?;
+        arrays.push(scalar.to_array_of_size(batch.num_rows())?);
+    }
+    arrays.extend_from_slice(batch.columns());
 
     RecordBatch::try_new_with_options(
         Arc::new(schema.clone()),
-        arrays
-            .iter()
-            .chain(batch.columns().iter())
-            .cloned()
-            .collect(),
+        arrays,
         &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
     )
     .map_err(Into::into)

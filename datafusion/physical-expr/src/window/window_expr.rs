@@ -350,7 +350,8 @@ pub trait AggregateWindowExpr: WindowExpr {
 
         // We iterate on each row to perform a running calculation.
         let length = values[0].len();
-        let mut row_wise_results: Vec<ScalarValue> = vec![];
+        let mut row_wise_results: Vec<ScalarValue> =
+            Vec::with_capacity(length.saturating_sub(idx));
         let is_causal = self.get_window_frame().is_causal();
         while idx < length {
             // Start search from the last_range. This squeezes searched range.
