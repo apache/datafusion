@@ -300,7 +300,7 @@ impl MemTable {
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut partitions = vec![];
+        let mut partitions = Vec::with_capacity(self.batches.len());
         for arc_inner_vec in self.batches.iter() {
             let inner_vec = arc_inner_vec.read().await;
             partitions.push(inner_vec.clone())
@@ -321,7 +321,7 @@ impl MemTable {
             let df_schema = DFSchema::try_from(Arc::clone(&self.schema))?;
 
             let eqp = state.execution_props();
-            let mut file_sort_order = vec![];
+            let mut file_sort_order = Vec::with_capacity(sort_order.len());
             for sort_exprs in sort_order.iter() {
                 let physical_exprs = create_physical_sort_exprs(
                     sort_exprs,

@@ -115,3 +115,57 @@ from (
 ) as t(ts);
 ----
 2286-11-20T17:46:40
+
+# Strides must be greater than zero, like in PostgreSQL. A negative stride has
+# no well-defined bins: a negative month stride used to bin 2023-01-01 forward
+# to 2023-02-28 with origin 2023-01-31.
+query error DataFusion error: Execution error: DATE_BIN stride must be greater than zero
+select date_bin(interval '-1 month', timestamp '2023-01-01 00:00:00', timestamp '2023-01-31 00:00:00');
+
+query error DataFusion error: Execution error: DATE_BIN stride must be greater than zero
+select date_bin(interval '-1 year', timestamp '2023-01-01 00:00:00');
+
+query error DataFusion error: Execution error: DATE_BIN stride must be greater than zero
+select date_bin(interval '-15 minutes', timestamp '2023-01-01 18:18:18');
+
+query error DataFusion error: Execution error: DATE_BIN stride must be greater than zero
+select date_bin(interval '-1 day', timestamp '2023-01-01 18:18:18');
+
+# The parts of the interval add up to a negative stride.
+query error DataFusion error: Execution error: DATE_BIN stride must be greater than zero
+select date_bin(interval '1 day -25 hours', timestamp '2023-01-01 18:18:18');
+
+# A stride of -1 ns with a source at i64::MIN used to overflow the remainder
+# (#22215)
+query error DataFusion error: Execution error: DATE_BIN stride must be greater than zero
+select date_bin(
+  interval '-1 nanosecond',
+  arrow_cast(-9223372036854775808, 'Timestamp(Nanosecond, None)')
+);
+
+# Column inputs, for second and nanosecond precision
+query error DataFusion error: Execution error: DATE_BIN stride must be greater than zero
+select date_bin(interval '-1 month', ts, timestamp '2023-01-31 00:00:00')
+from (
+  select arrow_cast(column1, 'Timestamp(Second)') as ts
+  from (values (timestamp '2023-01-01 00:00:00'), (timestamp '2023-01-31 00:00:00'))
+);
+
+query error DataFusion error: Execution error: DATE_BIN stride must be greater than zero
+select date_bin(interval '-1 month', column1, timestamp '2023-01-31 00:00:00')
+from (values (timestamp '2023-01-01 00:00:00'), (timestamp '2023-01-31 00:00:00'));
+
+query error DataFusion error: Execution error: DATE_BIN stride must be greater than zero
+select date_bin(interval '-15 minutes', column1)
+from (values (timestamp '2023-01-01 18:18:18'), (timestamp '2023-01-03 19:00:03'));
+
+# TIME inputs
+query error DataFusion error: Execution error: DATE_BIN stride must be greater than zero
+select date_bin(interval '-15 minutes', time '14:38:50', time '00:00:00');
+
+query error DataFusion error: Execution error: DATE_BIN stride must be greater than zero
+select date_bin(interval '-1 month', time '14:38:50', time '00:00:00');
+
+query error DataFusion error: Execution error: DATE_BIN stride must be greater than zero
+select date_bin(interval '-15 minutes', column1, time '00:00:00')
+from (values (time '14:38:50'), (time '19:00:03'));

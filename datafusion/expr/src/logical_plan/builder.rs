@@ -44,7 +44,7 @@ use crate::utils::{
     COUNT_STAR_EXPANSION, Columnizer, can_hash, check_all_columns_from_schema,
     compare_sort_expr, expand_qualified_wildcard, expand_wildcard, expr_to_columns,
     find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
-    split_conjunction_owned,
+    passthrough_field_index, split_conjunction_owned,
 };
 use crate::{
     AggregateUDF, BinaryExpr, DmlStatement, ExplainOption, Expr, ExprSchemable, Operator,
@@ -334,7 +334,7 @@ impl LogicalPlanBuilder {
                 if let Some(prev_type) = common_type {
                     // Widen the running type so that it can hold both the
                     // previously seen rows and this row's value.
-                    let data_types = vec![prev_type.clone(), data_type.clone()];
+                    let data_types = [prev_type.clone(), data_type.clone()];
                     let Some(new_type) = type_union_resolution(&data_types) else {
                         return plan_err!(
                             "Inconsistent data type across values list at row {i} column {j}. Was {prev_type} but found {data_type}"
@@ -1307,7 +1307,7 @@ impl LogicalPlanBuilder {
             .collect::<Result<_>>()?;
 
         let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys).collect();
-        let mut join_on: Vec<(Expr, Expr)> = vec![];
+        let mut join_on: Vec<(Expr, Expr)> = Vec::with_capacity(on.len());
         let mut filters: Option<Expr> = None;
         for (l, r) in &on {
             if self.plan.schema().has_column(l)
@@ -1917,9 +1917,9 @@ pub fn unique_field_aliases(fields: &Fields) -> Vec<Option<String>> {
     // That's why we need the `seen` set, so the fields are always unique.
 
     // Tracks a mapping between a field name and the number of appearances of that field.
-    let mut name_map = HashMap::<&str, usize>::new();
+    let mut name_map = HashMap::<&str, usize>::with_capacity(fields.len());
     // Tracks all the fields and aliases that were previously seen.
-    let mut seen = HashSet::<Cow<String>>::new();
+    let mut seen = HashSet::<Cow<String>>::with_capacity(fields.len());
 
     fields
         .iter()
@@ -2179,22 +2179,20 @@ pub fn add_group_by_exprs_from_dependencies(
         return Ok(group_expr);
     }
 
-    // Names of the fields produced by the GROUP BY exprs for example, `GROUP BY
-    // c1 + 1` produces an output field named `"c1 + 1"`
-    let mut group_by_field_names = group_expr
+    // The input field that each GROUP BY expression passes through, or `None`
+    // for a computed expression such as `c1 + 1`
+    let mut group_by_input_indices = group_expr
         .iter()
-        .map(|e| e.schema_name().to_string())
+        .map(|e| passthrough_field_index(e, schema))
         .collect::<Vec<_>>();
 
     if let Some(target_indices) =
-        get_target_functional_dependencies(schema, &group_by_field_names)
+        get_target_functional_dependencies(schema, &group_by_input_indices)
     {
         for idx in target_indices {
-            let expr = Expr::Column(Column::from(schema.qualified_field(idx)));
-            let expr_name = expr.schema_name().to_string();
-            if !group_by_field_names.contains(&expr_name) {
-                group_by_field_names.push(expr_name);
-                group_expr.push(expr);
+            if !group_by_input_indices.contains(&Some(idx)) {
+                group_by_input_indices.push(Some(idx));
+                group_expr.push(Expr::Column(Column::from(schema.qualified_field(idx))));
             }
         }
     }
@@ -2206,9 +2204,10 @@ pub fn validate_unique_names<'a>(
     node_name: &str,
     expressions: impl IntoIterator<Item = &'a Expr>,
 ) -> Result<()> {
-    let mut unique_names = HashMap::new();
+    let expressions = expressions.into_iter();
+    let mut unique_names = HashMap::with_capacity(expressions.size_hint().0);
 
-    expressions.into_iter().enumerate().try_for_each(|(position, expr)| {
+    expressions.enumerate().try_for_each(|(position, expr)| {
         let name = expr.schema_name().to_string();
         match unique_names.get(&name) {
             None => {

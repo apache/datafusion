@@ -543,11 +543,13 @@ fn hash_dictionary_scatter<
             if let Some(key) = key {
                 let idx = key.as_usize();
                 if !HAS_NULL_VALUES || dict_values.is_valid(idx) {
-                    if MULTI_COL {
-                        *hash = combine_hashes(dict_hashes[idx], *hash);
+                    // SAFETY: `idx` is a valid Arrow dict key, in-bounds for `dict_hashes`.
+                    let dict_hash = unsafe { *dict_hashes.get_unchecked(idx) };
+                    *hash = if MULTI_COL {
+                        combine_hashes(dict_hash, *hash)
                     } else {
-                        *hash = dict_hashes[idx];
-                    }
+                        dict_hash
+                    };
                 }
             }
         }
@@ -555,11 +557,13 @@ fn hash_dictionary_scatter<
         for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().values()) {
             let idx = key.as_usize();
             if !HAS_NULL_VALUES || dict_values.is_valid(idx) {
-                if MULTI_COL {
-                    *hash = combine_hashes(dict_hashes[idx], *hash);
+                // SAFETY: `idx` is a valid Arrow dict key, in-bounds for `dict_hashes`.
+                let dict_hash = unsafe { *dict_hashes.get_unchecked(idx) };
+                *hash = if MULTI_COL {
+                    combine_hashes(dict_hash, *hash)
                 } else {
-                    *hash = dict_hashes[idx];
-                }
+                    dict_hash
+                };
             }
         }
     }
@@ -899,6 +903,7 @@ fn hash_sparse_union_array(
         child_hashing.create_hashes([array.child(type_id)], &mut child_hashes)?;
     } else {
         let (starts, rows) = group_rows_by_type_id(type_ids);
+        let mut taken_hashes: Vec<u64> = Vec::new();
         for (type_id, _) in union_fields.iter() {
             let (start, end) = (starts[type_id as usize], starts[type_id as usize + 1]);
             if start == end {
@@ -927,10 +932,11 @@ fn hash_sparse_union_array(
                 child_hashing.create_hashes([masked], &mut child_hashes)?;
             } else {
                 let indices = UInt32Array::new(rows.slice(start, end - start), None);
-                let mut taken_hashes = vec![0; indices.len()];
+                taken_hashes.clear();
+                taken_hashes.resize(indices.len(), 0);
                 child_hashing
                     .create_hashes([take(child, &indices, None)?], &mut taken_hashes)?;
-                for (&row, hash) in indices.values().iter().zip(taken_hashes) {
+                for (&row, &hash) in indices.values().iter().zip(&taken_hashes) {
                     child_hashes[row as usize] = hash;
                 }
             }
@@ -1303,6 +1309,9 @@ mod tests {
     #[cfg(not(feature = "force_hash_collisions"))]
     use std::hash::{BuildHasherDefault, Hasher};
     use std::sync::Arc;
+
+    #[cfg(not(feature = "force_hash_collisions"))]
+    use arrow::buffer::{NullBuffer, ScalarBuffer};
 
     use super::*;
 
@@ -1856,8 +1865,6 @@ mod tests {
     // Tests actual values of hashes, which are different if forcing collisions
     #[cfg(not(feature = "force_hash_collisions"))]
     fn create_hashes_for_list_view_arrays() {
-        use arrow::buffer::{NullBuffer, ScalarBuffer};
-
         // Create values array: [0, 1, 2, 3, null, 5]
         let values = Arc::new(Int32Array::from(vec![
             Some(0),
@@ -1906,8 +1913,6 @@ mod tests {
     // Tests actual values of hashes, which are different if forcing collisions
     #[cfg(not(feature = "force_hash_collisions"))]
     fn create_hashes_for_large_list_view_arrays() {
-        use arrow::buffer::{NullBuffer, ScalarBuffer};
-
         // Create values array: [0, 1, 2, 3, null, 5]
         let values = Arc::new(Int32Array::from(vec![
             Some(0),

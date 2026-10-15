@@ -1181,44 +1181,6 @@ impl BulkNullStringArrayBuilder for StringViewArrayBuilder {
     }
 }
 
-/// Append a new view to the views buffer with the given substr.
-///
-/// Callers are responsible for their own null tracking.
-///
-/// # Safety
-///
-/// original_view must be a valid view (the format described on
-/// [`GenericByteViewArray`](arrow::array::GenericByteViewArray).
-///
-/// # Arguments
-/// - views_buffer: The buffer to append the new view to
-/// - original_view: The original view value
-/// - substr: The substring to append. Must be a valid substring of the original view
-/// - start_offset: The start offset of the substring in the view
-///
-/// LLVM is apparently overly eager to inline this function into some hot loops,
-/// which bloats them and regresses performance, so we disable inlining for now.
-#[inline(never)]
-pub(crate) fn append_view(
-    views_buffer: &mut Vec<u128>,
-    original_view: &u128,
-    substr: &str,
-    start_offset: u32,
-) {
-    let substr_len = substr.len();
-    let sub_view = if substr_len > 12 {
-        let view = ByteView::from(*original_view);
-        make_view(
-            substr.as_bytes(),
-            view.buffer_index,
-            view.offset + start_offset,
-        )
-    } else {
-        make_view(substr.as_bytes(), 0, 0)
-    };
-    views_buffer.push(sub_view);
-}
-
 /// Values of at most this many bytes are stored inline in their view.
 pub(crate) const MAX_INLINE_LEN: usize = MAX_INLINE_VIEW_LEN as usize;
 
@@ -1239,9 +1201,23 @@ pub(crate) const MAX_INLINE_LEN: usize = MAX_INLINE_VIEW_LEN as usize;
 pub(crate) fn sub_view(view: u128, source: &[u8], range: Range<usize>) -> u128 {
     debug_assert!(range.start <= range.end && range.end <= source.len());
 
-    // The substring's first bytes, in the low-order bits. Any bits past the
-    // end of the substring are masked off by `inline_view`.
-    let leading_bytes = if source.len() <= MAX_INLINE_LEN {
+    let len = range.end - range.start;
+    if len > MAX_INLINE_LEN {
+        // The substring has more than 12 bytes, so its 4-byte prefix is in bounds.
+        let prefix = source[range.start..range.start + 4].try_into().unwrap();
+        let original = ByteView::from(view);
+        return ByteView {
+            length: len as u32,
+            prefix: u32::from_le_bytes(prefix),
+            offset: original.offset + range.start as u32,
+            ..original
+        }
+        .as_u128();
+    }
+
+    // The substring's bytes, in the low-order bits. Any bits past the end of
+    // the substring are masked off by `inline_view`.
+    let bytes = if source.len() <= MAX_INLINE_LEN {
         // `source` is stored in `view` itself, after its 4-byte length.
         (view >> 32) >> (8 * range.start)
     } else {
@@ -1254,20 +1230,15 @@ pub(crate) fn sub_view(view: u128, source: &[u8], range: Range<usize>) -> u128 {
             .unwrap();
         read_12_bytes(window) >> (8 * (range.start - window_start))
     };
+    inline_view(bytes, len)
+}
 
-    let len = range.len();
-    if len <= MAX_INLINE_LEN {
-        inline_view(leading_bytes, len)
-    } else {
-        let original = ByteView::from(view);
-        ByteView {
-            length: len as u32,
-            prefix: leading_bytes as u32,
-            offset: original.offset + range.start as u32,
-            ..original
-        }
-        .as_u128()
-    }
+/// Returns the view for `substr`, which must be a slice of `string`, the value
+/// `view` refers to. See [`sub_view`].
+#[inline]
+pub(crate) fn substr_view(view: u128, string: &str, substr: &str) -> u128 {
+    let start = substr.as_ptr() as usize - string.as_ptr() as usize;
+    sub_view(view, string.as_bytes(), start..start + substr.len())
 }
 
 /// Reads `bytes` as a little-endian integer.

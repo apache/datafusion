@@ -210,6 +210,7 @@ use itertools::Itertools;
 use topk::hash_table::is_supported_hash_key_type;
 use topk::heap::is_supported_heap_type;
 
+mod aggregate_argument;
 mod aggregate_hash_table;
 mod aggregate_stream;
 pub mod group_values;
@@ -935,8 +936,9 @@ impl AggregateExec {
     ///
     /// # Public Only for Internal Use:
     ///
-    /// This is not part of the supported public API, it's made public for internal
-    /// optimizer usage.
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
     ///
     /// # TopK Optimization Overview
     ///
@@ -1141,6 +1143,13 @@ impl AggregateExec {
     /// leaves the aggregate in a consistent state. Ineligible aggregates return
     /// `None`. Eligible aggregates are returned unchanged when the limit is zero
     /// or no tighter than the existing limit.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
     pub fn try_optimize_distinct_soft_limit(
         mut self,
         limit: usize,
@@ -1166,6 +1175,13 @@ impl AggregateExec {
     ///
     /// The caller must preserve the schema, filters, and ordering requirements.
     /// Changing expressions in a TopK aggregate drops its specialization.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
     pub fn with_new_aggr_exprs(
         &self,
         aggr_expr: impl Into<Arc<[Arc<AggregateFunctionExpr>]>>,
@@ -1319,11 +1335,11 @@ impl AggregateExec {
         // it is not null in every group
         let indices: Vec<usize> = indices
             .into_iter()
-            .filter(|idx| group_by.groups.iter().all(|group| !group[*idx]))
             .filter(|idx| {
-                input_eq_properties
-                    .is_expr_constant(&groupby_exprs[*idx])
-                    .is_none()
+                group_by.groups.iter().all(|group| !group[*idx])
+                    && input_eq_properties
+                        .is_expr_constant(&groupby_exprs[*idx])
+                        .is_none()
             })
             .collect();
 
@@ -1391,6 +1407,23 @@ impl AggregateExec {
     /// Aggregation mode (full, partial)
     pub fn mode(&self) -> &AggregateMode {
         &self.mode
+    }
+
+    /// Returns whether this is a compatible partial/final aggregation pair.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is made public for the physical optimizer to use, this is not part of
+    /// the public API.
+    #[doc(hidden)]
+    pub fn matches_partial(&self, partial: &Self) -> bool {
+        matches!(
+            (self.mode, partial.mode),
+            (
+                AggregateMode::Final | AggregateMode::FinalPartitioned,
+                AggregateMode::Partial,
+            )
+        ) && self.group_expr() == &partial.group_expr().as_final()
     }
 
     /// Set a legacy limit hint. Unsupported requests leave ordinary aggregation.
@@ -3560,7 +3593,13 @@ pub(crate) fn group_id_array(
     let semantic_id = group
         .iter()
         .fold(0u64, |acc, &is_null| (acc << 1) | u64::from(is_null));
-    let full_id = semantic_id | ((ordinal as u64) << n);
+    // A zero ordinal needs no high bits. Avoid shifting it by 64 when all
+    // UInt64 bits belong to the semantic mask.
+    let full_id = if ordinal == 0 {
+        semantic_id
+    } else {
+        semantic_id | ((ordinal as u64) << n)
+    };
     if total_bits <= 8 {
         Ok(Arc::new(UInt8Array::from(vec![full_id as u8; num_rows])))
     } else if total_bits <= 16 {
@@ -3580,7 +3619,7 @@ pub(crate) fn group_id_array(
 /// three times the ordinals are 0, 1, 2 and this function returns 2.
 /// Returns 0 when no grouping set is duplicated.
 pub(crate) fn max_duplicate_ordinal(groups: &[Vec<bool>]) -> usize {
-    let mut counts: HashMap<&[bool], usize> = HashMap::new();
+    let mut counts: HashMap<&[bool], usize> = HashMap::with_capacity(groups.len());
     for group in groups {
         *counts.entry(group).or_insert(0) += 1;
     }
@@ -3628,7 +3667,8 @@ pub fn evaluate_group_by(
     batch: &RecordBatch,
 ) -> Result<Vec<Vec<ArrayRef>>> {
     let max_ordinal = max_duplicate_ordinal(&group_by.groups);
-    let mut ordinal_per_pattern: HashMap<&[bool], usize> = HashMap::new();
+    let mut ordinal_per_pattern: HashMap<&[bool], usize> =
+        HashMap::with_capacity(group_by.groups.len());
     let exprs = evaluate_expressions_to_arrays(
         group_by.expr.iter().map(|(expr, _)| expr),
         batch,
@@ -3727,6 +3767,13 @@ mod tests {
     use datafusion_physical_expr::projection::ProjectionExpr;
     use futures::{FutureExt, Stream, StreamExt};
     use insta::{allow_duplicates, assert_snapshot};
+
+    #[test]
+    fn wide_group_id_64_empty_rows() {
+        let array = group_id_array(&[true; 64], 0, 0, 0).unwrap();
+        assert_eq!(array.data_type(), &DataType::UInt64);
+        assert_eq!(array.len(), 0);
+    }
 
     #[cfg(feature = "proto")]
     #[test]

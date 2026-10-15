@@ -511,7 +511,7 @@ pub async fn from_substrait_sorts(
     substrait_sorts: &Vec<SortField>,
     input_schema: &DFSchema,
 ) -> datafusion::common::Result<Vec<Sort>> {
-    let mut sorts: Vec<Sort> = vec![];
+    let mut sorts: Vec<Sort> = Vec::with_capacity(substrait_sorts.len());
     for s in substrait_sorts {
         let expr = consumer
             .consume_expression(s.expr.as_ref().unwrap(), input_schema)
