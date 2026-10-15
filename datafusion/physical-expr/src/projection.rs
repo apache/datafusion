@@ -753,7 +753,6 @@ impl ProjectionExprs {
                     ColumnStatistics {
                         min_value: Precision::Exact(literal.value().clone()),
                         max_value: Precision::Exact(literal.value().clone()),
-                        // NULLs are not distinct values, whatever the row count
                         distinct_count: Precision::Exact(0),
                         null_count,
                         sum_value: Precision::Exact(literal.value().clone()),
@@ -761,8 +760,6 @@ impl ProjectionExprs {
                     }
                 } else {
                     let value = literal.value();
-                    // The value is present only if some row is, so an estimated
-                    // or unknown row count gives an estimated distinct count.
                     let distinct_count = match stats.num_rows {
                         Precision::Exact(0) | Precision::Inexact(0) => stats.num_rows,
                         Precision::Exact(_) => Precision::Exact(1),
