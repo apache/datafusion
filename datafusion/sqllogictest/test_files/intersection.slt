@@ -163,6 +163,74 @@ SELECT t3.x, t4.x FROM (VALUES (1)) t3(x) CROSS JOIN (VALUES (2)) t4(x)
 ----
 1 2
 
+# An empty input, written as an empty table or as a filter that removes every row
+statement ok
+CREATE TABLE set_all_empty(v INT);
+
+# Empty left input
+query I
+SELECT v FROM set_all_empty INTERSECT ALL SELECT v FROM set_all_left
+----
+
+query I
+SELECT v FROM set_all_empty EXCEPT ALL SELECT v FROM set_all_left
+----
+
+query I
+SELECT v FROM set_all_left WHERE false INTERSECT ALL SELECT v FROM set_all_left
+----
+
+query I
+SELECT v FROM set_all_left WHERE false EXCEPT ALL SELECT v FROM set_all_left
+----
+
+# Empty right input: nothing intersects, and EXCEPT ALL keeps every left row,
+# duplicates and NULLs included
+query I
+SELECT v FROM set_all_left INTERSECT ALL SELECT v FROM set_all_empty
+----
+
+query I rowsort
+SELECT v FROM set_all_left EXCEPT ALL SELECT v FROM set_all_empty
+----
+1
+1
+2
+NULL
+NULL
+NULL
+
+query I
+SELECT v FROM set_all_left INTERSECT ALL SELECT v FROM set_all_left WHERE false
+----
+
+query I rowsort
+SELECT v FROM set_all_left EXCEPT ALL SELECT v FROM set_all_left WHERE false
+----
+1
+1
+2
+NULL
+NULL
+NULL
+
+# Both inputs empty
+query I
+SELECT v FROM set_all_empty INTERSECT ALL SELECT v FROM set_all_empty
+----
+
+query I
+SELECT v FROM set_all_empty EXCEPT ALL SELECT v FROM set_all_empty
+----
+
+query I
+SELECT v FROM set_all_left WHERE false INTERSECT ALL SELECT v FROM set_all_left WHERE false
+----
+
+query I
+SELECT v FROM set_all_left WHERE false EXCEPT ALL SELECT v FROM set_all_left WHERE false
+----
+
 # Inputs of different types are compared in the type `=` compares them in, so
 # values that only become equal after the cast are counted together: '1' and
 # '01' are both the integer 1.
@@ -277,6 +345,9 @@ DROP TABLE set_all_left;
 
 statement ok
 DROP TABLE set_all_right;
+
+statement ok
+DROP TABLE set_all_empty;
 
 statement ok
 DROP TABLE set_all_pairs_left;
