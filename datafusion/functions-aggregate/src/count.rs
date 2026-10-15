@@ -39,7 +39,8 @@ use datafusion_expr::{
     GroupsAccumulator, ReversedUDAF, SetMonotonicity, Signature, StatisticsArgs,
     TypeSignature, Volatility, WindowFunctionDefinition,
     expr::WindowFunction,
-    function::{AccumulatorArgs, StateFieldsArgs},
+    function::{AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs},
+    simplify::SimplifyContext,
     utils::{AggregateOrderSensitivity, format_state_name},
 };
 use datafusion_functions_aggregate_common::aggregate::count_distinct::PrimitiveDistinctCountGroupsAccumulator;
@@ -400,6 +401,18 @@ impl AggregateUDFImpl for Count {
         AggregateOrderSensitivity::Insensitive
     }
 
+    fn simplify(&self) -> Option<AggregateFunctionSimplification> {
+        Some(Box::new(|mut aggregate_function, info| {
+            if !aggregate_function.params.distinct
+                && can_rewrite_count_args(&aggregate_function.params.args, info)
+            {
+                aggregate_function.params.args =
+                    vec![Expr::Literal(COUNT_STAR_EXPANSION, None)];
+            }
+            Ok(Expr::AggregateFunction(aggregate_function))
+        }))
+    }
+
     fn default_value(&self, _data_type: &DataType) -> Result<ScalarValue> {
         Ok(ScalarValue::Int64(Some(0)))
     }
@@ -468,6 +481,20 @@ impl AggregateUDFImpl for Count {
             Ok(Box::new(acc))
         }
     }
+}
+
+fn can_rewrite_count_args(args: &[Expr], info: &SimplifyContext) -> bool {
+    let mut has_non_nullable_column = false;
+    for arg in args {
+        match arg {
+            Expr::Column(_) if matches!(info.nullable(arg), Ok(false)) => {
+                has_non_nullable_column = true;
+            }
+            Expr::Literal(value, _) if !value.is_null() => {}
+            _ => return false,
+        }
+    }
+    has_non_nullable_column
 }
 
 #[cold]
@@ -965,7 +992,9 @@ mod tests {
         array::{DictionaryArray, Int32Array, Int64Array, NullArray, StringArray},
         datatypes::{DataType, Field, Int32Type, Schema},
     };
+    use datafusion_common::DFSchema;
     use datafusion_expr::function::AccumulatorArgs;
+    use datafusion_expr::{col, lit};
     use datafusion_physical_expr::{PhysicalExpr, expressions::Column};
     use std::sync::Arc;
     /// Helper function to create a dictionary array with non-null keys but some null values
@@ -1004,6 +1033,47 @@ mod tests {
         let mut accumulator = CountAccumulator::new();
         accumulator.update_batch(&[Arc::new(NullArray::new(10))])?;
         assert_eq!(accumulator.evaluate()?, ScalarValue::Int64(Some(0)));
+        Ok(())
+    }
+
+    #[test]
+    fn simplify_count_non_nullable_columns() -> Result<()> {
+        let schema = DFSchema::try_from(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, true),
+        ]))?;
+        let info = SimplifyContext::builder()
+            .with_schema(Arc::new(schema))
+            .build();
+        let simplify = Count::new().simplify().unwrap();
+        let simplified_args = |args: Vec<Expr>, distinct: bool| -> Result<Vec<Expr>> {
+            let aggregate_function = datafusion_expr::expr::AggregateFunction::new_udf(
+                count_udaf(),
+                args,
+                distinct,
+                None,
+                vec![],
+                None,
+            );
+            match simplify(aggregate_function, &info)? {
+                Expr::AggregateFunction(f) => Ok(f.params.args),
+                other => internal_err!("unexpected expression {other}"),
+            }
+        };
+        let count_one = vec![Expr::Literal(COUNT_STAR_EXPANSION, None)];
+
+        assert_eq!(simplified_args(vec![col("a")], false)?, count_one);
+        assert_eq!(simplified_args(vec![col("a"), lit(2)], false)?, count_one);
+
+        for args in [
+            vec![lit(1)],
+            vec![col("b")],
+            vec![col("a"), col("b")],
+            vec![col("a") + lit(1)],
+        ] {
+            assert_eq!(simplified_args(args.clone(), false)?, args);
+        }
+        assert_eq!(simplified_args(vec![col("a")], true)?, vec![col("a")]);
         Ok(())
     }
 
