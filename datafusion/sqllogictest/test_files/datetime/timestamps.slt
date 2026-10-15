@@ -3530,6 +3530,62 @@ logical_plan
 statement ok
 drop table ts_berlin;
 
+# Day granularity with a named timezone: days can be 23 or 25 hours long
+# around DST transitions, so the rewrite is skipped (date_trunc is still present).
+statement ok
+create table ts_berlin as select arrow_cast('2024-10-27T00:30:00Z', 'Timestamp(Nanosecond, Some("Europe/Berlin"))') as ts;
+
+query TT
+EXPLAIN SELECT * FROM ts_berlin
+WHERE date_trunc('day', ts) = arrow_cast('2024-10-26T22:00:00Z', 'Timestamp(Nanosecond, Some("Europe/Berlin"))');
+----
+logical_plan
+01)Filter: date_trunc(Utf8("day"), ts_berlin.ts) = TimestampNanosecond(1729980000000000000, Some("Europe/Berlin"))
+02)--TableScan: ts_berlin projection=[ts]
+
+statement ok
+drop table ts_berlin;
+
+# Day and month granularity with an explicit UTC timezone: UTC has no DST so
+# every bucket is a fixed width and the rewrite fires, preserving the timezone
+# on the bounds.
+statement ok
+create table ts_utc as select arrow_cast('2024-05-01T10:00:00Z', 'Timestamp(Nanosecond, Some("UTC"))') as ts;
+
+query TT
+EXPLAIN SELECT * FROM ts_utc
+WHERE date_trunc('day', ts) = arrow_cast('2024-05-01T00:00:00Z', 'Timestamp(Nanosecond, Some("UTC"))');
+----
+logical_plan
+01)Filter: ts_utc.ts >= TimestampNanosecond(1714521600000000000, Some("UTC")) AND ts_utc.ts < TimestampNanosecond(1714608000000000000, Some("UTC"))
+02)--TableScan: ts_utc projection=[ts]
+
+query TT
+EXPLAIN SELECT * FROM ts_utc
+WHERE date_trunc('month', ts) = arrow_cast('2024-05-01T00:00:00Z', 'Timestamp(Nanosecond, Some("UTC"))');
+----
+logical_plan
+01)Filter: ts_utc.ts >= TimestampNanosecond(1714521600000000000, Some("UTC")) AND ts_utc.ts < TimestampNanosecond(1717200000000000000, Some("UTC"))
+02)--TableScan: ts_utc projection=[ts]
+
+statement ok
+drop table ts_utc;
+
+# Same with "+00:00"
+statement ok
+create table ts_zero as select arrow_cast('2024-05-01T10:00:00Z', 'Timestamp(Nanosecond, Some("+00:00"))') as ts;
+
+query TT
+EXPLAIN SELECT * FROM ts_zero
+WHERE date_trunc('year', ts) = arrow_cast('2024-01-01T00:00:00Z', 'Timestamp(Nanosecond, Some("+00:00"))');
+----
+logical_plan
+01)Filter: ts_zero.ts >= TimestampNanosecond(1704067200000000000, Some("+00:00")) AND ts_zero.ts < TimestampNanosecond(1735689600000000000, Some("+00:00"))
+02)--TableScan: ts_zero projection=[ts]
+
+statement ok
+drop table ts_zero;
+
 # Hour granularity in a timezone with a 30 minute DST shift: the bucket
 # starting at 2024-10-05T15:30:00Z is only 30 minutes wide, so the fixed
 # one-hour step is wrong and the rewrite must be skipped (date_trunc is still present).

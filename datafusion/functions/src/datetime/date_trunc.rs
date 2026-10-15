@@ -515,8 +515,11 @@ impl ScalarUDFImpl for DateTruncFunc {
         };
 
         // timezone-aware buckets can have variable widths around DST.
-        // Stay conservative for those.
-        if tz_opt.is_some() && granularity.has_variable_width_in_tz() {
+        // Stay conservative for those, unless the timezone is explicitly UTC
+        // (which has no DST, so the buckets are the same as without a timezone)
+        if tz_opt.as_ref().is_some_and(|tz| !is_utc(tz))
+            && granularity.has_variable_width_in_tz()
+        {
             return Ok(PreimageResult::None);
         }
 
@@ -694,6 +697,11 @@ where
     T: Datelike,
 {
     1 + 3 * ((date.month() - 1) / 3)
+}
+
+/// Returns true if `tz` explicitly names UTC (`"UTC"` or `"+00:00"`)
+fn is_utc(tz: &str) -> bool {
+    tz.eq_ignore_ascii_case("utc") || tz == "+00:00"
 }
 
 /// Extract an `i64` timestamp value from a date literal wrapped in a CAST

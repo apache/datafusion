@@ -98,7 +98,7 @@ use arrow::datatypes::{
 };
 use arrow::util::display::{ArrayFormatter, FormatOptions, array_value_to_string};
 use cache::{get_or_create_cached_key_array, get_or_create_cached_null_array};
-use chrono::{Duration, NaiveDate};
+use chrono::{Duration, LocalResult, NaiveDate, NaiveDateTime, Offset, TimeZone};
 use half::f16;
 use num_traits::ToPrimitive;
 pub use struct_builder::ScalarStructBuilder;
@@ -109,6 +109,37 @@ const MICROS_PER_DAY: i64 = MILLIS_PER_DAY * 1_000;
 const NANOS_PER_DAY: i64 = MICROS_PER_DAY * 1_000;
 const MICROS_PER_MILLISECOND: i64 = 1_000;
 const NANOS_PER_MILLISECOND: i64 = 1_000_000;
+
+/// Returns the first instant of `date` in `tz` (UTC if `tz` is `None`) as a
+/// UTC [`NaiveDateTime`].
+///
+/// This is local midnight unless the timezone skips midnight that day (for
+/// example a daylight saving transition from 00:00 to 01:00), in which case
+/// it is the first instant after the gap. If midnight occurs twice (a
+/// transition back from 01:00 to 00:00) the earlier instant is returned.
+fn first_instant_of_date(date: NaiveDate, tz: Option<&Tz>) -> Option<NaiveDateTime> {
+    let midnight = date.and_hms_opt(0, 0, 0)?;
+    let Some(tz) = tz else {
+        return Some(midnight);
+    };
+    match tz.from_local_datetime(&midnight) {
+        LocalResult::Single(dt) => Some(dt.naive_utc()),
+        LocalResult::Ambiguous(earliest, _) => Some(earliest.naive_utc()),
+        LocalResult::None => {
+            // Midnight falls in a gap, so the first instant of the day is the
+            // instant of the transition itself. Find the offset in effect
+            // before the transition by probing a day earlier (any offset is
+            // less than a day, so that instant is before the transition), and
+            // use it to convert midnight to the transition instant.
+            let probe = midnight.checked_sub_signed(Duration::days(1))?;
+            let offset_before = tz.offset_from_utc_datetime(&probe).fix();
+            let transition = midnight.checked_sub_offset(offset_before)?;
+            // Sanity check: the transition must land on or after local midnight
+            (tz.from_utc_datetime(&transition).naive_local() >= midnight)
+                .then_some(transition)
+        }
+    }
+}
 
 /// Returns the multiplier that converts the input date representation into the
 /// desired timestamp unit, if the conversion requires a multiplication that can
@@ -1449,12 +1480,15 @@ impl ScalarValue {
 
     /// Returns a [`ScalarValue`] of type `target_type` representing `date`.
     ///
-    /// For `Timestamp` types the result is midnight on `date` in the type's
-    /// timezone (or UTC when the type has no timezone).
+    /// For `Timestamp` types the result is the first instant of `date` in the
+    /// type's timezone (or UTC when the type has no timezone). This is normally
+    /// midnight, but when the timezone skips midnight (for example a daylight
+    /// saving transition at 00:00) it is the first instant that exists on that
+    /// day, such as 01:00. When midnight occurs twice (a transition back to
+    /// 00:00) the earlier instant is returned.
     ///
     /// Returns `None` if `target_type` is not a date or timestamp type, or if
-    /// midnight on `date` cannot be represented such as when the timezone skips
-    /// midnight that day (for example a daylight saving transition at 00:00).
+    /// the result is outside the range of the timestamp unit.
     ///
     /// # Example
     /// ```
@@ -1498,42 +1532,29 @@ impl ScalarValue {
                 ScalarValue::Date64(Some(Date64Type::from_naive_date(date)))
             }
             DataType::Timestamp(unit, tz_opt) => {
-                let naive_midnight = date.and_hms_opt(0, 0, 0)?;
                 let tz: Option<Tz> = tz_opt.clone().and_then(|s| s.parse().ok());
+                let utc = first_instant_of_date(date, tz.as_ref())?;
 
-                // Midnight has no representation when the date falls outside
-                // the unit's range, or when the zone skips it.
-                //
-                // Note that a `NaiveDate` can only be out of range for
-                // `TimeUnit::Nanosecond` as the units cover the entire range of
-                // `NaiveDate`.
+                // The date can only be out of range for `TimeUnit::Nanosecond`
+                // as the other units cover the entire range of `NaiveDate`.
                 match unit {
                     TimeUnit::Second => {
-                        let value = TimestampSecondType::from_naive_datetime(
-                            naive_midnight,
-                            tz.as_ref(),
-                        )?;
+                        let value = TimestampSecondType::from_naive_datetime(utc, None)?;
                         ScalarValue::TimestampSecond(Some(value), tz_opt.clone())
                     }
                     TimeUnit::Millisecond => {
-                        let value = TimestampMillisecondType::from_naive_datetime(
-                            naive_midnight,
-                            tz.as_ref(),
-                        )?;
+                        let value =
+                            TimestampMillisecondType::from_naive_datetime(utc, None)?;
                         ScalarValue::TimestampMillisecond(Some(value), tz_opt.clone())
                     }
                     TimeUnit::Microsecond => {
-                        let value = TimestampMicrosecondType::from_naive_datetime(
-                            naive_midnight,
-                            tz.as_ref(),
-                        )?;
+                        let value =
+                            TimestampMicrosecondType::from_naive_datetime(utc, None)?;
                         ScalarValue::TimestampMicrosecond(Some(value), tz_opt.clone())
                     }
                     TimeUnit::Nanosecond => {
-                        let value = TimestampNanosecondType::from_naive_datetime(
-                            naive_midnight,
-                            tz.as_ref(),
-                        )?;
+                        let value =
+                            TimestampNanosecondType::from_naive_datetime(utc, None)?;
                         ScalarValue::TimestampNanosecond(Some(value), tz_opt.clone())
                     }
                 }
@@ -6199,6 +6220,48 @@ mod tests {
     use arrow::util::pretty::pretty_format_columns;
     use insta::assert_snapshot;
     use rand::Rng;
+
+    #[test]
+    fn try_from_date_timestamp_dst_at_midnight() {
+        // America/Havana moves its clocks at midnight: in 2024 it sprang
+        // forward 00:00 -> 01:00 on March 10 and fell back 01:00 -> 00:00 on
+        // November 3.
+        let tz: Arc<str> = Arc::from("America/Havana");
+        let ty = DataType::Timestamp(TimeUnit::Second, Some(Arc::clone(&tz)));
+        let ts = |s: &str| {
+            let dt = chrono::DateTime::parse_from_rfc3339(s).unwrap();
+            ScalarValue::TimestampSecond(Some(dt.timestamp()), Some(Arc::clone(&tz)))
+        };
+
+        // Ordinary day: midnight local (-05:00)
+        let date = NaiveDate::from_ymd_opt(2024, 3, 9).unwrap();
+        assert_eq!(
+            ScalarValue::try_from_date(date, &ty),
+            Some(ts("2024-03-09T00:00:00-05:00"))
+        );
+
+        // Midnight is skipped: the first instant of the day is 01:00 (-04:00),
+        // which is the same instant as the (nonexistent) 00:00 -05:00
+        let date = NaiveDate::from_ymd_opt(2024, 3, 10).unwrap();
+        assert_eq!(
+            ScalarValue::try_from_date(date, &ty),
+            Some(ts("2024-03-10T01:00:00-04:00"))
+        );
+
+        // Midnight occurs twice: the earlier instant (-04:00) is returned
+        let date = NaiveDate::from_ymd_opt(2024, 11, 3).unwrap();
+        assert_eq!(
+            ScalarValue::try_from_date(date, &ty),
+            Some(ts("2024-11-03T00:00:00-04:00"))
+        );
+
+        // The day after is back to -05:00
+        let date = NaiveDate::from_ymd_opt(2024, 11, 4).unwrap();
+        assert_eq!(
+            ScalarValue::try_from_date(date, &ty),
+            Some(ts("2024-11-04T00:00:00-05:00"))
+        );
+    }
 
     #[test]
     fn test_scalar_value_from_for_map() {
