@@ -423,7 +423,7 @@ Logical Or
 
 - [& (bitwise and)](#op_bit_and)
 - [| (bitwise or)](#op_bit_or)
-- [# (bitwise xor)](#op_bit_xor)
+- [^ (bitwise xor)](#op_bit_xor)
 - [>> (bitwise shift right)](#op_shift_r)
 - [<< (bitwise shift left)](#op_shift_l)
 
@@ -459,17 +459,17 @@ Bitwise Or
 
 (op_bit_xor)=
 
-### `#`
+### `^`
 
-Bitwise Xor (interchangeable with `^`)
+Bitwise Xor
 
 ```sql
-> SELECT 5 # 3;
-+---------------------+
-| Int64(5) # Int64(3) |
-+---------------------+
-| 6                   |
-+---------------------+
+> SELECT 5 ^ 3;
++---------------------------+
+| Int64(5) BIT_XOR Int64(3) |
++---------------------------+
+| 6                         |
++---------------------------+
 ```
 
 (op_shift_r)=

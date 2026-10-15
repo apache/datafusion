@@ -412,7 +412,7 @@ impl MemoryReservation {
     /// Panics if `capacity` exceeds [`Self::size`]
     pub fn shrink(&self, capacity: usize) {
         self.size
-            .fetch_update(
+            .try_update(
                 atomic::Ordering::Relaxed,
                 atomic::Ordering::Relaxed,
                 |prev| prev.checked_sub(capacity),
@@ -430,7 +430,7 @@ impl MemoryReservation {
     pub fn try_shrink(&self, capacity: usize) -> Result<usize> {
         let prev = self
             .size
-            .fetch_update(
+            .try_update(
                 atomic::Ordering::Relaxed,
                 atomic::Ordering::Relaxed,
                 |prev| prev.checked_sub(capacity),
@@ -495,7 +495,7 @@ impl MemoryReservation {
     /// Panics if `capacity` exceeds [`Self::size`]
     pub fn split(&self, capacity: usize) -> MemoryReservation {
         self.size
-            .fetch_update(
+            .try_update(
                 atomic::Ordering::Relaxed,
                 atomic::Ordering::Relaxed,
                 |prev| prev.checked_sub(capacity),

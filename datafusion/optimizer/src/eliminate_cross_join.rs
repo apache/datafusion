@@ -75,10 +75,6 @@ impl EliminateCrossJoin {
 ///
 /// This fix helps to improve the performance of TPCH Q19. issue#78
 impl OptimizerRule for EliminateCrossJoin {
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn rewrite(
         &self,
@@ -363,6 +359,7 @@ fn find_inner_join(
                 schema: join_schema,
                 null_equality,
                 null_aware: false,
+                null_aware_value_keys: 1,
             }));
         }
     }
@@ -386,6 +383,7 @@ fn find_inner_join(
         join_constraint: JoinConstraint::On,
         null_equality,
         null_aware: false,
+        null_aware_value_keys: 1,
     }))
 }
 
@@ -1421,6 +1419,7 @@ mod tests {
             schema: join_schema,
             null_equality: NullEquality::NullEqualsNull, // Test preservation
             null_aware: false,
+            null_aware_value_keys: 1,
         });
 
         // Apply filter that can create join conditions

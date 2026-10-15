@@ -164,6 +164,82 @@ fn payload_filter(op: Operator) -> JoinFilter {
 }
 
 #[tokio::test]
+async fn prepared_build_integer_prefilter() -> Result<()> {
+    use datafusion_execution::config::SessionConfig;
+
+    let batches = vec![
+        batch(vec![Some(0), Some(1024)]),
+        batch(vec![Some(2048), Some(3072)]),
+    ];
+    let probe = batch(vec![
+        Some(0),
+        Some(1),
+        Some(1024),
+        Some(1025),
+        Some(2048),
+        Some(2049),
+        Some(3072),
+    ]);
+    let base = join(batches[0].schema(), probe.clone())?;
+    let mut baseline_bytes = 0;
+    let mut expected = None;
+    for build_enabled in [false, true] {
+        let mut config = ConfigOptions::default();
+        config.execution.enable_join_integer_prefilter = build_enabled;
+        let prepared = base
+            .prepare_build(
+                input(batches.clone(), batches[0].schema()),
+                Arc::new(GreedyMemoryPool::new(1 << 20)),
+                Arc::new(config),
+            )
+            .await?;
+        if build_enabled {
+            let bitmap = prepared.build.integer_prefilter.as_ref().unwrap();
+            assert!(bitmap.size() > 0);
+            assert_eq!(prepared.reserved_bytes(), baseline_bytes + bitmap.size());
+        } else {
+            assert!(prepared.build.integer_prefilter.is_none());
+            baseline_bytes = prepared.reserved_bytes();
+        }
+
+        // Repeated consumers share the bitmap, but each chooses whether to use it.
+        for probe_enabled in [false, true, true] {
+            let consumer = Arc::new(
+                join(base.left().schema(), probe.clone())?
+                    .builder()
+                    .with_prepared_build(Arc::clone(&prepared))
+                    .build()?,
+            );
+            let mut config = SessionConfig::default();
+            config.options_mut().execution.enable_join_integer_prefilter = probe_enabled;
+            let context = Arc::new(TaskContext::default().with_session_config(config));
+            let output = crate::collect(Arc::clone(&consumer) as _, context).await?;
+            assert_eq!(output.iter().map(RecordBatch::num_rows).sum::<usize>(), 4);
+            let output = batches_to_sort_string(&output);
+            if let Some(expected) = &expected {
+                assert_eq!(&output, expected);
+            } else {
+                expected = Some(output);
+            }
+            let metrics = consumer.metrics().unwrap();
+            assert_eq!(
+                metrics
+                    .sum_by_name("integer_prefilter_created_count")
+                    .map_or(0, |count| count.as_usize()),
+                0,
+            );
+            assert_eq!(
+                metrics
+                    .sum_by_name("probe_prefilter_rows_pruned")
+                    .map_or(0, |count| count.as_usize()),
+                if build_enabled && probe_enabled { 3 } else { 0 },
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn prepared_build_placeholder_properties_and_reset() -> Result<()> {
     let ascending = |name, index| PhysicalSortExpr {
         expr: Arc::new(Column::new(name, index)),
@@ -785,7 +861,9 @@ async fn prepared_inlist_shares_accounted_build_buffers() -> Result<()> {
             assert_eq!(counter.count_batch(&membership_batch), 0);
             drop(membership_batch);
 
-            // Disabling IN-list membership changes no retained key buffers.
+            // Disabling IN-list membership shares the same key buffers; a
+            // pruning bitmap, when the sparse two-key range earns one, adds
+            // its own bytes on top.
             let mut config = ConfigOptions::default();
             config.optimizer.hash_join_inlist_pushdown_max_size = 0;
             let map = base
@@ -795,9 +873,12 @@ async fn prepared_inlist_shares_accounted_build_buffers() -> Result<()> {
                     Arc::new(config),
                 )
                 .await?;
-            assert!(matches!(map.build.membership, PushdownStrategy::Map(_)));
-            assert_eq!(map.reserved_bytes(), bytes);
-            assert_eq!(pool.reserved(), 2 * bytes);
+            let PushdownStrategy::Map(_, bitmap) = &map.build.membership else {
+                panic!("expected hash-map membership");
+            };
+            let bitmap_bytes = bitmap.as_ref().map_or(0, |bitmap| bitmap.size());
+            assert_eq!(map.reserved_bytes(), bytes + bitmap_bytes);
+            assert_eq!(pool.reserved(), 2 * bytes + bitmap_bytes);
             drop(map);
             let lease = Arc::clone(&prepared);
             drop(prepared);
@@ -888,7 +969,7 @@ async fn prepared_byte_keys_use_hash_membership() -> Result<()> {
         assert!(prepared.build.bounds.is_none());
         assert!(matches!(
             &prepared.build.membership,
-            PushdownStrategy::Map(_)
+            PushdownStrategy::Map(_, _)
         ));
         let task = with_probe_filter(base)?
             .builder()

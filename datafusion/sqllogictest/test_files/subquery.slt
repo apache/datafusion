@@ -656,6 +656,142 @@ SELECT t1_id, t1_name FROM t1 WHERE NOT EXISTS (SELECT * FROM t2 WHERE t2_id = t
 33 c
 44 d
 
+#exists_subquery_with_offset0
+#de-correlated, limit is removed
+query TT
+explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id limit 1 offset 0)
+----
+logical_plan
+01)LeftSemi Join: t1.t1_id = __correlated_sq_1.t2_id
+02)--TableScan: t1 projection=[t1_id, t1_name]
+03)--SubqueryAlias: __correlated_sq_1
+04)----TableScan: t2 projection=[t2_id]
+
+query IT rowsort
+SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id limit 1 offset 0)
+----
+11 a
+22 b
+44 d
+
+#exists_subquery_with_offset
+#not de-correlated, the offset could make the subquery empty
+query TT
+explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id offset 1)
+----
+logical_plan
+01)Filter: EXISTS (<subquery>)
+02)--Subquery:
+03)----Limit: skip=1, fetch=None
+04)------Projection: t2.t2_id, t2.t2_name, t2.t2_int
+05)--------Filter: t2.t2_id = outer_ref(t1.t1_id)
+06)----------TableScan: t2
+07)--TableScan: t1 projection=[t1_id, t1_name]
+
+# errors rather than returning wrong rows
+query error Physical plan does not support logical expression Exists
+SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id offset 1)
+
+#not_exists_subquery_with_offset
+#not de-correlated, the offset could make the subquery empty
+query TT
+explain SELECT t1_id, t1_name FROM t1 WHERE NOT EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id offset 1)
+----
+logical_plan
+01)Filter: NOT EXISTS (<subquery>)
+02)--Subquery:
+03)----Limit: skip=1, fetch=None
+04)------Projection: t2.t2_id, t2.t2_name, t2.t2_int
+05)--------Filter: t2.t2_id = outer_ref(t1.t1_id)
+06)----------TableScan: t2
+07)--TableScan: t1 projection=[t1_id, t1_name]
+
+# errors rather than returning wrong rows
+query error Physical plan does not support logical expression Exists
+SELECT t1_id, t1_name FROM t1 WHERE NOT EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id offset 1)
+
+#exists_subquery_with_offset_in_disjunction
+#not de-correlated, errors rather than returning wrong rows
+query error Physical plan does not support logical expression Exists
+SELECT t1_id, t1_name FROM t1 WHERE t1_id > 40 OR EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id offset 1)
+
+#exists_subquery_with_limit0_and_offset
+#de-correlated, limit 0 is empty whatever the offset
+query TT
+explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id limit 0 offset 1)
+----
+logical_plan EmptyRelation: rows=0
+
+query IT rowsort
+SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id limit 0 offset 1)
+----
+
+#exists_subquery_with_non_literal_limit
+#not de-correlated, the fetch could evaluate to 0 and make the subquery empty
+query TT
+explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id limit (SELECT count(*) FROM t2))
+----
+logical_plan
+01)Filter: EXISTS (<subquery>)
+02)--Subquery:
+03)----Limit: skip=0, fetch=(<subquery>)
+04)------Subquery:
+05)--------Projection: count(Int64(1)) AS count(*)
+06)----------Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+07)------------TableScan: t2
+08)------Projection: t2.t2_id, t2.t2_name, t2.t2_int
+09)--------Filter: t2.t2_id = outer_ref(t1.t1_id)
+10)----------TableScan: t2
+11)--TableScan: t1 projection=[t1_id, t1_name]
+
+#exists_subquery_with_non_literal_offset
+#not de-correlated, the offset could be positive and make the subquery empty
+query TT
+explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id offset (SELECT 1))
+----
+logical_plan
+01)Filter: EXISTS (<subquery>)
+02)--Subquery:
+03)----Limit: skip=(<subquery>), fetch=None
+04)------Subquery:
+05)--------Projection: Int64(1)
+06)----------EmptyRelation: rows=1
+07)------Projection: t2.t2_id, t2.t2_name, t2.t2_int
+08)--------Filter: t2.t2_id = outer_ref(t1.t1_id)
+09)----------TableScan: t2
+10)--TableScan: t1 projection=[t1_id, t1_name]
+
+#exists_subquery_with_limit_on_uncorrelated_branch
+#de-correlated, the limit is on an uncorrelated branch so it stays
+query TT
+explain SELECT t1_id FROM t1 WHERE EXISTS (SELECT 1 FROM (SELECT * FROM t2 WHERE t2_id = t1_id) a JOIN (SELECT * FROM t3 ORDER BY t3_id LIMIT 1) b ON a.t2_int = b.t3_int)
+----
+logical_plan
+01)LeftSemi Join: t1.t1_id = __correlated_sq_1.t2_id
+02)--TableScan: t1 projection=[t1_id]
+03)--SubqueryAlias: __correlated_sq_1
+04)----Projection: a.t2_id
+05)------LeftSemi Join: a.t2_int = b.t3_int
+06)--------SubqueryAlias: a
+07)----------TableScan: t2 projection=[t2_id, t2_int]
+08)--------SubqueryAlias: b
+09)----------Projection: t3.t3_int
+10)------------Sort: t3.t3_id ASC NULLS LAST, fetch=1
+11)--------------TableScan: t3 projection=[t3_id, t3_int]
+
+query I rowsort
+SELECT t1_id FROM t1 WHERE EXISTS (SELECT 1 FROM (SELECT * FROM t2 WHERE t2_id = t1_id) a JOIN (SELECT * FROM t3 ORDER BY t3_id LIMIT 1) b ON a.t2_int = b.t3_int)
+----
+11
+44
+
+#exists_subquery_with_offset_on_uncorrelated_branch
+#de-correlated, the offset is on an uncorrelated branch so it stays
+query I rowsort
+SELECT t1_id FROM t1 WHERE EXISTS (SELECT 1 FROM (SELECT * FROM t2 WHERE t2_id = t1_id) a JOIN (SELECT * FROM t3 ORDER BY t3_id LIMIT 1 OFFSET 1) b ON a.t2_int = b.t3_int)
+----
+22
+
 #in_correlated_subquery_with_limit
 #not de-correlated
 query TT
@@ -716,6 +852,26 @@ logical_plan
 08)--------Filter: upper(t2.t2_name) = upper(outer_ref(t1.t1_name))
 09)----------TableScan: t2
 10)--TableScan: t1 projection=[t1_id, t1_name]
+
+#exists_subquery_with_limit_over_union
+#not de-correlated, the union below the removed limit still holds outer references
+query TT
+explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id UNION ALL SELECT * FROM t2 WHERE upper(t2_name) = upper(t1.t1_name) LIMIT 1)
+----
+logical_plan
+01)Filter: EXISTS (<subquery>)
+02)--Subquery:
+03)----Limit: skip=0, fetch=1
+04)------Union
+05)--------Projection: t2.t2_id, t2.t2_name, t2.t2_int
+06)----------Limit: skip=0, fetch=1
+07)------------Filter: t2.t2_id = outer_ref(t1.t1_id)
+08)--------------TableScan: t2
+09)--------Projection: t2.t2_id, t2.t2_name, t2.t2_int
+10)----------Limit: skip=0, fetch=1
+11)------------Filter: upper(t2.t2_name) = upper(outer_ref(t1.t1_name))
+12)--------------TableScan: t2
+13)--TableScan: t1 projection=[t1_id, t1_name]
 
 #simple_uncorrelated_scalar_subquery
 query TT
@@ -2858,6 +3014,202 @@ DROP TABLE gs_outer;
 statement ok
 DROP TABLE gs_inner;
 
+#############
+## Multi-column IN (LeftSemi) Tests
+#############
+## These tests verify that multi-column IN subqueries work correctly
+## Multi-column IN uses LeftSemi join (not null-aware)
+
+#############
+## Test 1: Basic two-column IN
+#############
+
+statement ok
+CREATE TABLE multi_in_left(a INT, b INT, value TEXT) AS VALUES
+(1, 2, 'match'),
+(3, 4, 'no_match'),
+(5, 6, 'match');
+
+statement ok
+CREATE TABLE multi_in_right(x INT, y INT) AS VALUES
+(1, 2),
+(5, 6);
+
+# Should return rows where (a, b) matches (x, y)
+query IIT rowsort
+SELECT * FROM multi_in_left
+WHERE (a, b) IN (SELECT x, y FROM multi_in_right);
+----
+1 2 match
+5 6 match
+
+#############
+## Test 2: Multi-column IN with no matches
+#############
+
+statement ok
+CREATE TABLE multi_in_right_no_match(x INT, y INT) AS VALUES
+(10, 20),
+(30, 40);
+
+# Should return empty result
+query IIT rowsort
+SELECT * FROM multi_in_left
+WHERE (a, b) IN (SELECT x, y FROM multi_in_right_no_match);
+----
+
+#############
+## Test 3: Multi-column IN with NULL values
+#############
+## Note: Unlike NOT IN, regular IN does NOT use null-aware semantics
+## NULL = NULL is always FALSE (not unknown) in regular semi joins
+
+statement ok
+CREATE TABLE multi_in_left_null(a INT, b INT, value TEXT) AS VALUES
+(1, 2, 'x'),
+(3, NULL, 'y'),
+(NULL, 6, 'z');
+
+statement ok
+CREATE TABLE multi_in_right_null(x INT, y INT) AS VALUES
+(1, 2),
+(NULL, 4);
+
+# Should return only (1, 2, 'x')
+# (3, NULL, 'y') doesn't match because NULL doesn't equal anything
+# (NULL, 6, 'z') doesn't match because NULL doesn't equal anything
+query IIT rowsort
+SELECT * FROM multi_in_left_null
+WHERE (a, b) IN (SELECT x, y FROM multi_in_right_null);
+----
+1 2 x
+
+#############
+## Test 4: Three-column IN
+#############
+
+statement ok
+CREATE TABLE three_col_left(a INT, b INT, c INT, value TEXT) AS VALUES
+(1, 2, 3, 'match1'),
+(4, 5, 6, 'no_match'),
+(7, 8, 9, 'match2');
+
+statement ok
+CREATE TABLE three_col_right(x INT, y INT, z INT) AS VALUES
+(1, 2, 3),
+(7, 8, 9);
+
+# Should return rows with matching three-column tuples
+query IIIT rowsort
+SELECT * FROM three_col_left
+WHERE (a, b, c) IN (SELECT x, y, z FROM three_col_right);
+----
+1 2 3 match1
+7 8 9 match2
+
+#############
+## Test 5: Correlated multi-column IN
+#############
+
+statement ok
+CREATE TABLE correlated_outer(id INT, a INT, b INT) AS VALUES
+(1, 10, 20),
+(2, 30, 40),
+(3, 10, 20);
+
+statement ok
+CREATE TABLE correlated_inner(id INT, x INT, y INT) AS VALUES
+(1, 10, 20),
+(1, 30, 40),
+(2, 50, 60),
+(3, 10, 20);
+
+# Should return outer rows where (a, b) matches (x, y) for the same id
+query III rowsort
+SELECT * FROM correlated_outer o
+WHERE (a, b) IN (
+    SELECT x, y FROM correlated_inner i WHERE i.id = o.id
+);
+----
+1 10 20
+3 10 20
+
+#############
+## Test 6: Verify logical plan shows LeftSemi join with multiple conditions
+#############
+
+query TT
+EXPLAIN SELECT * FROM multi_in_left
+WHERE (a, b) IN (SELECT x, y FROM multi_in_right);
+----
+logical_plan
+01)LeftSemi Join: multi_in_left.a = __correlated_sq_1.x, multi_in_left.b = __correlated_sq_1.y
+02)--TableScan: multi_in_left projection=[a, b, value]
+03)--SubqueryAlias: __correlated_sq_1
+04)----TableScan: multi_in_right projection=[x, y]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(x@0, a@0), (y@1, b@1)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+#############
+## Test 7: Multi-column IN with empty subquery
+#############
+
+statement ok
+CREATE TABLE multi_in_right_empty(x INT, y INT);
+
+# Should return empty result (empty subquery)
+query IIT rowsort
+SELECT * FROM multi_in_left
+WHERE (a, b) IN (SELECT x, y FROM multi_in_right_empty);
+----
+
+#############
+## Test 8: Multi-column IN with WHERE clause in subquery
+#############
+
+# The filter drops (1, 2) from the subquery, so only (5, 6) matches
+query IIT rowsort
+SELECT * FROM multi_in_left
+WHERE (a, b) IN (SELECT x, y FROM multi_in_right WHERE x > 1);
+----
+5 6 match
+
+#############
+## Cleanup
+#############
+
+statement ok
+DROP TABLE multi_in_left;
+
+statement ok
+DROP TABLE multi_in_right;
+
+statement ok
+DROP TABLE multi_in_right_no_match;
+
+statement ok
+DROP TABLE multi_in_left_null;
+
+statement ok
+DROP TABLE multi_in_right_null;
+
+statement ok
+DROP TABLE three_col_left;
+
+statement ok
+DROP TABLE three_col_right;
+
+statement ok
+DROP TABLE correlated_outer;
+
+statement ok
+DROP TABLE correlated_inner;
+
+statement ok
+DROP TABLE multi_in_right_empty;
+
 # Regression test for #25507: a correlated filter below the side of an outer
 # join that the join fills with NULLs must not be pulled above the join. The
 # filter decides which rows of the other side are unmatched, so once it is
@@ -3031,3 +3383,195 @@ DROP TABLE oj_a;
 
 statement ok
 DROP TABLE oj_b;
+
+# Regression test for #25792: a correlated filter below a window function must
+# not be pulled above the window. The filter selects the rows the window
+# function sees for each outer row, so once it is above the window the window
+# function runs over all rows and computes different values.
+statement ok
+CREATE TABLE win_outer(k INT) AS VALUES (1), (2), (5);
+
+statement ok
+CREATE TABLE win_inner(id INT, y INT) AS VALUES (1, 1), (2, 2);
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+# The correlated filter is below the window, so the subquery stays correlated.
+query TT
+EXPLAIN SELECT win_outer.k FROM win_outer WHERE EXISTS (SELECT 1 FROM (SELECT b.id, row_number() OVER (ORDER BY b.id) AS rn FROM (SELECT * FROM win_inner WHERE win_inner.y = win_outer.k) AS b) AS w WHERE w.rn = 1);
+----
+logical_plan
+01)Filter: EXISTS (<subquery>)
+02)--Subquery:
+03)----Projection: Int64(1)
+04)------SubqueryAlias: w
+05)--------Projection: b.id, row_number() ORDER BY [b.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
+06)----------Filter: row_number() ORDER BY [b.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW = UInt64(1)
+07)------------WindowAggr: windowExpr=[[row_number() ORDER BY [b.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+08)--------------SubqueryAlias: b
+09)----------------Projection: win_inner.id, win_inner.y
+10)------------------Filter: win_inner.y = outer_ref(win_outer.k)
+11)--------------------TableScan: win_inner
+12)--TableScan: win_outer projection=[k]
+
+# It errors rather than returning wrong results. The right answer is `1, 2`.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT win_outer.k FROM win_outer WHERE EXISTS (SELECT 1 FROM (SELECT b.id, row_number() OVER (ORDER BY b.id) AS rn FROM (SELECT * FROM win_inner WHERE win_inner.y = win_outer.k) AS b) AS w WHERE w.rn = 1) ORDER BY win_outer.k;
+
+# The same for NOT EXISTS. The right answer is `5`.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT win_outer.k FROM win_outer WHERE NOT EXISTS (SELECT 1 FROM (SELECT b.id, row_number() OVER (ORDER BY b.id) AS rn FROM (SELECT * FROM win_inner WHERE win_inner.y = win_outer.k) AS b) AS w WHERE w.rn = 1) ORDER BY win_outer.k;
+
+# The same for IN. The right answer is `1, 2`.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression InSubquery
+SELECT win_outer.k FROM win_outer WHERE 1 IN (SELECT row_number() OVER (ORDER BY win_inner.id) FROM win_inner WHERE win_inner.y = win_outer.k) ORDER BY win_outer.k;
+
+# And for a scalar subquery. The right answer is `(1, 1), (2, 1), (5, NULL)`.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+SELECT win_outer.k, (SELECT max(w.rn) FROM (SELECT row_number() OVER (ORDER BY win_inner.id) AS rn FROM win_inner WHERE win_inner.y = win_outer.k) AS w) AS m FROM win_outer ORDER BY win_outer.k;
+
+# A correlated filter above the window is still pulled up, because the window
+# input does not depend on the outer row.
+query TT
+EXPLAIN SELECT win_outer.k FROM win_outer WHERE EXISTS (SELECT 1 FROM (SELECT win_inner.id, row_number() OVER (ORDER BY win_inner.id) AS rn FROM win_inner) AS w WHERE w.id = win_outer.k AND w.rn = 2);
+----
+logical_plan
+01)LeftSemi Join: win_outer.k = __correlated_sq_1.id
+02)--TableScan: win_outer projection=[k]
+03)--SubqueryAlias: __correlated_sq_1
+04)----SubqueryAlias: w
+05)------Projection: win_inner.id
+06)--------Filter: row_number() ORDER BY [win_inner.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW = UInt64(2)
+07)----------WindowAggr: windowExpr=[[row_number() ORDER BY [win_inner.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+08)------------TableScan: win_inner projection=[id]
+
+query I
+SELECT win_outer.k FROM win_outer WHERE EXISTS (SELECT 1 FROM (SELECT win_inner.id, row_number() OVER (ORDER BY win_inner.id) AS rn FROM win_inner) AS w WHERE w.id = win_outer.k AND w.rn = 2) ORDER BY win_outer.k;
+----
+2
+
+# A correlated filter below the window that reads only a `PARTITION BY` column
+# keeps or drops whole partitions, so it is pulled above the window. This holds
+# for a non-equality filter too. The right answer is `1`.
+query I
+SELECT win_outer.k FROM win_outer WHERE EXISTS (SELECT 1 FROM (SELECT row_number() OVER (PARTITION BY win_inner.y ORDER BY win_inner.id) AS rn FROM win_inner WHERE win_inner.y > win_outer.k) AS w WHERE w.rn = 1) ORDER BY win_outer.k;
+----
+1
+
+# IN. The right answer is `1, 2`.
+query I
+SELECT win_outer.k FROM win_outer WHERE 1 IN (SELECT row_number() OVER (PARTITION BY win_inner.y ORDER BY win_inner.id) FROM win_inner WHERE win_inner.y = win_outer.k) ORDER BY win_outer.k;
+----
+1
+2
+
+# A scalar subquery. The right answer is `(1, 1), (2, 1), (5, NULL)`.
+query II
+SELECT win_outer.k, (SELECT max(w.rn) FROM (SELECT row_number() OVER (PARTITION BY win_inner.y ORDER BY win_inner.id) AS rn FROM win_inner WHERE win_inner.y = win_outer.k) AS w) AS m FROM win_outer ORDER BY win_outer.k;
+----
+1 1
+2 1
+5 NULL
+
+# A window that partitions by an expression of the column does not count.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+SELECT win_outer.k, (SELECT max(w.rn) FROM (SELECT row_number() OVER (PARTITION BY win_inner.y + 0 ORDER BY win_inner.id) AS rn FROM win_inner WHERE win_inner.y = win_outer.k) AS w) AS m FROM win_outer ORDER BY win_outer.k;
+
+# A window over an aggregate with count bug handling stays correlated.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+SELECT win_outer.k, (SELECT count(*) OVER () FROM (SELECT count(*) AS c FROM win_inner WHERE win_inner.y = win_outer.k) AS a) AS m FROM win_outer ORDER BY win_outer.k;
+
+# LEFT JOIN LATERAL keeps the outer rows without a match.
+query III
+SELECT win_outer.k, s.id, s.rn FROM win_outer LEFT JOIN LATERAL (SELECT win_inner.id, row_number() OVER (PARTITION BY win_inner.y ORDER BY win_inner.id) AS rn FROM win_inner WHERE win_inner.y = win_outer.k) AS s ON true ORDER BY win_outer.k;
+----
+1 1 1
+2 2 1
+5 NULL NULL
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
+
+statement ok
+DROP TABLE win_outer;
+
+statement ok
+DROP TABLE win_inner;
+
+# A correlated filter below an Unnest is pulled above the Unnest. An Unnest maps
+# each input row to its own output rows, so a filter on a column it passes
+# through keeps the same rows. The Unnest must output the columns the pull up
+# adds below it, which failed with a schema error before.
+statement ok
+CREATE TABLE unnest_outer(k INT) AS VALUES (1), (2);
+
+statement ok
+CREATE TABLE unnest_inner(id INT, arr INT[]) AS VALUES (1, [3, 4]), (2, [5]);
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+query TT
+EXPLAIN SELECT unnest_outer.k FROM unnest_outer WHERE EXISTS (SELECT 1 FROM (SELECT unnest(t.arr) AS u FROM (SELECT * FROM unnest_inner WHERE unnest_inner.id = unnest_outer.k) AS t) AS x WHERE x.u = 3);
+----
+logical_plan
+01)LeftSemi Join: unnest_outer.k = __correlated_sq_1.id
+02)--TableScan: unnest_outer projection=[k]
+03)--SubqueryAlias: __correlated_sq_1
+04)----SubqueryAlias: x
+05)------Projection: t.id
+06)--------Filter: __unnest_placeholder(t.arr,depth=1) = Int32(3)
+07)----------Unnest: lists[__unnest_placeholder(t.arr)|depth=1] structs[]
+08)------------Projection: t.arr AS __unnest_placeholder(t.arr), t.id
+09)--------------SubqueryAlias: t
+10)----------------TableScan: unnest_inner projection=[id, arr]
+
+query I
+SELECT unnest_outer.k FROM unnest_outer WHERE EXISTS (SELECT 1 FROM (SELECT unnest(t.arr) AS u FROM (SELECT * FROM unnest_inner WHERE unnest_inner.id = unnest_outer.k) AS t) AS x WHERE x.u = 3);
+----
+1
+
+query I
+SELECT unnest_outer.k FROM unnest_outer WHERE NOT EXISTS (SELECT 1 FROM (SELECT unnest(t.arr) AS u FROM (SELECT * FROM unnest_inner WHERE unnest_inner.id = unnest_outer.k) AS t) AS x WHERE x.u = 3);
+----
+2
+
+# The correlated column is selected next to the unnested one.
+query TT
+EXPLAIN SELECT unnest_outer.k, s.u FROM unnest_outer, LATERAL (SELECT i.id, unnest(i.arr) AS u FROM unnest_inner AS i WHERE i.id = unnest_outer.k) AS s ORDER BY unnest_outer.k, s.u;
+----
+logical_plan
+01)Sort: unnest_outer.k ASC NULLS LAST, s.u ASC NULLS LAST
+02)--Projection: unnest_outer.k, s.u
+03)----Inner Join: unnest_outer.k = s.id
+04)------TableScan: unnest_outer projection=[k]
+05)------SubqueryAlias: s
+06)--------Projection: i.id, __unnest_placeholder(i.arr,depth=1) AS UNNEST(i.arr) AS u
+07)----------Unnest: lists[__unnest_placeholder(i.arr)|depth=1] structs[]
+08)------------Projection: i.id, i.arr AS __unnest_placeholder(i.arr)
+09)--------------SubqueryAlias: i
+10)----------------TableScan: unnest_inner projection=[id, arr]
+
+query II
+SELECT unnest_outer.k, s.u FROM unnest_outer, LATERAL (SELECT i.id, unnest(i.arr) AS u FROM unnest_inner AS i WHERE i.id = unnest_outer.k) AS s ORDER BY unnest_outer.k, s.u;
+----
+1 3
+1 4
+2 5
+
+# A scalar subquery over an Unnest. The right answer is `(1, 2), (2, 1)`.
+query II
+SELECT unnest_outer.k, (SELECT count(x.u) FROM (SELECT unnest(t.arr) AS u FROM unnest_inner AS t WHERE t.id = unnest_outer.k) AS x) AS c FROM unnest_outer ORDER BY unnest_outer.k;
+----
+1 2
+2 1
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
+
+statement ok
+DROP TABLE unnest_outer;
+
+statement ok
+DROP TABLE unnest_inner;

@@ -339,6 +339,20 @@ impl ArrayAggAccumulator {
     }
 }
 
+/// Returns the mask of non-null rows in `values` when `ignore_nulls` is set
+/// and some row is null.
+fn non_null_mask(values: &dyn Array, ignore_nulls: bool) -> Option<BooleanArray> {
+    if !ignore_nulls {
+        return None;
+    }
+    let nulls = values.logical_nulls()?;
+    if nulls.null_count() == 0 {
+        return None;
+    }
+    // The validity bitmap is the keep mask: a row is kept when it is valid.
+    Some(BooleanArray::new(nulls.into_inner(), None))
+}
+
 impl Accumulator for ArrayAggAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         // Append value like Int64Array(1,2,3)
@@ -617,7 +631,12 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
             None
         };
 
-        let mut entries = Vec::new();
+        // Without a filter or nulls to skip, every row becomes an entry
+        let mut entries = if opt_filter.is_none() && nulls.is_none() {
+            Vec::with_capacity(group_indices.len())
+        } else {
+            Vec::new()
+        };
 
         for (row_idx, &group_idx) in group_indices.iter().enumerate() {
             // Skip filtered rows
@@ -743,7 +762,12 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
         let list_values = input_list.values();
         let list_offsets = input_list.offsets();
 
-        let mut entries = Vec::new();
+        // Without null rows, every value in the offset span becomes an entry
+        let mut entries = if input_list.null_count() == 0 {
+            Vec::with_capacity(offset_span(list_offsets).1)
+        } else {
+            Vec::new()
+        };
 
         for (row_idx, &group_idx) in group_indices.iter().enumerate() {
             if input_list.is_null(row_idx) {
@@ -924,20 +948,12 @@ impl DistinctArrayAggAccumulator {
         // Filter nulls out upfront when ignore_nulls is set so they are
         // never inserted into the dedup state.
         let filtered;
-        let col: &ArrayRef = if self.ignore_nulls {
-            if let Some(nulls) = val.logical_nulls() {
-                if nulls.null_count() > 0 {
-                    let mask: BooleanArray = nulls.iter().map(Some).collect();
-                    filtered = filter(val.as_ref(), &mask)?;
-                    &filtered
-                } else {
-                    val
-                }
-            } else {
-                val
+        let col: &ArrayRef = match non_null_mask(val.as_ref(), self.ignore_nulls) {
+            Some(mask) => {
+                filtered = filter(val.as_ref(), &mask)?;
+                &filtered
             }
-        } else {
-            val
+            None => val,
         };
 
         if col.is_empty() {
@@ -1122,20 +1138,12 @@ impl Accumulator for DistinctArrayAggAccumulator {
         // Mirror the null-filtering logic from update_batch so we only
         // retract values that were actually inserted.
         let filtered;
-        let col: &ArrayRef = if self.ignore_nulls {
-            if let Some(nulls) = val.logical_nulls() {
-                if nulls.null_count() > 0 {
-                    let mask: BooleanArray = nulls.iter().map(Some).collect();
-                    filtered = filter(val.as_ref(), &mask)?;
-                    &filtered
-                } else {
-                    val
-                }
-            } else {
-                val
+        let col: &ArrayRef = match non_null_mask(val.as_ref(), self.ignore_nulls) {
+            Some(mask) => {
+                filtered = filter(val.as_ref(), &mask)?;
+                &filtered
             }
-        } else {
-            val
+            None => val,
         };
 
         if col.is_empty() {
@@ -1508,12 +1516,8 @@ impl OrderSensitiveArrayAggAccumulator {
             );
         }
 
-        let nulls = ignore_nulls
-            .then(|| values.logical_nulls())
-            .flatten()
-            .filter(|nulls| nulls.null_count() > 0);
-        let (values, filtered_ordering_values) = if let Some(nulls) = nulls {
-            let mask: BooleanArray = nulls.iter().map(Some).collect();
+        let mask = non_null_mask(values.as_ref(), ignore_nulls);
+        let (values, filtered_ordering_values) = if let Some(mask) = mask {
             let values = filter(values.as_ref(), &mask)?;
             let ordering_values = ordering_values
                 .iter()
@@ -1688,6 +1692,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
                     "ordered array_agg ordering state must contain Struct values"
                 )
             })?;
+        let mut ordering_columns = Vec::with_capacity(ordering_struct.num_columns());
         for row_idx in 0..array_agg_values.len() {
             let payload_len = if array_agg_values.is_null(row_idx) {
                 0
@@ -1707,11 +1712,13 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
             let payload = array_agg_values.value(row_idx);
             let ordering_start = agg_orderings.value_offsets()[row_idx] as usize;
             let len = payload.len();
-            let ordering_columns = ordering_struct
-                .columns()
-                .iter()
-                .map(|column| column.slice(ordering_start, len))
-                .collect::<Vec<_>>();
+            ordering_columns.clear();
+            ordering_columns.extend(
+                ordering_struct
+                    .columns()
+                    .iter()
+                    .map(|column| column.slice(ordering_start, len)),
+            );
             self.append_sorted_run(&payload, &ordering_columns)?;
         }
         self.can_extend_preordered_run = false;

@@ -319,7 +319,8 @@ where
     F: FnMut(&mut MutableArrayData, usize, usize) -> Result<()>,
 {
     let capacity = Capacities::Array(output_values_len);
-    let mut offsets = vec![O::usize_as(0)];
+    let mut offsets = Vec::with_capacity(array.len() + 1);
+    offsets.push(O::usize_as(0));
     let sources = match default_value_data {
         Some(default_value_data) => vec![original_data, default_value_data],
         None => vec![original_data],
