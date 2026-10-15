@@ -137,7 +137,7 @@ impl ReusableRows {
         let retained = self.reservation.size() - self.reserved_sizes[stream_idx] + size;
         debug_assert!(retained >= self.reservation.size());
         if let Err(e) = self.reservation.try_resize(retained) {
-            self.release(stream_idx);
+            self.release(stream_idx)?;
             return Err(e);
         }
         self.inner[stream_idx] = Some(Arc::clone(rows));
@@ -146,11 +146,11 @@ impl ReusableRows {
     }
 
     // drop whatever a finished stream was holding
-    fn release(&mut self, stream_idx: usize) {
+    fn release(&mut self, stream_idx: usize) -> Result<()> {
         debug_assert!(self.reservation.size() >= self.retained_size());
         self.inner[stream_idx] = None;
-        let reserved = mem::take(&mut self.reserved_sizes[stream_idx]);
-        self.reservation.resize(self.reservation.size() - reserved);
+        self.reserved_sizes[stream_idx] = 0;
+        self.reservation.try_resize(self.retained_size())
     }
 
     fn retained_size(&self) -> usize {
@@ -252,7 +252,9 @@ impl PartitionedStream for RowCursorStream {
         let polled = ready!(self.streams.poll_next(cx, stream_idx));
         if polled.is_none() {
             // The stream is finished, so its retained buffer will never be reused.
-            self.rows.release(stream_idx);
+            if let Err(error) = self.rows.release(stream_idx) {
+                return Poll::Ready(Some(Err(error)));
+            }
         }
         Poll::Ready(polled.map(|r| {
             r.and_then(|batch| {
