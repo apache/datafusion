@@ -25,7 +25,6 @@ use std::task::Poll;
 
 use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
 use crate::joins::Map;
-use crate::joins::MapOffset;
 use crate::joins::PartitionMode;
 use crate::joins::hash_join::exec::{JoinLeftData, NullAwareMode, null_value_key_mask};
 use crate::joins::hash_join::probe_completion::ProbeSideSummary;
@@ -33,6 +32,8 @@ use crate::joins::hash_join::shared_bounds::{
     PartitionBounds, PartitionBuildData, SharedBuildAccumulator,
 };
 use crate::joins::integer_prefilter::PrefilterState;
+use crate::joins::join_hash_map::ProbeOffset;
+use crate::joins::join_hash_map::ProbeOffset::AtRow;
 use crate::joins::utils::{
     JoinKeyComparator, OnceFut, equal_rows_arr_with_normalized_left, matchable_join_keys,
 };
@@ -194,7 +195,7 @@ pub(super) struct ProcessProbeBatchState {
     /// Original validity combined with integer membership, for lookup only.
     lookup_keys: Option<NullBuffer>,
     /// Starting offset for JoinHashMap lookups
-    offset: MapOffset,
+    offset: ProbeOffset,
     /// Max joined probe-side index from current batch
     joined_probe_idx: Option<usize>,
     /// Max probe-side index with a join-key match from current batch, before
@@ -208,7 +209,7 @@ pub(super) struct ProcessProbeBatchState {
 }
 
 impl ProcessProbeBatchState {
-    fn advance(&mut self, offset: MapOffset, joined_probe_idx: Option<usize>) {
+    fn advance(&mut self, offset: ProbeOffset, joined_probe_idx: Option<usize>) {
         self.offset = offset;
         if joined_probe_idx.is_some() {
             self.joined_probe_idx = joined_probe_idx;
@@ -230,6 +231,15 @@ impl ProcessProbeBatchState {
             self.matched_probe_idx = Some(last);
         }
         count
+    }
+
+    /// Returns whether the next lookup is the first chunk of this probe batch.
+    ///
+    /// A probe batch starts at `AtRow { row: 0 }`, and a lookup never returns
+    /// that offset (see [`ProbeOffset`]), so this holds only before the first
+    /// lookup.
+    fn is_first_chunk(&self) -> bool {
+        self.offset == AtRow { row: 0 }
     }
 }
 
@@ -492,11 +502,11 @@ pub(super) fn lookup_join_hashmap(
     hashes_buffer: &[u64],
     valid_keys: Option<&NullBuffer>,
     limit: usize,
-    offset: MapOffset,
+    offset: ProbeOffset,
     probe_indices_buffer: &mut Vec<u32>,
     build_indices_buffer: &mut Vec<u64>,
     key_comparator: &mut Option<JoinKeyComparator>,
-) -> Result<(UInt64Array, UInt32Array, Option<MapOffset>)> {
+) -> Result<(UInt64Array, UInt32Array, Option<ProbeOffset>)> {
     let next_offset = build_hashmap.get_matched_indices_with_limit_offset(
         hashes_buffer,
         valid_keys,
@@ -875,7 +885,7 @@ impl HashJoinStream {
                         values: keys_values,
                         valid_keys,
                         lookup_keys,
-                        offset: (0, None),
+                        offset: AtRow { row: 0 },
                         joined_probe_idx: None,
                         matched_probe_idx: None,
                         key_comparator: None,
@@ -897,8 +907,8 @@ impl HashJoinStream {
         let build_side = self.build_side.try_as_ready_mut()?;
 
         // A probe batch may be processed in several chunks; count its rows once,
-        // on the first chunked lookup (offset == (0, None)).
-        if state.offset == (0, None) {
+        // on the first chunked lookup (offset == AtRow {row: 0}).
+        if state.is_first_chunk() {
             self.join_metrics
                 .probe_hit_rate
                 .add_total(state.batch.num_rows());
@@ -915,11 +925,11 @@ impl HashJoinStream {
 
             // For correlated null-aware joins, record this batch's UNKNOWN
             // candidates once, before the first chunked lookup
-            // (offset == (0, None)).
+            // (offset == AtRow {row: 0}).
             //
             // Must precede the empty-build-map return below: an all-NULL-key
             // build side has an empty full-key map but still needs UNKNOWN marks.
-            if mode.is_correlated() && state.offset == (0, None) {
+            if mode.is_correlated() && state.is_first_chunk() {
                 mark_null_candidates_for_probe_batch(
                     build_side,
                     state,
@@ -1347,7 +1357,7 @@ fn null_aware_skip_probe_batch(
             correlated: false, ..
         } => {
             let is_anti = matches!(mode, NullAwareMode::LeftAnti { .. });
-            if state.offset == (0, None) {
+            if state.is_first_chunk() {
                 // `on[0]` is the `NOT IN` value key for both modes. A probe
                 // batch may resume lookup many times, but its summary is
                 // invariant and only needs to be computed once.
@@ -1729,7 +1739,7 @@ fn for_each_scope_match(
     build_indices_buffer: &mut Vec<u64>,
     mut f: impl FnMut(UInt64Array, UInt32Array) -> Result<()>,
 ) -> Result<()> {
-    let mut offset = (0, None);
+    let mut offset = AtRow { row: 0 };
     let mut key_comparator = None;
     loop {
         let (build_indices, probe_indices, next_offset) = lookup_join_hashmap(
