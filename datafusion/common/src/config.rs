@@ -2970,6 +2970,7 @@ pub enum ConfigFileType {
     #[cfg(feature = "parquet")]
     PARQUET,
     JSON,
+    ARROW,
 }
 
 /// Represents the configuration options available for handling different table formats within a data processing application.
@@ -2987,6 +2988,10 @@ pub struct TableOptions {
 
     /// Configuration options for JSON file handling.
     pub json: JsonOptions,
+
+    /// Configuration options for Arrow IPC file handling. This includes settings for the
+    /// compression codec used for record batches written to disk.
+    pub arrow: ArrowOptions,
 
     /// The current file format that the table operations should assume. This option allows
     /// for dynamic switching between the supported file types (e.g., CSV, Parquet, JSON).
@@ -3011,11 +3016,13 @@ impl ConfigField for TableOptions {
                 ConfigFileType::PARQUET => self.parquet.visit(v, "format", ""),
                 ConfigFileType::CSV => self.csv.visit(v, "format", ""),
                 ConfigFileType::JSON => self.json.visit(v, "format", ""),
+                ConfigFileType::ARROW => self.arrow.visit(v, "format", ""),
             }
         } else {
             self.csv.visit(v, "csv", "");
             self.parquet.visit(v, "parquet", "");
             self.json.visit(v, "json", "");
+            self.arrow.visit(v, "arrow", "");
         }
     }
 
@@ -3047,6 +3054,7 @@ impl ConfigField for TableOptions {
                     ConfigFileType::PARQUET => self.parquet.set(rem, value),
                     ConfigFileType::CSV => self.csv.set(rem, value),
                     ConfigFileType::JSON => self.json.set(rem, value),
+                    ConfigFileType::ARROW => self.arrow.set(rem, value),
                 }
             }
             _ => _config_err!("Config value \"{key}\" not found on TableOptions"),
@@ -3675,7 +3683,7 @@ impl From<&Arc<FileEncryptionProperties>> for ConfigFileEncryptionProperties {
         let mut column_encryption_properties: HashMap<
             String,
             ColumnEncryptionProperties,
-        > = HashMap::new();
+        > = HashMap::with_capacity(column_names_vec.len());
 
         for (i, column_name) in column_names_vec.iter().enumerate() {
             let column_key_as_hex = hex::encode(&column_keys_vec[i]);
@@ -3783,8 +3791,9 @@ impl TryFrom<ConfigFileDecryptionProperties> for FileDecryptionProperties {
     type Error = DataFusionError;
 
     fn try_from(val: ConfigFileDecryptionProperties) -> Result<Self> {
-        let mut column_names: Vec<&str> = Vec::new();
-        let mut column_keys: Vec<Vec<u8>> = Vec::new();
+        let num_columns = val.column_decryption_properties.len();
+        let mut column_names: Vec<&str> = Vec::with_capacity(num_columns);
+        let mut column_keys: Vec<Vec<u8>> = Vec::with_capacity(num_columns);
 
         for (col_name, decryption_properties) in val.column_decryption_properties.iter() {
             let column_key = hex::decode(&decryption_properties.column_key_as_hex).map_err(|e| {
@@ -3856,7 +3865,7 @@ impl TryFrom<&Arc<FileDecryptionProperties>> for ConfigFileDecryptionProperties 
         let mut column_decryption_properties: HashMap<
             String,
             ColumnDecryptionProperties,
-        > = HashMap::new();
+        > = HashMap::with_capacity(column_names_vec.len());
         for (i, column_name) in column_names_vec.iter().enumerate() {
             let props = ColumnDecryptionProperties {
                 column_key_as_hex: hex::encode(column_keys_vec[i].clone()),
@@ -3905,6 +3914,80 @@ impl EncryptionFactoryOptions {
             options.set(key, value)?;
         }
         Ok(options)
+    }
+}
+
+/// Compression codec used for the record batch bodies of Arrow IPC files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArrowIpcCompression {
+    /// No compression
+    Uncompressed,
+    /// LZ4 (frame format)
+    Lz4Frame,
+    /// Zstd
+    Zstd,
+}
+
+impl FromStr for ArrowIpcCompression {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.replace('\'', "").to_ascii_lowercase().as_str() {
+            "uncompressed" | "" => Ok(Self::Uncompressed),
+            "lz4_frame" => Ok(Self::Lz4Frame),
+            "zstd" => Ok(Self::Zstd),
+            other => Err(DataFusionError::Configuration(format!(
+                "Invalid Arrow IPC compression type: {other}. \
+                Expected one of: uncompressed, lz4_frame, zstd"
+            ))),
+        }
+    }
+}
+
+impl Display for ArrowIpcCompression {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let str = match self {
+            Self::Uncompressed => "uncompressed",
+            Self::Lz4Frame => "lz4_frame",
+            Self::Zstd => "zstd",
+        };
+        write!(f, "{str}")
+    }
+}
+
+impl ConfigField for ArrowIpcCompression {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = ArrowIpcCompression::from_str(value)?;
+        Ok(())
+    }
+}
+
+impl From<ArrowIpcCompression> for Option<CompressionType> {
+    fn from(c: ArrowIpcCompression) -> Self {
+        match c {
+            ArrowIpcCompression::Uncompressed => None,
+            ArrowIpcCompression::Lz4Frame => Some(CompressionType::LZ4_FRAME),
+            ArrowIpcCompression::Zstd => Some(CompressionType::ZSTD),
+        }
+    }
+}
+
+config_namespace! {
+    /// Options controlling Arrow IPC format
+    pub struct ArrowOptions {
+        /// Compression codec used for the record batch bodies of Arrow IPC files.
+        /// One of: "uncompressed", "lz4_frame", "zstd"
+        pub compression: ArrowIpcCompression, default = ArrowIpcCompression::Lz4Frame
+        /// Compression level to use with the "zstd" codec. Not supported by "lz4_frame"
+        /// or "uncompressed". If not specified, the default zstd compression level is used.
+        pub compression_level: Option<i32>, default = None
+        /// Byte alignment to pad buffers to when writing Arrow IPC files.
+        /// Must be one of 8, 16, 32, or 64.
+        pub alignment: usize, default = 64
     }
 }
 
@@ -4163,7 +4246,7 @@ pub enum OutputFormat {
     #[cfg(feature = "parquet")]
     PARQUET(TableParquetOptions),
     AVRO,
-    ARROW,
+    ARROW(ArrowOptions),
 }
 
 impl Display for OutputFormat {
@@ -4174,7 +4257,7 @@ impl Display for OutputFormat {
             #[cfg(feature = "parquet")]
             OutputFormat::PARQUET(_) => "parquet",
             OutputFormat::AVRO => "avro",
-            OutputFormat::ARROW => "arrow",
+            OutputFormat::ARROW(_) => "arrow",
         };
         write!(f, "{out}")
     }

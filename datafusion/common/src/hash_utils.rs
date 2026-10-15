@@ -903,6 +903,7 @@ fn hash_sparse_union_array(
         child_hashing.create_hashes([array.child(type_id)], &mut child_hashes)?;
     } else {
         let (starts, rows) = group_rows_by_type_id(type_ids);
+        let mut taken_hashes: Vec<u64> = Vec::new();
         for (type_id, _) in union_fields.iter() {
             let (start, end) = (starts[type_id as usize], starts[type_id as usize + 1]);
             if start == end {
@@ -931,10 +932,11 @@ fn hash_sparse_union_array(
                 child_hashing.create_hashes([masked], &mut child_hashes)?;
             } else {
                 let indices = UInt32Array::new(rows.slice(start, end - start), None);
-                let mut taken_hashes = vec![0; indices.len()];
+                taken_hashes.clear();
+                taken_hashes.resize(indices.len(), 0);
                 child_hashing
                     .create_hashes([take(child, &indices, None)?], &mut taken_hashes)?;
-                for (&row, hash) in indices.values().iter().zip(taken_hashes) {
+                for (&row, &hash) in indices.values().iter().zip(&taken_hashes) {
                     child_hashes[row as usize] = hash;
                 }
             }

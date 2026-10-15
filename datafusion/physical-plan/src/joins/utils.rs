@@ -45,6 +45,7 @@ pub use super::join_filter::JoinFilter;
 /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
 #[doc(hidden)]
 pub use super::join_hash_map::JoinHashMapType;
+pub use super::join_hash_map::ProbeOffset;
 pub use crate::joins::{JoinOn, JoinOnRef};
 
 use arrow::array::{
@@ -2774,6 +2775,7 @@ mod tests {
     use datafusion_common::{ScalarValue, SplitPoint, arrow_datafusion_err, arrow_err};
     use datafusion_physical_expr::PhysicalSortExpr;
 
+    use crate::joins::join_hash_map::ProbeOffset::AtRow;
     use rstest::rstest;
 
     fn assert_u32_values(array: &UInt32Array, expected: &[u32]) {
@@ -2826,7 +2828,7 @@ mod tests {
                     hashes_buffer,
                     None,
                     8192,
-                    (0, None),
+                    AtRow { row: 0 },
                     &mut input_indices,
                     &mut match_indices,
                 );
@@ -2907,7 +2909,7 @@ mod tests {
             )?;
             let (mut input_indices, mut match_indices, mut pairs) =
                 (vec![], vec![], vec![]);
-            let mut offset = Some((0, None));
+            let mut offset = Some(AtRow { row: 0 });
             while let Some(current) = offset {
                 offset = map.get_matched_indices_with_limit_offset(
                     &probe_hashes,
