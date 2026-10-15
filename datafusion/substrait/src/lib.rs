@@ -48,14 +48,22 @@
 //! # See Also
 //!
 //! Substrait does not (yet) support the full range of plans and expressions
-//! that DataFusion offers. See the [datafusion-proto]  crate for a DataFusion
-//! specific format that does support of the full range.
+//! that DataFusion offers. See the [datafusion-proto] crate for a DataFusion
+//! specific format that does support the full range.
 //!
 //! [datafusion-proto]: https://docs.rs/datafusion-proto/latest/datafusion_proto
 //!
-//! Note that generated types  such as [`substrait::proto::Plan`] and
+//! Note that generated types such as [`substrait::proto::Plan`] and
 //! [`substrait::proto::Rel`] can be serialized / deserialized to bytes, JSON and
 //! other formats using [prost] and the rest of the Rust protobuf ecosystem.
+//!
+//! # Security
+//!
+//! Substrait plans are treated as trusted input. The application must validate
+//! untrusted inputs as this crate does not validate that a plan is safe to
+//! execute. See the [DataFusion Security Model] for more details.
+//!
+//! [DataFusion Security Model]: https://github.com/apache/datafusion/blob/main/SECURITY.md#serialized-plans
 //!
 //! # Example: Serializing [`LogicalPlan`]s
 //! ```
