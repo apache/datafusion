@@ -238,6 +238,10 @@ fn general_list_repeat<O: OffsetSizeTrait>(
     list_array: &GenericListArray<O>,
     count_array: &Int64Array,
 ) -> Result<ArrayRef> {
+    let field = match list_array.data_type() {
+        List(f) | LargeList(f) => Arc::clone(f),
+        _ => unreachable!(),
+    };
     let list_offsets = list_array.value_offsets();
     let (outer_offsets, outer_total) = build_repeat_offsets::<O>(count_array)?;
 
@@ -298,7 +302,7 @@ fn general_list_repeat<O: OffsetSizeTrait>(
         None,
     )?;
     let inner_list = GenericListArray::<O>::try_new(
-        Arc::new(Field::new_list_field(list_array.value_type().clone(), true)),
+        field,
         OffsetBuffer::new(inner_offsets.into()),
         inner_values,
         Some(NullBuffer::new(inner_nulls.finish())),
@@ -519,5 +523,39 @@ mod tests {
             ),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn test_array_repeat_nested_non_nullable_elements() -> Result<()> {
+        let values = Int32Array::from(vec![1, 2, 3]);
+        let element_field = Arc::new(Field::new_list_field(DataType::Int32, false));
+        let list_array = ListArray::new(
+            Arc::clone(&element_field),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0, 2, 3])),
+            Arc::new(values),
+            None,
+        );
+        let counts = Int64Array::from(vec![2, 1]);
+
+        let result = general_list_repeat::<i32>(&list_array, &counts)?;
+        let repeated_values = ListArray::new(
+            element_field,
+            OffsetBuffer::new(ScalarBuffer::from(vec![0, 2, 4, 5])),
+            Arc::new(Int32Array::from(vec![1, 2, 1, 2, 3])),
+            None,
+        );
+        let expected = ListArray::new(
+            Arc::new(Field::new_list_field(
+                repeated_values.data_type().clone(),
+                true,
+            )),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0, 2, 3])),
+            Arc::new(repeated_values),
+            None,
+        );
+
+        assert_eq!(result.as_list::<i32>(), &expected);
+
+        Ok(())
     }
 }
