@@ -141,15 +141,22 @@ pub(crate) fn invoke_pad<S: PadSide>(args: ScalarFunctionArgs) -> Result<Columna
 
 /// Validates a requested pad length. Lengths above `i32::MAX` are an error and
 /// negative lengths are treated as 0.
-#[inline]
+#[inline(always)]
 fn parse_target_len(target_len: i64, fn_name: &str) -> Result<usize> {
     if target_len > i32::MAX as i64 {
-        return exec_err!(
-            "{fn_name} requested length {target_len} too large, maximum allowed length is {}",
-            i32::MAX
-        );
+        return target_len_too_large(target_len, fn_name);
     }
     Ok(target_len.max(0) as usize)
+}
+
+/// Kept out of line so the per-row length check stays small.
+#[cold]
+#[inline(never)]
+fn target_len_too_large(target_len: i64, fn_name: &str) -> Result<usize> {
+    exec_err!(
+        "{fn_name} requested length {target_len} too large, maximum allowed length is {}",
+        i32::MAX
+    )
 }
 
 /// Appends one output row made of `string` and the padding written by
@@ -173,13 +180,17 @@ fn append_padded<S: PadSide, T: OffsetSizeTrait>(
 
 /// Writes `pad_chars` characters of `fill`, repeated cyclically. Whole copies
 /// of `fill` are written at once rather than one character at a time.
-#[inline]
+#[inline(always)]
 fn write_fill_chars(
     w: &mut impl Write,
     fill: &str,
     pad_chars: usize,
 ) -> std::fmt::Result {
-    let fill_chars = fill.chars().count();
+    let fill_chars = if fill.is_ascii() {
+        fill.len()
+    } else {
+        fill.chars().count()
+    };
     if fill_chars == 0 {
         return Ok(());
     }
@@ -331,8 +342,10 @@ fn pad<S: PadSide, T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let length_array = as_int64_array(&args[1])?;
 
-    // Without a fill argument, pad with spaces.
-    let spaces = || iter::repeat(Some(" "));
+    // Without a fill argument, pad with spaces. `repeat_with` keeps the fill a
+    // compile-time constant in `pad_impl`, so this case is as fast as a
+    // dedicated space-padding loop.
+    let spaces = || iter::repeat_with(|| Some(" "));
 
     match (args.len(), args[0].data_type()) {
         (2, Utf8View) => {
