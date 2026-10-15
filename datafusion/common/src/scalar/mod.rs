@@ -1503,6 +1503,10 @@ impl ScalarValue {
 
                 // Midnight has no representation when the date falls outside
                 // the unit's range, or when the zone skips it.
+                //
+                // Note that a `NaiveDate` can only be out of range for
+                // `TimeUnit::Nanosecond` as the units cover the entire range of
+                // `NaiveDate`.
                 let value = match unit {
                     TimeUnit::Second => TimestampSecondType::from_naive_datetime(
                         naive_midnight,
