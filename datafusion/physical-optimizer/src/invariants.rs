@@ -28,6 +28,31 @@ use datafusion_physical_plan::joins::{
 };
 
 use crate::optimizer::PlanInvariant;
+use crate::sanity_checker::check_input_requirements;
+
+/// Every child satisfies its parent's ordering and distribution requirements.
+///
+/// [`EnsureRequirements`](crate::ensure_requirements::EnsureRequirements)
+/// establishes this invariant. It includes co-partitioning requirements between
+/// children and shares its checks with the final
+/// [`SanityCheckPlan`](crate::sanity_checker::SanityCheckPlan). Streaming
+/// executability and other operator invariants remain the final check's job.
+#[derive(Debug)]
+pub struct InputRequirementsSatisfied;
+
+impl PlanInvariant for InputRequirementsSatisfied {
+    fn name(&self) -> &'static str {
+        "input_requirements_satisfied"
+    }
+
+    fn check(&self, plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
+        plan.apply(|node| {
+            check_input_requirements(node)?;
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        Ok(())
+    }
+}
 
 /// Every hash join has a concrete partition mode.
 ///

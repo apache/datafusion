@@ -27,8 +27,8 @@ use datafusion_common::Result;
 use datafusion_physical_plan::ExecutionPlan;
 
 use datafusion_common::config::{ConfigOptions, OptimizerOptions};
-use datafusion_common::plan_err;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::{internal_err, plan_err};
 use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supported};
 use datafusion_physical_plan::execution_plan::{
     Boundedness, EmissionType, InvariantLevel,
@@ -145,6 +145,15 @@ pub fn check_plan_sanity(
     optimizer_options: &OptimizerOptions,
 ) -> Result<()> {
     check_finiteness_requirements(plan.as_ref(), optimizer_options)?;
+    check_input_requirements(plan)?;
+    plan.check_invariants(InvariantLevel::Executable)?;
+
+    Ok(())
+}
+
+/// Check ordering and distribution requirements, including relationships
+/// between children. This does not check streaming executability.
+pub(crate) fn check_input_requirements(plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
     let input_distributions = plan.input_distribution_requirements();
 
     for ((idx, child), sort_req, dist_req) in izip!(
@@ -186,7 +195,20 @@ pub fn check_plan_sanity(
         }
     }
 
-    plan.check_invariants(InvariantLevel::Executable)?;
+    let children = plan.children();
+    let children = children
+        .iter()
+        .map(|child| child.as_ref())
+        .collect::<Vec<_>>();
+    let unsatisfied = input_distributions
+        .unsatisfied_co_partitioned_children(plan.name(), &children)?;
+    if !unsatisfied.is_empty() {
+        return internal_err!(
+            "{} requires children {:?} to be co-partitioned",
+            plan.name(),
+            unsatisfied
+        );
+    }
 
     Ok(())
 }

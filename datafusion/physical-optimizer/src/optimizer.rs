@@ -25,7 +25,9 @@ use crate::combine_partial_final_agg::CombinePartialFinalAggregate;
 use crate::ensure_coop::EnsureCooperative;
 use crate::ensure_requirements::EnsureRequirements;
 use crate::filter_pushdown::FilterPushdown;
-use crate::invariants::{HashJoinModesResolved, NoEmbeddedProjections};
+use crate::invariants::{
+    HashJoinModesResolved, InputRequirementsSatisfied, NoEmbeddedProjections,
+};
 use crate::join_selection::JoinSelection;
 use crate::limit_pushdown::LimitPushdown;
 use crate::limited_distinct_aggregation::LimitedDistinctAggregation;
@@ -143,6 +145,7 @@ impl PhysicalOptimizer {
             // breakdown, and <https://github.com/apache/datafusion/issues/21973>
             // for the original failure mode.
             PhysicalOptimizerStep::Rule(Arc::new(EnsureRequirements::new())),
+            PhysicalOptimizerStep::Begin(Arc::new(InputRequirementsSatisfied)),
             // The CombinePartialFinalAggregate rule should be applied after distribution enforcement
             PhysicalOptimizerStep::Rule(Arc::new(CombinePartialFinalAggregate::new())),
             // Run once after the local sorting requirement is changed
@@ -200,6 +203,7 @@ impl PhysicalOptimizer {
             // given query plan; i.e. it only acts as a final
             // gatekeeping rule.
             PhysicalOptimizerStep::Rule(Arc::new(SanityCheckPlan::new())),
+            PhysicalOptimizerStep::End(InputRequirementsSatisfied.name()),
             PhysicalOptimizerStep::End(HashJoinModesResolved.name()),
         ];
 

@@ -21,8 +21,9 @@ use arrow::array::{Int32Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion::execution::session_state::SessionStateBuilder;
+use datafusion::physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion::physical_optimizer::invariants::{
-    HashJoinModesResolved, NoEmbeddedProjections,
+    HashJoinModesResolved, InputRequirementsSatisfied, NoEmbeddedProjections,
 };
 use datafusion::physical_optimizer::join_selection::JoinSelection;
 use datafusion::physical_optimizer::optimizer::{
@@ -37,11 +38,14 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{JoinType, Result, assert_contains, plan_err};
 use datafusion_physical_expr::expressions::col;
+use datafusion_physical_expr::{Partitioning, PhysicalSortExpr};
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::joins::{HashJoinExec, HashJoinExecBuilder, PartitionMode};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
 use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{ExecutionPlan, displayable};
 
 type Plan = Arc<dyn ExecutionPlan>;
@@ -186,6 +190,156 @@ fn runtime_option_controls_all_region_checks() -> Result<()> {
         assert!(Arc::ptr_eq(&plan, &output));
         let expected = if enabled { vec!["a", "a", "a"] } else { vec![] };
         assert_eq!(*checks.lock().unwrap(), expected);
+    }
+    Ok(())
+}
+
+fn unsatisfied_input_requirements() -> Result<Vec<(&'static str, Plan)>> {
+    let schema = empty(&["a"]).schema();
+    let input: Plan = Arc::new(EmptyExec::new(Arc::clone(&schema)).with_partitions(2));
+    let key = col("a", &schema)?;
+    let ordering = [PhysicalSortExpr::new_default(Arc::clone(&key))].into();
+    let partitioned = |partitions| -> Result<Plan> {
+        Ok(Arc::new(RepartitionExec::try_new(
+            Arc::clone(&input),
+            Partitioning::Hash(vec![Arc::clone(&key)], partitions),
+        )?))
+    };
+    let join = HashJoinExecBuilder::new(
+        partitioned(2)?,
+        partitioned(3)?,
+        vec![(Arc::clone(&key), key)],
+        JoinType::Inner,
+    )
+    .with_partition_mode(PartitionMode::Partitioned)
+    .build()?;
+    Ok(vec![
+        (
+            "does not satisfy order requirements",
+            Arc::new(SortPreservingMergeExec::new(ordering, Arc::clone(&input))),
+        ),
+        (
+            "does not satisfy distribution requirements",
+            Arc::new(GlobalLimitExec::new(input, 0, Some(10))),
+        ),
+        (
+            "requires children [0, 1] to be co-partitioned",
+            Arc::new(join),
+        ),
+    ])
+}
+
+#[test]
+fn requirements_region_rejects_invalid_plans_at_begin() -> Result<()> {
+    for (diagnostic, root) in unsatisfied_input_requirements()? {
+        let nested = Arc::new(LocalLimitExec::new(Arc::clone(&root), 10)) as Plan;
+        for plan in [root, nested] {
+            let error = optimize(
+                plan,
+                vec![
+                    Step::Begin(Arc::new(InputRequirementsSatisfied)),
+                    Step::End(InputRequirementsSatisfied.name()),
+                ],
+            )
+            .unwrap_err()
+            .to_string();
+            assert_contains!(&error, "Beginning invariant input_requirements_satisfied");
+            assert_contains!(&error, diagnostic);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn ensure_requirements_establishes_region() -> Result<()> {
+    for (_, plan) in unsatisfied_input_requirements()? {
+        optimize(
+            plan,
+            vec![
+                rule(EnsureRequirements::new()),
+                Step::Begin(Arc::new(InputRequirementsSatisfied)),
+                rule(SanityCheckPlan::new()),
+                Step::End(InputRequirementsSatisfied.name()),
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+#[test]
+fn default_requirements_region_attributes_later_rule_violations() -> Result<()> {
+    // Exercise both the start and the end of the default region. A violation
+    // must be attributed to the rule that introduced it, before final sanity.
+    for before_rule in ["CombinePartialFinalAggregate", "SanityCheckPlan"] {
+        for (diagnostic, invalid) in unsatisfied_input_requirements()? {
+            let mut steps = PhysicalOptimizer::new().steps().to_vec();
+            let index = steps
+                .iter()
+                .position(
+                    |step| matches!(step, Step::Rule(rule) if rule.name() == before_rule),
+                )
+                .unwrap();
+            steps.insert(
+                index,
+                rule(ReplacePlan {
+                    name: "break_input_requirements",
+                    plan: Arc::new(LocalLimitExec::new(Arc::clone(&invalid), 10)),
+                    schema_check: true,
+                }),
+            );
+            let error = optimize(invalid, steps).unwrap_err().to_string();
+            assert_contains!(
+                &error,
+                "Rule break_input_requirements violated invariant input_requirements_satisfied"
+            );
+            assert_contains!(&error, diagnostic);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn requirements_region_end_keeps_final_sanity_independent() -> Result<()> {
+    for (diagnostic, invalid) in unsatisfied_input_requirements()? {
+        let mut steps = vec![
+            rule(EnsureRequirements::new()),
+            Step::Begin(Arc::new(InputRequirementsSatisfied)),
+            Step::End(InputRequirementsSatisfied.name()),
+            rule(ReplacePlan {
+                name: "break_input_requirements_after_end",
+                plan: Arc::clone(&invalid),
+                schema_check: true,
+            }),
+        ];
+        match optimize(Arc::clone(&invalid), steps.clone()) {
+            Ok(output) => assert!(Arc::ptr_eq(&invalid, &output)),
+            Err(error) => {
+                // Co-partitioning also has an independent final executable
+                // invariant, even in a pipeline without SanityCheckPlan.
+                let error = error.to_string();
+                assert_contains!(
+                    &error,
+                    "Invariant for ExecutionPlan node 'HashJoinExec' failed"
+                );
+                assert_contains!(&error, diagnostic);
+            }
+        }
+
+        steps.push(rule(SanityCheckPlan::new()));
+        for enabled in [false, true] {
+            let error = optimize_with_config(
+                Arc::clone(&invalid),
+                steps.clone(),
+                SessionConfig::new().set_bool(VALIDATE_INVARIANTS, enabled),
+            )
+            .unwrap_err()
+            .to_string();
+            assert_contains!(&error, "SanityCheckPlan");
+            assert!(
+                !error.contains("invariant input_requirements_satisfied"),
+                "{error}"
+            );
+        }
     }
     Ok(())
 }
