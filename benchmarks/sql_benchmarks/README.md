@@ -40,6 +40,7 @@ in the community:
 | `null_aware_join`     | Null-aware (`NOT IN`) hash join micro-benchmarks. Q01-Q03 are uncorrelated `NOT IN` across NULL fractions and are linear in the table size (`NAJ_LARGE_ROWS`, default `1000000`). Q04-Q08 are correlated, so the correlation predicate stays behind as a join filter that the join applies per candidate (build row × probe row) pair while deciding which outer rows are UNKNOWN; without an equality correlation there are no scope keys to narrow those pairs, so their cost grows with the square of `NAJ_ROWS` (default `10000`). Q08 adds an equality correlation, which turns those pairs into a hash lookup. All tables are built inline from `range()`, so there is no data step. |
 | `push_down_topk`      | `ORDER BY ... LIMIT` over outer joins (TPC-H data); exercises pushing a TopK through a join |
 | `pwmj`                | Piecewise merge join: classic `INNER`/`LEFT`/`RIGHT`/`FULL` joins over `lhs.key < rhs.key`. Subgroups (`--subgroup`) are match regimes: `no_match`, `null_heavy`, `half_match`, `selective`, `all_match`. Generated with `range()`, no data needed. |
+| `set_operations`      | `INTERSECT ALL` / `EXCEPT ALL` on unique keys, 1,000-key duplicates, and single-key skew; DISTINCT controls on unique keys. Inline in-memory data, no data step. `SET_ROWS` sets left rows (default `1000000`); duplicate/skew cases have half as many right rows, leaving nonempty EXCEPT ALL output. |
 | `smj`                 | Sort‑merge join benchmark                                          |
 | `sort tpch`           | Sorting benchmarks against the TPC-H lineitem table                |
 | `taxi`                | NYC taxi dataset benchmark                                         |
@@ -178,6 +179,7 @@ Some benchmarks use custom environment variables as outlined below:
 | PRED_ROWS                    | Used in the predicate_eval benchmark to size the synthetic table (the `scale` subgroup overrides this per query), and in the parquet_row_filter_skip benchmark to size the generated Parquet datasets (default `10000000` there). | `1000000`     |
 | PRED_FILL                    | Used in the predicate_eval benchmark as the string-column width knob (filler chars per marker).                          | `30`          |
 | RG_SIZE                      | Used in the parquet_row_filter_skip benchmark as the Parquet `max_row_group_size` for the generated datasets.            | `1000000`     |
+| SET_ROWS                     | Used in set_operations to size the left input; must be a positive integer.                                               | `1000000`     |
 | PSQ_ROWS                     | Used in the projection_subquery benchmark to size the two inline tables.                                                 | `30000`       |
 | SPILL_VIEWS_LIMIT_REPEATED   | Used in the spill_views benchmark as the memory limit of the `repeated` subgroup.                                        | `40M`         |
 | SPILL_VIEWS_LIMIT_DISTINCT   | Used in the spill_views benchmark as the memory limit of the `distinct` subgroup.                                        | `96M`         |
