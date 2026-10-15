@@ -150,9 +150,7 @@ impl ReusableRows {
         debug_assert!(self.reservation.size() >= self.retained_size());
         self.inner[stream_idx] = None;
         let reserved = mem::take(&mut self.reserved_sizes[stream_idx]);
-        if reserved != 0 {
-            self.reservation.shrink(reserved);
-        }
+        self.reservation.resize(self.reservation.size() - reserved);
     }
 
     fn retained_size(&self) -> usize {
