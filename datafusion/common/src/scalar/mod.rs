@@ -1554,7 +1554,10 @@ impl ScalarValue {
     ///
     /// Returns a tuple of (`i64` value, [`TimeUnit`], and timezone) for a
     /// non-null timestamp. The `i64` is always the offset from the UTC epoch in
-    /// `unit`s, regardless of the timezone.
+    /// `unit`s, regardless of the timezone, as defined by the
+    /// [Arrow specification].
+    ///
+    /// [Arrow specification]: https://github.com/apache/arrow/blob/main/format/Schema.fbs
     ///
     /// # Example
     /// ```
