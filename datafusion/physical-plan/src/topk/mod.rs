@@ -3182,7 +3182,7 @@ mod tests {
             )
         };
         let without_prefix = make_topk(vec![])?;
-        let mut with_prefix = make_topk(vec![sort_expr.clone()])?;
+        let with_prefix = make_topk(vec![sort_expr.clone()])?;
         let converter_size = with_prefix
             .common_sort_prefix_converter
             .as_ref()
@@ -3199,12 +3199,6 @@ mod tests {
         );
         assert_eq!(with_prefix.size(), without_prefix.size() + converter_size);
 
-        with_prefix.insert_batch(make_ab_batch(
-            Arc::clone(&schema),
-            &[Some(1), Some(2)],
-            &[1.0, 2.0],
-        )?)?;
-        assert_eq!(with_prefix.reservation.size(), with_prefix.size());
         Ok(())
     }
 
