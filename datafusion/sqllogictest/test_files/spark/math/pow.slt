@@ -70,10 +70,11 @@ SELECT pow(CAST('NaN' AS DOUBLE), 1.0);
 ----
 NaN
 
+## Spark follows java.lang.StrictMath.pow: a NaN exponent gives NaN, also for a base of 1
 query R
 SELECT pow(1.0, CAST('NaN' AS DOUBLE));
 ----
-1
+NaN
 
 query R
 SELECT pow(CAST('NaN' AS DOUBLE), 0.0);
@@ -99,7 +100,17 @@ Infinity
 query R
 SELECT pow(CAST('-0.0' AS DOUBLE), -1.0);
 ----
+-Infinity
+
+query R
+SELECT pow(CAST('-0.0' AS DOUBLE), -2.0);
+----
 Infinity
+
+query R
+SELECT pow(CAST('-0.0' AS DOUBLE), -3.0);
+----
+-Infinity
 
 # -inf, +inf
 query R
@@ -142,12 +153,36 @@ SELECT pow(0.5, CAST('-Infinity' AS DOUBLE));
 ----
 Infinity
 
+## A base of 1 or -1 with an infinite exponent gives NaN in Spark
+query R
+SELECT pow(1.0, CAST('Infinity' AS DOUBLE));
+----
+NaN
+
+query R
+SELECT pow(-1.0, CAST('Infinity' AS DOUBLE));
+----
+NaN
+
+query R
+SELECT pow(1.0, CAST('-Infinity' AS DOUBLE));
+----
+NaN
+
+query R
+SELECT pow(-1.0, CAST('-Infinity' AS DOUBLE));
+----
+NaN
+
 # Test Array x Array
 statement ok
 CREATE TABLE t1(a DOUBLE, b DOUBLE) AS VALUES
 (0.0, -1.0),
 (2.0, 3.0),
-(CAST(NULL AS DOUBLE), 1.0);
+(CAST(NULL AS DOUBLE), 1.0),
+(CAST('-0.0' AS DOUBLE), -3.0),
+(1.0, CAST('NaN' AS DOUBLE)),
+(-1.0, CAST('Infinity' AS DOUBLE));
 
 query R
 SELECT pow(a, b) FROM t1;
@@ -155,6 +190,9 @@ SELECT pow(a, b) FROM t1;
 Infinity
 8
 NULL
+-Infinity
+NaN
+NaN
 
 statement ok
 DROP TABLE t1;
