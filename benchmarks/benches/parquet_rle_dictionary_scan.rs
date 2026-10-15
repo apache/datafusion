@@ -149,7 +149,7 @@ async fn prepare_scan(path: &Path, read_as: ReadAs) -> Scan {
         .await
         .unwrap();
     let scan = Scan { context };
-    let plan = build_plan(&scan).await;
+    let plan = build_plan(&scan, "SELECT value FROM strings").await;
     assert_eq!(plan.schema().field(0).data_type(), &read_as.expected_type());
 
     let mut finder = ParquetScanFinder(false);
@@ -159,9 +159,9 @@ async fn prepare_scan(path: &Path, read_as: ReadAs) -> Scan {
     scan
 }
 
-async fn build_plan(scan: &Scan) -> Arc<dyn ExecutionPlan> {
+async fn build_plan(scan: &Scan, query: &str) -> Arc<dyn ExecutionPlan> {
     scan.context
-        .sql("SELECT value FROM strings")
+        .sql(query)
         .await
         .unwrap()
         .create_physical_plan()
@@ -169,13 +169,13 @@ async fn build_plan(scan: &Scan) -> Arc<dyn ExecutionPlan> {
         .unwrap()
 }
 
-async fn scan_once(scan: &Scan, plan: Arc<dyn ExecutionPlan>, expected_rows: usize) {
+async fn execute_once(scan: &Scan, plan: Arc<dyn ExecutionPlan>, expected_rows: usize) {
     let mut stream = execute_stream(plan, scan.context.task_ctx()).unwrap();
     let mut rows = 0;
     while let Some(batch) = stream.next().await {
         let batch = batch.unwrap();
         rows += batch.num_rows();
-        black_box(batch.column(0));
+        black_box(batch);
     }
     assert_eq!(rows, expected_rows);
 }
@@ -202,9 +202,10 @@ fn criterion_benchmark(criterion: &mut Criterion) {
                     async move {
                         let mut elapsed = Duration::ZERO;
                         for _ in 0..iterations {
-                            let plan = build_plan(scan).await;
+                            let plan =
+                                build_plan(scan, "SELECT value FROM strings").await;
                             let start = Instant::now();
-                            scan_once(scan, plan, rows).await;
+                            execute_once(scan, plan, rows).await;
                             elapsed += start.elapsed();
                         }
                         elapsed
@@ -217,9 +218,10 @@ fn criterion_benchmark(criterion: &mut Criterion) {
                     async move {
                         let mut elapsed = Duration::ZERO;
                         for _ in 0..iterations {
-                            let plan = build_plan(scan).await;
+                            let plan =
+                                build_plan(scan, "SELECT value FROM strings").await;
                             let start = Instant::now();
-                            scan_once(scan, plan, rows).await;
+                            execute_once(scan, plan, rows).await;
                             elapsed += start.elapsed();
                         }
                         elapsed
@@ -227,6 +229,45 @@ fn criterion_benchmark(criterion: &mut Criterion) {
                 });
             });
             group.finish();
+
+            if cardinality <= 100 {
+                let query = "SELECT value, COUNT(*) FROM strings GROUP BY value";
+                let mut group = criterion.benchmark_group(format!(
+                    "parquet_rle_dictionary_aggregate/rows={rows}/cardinality={cardinality}"
+                ));
+                group.throughput(Throughput::Elements(rows as u64));
+                group.bench_function("utf8_view", |bencher| {
+                    bencher.to_async(&runtime).iter_custom(|iterations| {
+                        let scan = &view;
+                        async move {
+                            let mut elapsed = Duration::ZERO;
+                            for _ in 0..iterations {
+                                let plan = build_plan(scan, query).await;
+                                let start = Instant::now();
+                                execute_once(scan, plan, cardinality).await;
+                                elapsed += start.elapsed();
+                            }
+                            elapsed
+                        }
+                    });
+                });
+                group.bench_function("dictionary", |bencher| {
+                    bencher.to_async(&runtime).iter_custom(|iterations| {
+                        let scan = &dictionary;
+                        async move {
+                            let mut elapsed = Duration::ZERO;
+                            for _ in 0..iterations {
+                                let plan = build_plan(scan, query).await;
+                                let start = Instant::now();
+                                execute_once(scan, plan, cardinality).await;
+                                elapsed += start.elapsed();
+                            }
+                            elapsed
+                        }
+                    });
+                });
+                group.finish();
+            }
         }
     }
 }
