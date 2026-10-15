@@ -28,7 +28,7 @@ use arrow::array::{
     UInt32Array, make_array, new_empty_array,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
-use arrow::compute::{SortOptions, cast, filter};
+use arrow::compute::{SortOptions, cast, filter, take as take_array};
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use arrow::row::{OwnedRow, Row, RowConverter, Rows, SortField};
 use arrow_select::dictionary::garbage_collect_any_dictionary;
@@ -888,6 +888,8 @@ struct DistinctArrayAggGroupsAccumulator {
     /// Total number of groups tracked.
     num_groups: usize,
     random_state: RandomState,
+    /// Time spent deduplicating values, reported as the DISTINCT submetric.
+    distinct_metric: Option<Arc<dyn AggregateMetric>>,
 }
 
 impl DistinctArrayAggGroupsAccumulator {
@@ -908,6 +910,7 @@ impl DistinctArrayAggGroupsAccumulator {
             pair_set: HashSet::default(),
             num_groups: 0,
             random_state: RandomState::default(),
+            distinct_metric: None,
         }
     }
 
@@ -924,6 +927,28 @@ impl DistinctArrayAggGroupsAccumulator {
         self.converter
             .as_ref()
             .ok_or_else(|| internal_datafusion_err!("row converter must be set"))
+    }
+
+    /// Like [`Self::insert`], but first gathers the selected rows when they
+    /// are only part of `input`, so rejected values are never encoded.
+    fn insert_selected(
+        &mut self,
+        input: &ArrayRef,
+        rows: Vec<(usize, usize)>,
+    ) -> Result<()> {
+        if rows.len() == input.len() {
+            return self.insert(input, rows);
+        }
+        let indices = UInt32Array::from_iter_values(
+            rows.iter().map(|&(_, row_index)| row_index as u32),
+        );
+        let selected = take_array(input.as_ref(), &indices, None)?;
+        self.insert(
+            &selected,
+            rows.into_iter()
+                .enumerate()
+                .map(|(position, (group_index, _))| (group_index, position)),
+        )
     }
 
     /// Records that `group_index` contains each value of `input` selected by
@@ -1054,7 +1079,10 @@ impl GroupsAccumulator for DistinctArrayAggGroupsAccumulator {
         if rows.is_empty() {
             return Ok(());
         }
-        self.insert(input, rows)
+        let mut metric_recorder =
+            AggregateMetricRecorder::new(self.distinct_metric.clone());
+        let _timer = metric_recorder.timer();
+        self.insert_selected(input, rows)
     }
 
     /// Produces a `ListArray` ordered by group index. Groups without values
@@ -1125,11 +1153,13 @@ impl GroupsAccumulator for DistinctArrayAggGroupsAccumulator {
         match emit_to {
             EmitTo::All => {
                 let converter = self.converter.take();
+                let distinct_metric = self.distinct_metric.take();
                 *self = Self::new(
                     self.datatype.clone(),
                     self.sort_options,
                     self.ignore_nulls,
                 );
+                self.distinct_metric = distinct_metric;
                 // Keep the converter: the runtime type does not change.
                 if let Some(converter) = converter {
                     self.values = Some(converter.empty_rows(0, 0));
@@ -1162,21 +1192,28 @@ impl GroupsAccumulator for DistinctArrayAggGroupsAccumulator {
         let lists = values[0].as_list::<i32>();
         self.num_groups = self.num_groups.max(total_num_groups);
 
+        // A sliced list keeps its whole child array, so encode only the span
+        // its offsets cover.
         let offsets = lists.offsets();
+        let (span_start, span_len) = offset_span(offsets);
+        let child = lists.values().slice(span_start, span_len);
         let rows = group_indices
             .iter()
             .enumerate()
             .filter(|&(list_index, _)| lists.is_valid(list_index))
             .flat_map(|(list_index, &group_index)| {
-                let start = offsets[list_index] as usize;
-                let end = offsets[list_index + 1] as usize;
+                let start = offsets[list_index] as usize - span_start;
+                let end = offsets[list_index + 1] as usize - span_start;
                 (start..end).map(move |position| (group_index, position))
             })
             .collect::<Vec<_>>();
         if rows.is_empty() {
             return Ok(());
         }
-        self.insert(lists.values(), rows)
+        let mut metric_recorder =
+            AggregateMetricRecorder::new(self.distinct_metric.clone());
+        let _timer = metric_recorder.timer();
+        self.insert_selected(&child, rows)
     }
 
     fn convert_to_state(
@@ -1193,6 +1230,10 @@ impl GroupsAccumulator for DistinctArrayAggGroupsAccumulator {
             self.ignore_nulls,
             &self.datatype,
         )])
+    }
+
+    fn set_metrics(&mut self, metrics: Arc<dyn AggregateMetrics>) {
+        self.distinct_metric = Some(metrics.metric("distinct"));
     }
 
     fn size(&self) -> usize {
@@ -3846,6 +3887,64 @@ mod tests {
         let vals = eval_i32_lists(&mut acc, EmitTo::All)?;
         assert_eq!(vals[0], Some(vec![Some(1), Some(2)]));
         assert_eq!(vals[1], None);
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_groups_accumulator_sparse_filter() -> Result<()> {
+        // Only the selected rows are gathered and encoded, so their positions
+        // move; check each value still lands in its own group.
+        let mut acc = distinct_groups_accumulator(true);
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(5),
+            Some(6),
+            Some(7),
+            None,
+            Some(8),
+        ]));
+        let filter = BooleanArray::from(vec![false, true, false, true, true]);
+        acc.update_batch(&[values], &[0, 1, 0, 2, 2], Some(&filter), 3)?;
+
+        assert_eq!(acc.values.as_ref().map(Rows::num_rows), Some(2));
+        let vals = eval_i32_lists(&mut acc, EmitTo::All)?;
+        assert_eq!(vals, vec![None, Some(vec![Some(6)]), Some(vec![Some(8)])]);
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_groups_accumulator_merges_sliced_state() -> Result<()> {
+        let mut partial = distinct_groups_accumulator(false);
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 4]));
+        partial.update_batch(&[values], &[0, 1, 2, 3, 3], None, 4)?;
+        let state = partial.state(EmitTo::All)?;
+
+        // Partial aggregation emits slices of one state array.
+        let mut acc = distinct_groups_accumulator(false);
+        acc.merge_batch(&[state[0].slice(2, 2)], &[0, 1], 2)?;
+        acc.merge_batch(&[state[0].slice(0, 2)], &[1, 0], 2)?;
+
+        let vals = eval_i32_lists(&mut acc, EmitTo::All)?;
+        assert_eq!(vals[0], Some(vec![Some(3), Some(2)]));
+        assert_eq!(vals[1], Some(vec![Some(4), Some(1)]));
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_groups_accumulator_records_metric() -> Result<()> {
+        let metric_updates = Arc::new(AtomicUsize::new(0));
+        let mut acc = distinct_groups_accumulator(false);
+        acc.set_metrics(Arc::new(CountingMetrics(Arc::clone(&metric_updates))));
+
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
+        acc.update_batch(&[Arc::clone(&values)], &[0, 1], None, 2)?;
+        let state = acc.state(EmitTo::All)?;
+        acc.merge_batch(&state, &[0, 1], 2)?;
+        assert_eq!(metric_updates.load(Ordering::Relaxed), 2);
+
+        // Emitting everything resets the state but keeps the metric.
+        acc.evaluate(EmitTo::All)?;
+        acc.update_batch(&[values], &[0, 1], None, 2)?;
+        assert_eq!(metric_updates.load(Ordering::Relaxed), 3);
         Ok(())
     }
 
