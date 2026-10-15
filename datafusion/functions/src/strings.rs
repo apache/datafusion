@@ -462,9 +462,8 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
         mut map: F,
     ) -> Result<()> {
         self.try_append_bytes(src.len(), |value_buffer| {
-            // Copy, then map in place: `MutableBuffer::extend` checks the
-            // remaining capacity before each byte, which is several times
-            // slower.
+            // Copy, then map the bytes in place: a plain loop over a slice,
+            // which the compiler can vectorize.
             let old_len = value_buffer.len();
             value_buffer.extend_from_slice(src);
             for b in &mut value_buffer.as_slice_mut()[old_len..] {
