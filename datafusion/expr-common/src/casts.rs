@@ -28,7 +28,8 @@ use crate::interval_arithmetic::Interval;
 use crate::operator::Operator;
 
 use arrow::datatypes::{
-    DataType, MAX_DECIMAL32_FOR_EACH_PRECISION, MAX_DECIMAL64_FOR_EACH_PRECISION,
+    DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION, DECIMAL128_MAX_PRECISION, DataType,
+    MAX_DECIMAL32_FOR_EACH_PRECISION, MAX_DECIMAL64_FOR_EACH_PRECISION,
     MAX_DECIMAL128_FOR_EACH_PRECISION, MIN_DECIMAL32_FOR_EACH_PRECISION,
     MIN_DECIMAL64_FOR_EACH_PRECISION, MIN_DECIMAL128_FOR_EACH_PRECISION, TimeUnit,
 };
@@ -73,13 +74,15 @@ impl CastPredicatePreimage {
 ///
 /// This is a restricted, value-preserving cast used to rewrite comparison
 /// predicates of the form `CAST(col AS target_type) <op> literal` into
-/// `col <op> try_cast_literal_to_type(literal, col_type)`. That rewrite is
-/// only valid when the cast cannot change the comparison result.
+/// `col <op> try_cast_literal_to_type(literal, col_type)`. The rewrite requires
+/// an exact literal preimage and an accepted cast family; for max-precision
+/// same-variant decimals, it may change cast overflow errors or NULLs to a
+/// boolean result for values outside the target range.
 ///
 /// # Supported Casts
 /// * numeric → numeric, including integers, decimals, `Date32`/`Date64` and
-///   `Timestamp`s, rejecting values outside the target's range or that would
-///   lose decimal digits
+///   `Timestamps`, rejecting literal conversions outside the target's range or
+///   that would lose decimal digits
 /// * string → string between `Utf8`, `LargeUtf8` and `Utf8View`
 /// * wrapping a value into, or unwrapping it out of, a `Dictionary` whose value
 ///   type matches the literal's type
@@ -114,7 +117,7 @@ pub fn try_cast_literal_to_type(
 /// This is the shared semantic core for logical and physical cast-predicate
 /// rewrites. It returns an exact same-operator source bound or literal as
 /// [`CastPredicatePreimage::Exact`] where moving the cast preserves comparison
-/// semantics, and a
+/// semantics subject to the documented family-level overflow exceptions, and a
 /// [`CastPredicatePreimage::Range`] for many-to-one casts with known preimages
 /// such as timestamp precision narrowing.
 pub fn cast_predicate_preimage(
@@ -175,9 +178,9 @@ pub fn exact_preimage_cast(
     target_type: &DataType,
     lit_value: &ScalarValue,
 ) -> Option<ScalarValue> {
-    // Apply a family-level safety gate: the source→target cast must normally be
-    // value-preserving over the full source domain. Timestamp precision
-    // narrowing is handled as a Range preimage, not an Exact preimage.
+    // Apply a family-level gate: the source→target cast must normally preserve
+    // the full source domain. Timestamp precision narrowing is handled as a
+    // Range preimage, not an Exact preimage.
     // Timestamp widening / equal-unit casts still require the literal
     // round-trip check below; widening retains its pre-existing overflow
     // limitation at extreme source values.
@@ -233,17 +236,18 @@ fn is_naive_to_tz_timestamp_cast(source_type: &DataType, target_type: &DataType)
 }
 
 /// Returns `true` when the cast from `source_type` to `target_type` is
-/// value-preserving (injective) and order-preserving at the family level.
-/// Timestamp widening is classified family-safe but retains its pre-existing
-/// overflow limitation at extreme source values; it is not a full-domain
-/// guarantee. Other accepted casts can be round-tripped without information
-/// loss and preserve comparison ordering.
+/// value-preserving and order-preserving at the family level. Timestamp
+/// widening retains its pre-existing overflow limitation. Same-variant
+/// maximum-precision decimal widening is an explicit exception: it may lose
+/// integer digits and replace cast overflow errors or `TRY_CAST` NULLs with
+/// booleans for out-of-range sources. This family-level rule is type-based and
+/// does not distinguish implicit coercions from explicit casts.
 ///
 /// This is a conservative gate used by [`exact_preimage_cast`]. Timestamp
 /// precision narrowing is not exact-safe (it is handled by
 /// [`CastPredicatePreimage::Range`]); timestamp widening / equal-unit casts are
-/// family-safe subject to the widening overflow limitation and still require the
-/// caller's literal round-trip check.
+/// family-safe subject to their documented overflow limitations and still
+/// require the caller's literal round-trip check.
 fn is_exact_cast_safe(source_type: &DataType, target_type: &DataType) -> bool {
     // Unwrap at most one level of dictionary for family-level checking.
     let (src, tgt) = match (source_type, target_type) {
@@ -293,8 +297,9 @@ fn is_exact_cast_safe(source_type: &DataType, target_type: &DataType) -> bool {
         return true;
     }
     if is_decimal_type(src) && is_decimal_type(tgt) {
-        // Decimal widening only: target integer digits and scale must
-        // be at least as large as source.
+        // Decimal widening normally retains integer digits and increases
+        // scale; same-variant maximum precision permits the narrow overflow
+        // exception documented by is_safe_decimal_widening.
         return is_safe_decimal_widening(src, tgt);
     }
     if is_integer_type(src) && is_decimal_type(tgt) {
@@ -371,8 +376,10 @@ fn decimal_precision_scale(dt: &DataType) -> (u8, i8) {
     }
 }
 
-/// Target must have at least as many integer digits and at least as large a
-/// scale as source.
+/// Requires nonnegative scales and normally preserves integer digits while
+/// increasing scale. Same-variant maximum-precision decimals may lose integer
+/// digits: this type-level exception can turn cast overflow errors or
+/// `TRY_CAST` NULLs into booleans for out-of-range source values.
 fn is_safe_decimal_widening(src: &DataType, tgt: &DataType) -> bool {
     let (p_src, s_src) = decimal_precision_scale(src);
     let (p_tgt, s_tgt) = decimal_precision_scale(tgt);
@@ -381,7 +388,19 @@ fn is_safe_decimal_widening(src: &DataType, tgt: &DataType) -> bool {
     }
     let src_int = (p_src as i16) - (s_src as i16);
     let tgt_int = (p_tgt as i16) - (s_tgt as i16);
-    tgt_int >= src_int && s_tgt >= s_src
+    let both_max_same_variant = match (src, tgt) {
+        (DataType::Decimal32(p_src, _), DataType::Decimal32(p_tgt, _)) => {
+            *p_src == DECIMAL32_MAX_PRECISION && *p_tgt == DECIMAL32_MAX_PRECISION
+        }
+        (DataType::Decimal64(p_src, _), DataType::Decimal64(p_tgt, _)) => {
+            *p_src == DECIMAL64_MAX_PRECISION && *p_tgt == DECIMAL64_MAX_PRECISION
+        }
+        (DataType::Decimal128(p_src, _), DataType::Decimal128(p_tgt, _)) => {
+            *p_src == DECIMAL128_MAX_PRECISION && *p_tgt == DECIMAL128_MAX_PRECISION
+        }
+        _ => false,
+    };
+    s_tgt >= s_src && (tgt_int >= src_int || both_max_same_variant)
 }
 
 /// Target decimal must be able to represent the full range of the source
@@ -2650,30 +2669,6 @@ mod tests {
             Operator::Eq,
             &ScalarValue::Int64(Some(123)),
         );
-        // Increasing scale while narrowing integer capacity can overflow for
-        // valid source values, even when this particular literal round-trips.
-        let source_type = DataType::Decimal128(38, 2);
-        let target_type = DataType::Decimal128(38, 15);
-        let target_literal = ScalarValue::Decimal128(Some(4 * 10_i128.pow(15)), 38, 15);
-        assert_eq!(
-            try_cast_literal_to_type(&target_literal, &source_type),
-            Some(ScalarValue::Decimal128(Some(400), 38, 2)),
-        );
-        assert_preimage_none(&source_type, &target_type, Operator::Eq, &target_literal);
-        let overflowing_source = ScalarValue::Decimal128(Some(10_i128.pow(37)), 38, 2);
-        let array = overflowing_source.to_array_of_size(1).unwrap();
-        assert!(
-            cast_with_options(
-                &array,
-                &target_type,
-                &CastOptions {
-                    safe: false,
-                    ..Default::default()
-                },
-            )
-            .is_err()
-        );
-
         // decimal scale narrowing
         assert_preimage_none(
             &DataType::Decimal128(18, 2),
@@ -2700,6 +2695,183 @@ mod tests {
             &DataType::FixedSizeBinary(4),
             Operator::Eq,
             &ScalarValue::FixedSizeBinary(4, Some(vec![1, 2, 3, 4])),
+        );
+    }
+
+    #[test]
+    fn test_max_precision_decimal_widening_preimages() {
+        let cases = [
+            (
+                DataType::Decimal32(9, 1),
+                DataType::Decimal32(9, 2),
+                ScalarValue::Decimal32(Some(1200), 9, 2),
+                ScalarValue::Decimal32(Some(120), 9, 1),
+            ),
+            (
+                DataType::Decimal64(18, 1),
+                DataType::Decimal64(18, 2),
+                ScalarValue::Decimal64(Some(1200), 18, 2),
+                ScalarValue::Decimal64(Some(120), 18, 1),
+            ),
+            (
+                DataType::Decimal128(38, 1),
+                DataType::Decimal128(38, 2),
+                ScalarValue::Decimal128(Some(1200), 38, 2),
+                ScalarValue::Decimal128(Some(120), 38, 1),
+            ),
+        ];
+        let ops = [
+            Operator::Eq,
+            Operator::NotEq,
+            Operator::Lt,
+            Operator::LtEq,
+            Operator::Gt,
+            Operator::GtEq,
+            Operator::IsDistinctFrom,
+            Operator::IsNotDistinctFrom,
+        ];
+        for (source, target, literal, expected) in &cases {
+            for op in ops {
+                assert_preimage_exact(source, target, op, literal, expected.clone());
+            }
+            let (negative, negative_expected, zero, zero_expected) = match source {
+                DataType::Decimal32(_, _) => (
+                    ScalarValue::Decimal32(Some(-1200), 9, 2),
+                    ScalarValue::Decimal32(Some(-120), 9, 1),
+                    ScalarValue::Decimal32(Some(0), 9, 2),
+                    ScalarValue::Decimal32(Some(0), 9, 1),
+                ),
+                DataType::Decimal64(_, _) => (
+                    ScalarValue::Decimal64(Some(-1200), 18, 2),
+                    ScalarValue::Decimal64(Some(-120), 18, 1),
+                    ScalarValue::Decimal64(Some(0), 18, 2),
+                    ScalarValue::Decimal64(Some(0), 18, 1),
+                ),
+                _ => (
+                    ScalarValue::Decimal128(Some(-1200), 38, 2),
+                    ScalarValue::Decimal128(Some(-120), 38, 1),
+                    ScalarValue::Decimal128(Some(0), 38, 2),
+                    ScalarValue::Decimal128(Some(0), 38, 1),
+                ),
+            };
+            for (literal, expected) in
+                [(negative, negative_expected), (zero, zero_expected)]
+            {
+                for op in ops {
+                    assert_preimage_exact(source, target, op, &literal, expected.clone());
+                }
+            }
+            let null = ScalarValue::try_from(target).unwrap();
+            assert_preimage_exact(
+                source,
+                target,
+                Operator::Eq,
+                &null,
+                ScalarValue::try_from(source).unwrap(),
+            );
+        }
+
+        // The exception does not cover reduced target scales, nonaligned
+        // literals, non-maximum precision, or cross-variant widening.
+        assert_preimage_none(
+            &DataType::Decimal128(38, 1),
+            &DataType::Decimal128(38, 0),
+            Operator::Eq,
+            &ScalarValue::Decimal128(Some(12), 38, 0),
+        );
+        for literal in [
+            ScalarValue::Decimal128(Some(1201), 38, 2),
+            ScalarValue::Decimal128(Some(-1201), 38, 2),
+        ] {
+            assert_preimage_none(
+                &DataType::Decimal128(38, 1),
+                &DataType::Decimal128(38, 2),
+                Operator::Eq,
+                &literal,
+            );
+        }
+        assert_preimage_none(
+            &DataType::Decimal128(37, 0),
+            &DataType::Decimal128(38, 2),
+            Operator::Eq,
+            &ScalarValue::Decimal128(Some(1200), 38, 2),
+        );
+        assert_preimage_none(
+            &DataType::Decimal128(38, 1),
+            &DataType::Decimal128(37, 2),
+            Operator::Eq,
+            &ScalarValue::Decimal128(Some(1200), 37, 2),
+        );
+        assert_preimage_none(
+            &DataType::Decimal128(38, 1),
+            &DataType::Decimal64(18, 2),
+            Operator::Eq,
+            &ScalarValue::Decimal64(Some(1200), 18, 2),
+        );
+        assert_preimage_none(
+            &DataType::Decimal64(18, 0),
+            &DataType::Decimal128(38, 30),
+            Operator::Eq,
+            &ScalarValue::Decimal128(Some(10_i128.pow(30)), 38, 30),
+        );
+        assert_preimage_none(
+            &DataType::Decimal256(76, 1),
+            &DataType::Decimal256(76, 2),
+            Operator::Eq,
+            &ScalarValue::Decimal256(Some(1200.into()), 76, 2),
+        );
+
+        // Arrow's strict cast errors and TRY_CAST returns NULL when this valid
+        // Decimal128 source exceeds the target's integer capacity.
+        let target_type = DataType::Decimal128(38, 2);
+        let source = ScalarValue::Decimal128(Some(i128::MAX / 10), 38, 1);
+        let array = source.to_array_of_size(1).unwrap();
+        assert!(
+            cast_with_options(
+                &array,
+                &target_type,
+                &CastOptions {
+                    safe: false,
+                    ..Default::default()
+                },
+            )
+            .is_err()
+        );
+        assert_eq!(
+            cast_with_options(&array, &target_type, &CastOptions::default())
+                .unwrap()
+                .null_count(),
+            1,
+        );
+
+        // This larger-scale Decimal128 value overflows the physical i128
+        // representation during the cast, not only the target precision.
+        let extreme = ScalarValue::Decimal128(Some(10_i128.pow(37)), 38, 2);
+        let extreme_array = extreme.to_array_of_size(1).unwrap();
+        let extreme_target = DataType::Decimal128(38, 15);
+        assert_preimage_exact(
+            &DataType::Decimal128(38, 2),
+            &extreme_target,
+            Operator::Eq,
+            &ScalarValue::Decimal128(Some(4 * 10_i128.pow(15)), 38, 15),
+            ScalarValue::Decimal128(Some(400), 38, 2),
+        );
+        assert!(
+            cast_with_options(
+                &extreme_array,
+                &extreme_target,
+                &CastOptions {
+                    safe: false,
+                    ..Default::default()
+                },
+            )
+            .is_err()
+        );
+        assert_eq!(
+            cast_with_options(&extreme_array, &extreme_target, &CastOptions::default())
+                .unwrap()
+                .null_count(),
+            1,
         );
     }
 

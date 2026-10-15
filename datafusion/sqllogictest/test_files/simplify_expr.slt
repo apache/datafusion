@@ -248,6 +248,92 @@ physical_plan
 statement ok
 drop table dates;
 
+# Maximum-precision decimal casts unwrap for aligned literals, while an
+# unaligned IN member keeps the cast. NULL inputs retain SQL comparison behavior.
+statement ok
+create table decimal_prices(price decimal(38,2)) as values
+  (4.00), (-1.00), (0.00), (5.00), (NULL);
+
+query TT
+explain select price from decimal_prices where price = 4.00;
+----
+logical_plan
+01)Filter: decimal_prices.price = Decimal128(4.00,38,2)
+02)--TableScan: decimal_prices projection=[price]
+physical_plan
+01)FilterExec: price@0 = 4.00
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query BBBBBBBB
+select
+  cast(price as decimal(38,15)) = 4.000000000000000,
+  cast(price as decimal(38,15)) <> 4.000000000000000,
+  cast(price as decimal(38,15)) < 4.000000000000000,
+  cast(price as decimal(38,15)) <= 4.000000000000000,
+  cast(price as decimal(38,15)) > 4.000000000000000,
+  cast(price as decimal(38,15)) >= 4.000000000000000,
+  cast(price as decimal(38,15)) is distinct from 4.000000000000000,
+  cast(price as decimal(38,15)) is not distinct from 4.000000000000000
+from decimal_prices order by price nulls last;
+----
+false true true true false false true false
+false true true true false false true false
+true false false true false true false true
+false true false false true true true false
+NULL NULL NULL NULL NULL NULL true false
+
+query R
+select price from decimal_prices where price in (
+  cast(4.000000000000000 as decimal(38,15)),
+  cast(4.000000000000001 as decimal(38,15)),
+  NULL
+);
+----
+4.00
+
+query TT
+explain select price from decimal_prices where cast(price as decimal(38,15)) in (
+  4.000000000000000,
+  4.000000000000001,
+  NULL
+);
+----
+logical_plan
+01)Filter: CAST(decimal_prices.price AS Decimal128(38, 15)) IN ([Decimal128(4.000000000000000,38,15), Decimal128(4.000000000000001,38,15), Decimal128(NULL,38,15)])
+02)--TableScan: decimal_prices projection=[price]
+physical_plan
+01)FilterExec: CAST(price@0 AS Decimal128(38, 15)) IN (SET) ([4.000000000000000, 4.000000000000001, NULL])
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select price from decimal_prices where cast(price as decimal(38,15)) in (
+  4.000000000000000,
+  5.000000000000000,
+  NULL
+);
+----
+logical_plan
+01)Filter: decimal_prices.price = Decimal128(4.00,38,2) OR decimal_prices.price = Decimal128(5.00,38,2)
+02)--TableScan: decimal_prices projection=[price]
+physical_plan
+01)FilterExec: price@0 = 4.00 OR price@0 = 5.00
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query BB
+select
+  price in (4.000000000000000, 5.000000000000000, NULL),
+  price not in (4.000000000000000, 5.000000000000000, NULL)
+from decimal_prices order by price nulls last;
+----
+NULL NULL
+NULL NULL
+true false
+true false
+NULL NULL
+
+statement ok
+drop table decimal_prices;
+
 # ------------------------------------------------------------------------
 # Unwrapping Date32 <-> Date64 casts in comparison predicates.
 #

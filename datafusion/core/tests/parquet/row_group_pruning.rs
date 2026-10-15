@@ -1003,8 +1003,8 @@ async fn prune_decimal_eq() {
         .with_expected_rows(2)
         .test_row_group_prune()
         .await;
-    // Increasing scale here narrows integer capacity, so the retained cast
-    // has no literal guarantee and its Bloom filter is not evaluated.
+    // Maximum-precision decimal widening accepts this aligned literal, so
+    // Bloom-filter pruning evaluates it just like the equivalent source cast.
     RowGroupPruningTest::new()
         .with_scenario(Scenario::DecimalLargePrecision)
         .with_query("SELECT * FROM t where decimal_col = 4.00")
@@ -1012,7 +1012,7 @@ async fn prune_decimal_eq() {
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
         .with_pruned_files(Some(0))
-        .with_matched_by_bloom_filter(Some(0))
+        .with_matched_by_bloom_filter(Some(2))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(2)
         .test_row_group_prune()
