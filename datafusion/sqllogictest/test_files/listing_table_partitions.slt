@@ -189,3 +189,31 @@ query DD
 select min(d), max(d) from null_part;
 ----
 2024-01-01 2024-01-01
+
+# A null partition still lets files be ordered by their partition value.
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement count 0
+create external table null_part_ordered (column1 int, column2 varchar, d date)
+stored as parquet
+partitioned by (d)
+with order (d)
+location 'test_files/scratch/listing_table_partitions/null_part/';
+
+query TT
+explain select column1, d from null_part_ordered order by d;
+----
+logical_plan
+01)Sort: null_part_ordered.d ASC NULLS LAST
+02)--TableScan: null_part_ordered projection=[column1, d]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/listing_table_partitions/null_part/d=2024-01-01/data.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/listing_table_partitions/null_part/d=__HIVE_DEFAULT_PARTITION__/data.parquet]]}, projection=[column1, d], output_ordering=[d@1 ASC NULLS LAST], file_type=parquet
+
+query ID
+select column1, d from null_part_ordered order by d;
+----
+1 2024-01-01
+2 NULL
+
+statement ok
+set datafusion.execution.target_partitions = 4;
