@@ -306,53 +306,51 @@ pub const BROTLI_LEVELS: std::ops::RangeInclusive<u32> = 0..=11;
 /// which the string form of this setting has never allowed.
 pub const ZSTD_LEVELS: std::ops::RangeInclusive<u32> = 0..=22;
 
-impl DFParquetCompression {
-    /// Splits `gzip(2)` into `("gzip", Some(2))` and `snappy` into `("snappy", None)`
-    fn split(setting: &str) -> Result<(&str, Option<u32>)> {
-        let Some((codec, rest)) = setting.split_once('(') else {
-            return Ok((setting, None));
-        };
-        let level = rest
-            .strip_suffix(')')
-            .and_then(|level| level.parse::<u32>().ok())
-            .ok_or_else(|| {
-                DataFusionError::Configuration(format!(
-                    "Could not parse compression string. \
-                    Got codec: {codec} and unknown level from {setting}"
-                ))
-            })?;
-        Ok((codec, Some(level)))
-    }
-
-    fn without_level(codec: &str, level: Option<u32>) -> Result<()> {
-        if level.is_some() {
-            return Err(DataFusionError::Configuration(format!(
-                "Compression {codec} does not support specifying a level"
-            )));
-        }
-        Ok(())
-    }
-
-    fn level_in(
-        codec: &str,
-        level: Option<u32>,
-        valid: std::ops::RangeInclusive<u32>,
-    ) -> Result<u32> {
-        let level = level.ok_or_else(|| {
+/// Splits `gzip(2)` into `("gzip", Some(2))` and `snappy` into `("snappy", None)`.
+pub(crate) fn split_compression(setting: &str) -> Result<(&str, Option<u32>)> {
+    let Some((codec, rest)) = setting.split_once('(') else {
+        return Ok((setting, None));
+    };
+    let level = rest
+        .strip_suffix(')')
+        .and_then(|level| level.parse::<u32>().ok())
+        .ok_or_else(|| {
             DataFusionError::Configuration(format!(
-                "{codec} compression requires specifying a level such as {codec}(4)"
+                "Could not parse compression string. \
+                Got codec: {codec} and unknown level from {setting}"
             ))
         })?;
-        if !valid.contains(&level) {
-            return Err(DataFusionError::Configuration(format!(
-                "Invalid compression level {level} for {codec}. \
-                Expected a level between {} and {}",
-                valid.start(),
-                valid.end()
-            )));
-        }
-        Ok(level)
+    Ok((codec, Some(level)))
+}
+
+pub(crate) fn compression_without_level(codec: &str, level: Option<u32>) -> Result<()> {
+    if level.is_some() {
+        return Err(DataFusionError::Configuration(format!(
+            "Compression {codec} does not support specifying a level"
+        )));
     }
+    Ok(())
+}
+
+pub(crate) fn compression_level_in(
+    codec: &str,
+    level: Option<u32>,
+    valid: std::ops::RangeInclusive<u32>,
+) -> Result<u32> {
+    let level = level.ok_or_else(|| {
+        DataFusionError::Configuration(format!(
+            "{codec} compression requires specifying a level such as {codec}(4)"
+        ))
+    })?;
+    if !valid.contains(&level) {
+        return Err(DataFusionError::Configuration(format!(
+            "Invalid compression level {level} for {codec}. \
+            Expected a level between {} and {}",
+            valid.start(),
+            valid.end()
+        )));
+    }
+    Ok(level)
 }
 
 impl FromStr for DFParquetCompression {
@@ -361,25 +359,29 @@ impl FromStr for DFParquetCompression {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         // ignore string literal chars passed from sqlparser i.e. remove single quotes
         let setting = s.replace('\'', "").to_lowercase();
-        let (codec, level) = Self::split(&setting)?;
+        let (codec, level) = split_compression(&setting)?;
         match codec {
             "uncompressed" => {
-                Self::without_level(codec, level)?;
+                compression_without_level(codec, level)?;
                 Ok(Self::Uncompressed)
             }
             "snappy" => {
-                Self::without_level(codec, level)?;
+                compression_without_level(codec, level)?;
                 Ok(Self::Snappy)
             }
-            "gzip" => Ok(Self::Gzip(Self::level_in(codec, level, GZIP_LEVELS)?)),
-            "brotli" => Ok(Self::Brotli(Self::level_in(codec, level, BROTLI_LEVELS)?)),
+            "gzip" => Ok(Self::Gzip(compression_level_in(codec, level, GZIP_LEVELS)?)),
+            "brotli" => Ok(Self::Brotli(compression_level_in(
+                codec,
+                level,
+                BROTLI_LEVELS,
+            )?)),
             "lz4" => {
-                Self::without_level(codec, level)?;
+                compression_without_level(codec, level)?;
                 Ok(Self::Lz4)
             }
-            "zstd" => Ok(Self::Zstd(Self::level_in(codec, level, ZSTD_LEVELS)?)),
+            "zstd" => Ok(Self::Zstd(compression_level_in(codec, level, ZSTD_LEVELS)?)),
             "lz4_raw" => {
-                Self::without_level(codec, level)?;
+                compression_without_level(codec, level)?;
                 Ok(Self::Lz4Raw)
             }
             _ => Err(DataFusionError::Configuration(format!(

@@ -4656,7 +4656,10 @@ mod tests {
             repartition_spill_with_compression(SpillCompression::Uncompressed).await?;
         assert!(uncompressed_rows > 0, "Expected spilling to occur");
 
-        for spill_compression in [SpillCompression::Lz4Frame, SpillCompression::Zstd] {
+        for spill_compression in [
+            SpillCompression::Lz4Frame,
+            SpillCompression::Zstd(SpillCompression::DEFAULT_ZSTD_LEVEL),
+        ] {
             let (rows, bytes) =
                 repartition_spill_with_compression(spill_compression).await?;
             assert_eq!(
