@@ -1,0 +1,11 @@
+# RIGHT JOIN, no_match: every streamed key is below every buffered key, so no row matches.
+
+subgroup no_match
+
+template sql_benchmarks/pwmj/pwmj.benchmark.template
+QPAD=03
+JOIN=RIGHT
+JOIN_KIND=Right
+RIGHT_ROWS=2000000
+RIGHT_KEY=-(h % 1000)
+EXPECTED_ROWS=2000000

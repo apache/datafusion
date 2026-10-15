@@ -20,7 +20,8 @@ use std::ops::Sub;
 
 use arrow::datatypes::ArrowNativeType;
 
-use crate::joins::MapOffset;
+use crate::joins::join_hash_map::ProbeOffset;
+use crate::joins::join_hash_map::ProbeOffset::{AtRow, MidChain};
 
 /// Traverses the chain of matching indices, collecting results up to the remaining limit.
 /// Returns `Some(offset)` if the limit was reached and there are more results to process,
@@ -34,7 +35,7 @@ pub(crate) fn traverse_chain<T>(
     input_indices: &mut Vec<u32>,
     match_indices: &mut Vec<u64>,
     is_last_input: bool,
-) -> Option<MapOffset>
+) -> Option<ProbeOffset>
 where
     T: Copy + TryFrom<usize> + PartialOrd + Into<u64> + Sub<Output = T>,
     <T as TryFrom<usize>>::Error: Debug,
@@ -56,8 +57,15 @@ where
             return if is_last_input && next == zero {
                 // Finished processing the last input row
                 None
+            } else if next == zero {
+                // `prob_idx` has been processed during this iteration, so the
+                // next call should start with the next input row
+                Some(AtRow { row: prob_idx + 1 })
             } else {
-                Some((prob_idx, Some(next.into())))
+                Some(MidChain {
+                    row: prob_idx,
+                    next: next.into(),
+                })
             };
         }
         if next == zero {
