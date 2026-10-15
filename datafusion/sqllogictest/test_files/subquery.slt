@@ -2976,6 +2976,25 @@ SELECT gs_outer.k, EXISTS (SELECT 1 FROM gs_inner WHERE gs_inner.k = gs_outer.k 
 statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
 SELECT gs_outer.k, (SELECT GROUPING(gs_inner.k) FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY GROUPING SETS ((gs_inner.k), (gs_inner.j)) LIMIT 1) FROM gs_outer;
 
+# `GROUPING`/`GROUPING_ID` are rewritten by `ResolveGroupingFunction` into bit
+# tests on `__grouping_id` in a node above the aggregate before this rule
+# runs, so the aggregate's own `aggr_expr` never holds a raw `GROUPING` call.
+# Reading `GROUPING(j)` out of the `(j)`/`(x)` sets, as a HAVING or through an
+# outer projection, reads `__grouping_id` above the aggregate without reading
+# `j` or `x` themselves, so this is only caught by looking for
+# `__grouping_id` in `column_refs_above_aggregate` directly.
+statement ok
+CREATE TABLE gs_inner3(k INT, j INT, x INT) AS VALUES (1, 10, 100), (NULL, 20, 200), (5, 30, 300), (2, 40, 400);
+
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT gs_outer.k, EXISTS (SELECT 1 FROM gs_inner3 WHERE gs_inner3.k = gs_outer.k GROUP BY GROUPING SETS ((gs_inner3.j), (gs_inner3.x)) HAVING GROUPING(gs_inner3.j) = 1) FROM gs_outer ORDER BY gs_outer.k;
+
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+SELECT gs_outer.k, (SELECT count(*) FROM (SELECT GROUPING(gs_inner3.j) AS g FROM gs_inner3 WHERE gs_inner3.k = gs_outer.k GROUP BY GROUPING SETS ((gs_inner3.j), (gs_inner3.x))) t WHERE t.g = 1) FROM gs_outer ORDER BY gs_outer.k;
+
+statement ok
+DROP TABLE gs_inner3;
+
 # The correlated column does not have to appear in the grouping set at all.
 statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
 SELECT gs_outer.k, EXISTS (SELECT 1 FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY ROLLUP(gs_inner.j)) FROM gs_outer;

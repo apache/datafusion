@@ -748,12 +748,19 @@ impl PullUpCorrelatedExpr {
             GroupingSet::Rollup(_) | GroupingSet::Cube(_) => true,
             GroupingSet::GroupingSets(sets) => sets.iter().any(|set| set.is_empty()),
         });
-        let reads_grouping_fn = aggregate.aggr_expr.iter().any(is_grouping_call);
+        // `GROUPING`/`GROUPING_ID` are resolved to bit tests on `__grouping_id`
+        // above the aggregate by `ResolveGroupingFunction` before this rule
+        // runs, so `aggregate.aggr_expr` never holds a `GROUPING` call by the
+        // time this is reached; adding a column shifts those bits instead.
+        let reads_grouping_id = self
+            .column_refs_above_aggregate
+            .iter()
+            .any(|col| col.name == Aggregate::INTERNAL_GROUPING_ID);
         let read_above = required_cols
             .iter()
             .any(|col| self.column_refs_above_aggregate.contains(*col));
 
-        if has_empty_set || reads_grouping_fn || read_above {
+        if has_empty_set || reads_grouping_id || read_above {
             GroupingSetsPullUp::Unsafe
         } else {
             GroupingSetsPullUp::SafeToExtend
@@ -910,12 +917,6 @@ fn can_pullup_over_aggregation(expr: &Expr) -> bool {
     } else {
         false
     }
-}
-
-/// Whether `expr` computes `GROUPING`/`GROUPING_ID`, which reads whether a
-/// row's grouping set groups by a particular column.
-fn is_grouping_call(expr: &Expr) -> bool {
-    matches!(expr, Expr::AggregateFunction(agg) if agg.func.name().eq_ignore_ascii_case("grouping"))
 }
 
 /// Columns read by a node that has a grouping set `Aggregate` below it in
