@@ -25,13 +25,20 @@ heading. See [CHECKS.md](CHECKS.md) for what is checked and
 
 ## Goal
 
-Testing an `ExecutionPlan` should need as little test code as possible. A user
-describes how to build their plan from its inputs (a `PlanFactory`), and the
-crate generates the inputs, meets the plan's input requirements, runs every
-check on several cases, and reports the findings of each case (the
-`PlanHarness`). The built-in audit in `tests/physical_plan/builtin_plans/` is
-written this way. The layers below the harness can also be used on their own,
-for a plan built by hand.
+`ExecutionPlan`s have a lot of properties, both implicit and explicit, that are
+important to get right for correctness and performance.  The interface exposes
+enough that we should be able to create a generic test suite over that interface
+to (1) catch real bugs in `ExecutionPlan`s shipped by DataFusion, and (2) let
+users more easily create correct and performant `ExecutionPlan`s.
+
+This crate implements a suite of checks to run on `ExecutionPlan`s, as well as
+profiles that vary the inputs to the `ExecutionPlan` to increase test coverage
+(e.g. varying statistics precision or input partitioning).
+
+The goal is that users only need to define a "spec" that describes valid inputs
+to the plan node and the cases will be generated automatically.  Some plans that
+have multiple configurations (e.g. `RepartitionExec` in different partitioning
+modes) will require users to define these variations explicitly.
 
 ## Layers
 
