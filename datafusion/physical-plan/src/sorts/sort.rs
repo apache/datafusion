@@ -63,7 +63,9 @@ use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::config::SpillCompression;
 use datafusion_common::tree_node::TreeNodeRecursion;
-use datafusion_common::utils::memory::RecordBatchMemoryCounter;
+use datafusion_common::utils::{
+    get_available_parallelism, memory::RecordBatchMemoryCounter,
+};
 use datafusion_common::{
     DataFusionError, Result, assert_or_internal_err, internal_datafusion_err,
     unwrap_or_internal_err,
@@ -105,7 +107,7 @@ impl ExternalSorterMetrics {
 /// Limits concurrent batch sorting across the partitions of one [`SortExec`].
 #[derive(Debug, Clone)]
 struct SortConcurrency {
-    /// Each partition can use the full worker budget, but queues at most this
+    /// Each partition can use the full concurrency budget, but queues at most this
     /// many jobs so it cannot put all its runs ahead of other partitions.
     per_partition_limit: usize,
     /// Shared budget: a job holds a permit until its run has been sorted.
@@ -114,7 +116,7 @@ struct SortConcurrency {
 
 impl SortConcurrency {
     /// Returns the shared limit on multithreaded Tokio runtimes, initialized
-    /// from the current runtime's worker count on first use.
+    /// on first use.
     fn for_current_runtime(cell: &OnceLock<Self>) -> Option<Self> {
         let handle = Handle::try_current().ok()?;
         if handle.runtime_flavor() != RuntimeFlavor::MultiThread {
@@ -122,11 +124,16 @@ impl SortConcurrency {
         }
         Some(
             cell.get_or_init(|| {
-                // Sorting is CPU-bound; more jobs would only queue for a worker.
-                let workers = handle.metrics().num_workers();
+                // These jobs are CPU-bound. Cap concurrency by the worker count
+                // to avoid queuing jobs that cannot run, and by estimated CPU
+                // parallelism to avoid oversubscribing CPUs on larger runtimes.
+                let limit = handle
+                    .metrics()
+                    .num_workers()
+                    .min(get_available_parallelism());
                 Self {
-                    per_partition_limit: workers,
-                    permits: Arc::new(Semaphore::new(workers)),
+                    per_partition_limit: limit,
+                    permits: Arc::new(Semaphore::new(limit)),
                 }
             })
             .clone(),
@@ -1289,9 +1296,10 @@ pub fn sort_batch_chunked(
 /// by the memory manager, by spilling to disk.
 ///
 /// On multithreaded Tokio runtimes, large inputs are sorted in batches on
-/// separate tasks before merging. All partitions share a task limit equal to
-/// the worker count of the runtime that first performs this sorting. The plan
-/// returned by [`ExecutionPlan::reset_state`] starts with a fresh limit.
+/// separate tasks before merging. All partitions share a task limit capped by
+/// both the worker count of the runtime that first performs this sorting and
+/// the estimated available CPU parallelism. The plan returned by
+/// [`ExecutionPlan::reset_state`] starts with a fresh limit.
 /// Inputs sorted in a single pass, current-thread runtimes, execution outside
 /// Tokio, and TopK sorting continue sorting inline.
 #[derive(Debug, Clone)]
