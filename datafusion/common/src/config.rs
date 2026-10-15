@@ -25,7 +25,8 @@ use crate::error::{_config_datafusion_err, _config_err};
 use crate::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
 use crate::parquet_config::{
     DFParquetCompression, DFParquetStatistics, DFParquetWriterVersion,
-    RowGroupRangeAssignment,
+    RowGroupRangeAssignment, ZSTD_LEVELS, compression_level_in,
+    compression_without_level, split_compression,
 };
 use crate::parsers::{CompressionTypeVariant, CsvQuoteStyle};
 use crate::utils::get_available_parallelism;
@@ -543,22 +544,40 @@ impl Display for Dialect {
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum SpillCompression {
-    Zstd,
+    /// Zstd with a level from [`ZSTD_LEVELS`]
+    Zstd(u32),
     Lz4Frame,
     #[default]
     Uncompressed,
+}
+
+impl SpillCompression {
+    /// Level used when `zstd` is given without an explicit level.
+    /// Matches the Arrow IPC writer's default.
+    pub const DEFAULT_ZSTD_LEVEL: u32 = 3;
 }
 
 impl FromStr for SpillCompression {
     type Err = DataFusionError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "zstd" => Ok(Self::Zstd),
-            "lz4_frame" => Ok(Self::Lz4Frame),
-            "uncompressed" | "" => Ok(Self::Uncompressed),
+        let setting = s.to_ascii_lowercase();
+        let (codec, level) = split_compression(&setting)?;
+        match codec {
+            "zstd" => Ok(Self::Zstd(match level {
+                None => Self::DEFAULT_ZSTD_LEVEL,
+                Some(_) => compression_level_in(codec, level, ZSTD_LEVELS)?,
+            })),
+            "lz4_frame" => {
+                compression_without_level(codec, level)?;
+                Ok(Self::Lz4Frame)
+            }
+            "uncompressed" | "" => {
+                compression_without_level(codec, level)?;
+                Ok(Self::Uncompressed)
+            }
             other => Err(DataFusionError::Configuration(format!(
-                "Invalid Spill file compression type: {other}. Expected one of: zstd, lz4_frame, uncompressed"
+                "Invalid Spill file compression type: {other}. Expected one of: zstd, zstd(level), lz4_frame, uncompressed"
             ))),
         }
     }
@@ -577,12 +596,11 @@ impl ConfigField for SpillCompression {
 
 impl Display for SpillCompression {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let str = match self {
-            Self::Zstd => "zstd",
-            Self::Lz4Frame => "lz4_frame",
-            Self::Uncompressed => "uncompressed",
-        };
-        write!(f, "{str}")
+        match self {
+            Self::Zstd(level) => write!(f, "zstd({level})"),
+            Self::Lz4Frame => write!(f, "lz4_frame"),
+            Self::Uncompressed => write!(f, "uncompressed"),
+        }
     }
 }
 
@@ -887,7 +905,7 @@ impl Display for MapKeyDedupPolicy {
 impl From<SpillCompression> for Option<CompressionType> {
     fn from(c: SpillCompression) -> Self {
         match c {
-            SpillCompression::Zstd => Some(CompressionType::ZSTD),
+            SpillCompression::Zstd(_) => Some(CompressionType::ZSTD),
             SpillCompression::Lz4Frame => Some(CompressionType::LZ4_FRAME),
             SpillCompression::Uncompressed => None,
         }
@@ -1007,10 +1025,12 @@ config_namespace! {
         ///
         /// Since datafusion writes spill files using the Arrow IPC Stream format,
         /// only codecs supported by the Arrow IPC Stream Writer are allowed.
-        /// Valid values are: uncompressed, lz4_frame, zstd.
+        /// Valid values are: uncompressed, lz4_frame, zstd, zstd(level).
         /// Note: lz4_frame offers faster (de)compression, but typically results in
         /// larger spill files. In contrast, zstd achieves
         /// higher compression ratios at the cost of slower (de)compression speed.
+        /// The zstd level must be between 0 and 22; lower levels compress faster.
+        /// zstd without a level, or with level 0, uses zstd's default level 3.
         pub spill_compression: SpillCompression, default = SpillCompression::Uncompressed
 
         /// Specifies the reserved memory for each spillable sort operation to
@@ -5080,6 +5100,51 @@ mod tests {
         assert!(MaxRowGroupBytes::from_str("not_a_number").is_err());
         assert_eq!(MaxRowGroupBytes::try_new(128).unwrap().get(), 128);
         assert_eq!(MaxRowGroupBytes::from_str("128").unwrap().get(), 128);
+    }
+
+    #[test]
+    fn spill_compression_zstd_carries_its_level() {
+        use crate::config::SpillCompression;
+
+        for (input, expected, displayed) in [
+            (
+                "zstd",
+                SpillCompression::Zstd(SpillCompression::DEFAULT_ZSTD_LEVEL),
+                "zstd(3)",
+            ),
+            ("ZSTD(1)", SpillCompression::Zstd(1), "zstd(1)"),
+            ("zstd(22)", SpillCompression::Zstd(22), "zstd(22)"),
+            ("lz4_frame", SpillCompression::Lz4Frame, "lz4_frame"),
+            ("", SpillCompression::Uncompressed, "uncompressed"),
+        ] {
+            let parsed: SpillCompression = input.parse().unwrap();
+            assert_eq!(parsed, expected, "input: {input}");
+            assert_eq!(parsed.to_string(), displayed, "input: {input}");
+            assert_eq!(displayed.parse::<SpillCompression>().unwrap(), parsed);
+        }
+    }
+
+    #[test]
+    fn spill_compression_rejects_invalid_settings() {
+        use crate::config::SpillCompression;
+
+        for (input, message) in [
+            ("zstdd(3)", "Invalid Spill file compression type: zstdd"),
+            ("zstd(fast)", "Could not parse compression string"),
+            ("zstd(3", "Could not parse compression string"),
+            ("zstd(-5)", "Could not parse compression string"),
+            (
+                "zstd(23)",
+                "Invalid compression level 23 for zstd. Expected a level between 0 and 22",
+            ),
+            (
+                "lz4_frame(2)",
+                "Compression lz4_frame does not support specifying a level",
+            ),
+        ] {
+            let err = input.parse::<SpillCompression>().unwrap_err().to_string();
+            assert!(err.contains(message), "input: {input}, error: {err}");
+        }
     }
 
     #[test]

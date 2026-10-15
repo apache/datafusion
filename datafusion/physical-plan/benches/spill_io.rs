@@ -435,7 +435,7 @@ fn bench_spill_compression(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
     let compressions = vec![
         SpillCompression::Uncompressed,
-        SpillCompression::Zstd,
+        SpillCompression::Zstd(SpillCompression::DEFAULT_ZSTD_LEVEL),
         SpillCompression::Lz4Frame,
     ];
 

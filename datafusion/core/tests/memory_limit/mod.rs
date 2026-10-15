@@ -1043,7 +1043,7 @@ async fn test_disk_spill_limit_not_reached() -> Result<()> {
 #[tokio::test]
 async fn test_spill_file_compressed_with_zstd() -> Result<()> {
     let disk_spill_limit = 1024 * 1024; // 1MB
-    let spill_compression = SpillCompression::Zstd;
+    let spill_compression = SpillCompression::Zstd(SpillCompression::DEFAULT_ZSTD_LEVEL);
     let ctx = setup_context(disk_spill_limit, 128 * 1024, spill_compression)?; // 1MB disk limit, 128KB memory limit, zstd
 
     let df = ctx
