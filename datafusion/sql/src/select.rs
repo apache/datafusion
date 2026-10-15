@@ -34,7 +34,8 @@ use arrow::datatypes::DataType;
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{
-    Column, DFSchema, DFSchemaRef, HashMap, Result, not_impl_err, plan_err,
+    Column, DFSchema, DFSchemaRef, HashMap, Result, not_impl_err, plan_datafusion_err,
+    plan_err,
 };
 use datafusion_common::{NullHandling, RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::ExprSchemable;
@@ -55,8 +56,8 @@ use datafusion_expr::{
 
 use indexmap::IndexMap;
 use sqlparser::ast::{
-    Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr, OrderBy,
-    SelectItemQualifiedWildcardKind, WildcardAdditionalOptions, WindowType,
+    Distinct, Expr as SQLExpr, GroupByExpr, Ident, NamedWindowExpr, OrderBy,
+    SelectItemQualifiedWildcardKind, WildcardAdditionalOptions, WindowSpec, WindowType,
     visit_expressions_mut,
 };
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
@@ -130,7 +131,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         // Handle named windows before processing the projection expression
         check_conflicting_windows(&select.named_window)?;
-        self.match_window_definitions(&mut select.projection, &select.named_window)?;
+        self.match_window_definitions(
+            &mut select.projection,
+            select.qualify.as_mut(),
+            &select.named_window,
+        )?;
 
         // Process the SELECT expressions
         let select_exprs = self.prepare_select_exprs(
@@ -1425,54 +1430,129 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn match_window_definitions(
         &self,
         projection: &mut [SelectItem],
+        qualify: Option<&mut SQLExpr>,
         named_windows: &[NamedWindowDefinition],
     ) -> Result<()> {
-        let named_windows: Vec<(&NamedWindowDefinition, String)> = named_windows
-            .iter()
-            .map(|w| (w, self.ident_normalizer.normalize(w.0.clone())))
-            .collect();
+        let mut resolved_windows: HashMap<String, WindowSpec> = HashMap::new();
+
+        for NamedWindowDefinition(ident, window_expr) in named_windows {
+            let normalized_name = self.ident_normalizer.normalize(ident.clone());
+            let resolved_spec = match window_expr {
+                NamedWindowExpr::NamedWindow(ref_ident) => {
+                    let normalized_ref =
+                        self.ident_normalizer.normalize(ref_ident.clone());
+                    resolved_windows
+                        .get(&normalized_ref)
+                        .cloned()
+                        .ok_or_else(|| {
+                            plan_datafusion_err!("The window {ref_ident} is not defined!")
+                        })?
+                }
+                NamedWindowExpr::WindowSpec(spec) => {
+                    let mut spec = spec.clone();
+                    if let Some(ref_ident) = spec.window_name.clone() {
+                        let normalized_ref =
+                            self.ident_normalizer.normalize(ref_ident.clone());
+                        let base_spec =
+                            resolved_windows.get(&normalized_ref).ok_or_else(|| {
+                                plan_datafusion_err!(
+                                    "The window {ref_ident} is not defined!"
+                                )
+                            })?;
+                        resolve_window_spec_inheritance(
+                            &ref_ident, &mut spec, base_spec,
+                        )?;
+                    }
+                    spec
+                }
+            };
+            resolved_windows.insert(normalized_name, resolved_spec);
+        }
+
+        let resolve_expr = |expr: &mut SQLExpr| -> Result<()> {
+            let mut err = None;
+            let _ = visit_expressions_mut(expr, |expr| {
+                if let SQLExpr::Function(f) = expr {
+                    match &mut f.over {
+                        Some(WindowType::NamedWindow(ident)) => {
+                            let normalized_ident =
+                                self.ident_normalizer.normalize(ident.clone());
+                            if let Some(spec) = resolved_windows.get(&normalized_ident) {
+                                f.over = Some(WindowType::WindowSpec(spec.clone()));
+                            } else {
+                                err =
+                                    Some(plan_err!("The window {ident} is not defined!"));
+                                return ControlFlow::Break(());
+                            }
+                        }
+                        Some(WindowType::WindowSpec(spec)) => {
+                            if let Some(ident) = spec.window_name.clone() {
+                                let normalized_ident =
+                                    self.ident_normalizer.normalize(ident.clone());
+                                if let Some(base_spec) =
+                                    resolved_windows.get(&normalized_ident)
+                                {
+                                    if let Err(e) = resolve_window_spec_inheritance(
+                                        &ident, spec, base_spec,
+                                    ) {
+                                        err = Some(Err(e));
+                                        return ControlFlow::Break(());
+                                    }
+                                } else {
+                                    err = Some(plan_err!(
+                                        "The window {ident} is not defined!"
+                                    ));
+                                    return ControlFlow::Break(());
+                                }
+                            }
+                        }
+                        None => {}
+                    }
+                }
+                ControlFlow::Continue(())
+            });
+            if let Some(err) = err { err } else { Ok(()) }
+        };
+
         for proj in projection.iter_mut() {
             if let SelectItem::ExprWithAlias { expr, alias: _ }
             | SelectItem::UnnamedExpr(expr) = proj
             {
-                let mut err = None;
-                let _ = visit_expressions_mut(expr, |expr| {
-                    if let SQLExpr::Function(f) = expr
-                        && let Some(WindowType::NamedWindow(ident)) = &f.over
-                    {
-                        let normalized_ident =
-                            self.ident_normalizer.normalize(ident.clone());
-                        for (
-                            NamedWindowDefinition(_, window_expr),
-                            normalized_window_ident,
-                        ) in named_windows.iter()
-                        {
-                            if normalized_ident.eq(normalized_window_ident) {
-                                f.over = Some(match window_expr {
-                                    NamedWindowExpr::NamedWindow(ident) => {
-                                        WindowType::NamedWindow(ident.clone())
-                                    }
-                                    NamedWindowExpr::WindowSpec(spec) => {
-                                        WindowType::WindowSpec(spec.clone())
-                                    }
-                                })
-                            }
-                        }
-                        // All named windows must be defined with a WindowSpec.
-                        if let Some(WindowType::NamedWindow(ident)) = &f.over {
-                            err = Some(plan_err!("The window {ident} is not defined!"));
-                            return ControlFlow::Break(());
-                        }
-                    }
-                    ControlFlow::Continue(())
-                });
-                if let Some(err) = err {
-                    return err;
-                }
+                resolve_expr(expr)?;
             }
         }
+
+        if let Some(qualify_expr) = qualify {
+            resolve_expr(qualify_expr)?;
+        }
+
         Ok(())
     }
+}
+
+fn resolve_window_spec_inheritance(
+    ident: &Ident,
+    spec: &mut WindowSpec,
+    base_spec: &WindowSpec,
+) -> Result<()> {
+    if !spec.partition_by.is_empty() {
+        return plan_err!("Cannot override PARTITION BY clause of window {ident}");
+    }
+    if !spec.order_by.is_empty() && !base_spec.order_by.is_empty() {
+        return plan_err!("Cannot override ORDER BY clause of window {ident}");
+    }
+    if base_spec.window_frame.is_some() {
+        return plan_err!("Cannot copy window {ident} because it has a frame clause");
+    }
+
+    spec.partition_by.clone_from(&base_spec.partition_by);
+
+    if spec.order_by.is_empty() {
+        spec.order_by.clone_from(&base_spec.order_by);
+    }
+
+    spec.window_name = None;
+    Ok(())
 }
 
 // If there are any multiple-defined windows, we raise an error.

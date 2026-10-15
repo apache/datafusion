@@ -3481,6 +3481,35 @@ SELECT
   ORDER BY C3
   LIMIT 5
 
+# window referencing named window with frame clause inherits PARTITION BY and ORDER BY (#26364)
+query RRR
+SELECT
+  MAX(c12) OVER (w ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) as named_plus_frame,
+  MAX(c12) OVER (PARTITION BY c11 ORDER BY c12 ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) as inline,
+  MAX(c12) OVER (w) as named_paren
+  FROM aggregate_test_100
+  WINDOW w AS (PARTITION BY c11 ORDER BY c12)
+  ORDER BY c11, c12
+  LIMIT 5
+----
+0.850672105305 0.850672105305 0.970671228336
+0.850672105305 0.850672105305 0.970671228336
+0.970671228336 0.970671228336 0.970671228336
+0.369363046006 0.369363046006 0.865502699898
+0.56535284223 0.56535284223 0.865502699898
+
+# window referencing named window cannot override PARTITION BY
+statement error DataFusion error: Error during planning: Cannot override PARTITION BY clause of window w
+SELECT MAX(c12) OVER (w PARTITION BY c3) FROM aggregate_test_100 WINDOW w AS (PARTITION BY c11);
+
+# window referencing named window cannot override ORDER BY
+statement error DataFusion error: Error during planning: Cannot override ORDER BY clause of window w
+SELECT MAX(c12) OVER (w ORDER BY c3) FROM aggregate_test_100 WINDOW w AS (ORDER BY c12);
+
+# window referencing named window cannot copy window if base window has frame clause
+statement error DataFusion error: Error during planning: Cannot copy window w because it has a frame clause
+SELECT MAX(c12) OVER (w ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM aggregate_test_100 WINDOW w AS (ORDER BY c12 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW);
+
 # Create a source where there is multiple orderings.
 statement ok
 CREATE EXTERNAL TABLE multiple_ordered_table (

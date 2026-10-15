@@ -6104,3 +6104,89 @@ fn test_reserved_column_name_explain_copy() {
         "Error during planning: __common_expr_1 is a reserved DataFusion column name, please use another name"
     );
 }
+
+#[test]
+fn test_named_window_spec_reference_inherits_partition_and_order() {
+    let sql_named = "SELECT id, max(age) OVER (w ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM person WINDOW w AS (PARTITION BY state ORDER BY age)";
+    let sql_inline = "SELECT id, max(age) OVER (PARTITION BY state ORDER BY age ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM person";
+
+    let plan_named = logical_plan(sql_named).unwrap();
+    let plan_inline = logical_plan(sql_inline).unwrap();
+
+    assert_eq!(format!("{plan_named}"), format!("{plan_inline}"));
+}
+
+#[test]
+fn test_named_window_spec_reference_in_parens_matches_without_parens() {
+    let sql_paren = "SELECT id, max(age) OVER (w) FROM person WINDOW w AS (PARTITION BY state ORDER BY age)";
+    let sql_no_paren = "SELECT id, max(age) OVER w FROM person WINDOW w AS (PARTITION BY state ORDER BY age)";
+
+    let plan_paren = logical_plan(sql_paren).unwrap();
+    let plan_no_paren = logical_plan(sql_no_paren).unwrap();
+
+    assert_eq!(format!("{plan_paren}"), format!("{plan_no_paren}"));
+}
+
+#[test]
+fn test_named_window_spec_reference_adds_order_by() {
+    let sql_named = "SELECT id, max(age) OVER (w ORDER BY age) FROM person WINDOW w AS (PARTITION BY state)";
+    let sql_inline =
+        "SELECT id, max(age) OVER (PARTITION BY state ORDER BY age) FROM person";
+
+    let plan_named = logical_plan(sql_named).unwrap();
+    let plan_inline = logical_plan(sql_inline).unwrap();
+
+    assert_eq!(format!("{plan_named}"), format!("{plan_inline}"));
+}
+
+#[test]
+fn test_named_window_spec_reference_chained_definitions() {
+    let sql = "SELECT id, max(age) OVER (w2 ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM person WINDOW w1 AS (PARTITION BY state), w2 AS (w1 ORDER BY age)";
+    let sql_inline = "SELECT id, max(age) OVER (PARTITION BY state ORDER BY age ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM person";
+
+    let plan_named = logical_plan(sql).unwrap();
+    let plan_inline = logical_plan(sql_inline).unwrap();
+
+    assert_eq!(format!("{plan_named}"), format!("{plan_inline}"));
+}
+
+#[test]
+fn test_named_window_spec_reference_cannot_override_partition_by() {
+    let sql = "SELECT max(age) OVER (w PARTITION BY id) FROM person WINDOW w AS (PARTITION BY state)";
+    let err = logical_plan(sql).unwrap_err().strip_backtrace();
+    assert_eq!(
+        err,
+        "Error during planning: Cannot override PARTITION BY clause of window w"
+    );
+}
+
+#[test]
+fn test_named_window_spec_reference_cannot_override_order_by() {
+    let sql =
+        "SELECT max(age) OVER (w ORDER BY id) FROM person WINDOW w AS (ORDER BY age)";
+    let err = logical_plan(sql).unwrap_err().strip_backtrace();
+    assert_eq!(
+        err,
+        "Error during planning: Cannot override ORDER BY clause of window w"
+    );
+}
+
+#[test]
+fn test_named_window_spec_reference_cannot_copy_frame_clause() {
+    let sql = "SELECT max(age) OVER (w ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM person WINDOW w AS (ORDER BY age ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)";
+    let err = logical_plan(sql).unwrap_err().strip_backtrace();
+    assert_eq!(
+        err,
+        "Error during planning: Cannot copy window w because it has a frame clause"
+    );
+}
+
+#[test]
+fn test_named_window_spec_reference_undefined_window() {
+    let sql = "SELECT max(age) OVER (nonexistent ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM person";
+    let err = logical_plan(sql).unwrap_err().strip_backtrace();
+    assert_eq!(
+        err,
+        "Error during planning: The window nonexistent is not defined!"
+    );
+}
