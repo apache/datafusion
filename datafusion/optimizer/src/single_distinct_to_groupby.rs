@@ -120,6 +120,21 @@ impl CountRollup {
     }
 }
 
+fn unalias(expr: &Expr) -> &Expr {
+    let mut cur = expr;
+    while let Expr::Alias(alias) = cur {
+        cur = alias.expr.as_ref();
+    }
+    cur
+}
+
+fn unalias_owned(mut expr: Expr) -> Expr {
+    while let Expr::Alias(alias) = expr {
+        expr = *alias.expr;
+    }
+    expr
+}
+
 /// Check whether all aggregate exprs are distinct on a single field.
 fn is_single_distinct_agg(
     aggr_expr: &[Expr],
@@ -131,6 +146,7 @@ fn is_single_distinct_agg(
     let mut distinct_aggs = vec![];
     let mut has_count_rollup = false;
     for expr in aggr_expr {
+        let unaliased = unalias(expr);
         if let Expr::AggregateFunction(AggregateFunction {
             func,
             params:
@@ -141,7 +157,7 @@ fn is_single_distinct_agg(
                     order_by,
                     null_treatment: _,
                 },
-        }) = expr
+        }) = unaliased
         {
             if filter.is_some() || !order_by.is_empty() {
                 return Ok(false);
@@ -297,7 +313,10 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 // zero that `sum` reports as NULL over an empty input.
                 let (outer_aggr_exprs, outer_proj_exprs): (Vec<Expr>, Vec<Expr>) = aggr_expr
                     .into_iter()
-                    .map(|aggr_expr| match aggr_expr {
+                    .map(|aggr_expr| {
+                        let original_expr = aggr_expr.clone();
+                        let unaliased = unalias_owned(aggr_expr);
+                        match unaliased {
                         Expr::AggregateFunction(AggregateFunction {
                             func,
                             params:
@@ -384,8 +403,9 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                 Ok((outer, proj))
                             }
                         }
-                        _ => Ok((aggr_expr.clone(), aggr_expr)),
-                    })
+                        _ => Ok((original_expr.clone(), original_expr)),
+                    }
+                })
                     .collect::<Result<Vec<_>>>()?
                     .into_iter()
                     .unzip();

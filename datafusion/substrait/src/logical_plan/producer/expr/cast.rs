@@ -29,7 +29,7 @@ pub fn from_cast(
     cast: &Cast,
     schema: &DFSchemaRef,
 ) -> datafusion::common::Result<Expression> {
-    let Cast { expr, field } = cast;
+    let Cast { expr, field, .. } = cast;
     // since substrait Null must be typed, so if we see a cast(null, dt), we make it a typed null
     if let Expr::Literal(lit, _) = expr.as_ref() {
         // only the untyped(a null scalar value) null literal need this special handling
@@ -64,7 +64,7 @@ pub fn from_try_cast(
     cast: &TryCast,
     schema: &DFSchemaRef,
 ) -> datafusion::common::Result<Expression> {
-    let TryCast { expr, field } = cast;
+    let TryCast { expr, field, .. } = cast;
     Ok(Expression {
         rex_type: Some(RexType::Cast(Box::new(
             substrait::proto::expression::Cast {

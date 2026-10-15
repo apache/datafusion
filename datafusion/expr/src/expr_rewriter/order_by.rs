@@ -119,13 +119,23 @@ fn rewrite_in_terms_of_projection(
             let (qualifier, field_name) = found.qualified_name();
             let col = Expr::Column(Column::new(qualifier, field_name));
             return Ok(Transformed::yes(match normalized_expr {
-                Expr::Cast(Cast { expr: _, field }) => Expr::Cast(Cast {
+                Expr::Cast(Cast {
+                    expr: _,
+                    field,
+                    is_implicit,
+                }) => Expr::Cast(Cast {
                     expr: Box::new(col),
                     field,
+                    is_implicit,
                 }),
-                Expr::TryCast(TryCast { expr: _, field }) => Expr::TryCast(TryCast {
+                Expr::TryCast(TryCast {
+                    expr: _,
+                    field,
+                    is_implicit,
+                }) => Expr::TryCast(TryCast {
                     expr: Box::new(col),
                     field,
+                    is_implicit,
                 }),
                 _ => col,
             }));

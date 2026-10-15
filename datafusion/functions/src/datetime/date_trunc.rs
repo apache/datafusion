@@ -741,7 +741,10 @@ fn date_column_preimage(
     info: &SimplifyContext,
 ) -> Option<PreimageResult> {
     // The signature wraps Date columns as exactly Cast(_, Timestamp(Nanosecond, None)).
-    let Expr::Cast(Cast { expr: inner, field }) = col_expr else {
+    let Expr::Cast(Cast {
+        expr: inner, field, ..
+    }) = col_expr
+    else {
         return None;
     };
     if !matches!(field.data_type(), Timestamp(Nanosecond, None)) {

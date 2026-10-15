@@ -1069,7 +1069,7 @@ fn is_partitionable_equality(expr: &Expr, schema: &DFSchema) -> bool {
         return false;
     };
     let (col, cast_to) = match col_side {
-        Expr::Cast(Cast { expr, field }) => (&**expr, Some(field.data_type())),
+        Expr::Cast(Cast { expr, field, .. }) => (&**expr, Some(field.data_type())),
         _ => (col_side, None),
     };
     let Ok(col_type) = col.get_type(schema) else {

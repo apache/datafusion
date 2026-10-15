@@ -18,9 +18,7 @@
 //! [`TryCastToTypeFunc`]: Implementation of the `try_cast_to_type` function
 
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::{
-    Result, datatype::DataTypeExt, internal_err, utils::take_function_args,
-};
+use datafusion_common::{Result, internal_err, utils::take_function_args};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
@@ -116,10 +114,10 @@ impl ScalarUDFImpl for TryCastToTypeFunc {
         let new_expr = if source_type == target_type {
             source_arg
         } else {
-            Expr::TryCast(datafusion_expr::TryCast {
-                expr: Box::new(source_arg),
-                field: target_type.into_nullable_field_ref(),
-            })
+            Expr::TryCast(datafusion_expr::TryCast::new(
+                Box::new(source_arg),
+                target_type,
+            ))
         };
         Ok(ExprSimplifyResult::Simplified(new_expr))
     }

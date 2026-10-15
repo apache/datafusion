@@ -16,7 +16,8 @@
 // under the License.
 
 use crate::logical_plan::consumer::{
-    SubstraitConsumer, from_substrait_func_args, substrait_fun_name,
+    SubstraitConsumer, from_substrait_func_args, mark_implicit_coercion_casts,
+    substrait_fun_name,
 };
 use datafusion::common::{
     DFSchema, ScalarValue, not_impl_datafusion_err, not_impl_err, plan_datafusion_err,
@@ -77,11 +78,13 @@ pub async fn from_substrait_agg_func(
     // Datafusion does not support aggregate functions with no arguments, so
     // we inject a dummy argument that does not affect the query, but allows
     // us to bypass this limitation.
-    let args = if udaf.name() == "count" && args.is_empty() {
+    let mut args = if udaf.name() == "count" && args.is_empty() {
         vec![Expr::Literal(ScalarValue::Int64(Some(1)), None)]
     } else {
         args
     };
+
+    mark_implicit_coercion_casts(udaf.as_ref(), &mut args, input_schema)?;
 
     Ok(Arc::new(Expr::AggregateFunction(
         expr::AggregateFunction::new_udf(udaf, args, distinct, filter, order_by, None),

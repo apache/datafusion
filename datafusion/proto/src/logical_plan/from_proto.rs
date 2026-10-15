@@ -444,7 +444,13 @@ pub fn parse_expr(
                 .into_nullable_field()
                 .with_nullable(cast.nullable.unwrap_or(true))
                 .with_metadata(cast.metadata.clone());
-            Ok(Expr::Cast(Cast::new_from_field(expr, Arc::new(field))))
+            let is_implicit = cast.is_implicit.unwrap_or(false);
+            let cast = if is_implicit {
+                Cast::new_implicit_from_field(expr, Arc::new(field))
+            } else {
+                Cast::new_from_field(expr, Arc::new(field))
+            };
+            Ok(Expr::Cast(cast))
         }
         ExprType::TryCast(cast) => {
             let expr = Box::new(parse_required_expr(
@@ -458,10 +464,13 @@ pub fn parse_expr(
                 .into_nullable_field()
                 .with_nullable(cast.nullable.unwrap_or(true))
                 .with_metadata(cast.metadata.clone());
-            Ok(Expr::TryCast(TryCast::new_from_field(
-                expr,
-                Arc::new(field),
-            )))
+            let is_implicit = cast.is_implicit.unwrap_or(false);
+            let try_cast = if is_implicit {
+                TryCast::new_implicit_from_field(expr, Arc::new(field))
+            } else {
+                TryCast::new_from_field(expr, Arc::new(field))
+            };
+            Ok(Expr::TryCast(try_cast))
         }
         ExprType::Negative(negative) => Ok(Expr::Negative(Box::new(
             parse_required_expr(negative.expr.as_deref(), ctx, "expr", codec)?,
