@@ -289,8 +289,8 @@ impl PhysicalOptimizer {
 
     /// Create a new optimizer with the given rules
     ///
-    /// See the [physical optimizer contract](self#physical-optimizer-contract)
-    /// for correctness requirements and optimization coverage of custom pipelines.
+    /// See the [module documentation](self) for the contract governing non-default
+    /// optimizer pipelines.
     pub fn with_rules(rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>) -> Self {
         Self { rules }
     }
