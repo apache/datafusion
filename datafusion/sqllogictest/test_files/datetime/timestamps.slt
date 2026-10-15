@@ -3376,6 +3376,12 @@ logical_plan
 01)Filter: date_trunc(Utf8("month"), ts_data_nanos.ts) = TimestampNanosecond(1715731200000000000, None)
 02)--TableScan: ts_data_nanos projection=[ts, value]
 
+# Literal of a different type: type coercion rejects the comparison before
+# the preimage is consulted, so the preimage only ever sees timestamp literals.
+query error DataFusion error: type_coercion\ncaused by\nError during planning: Cannot infer common argument type for comparison operation Timestamp\(ns\) = Int32
+SELECT * FROM ts_data_nanos
+WHERE date_trunc('day', ts) = arrow_cast(1714521600, 'Int32');
+
 # Date column: preimage peels the signature-inserted Cast(date, Timestamp(ns))
 # and emits bounds in the Date type against the raw column, enabling pruning
 # on Date partition columns. Date values are always at midnight UTC after the

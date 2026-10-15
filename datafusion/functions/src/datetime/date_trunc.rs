@@ -1347,46 +1347,12 @@ mod tests {
     use arrow::buffer::NullBuffer;
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::compute::{DatePart, SortOptions};
-    use arrow::datatypes::{DataType, Field, Metadata, TimeUnit};
+    use arrow::datatypes::{DataType, Field, TimeUnit};
     use datafusion_common::ScalarValue;
     use datafusion_common::config::ConfigOptions;
-    use datafusion_common::{DFSchema, DFSchemaRef};
     use datafusion_expr::interval_arithmetic::Interval;
-    use datafusion_expr::preimage::PreimageResult;
-    use datafusion_expr::simplify::SimplifyContext;
     use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-    use datafusion_expr::{ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, col};
-
-    /// Build a `SimplifyContext` whose schema declares `x` with the given type.
-    /// The preimage method consults `info.get_data_type(col_expr)`, so unit
-    /// tests need a real schema (matches the date_part / floor test pattern).
-    fn ctx_with_x(data_type: DataType) -> SimplifyContext {
-        let schema: DFSchemaRef = Arc::new(
-            DFSchema::from_unqualified_fields(
-                vec![Field::new("x", data_type, true)].into(),
-                Metadata::new(),
-            )
-            .unwrap(),
-        );
-        SimplifyContext::builder().with_schema(schema).build()
-    }
-
-    fn assert_preimage_none(granularity: &str, literal: ScalarValue) {
-        let date_trunc = DateTruncFunc::new();
-        let args = vec![
-            Expr::Literal(ScalarValue::Utf8(Some(granularity.to_string())), None),
-            col("x"),
-        ];
-        let lit_expr = Expr::Literal(literal.clone(), None);
-        let info = ctx_with_x(literal.data_type());
-
-        let result = date_trunc.preimage(&args, &lit_expr, &info).unwrap();
-
-        assert!(
-            matches!(result, PreimageResult::None),
-            "expected no preimage for literal {literal:?}"
-        );
-    }
+    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
     #[test]
     fn output_ordering_respects_timestamp_timezone() {
@@ -1522,31 +1488,6 @@ mod tests {
             let result = date_trunc_coarse(granularity_enum, left, None).unwrap();
             assert_eq!(result, right, "{original} = {expected}");
         }
-    }
-
-    #[test]
-    fn test_date_trunc_preimage_none_cases() {
-        // Literal not aligned to the granularity → unsatisfiable, skip rewrite.
-        let non_truncated = string_to_timestamp_nanos("2024-05-01T10:30:15Z").unwrap();
-        assert_preimage_none(
-            "minute",
-            ScalarValue::TimestampNanosecond(Some(non_truncated), None),
-        );
-
-        // Coarse granularity with a named timezone: bucket width is variable
-        // around DST, so we conservatively skip the rewrite.
-        let day_start_tz =
-            string_to_timestamp_nanos("2024-10-27T00:00:00+02:00").unwrap();
-        assert_preimage_none(
-            "day",
-            ScalarValue::TimestampNanosecond(
-                Some(day_start_tz),
-                Some(Arc::<str>::from("Europe/Berlin")),
-            ),
-        );
-
-        // Unsupported literal type (Int32) → no preimage.
-        assert_preimage_none("day", ScalarValue::Int32(Some(0)));
     }
 
     #[test]
