@@ -826,6 +826,17 @@ datafusion.execution.parquet.coerce_int96 us
 statement ok
 RESET datafusion.execution.parquet.coerce_int96
 
+# Table options are validated at CREATE time too. With an explicit schema this
+# used to be accepted and then panic on the first scan.
+statement error
+CREATE EXTERNAL TABLE int96_bad_unit (a TIMESTAMP)
+STORED AS PARQUET
+LOCATION '../../parquet-testing/data/int96_from_spark.parquet'
+OPTIONS ('format.coerce_int96' 'nanos');
+----
+DataFusion error: Invalid or Unsupported Configuration: Invalid parquet coerce_int96 setting: nanos. Expected one of: ns, us, ms, s
+
+
 statement error DataFusion error: Error setting config datafusion\.execution\.batch_size\ncaused by\nInvalid or Unsupported Configuration: value must be greater than 0
 SET datafusion.execution.batch_size = 0
 
