@@ -36,8 +36,7 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     Column, Constraint, Constraints, DFSchema, DFSchemaRef, DataFusionError, Result,
     ScalarValue, SchemaError, SchemaReference, TableReference, ToDFSchema, exec_err,
-    internal_err, not_impl_err, plan_datafusion_err, plan_err, schema_err,
-    unqualified_field_not_found,
+    not_impl_err, plan_datafusion_err, plan_err, schema_err, unqualified_field_not_found,
 };
 use datafusion_expr::dml::{
     CopyTo, InsertOp, MergeIntoAction, MergeIntoClause, MergeIntoClauseKind, MergeIntoOp,
@@ -279,688 +278,74 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 describe_alias: DescribeAlias::Describe | DescribeAlias::Desc, // only parse 'DESCRIBE statement' or 'DESC statement' and not 'EXPLAIN statement'
                 statement,
                 ..
-            } => match *statement {
-                Statement::Query(query) => self.describe_query_to_plan(*query),
-                _ => {
-                    not_impl_err!("Describing statements other than SELECT not supported")
-                }
-            },
+            } => self.describe_statement_to_plan(*statement),
             Statement::Explain {
                 verbose,
                 statement,
                 analyze,
                 format,
                 ..
-            } => {
-                let format = format
-                    .map(|format| ExplainFormat::from_str(&format.to_string()))
-                    .transpose()?;
-                let statement = DFStatement::Statement(statement);
-                let options = ExplainStatementOptions {
-                    analyze,
-                    verbose,
-                    format,
-                    analyze_level: None,
-                    analyze_categories: None,
-                    show_statistics: None,
-                };
-                self.explain_to_plan(options, statement)
-            }
+            } => self.explain_statement_to_plan(verbose, statement, analyze, format),
             Statement::Query(query) => self.query_to_plan(*query, planner_context),
             Statement::ShowVariable { variable } => self.show_variable_to_plan(&variable),
             Statement::Set(statement) => self.set_statement_to_plan(statement),
-            Statement::CreateTable(CreateTable {
-                temporary,
-                external,
-                global,
-                transient,
-                volatile,
-                hive_distribution,
-                hive_formats,
-                file_format,
-                location,
-                query,
-                name,
-                columns,
-                constraints,
-                if_not_exists,
-                or_replace,
-                without_rowid,
-                like,
-                clone,
-                comment,
-                on_commit,
-                on_cluster,
-                primary_key,
-                order_by,
-                partition_by,
-                cluster_by,
-                clustered_by,
-                strict,
-                copy_grants,
-                enable_schema_evolution,
-                change_tracking,
-                data_retention_time_in_days,
-                max_data_extension_time_in_days,
-                default_ddl_collation,
-                with_aggregation_policy,
-                with_row_access_policy,
-                with_tags,
-                iceberg,
-                external_volume,
-                base_location,
-                catalog,
-                catalog_sync,
-                storage_serialization_policy,
-                inherits,
-                table_options: CreateTableOptions::None,
-                dynamic,
-                version,
-                target_lag,
-                warehouse,
-                refresh_mode,
-                initialize,
-                require_user,
-                partition_of,
-                for_values,
-                snapshot,
-                with_storage_lifecycle_policy,
-                diststyle,
-                distkey,
-                sortkey,
-                backup,
-                unlogged,
-                with_connection,
-                multiset,
-                fallback,
-                with_data,
-            }) => {
-                if temporary {
-                    return not_impl_err!("Temporary tables not supported");
-                }
-                if external {
-                    return not_impl_err!("External tables not supported");
-                }
-                if global.is_some() {
-                    return not_impl_err!("Global tables not supported");
-                }
-                if transient {
-                    return not_impl_err!("Transient tables not supported");
-                }
-                if volatile {
-                    return not_impl_err!("Volatile tables not supported");
-                }
-                if hive_distribution != ast::HiveDistributionStyle::NONE {
-                    return not_impl_err!(
-                        "Hive distribution not supported: {hive_distribution:?}"
-                    );
-                }
-                if hive_formats.is_some()
-                    && !matches!(
-                        hive_formats,
-                        Some(ast::HiveFormat {
-                            row_format: None,
-                            serde_properties: None,
-                            storage: None,
-                            location: None,
-                        })
-                    )
-                {
-                    return not_impl_err!("Hive formats not supported: {hive_formats:?}");
-                }
-                if file_format.is_some() {
-                    return not_impl_err!("File format not supported");
-                }
-                if location.is_some() {
-                    return not_impl_err!("Location not supported");
-                }
-                if without_rowid {
-                    return not_impl_err!("Without rowid not supported");
-                }
-                if like.is_some() {
-                    return not_impl_err!("Like not supported");
-                }
-                if clone.is_some() {
-                    return not_impl_err!("Clone not supported");
-                }
-                if comment.is_some() {
-                    return not_impl_err!("Comment not supported");
-                }
-                if on_commit.is_some() {
-                    return not_impl_err!("On commit not supported");
-                }
-                if on_cluster.is_some() {
-                    return not_impl_err!("On cluster not supported");
-                }
-                if primary_key.is_some() {
-                    return not_impl_err!("Primary key not supported");
-                }
-                if order_by.is_some() {
-                    return not_impl_err!("Order by not supported");
-                }
-                if partition_by.is_some() {
-                    return not_impl_err!("Partition by not supported");
-                }
-                if cluster_by.is_some() {
-                    return not_impl_err!("Cluster by not supported");
-                }
-                if clustered_by.is_some() {
-                    return not_impl_err!("Clustered by not supported");
-                }
-                if strict {
-                    return not_impl_err!("Strict not supported");
-                }
-                if copy_grants {
-                    return not_impl_err!("Copy grants not supported");
-                }
-                if enable_schema_evolution.is_some() {
-                    return not_impl_err!("Enable schema evolution not supported");
-                }
-                if change_tracking.is_some() {
-                    return not_impl_err!("Change tracking not supported");
-                }
-                if data_retention_time_in_days.is_some() {
-                    return not_impl_err!("Data retention time in days not supported");
-                }
-                if max_data_extension_time_in_days.is_some() {
-                    return not_impl_err!(
-                        "Max data extension time in days not supported"
-                    );
-                }
-                if default_ddl_collation.is_some() {
-                    return not_impl_err!("Default DDL collation not supported");
-                }
-                if with_aggregation_policy.is_some() {
-                    return not_impl_err!("With aggregation policy not supported");
-                }
-                if with_row_access_policy.is_some() {
-                    return not_impl_err!("With row access policy not supported");
-                }
-                if with_tags.is_some() {
-                    return not_impl_err!("With tags not supported");
-                }
-                if iceberg {
-                    return not_impl_err!("Iceberg not supported");
-                }
-                if external_volume.is_some() {
-                    return not_impl_err!("External volume not supported");
-                }
-                if base_location.is_some() {
-                    return not_impl_err!("Base location not supported");
-                }
-                if catalog.is_some() {
-                    return not_impl_err!("Catalog not supported");
-                }
-                if catalog_sync.is_some() {
-                    return not_impl_err!("Catalog sync not supported");
-                }
-                if storage_serialization_policy.is_some() {
-                    return not_impl_err!("Storage serialization policy not supported");
-                }
-                if inherits.is_some() {
-                    return not_impl_err!("Table inheritance not supported");
-                }
-                if dynamic {
-                    return not_impl_err!("Dynamic tables not supported");
-                }
-                if version.is_some() {
-                    return not_impl_err!("Version not supported");
-                }
-                if target_lag.is_some() {
-                    return not_impl_err!("Target lag not supported");
-                }
-                if warehouse.is_some() {
-                    return not_impl_err!("Warehouse not supported");
-                }
-                if refresh_mode.is_some() {
-                    return not_impl_err!("Refresh mode not supported");
-                }
-                if initialize.is_some() {
-                    return not_impl_err!("Initialize not supported");
-                }
-                if require_user {
-                    return not_impl_err!("Require user not supported");
-                }
-                if partition_of.is_some() {
-                    return not_impl_err!("PARTITION OF not supported");
-                }
-                if for_values.is_some() {
-                    return not_impl_err!("PARTITION OF .. FOR VALUES .. not supported");
-                }
-                if snapshot {
-                    return not_impl_err!("Snapshot tables not supported");
-                }
-                if with_storage_lifecycle_policy.is_some() {
-                    return not_impl_err!("WITH STORAGE LIFECYCLE POLICY not supported");
-                }
-                if diststyle.is_some() {
-                    return not_impl_err!("DISTSTYLE not supported");
-                }
-                if distkey.is_some() {
-                    return not_impl_err!("DISTKEY not supported");
-                }
-                if sortkey.is_some() {
-                    return not_impl_err!("SORTKEY not supported");
-                }
-                if backup.is_some() {
-                    return not_impl_err!("BACKUP not supported");
-                }
-                if unlogged {
-                    return not_impl_err!("UNLOGGED tables not supported");
-                }
-                if with_connection.is_some() {
-                    return not_impl_err!("WITH CONNECTION not supported");
-                }
-                if multiset.is_some() {
-                    return not_impl_err!("MULTISET tables not supported");
-                }
-                if fallback.is_some() {
-                    return not_impl_err!("FALLBACK not supported");
-                }
-                if with_data.is_some() {
-                    return not_impl_err!("WITH [NO] DATA not supported");
-                }
-                // Merge inline constraints and existing constraints
-                let mut all_constraints = constraints;
-                let inline_constraints = calc_inline_constraints_from_columns(&columns);
-                all_constraints.extend(inline_constraints);
-                // Build column default values
-                let column_defaults =
-                    self.build_column_defaults(&columns, planner_context)?;
-
-                let has_columns = !columns.is_empty();
-                let schema = self.build_schema(columns)?.to_dfschema_ref()?;
-                if has_columns {
-                    planner_context.set_table_schema(Some(Arc::clone(&schema)));
-                }
-
-                match query {
-                    Some(query) => {
-                        let plan = self.query_to_plan(*query, planner_context)?;
-                        let input_schema = plan.schema();
-
-                        let plan = if has_columns {
-                            if schema.fields().len() != input_schema.fields().len() {
-                                return plan_err!(
-                                    "Mismatch: {} columns specified, but result has {} columns",
-                                    schema.fields().len(),
-                                    input_schema.fields().len()
-                                );
-                            }
-                            let input_columns = input_schema.columns();
-                            let project_exprs = schema
-                                .fields()
-                                .iter()
-                                .zip(input_columns)
-                                .map(|(field, input_column)| {
-                                    cast(
-                                        Expr::Column(input_column),
-                                        field.data_type().clone(),
-                                    )
-                                    .alias(field.name())
-                                })
-                                .collect::<Vec<_>>();
-
-                            LogicalPlanBuilder::from(plan.clone())
-                                .project(project_exprs)?
-                                .build()?
-                        } else {
-                            plan
-                        };
-
-                        let constraints = self.new_constraint_from_table_constraints(
-                            &all_constraints,
-                            plan.schema(),
-                        )?;
-
-                        Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
-                            CreateMemoryTable {
-                                name: self.object_name_to_table_reference(name)?,
-                                constraints,
-                                input: Arc::new(plan),
-                                if_not_exists,
-                                or_replace,
-                                column_defaults,
-                                temporary,
-                            },
-                        )))
-                    }
-
-                    None => {
-                        let plan = EmptyRelation {
-                            produce_one_row: false,
-                            schema,
-                        };
-                        let plan = LogicalPlan::EmptyRelation(plan);
-                        let constraints = self.new_constraint_from_table_constraints(
-                            &all_constraints,
-                            plan.schema(),
-                        )?;
-                        Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
-                            CreateMemoryTable {
-                                name: self.object_name_to_table_reference(name)?,
-                                constraints,
-                                input: Arc::new(plan),
-                                if_not_exists,
-                                or_replace,
-                                column_defaults,
-                                temporary,
-                            },
-                        )))
-                    }
-                }
+            Statement::CreateTable(create_table) => {
+                self.create_table_to_plan(create_table, planner_context)
             }
-            Statement::CreateView(ast::CreateView {
-                or_replace,
-                materialized,
-                name,
-                columns,
-                query,
-                options: CreateTableOptions::None,
-                cluster_by,
-                comment,
-                with_no_schema_binding,
-                if_not_exists,
-                temporary,
-                to,
-                params,
-                or_alter,
-                secure,
-                name_before_not_exists,
-                copy_grants,
-            }) => {
-                if materialized {
-                    return not_impl_err!("Materialized views not supported")?;
-                }
-                if !cluster_by.is_empty() {
-                    return not_impl_err!("Cluster by not supported")?;
-                }
-                if comment.is_some() {
-                    return not_impl_err!("Comment not supported")?;
-                }
-                if with_no_schema_binding {
-                    return not_impl_err!("With no schema binding not supported")?;
-                }
-                if if_not_exists {
-                    return not_impl_err!("If not exists not supported")?;
-                }
-                if to.is_some() {
-                    return not_impl_err!("To not supported")?;
-                }
-                if copy_grants {
-                    return not_impl_err!("COPY GRANTS not supported")?;
-                }
-
-                // put the statement back together temporarily to get the SQL
-                // string representation
-                let stmt = Statement::CreateView(ast::CreateView {
-                    or_replace,
-                    materialized,
-                    name,
-                    columns,
-                    query,
-                    options: CreateTableOptions::None,
-                    cluster_by,
-                    comment,
-                    with_no_schema_binding,
-                    if_not_exists,
-                    temporary,
-                    to,
-                    params,
-                    or_alter,
-                    secure,
-                    name_before_not_exists,
-                    copy_grants,
-                });
-                let sql = stmt.to_string();
-                let Statement::CreateView(ast::CreateView {
-                    name,
-                    columns,
-                    query,
-                    or_replace,
-                    temporary,
-                    ..
-                }) = stmt
-                else {
-                    return internal_err!("Unreachable code in create view");
-                };
-
-                let columns = columns
-                    .into_iter()
-                    .map(|view_column_def| {
-                        if let Some(options) = view_column_def.options {
-                            plan_err!(
-                                "Options not supported for view columns: {options:?}"
-                            )
-                        } else {
-                            Ok(view_column_def.name)
-                        }
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
-                let mut plan = self.query_to_plan(*query, &mut PlannerContext::new())?;
-                plan = self.apply_expr_alias(plan, columns)?;
-
-                Ok(LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
-                    name: self.object_name_to_table_reference(name)?,
-                    input: Arc::new(plan),
-                    or_replace,
-                    definition: Some(sql),
-                    temporary,
-                })))
+            Statement::CreateView(create_view) => self.create_view_to_plan(create_view),
+            Statement::ShowCreate { obj_type, obj_name } => {
+                self.show_create_to_plan(&obj_type, obj_name)
             }
-            Statement::ShowCreate { obj_type, obj_name } => match obj_type {
-                ShowCreateObject::Table => self.show_create_table_to_plan(obj_name),
-                _ => {
-                    not_impl_err!("Only `SHOW CREATE TABLE  ...` statement is supported")
-                }
-            },
             Statement::CreateSchema {
                 schema_name,
                 if_not_exists,
                 ..
-            } => Ok(LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(
-                CreateCatalogSchema {
-                    schema_name: get_schema_name(&schema_name),
-                    if_not_exists,
-                    schema: Arc::new(DFSchema::empty()),
-                },
-            ))),
+            } => self.create_schema_to_plan(&schema_name, if_not_exists),
             Statement::CreateDatabase {
                 db_name,
                 if_not_exists,
                 ..
-            } => Ok(LogicalPlan::Ddl(DdlStatement::CreateCatalog(
-                CreateCatalog {
-                    catalog_name: object_name_to_string(&db_name),
-                    if_not_exists,
-                    schema: Arc::new(DFSchema::empty()),
-                },
-            ))),
+            } => self.create_database_to_plan(&db_name, if_not_exists),
             Statement::Drop {
                 object_type,
                 if_exists,
-                mut names,
+                names,
                 cascade,
                 restrict: _,
                 purge: _,
                 temporary: _,
                 table: _,
-            } => {
-                // We don't support cascade and purge for now.
-                // nor do we support multiple object names
-                let name = match names.len() {
-                    0 => Err::<_, DataFusionError>(
-                        ParserError("Missing table name.".to_string()).into(),
-                    ),
-                    1 => Ok(names.pop().unwrap()),
-                    _ => Err::<_, DataFusionError>(
-                        ParserError("Multiple objects not supported".to_string()).into(),
-                    ),
-                }?;
-
-                match object_type {
-                    ObjectType::Table => {
-                        Ok(LogicalPlan::Ddl(DdlStatement::DropTable(DropTable {
-                            name: self.object_name_to_table_reference(name)?,
-                            if_exists,
-                            schema: DFSchemaRef::new(DFSchema::empty()),
-                        })))
-                    }
-                    ObjectType::View => {
-                        Ok(LogicalPlan::Ddl(DdlStatement::DropView(DropView {
-                            name: self.object_name_to_table_reference(name)?,
-                            if_exists,
-                            schema: DFSchemaRef::new(DFSchema::empty()),
-                        })))
-                    }
-                    ObjectType::Schema => {
-                        let name = match self.object_name_to_table_reference(name)? {
-                            TableReference::Bare { table } => {
-                                Ok(SchemaReference::Bare { schema: table })
-                            }
-                            TableReference::Partial { schema, table } => {
-                                Ok(SchemaReference::Full {
-                                    schema: table,
-                                    catalog: schema,
-                                })
-                            }
-                            TableReference::Full {
-                                catalog: _,
-                                schema: _,
-                                table: _,
-                            } => Err(ParserError(
-                                "Invalid schema specifier (has 3 parts)".to_string(),
-                            )),
-                        }?;
-                        Ok(LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(
-                            DropCatalogSchema {
-                                name,
-                                if_exists,
-                                cascade,
-                                schema: DFSchemaRef::new(DFSchema::empty()),
-                            },
-                        )))
-                    }
-                    ObjectType::Database => {
-                        Ok(LogicalPlan::Ddl(DdlStatement::DropCatalog(
-                            DropCatalog::builder(object_name_to_string(&name))
-                                .with_if_exists(if_exists)
-                                .with_cascade(cascade)
-                                .build(),
-                        )))
-                    }
-                    _ => not_impl_err!(
-                        "Only `DROP TABLE/VIEW/SCHEMA/CATALOG/DATABASE  ...` statement is supported currently"
-                    ),
-                }
-            }
+            } => self.drop_to_plan(object_type, if_exists, names, cascade),
             Statement::Prepare {
                 name,
                 data_types,
                 statement,
-            } => {
-                // Convert parser data types to DataFusion data types
-                let mut fields: Vec<FieldRef> = data_types
-                    .into_iter()
-                    .map(|t| self.convert_data_type_to_field(&t))
-                    .collect::<Result<_>>()?;
-
-                // Create planner context with parameters
-                let mut planner_context = PlannerContext::new()
-                    .with_prepare_param_data_types(
-                        fields.iter().cloned().map(Some).collect(),
-                    );
-
-                // Build logical plan for inner statement of the prepare statement
-                let plan = self.sql_statement_to_plan_with_context_impl(
-                    *statement,
-                    &mut planner_context,
-                )?;
-
-                if fields.is_empty() {
-                    let map_types = plan.get_parameter_fields()?;
-                    let param_types: Option<Vec<FieldRef>> = (1..=map_types.len())
-                        .map(|i| {
-                            let key = format!("${i}");
-                            map_types.get(&key).and_then(|opt| opt.clone())
-                        })
-                        .collect();
-                    if let Some(param_types) = param_types {
-                        fields.extend(param_types.iter().cloned());
-                        planner_context.with_prepare_param_data_types(
-                            param_types.into_iter().map(Some).collect(),
-                        );
-                    }
-                }
-
-                Ok(LogicalPlan::Statement(PlanStatement::Prepare(Prepare {
-                    name: ident_to_string(&name),
-                    fields,
-                    input: Arc::new(plan),
-                })))
-            }
+            } => self.prepare_to_plan(&name, data_types, *statement),
             Statement::Execute {
                 name,
                 parameters,
                 using,
-                // has_parentheses specifies the syntax, but the plan is the
-                // same no matter the syntax used, so ignore it
+                // Parentheses affect syntax, but not the plan.
                 has_parentheses: _,
                 immediate,
                 into,
                 output,
                 default,
-            } => {
-                // `USING` is a MySQL-specific syntax and currently not supported.
-                if !using.is_empty() {
-                    return not_impl_err!(
-                        "Execute statement with USING is not supported"
-                    );
-                }
-                if immediate {
-                    return not_impl_err!(
-                        "Execute statement with IMMEDIATE is not supported"
-                    );
-                }
-                if !into.is_empty() {
-                    return not_impl_err!("Execute statement with INTO is not supported");
-                }
-                if output {
-                    return not_impl_err!(
-                        "Execute statement with OUTPUT is not supported"
-                    );
-                }
-                if default {
-                    return not_impl_err!(
-                        "Execute statement with DEFAULT is not supported"
-                    );
-                }
-                let name = name.ok_or_else(|| {
-                    plan_datafusion_err!("EXECUTE statement requires a name")
-                })?;
-
-                let empty_schema = DFSchema::empty();
-                let parameters = parameters
-                    .into_iter()
-                    .map(|expr| self.sql_to_expr(expr, &empty_schema, planner_context))
-                    .collect::<Result<Vec<Expr>>>()?;
-
-                Ok(LogicalPlan::Statement(PlanStatement::Execute(Execute {
-                    name: object_name_to_string(&name),
-                    parameters,
-                })))
-            }
+            } => self.execute_to_plan(
+                name,
+                parameters,
+                &using,
+                immediate,
+                &into,
+                output,
+                default,
+                planner_context,
+            ),
             Statement::Deallocate {
                 name,
                 // Similar to PostgreSQL, the PREPARE keyword is ignored
                 prepare: _,
-            } => Ok(LogicalPlan::Statement(PlanStatement::Deallocate(
-                Deallocate {
-                    name: ident_to_string(&name),
-                },
-            ))),
-
+            } => self.deallocate_to_plan(&name),
             Statement::ShowTables {
                 extended,
                 full,
@@ -968,303 +353,26 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 history,
                 external,
                 show_options,
-            } => {
-                // We only support the basic "SHOW TABLES"
-                // https://github.com/apache/datafusion/issues/3188
-                if extended {
-                    return not_impl_err!("SHOW TABLES EXTENDED not supported")?;
-                }
-                if full {
-                    return not_impl_err!("SHOW FULL TABLES not supported")?;
-                }
-                if terse {
-                    return not_impl_err!("SHOW TERSE TABLES not supported")?;
-                }
-                if history {
-                    return not_impl_err!("SHOW TABLES HISTORY not supported")?;
-                }
-                if external {
-                    return not_impl_err!("SHOW EXTERNAL TABLES not supported")?;
-                }
-                let ShowStatementOptions {
-                    show_in,
-                    starts_with,
-                    limit,
-                    limit_from,
-                    filter_position,
-                } = show_options;
-                if show_in.is_some() {
-                    return not_impl_err!("SHOW TABLES IN not supported")?;
-                }
-                if starts_with.is_some() {
-                    return not_impl_err!("SHOW TABLES LIKE not supported")?;
-                }
-                if limit.is_some() {
-                    return not_impl_err!("SHOW TABLES LIMIT not supported")?;
-                }
-                if limit_from.is_some() {
-                    return not_impl_err!("SHOW TABLES LIMIT FROM not supported")?;
-                }
-                if filter_position.is_some() {
-                    return not_impl_err!("SHOW TABLES FILTER not supported")?;
-                }
-                self.show_tables_to_plan()
-            }
-
+            } => self.show_tables_to_plan(
+                extended,
+                full,
+                terse,
+                history,
+                external,
+                show_options,
+            ),
             Statement::ShowColumns {
                 extended,
                 full,
                 show_options,
-            } => {
-                let ShowStatementOptions {
-                    show_in,
-                    starts_with,
-                    limit,
-                    limit_from,
-                    filter_position,
-                } = show_options;
-                if starts_with.is_some() {
-                    return not_impl_err!("SHOW COLUMNS LIKE not supported")?;
-                }
-                if limit.is_some() {
-                    return not_impl_err!("SHOW COLUMNS LIMIT not supported")?;
-                }
-                if limit_from.is_some() {
-                    return not_impl_err!("SHOW COLUMNS LIMIT FROM not supported")?;
-                }
-                if filter_position.is_some() {
-                    return not_impl_err!(
-                        "SHOW COLUMNS with WHERE or LIKE is not supported"
-                    )?;
-                }
-                let Some(ShowStatementIn {
-                    // specifies if the syntax was `SHOW COLUMNS IN` or `SHOW
-                    // COLUMNS FROM` which is not different in DataFusion
-                    clause: _,
-                    parent_type,
-                    parent_name,
-                }) = show_in
-                else {
-                    return plan_err!("SHOW COLUMNS requires a table name");
-                };
-
-                if let Some(parent_type) = parent_type {
-                    return not_impl_err!("SHOW COLUMNS IN {parent_type} not supported");
-                }
-                let Some(table_name) = parent_name else {
-                    return plan_err!("SHOW COLUMNS requires a table name");
-                };
-
-                self.show_columns_to_plan(extended, full, table_name)
-            }
-
+            } => self.show_columns_statement_to_plan(extended, full, show_options),
             Statement::ShowFunctions { filter, .. } => {
                 self.show_functions_to_plan(filter)
             }
-
-            Statement::Insert(Insert {
-                or,
-                into,
-                columns,
-                overwrite,
-                source,
-                partitioned,
-                after_columns,
-                table,
-                on,
-                returning,
-                ignore,
-                table_alias,
-                mut replace_into,
-                priority,
-                insert_alias,
-                assignments,
-                has_table_keyword,
-                settings,
-                format_clause,
-                insert_token: _, // record the location the `INSERT` token
-                optimizer_hints,
-                output,
-                multi_table_insert_type,
-                multi_table_into_clauses,
-                multi_table_when_clauses,
-                multi_table_else_clause,
-            }) => {
-                let table_name = match table {
-                    TableObject::TableName(table_name) => table_name,
-                    TableObject::TableFunction(_) => {
-                        return not_impl_err!(
-                            "INSERT INTO Table functions not supported"
-                        );
-                    }
-                    TableObject::TableQuery(_) => {
-                        return not_impl_err!(
-                            "INSERT INTO subquery target not supported"
-                        );
-                    }
-                };
-                if let Some(or) = or {
-                    match or {
-                        SqliteOnConflict::Replace => replace_into = true,
-                        _ => plan_err!("Inserts with {or} clause is not supported")?,
-                    }
-                }
-                if partitioned.is_some() {
-                    plan_err!("Partitioned inserts not yet supported")?;
-                }
-                if !after_columns.is_empty() {
-                    plan_err!("After-columns clause not supported")?;
-                }
-                if on.is_some() {
-                    plan_err!("Insert-on clause not supported")?;
-                }
-                if returning.is_some() {
-                    plan_err!("Insert-returning clause not supported")?;
-                }
-                if ignore {
-                    plan_err!("Insert-ignore clause not supported")?;
-                }
-                let Some(source) = source else {
-                    plan_err!("Inserts without a source not supported")?
-                };
-                if let Some(table_alias) = table_alias {
-                    plan_err!(
-                        "Inserts with a table alias not supported: {table_alias:?}"
-                    )?
-                }
-                if let Some(priority) = priority {
-                    plan_err!(
-                        "Inserts with a `PRIORITY` clause not supported: {priority:?}"
-                    )?
-                }
-                if insert_alias.is_some() {
-                    plan_err!("Inserts with an alias not supported")?;
-                }
-                if !assignments.is_empty() {
-                    plan_err!("Inserts with assignments not supported")?;
-                }
-                if settings.is_some() {
-                    plan_err!("Inserts with settings not supported")?;
-                }
-                if format_clause.is_some() {
-                    plan_err!("Inserts with format clause not supported")?;
-                }
-                if !optimizer_hints.is_empty() {
-                    plan_err!("Optimizer hints not supported")?;
-                }
-                if output.is_some() {
-                    plan_err!("Insert OUTPUT clause not supported")?;
-                }
-                if multi_table_insert_type.is_some()
-                    || !multi_table_into_clauses.is_empty()
-                    || !multi_table_when_clauses.is_empty()
-                    || multi_table_else_clause.is_some()
-                {
-                    plan_err!("Multi-table INSERT not supported")?;
-                }
-                // optional keywords don't change behavior
-                let _ = into;
-                let _ = has_table_keyword;
-                self.insert_to_plan(table_name, columns, source, overwrite, replace_into)
-            }
-            Statement::Update(Update {
-                table,
-                assignments,
-                from,
-                selection,
-                returning,
-                or,
-                limit,
-                update_token: _,
-                optimizer_hints,
-                output,
-                order_by,
-            }) => {
-                let from_clauses =
-                    from.map(|update_table_from_kind| match update_table_from_kind {
-                        UpdateTableFromKind::BeforeSet(from_clauses) => from_clauses,
-                        UpdateTableFromKind::AfterSet(from_clauses) => from_clauses,
-                    });
-                // TODO: support multiple tables in UPDATE SET FROM
-                if from_clauses.as_ref().is_some_and(|f| f.len() > 1) {
-                    not_impl_err!(
-                        "Multiple tables in UPDATE SET FROM not yet supported"
-                    )?;
-                }
-                let update_from = from_clauses.and_then(|mut f| f.pop());
-
-                // UPDATE ... FROM is currently not working
-                // TODO fix https://github.com/apache/datafusion/issues/19950
-                if update_from.is_some() {
-                    return not_impl_err!("UPDATE ... FROM is not supported");
-                }
-
-                if returning.is_some() {
-                    plan_err!("Update-returning clause not yet supported")?;
-                }
-                if or.is_some() {
-                    plan_err!("ON conflict not supported")?;
-                }
-                if limit.is_some() {
-                    return not_impl_err!("Update-limit clause not supported")?;
-                }
-                if !optimizer_hints.is_empty() {
-                    plan_err!("Optimizer hints not supported")?;
-                }
-                if output.is_some() {
-                    plan_err!("Update OUTPUT clause not supported")?;
-                }
-                if !order_by.is_empty() {
-                    plan_err!("Update ORDER BY not supported")?;
-                }
-                self.update_to_plan(table, &assignments, update_from, selection)
-            }
-
-            Statement::Delete(Delete {
-                tables,
-                using,
-                selection,
-                returning,
-                from,
-                order_by,
-                limit,
-                delete_token: _,
-                optimizer_hints,
-                output,
-            }) => {
-                if !tables.is_empty() {
-                    plan_err!("DELETE <TABLE> not supported")?;
-                }
-
-                if using.is_some() {
-                    plan_err!("Using clause not supported")?;
-                }
-
-                if returning.is_some() {
-                    plan_err!("Delete-returning clause not yet supported")?;
-                }
-
-                if !order_by.is_empty() {
-                    plan_err!("Delete-order-by clause not yet supported")?;
-                }
-
-                if limit.is_some() {
-                    return plan_err!("Delete-limit clause is not supported");
-                }
-
-                if !optimizer_hints.is_empty() {
-                    plan_err!("Optimizer hints not supported")?;
-                }
-                if output.is_some() {
-                    plan_err!("Delete OUTPUT clause not supported")?;
-                }
-
-                let table_name = self.get_delete_target(from)?;
-                self.delete_to_plan(&table_name, selection)
-            }
-
+            Statement::Insert(insert) => self.insert_statement_to_plan(insert),
+            Statement::Update(update) => self.update_statement_to_plan(update),
+            Statement::Delete(delete) => self.delete_statement_to_plan(delete),
             Statement::Merge(merge) => self.merge_to_plan(merge),
-
             Statement::StartTransaction {
                 modes,
                 begin: false,
@@ -1273,379 +381,1387 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 statements,
                 has_end_keyword,
                 exception,
-            } => {
-                if let Some(modifier) = modifier {
-                    return not_impl_err!(
-                        "Transaction modifier not supported: {modifier}"
-                    );
-                }
-                if !statements.is_empty() {
-                    return not_impl_err!(
-                        "Transaction with multiple statements not supported"
-                    );
-                }
-                if exception.is_some() {
-                    return not_impl_err!(
-                        "Transaction with exception statements not supported"
-                    );
-                }
-                if has_end_keyword {
-                    return not_impl_err!("Transaction with END keyword not supported");
-                }
-                self.validate_transaction_kind(transaction.as_ref())?;
-                let isolation_level: ast::TransactionIsolationLevel = modes
-                    .iter()
-                    .filter_map(|m: &TransactionMode| match m {
-                        TransactionMode::AccessMode(_) => None,
-                        TransactionMode::IsolationLevel(level) => Some(level),
-                    })
-                    .next_back()
-                    .copied()
-                    .unwrap_or(ast::TransactionIsolationLevel::Serializable);
-                let access_mode: ast::TransactionAccessMode = modes
-                    .iter()
-                    .filter_map(|m: &TransactionMode| match m {
-                        TransactionMode::AccessMode(mode) => Some(mode),
-                        TransactionMode::IsolationLevel(_) => None,
-                    })
-                    .next_back()
-                    .copied()
-                    .unwrap_or(ast::TransactionAccessMode::ReadWrite);
-                let isolation_level = match isolation_level {
-                    ast::TransactionIsolationLevel::ReadUncommitted => {
-                        TransactionIsolationLevel::ReadUncommitted
-                    }
-                    ast::TransactionIsolationLevel::ReadCommitted => {
-                        TransactionIsolationLevel::ReadCommitted
-                    }
-                    ast::TransactionIsolationLevel::RepeatableRead => {
-                        TransactionIsolationLevel::RepeatableRead
-                    }
-                    ast::TransactionIsolationLevel::Serializable => {
-                        TransactionIsolationLevel::Serializable
-                    }
-                    ast::TransactionIsolationLevel::Snapshot => {
-                        TransactionIsolationLevel::Snapshot
-                    }
-                };
-                let access_mode = match access_mode {
-                    ast::TransactionAccessMode::ReadOnly => {
-                        TransactionAccessMode::ReadOnly
-                    }
-                    ast::TransactionAccessMode::ReadWrite => {
-                        TransactionAccessMode::ReadWrite
-                    }
-                };
-                let statement = PlanStatement::TransactionStart(TransactionStart {
-                    access_mode,
-                    isolation_level,
-                });
-                Ok(LogicalPlan::Statement(statement))
-            }
+            } => self.start_transaction_to_plan(
+                &modes,
+                modifier,
+                transaction.as_ref(),
+                &statements,
+                has_end_keyword,
+                exception.as_deref(),
+            ),
             Statement::Commit {
                 chain,
                 end,
                 modifier,
-            } => {
-                if end {
-                    return not_impl_err!("COMMIT AND END not supported");
-                }
-                if let Some(modifier) = modifier {
-                    return not_impl_err!("COMMIT {modifier} not supported");
-                }
-                let statement = PlanStatement::TransactionEnd(TransactionEnd {
-                    conclusion: TransactionConclusion::Commit,
-                    chain,
-                });
-                Ok(LogicalPlan::Statement(statement))
-            }
+            } => self.commit_to_plan(chain, end, modifier),
             Statement::Rollback { chain, savepoint } => {
-                if savepoint.is_some() {
-                    plan_err!("Savepoints not supported")?;
-                }
-                let statement = PlanStatement::TransactionEnd(TransactionEnd {
-                    conclusion: TransactionConclusion::Rollback,
-                    chain,
-                });
-                Ok(LogicalPlan::Statement(statement))
+                self.rollback_to_plan(chain, savepoint.as_ref())
             }
-            Statement::CreateFunction(ast::CreateFunction {
-                or_replace,
-                temporary,
-                name,
-                args,
-                return_type,
-                function_body,
-                behavior,
-                language,
-                ..
-            }) => {
-                let return_type = match return_type {
-                    Some(ast::FunctionReturnType::DataType(t)) => {
-                        Some(self.convert_data_type_to_field(&t)?)
-                    }
-                    Some(ast::FunctionReturnType::SetOf(_)) => {
-                        return not_impl_err!(
-                            "RETURNS SETOF in CREATE FUNCTION is not supported"
-                        );
-                    }
-                    None => None,
-                };
-                let mut planner_context = PlannerContext::new();
-                let empty_schema = &DFSchema::empty();
-
-                let args = match args {
-                    Some(function_args) => {
-                        let function_args = function_args
-                            .into_iter()
-                            .map(|arg| {
-                                let data_type =
-                                    self.convert_data_type_to_field(&arg.data_type)?;
-
-                                let default_expr = match arg.default_expr {
-                                    Some(expr) => Some(self.sql_to_expr(
-                                        expr,
-                                        empty_schema,
-                                        &mut planner_context,
-                                    )?),
-                                    None => None,
-                                };
-                                Ok(OperateFunctionArg {
-                                    name: arg.name,
-                                    default_expr,
-                                    data_type: data_type.data_type().clone(),
-                                })
-                            })
-                            .collect::<Result<Vec<OperateFunctionArg>>>();
-                        Some(function_args?)
-                    }
-                    None => None,
-                };
-                // Validate default arguments
-                let first_default = args
-                    .as_ref()
-                    .and_then(|arg| arg.iter().position(|t| t.default_expr.is_some()));
-                let last_non_default = args
-                    .as_ref()
-                    .and_then(|arg| arg.iter().rposition(|t| t.default_expr.is_none()));
-                if let (Some(pos_default), Some(pos_non_default)) =
-                    (first_default, last_non_default)
-                    && pos_non_default > pos_default
-                {
-                    return plan_err!(
-                        "Non-default arguments cannot follow default arguments."
-                    );
-                }
-                // At the moment functions can't be qualified `schema.name`
-                let name = match &name.0[..] {
-                    [] => exec_err!("Function should have name")?,
-                    [n] => n.as_ident().unwrap().value.clone(),
-                    [..] => not_impl_err!("Qualified functions are not supported")?,
-                };
-                //
-                // Convert resulting expression to data fusion expression
-                //
-                let arg_types = args.as_ref().map(|arg| {
-                    arg.iter()
-                        .map(|t| {
-                            let name = match t.name.clone() {
-                                Some(name) => name.value,
-                                None => "".to_string(),
-                            };
-                            Arc::new(Field::new(name, t.data_type.clone(), true))
-                        })
-                        .collect::<Vec<_>>()
-                });
-                // Validate parameter style
-                if let Some(ref fields) = arg_types {
-                    let count_positional =
-                        fields.iter().filter(|f| f.name() == "").count();
-                    if !(count_positional == 0 || count_positional == fields.len()) {
-                        return plan_err!(
-                            "All function arguments must use either named or positional style."
-                        );
-                    }
-                }
-                let mut planner_context = PlannerContext::new()
-                    .with_prepare_param_data_types(
-                        arg_types
-                            .unwrap_or_default()
-                            .into_iter()
-                            .map(Some)
-                            .collect(),
-                    );
-
-                let function_body = match function_body {
-                    Some(r) => Some(self.sql_to_expr(
-                        match r {
-                            // `link_symbol` indicates if the primary expression contains the name of shared library file.
-                            ast::CreateFunctionBody::AsBeforeOptions{body: expr, link_symbol: _link_symbol} => expr,
-                            ast::CreateFunctionBody::AsAfterOptions(expr) => expr,
-                            ast::CreateFunctionBody::Return(expr) => expr,
-                            ast::CreateFunctionBody::AsBeginEnd(_) => {
-                                return not_impl_err!(
-                                    "BEGIN/END enclosed function body syntax is not supported"
-                                )?;
-                            }
-                            ast::CreateFunctionBody::AsReturnExpr(_)
-                            | ast::CreateFunctionBody::AsReturnSelect(_) => {
-                                return not_impl_err!(
-                                    "AS RETURN function syntax is not supported"
-                                )?
-                            }
-                        },
-                        &DFSchema::empty(),
-                        &mut planner_context,
-                    )?),
-                    None => None,
-                };
-
-                let params = CreateFunctionBody {
-                    language,
-                    behavior: behavior.map(|b| match b {
-                        ast::FunctionBehavior::Immutable => Volatility::Immutable,
-                        ast::FunctionBehavior::Stable => Volatility::Stable,
-                        ast::FunctionBehavior::Volatile => Volatility::Volatile,
-                    }),
-                    function_body,
-                };
-
-                let statement = DdlStatement::CreateFunction(Box::new(CreateFunction {
-                    or_replace,
-                    temporary,
-                    name,
-                    return_type: return_type.map(|f| f.data_type().clone()),
-                    args,
-                    params,
-                    schema: DFSchemaRef::new(DFSchema::empty()),
-                }));
-
-                Ok(LogicalPlan::Ddl(statement))
+            Statement::CreateFunction(create_function) => {
+                self.create_function_to_plan(create_function)
             }
-            Statement::DropFunction(ast::DropFunction {
-                if_exists,
-                func_desc,
-                drop_behavior: _,
-            }) => {
-                // According to postgresql documentation it can be only one function
-                // specified in drop statement
-                if let Some(desc) = func_desc.first() {
-                    // At the moment functions can't be qualified `schema.name`
-                    let name = match &desc.name.0[..] {
-                        [] => exec_err!("Function should have name")?,
-                        [n] => n.as_ident().unwrap().value.clone(),
-                        [..] => not_impl_err!("Qualified functions are not supported")?,
-                    };
-                    let statement = DdlStatement::DropFunction(DropFunction {
-                        if_exists,
-                        name,
-                        schema: DFSchemaRef::new(DFSchema::empty()),
-                    });
-                    Ok(LogicalPlan::Ddl(statement))
-                } else {
-                    exec_err!("Function name not provided")
-                }
+            Statement::DropFunction(drop_function) => {
+                self.drop_function_to_plan(drop_function)
             }
-            Statement::Truncate(ast::Truncate {
-                table_names,
-                partitions,
-                identity,
-                cascade,
-                on_cluster,
-                table,
-                if_exists,
-            }) => {
-                let _ = table; // Support TRUNCATE TABLE and TRUNCATE syntax
-                if table_names.len() != 1 {
-                    return not_impl_err!(
-                        "TRUNCATE with multiple tables is not supported"
-                    );
-                }
-
-                let target = &table_names[0];
-                if target.only {
-                    return not_impl_err!("TRUNCATE with ONLY is not supported");
-                }
-                if partitions.is_some() {
-                    return not_impl_err!("TRUNCATE with PARTITION is not supported");
-                }
-                if identity.is_some() {
-                    return not_impl_err!(
-                        "TRUNCATE with RESTART/CONTINUE IDENTITY is not supported"
-                    );
-                }
-                if cascade.is_some() {
-                    return not_impl_err!(
-                        "TRUNCATE with CASCADE/RESTRICT is not supported"
-                    );
-                }
-                if on_cluster.is_some() {
-                    return not_impl_err!("TRUNCATE with ON CLUSTER is not supported");
-                }
-                if if_exists {
-                    return not_impl_err!("TRUNCATE .. with IF EXISTS is not supported");
-                }
-                let table = self.object_name_to_table_reference(target.name.clone())?;
-                let source = self.context_provider.get_table_source(table.clone())?;
-
-                // TRUNCATE does not operate on input rows. The EmptyRelation is a logical placeholder
-                // since the real operation is executed directly by the TableProvider's truncate() hook.
-                Ok(LogicalPlan::Dml(DmlStatement::new(
-                    table.clone(),
-                    source,
-                    WriteOp::Truncate,
-                    Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
-                        produce_one_row: false,
-                        schema: DFSchemaRef::new(DFSchema::empty()),
-                    })),
-                )))
-            }
-            Statement::CreateIndex(CreateIndex {
-                name,
-                table_name,
-                using,
-                columns,
-                unique,
-                if_not_exists,
-                ..
-            }) => {
-                let name: Option<String> = name.as_ref().map(object_name_to_string);
-                let table = self.object_name_to_table_reference(table_name)?;
-                let table_schema = self
-                    .context_provider
-                    .get_table_source(table.clone())?
-                    .schema()
-                    .to_dfschema_ref()?;
-                let using: Option<String> =
-                    using.as_ref().map(|index_type| match index_type {
-                        IndexType::Custom(ident) => ident_to_string(ident),
-                        _ => index_type.to_string().to_ascii_lowercase(),
-                    });
-                let order_by_exprs: Vec<OrderByExpr> =
-                    columns.into_iter().map(|col| col.column).collect();
-                let columns = self.order_by_to_sort_expr(
-                    order_by_exprs,
-                    &table_schema,
-                    planner_context,
-                    false,
-                    None,
-                )?;
-                Ok(LogicalPlan::Ddl(DdlStatement::CreateIndex(
-                    PlanCreateIndex {
-                        name,
-                        table,
-                        using,
-                        columns,
-                        unique,
-                        if_not_exists,
-                        schema: DFSchemaRef::new(DFSchema::empty()),
-                    },
-                )))
+            Statement::Truncate(truncate) => self.truncate_to_plan(truncate),
+            Statement::CreateIndex(create_index) => {
+                self.create_index_to_plan(create_index, planner_context)
             }
             stmt => {
                 not_impl_err!("Unsupported SQL statement: {stmt}")
             }
         }
+    }
+
+    fn describe_statement_to_plan(&self, statement: Statement) -> Result<LogicalPlan> {
+        match statement {
+            Statement::Query(query) => self.describe_query_to_plan(*query),
+            _ => not_impl_err!("Describing statements other than SELECT not supported"),
+        }
+    }
+
+    fn explain_statement_to_plan(
+        &self,
+        verbose: bool,
+        statement: Box<Statement>,
+        analyze: bool,
+        format: Option<ast::AnalyzeFormatKind>,
+    ) -> Result<LogicalPlan> {
+        let format = format
+            .map(|format| ExplainFormat::from_str(&format.to_string()))
+            .transpose()?;
+        let statement = DFStatement::Statement(statement);
+        let options = ExplainStatementOptions {
+            analyze,
+            verbose,
+            format,
+            analyze_level: None,
+            analyze_categories: None,
+            show_statistics: None,
+        };
+        self.explain_to_plan(options, statement)
+    }
+
+    fn show_create_to_plan(
+        &self,
+        obj_type: &ShowCreateObject,
+        obj_name: ObjectName,
+    ) -> Result<LogicalPlan> {
+        match obj_type {
+            ShowCreateObject::Table => self.show_create_table_to_plan(obj_name),
+            _ => not_impl_err!("Only `SHOW CREATE TABLE  ...` statement is supported"),
+        }
+    }
+
+    fn create_schema_to_plan(
+        &self,
+        schema_name: &SchemaName,
+        if_not_exists: bool,
+    ) -> Result<LogicalPlan> {
+        Ok(LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(
+            CreateCatalogSchema {
+                schema_name: get_schema_name(schema_name),
+                if_not_exists,
+                schema: Arc::new(DFSchema::empty()),
+            },
+        )))
+    }
+
+    fn create_database_to_plan(
+        &self,
+        db_name: &ObjectName,
+        if_not_exists: bool,
+    ) -> Result<LogicalPlan> {
+        Ok(LogicalPlan::Ddl(DdlStatement::CreateCatalog(
+            CreateCatalog {
+                catalog_name: object_name_to_string(db_name),
+                if_not_exists,
+                schema: Arc::new(DFSchema::empty()),
+            },
+        )))
+    }
+
+    fn deallocate_to_plan(&self, name: &Ident) -> Result<LogicalPlan> {
+        Ok(LogicalPlan::Statement(PlanStatement::Deallocate(
+            Deallocate {
+                name: ident_to_string(name),
+            },
+        )))
+    }
+
+    fn reject_unsupported_create_table_options(create_table: &CreateTable) -> Result<()> {
+        let CreateTable {
+            temporary,
+            external,
+            global,
+            transient,
+            volatile,
+            hive_distribution,
+            hive_formats,
+            file_format,
+            location,
+            query: _,
+            name: _,
+            columns: _,
+            constraints: _,
+            if_not_exists: _,
+            or_replace: _,
+            without_rowid,
+            like,
+            clone,
+            comment,
+            on_commit,
+            on_cluster,
+            primary_key,
+            order_by,
+            partition_by,
+            cluster_by,
+            clustered_by,
+            strict,
+            copy_grants,
+            enable_schema_evolution,
+            change_tracking,
+            data_retention_time_in_days,
+            max_data_extension_time_in_days,
+            default_ddl_collation,
+            with_aggregation_policy,
+            with_row_access_policy,
+            with_tags,
+            iceberg,
+            external_volume,
+            base_location,
+            catalog,
+            catalog_sync,
+            storage_serialization_policy,
+            inherits,
+            table_options,
+            dynamic,
+            version,
+            target_lag,
+            warehouse,
+            refresh_mode,
+            initialize,
+            require_user,
+            partition_of,
+            for_values,
+            snapshot,
+            with_storage_lifecycle_policy,
+            diststyle,
+            distkey,
+            sortkey,
+            backup,
+            unlogged,
+            with_connection,
+            multiset,
+            fallback,
+            with_data,
+        } = create_table;
+        if !matches!(table_options, CreateTableOptions::None) {
+            return not_impl_err!("Unsupported SQL statement: {create_table}");
+        }
+        if *temporary {
+            return not_impl_err!("Temporary tables not supported");
+        }
+        if *external {
+            return not_impl_err!("External tables not supported");
+        }
+        if global.is_some() {
+            return not_impl_err!("Global tables not supported");
+        }
+        if *transient {
+            return not_impl_err!("Transient tables not supported");
+        }
+        if *volatile {
+            return not_impl_err!("Volatile tables not supported");
+        }
+        if *hive_distribution != ast::HiveDistributionStyle::NONE {
+            return not_impl_err!(
+                "Hive distribution not supported: {hive_distribution:?}"
+            );
+        }
+        if hive_formats.is_some()
+            && !matches!(
+                hive_formats,
+                Some(ast::HiveFormat {
+                    row_format: None,
+                    serde_properties: None,
+                    storage: None,
+                    location: None,
+                })
+            )
+        {
+            return not_impl_err!("Hive formats not supported: {hive_formats:?}");
+        }
+        if file_format.is_some() {
+            return not_impl_err!("File format not supported");
+        }
+        if location.is_some() {
+            return not_impl_err!("Location not supported");
+        }
+        if *without_rowid {
+            return not_impl_err!("Without rowid not supported");
+        }
+        if like.is_some() {
+            return not_impl_err!("Like not supported");
+        }
+        if clone.is_some() {
+            return not_impl_err!("Clone not supported");
+        }
+        if comment.is_some() {
+            return not_impl_err!("Comment not supported");
+        }
+        if on_commit.is_some() {
+            return not_impl_err!("On commit not supported");
+        }
+        if on_cluster.is_some() {
+            return not_impl_err!("On cluster not supported");
+        }
+        if primary_key.is_some() {
+            return not_impl_err!("Primary key not supported");
+        }
+        if order_by.is_some() {
+            return not_impl_err!("Order by not supported");
+        }
+        if partition_by.is_some() {
+            return not_impl_err!("Partition by not supported");
+        }
+        if cluster_by.is_some() {
+            return not_impl_err!("Cluster by not supported");
+        }
+        if clustered_by.is_some() {
+            return not_impl_err!("Clustered by not supported");
+        }
+        if *strict {
+            return not_impl_err!("Strict not supported");
+        }
+        if *copy_grants {
+            return not_impl_err!("Copy grants not supported");
+        }
+        if enable_schema_evolution.is_some() {
+            return not_impl_err!("Enable schema evolution not supported");
+        }
+        if change_tracking.is_some() {
+            return not_impl_err!("Change tracking not supported");
+        }
+        if data_retention_time_in_days.is_some() {
+            return not_impl_err!("Data retention time in days not supported");
+        }
+        if max_data_extension_time_in_days.is_some() {
+            return not_impl_err!("Max data extension time in days not supported");
+        }
+        if default_ddl_collation.is_some() {
+            return not_impl_err!("Default DDL collation not supported");
+        }
+        if with_aggregation_policy.is_some() {
+            return not_impl_err!("With aggregation policy not supported");
+        }
+        if with_row_access_policy.is_some() {
+            return not_impl_err!("With row access policy not supported");
+        }
+        if with_tags.is_some() {
+            return not_impl_err!("With tags not supported");
+        }
+        if *iceberg {
+            return not_impl_err!("Iceberg not supported");
+        }
+        if external_volume.is_some() {
+            return not_impl_err!("External volume not supported");
+        }
+        if base_location.is_some() {
+            return not_impl_err!("Base location not supported");
+        }
+        if catalog.is_some() {
+            return not_impl_err!("Catalog not supported");
+        }
+        if catalog_sync.is_some() {
+            return not_impl_err!("Catalog sync not supported");
+        }
+        if storage_serialization_policy.is_some() {
+            return not_impl_err!("Storage serialization policy not supported");
+        }
+        if inherits.is_some() {
+            return not_impl_err!("Table inheritance not supported");
+        }
+        if *dynamic {
+            return not_impl_err!("Dynamic tables not supported");
+        }
+        if version.is_some() {
+            return not_impl_err!("Version not supported");
+        }
+        if target_lag.is_some() {
+            return not_impl_err!("Target lag not supported");
+        }
+        if warehouse.is_some() {
+            return not_impl_err!("Warehouse not supported");
+        }
+        if refresh_mode.is_some() {
+            return not_impl_err!("Refresh mode not supported");
+        }
+        if initialize.is_some() {
+            return not_impl_err!("Initialize not supported");
+        }
+        if *require_user {
+            return not_impl_err!("Require user not supported");
+        }
+        if partition_of.is_some() {
+            return not_impl_err!("PARTITION OF not supported");
+        }
+        if for_values.is_some() {
+            return not_impl_err!("PARTITION OF .. FOR VALUES .. not supported");
+        }
+        if *snapshot {
+            return not_impl_err!("Snapshot tables not supported");
+        }
+        if with_storage_lifecycle_policy.is_some() {
+            return not_impl_err!("WITH STORAGE LIFECYCLE POLICY not supported");
+        }
+        if diststyle.is_some() {
+            return not_impl_err!("DISTSTYLE not supported");
+        }
+        if distkey.is_some() {
+            return not_impl_err!("DISTKEY not supported");
+        }
+        if sortkey.is_some() {
+            return not_impl_err!("SORTKEY not supported");
+        }
+        if backup.is_some() {
+            return not_impl_err!("BACKUP not supported");
+        }
+        if *unlogged {
+            return not_impl_err!("UNLOGGED tables not supported");
+        }
+        if with_connection.is_some() {
+            return not_impl_err!("WITH CONNECTION not supported");
+        }
+        if multiset.is_some() {
+            return not_impl_err!("MULTISET tables not supported");
+        }
+        if fallback.is_some() {
+            return not_impl_err!("FALLBACK not supported");
+        }
+        if with_data.is_some() {
+            return not_impl_err!("WITH [NO] DATA not supported");
+        }
+        Ok(())
+    }
+
+    fn create_table_to_plan(
+        &self,
+        create_table: CreateTable,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan> {
+        Self::reject_unsupported_create_table_options(&create_table)?;
+        let CreateTable {
+            query,
+            name,
+            columns,
+            constraints,
+            if_not_exists,
+            or_replace,
+            temporary,
+            ..
+        } = create_table;
+        // Merge inline constraints and existing constraints
+        let mut all_constraints = constraints;
+        let inline_constraints = calc_inline_constraints_from_columns(&columns);
+        all_constraints.extend(inline_constraints);
+        // Build column default values
+        let column_defaults = self.build_column_defaults(&columns, planner_context)?;
+
+        let has_columns = !columns.is_empty();
+        let schema = self.build_schema(columns)?.to_dfschema_ref()?;
+        if has_columns {
+            planner_context.set_table_schema(Some(Arc::clone(&schema)));
+        }
+
+        match query {
+            Some(query) => {
+                let plan = self.query_to_plan(*query, planner_context)?;
+                let input_schema = plan.schema();
+
+                let plan = if has_columns {
+                    if schema.fields().len() != input_schema.fields().len() {
+                        return plan_err!(
+                            "Mismatch: {} columns specified, but result has {} columns",
+                            schema.fields().len(),
+                            input_schema.fields().len()
+                        );
+                    }
+                    let input_columns = input_schema.columns();
+                    let project_exprs = schema
+                        .fields()
+                        .iter()
+                        .zip(input_columns)
+                        .map(|(field, input_column)| {
+                            cast(Expr::Column(input_column), field.data_type().clone())
+                                .alias(field.name())
+                        })
+                        .collect::<Vec<_>>();
+
+                    LogicalPlanBuilder::from(plan.clone())
+                        .project(project_exprs)?
+                        .build()?
+                } else {
+                    plan
+                };
+
+                let constraints = self.new_constraint_from_table_constraints(
+                    &all_constraints,
+                    plan.schema(),
+                )?;
+
+                Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
+                    CreateMemoryTable {
+                        name: self.object_name_to_table_reference(name)?,
+                        constraints,
+                        input: Arc::new(plan),
+                        if_not_exists,
+                        or_replace,
+                        column_defaults,
+                        temporary,
+                    },
+                )))
+            }
+
+            None => {
+                let plan = EmptyRelation {
+                    produce_one_row: false,
+                    schema,
+                };
+                let plan = LogicalPlan::EmptyRelation(plan);
+                let constraints = self.new_constraint_from_table_constraints(
+                    &all_constraints,
+                    plan.schema(),
+                )?;
+                Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
+                    CreateMemoryTable {
+                        name: self.object_name_to_table_reference(name)?,
+                        constraints,
+                        input: Arc::new(plan),
+                        if_not_exists,
+                        or_replace,
+                        column_defaults,
+                        temporary,
+                    },
+                )))
+            }
+        }
+    }
+
+    fn create_view_to_plan(&self, create_view: ast::CreateView) -> Result<LogicalPlan> {
+        if !matches!(create_view.options, CreateTableOptions::None) {
+            return not_impl_err!("Unsupported SQL statement: {create_view}");
+        }
+        if create_view.materialized {
+            return not_impl_err!("Materialized views not supported")?;
+        }
+        if !create_view.cluster_by.is_empty() {
+            return not_impl_err!("Cluster by not supported")?;
+        }
+        if create_view.comment.is_some() {
+            return not_impl_err!("Comment not supported")?;
+        }
+        if create_view.with_no_schema_binding {
+            return not_impl_err!("With no schema binding not supported")?;
+        }
+        if create_view.if_not_exists {
+            return not_impl_err!("If not exists not supported")?;
+        }
+        if create_view.to.is_some() {
+            return not_impl_err!("To not supported")?;
+        }
+        if create_view.copy_grants {
+            return not_impl_err!("COPY GRANTS not supported")?;
+        }
+
+        let sql = create_view.to_string();
+        let ast::CreateView {
+            or_replace,
+            materialized: _,
+            name,
+            columns,
+            query,
+            options: _,
+            cluster_by: _,
+            comment: _,
+            with_no_schema_binding: _,
+            if_not_exists: _,
+            temporary,
+            to: _,
+            params: _,
+            or_alter: _,
+            secure: _,
+            name_before_not_exists: _,
+            copy_grants: _,
+        } = create_view;
+
+        let columns = columns
+            .into_iter()
+            .map(|view_column_def| {
+                if let Some(options) = view_column_def.options {
+                    plan_err!("Options not supported for view columns: {options:?}")
+                } else {
+                    Ok(view_column_def.name)
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let mut plan = self.query_to_plan(*query, &mut PlannerContext::new())?;
+        plan = self.apply_expr_alias(plan, columns)?;
+
+        Ok(LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
+            name: self.object_name_to_table_reference(name)?,
+            input: Arc::new(plan),
+            or_replace,
+            definition: Some(sql),
+            temporary,
+        })))
+    }
+
+    fn drop_to_plan(
+        &self,
+        object_type: ObjectType,
+        if_exists: bool,
+        mut names: Vec<ObjectName>,
+        cascade: bool,
+    ) -> Result<LogicalPlan> {
+        // We don't support cascade and purge for now.
+        // nor do we support multiple object names
+        let name = match names.len() {
+            0 => Err::<_, DataFusionError>(
+                ParserError("Missing table name.".to_string()).into(),
+            ),
+            1 => Ok(names.pop().unwrap()),
+            _ => Err::<_, DataFusionError>(
+                ParserError("Multiple objects not supported".to_string()).into(),
+            ),
+        }?;
+
+        match object_type {
+            ObjectType::Table => {
+                Ok(LogicalPlan::Ddl(DdlStatement::DropTable(DropTable {
+                    name: self.object_name_to_table_reference(name)?,
+                    if_exists,
+                    schema: DFSchemaRef::new(DFSchema::empty()),
+                })))
+            }
+            ObjectType::View => Ok(LogicalPlan::Ddl(DdlStatement::DropView(DropView {
+                name: self.object_name_to_table_reference(name)?,
+                if_exists,
+                schema: DFSchemaRef::new(DFSchema::empty()),
+            }))),
+            ObjectType::Schema => {
+                let name = match self.object_name_to_table_reference(name)? {
+                    TableReference::Bare { table } => {
+                        Ok(SchemaReference::Bare { schema: table })
+                    }
+                    TableReference::Partial { schema, table } => {
+                        Ok(SchemaReference::Full {
+                            schema: table,
+                            catalog: schema,
+                        })
+                    }
+                    TableReference::Full {
+                        catalog: _,
+                        schema: _,
+                        table: _,
+                    } => Err(ParserError(
+                        "Invalid schema specifier (has 3 parts)".to_string(),
+                    )),
+                }?;
+                Ok(LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(
+                    DropCatalogSchema {
+                        name,
+                        if_exists,
+                        cascade,
+                        schema: DFSchemaRef::new(DFSchema::empty()),
+                    },
+                )))
+            }
+            ObjectType::Database => Ok(LogicalPlan::Ddl(DdlStatement::DropCatalog(
+                DropCatalog::builder(object_name_to_string(&name))
+                    .with_if_exists(if_exists)
+                    .with_cascade(cascade)
+                    .build(),
+            ))),
+            _ => not_impl_err!(
+                "Only `DROP TABLE/VIEW/SCHEMA/CATALOG/DATABASE  ...` statement is supported currently"
+            ),
+        }
+    }
+
+    fn prepare_to_plan(
+        &self,
+        name: &Ident,
+        data_types: Vec<ast::DataType>,
+        statement: Statement,
+    ) -> Result<LogicalPlan> {
+        // Convert parser data types to DataFusion data types
+        let mut fields: Vec<FieldRef> = data_types
+            .into_iter()
+            .map(|t| self.convert_data_type_to_field(&t))
+            .collect::<Result<_>>()?;
+
+        // Create planner context with parameters
+        let mut planner_context = PlannerContext::new()
+            .with_prepare_param_data_types(fields.iter().cloned().map(Some).collect());
+
+        // Build logical plan for inner statement of the prepare statement
+        let plan = self
+            .sql_statement_to_plan_with_context_impl(statement, &mut planner_context)?;
+
+        if fields.is_empty() {
+            let map_types = plan.get_parameter_fields()?;
+            let param_types: Option<Vec<FieldRef>> = (1..=map_types.len())
+                .map(|i| {
+                    let key = format!("${i}");
+                    map_types.get(&key).and_then(|opt| opt.clone())
+                })
+                .collect();
+            if let Some(param_types) = param_types {
+                fields.extend(param_types.iter().cloned());
+                planner_context.with_prepare_param_data_types(
+                    param_types.into_iter().map(Some).collect(),
+                );
+            }
+        }
+
+        Ok(LogicalPlan::Statement(PlanStatement::Prepare(Prepare {
+            name: ident_to_string(name),
+            fields,
+            input: Arc::new(plan),
+        })))
+    }
+
+    #[expect(clippy::too_many_arguments)]
+    fn execute_to_plan(
+        &self,
+        name: Option<ObjectName>,
+        parameters: Vec<SQLExpr>,
+        using: &[ast::ExprWithAlias],
+        immediate: bool,
+        into: &[Ident],
+        output: bool,
+        default: bool,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan> {
+        // `USING` is a MySQL-specific syntax and currently not supported.
+        if !using.is_empty() {
+            return not_impl_err!("Execute statement with USING is not supported");
+        }
+        if immediate {
+            return not_impl_err!("Execute statement with IMMEDIATE is not supported");
+        }
+        if !into.is_empty() {
+            return not_impl_err!("Execute statement with INTO is not supported");
+        }
+        if output {
+            return not_impl_err!("Execute statement with OUTPUT is not supported");
+        }
+        if default {
+            return not_impl_err!("Execute statement with DEFAULT is not supported");
+        }
+        let name = name
+            .ok_or_else(|| plan_datafusion_err!("EXECUTE statement requires a name"))?;
+
+        let empty_schema = DFSchema::empty();
+        let parameters = parameters
+            .into_iter()
+            .map(|expr| self.sql_to_expr(expr, &empty_schema, planner_context))
+            .collect::<Result<Vec<Expr>>>()?;
+
+        Ok(LogicalPlan::Statement(PlanStatement::Execute(Execute {
+            name: object_name_to_string(&name),
+            parameters,
+        })))
+    }
+
+    /// Generate a logical plan from a "SHOW TABLES" query
+    #[expect(clippy::fn_params_excessive_bools)]
+    fn show_tables_to_plan(
+        &self,
+        extended: bool,
+        full: bool,
+        terse: bool,
+        history: bool,
+        external: bool,
+        show_options: ShowStatementOptions,
+    ) -> Result<LogicalPlan> {
+        // We only support the basic "SHOW TABLES"
+        // https://github.com/apache/datafusion/issues/3188
+        if extended {
+            return not_impl_err!("SHOW TABLES EXTENDED not supported")?;
+        }
+        if full {
+            return not_impl_err!("SHOW FULL TABLES not supported")?;
+        }
+        if terse {
+            return not_impl_err!("SHOW TERSE TABLES not supported")?;
+        }
+        if history {
+            return not_impl_err!("SHOW TABLES HISTORY not supported")?;
+        }
+        if external {
+            return not_impl_err!("SHOW EXTERNAL TABLES not supported")?;
+        }
+        let ShowStatementOptions {
+            show_in,
+            starts_with,
+            limit,
+            limit_from,
+            filter_position,
+        } = show_options;
+        if show_in.is_some() {
+            return not_impl_err!("SHOW TABLES IN not supported")?;
+        }
+        if starts_with.is_some() {
+            return not_impl_err!("SHOW TABLES LIKE not supported")?;
+        }
+        if limit.is_some() {
+            return not_impl_err!("SHOW TABLES LIMIT not supported")?;
+        }
+        if limit_from.is_some() {
+            return not_impl_err!("SHOW TABLES LIMIT FROM not supported")?;
+        }
+        if filter_position.is_some() {
+            return not_impl_err!("SHOW TABLES FILTER not supported")?;
+        }
+        if self.has_table("information_schema", "tables") {
+            let query = "SELECT * FROM information_schema.tables;";
+            let mut rewrite = DFParser::parse_sql(query)?;
+            assert_eq!(rewrite.len(), 1);
+            self.statement_to_plan(rewrite.pop_front().unwrap()) // length of rewrite is 1
+        } else {
+            plan_err!("SHOW TABLES is not supported unless information_schema is enabled")
+        }
+    }
+
+    fn show_columns_statement_to_plan(
+        &self,
+        extended: bool,
+        full: bool,
+        show_options: ShowStatementOptions,
+    ) -> Result<LogicalPlan> {
+        let ShowStatementOptions {
+            show_in,
+            starts_with,
+            limit,
+            limit_from,
+            filter_position,
+        } = show_options;
+        if starts_with.is_some() {
+            return not_impl_err!("SHOW COLUMNS LIKE not supported")?;
+        }
+        if limit.is_some() {
+            return not_impl_err!("SHOW COLUMNS LIMIT not supported")?;
+        }
+        if limit_from.is_some() {
+            return not_impl_err!("SHOW COLUMNS LIMIT FROM not supported")?;
+        }
+        if filter_position.is_some() {
+            return not_impl_err!("SHOW COLUMNS with WHERE or LIKE is not supported")?;
+        }
+        let Some(ShowStatementIn {
+            // specifies if the syntax was `SHOW COLUMNS IN` or `SHOW
+            // COLUMNS FROM` which is not different in DataFusion
+            clause: _,
+            parent_type,
+            parent_name,
+        }) = show_in
+        else {
+            return plan_err!("SHOW COLUMNS requires a table name");
+        };
+
+        if let Some(parent_type) = parent_type {
+            return not_impl_err!("SHOW COLUMNS IN {parent_type} not supported");
+        }
+        let Some(table_name) = parent_name else {
+            return plan_err!("SHOW COLUMNS requires a table name");
+        };
+
+        self.show_columns_to_plan(extended, full, table_name)
+    }
+
+    fn insert_statement_to_plan(&self, insert: Insert) -> Result<LogicalPlan> {
+        let Insert {
+            or,
+            into,
+            columns,
+            overwrite,
+            source,
+            partitioned,
+            after_columns,
+            table,
+            on,
+            returning,
+            ignore,
+            table_alias,
+            mut replace_into,
+            priority,
+            insert_alias,
+            assignments,
+            has_table_keyword,
+            settings,
+            format_clause,
+            insert_token: _, // record the location the `INSERT` token
+            optimizer_hints,
+            output,
+            multi_table_insert_type,
+            multi_table_into_clauses,
+            multi_table_when_clauses,
+            multi_table_else_clause,
+        } = insert;
+        let table_name = match table {
+            TableObject::TableName(table_name) => table_name,
+            TableObject::TableFunction(_) => {
+                return not_impl_err!("INSERT INTO Table functions not supported");
+            }
+            TableObject::TableQuery(_) => {
+                return not_impl_err!("INSERT INTO subquery target not supported");
+            }
+        };
+        if let Some(or) = or {
+            match or {
+                SqliteOnConflict::Replace => replace_into = true,
+                _ => plan_err!("Inserts with {or} clause is not supported")?,
+            }
+        }
+        if partitioned.is_some() {
+            plan_err!("Partitioned inserts not yet supported")?;
+        }
+        if !after_columns.is_empty() {
+            plan_err!("After-columns clause not supported")?;
+        }
+        if on.is_some() {
+            plan_err!("Insert-on clause not supported")?;
+        }
+        if returning.is_some() {
+            plan_err!("Insert-returning clause not supported")?;
+        }
+        if ignore {
+            plan_err!("Insert-ignore clause not supported")?;
+        }
+        let Some(source) = source else {
+            plan_err!("Inserts without a source not supported")?
+        };
+        if let Some(table_alias) = table_alias {
+            plan_err!("Inserts with a table alias not supported: {table_alias:?}")?
+        }
+        if let Some(priority) = priority {
+            plan_err!("Inserts with a `PRIORITY` clause not supported: {priority:?}")?
+        }
+        if insert_alias.is_some() {
+            plan_err!("Inserts with an alias not supported")?;
+        }
+        if !assignments.is_empty() {
+            plan_err!("Inserts with assignments not supported")?;
+        }
+        if settings.is_some() {
+            plan_err!("Inserts with settings not supported")?;
+        }
+        if format_clause.is_some() {
+            plan_err!("Inserts with format clause not supported")?;
+        }
+        if !optimizer_hints.is_empty() {
+            plan_err!("Optimizer hints not supported")?;
+        }
+        if output.is_some() {
+            plan_err!("Insert OUTPUT clause not supported")?;
+        }
+        if multi_table_insert_type.is_some()
+            || !multi_table_into_clauses.is_empty()
+            || !multi_table_when_clauses.is_empty()
+            || multi_table_else_clause.is_some()
+        {
+            plan_err!("Multi-table INSERT not supported")?;
+        }
+        // optional keywords don't change behavior
+        let _ = into;
+        let _ = has_table_keyword;
+        self.insert_to_plan(table_name, columns, source, overwrite, replace_into)
+    }
+
+    fn update_statement_to_plan(&self, update: Update) -> Result<LogicalPlan> {
+        let Update {
+            table,
+            assignments,
+            from,
+            selection,
+            returning,
+            or,
+            limit,
+            update_token: _,
+            optimizer_hints,
+            output,
+            order_by,
+        } = update;
+        let from_clauses =
+            from.map(|update_table_from_kind| match update_table_from_kind {
+                UpdateTableFromKind::BeforeSet(from_clauses) => from_clauses,
+                UpdateTableFromKind::AfterSet(from_clauses) => from_clauses,
+            });
+        // TODO: support multiple tables in UPDATE SET FROM
+        if from_clauses.as_ref().is_some_and(|f| f.len() > 1) {
+            not_impl_err!("Multiple tables in UPDATE SET FROM not yet supported")?;
+        }
+        let update_from = from_clauses.and_then(|mut f| f.pop());
+
+        // UPDATE ... FROM is currently not working
+        // TODO fix https://github.com/apache/datafusion/issues/19950
+        if update_from.is_some() {
+            return not_impl_err!("UPDATE ... FROM is not supported");
+        }
+
+        if returning.is_some() {
+            plan_err!("Update-returning clause not yet supported")?;
+        }
+        if or.is_some() {
+            plan_err!("ON conflict not supported")?;
+        }
+        if limit.is_some() {
+            return not_impl_err!("Update-limit clause not supported")?;
+        }
+        if !optimizer_hints.is_empty() {
+            plan_err!("Optimizer hints not supported")?;
+        }
+        if output.is_some() {
+            plan_err!("Update OUTPUT clause not supported")?;
+        }
+        if !order_by.is_empty() {
+            plan_err!("Update ORDER BY not supported")?;
+        }
+        self.update_to_plan(table, &assignments, update_from, selection)
+    }
+
+    fn delete_statement_to_plan(&self, delete: Delete) -> Result<LogicalPlan> {
+        let Delete {
+            tables,
+            using,
+            selection,
+            returning,
+            from,
+            order_by,
+            limit,
+            delete_token: _,
+            optimizer_hints,
+            output,
+        } = delete;
+        if !tables.is_empty() {
+            plan_err!("DELETE <TABLE> not supported")?;
+        }
+
+        if using.is_some() {
+            plan_err!("Using clause not supported")?;
+        }
+
+        if returning.is_some() {
+            plan_err!("Delete-returning clause not yet supported")?;
+        }
+
+        if !order_by.is_empty() {
+            plan_err!("Delete-order-by clause not yet supported")?;
+        }
+
+        if limit.is_some() {
+            return plan_err!("Delete-limit clause is not supported");
+        }
+
+        if !optimizer_hints.is_empty() {
+            plan_err!("Optimizer hints not supported")?;
+        }
+        if output.is_some() {
+            plan_err!("Delete OUTPUT clause not supported")?;
+        }
+
+        let table_name = self.get_delete_target(from)?;
+        self.delete_to_plan(&table_name, selection)
+    }
+
+    fn start_transaction_to_plan(
+        &self,
+        modes: &[TransactionMode],
+        modifier: Option<ast::TransactionModifier>,
+        transaction: Option<&BeginTransactionKind>,
+        statements: &[Statement],
+        has_end_keyword: bool,
+        exception: Option<&[ast::ExceptionWhen]>,
+    ) -> Result<LogicalPlan> {
+        if let Some(modifier) = modifier {
+            return not_impl_err!("Transaction modifier not supported: {modifier}");
+        }
+        if !statements.is_empty() {
+            return not_impl_err!("Transaction with multiple statements not supported");
+        }
+        if exception.is_some() {
+            return not_impl_err!("Transaction with exception statements not supported");
+        }
+        if has_end_keyword {
+            return not_impl_err!("Transaction with END keyword not supported");
+        }
+        self.validate_transaction_kind(transaction)?;
+        let isolation_level: ast::TransactionIsolationLevel = modes
+            .iter()
+            .filter_map(|m: &TransactionMode| match m {
+                TransactionMode::AccessMode(_) => None,
+                TransactionMode::IsolationLevel(level) => Some(level),
+            })
+            .next_back()
+            .copied()
+            .unwrap_or(ast::TransactionIsolationLevel::Serializable);
+        let access_mode: ast::TransactionAccessMode = modes
+            .iter()
+            .filter_map(|m: &TransactionMode| match m {
+                TransactionMode::AccessMode(mode) => Some(mode),
+                TransactionMode::IsolationLevel(_) => None,
+            })
+            .next_back()
+            .copied()
+            .unwrap_or(ast::TransactionAccessMode::ReadWrite);
+        let isolation_level = match isolation_level {
+            ast::TransactionIsolationLevel::ReadUncommitted => {
+                TransactionIsolationLevel::ReadUncommitted
+            }
+            ast::TransactionIsolationLevel::ReadCommitted => {
+                TransactionIsolationLevel::ReadCommitted
+            }
+            ast::TransactionIsolationLevel::RepeatableRead => {
+                TransactionIsolationLevel::RepeatableRead
+            }
+            ast::TransactionIsolationLevel::Serializable => {
+                TransactionIsolationLevel::Serializable
+            }
+            ast::TransactionIsolationLevel::Snapshot => {
+                TransactionIsolationLevel::Snapshot
+            }
+        };
+        let access_mode = match access_mode {
+            ast::TransactionAccessMode::ReadOnly => TransactionAccessMode::ReadOnly,
+            ast::TransactionAccessMode::ReadWrite => TransactionAccessMode::ReadWrite,
+        };
+        let statement = PlanStatement::TransactionStart(TransactionStart {
+            access_mode,
+            isolation_level,
+        });
+        Ok(LogicalPlan::Statement(statement))
+    }
+
+    fn commit_to_plan(
+        &self,
+        chain: bool,
+        end: bool,
+        modifier: Option<ast::TransactionModifier>,
+    ) -> Result<LogicalPlan> {
+        if end {
+            return not_impl_err!("COMMIT AND END not supported");
+        }
+        if let Some(modifier) = modifier {
+            return not_impl_err!("COMMIT {modifier} not supported");
+        }
+        let statement = PlanStatement::TransactionEnd(TransactionEnd {
+            conclusion: TransactionConclusion::Commit,
+            chain,
+        });
+        Ok(LogicalPlan::Statement(statement))
+    }
+
+    fn rollback_to_plan(
+        &self,
+        chain: bool,
+        savepoint: Option<&Ident>,
+    ) -> Result<LogicalPlan> {
+        if savepoint.is_some() {
+            plan_err!("Savepoints not supported")?;
+        }
+        let statement = PlanStatement::TransactionEnd(TransactionEnd {
+            conclusion: TransactionConclusion::Rollback,
+            chain,
+        });
+        Ok(LogicalPlan::Statement(statement))
+    }
+
+    fn create_function_to_plan(
+        &self,
+        create_function: ast::CreateFunction,
+    ) -> Result<LogicalPlan> {
+        let ast::CreateFunction {
+            or_replace,
+            temporary,
+            name,
+            args,
+            return_type,
+            function_body,
+            behavior,
+            language,
+            ..
+        } = create_function;
+        let return_type = match return_type {
+            Some(ast::FunctionReturnType::DataType(t)) => {
+                Some(self.convert_data_type_to_field(&t)?)
+            }
+            Some(ast::FunctionReturnType::SetOf(_)) => {
+                return not_impl_err!(
+                    "RETURNS SETOF in CREATE FUNCTION is not supported"
+                );
+            }
+            None => None,
+        };
+        let mut planner_context = PlannerContext::new();
+        let empty_schema = &DFSchema::empty();
+
+        let args = match args {
+            Some(function_args) => {
+                let function_args = function_args
+                    .into_iter()
+                    .map(|arg| {
+                        let data_type =
+                            self.convert_data_type_to_field(&arg.data_type)?;
+
+                        let default_expr = match arg.default_expr {
+                            Some(expr) => Some(self.sql_to_expr(
+                                expr,
+                                empty_schema,
+                                &mut planner_context,
+                            )?),
+                            None => None,
+                        };
+                        Ok(OperateFunctionArg {
+                            name: arg.name,
+                            default_expr,
+                            data_type: data_type.data_type().clone(),
+                        })
+                    })
+                    .collect::<Result<Vec<OperateFunctionArg>>>();
+                Some(function_args?)
+            }
+            None => None,
+        };
+        // Validate default arguments
+        let first_default = args
+            .as_ref()
+            .and_then(|arg| arg.iter().position(|t| t.default_expr.is_some()));
+        let last_non_default = args
+            .as_ref()
+            .and_then(|arg| arg.iter().rposition(|t| t.default_expr.is_none()));
+        if let (Some(pos_default), Some(pos_non_default)) =
+            (first_default, last_non_default)
+            && pos_non_default > pos_default
+        {
+            return plan_err!("Non-default arguments cannot follow default arguments.");
+        }
+        // At the moment functions can't be qualified `schema.name`
+        let name = match &name.0[..] {
+            [] => exec_err!("Function should have name")?,
+            [n] => n.as_ident().unwrap().value.clone(),
+            [..] => not_impl_err!("Qualified functions are not supported")?,
+        };
+        //
+        // Convert resulting expression to data fusion expression
+        //
+        let arg_types = args.as_ref().map(|arg| {
+            arg.iter()
+                .map(|t| {
+                    let name = match t.name.clone() {
+                        Some(name) => name.value,
+                        None => "".to_string(),
+                    };
+                    Arc::new(Field::new(name, t.data_type.clone(), true))
+                })
+                .collect::<Vec<_>>()
+        });
+        // Validate parameter style
+        if let Some(ref fields) = arg_types {
+            let count_positional = fields.iter().filter(|f| f.name() == "").count();
+            if !(count_positional == 0 || count_positional == fields.len()) {
+                return plan_err!(
+                    "All function arguments must use either named or positional style."
+                );
+            }
+        }
+        let mut planner_context = PlannerContext::new().with_prepare_param_data_types(
+            arg_types
+                .unwrap_or_default()
+                .into_iter()
+                .map(Some)
+                .collect(),
+        );
+
+        let function_body = match function_body {
+            Some(r) => Some(self.sql_to_expr(
+                match r {
+                    // `link_symbol` indicates if the primary expression contains the name of shared library file.
+                    ast::CreateFunctionBody::AsBeforeOptions {
+                        body: expr,
+                        link_symbol: _link_symbol,
+                    } => expr,
+                    ast::CreateFunctionBody::AsAfterOptions(expr) => expr,
+                    ast::CreateFunctionBody::Return(expr) => expr,
+                    ast::CreateFunctionBody::AsBeginEnd(_) => {
+                        return not_impl_err!(
+                            "BEGIN/END enclosed function body syntax is not supported"
+                        )?;
+                    }
+                    ast::CreateFunctionBody::AsReturnExpr(_)
+                    | ast::CreateFunctionBody::AsReturnSelect(_) => {
+                        return not_impl_err!(
+                            "AS RETURN function syntax is not supported"
+                        )?;
+                    }
+                },
+                &DFSchema::empty(),
+                &mut planner_context,
+            )?),
+            None => None,
+        };
+
+        let params = CreateFunctionBody {
+            language,
+            behavior: behavior.map(|b| match b {
+                ast::FunctionBehavior::Immutable => Volatility::Immutable,
+                ast::FunctionBehavior::Stable => Volatility::Stable,
+                ast::FunctionBehavior::Volatile => Volatility::Volatile,
+            }),
+            function_body,
+        };
+
+        let statement = DdlStatement::CreateFunction(Box::new(CreateFunction {
+            or_replace,
+            temporary,
+            name,
+            return_type: return_type.map(|f| f.data_type().clone()),
+            args,
+            params,
+            schema: DFSchemaRef::new(DFSchema::empty()),
+        }));
+
+        Ok(LogicalPlan::Ddl(statement))
+    }
+
+    fn drop_function_to_plan(
+        &self,
+        drop_function: ast::DropFunction,
+    ) -> Result<LogicalPlan> {
+        let ast::DropFunction {
+            if_exists,
+            func_desc,
+            drop_behavior: _,
+        } = drop_function;
+        // According to postgresql documentation it can be only one function
+        // specified in drop statement
+        if let Some(desc) = func_desc.first() {
+            // At the moment functions can't be qualified `schema.name`
+            let name = match &desc.name.0[..] {
+                [] => exec_err!("Function should have name")?,
+                [n] => n.as_ident().unwrap().value.clone(),
+                [..] => not_impl_err!("Qualified functions are not supported")?,
+            };
+            let statement = DdlStatement::DropFunction(DropFunction {
+                if_exists,
+                name,
+                schema: DFSchemaRef::new(DFSchema::empty()),
+            });
+            Ok(LogicalPlan::Ddl(statement))
+        } else {
+            exec_err!("Function name not provided")
+        }
+    }
+
+    fn truncate_to_plan(&self, truncate: ast::Truncate) -> Result<LogicalPlan> {
+        let ast::Truncate {
+            table_names,
+            partitions,
+            identity,
+            cascade,
+            on_cluster,
+            table,
+            if_exists,
+        } = truncate;
+        let _ = table; // Support TRUNCATE TABLE and TRUNCATE syntax
+        if table_names.len() != 1 {
+            return not_impl_err!("TRUNCATE with multiple tables is not supported");
+        }
+
+        let target = &table_names[0];
+        if target.only {
+            return not_impl_err!("TRUNCATE with ONLY is not supported");
+        }
+        if partitions.is_some() {
+            return not_impl_err!("TRUNCATE with PARTITION is not supported");
+        }
+        if identity.is_some() {
+            return not_impl_err!(
+                "TRUNCATE with RESTART/CONTINUE IDENTITY is not supported"
+            );
+        }
+        if cascade.is_some() {
+            return not_impl_err!("TRUNCATE with CASCADE/RESTRICT is not supported");
+        }
+        if on_cluster.is_some() {
+            return not_impl_err!("TRUNCATE with ON CLUSTER is not supported");
+        }
+        if if_exists {
+            return not_impl_err!("TRUNCATE .. with IF EXISTS is not supported");
+        }
+        let table = self.object_name_to_table_reference(target.name.clone())?;
+        let source = self.context_provider.get_table_source(table.clone())?;
+
+        // TRUNCATE does not operate on input rows. The EmptyRelation is a logical placeholder
+        // since the real operation is executed directly by the TableProvider's truncate() hook.
+        Ok(LogicalPlan::Dml(DmlStatement::new(
+            table.clone(),
+            source,
+            WriteOp::Truncate,
+            Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: DFSchemaRef::new(DFSchema::empty()),
+            })),
+        )))
+    }
+
+    fn create_index_to_plan(
+        &self,
+        create_index: CreateIndex,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan> {
+        let CreateIndex {
+            name,
+            table_name,
+            using,
+            columns,
+            unique,
+            if_not_exists,
+            ..
+        } = create_index;
+        let name: Option<String> = name.as_ref().map(object_name_to_string);
+        let table = self.object_name_to_table_reference(table_name)?;
+        let table_schema = self
+            .context_provider
+            .get_table_source(table.clone())?
+            .schema()
+            .to_dfschema_ref()?;
+        let using: Option<String> = using.as_ref().map(|index_type| match index_type {
+            IndexType::Custom(ident) => ident_to_string(ident),
+            _ => index_type.to_string().to_ascii_lowercase(),
+        });
+        let order_by_exprs: Vec<OrderByExpr> =
+            columns.into_iter().map(|col| col.column).collect();
+        let columns = self.order_by_to_sort_expr(
+            order_by_exprs,
+            &table_schema,
+            planner_context,
+            false,
+            None,
+        )?;
+        Ok(LogicalPlan::Ddl(DdlStatement::CreateIndex(
+            PlanCreateIndex {
+                name,
+                table,
+                using,
+                columns,
+                unique,
+                if_not_exists,
+                schema: DFSchemaRef::new(DFSchema::empty()),
+            },
+        )))
     }
 
     fn get_delete_target(&self, from: FromTable) -> Result<ObjectName> {
@@ -1671,18 +1787,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         };
 
         Ok(name)
-    }
-
-    /// Generate a logical plan from a "SHOW TABLES" query
-    fn show_tables_to_plan(&self) -> Result<LogicalPlan> {
-        if self.has_table("information_schema", "tables") {
-            let query = "SELECT * FROM information_schema.tables;";
-            let mut rewrite = DFParser::parse_sql(query)?;
-            assert_eq!(rewrite.len(), 1);
-            self.statement_to_plan(rewrite.pop_front().unwrap()) // length of rewrite is 1
-        } else {
-            plan_err!("SHOW TABLES is not supported unless information_schema is enabled")
-        }
     }
 
     fn describe_table_to_plan(&self, table_name: ObjectName) -> Result<LogicalPlan> {

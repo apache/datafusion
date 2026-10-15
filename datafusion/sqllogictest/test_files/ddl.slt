@@ -859,6 +859,16 @@ CREATE MULTISET TABLE foo (x int);
 statement error DataFusion error: This feature is not implemented: WITH \[NO\] DATA not supported
 CREATE TABLE foo AS SELECT 1 WITH NO DATA;
 
+# Option lists are rejected before other unsupported table or view features.
+statement error DataFusion error: This feature is not implemented: Unsupported SQL statement: CREATE TEMPORARY TABLE rejected_table \(x INT\) WITH \(fillfactor = 70\)
+CREATE TEMPORARY TABLE rejected_table (x INT) WITH (fillfactor = 70);
+
+statement error DataFusion error: This feature is not implemented: Temporary tables not supported
+CREATE TEMPORARY TABLE rejected_table (x INT);
+
+statement error DataFusion error: This feature is not implemented: Unsupported SQL statement: CREATE MATERIALIZED VIEW rejected_view WITH \(check_option = local\) AS SELECT 1
+CREATE MATERIALIZED VIEW rejected_view WITH (check_option = local) AS SELECT 1;
+
 statement error DataFusion error: Error during planning: Exclude constraints are not currently supported
 CREATE TABLE foo (x int, EXCLUDE USING gist (x WITH =));
 
