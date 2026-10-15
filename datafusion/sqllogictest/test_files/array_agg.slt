@@ -665,3 +665,40 @@ List(Dictionary(Int32, Utf8))
 
 statement ok
 drop table array_agg_distinct_dict_table;
+
+# array_agg(DISTINCT) per group, mixed with other aggregates and a FILTER
+statement ok
+create table array_agg_distinct_groups(g int, v varchar) as values
+  (1, 'b'), (1, 'a'), (1, 'b'), (1, null),
+  (2, 'a'), (2, 'a'),
+  (3, null),
+  (4, 'c');
+
+query II??
+select
+  g,
+  count(*),
+  array_sort(array_agg(DISTINCT v) FILTER (WHERE v <> 'c')),
+  array_sort(array_agg(DISTINCT v))
+from array_agg_distinct_groups
+group by g
+order by g;
+----
+1 4 [a, b] [NULL, a, b]
+2 2 [a] [a]
+3 1 NULL [NULL]
+4 1 NULL [c]
+
+query I?
+select g, array_agg(DISTINCT v ORDER BY v DESC) ignore nulls
+from array_agg_distinct_groups
+group by g
+order by g;
+----
+1 [b, a]
+2 [a]
+3 NULL
+4 [c]
+
+statement ok
+drop table array_agg_distinct_groups;
