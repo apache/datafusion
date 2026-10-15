@@ -293,6 +293,17 @@ fn criterion_benchmark(c: &mut Criterion) {
                 ..Case::default()
             },
         ),
+        // As many elements as the default, spread over 8x as many rows, so
+        // per-row work dominates.
+        (
+            "int32/narrow_2/null_elements25",
+            Case {
+                rows: 2048,
+                width: 2,
+                element_nulls: 0.25,
+                ..Case::default()
+            },
+        ),
         (
             "scalar/true",
             Case {

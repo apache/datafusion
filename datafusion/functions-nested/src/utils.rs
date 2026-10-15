@@ -66,19 +66,27 @@ pub(crate) fn prepare_list_filter<O: OffsetSizeTrait>(
     let mut offsets = Vec::with_capacity(list.len() + 1);
     offsets.push(O::zero());
     let mut kept_count = 0;
+    // Count the set bits before each row end in one pass over `keep`, which
+    // stays cheap for short rows.
+    let mut set_bits = SetBitCounter::new(keep.bit_chunks().iter_padded());
+    // Set bits stored under NULL rows, which the result does not keep.
+    let mut hidden_count = 0;
     // NULL list rows are usually empty, so reuse `keep` until a NULL row stores
     // elements. Copy the bits of the preceding rows when that first happens.
     let mut keep_mask: Option<BooleanBufferBuilder> = None;
     for (row, window) in list_offsets.windows(2).enumerate() {
         let start = window[0].as_usize() - first_offset;
-        let len = window[1].as_usize() - window[0].as_usize();
+        let end = window[1].as_usize() - first_offset;
+        let len = end - start;
         let bit_start = keep.offset() + start;
         if list.is_valid(row) {
-            kept_count += keep.inner().count_set_bits_offset(bit_start, len);
+            kept_count = set_bits.count_before(end) - hidden_count;
             if let Some(keep_mask) = &mut keep_mask {
                 keep_mask.append_packed_range(bit_start..bit_start + len, keep.values());
             }
         } else if len != 0 {
+            let set_before_row = set_bits.count_before(start);
+            hidden_count += set_bits.count_before(end) - set_before_row;
             keep_mask
                 .get_or_insert_with(|| {
                     let mut builder = BooleanBufferBuilder::new(keep.len());
@@ -98,6 +106,45 @@ pub(crate) fn prepare_list_filter<O: OffsetSizeTrait>(
     // it to `O` cannot overflow.
     let offsets = unsafe { OffsetBuffer::new_unchecked(offsets.into()) };
     (offsets, keep_mask)
+}
+
+/// Counts the set bits that precede a sequence of non-decreasing positions in a
+/// bitmap, reading each 64-bit word of the bitmap once.
+struct SetBitCounter<I> {
+    /// The bitmap's remaining words, with the final word padded with zeros.
+    words: I,
+    /// The word containing the most recent position.
+    word: u64,
+    /// Position of the first bit of `word`.
+    word_start: usize,
+    /// Set bits before `word_start`.
+    count_before_word: usize,
+}
+
+impl<I: Iterator<Item = u64>> SetBitCounter<I> {
+    fn new(mut words: I) -> Self {
+        let word = words.next().unwrap_or(0);
+        Self {
+            words,
+            word,
+            word_start: 0,
+            count_before_word: 0,
+        }
+    }
+
+    /// Returns the number of set bits before `end`. `end` must be no less than
+    /// in the previous call, and no greater than the bitmap's length.
+    #[inline]
+    fn count_before(&mut self, end: usize) -> usize {
+        debug_assert!(end >= self.word_start);
+        while end - self.word_start >= 64 {
+            self.count_before_word += self.word.count_ones() as usize;
+            self.word = self.words.next().unwrap_or(0);
+            self.word_start += 64;
+        }
+        let mask = (1u64 << (end - self.word_start)) - 1;
+        self.count_before_word + (self.word & mask).count_ones() as usize
+    }
 }
 
 /// Computes the return type of a function that produces a list with the same
@@ -619,17 +666,37 @@ pub(crate) mod tests {
     #[test]
     fn list_filter_mask_handles_slices_and_hidden_elements() {
         let valid = [true, false, true, false, false, true, true, false];
-        // After slicing off the first row: an empty NULL row, a NULL row storing
-        // an element after a valid row, consecutive NULL rows, and a trailing one.
-        let hidden = [2, 0, 2, 1, 2, 0, 3, 2];
-        // NULL rows without elements leave the bitmap untouched.
-        let empty = [2, 0, 2, 0, 0, 3, 3, 0];
-        let (keep, mask) = check_list_filter::<i32>(hidden, valid);
-        assert!(!mask.inner().ptr_eq(keep.inner()));
-        let (keep, mask) = check_list_filter::<i32>(empty, valid);
-        assert!(mask.inner().ptr_eq(keep.inner()));
-        check_list_filter::<i64>(hidden, valid);
-        check_list_filter::<i64>(empty, valid);
+        // After slicing off the first row, the first lengths of each pair give an
+        // empty NULL row, a NULL row storing elements after a valid row,
+        // consecutive NULL rows, and a trailing one. The second lengths store no
+        // elements under NULL rows, which leaves the bitmap untouched.
+        for (hidden, empty) in [
+            ([2, 0, 2, 1, 2, 0, 3, 2], [2, 0, 2, 0, 0, 3, 3, 0]),
+            // Rows long enough that counting and copying bits spans 64-bit words.
+            ([2, 0, 63, 65, 64, 0, 65, 2], [2, 0, 63, 0, 0, 65, 65, 0]),
+        ] {
+            let (keep, mask) = check_list_filter::<i32>(hidden, valid);
+            assert!(!mask.inner().ptr_eq(keep.inner()));
+            let (keep, mask) = check_list_filter::<i32>(empty, valid);
+            assert!(mask.inner().ptr_eq(keep.inner()));
+            check_list_filter::<i64>(hidden, valid);
+            check_list_filter::<i64>(empty, valid);
+        }
+    }
+
+    #[test]
+    fn set_bit_counter_matches_per_position_counts() {
+        // A sliced bitmap whose length is a whole number of 64-bit words.
+        let bits =
+            BooleanBuffer::collect_bool(200, |i| i % 3 != 0 && i % 7 != 0).slice(5, 192);
+        let mut counter = SetBitCounter::new(bits.bit_chunks().iter_padded());
+        let mut expected = 0;
+        for end in 0..=bits.len() {
+            assert_eq!(counter.count_before(end), expected, "end {end}");
+            if end < bits.len() {
+                expected += usize::from(bits.value(end));
+            }
+        }
     }
 
     /// Only test internal functions, array-related sql functions will be tested in sqllogictest `array.slt`
