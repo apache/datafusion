@@ -3593,7 +3593,13 @@ pub(crate) fn group_id_array(
     let semantic_id = group
         .iter()
         .fold(0u64, |acc, &is_null| (acc << 1) | u64::from(is_null));
-    let full_id = semantic_id | ((ordinal as u64) << n);
+    // A zero ordinal needs no high bits. Avoid shifting it by 64 when all
+    // UInt64 bits belong to the semantic mask.
+    let full_id = if ordinal == 0 {
+        semantic_id
+    } else {
+        semantic_id | ((ordinal as u64) << n)
+    };
     if total_bits <= 8 {
         Ok(Arc::new(UInt8Array::from(vec![full_id as u8; num_rows])))
     } else if total_bits <= 16 {
@@ -3761,6 +3767,13 @@ mod tests {
     use datafusion_physical_expr::projection::ProjectionExpr;
     use futures::{FutureExt, Stream, StreamExt};
     use insta::{allow_duplicates, assert_snapshot};
+
+    #[test]
+    fn wide_group_id_64_empty_rows() {
+        let array = group_id_array(&[true; 64], 0, 0, 0).unwrap();
+        assert_eq!(array.data_type(), &DataType::UInt64);
+        assert_eq!(array.len(), 0);
+    }
 
     #[cfg(feature = "proto")]
     #[test]

@@ -28,8 +28,9 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::ipc::convert::try_fb_to_schema;
 use arrow::ipc::reader::{FileReader, StreamReader};
+use arrow::ipc::root_as_message;
 use arrow::ipc::writer::IpcWriteOptions;
-use arrow::ipc::{CompressionType, root_as_message};
+use datafusion_common::config::{ArrowOptions, ConfigField, ConfigFileType};
 use datafusion_common::error::Result;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
@@ -76,26 +77,52 @@ const BUFFER_FLUSH_BYTES: usize = 1024000;
 
 /// Factory struct used to create [`ArrowFormat`]
 #[derive(Default, Debug)]
-pub struct ArrowFormatFactory;
+pub struct ArrowFormatFactory {
+    /// the write options for arrow
+    pub options: Option<ArrowOptions>,
+}
 
 impl ArrowFormatFactory {
     /// Creates an instance of [ArrowFormatFactory]
     pub fn new() -> Self {
-        Self {}
+        Self { options: None }
+    }
+
+    /// Creates an instance of [`ArrowFormatFactory`] with customized default options
+    pub fn new_with_options(options: ArrowOptions) -> Self {
+        Self {
+            options: Some(options),
+        }
     }
 }
 
 impl FileFormatFactory for ArrowFormatFactory {
     fn create(
         &self,
-        _state: &dyn Session,
-        _format_options: &HashMap<String, String>,
+        state: &dyn Session,
+        format_options: &HashMap<String, String>,
     ) -> Result<Arc<dyn FileFormat>> {
-        Ok(Arc::new(ArrowFormat))
+        let arrow_options = match &self.options {
+            None => {
+                let mut table_options = state.default_table_options();
+                table_options.set_config_format(ConfigFileType::ARROW);
+                table_options.alter_with_string_hash_map(format_options)?;
+                table_options.arrow
+            }
+            Some(arrow_options) => {
+                let mut arrow_options = arrow_options.clone();
+                for (k, v) in format_options {
+                    arrow_options.set(k, v)?;
+                }
+                arrow_options
+            }
+        };
+
+        Ok(Arc::new(ArrowFormat::default().with_options(arrow_options)))
     }
 
     fn default(&self) -> Arc<dyn FileFormat> {
-        Arc::new(ArrowFormat)
+        Arc::new(ArrowFormat::default())
     }
 }
 
@@ -108,7 +135,22 @@ impl GetExt for ArrowFormatFactory {
 
 /// Arrow [`FileFormat`] implementation.
 #[derive(Default, Debug)]
-pub struct ArrowFormat;
+pub struct ArrowFormat {
+    options: ArrowOptions,
+}
+
+impl ArrowFormat {
+    /// Set the arrow options
+    pub fn with_options(mut self, options: ArrowOptions) -> Self {
+        self.options = options;
+        self
+    }
+
+    /// Retrieve the arrow options
+    pub fn options(&self) -> &ArrowOptions {
+        &self.options
+    }
+}
 
 #[async_trait]
 impl FileFormat for ArrowFormat {
@@ -234,7 +276,7 @@ impl FileFormat for ArrowFormat {
             return not_impl_err!("Overwrites are not implemented yet for Arrow format");
         }
 
-        let sink = Arc::new(ArrowFileSink::new(conf));
+        let sink = Arc::new(ArrowFileSink::new(conf, self.options.clone()));
 
         Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
     }
@@ -247,11 +289,12 @@ impl FileFormat for ArrowFormat {
 /// Implements [`FileSink`] for Arrow IPC files
 struct ArrowFileSink {
     config: FileSinkConfig,
+    options: ArrowOptions,
 }
 
 impl ArrowFileSink {
-    fn new(config: FileSinkConfig) -> Self {
-        Self { config }
+    fn new(config: FileSinkConfig, options: ArrowOptions) -> Self {
+        Self { config, options }
     }
 }
 
@@ -271,9 +314,13 @@ impl FileSink for ArrowFileSink {
         let mut file_write_tasks: JoinSet<std::result::Result<usize, DataFusionError>> =
             JoinSet::new();
 
-        let ipc_options =
-            IpcWriteOptions::try_new(64, false, arrow_ipc::MetadataVersion::V5)?
-                .try_with_compression(Some(CompressionType::LZ4_FRAME))?;
+        let ipc_options = IpcWriteOptions::try_new(
+            self.options.alignment,
+            false,
+            arrow_ipc::MetadataVersion::V5,
+        )?
+        .try_with_compression(self.options.compression.into())?
+        .try_with_compression_level(self.options.compression_level)?;
         while let Some((file_metadata, mut rx)) = file_stream_rx.recv().await {
             let shared_buffer = SharedBuffer::new(INITIAL_BUFFER_BYTES);
             let mut arrow_writer = arrow_ipc::writer::FileWriter::try_new_with_options(
@@ -660,7 +707,7 @@ mod tests {
                 version: None,
             };
 
-            let arrow_format = ArrowFormat {};
+            let arrow_format = ArrowFormat::default();
             let expected = vec!["f0: Int64", "f1: Utf8", "f2: Boolean"];
 
             // Test chunk sizes where too small so we keep having to read more bytes
@@ -704,7 +751,7 @@ mod tests {
                 version: None,
             };
 
-            let arrow_format = ArrowFormat {};
+            let arrow_format = ArrowFormat::default();
 
             let store = Arc::new(ChunkedStore::new(in_memory_store.clone(), 7));
             let err = arrow_format
