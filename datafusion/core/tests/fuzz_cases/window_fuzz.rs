@@ -133,10 +133,14 @@ async fn window_bounded_window_random_comparison() -> Result<()> {
         let mut handles = Vec::new();
         for i in 0..n {
             let idx = i % test_cases.len();
+            // Change the NULL rate after each pass through `test_cases`, so that
+            // each test case runs with each NULL rate.
+            let null_pct = NULL_PCTS[(i / test_cases.len()) % NULL_PCTS.len()];
             let (pb_cols, ob_cols, search_mode) = test_cases[idx].clone();
             let job = SpawnedTask::spawn(run_window_test(
-                make_staggered_batches::<true>(1000, n_distinct, i as u64),
+                make_staggered_batches::<true>(1000, n_distinct, null_pct, i as u64),
                 i as u64,
+                null_pct,
                 pb_cols,
                 ob_cols,
                 search_mode,
@@ -156,7 +160,9 @@ async fn window_bounded_window_random_comparison() -> Result<()> {
 async fn bounded_window_causal_non_causal() -> Result<()> {
     let session_config = SessionConfig::new();
     let ctx = SessionContext::new_with_config(session_config);
-    let mut batches = make_staggered_batches::<true>(1000, 10, 23_u64);
+    // This test examines only the output batch sizes and has no ORDER BY.
+    // NULL values do not change the result of this test.
+    let mut batches = make_staggered_batches::<true>(1000, 10, 0.0, 23_u64);
     // Remove empty batches:
     batches.retain(|batch| batch.num_rows() > 0);
     let schema = batches[0].schema();
@@ -585,6 +591,7 @@ fn convert_bound_to_current_row_if_applicable(
 async fn run_window_test(
     input1: Vec<RecordBatch>,
     random_seed: u64,
+    null_pct: f64,
     partition_by_columns: Vec<&str>,
     orderby_columns: Vec<&str>,
     search_mode: InputOrderMode,
@@ -699,7 +706,7 @@ async fn run_window_test(
     // BoundedWindowAggExec should produce more chunk than the usual WindowAggExec.
     // Otherwise it means that we cannot generate result in running mode.
     let err_msg = format!(
-        "Inconsistent result for window_frame: {window_frame:?}, window_fn: {window_fn:?}, args:{args:?}, random_seed: {random_seed:?}, search_mode: {search_mode:?}, partition_by_columns:{partition_by_columns:?}, orderby_columns: {orderby_columns:?}"
+        "Inconsistent result for window_frame: {window_frame:?}, window_fn: {window_fn:?}, args:{args:?}, random_seed: {random_seed:?}, null_pct: {null_pct:?}, search_mode: {search_mode:?}, partition_by_columns:{partition_by_columns:?}, orderby_columns: {orderby_columns:?}"
     );
     // Below check makes sure that, streaming execution generates more chunks than the bulk execution.
     // Since algorithms and operators works on sliding windows in the streaming execution.
@@ -733,7 +740,7 @@ async fn run_window_test(
     {
         if !usual_line.eq(running_line) {
             println!(
-                "Inconsistent result for window_frame at line:{i:?}: {window_frame:?}, window_fn: {window_fn:?}, args:{args:?}, pb_cols:{partition_by_columns:?}, ob_cols:{orderby_columns:?}, search_mode:{search_mode:?}"
+                "Inconsistent result for window_frame at line:{i:?}: {window_frame:?}, window_fn: {window_fn:?}, args:{args:?}, random_seed: {random_seed:?}, null_pct: {null_pct:?}, pb_cols:{partition_by_columns:?}, ob_cols:{orderby_columns:?}, search_mode:{search_mode:?}"
             );
             println!(
                 "--------usual_formatted_sorted----------------running_formatted_sorted--------"
@@ -749,6 +756,9 @@ async fn run_window_test(
     Ok(())
 }
 
+/// NULL rates for the random window tests
+const NULL_PCTS: [f64; 4] = [0.0, 0.01, 0.1, 0.5];
+
 fn generate_random_string(rng: &mut StdRng, length: usize) -> String {
     rng.sample_iter(&Alphanumeric)
         .take(length)
@@ -759,33 +769,46 @@ fn generate_random_string(rng: &mut StdRng, length: usize) -> String {
 /// Return randomly sized record batches with:
 /// three sorted int32 columns 'a', 'b', 'c' ranged from 0..DISTINCT as columns
 /// one random int32 column x
+///
+/// Each value in 'a', 'b', 'c' and 'x' is NULL with the probability `null_pct`.
+/// NULL values sort first. This agrees with the default `SortOptions` of the tests.
 pub(crate) fn make_staggered_batches<const STREAM: bool>(
     len: usize,
     n_distinct: usize,
+    null_pct: f64,
     random_seed: u64,
 ) -> Vec<RecordBatch> {
     // use a random number generator to pick a random sized output
     let mut rng = StdRng::seed_from_u64(random_seed);
-    let mut input123: Vec<(i32, i32, i32)> = vec![(0, 0, 0); len];
-    let mut input4: Vec<i32> = vec![0; len];
+    let mut input123: Vec<(Option<i32>, Option<i32>, Option<i32>)> =
+        vec![(None, None, None); len];
+    let mut input4: Vec<Option<i32>> = vec![None; len];
     let mut input5: Vec<String> = vec!["".to_string(); len];
+    let random_key = |rng: &mut StdRng| {
+        let value = rng.random_range(0..n_distinct) as i32;
+        (!rng.random_bool(null_pct)).then_some(value)
+    };
     for v in &mut input123 {
         *v = (
-            rng.random_range(0..n_distinct) as i32,
-            rng.random_range(0..n_distinct) as i32,
-            rng.random_range(0..n_distinct) as i32,
+            random_key(&mut rng),
+            random_key(&mut rng),
+            random_key(&mut rng),
         )
     }
+    // `Option` puts `None` first, so NULL values sort first
     input123.sort_unstable();
-    rng.fill(&mut input4[..]);
+    for v in &mut input4 {
+        let value = rng.random();
+        *v = (!rng.random_bool(null_pct)).then_some(value);
+    }
     for v in &mut input5 {
         *v = generate_random_string(&mut rng, 1);
     }
     input5.sort();
-    let input1 = Int32Array::from_iter_values(input123.iter().map(|k| k.0));
-    let input2 = Int32Array::from_iter_values(input123.iter().map(|k| k.1));
-    let input3 = Int32Array::from_iter_values(input123.iter().map(|k| k.2));
-    let input4 = Int32Array::from_iter_values(input4);
+    let input1 = Int32Array::from_iter(input123.iter().map(|k| k.0));
+    let input2 = Int32Array::from_iter(input123.iter().map(|k| k.1));
+    let input3 = Int32Array::from_iter(input123.iter().map(|k| k.2));
+    let input4 = Int32Array::from_iter(input4);
     let input5 = StringArray::from_iter_values(input5);
 
     // split into several record batches
