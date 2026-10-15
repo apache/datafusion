@@ -1157,7 +1157,10 @@ impl ConversionSpecifier {
                     (
                         ConversionType::StringLower | ConversionType::StringUpper,
                         Some(value),
-                    ) => self.format_string(string, &value.to_string()),
+                    ) => self.format_string(
+                        string,
+                        &decimal_to_plain_string(&value.to_string(), *scale as i64)?,
+                    ),
                     (t, None) if t.supports_decimal() => {
                         self.format_string(string, "null")
                     }
@@ -1183,7 +1186,10 @@ impl ConversionSpecifier {
                     (
                         ConversionType::StringLower | ConversionType::StringUpper,
                         Some(value),
-                    ) => self.format_string(string, &value.to_string()),
+                    ) => self.format_string(
+                        string,
+                        &decimal_to_plain_string(&value.to_string(), *scale as i64)?,
+                    ),
                     (t, None) if t.supports_decimal() => {
                         self.format_string(string, "null")
                     }
@@ -1714,9 +1720,8 @@ impl ConversionSpecifier {
 
         if value.is_finite() {
             let mut use_scientific = false;
-            let mut strip_trailing_0s = false;
             let mut abs = value.abs();
-            let mut exponent = abs.log10().floor() as i32;
+            let mut exponent = decimal_exponent(abs);
             let mut precision = match self.precision {
                 NumericParam::Literal(p) => p,
                 _ => 6,
@@ -1732,7 +1737,9 @@ impl ConversionSpecifier {
                     use_scientific = true;
                 }
                 ConversionType::CompactFloatLower | ConversionType::CompactFloatUpper => {
-                    strip_trailing_0s = true;
+                    // Like Java's Formatter (and unlike C), `%g` keeps trailing
+                    // zeros: the precision is always the number of significant
+                    // digits printed.
                     if precision == 0 {
                         precision = 1;
                     }
@@ -1742,7 +1749,7 @@ impl ConversionSpecifier {
                         10.0_f64.powf((precision - 1 - exponent) as f64);
                     let rounded_fixed = (abs * rounding_factor).round();
                     abs = rounded_fixed / rounding_factor;
-                    exponent = abs.log10().floor() as i32;
+                    exponent = decimal_exponent(abs);
                     if exponent < -4 || exponent >= precision {
                         use_scientific = true;
                         precision -= 1;
@@ -1764,15 +1771,9 @@ impl ConversionSpecifier {
                 let mantissa = abs / 10.0_f64.powf(exponent as f64);
                 let exp_char = if upper { 'E' } else { 'e' };
                 number = format!("{mantissa:.prec$}", prec = precision as usize);
-                if strip_trailing_0s {
-                    number = trim_trailing_0s(&number).to_owned();
-                }
                 number = format!("{number}{exp_char}{exponent:+03}");
             } else {
                 number = format!("{abs:.prec$}", prec = precision as usize);
-                if strip_trailing_0s {
-                    number = trim_trailing_0s(&number).to_owned();
-                }
                 if self.grouping_separator {
                     number = insert_thousands_separator(&number);
                 }
@@ -1988,7 +1989,6 @@ impl ConversionSpecifier {
         }
 
         let exp_symb = if upper { 'E' } else { 'e' };
-        let mut strip_trailing_0s = false;
 
         // Get precision setting
         let mut precision = match self.precision {
@@ -1999,47 +1999,30 @@ impl ConversionSpecifier {
         let number = match self.conversion_type {
             ConversionType::DecFloatLower => {
                 // Format as fixed-point decimal
-                let mut n = self.format_decimal_fixed(
-                    &abs_decimal,
-                    precision,
-                    strip_trailing_0s,
-                )?;
+                let mut n = self.format_decimal_fixed(&abs_decimal, precision)?;
                 if self.grouping_separator {
                     n = insert_thousands_separator(&n);
                 }
                 n
             }
-            ConversionType::SciFloatLower => self.format_decimal_scientific(
-                &abs_decimal,
-                precision,
-                'e',
-                strip_trailing_0s,
-            )?,
-            ConversionType::SciFloatUpper => self.format_decimal_scientific(
-                &abs_decimal,
-                precision,
-                'E',
-                strip_trailing_0s,
-            )?,
+            ConversionType::SciFloatLower => {
+                self.format_decimal_scientific(&abs_decimal, precision, 'e')?
+            }
+            ConversionType::SciFloatUpper => {
+                self.format_decimal_scientific(&abs_decimal, precision, 'E')?
+            }
             ConversionType::CompactFloatLower | ConversionType::CompactFloatUpper => {
-                strip_trailing_0s = true;
                 if precision == 0 {
                     precision = 1;
                 }
                 // Determine if we should use scientific notation
                 let log10_val = abs_decimal.to_f64().map(|f| f.log10()).unwrap_or(0.0);
                 if log10_val < -4.0 || log10_val >= precision as f64 {
-                    self.format_decimal_scientific(
-                        &abs_decimal,
-                        precision - 1,
-                        exp_symb,
-                        strip_trailing_0s,
-                    )?
+                    self.format_decimal_scientific(&abs_decimal, precision - 1, exp_symb)?
                 } else {
                     let mut n = self.format_decimal_fixed(
                         &abs_decimal,
                         precision - 1 - log10_val.floor() as i32,
-                        strip_trailing_0s,
                     )?;
                     if self.grouping_separator {
                         n = insert_thousands_separator(&n);
@@ -2063,18 +2046,13 @@ impl ConversionSpecifier {
         &self,
         decimal: &BigDecimal,
         precision: i32,
-        strip_trailing_0s: bool,
     ) -> Result<String> {
         if precision <= 0 {
             Ok(decimal.round(0).to_string())
         } else {
             // Use BigDecimal's with_scale method for precise decimal formatting
             let scaled = decimal.round(precision as i64);
-            let mut number = scaled.to_string();
-            if strip_trailing_0s {
-                number = trim_trailing_0s(&number).to_owned();
-            }
-            Ok(number)
+            Ok(scaled.to_string())
         }
     }
 
@@ -2083,7 +2061,6 @@ impl ConversionSpecifier {
         decimal: &BigDecimal,
         precision: i32,
         exp_char: char,
-        strip_trailing_0s: bool,
     ) -> Result<String> {
         // Convert to f64 for scientific notation (may lose precision for very large numbers)
         let float_val = decimal.to_f64().unwrap_or(0.0);
@@ -2095,15 +2072,11 @@ impl ConversionSpecifier {
         let exponent = abs_val.log10().floor() as i32;
         let mantissa = abs_val / 10.0_f64.powf(exponent as f64);
 
-        let mut number = if precision <= 0 {
+        let number = if precision <= 0 {
             format!("{mantissa:.0}")
         } else {
             format!("{mantissa:.prec$}", prec = precision as usize)
         };
-
-        if strip_trailing_0s {
-            number = trim_trailing_0s(&number).to_owned();
-        }
 
         Ok(format!("{number}{exp_char}{exponent:+03}"))
     }
@@ -2340,15 +2313,23 @@ fn insert_thousands_separator(number: &str) -> String {
     result
 }
 
-fn trim_trailing_0s(number: &str) -> &str {
-    if number.contains('.') {
-        for (i, c) in number.chars().rev().enumerate() {
-            if c != '0' {
-                return &number[..number.len() - i];
-            }
-        }
+/// The base-10 exponent of `abs` in scientific notation, 0 for zero (whose
+/// logarithm is not finite).
+fn decimal_exponent(abs: f64) -> i32 {
+    if abs == 0.0 {
+        0
+    } else {
+        abs.log10().floor() as i32
     }
-    number
+}
+
+/// A decimal's value with its scale in plain notation, the way `%s` prints a
+/// DECIMAL in Spark: unscaled `50` with scale 2 is `0.50`.
+fn decimal_to_plain_string(unscaled: &str, scale: i64) -> Result<String> {
+    let unscaled = unscaled
+        .parse::<BigInt>()
+        .map_err(|e| exec_datafusion_err!("Failed to parse decimal: {}", e))?;
+    Ok(BigDecimal::from_bigint(unscaled, scale).to_plain_string())
 }
 
 fn trim_trailing_0s_hex(number: &str) -> &str {
