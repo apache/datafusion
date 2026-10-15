@@ -48,10 +48,12 @@ use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_functions::core::file_row_index::FileRowIndexFunc;
-use datafusion_physical_expr::expressions::{Column, DynamicFilterTracking};
+use datafusion_physical_expr::expressions::{
+    Column, DynamicFilterPhysicalExpr, DynamicFilterTracking,
+};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::split_conjunction;
-use datafusion_physical_expr::{EquivalenceProperties, conjunction};
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning, conjunction};
 use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
 use datafusion_physical_expr_adapter::rewrite::{
     expr_references_scalar_udf, rewrite_file_row_index_projection,
@@ -648,6 +650,41 @@ impl FileSource for ParquetSource {
             self.pushdown_filters(),
         )?;
 
+        // These predicates and the declared partitioning both use the full table
+        // schema, before projection. Binding here also precedes file-schema
+        // adaptation, which remaps the filter and its routing together.
+        // Legacy Hash metadata from preserve_file_partitions only groups equal
+        // keys; it does not guarantee hash(key) % N == file-group index.
+        let predicate = match (&self.predicate, &base_config.output_partitioning) {
+            (Some(predicate), Some(Partitioning::Range(consumer)))
+                if consumer.partition_count() == base_config.file_groups.len() =>
+            {
+                use datafusion_common::tree_node::{
+                    Transformed, TransformedResult, TreeNode,
+                };
+                Some(
+                    Arc::clone(predicate)
+                        .transform_up(|expr| {
+                            if let Some(filter) =
+                                expr.downcast_ref::<DynamicFilterPhysicalExpr>()
+                                && let Some(Partitioning::Range(producer)) =
+                                    filter.partitioning()?
+                                && producer.has_same_layout(consumer)
+                            {
+                                Ok(Transformed::yes(Arc::new(
+                                    filter.for_partition(partition)?,
+                                )
+                                    as Arc<dyn PhysicalExpr>))
+                            } else {
+                                Ok(Transformed::no(expr))
+                            }
+                        })
+                        .data()?,
+                )
+            }
+            _ => self.predicate.clone(),
+        };
+
         Ok(Box::new(ParquetMorselizer {
             partition_index: partition,
             projection: self.projection.clone(),
@@ -656,7 +693,7 @@ impl FileSource for ParquetSource {
                 .expect("Batch size must set before creating ParquetMorselizer"),
             limit: base_config.limit,
             preserve_order: base_config.preserve_order,
-            predicate: self.predicate.clone(),
+            predicate,
             table_schema: self.table_schema.clone(),
             metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics().clone(),

@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::{fmt::Display, hash::Hash, sync::Arc};
 use tokio::sync::watch;
 
-use crate::PhysicalExpr;
+use crate::{Partitioning, PhysicalExpr};
 use arrow::datatypes::{DataType, Schema};
 #[cfg(feature = "proto")]
 use datafusion_common::internal_datafusion_err;
@@ -31,6 +31,9 @@ use datafusion_common::{
 
 use datafusion_expr::ColumnarValue;
 use datafusion_expr_common::dyn_eq::DynHash;
+
+mod partitioned;
+use partitioned::{PartitionedFilterExpr, map_partitioning, same_partitioning};
 
 mod tracker;
 pub use tracker::{DynamicFilterTracker, DynamicFilterTracking};
@@ -85,6 +88,8 @@ pub struct DynamicFilterPhysicalExpr {
     /// and populated with `None` on `with_new_children` (each derived
     /// filter owns its own cache).
     current_cache: CurrentExprCache,
+    /// A runtime consumer view selects one of the producer partitions.
+    partition_index: Option<usize>,
     /// The source of dynamic filters.
     inner: Arc<RwLock<Inner>>,
     /// Broadcasts filter state (updates and completion) to all waiters.
@@ -105,6 +110,7 @@ impl std::fmt::Debug for DynamicFilterPhysicalExpr {
         f.debug_struct("DynamicFilterPhysicalExpr")
             .field("children", &self.children)
             .field("remapped_children", &self.remapped_children)
+            .field("partition_index", &self.partition_index)
             .field("inner", &self.inner)
             .field("state_watch", &self.state_watch)
             .field("data_type", &self.data_type)
@@ -126,6 +132,8 @@ struct Inner {
     /// This is used for [`PhysicalExpr::snapshot_generation`] to have a cheap check for changes.
     generation: u64,
     expr: Arc<dyn PhysicalExpr>,
+    /// Predicates that can be applied directly by a matching partitioned consumer.
+    partitioned: Option<Arc<PartitionedFilterExpr>>,
     /// Flag for quick synchronous check if filter is complete.
     /// This is redundant with the watch channel state, but allows us to return immediately
     /// from `wait_complete()` without subscribing if already complete.
@@ -140,6 +148,7 @@ impl Inner {
             // This is not currently used anywhere but it seems useful to have this simple distinction.
             generation: 1,
             expr,
+            partitioned: None,
             is_complete: false,
         }
     }
@@ -159,6 +168,7 @@ impl Hash for DynamicFilterPhysicalExpr {
         Arc::as_ptr(&self.inner).hash(state);
         self.children.dyn_hash(state);
         self.remapped_children.dyn_hash(state);
+        self.partition_index.hash(state);
     }
 }
 
@@ -171,6 +181,7 @@ impl PartialEq for DynamicFilterPhysicalExpr {
         Arc::ptr_eq(&self.inner, &other.inner)
             && self.children == other.children
             && self.remapped_children == other.remapped_children
+            && self.partition_index == other.partition_index
     }
 }
 
@@ -220,10 +231,26 @@ impl DynamicFilterPhysicalExpr {
             remapped_children: None, // Initially no remapped children
             inner: Arc::new(RwLock::new(Inner::new(inner))),
             current_cache: Arc::new(RwLock::new(None)),
+            partition_index: None,
             state_watch,
             data_type: Arc::new(RwLock::new(None)),
             nullable: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Create a filter with fixed producer partitioning, initially applying
+    /// `inner` to every partition. Declare this before pushing the filter to
+    /// consumers, so they can check compatibility before execution starts.
+    pub fn new_partitioned(
+        children: Vec<Arc<dyn PhysicalExpr>>,
+        partitioning: Partitioning,
+        inner: Arc<dyn PhysicalExpr>,
+    ) -> Result<Self> {
+        let filters = vec![Arc::clone(&inner); partitioning.partition_count()];
+        let partitioned = PartitionedFilterExpr::try_new(partitioning, filters)?;
+        let filter = Self::new(children, inner);
+        filter.inner.write().partitioned = Some(Arc::new(partitioned));
+        Ok(filter)
     }
 
     fn remap_children(
@@ -272,17 +299,19 @@ impl DynamicFilterPhysicalExpr {
     /// cache the remapped expression per generation and return it directly
     /// on subsequent per-batch calls.
     pub fn current(&self) -> Result<Arc<dyn PhysicalExpr>> {
-        // Fast path: cache hit for the current generation.
-        let (expr, generation) = {
-            let inner = self.inner.read();
-            (Arc::clone(inner.expr()), inner.generation)
-        };
+        let inner = self.inner.read();
+        let generation = inner.generation;
         if let Some((cached_gen, cached_expr)) = self.current_cache.read().as_ref()
             && *cached_gen == generation
         {
             return Ok(Arc::clone(cached_expr));
         }
-        // Slow path: (re)compute the remap and store it under a write lock.
+        let expr = match (self.partition_index, &inner.partitioned) {
+            (Some(index), Some(partitioned)) => Arc::clone(&partitioned.filters[index]),
+            _ => Arc::clone(inner.expr()),
+        };
+        drop(inner);
+
         let remapped =
             Self::remap_children(&self.children, self.remapped_children.as_ref(), expr)?;
         // Only publish our result if it is strictly newer than whatever is
@@ -314,6 +343,124 @@ impl DynamicFilterPhysicalExpr {
     /// - When we've computed the probe side's hash table in a HashJoinExec
     /// - After every batch is processed if we update the TopK heap in a SortExec using a TopK approach.
     pub fn update(&self, new_expr: Arc<dyn PhysicalExpr>) -> Result<()> {
+        self.update_inner(new_expr, None)
+    }
+
+    /// Publish a total filter and its per-partition predicates atomically.
+    ///
+    /// `new_expr` must be safe for every input row, irrespective of the consumer's
+    /// partitioning. Each entry in `filters` must be safe for rows routed to that
+    /// partition by `partitioning`. Both are in the producer's original schema.
+    /// Empty partitions should use `false`; partitions whose contents are not yet
+    /// known must use `true`. All expressions must reference only the children
+    /// provided to [`Self::new`].
+    ///
+    /// Hash partitioning refers to DataFusion's standard repartition hash and seed.
+    /// Sources with another hash function must use the total expression instead.
+    pub fn update_partitioned(
+        &self,
+        partitioning: Partitioning,
+        filters: Vec<Arc<dyn PhysicalExpr>>,
+        new_expr: Arc<dyn PhysicalExpr>,
+    ) -> Result<()> {
+        let partitioned = PartitionedFilterExpr::try_new(partitioning, filters)?;
+        self.update_inner(new_expr, Some(partitioned))
+    }
+
+    /// The producer's routing, remapped into this expression's schema.
+    /// Once declared, the partitioning cannot change across updates.
+    /// Consumers must verify that their own routing matches before calling
+    /// [`Self::for_partition`]. In particular, hash keys AND partition count
+    /// must match, and range keys, sort options, and split points must match.
+    pub fn partitioning(&self) -> Result<Option<Partitioning>> {
+        let partitioned = self.inner.read().partitioned.clone();
+        partitioned
+            .map(|partitioned| {
+                map_partitioning(&partitioned.partitioning, |expr| {
+                    Self::remap_children(
+                        &self.children,
+                        self.remapped_children.as_ref(),
+                        expr,
+                    )
+                })
+            })
+            .transpose()
+    }
+
+    /// Create a live view of one producer partition's filter. This view observes
+    /// subsequent updates and completion, retaining the producer's expression ID.
+    ///
+    /// The caller must first check [`Self::partitioning`] against the consumer's
+    /// actual routing in the same schema. A matching count alone is insufficient.
+    /// Hash partitioning means DataFusion's standard repartition hash and seed;
+    /// grouping files by equal keys does not establish that routing contract.
+    /// The view holds only the partition index, not a copy of consumer metadata.
+    pub fn for_partition(&self, index: usize) -> Result<Self> {
+        let inner = self.inner.read();
+        let Some(partitioned) = &inner.partitioned else {
+            return datafusion_common::internal_err!(
+                "Dynamic filter has no producer partitioning"
+            );
+        };
+        if index >= partitioned.filters.len() {
+            return datafusion_common::internal_err!(
+                "Dynamic filter partition index {index} is outside {} partitions",
+                partitioned.filters.len()
+            );
+        }
+        Ok(Self {
+            children: self.children.clone(),
+            remapped_children: self.remapped_children.clone(),
+            current_cache: Arc::new(RwLock::new(None)),
+            partition_index: Some(index),
+            inner: Arc::clone(&self.inner),
+            state_watch: self.state_watch.clone(),
+            data_type: Arc::new(RwLock::new(None)),
+            nullable: Arc::new(RwLock::new(None)),
+        })
+    }
+
+    /// Restore shared producer state when decoding multiple views of the same
+    /// filter. Unlike `with_new_children`, this preserves the decoded view's
+    /// partition index as well as its column remapping.
+    #[cfg(feature = "proto")]
+    pub fn with_shared_state_from(&self, source: &Self) -> Result<Self> {
+        if self.expression_id() != source.expression_id() {
+            return datafusion_common::internal_err!(
+                "Cannot share state between different dynamic filters"
+            );
+        }
+        let source_partitioned = source.inner.read().partitioned.clone();
+        let partitioned = self.inner.read().partitioned.clone();
+        let same_routing = match (&source_partitioned, &partitioned) {
+            (Some(source), Some(partitioned)) => {
+                same_partitioning(&source.partitioning, &partitioned.partitioning)
+            }
+            (None, None) => true,
+            _ => false,
+        };
+        if !same_routing {
+            return datafusion_common::internal_err!(
+                "Conflicting producer partitioning for the same dynamic filter"
+            );
+        }
+        Ok(Self {
+            children: self.children.clone(),
+            remapped_children: self.remapped_children.clone(),
+            current_cache: Arc::new(RwLock::new(None)),
+            partition_index: self.partition_index,
+            inner: Arc::clone(&source.inner),
+            state_watch: source.state_watch.clone(),
+            data_type: Arc::new(RwLock::new(None)),
+            nullable: Arc::new(RwLock::new(None)),
+        })
+    }
+
+    fn update_inner(
+        &self,
+        new_expr: Arc<dyn PhysicalExpr>,
+        partitioned: Option<PartitionedFilterExpr>,
+    ) -> Result<()> {
         // Remap the children of the new expression to match the original children
         // We still do this again in `current()` but doing it preventively here
         // reduces the work needed in some cases if `current()` is called multiple times
@@ -324,14 +471,52 @@ impl DynamicFilterPhysicalExpr {
             new_expr,
         )?;
 
+        let partitioned = partitioned
+            .map(|partitioned| {
+                let remap = |expr| {
+                    Self::remap_children(
+                        &self.children,
+                        self.remapped_children.as_ref(),
+                        expr,
+                    )
+                };
+                Ok::<_, datafusion_common::DataFusionError>(Arc::new(
+                    PartitionedFilterExpr {
+                        partitioning: map_partitioning(&partitioned.partitioning, remap)?,
+                        filters: partitioned
+                            .filters
+                            .into_iter()
+                            .map(remap)
+                            .collect::<Result<_>>()?,
+                    },
+                ))
+            })
+            .transpose()?;
+
         // Load the current inner, increment generation, and store the new one
         let mut current = self.inner.write();
+        let partitioned = match (&current.partitioned, partitioned) {
+            (Some(previous), Some(next)) => {
+                if !same_partitioning(&previous.partitioning, &next.partitioning) {
+                    return datafusion_common::internal_err!(
+                        "Dynamic filter producer partitioning cannot change"
+                    );
+                }
+                Some(next)
+            }
+            (Some(previous), None) => Some(Arc::new(PartitionedFilterExpr {
+                partitioning: previous.partitioning.clone(),
+                filters: vec![Arc::clone(&new_expr); previous.filters.len()],
+            })),
+            (None, next) => next,
+        };
         let new_generation = current.generation + 1;
         *current = Inner {
             // Preserve the expression id across updates.
             expression_id: current.expression_id,
             generation: new_generation,
             expr: new_expr,
+            partitioned,
             is_complete: current.is_complete,
         };
         drop(current); // Release the lock before broadcasting
@@ -487,6 +672,7 @@ impl DynamicFilterPhysicalExpr {
             remapped_children,
             inner: Arc::new(RwLock::new(inner)),
             current_cache: Arc::new(RwLock::new(None)),
+            partition_index: None,
             state_watch,
             data_type: Arc::new(RwLock::new(None)),
             nullable: Arc::new(RwLock::new(None)),
@@ -515,6 +701,7 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
             // Fresh cache per derived filter — remap depends on this
             // instance's `remapped_children`, which just changed.
             current_cache: Arc::new(RwLock::new(None)),
+            partition_index: self.partition_index,
             state_watch: self.state_watch.clone(),
             data_type: Arc::clone(&self.data_type),
             nullable: Arc::clone(&self.nullable),
@@ -610,6 +797,7 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
             children,
             remapped_children,
             current_cache: _, // Runtime cache, repopulated by current().
+            partition_index,
             inner,
             state_watch: _, // Runtime channel, recreated from inner state by from_parts().
             data_type: _,   // Cached test invariant, recomputed from the expression.
@@ -633,9 +821,31 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
             expression_id,
             generation,
             expr,
+            partitioned,
             is_complete,
         } = inner.read().clone();
         let inner_expr = Box::new(ctx.encode_child(&expr)?);
+
+        let (partitioning, partition_filters) = match partitioned {
+            Some(partitioned) => (
+                Some(partitioned.partitioning.try_to_proto(ctx)?),
+                partitioned
+                    .filters
+                    .iter()
+                    .map(|expr| ctx.encode_child(expr))
+                    .collect::<Result<_>>()?,
+            ),
+            None => (None, vec![]),
+        };
+        let partition_index = partition_index
+            .map(|index| {
+                datafusion_common::utils::usize_to_wire(
+                    index,
+                    "PhysicalDynamicFilterNode",
+                    "partition_index",
+                )
+            })
+            .transpose()?;
 
         Ok(Some(protobuf::PhysicalExprNode {
             expr_id: Some(expression_id),
@@ -646,6 +856,9 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
                     generation,
                     inner_expr: Some(inner_expr),
                     is_complete,
+                    partitioning,
+                    partition_filters,
+                    partition_index,
                 },
             ))),
         }))
@@ -679,6 +892,9 @@ impl DynamicFilterPhysicalExpr {
             generation,
             inner_expr,
             is_complete,
+            partitioning,
+            partition_filters,
+            partition_index,
         } = df.as_ref();
 
         // Decode original children
@@ -705,6 +921,34 @@ impl DynamicFilterPhysicalExpr {
         })?;
         let inner_expr = ctx.decode(inner_expr_proto)?;
 
+        let decode_partitioning = |proto| {
+            Partitioning::try_from_proto(proto, ctx)?.ok_or_else(|| {
+                internal_datafusion_err!("Missing partition method in dynamic filter")
+            })
+        };
+        let partitioned = match partitioning {
+            Some(partitioning) => Some(Arc::new(PartitionedFilterExpr::try_new(
+                decode_partitioning(partitioning)?,
+                partition_filters
+                    .iter()
+                    .map(|expr| ctx.decode(expr))
+                    .collect::<Result<_>>()?,
+            )?)),
+            None if partition_filters.is_empty() => None,
+            None => {
+                return Err(internal_datafusion_err!(
+                    "Partition filters require partitioning"
+                ));
+            }
+        };
+        let partition_index = partition_index.map(|index| {
+            let index = datafusion_common::utils::usize_from_wire(index, "PhysicalDynamicFilterNode", "partition_index")?;
+            if partitioned.as_ref().is_none_or(|p| index >= p.filters.len()) {
+                return Err(internal_datafusion_err!("Dynamic filter partition index out of bounds or missing producer partitioning"));
+            }
+            Ok(index)
+        }).transpose()?;
+
         // Restore the expression_id from the outer PhysicalExprNode
         let expression_id = expr_id.ok_or_else(|| {
             internal_datafusion_err!(
@@ -716,14 +960,13 @@ impl DynamicFilterPhysicalExpr {
             expression_id,
             generation: *generation,
             expr: inner_expr,
+            partitioned,
             is_complete: *is_complete,
         };
 
-        Ok(Arc::new(Self::from_parts(
-            children,
-            remapped_children,
-            inner,
-        )))
+        let mut filter = Self::from_parts(children, remapped_children, inner);
+        filter.partition_index = partition_index;
+        Ok(Arc::new(filter))
     }
 }
 
@@ -834,6 +1077,7 @@ impl DynamicFilterPhysicalExpr {
             remapped_children: self.remapped_children.clone(),
             inner: Arc::clone(&self.inner),
             current_cache: Arc::new(RwLock::new(None)),
+            partition_index: None,
             state_watch: self.state_watch.clone(),
             data_type: Arc::clone(&self.data_type),
             nullable: Arc::clone(&self.nullable),
