@@ -15,43 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, BooleanArray, Int64Array, StringArray};
-use arrow::datatypes::Field;
+use arrow::datatypes::{Field, Int64Type};
+use arrow::util::bench_util::{
+    create_boolean_array_with_seed, create_primitive_array_with_seed,
+    create_string_array_with_len_range_and_prefix_and_seed,
+};
 use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs};
 use datafusion_spark::function::generator::stack;
-use rand::prelude::StdRng;
-use rand::{Rng, SeedableRng};
 use std::hint::black_box;
 use std::sync::Arc;
 
 const SIZE: usize = 8192;
-
-fn int64_column(rng: &mut StdRng) -> ColumnarValue {
-    let array: Int64Array = (0..SIZE)
-        .map(|_| (rng.random::<f32>() > 0.1).then(|| rng.random::<i64>()))
-        .collect();
-    ColumnarValue::Array(Arc::new(array) as ArrayRef)
-}
-
-fn utf8_column(rng: &mut StdRng) -> ColumnarValue {
-    let array: StringArray = (0..SIZE)
-        .map(|_| {
-            (rng.random::<f32>() > 0.1)
-                .then(|| format!("value-{}", rng.random_range(0..1_000_000)))
-        })
-        .collect();
-    ColumnarValue::Array(Arc::new(array) as ArrayRef)
-}
-
-fn boolean_column(rng: &mut StdRng) -> ColumnarValue {
-    let array: BooleanArray = (0..SIZE)
-        .map(|_| (rng.random::<f32>() > 0.1).then(|| rng.random::<bool>()))
-        .collect();
-    ColumnarValue::Array(Arc::new(array) as ArrayRef)
-}
 
 fn bench_stack(c: &mut Criterion, name: &str, n: i32, values: Vec<ColumnarValue>) {
     let stack = stack();
@@ -92,10 +69,23 @@ fn bench_stack(c: &mut Criterion, name: &str, n: i32, values: Vec<ColumnarValue>
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let rng = &mut StdRng::seed_from_u64(42);
-    let ints = (0..4).map(|_| int64_column(rng)).collect::<Vec<_>>();
-    let strings = (0..2).map(|_| utf8_column(rng)).collect::<Vec<_>>();
-    let booleans = (0..2).map(|_| boolean_column(rng)).collect::<Vec<_>>();
+    // One seed per column, so the columns differ
+    let ints = (0..4)
+        .map(|seed| create_primitive_array_with_seed::<Int64Type>(SIZE, 0.1, seed))
+        .map(|array| ColumnarValue::Array(Arc::new(array)))
+        .collect::<Vec<_>>();
+    let strings = (0..2)
+        .map(|seed| {
+            create_string_array_with_len_range_and_prefix_and_seed::<i32>(
+                SIZE, 0.1, 12, 12, "", seed,
+            )
+        })
+        .map(|array| ColumnarValue::Array(Arc::new(array)))
+        .collect::<Vec<_>>();
+    let booleans = (0..2)
+        .map(|seed| create_boolean_array_with_seed(SIZE, 0.1, 0.5, seed))
+        .map(|array| ColumnarValue::Array(Arc::new(array)))
+        .collect::<Vec<_>>();
     let key = |k: &str| ColumnarValue::Scalar(ScalarValue::from(k));
 
     // stack(4, 'k1', c1, 'k2', c2, 'k3', c3, 'k4', c4): unpivot 4 columns

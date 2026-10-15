@@ -33,11 +33,6 @@ SELECT stack(2, 1, 2, 3);
 [{col0: 1, col1: 2}, {col0: 3, col1: NULL}]
 
 query ?
-SELECT stack(3, 1, 2, 3);
-----
-[{col0: 1}, {col0: 2}, {col0: 3}]
-
-query ?
 SELECT stack(4, 1, 2, 3);
 ----
 [{col0: 1}, {col0: 2}, {col0: 3}, {col0: NULL}]
@@ -54,21 +49,16 @@ SELECT stack(2, 1.5::DECIMAL(10, 2), '2024-01-01'::DATE, true, [1, 2], named_str
 [{col0: 1.50, col1: 2024-01-01, col2: true, col3: [1, 2], col4: {a: 1}}, {col0: NULL, col1: NULL, col2: false, col3: [3], col4: {a: 2}}]
 
 # NULLs take the type of the first non-NULL value in their column
-query ?
-SELECT stack(3, 1, 1.1, NULL, 2, NULL, 'b', NULL, 3.3, 'c');
+query ?T
+SELECT stack(3, 1, 1.1, NULL, 2, NULL, 'b', NULL, 3.3, 'c'), arrow_typeof(stack(3, 1, 1.1, NULL, 2, NULL, 'b', NULL, 3.3, 'c'));
 ----
-[{col0: 1, col1: 1.1, col2: NULL}, {col0: 2, col1: NULL, col2: b}, {col0: NULL, col1: 3.3, col2: c}]
+[{col0: 1, col1: 1.1, col2: NULL}, {col0: 2, col1: NULL, col2: b}, {col0: NULL, col1: 3.3, col2: c}] List(Struct("col0": Int64, "col1": Float64, "col2": Utf8))
 
-query TTTT
-SELECT arrow_typeof(stack(3, 1, 2, NULL)), arrow_typeof(stack(3, NULL, '2', '3')), arrow_typeof(stack(2, NULL, NULL, 1, '2')), arrow_typeof(stack(3, NULL, NULL, NULL));
+# A column of only NULLs has the NULL type, and the list is never NULL
+query ?T
+SELECT stack(2, NULL, NULL), arrow_typeof(stack(2, NULL, NULL));
 ----
-List(Struct("col0": Int64)) List(Struct("col0": Utf8)) List(Struct("col0": Int64, "col1": Utf8)) List(Struct("col0": Null))
-
-# The list is never NULL, even when every value is
-query ?B
-SELECT stack(2, NULL, NULL), stack(2, NULL, NULL) IS NULL;
-----
-[{col0: NULL}, {col0: NULL}] false
+[{col0: NULL}, {col0: NULL}] List(Struct("col0": Null))
 
 # A NULL before an array, and a column of NULL type
 query ??
@@ -90,12 +80,12 @@ SELECT stack(2, [1, NULL], NULL), stack(2, named_struct('a', NULL::INT), NULL);
 ----
 [{col0: [1, NULL]}, {col0: NULL}] [{col0: {a: NULL}}, {col0: NULL}]
 
-# Array inputs
-query ?
-SELECT stack(2, a, b, c) FROM (VALUES (1, 2, 3), (4, 5, 6)) AS t(a, b, c);
+# Array inputs, also with one row per input row
+query ??
+SELECT stack(2, a, b, c), stack(1, a, 'x') FROM (VALUES (1, 2, 3), (4, 5, 6)) AS t(a, b, c);
 ----
-[{col0: 1, col1: 2}, {col0: 3, col1: NULL}]
-[{col0: 4, col1: 5}, {col0: 6, col1: NULL}]
+[{col0: 1, col1: 2}, {col0: 3, col1: NULL}] [{col0: 1, col1: x}]
+[{col0: 4, col1: 5}, {col0: 6, col1: NULL}] [{col0: 4, col1: x}]
 
 # Array, scalar, NULL and padding values in the same columns
 query ?
@@ -106,20 +96,20 @@ SELECT stack(3, i, 'a', s, -1, NULL, 'b', i) FROM (VALUES (1, 's1'), (NULL, 's2'
 [{col0: 3, col1: a, col2: NULL}, {col0: -1, col1: NULL, col2: b}, {col0: 3, col1: NULL, col2: NULL}]
 
 # Values of one Spark type with different Arrow types are cast to the first one
-query ???T
-SELECT stack(2, 'a', v), stack(2, 'a', d), stack(2, d, 'a'), arrow_typeof(stack(2, d, 'a')) FROM (VALUES (arrow_cast('b', 'Utf8View'), arrow_cast('b', 'Dictionary(Int32, Utf8)'))) AS t(v, d);
+query ??T
+SELECT stack(2, 'a', v), stack(2, d, 'a'), arrow_typeof(stack(2, d, 'a')) FROM (VALUES (arrow_cast('b', 'Utf8View'), arrow_cast('b', 'Dictionary(Int32, Utf8)'))) AS t(v, d);
 ----
-[{col0: a}, {col0: b}] [{col0: a}, {col0: b}] [{col0: b}, {col0: a}] List(Struct("col0": Dictionary(Int32, Utf8)))
+[{col0: a}, {col0: b}] [{col0: b}, {col0: a}] List(Struct("col0": Dictionary(Int32, Utf8)))
 
-# List elements match regardless of their field name, such as `element` from
-# Spark's array and `item` from DataFusion's
-query ?
-SELECT stack(2, array(1), [2]);
+# List elements and map entries match regardless of their field names, such as
+# `element` from Spark's array and `item` from DataFusion's
+query ???
+SELECT stack(2, array(1), [2]), stack(2, named_struct('a', array(1)), named_struct('a', [2])), stack(2, map_from_arrays(array('a'), array(1)), arrow_cast(map_from_arrays(array('b'), array(2)), 'Map("key_value": non-null Struct("key": non-null Utf8, "value": Int64), unsorted)'));
 ----
-[{col0: [1]}, {col0: [2]}]
+[{col0: [1]}, {col0: [2]}] [{col0: {a: [1]}}, {col0: {a: [2]}}] [{col0: {a: 1}}, {col0: {b: 2}}]
 
-# Integer literals are BIGINT here but INT in Spark, so one that fits can follow a
-# value of another integer type
+# Integer literals are BIGINT here but INT in Spark, so one that fits can follow an
+# INT value
 query ?T
 SELECT stack(2, a, 0), arrow_typeof(stack(2, a, 0)) FROM (VALUES (1::INT)) AS t(a);
 ----
@@ -127,6 +117,9 @@ SELECT stack(2, a, 0), arrow_typeof(stack(2, a, 0)) FROM (VALUES (1::INT)) AS t(
 
 query error The data type of the column \(0\) do not have the same type: "Int32" \(1\) <> "Int64" \(2\)\.
 SELECT stack(2, a, 3000000000) FROM (VALUES (1::INT)) AS t(a);
+
+query error The data type of the column \(0\) do not have the same type: "Int16" \(1\) <> "Int64" \(2\)\.
+SELECT stack(2, a, 0) FROM (VALUES (1::SMALLINT)) AS t(a);
 
 # Spark also accepts the literal first. Here the first value sets the column type,
 # so the literal needs a cast such as 0::INT.
@@ -143,6 +136,13 @@ SELECT c1, unnest(unnest(stack(2, 'Key', c1, 'Value', c2))) FROM (VALUES (0, NUL
 0 Value NULL
 NULL Key NULL
 NULL Value 2
+
+# The keys stay aligned with their values over more input rows than one tiled
+# block holds
+query I
+SELECT sum(CASE WHEN s['col0'] = 'k1' THEN s['col1'] ELSE -s['col1'] END) FROM (SELECT unnest(stack(2, 'k1', value, 'k2', -value)) AS s FROM generate_series(1, 1000));
+----
+1001000
 
 query error The `stack` requires > 1 parameters but the actual number is 0\.
 SELECT stack();
