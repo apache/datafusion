@@ -556,9 +556,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             fallback,
             with_data,
         } = create_table;
-        if !matches!(table_options, CreateTableOptions::None) {
-            return not_impl_err!("Unsupported SQL statement: {create_table}");
-        }
         if *temporary {
             return not_impl_err!("Temporary tables not supported");
         }
@@ -742,6 +739,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         if with_data.is_some() {
             return not_impl_err!("WITH [NO] DATA not supported");
         }
+        if !matches!(table_options, CreateTableOptions::None) {
+            return not_impl_err!("Table options not supported: {table_options}");
+        }
         Ok(())
     }
 
@@ -849,9 +849,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 
     fn create_view_to_plan(&self, create_view: ast::CreateView) -> Result<LogicalPlan> {
-        if !matches!(create_view.options, CreateTableOptions::None) {
-            return not_impl_err!("Unsupported SQL statement: {create_view}");
-        }
         if create_view.materialized {
             return not_impl_err!("Materialized views not supported")?;
         }
@@ -872,6 +869,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
         if create_view.copy_grants {
             return not_impl_err!("COPY GRANTS not supported")?;
+        }
+        if !matches!(create_view.options, CreateTableOptions::None) {
+            return not_impl_err!("View options not supported: {}", create_view.options);
         }
 
         let sql = create_view.to_string();
