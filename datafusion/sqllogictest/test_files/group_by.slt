@@ -4320,26 +4320,26 @@ query TT
 EXPLAIN SELECT SUM(DISTINCT CAST(x AS DOUBLE)), MAX(DISTINCT x) FROM t1 GROUP BY y;
 ----
 logical_plan
-01)Projection: sum(DISTINCT t1.x), max(DISTINCT t1.x)
+01)Projection: sum(DISTINCT CAST(t1.x AS Float64)), max(DISTINCT t1.x)
 02)--Aggregate: groupBy=[[t1.y]], aggr=[[sum(DISTINCT CAST(t1.x AS Float64)), max(DISTINCT t1.x)]]
 03)----TableScan: t1 projection=[x, y]
 physical_plan
-01)ProjectionExec: expr=[sum(DISTINCT t1.x)@1 as sum(DISTINCT t1.x), max(DISTINCT t1.x)@2 as max(DISTINCT t1.x)]
-02)--AggregateExec: mode=FinalPartitioned, gby=[y@0 as y], aggr=[sum(DISTINCT t1.x), max(DISTINCT t1.x)]
+01)ProjectionExec: expr=[sum(DISTINCT CAST(t1.x AS Float64))@1 as sum(DISTINCT CAST(t1.x AS Float64)), max(DISTINCT t1.x)@2 as max(DISTINCT t1.x)]
+02)--AggregateExec: mode=FinalPartitioned, gby=[y@0 as y], aggr=[sum(DISTINCT CAST(t1.x AS Float64)), max(DISTINCT t1.x)]
 03)----RepartitionExec: partitioning=Hash([y@0], 8), input_partitions=1
-04)------AggregateExec: mode=Partial, gby=[y@1 as y], aggr=[sum(DISTINCT t1.x), max(DISTINCT t1.x)]
+04)------AggregateExec: mode=Partial, gby=[y@1 as y], aggr=[sum(DISTINCT CAST(t1.x AS Float64)), max(DISTINCT t1.x)]
 05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
 EXPLAIN SELECT SUM(DISTINCT CAST(x AS DOUBLE)), MAX(DISTINCT CAST(x AS DOUBLE)) FROM t1 GROUP BY y;
 ----
 logical_plan
-01)Projection: sum(alias1) AS sum(DISTINCT t1.x), max(alias1) AS max(DISTINCT t1.x)
+01)Projection: sum(alias1) AS sum(DISTINCT CAST(t1.x AS Float64)), max(alias1) AS max(DISTINCT CAST(t1.x AS Float64))
 02)--Aggregate: groupBy=[[t1.y]], aggr=[[sum(alias1), max(alias1)]]
 03)----Aggregate: groupBy=[[t1.y, CAST(t1.x AS Float64) AS alias1]], aggr=[[]]
 04)------TableScan: t1 projection=[x, y]
 physical_plan
-01)ProjectionExec: expr=[sum(alias1)@1 as sum(DISTINCT t1.x), max(alias1)@2 as max(DISTINCT t1.x)]
+01)ProjectionExec: expr=[sum(alias1)@1 as sum(DISTINCT CAST(t1.x AS Float64)), max(alias1)@2 as max(DISTINCT CAST(t1.x AS Float64))]
 02)--AggregateExec: mode=FinalPartitioned, gby=[y@0 as y], aggr=[sum(alias1), max(alias1)]
 03)----RepartitionExec: partitioning=Hash([y@0], 8), input_partitions=8
 04)------AggregateExec: mode=Partial, gby=[y@0 as y], aggr=[sum(alias1), max(alias1)]

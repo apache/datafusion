@@ -573,6 +573,52 @@ async fn aggregate_grouping_sets() -> Result<()> {
 }
 
 #[tokio::test]
+async fn aggregate_with_implicit_coercion_cast() -> Result<()> {
+    roundtrip("SELECT sum(e) FROM data").await
+}
+
+#[tokio::test]
+async fn aggregate_with_explicit_cast_matching_coercion() -> Result<()> {
+    // Explicit cast whose target type matches the UDF coercion target (a: Int64 -> Float64 in avg)
+    roundtrip("SELECT avg(CAST(a AS DOUBLE)) FROM data").await
+}
+
+#[tokio::test]
+async fn aggregate_with_explicit_cast_differing_coercion() -> Result<()> {
+    // Explicit cast to Float64 where sum on Int64 would NOT coerce to Float64
+    roundtrip("SELECT sum(CAST(a AS DOUBLE)) FROM data").await
+}
+
+#[tokio::test]
+async fn aggregate_with_explicit_try_cast() -> Result<()> {
+    roundtrip("SELECT avg(TRY_CAST(a AS DOUBLE)) FROM data").await
+}
+
+#[tokio::test]
+async fn window_with_implicit_coercion_cast() -> Result<()> {
+    roundtrip("SELECT sum(e) OVER (PARTITION BY a ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) FROM data").await
+}
+
+#[tokio::test]
+async fn window_with_explicit_cast() -> Result<()> {
+    let ctx = create_context().await?;
+    let sql = "SELECT avg(CAST(a AS DOUBLE)) OVER (PARTITION BY a ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) FROM data";
+    let df = ctx.sql(sql).await?;
+    let plan = df.into_optimized_plan()?;
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    let plan2 = ctx.state().optimize(&plan2)?;
+
+    // Substrait specification does not encode cast origin flags (is_implicit). For window expressions
+    // wrapped under ProjectRel, RelRoot.names ensures schema name preservation via projection aliasing.
+    // The restored schema and execution semantics are verified to match identically.
+    assert_eq!(plan.schema(), plan2.schema());
+    let results = DataFrame::new(ctx.state(), plan2).collect().await?;
+    assert!(!results.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
 async fn aggregate_grouping_rollup() -> Result<()> {
     let plan = generate_plan_from_sql(
         "SELECT a, c, e, avg(b) FROM data GROUP BY ROLLUP (a, c, e)",

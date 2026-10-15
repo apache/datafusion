@@ -589,7 +589,7 @@ impl<'a> TypeCoercionRewriter<'a> {
         use DataType::*;
 
         fn cast(expr: Expr, target_type: DataType) -> Expr {
-            Expr::Cast(Cast::new(Box::new(expr), target_type))
+            Expr::Cast(Cast::new_implicit(Box::new(expr), target_type))
         }
 
         fn time_to_nanos(

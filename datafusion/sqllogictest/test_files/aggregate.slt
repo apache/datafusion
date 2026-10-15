@@ -170,8 +170,38 @@ SELECT MIN(c) WITHIN GROUP (ORDER BY c) FROM (VALUES (1),(2)) as t(c);
 
 
 # https://github.com/apache/datafusion/issues/3353
-statement error DataFusion error: Schema error: Schema contains duplicate unqualified field name "approx_distinct\(aggregate_test_100\.c9\)"
+# https://github.com/apache/datafusion/issues/26221
+query II
 SELECT approx_distinct(c9) count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100
+----
+99 99
+
+query II
+SELECT approx_distinct(c9), approx_distinct(cast(c9 as varchar)) FROM aggregate_test_100
+----
+99 99
+
+# https://github.com/apache/datafusion/issues/26221
+# Verify aggregate functions with and without cast on the same column can coexist
+query RR
+SELECT sum(x) AS a, sum(CAST(x AS FLOAT)) AS b FROM (VALUES (1.0), (2.0)) AS t(x);
+----
+3 3
+
+query RR
+SELECT sum(x), sum(CAST(x AS FLOAT)) FROM (VALUES (1.0), (2.0)) AS t(x);
+----
+3 3
+
+query II
+SELECT count(x) AS a, count(CAST(x AS BIGINT)) AS b FROM (VALUES (1), (2)) AS t(x);
+----
+2 2
+
+query II
+SELECT count(x), count(CAST(x AS BIGINT)) FROM (VALUES (1), (2)) AS t(x);
+----
+2 2
 
 # csv_query_approx_percentile_cont_with_weight
 statement error Function 'approx_percentile_cont_with_weight' failed to match any signature
@@ -1698,11 +1728,11 @@ SELECT COUNT(2) FROM aggregate_test_100
 100
 
 # csv_query_approx_count
-# FIX: https://github.com/apache/datafusion/issues/3353
-# query II
-# SELECT approx_distinct(c9) AS count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100
-# ----
-# 100 99
+# https://github.com/apache/datafusion/issues/3353
+query II
+SELECT approx_distinct(c9) AS count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100
+----
+99 99
 
 # csv_query_approx_count_literal_null
 query I
