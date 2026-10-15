@@ -533,3 +533,30 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[CASE WHEN column1@0 IS NOT NULL THEN column1@0 ELSE column2@1 END as c]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A volatile *last* argument still takes the lazy CASE rewrite, so it is not
+# evaluated when an earlier argument is non-null: `y / x` must not divide by
+# zero here.
+statement ok
+create table volatile_last_t(a int, x int, y int) as values (1, 0, 1), (2, 0, 2);
+
+query TT
+explain select coalesce(a, y / x + random()) as c from volatile_last_t;
+----
+logical_plan
+01)Projection: CASE WHEN __common_expr_1 IS NOT NULL THEN __common_expr_1 ELSE CAST(volatile_last_t.y / volatile_last_t.x AS Float64) + random() END AS c
+02)--Projection: CAST(volatile_last_t.a AS Float64) AS __common_expr_1, volatile_last_t.x, volatile_last_t.y
+03)----TableScan: volatile_last_t projection=[a, x, y]
+physical_plan
+01)ProjectionExec: expr=[CASE WHEN __common_expr_1@0 IS NOT NULL THEN __common_expr_1@0 ELSE CAST(y@2 / x@1 AS Float64) + random() END as c]
+02)--ProjectionExec: expr=[CAST(a@0 AS Float64) as __common_expr_1, x@1 as x, y@2 as y]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query R rowsort
+select coalesce(a, y / x + random()) as c from volatile_last_t;
+----
+1
+2
+
+statement ok
+drop table volatile_last_t;
