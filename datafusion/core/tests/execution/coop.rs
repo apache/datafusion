@@ -24,7 +24,7 @@ use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use datafusion::physical_plan;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::aggregates::{
-    AggregateExec, AggregateMode, LimitOptions, PhysicalGroupBy,
+    AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 use datafusion::physical_plan::execution_plan::Boundedness;
 use datafusion::prelude::SessionContext;
@@ -261,7 +261,9 @@ async fn agg_grouped_topk_yields(
             inf.clone(),
             inf.schema(),
         )?
-        .with_limit_options(Some(LimitOptions::new(100))),
+        .try_optimize_topk(100, "max", SortOptions::new(true, false))
+        .unwrap()
+        .data,
     );
 
     query_yields(aggr, session_ctx.task_ctx()).await

@@ -74,64 +74,56 @@ impl SparkEncode {
     }
 }
 
-/// Encodes a single string value using the specified charset.
+/// Encodes a single string value using the specified charset into `bytes`,
+/// replacing its previous contents.
 /// Unmappable characters are silently replaced with `?` (Spark 3.5 behavior).
-fn encode_string(s: &str, charset: &str) -> Result<Vec<u8>> {
+fn encode_string(s: &str, charset: &str, bytes: &mut Vec<u8>) -> Result<()> {
+    bytes.clear();
     match charset {
-        "UTF-8" | "UTF8" => Ok(s.as_bytes().to_vec()),
-        "US-ASCII" | "ASCII" => Ok(s
-            .chars()
-            .map(|c| if c.is_ascii() { c as u8 } else { b'?' })
-            .collect()),
-        "ISO-8859-1" | "ISO88591" | "LATIN1" => Ok(s
-            .chars()
-            .map(|c| {
-                let cp = c as u32;
-                if cp <= 255 { cp as u8 } else { b'?' }
-            })
-            .collect()),
+        "UTF-8" | "UTF8" => bytes.extend_from_slice(s.as_bytes()),
+        "US-ASCII" | "ASCII" => {
+            bytes.extend(s.chars().map(|c| if c.is_ascii() { c as u8 } else { b'?' }))
+        }
+        "ISO-8859-1" | "ISO88591" | "LATIN1" => bytes.extend(s.chars().map(|c| {
+            let cp = c as u32;
+            if cp <= 255 { cp as u8 } else { b'?' }
+        })),
         "UTF-16BE" | "UTF16BE" => {
-            let mut bytes = Vec::new();
             for code_unit in s.encode_utf16() {
                 bytes.extend_from_slice(&code_unit.to_be_bytes());
             }
-            Ok(bytes)
         }
         "UTF-16LE" | "UTF16LE" => {
-            let mut bytes = Vec::new();
             for code_unit in s.encode_utf16() {
                 bytes.extend_from_slice(&code_unit.to_le_bytes());
             }
-            Ok(bytes)
         }
         "UTF-16" | "UTF16" => {
             // BOM (big-endian marker) followed by UTF-16BE encoded bytes
-            let mut bytes = vec![0xFE, 0xFF];
+            bytes.extend_from_slice(&[0xFE, 0xFF]);
             for code_unit in s.encode_utf16() {
                 bytes.extend_from_slice(&code_unit.to_be_bytes());
             }
-            Ok(bytes)
         }
         // Spark treats UTF-32 as UTF-32BE (no BOM), matching Spark 3.5 and 4.1.
         "UTF-32" | "UTF32" | "UTF-32BE" | "UTF32BE" => {
-            let mut bytes = Vec::with_capacity(s.len() * 4);
             for c in s.chars() {
                 bytes.extend_from_slice(&(c as u32).to_be_bytes());
             }
-            Ok(bytes)
         }
         "UTF-32LE" | "UTF32LE" => {
-            let mut bytes = Vec::with_capacity(s.len() * 4);
             for c in s.chars() {
                 bytes.extend_from_slice(&(c as u32).to_le_bytes());
             }
-            Ok(bytes)
         }
-        _ => exec_err!(
-            "Unsupported charset for encode: '{}'. Supported: US-ASCII, ISO-8859-1, UTF-8, UTF-16, UTF-16BE, UTF-16LE, UTF-32, UTF-32BE, UTF-32LE",
-            charset
-        ),
+        _ => {
+            return exec_err!(
+                "Unsupported charset for encode: '{}'. Supported: US-ASCII, ISO-8859-1, UTF-8, UTF-16, UTF-16BE, UTF-16LE, UTF-32, UTF-32BE, UTF-32LE",
+                charset
+            );
+        }
     }
+    Ok(())
 }
 
 /// The charset for each row. `Constant` is a single uppercased charset; `PerRow`
@@ -163,10 +155,12 @@ fn encode_rows<'a>(
     charsets: &Charsets,
 ) -> Result<ArrayRef> {
     let mut builder = BinaryBuilder::with_capacity(len, len * 4);
+    let mut bytes = Vec::new();
     for i in 0..len {
         match (is_null(i), charsets.get(i)) {
             (false, Some(charset)) => {
-                builder.append_value(&encode_string(&decode(i), &charset)?)
+                encode_string(&decode(i), &charset, &mut bytes)?;
+                builder.append_value(&bytes);
             }
             _ => builder.append_null(),
         }

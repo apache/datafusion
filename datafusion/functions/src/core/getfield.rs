@@ -327,15 +327,13 @@ impl ScalarUDFImpl for GetFieldFunc {
             match current_field.data_type() {
                 DataType::Map(map_field, _) => {
                     match map_field.data_type() {
-                        DataType::Struct(fields) if fields.len() == 2 => {
+                        DataType::Struct(fields)
+                            if let [_, value_field] = &fields[..] =>
+                        {
                             // Arrow's MapArray is essentially a ListArray of structs with two columns. They are
                             // often named "key", and "value", but we don't require any specific naming here;
                             // instead, we assume that the second column is the "value" column both here and in
                             // execution.
-                            let value_field = fields
-                                .get(1)
-                                .expect("fields should have exactly two members");
-
                             current_field = Arc::new(
                                 value_field.as_ref().clone().with_nullable(true),
                             );
@@ -351,11 +349,8 @@ impl ScalarUDFImpl for GetFieldFunc {
                 // the underlying struct, then wrap the result back in the
                 // same Dictionary type so the promised type matches execution.
                 DataType::Dictionary(key_type, value_type)
-                    if matches!(value_type.as_ref(), DataType::Struct(_)) =>
+                    if let DataType::Struct(fields) = value_type.as_ref() =>
                 {
-                    let DataType::Struct(fields) = value_type.as_ref() else {
-                        unreachable!()
-                    };
                     let field_name = sv
                         .as_ref()
                         .and_then(|sv| {
