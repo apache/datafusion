@@ -835,6 +835,20 @@ impl<'a> Simplifier<'a> {
     }
 }
 
+/// Simplifies `expr {=, !=} literal` in either operand order after checking
+/// that both operands have boolean type.
+fn simplify_boolean_comparison(
+    literal: &Expr,
+    other: Box<Expr>,
+    op: Operator,
+) -> Result<Expr> {
+    Ok(match (as_bool_lit(literal)?, op) {
+        (Some(true), Operator::Eq) | (Some(false), Operator::NotEq) => *other,
+        (Some(_), _) => Expr::Not(other),
+        (None, _) => lit_bool_null(),
+    })
+}
+
 /// Returns whether values of the given type are guaranteed to satisfy `value % 1 == 0`.
 fn modulo_one_is_zero_type(data_type: &DataType) -> bool {
     match data_type {
@@ -892,36 +906,34 @@ impl TreeNodeRewriter for Simplifier<'_> {
             }) if is_null(&left) && is_null(&right) => Transformed::yes(lit_bool_null()),
 
             //
-            // Rules for Eq
+            // Rules for boolean comparisons with literals
             //
 
             // true = A  --> A
             // false = A --> !A
             // null = A --> null
+            // true != A  --> !A
+            // false != A --> A
+            // null != A --> null
             Expr::BinaryExpr(BinaryExpr {
                 left,
-                op: Eq,
+                op: op @ (Eq | NotEq),
                 right,
             }) if is_bool_lit(&left) && info.is_boolean_type(&right)? => {
-                Transformed::yes(match as_bool_lit(&left)? {
-                    Some(true) => *right,
-                    Some(false) => Expr::Not(right),
-                    None => lit_bool_null(),
-                })
+                Transformed::yes(simplify_boolean_comparison(&left, right, op)?)
             }
             // A = true  --> A
             // A = false --> !A
             // A = null --> null
+            // A != true  --> !A
+            // A != false --> A
+            // A != null --> null
             Expr::BinaryExpr(BinaryExpr {
                 left,
-                op: Eq,
+                op: op @ (Eq | NotEq),
                 right,
             }) if is_bool_lit(&right) && info.is_boolean_type(&left)? => {
-                Transformed::yes(match as_bool_lit(&right)? {
-                    Some(true) => *left,
-                    Some(false) => Expr::Not(left),
-                    None => lit_bool_null(),
-                })
+                Transformed::yes(simplify_boolean_comparison(&right, left, op)?)
             }
             // According to SQL's null semantics, NULL = NULL evaluates to NULL
             // Both sides are the same expression (A = A) and A is non-volatile expression
@@ -939,38 +951,6 @@ impl TreeNodeRewriter for Simplifier<'_> {
                         op: Or,
                         right: Box::new(lit_bool_null()),
                     }),
-                })
-            }
-
-            // Rules for NotEq
-            //
-
-            // true != A  --> !A
-            // false != A --> A
-            // null != A --> null
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: NotEq,
-                right,
-            }) if is_bool_lit(&left) && info.is_boolean_type(&right)? => {
-                Transformed::yes(match as_bool_lit(&left)? {
-                    Some(true) => Expr::Not(right),
-                    Some(false) => *right,
-                    None => lit_bool_null(),
-                })
-            }
-            // A != true  --> !A
-            // A != false --> A
-            // A != null --> null,
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: NotEq,
-                right,
-            }) if is_bool_lit(&right) && info.is_boolean_type(&left)? => {
-                Transformed::yes(match as_bool_lit(&right)? {
-                    Some(true) => Expr::Not(left),
-                    Some(false) => *left,
-                    None => lit_bool_null(),
                 })
             }
 
@@ -4124,11 +4104,20 @@ mod tests {
         // true = false -> false
         assert_eq!(simplify(lit(true).eq(lit(false))), lit(false),);
 
-        // c2 = true -> c2
-        assert_eq!(simplify(col("c2").eq(lit(true))), col("c2"));
-
-        // c2 = false => !c2
-        assert_eq!(simplify(col("c2").eq(lit(false))), col("c2").not(),);
+        for name in ["c2", "c2_non_null"] {
+            for (literal, expected) in [
+                (lit(true), col(name)),
+                (lit(false), col(name).not()),
+                (lit_bool_null(), lit_bool_null()),
+            ] {
+                // Disable canonicalization so both operand orders reach the simplifier.
+                assert_eq!(
+                    simplify_no_canonicalize(col(name).eq(literal.clone())),
+                    expected,
+                );
+                assert_eq!(simplify_no_canonicalize(literal.eq(col(name))), expected,);
+            }
+        }
     }
 
     #[test]
@@ -4142,8 +4131,11 @@ mod tests {
         // Make sure c1 column to be used in tests is not boolean type
         assert_eq!(col("c1").get_type(&schema).unwrap(), DataType::Utf8);
 
-        // don't fold c1 = foo
-        assert_eq!(simplify(col("c1").eq(lit("foo"))), col("c1").eq(lit("foo")),);
+        for literal in [lit("foo"), lit(true), lit(false)] {
+            for expr in [col("c1").eq(literal.clone()), literal.eq(col("c1"))] {
+                assert_eq!(simplify_no_canonicalize(expr.clone()), expr);
+            }
+        }
     }
 
     #[test]
@@ -4152,11 +4144,22 @@ mod tests {
 
         assert_eq!(col("c2").get_type(&schema).unwrap(), DataType::Boolean);
 
-        // c2 != true -> !c2
-        assert_eq!(simplify(col("c2").not_eq(lit(true))), col("c2").not(),);
-
-        // c2 != false -> c2
-        assert_eq!(simplify(col("c2").not_eq(lit(false))), col("c2"),);
+        for name in ["c2", "c2_non_null"] {
+            for (literal, expected) in [
+                (lit(true), col(name).not()),
+                (lit(false), col(name)),
+                (lit_bool_null(), lit_bool_null()),
+            ] {
+                assert_eq!(
+                    simplify_no_canonicalize(col(name).not_eq(literal.clone())),
+                    expected,
+                );
+                assert_eq!(
+                    simplify_no_canonicalize(literal.not_eq(col(name))),
+                    expected,
+                );
+            }
+        }
 
         // test constant
         assert_eq!(simplify(lit(true).not_eq(lit(true))), lit(false),);
@@ -4173,10 +4176,11 @@ mod tests {
         // expression to non-boolean.
         assert_eq!(col("c1").get_type(&schema).unwrap(), DataType::Utf8);
 
-        assert_eq!(
-            simplify(col("c1").not_eq(lit("foo"))),
-            col("c1").not_eq(lit("foo")),
-        );
+        for literal in [lit("foo"), lit(true), lit(false)] {
+            for expr in [col("c1").not_eq(literal.clone()), literal.not_eq(col("c1"))] {
+                assert_eq!(simplify_no_canonicalize(expr.clone()), expr);
+            }
+        }
     }
 
     #[test]
