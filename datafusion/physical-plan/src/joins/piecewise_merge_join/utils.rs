@@ -15,11 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::cmp::Ordering;
+
 use arrow::array::{Array, RecordBatch};
 use arrow::compute::concat_batches;
 use arrow_schema::SortOptions;
-use datafusion_common::Result;
-use datafusion_expr::JoinType;
+use datafusion_common::{Result, internal_err};
+use datafusion_expr::{JoinType, Operator};
 
 /// Bounds of the non-null keys in an array sorted with `options`.
 pub(super) fn non_null_range(values: &dyn Array, options: SortOptions) -> (usize, usize) {
@@ -62,4 +64,87 @@ pub(super) fn is_right_existence_join(join_type: JoinType) -> bool {
 // buffered side matches for classic joins
 pub(super) fn need_produce_result_in_final(join_type: JoinType) -> bool {
     matches!(join_type, JoinType::Full | JoinType::Left)
+}
+
+// Whether `operator` also holds when the two keys are equal: `<=` and `>=` do, `<` and `>`
+// do not.
+pub(super) fn matches_on_equal(operator: Operator) -> Result<bool> {
+    match operator {
+        Operator::Lt | Operator::Gt => Ok(false),
+        Operator::LtEq | Operator::GtEq => Ok(true),
+        _ => internal_err!("PiecewiseMergeJoin should not contain operator, {operator}"),
+    }
+}
+
+// Whether the predicate holds for a streamed key that compares `ordering` to a buffered key
+// under the join's sort options. Those are chosen so that `Less` means the predicate holds
+// for every operator; `Equal` does too for `<=`/`>=`.
+pub(super) fn is_match(ordering: Ordering, match_on_equal: bool) -> bool {
+    match ordering {
+        Ordering::Less => true,
+        Ordering::Equal => match_on_equal,
+        Ordering::Greater => false,
+    }
+}
+
+// Returns the first index in `[lo, hi)` for which `matches` holds, or `hi` if none does.
+//
+// `matches` must be monotone over that range -- false up to some index, true from there on.
+// Both PiecewiseMergeJoin streams search a sorted buffered side, where every match set is a
+// suffix, so the first match is a partition point: `O(log(hi - lo))` comparisons instead of a
+// walk.
+pub(super) fn first_match(
+    lo: usize,
+    hi: usize,
+    matches: impl Fn(usize) -> bool,
+) -> usize {
+    let (mut first, mut above) = (lo, hi);
+    while first < above {
+        let mid = first + (above - first) / 2;
+        if matches(mid) {
+            above = mid;
+        } else {
+            first = mid + 1;
+        }
+    }
+    first
+}
+
+#[cfg(test)]
+mod tests {
+    use super::first_match;
+
+    /// `first_match` against a linear scan for every range, answer and start up to 40, also
+    /// bounding its comparisons by `ceil(log2(hi - lo + 1))`.
+    #[test]
+    fn first_match_agrees_with_linear_scan() {
+        for hi in 0..=40usize {
+            for boundary in 0..=hi {
+                for lo in 0..=hi {
+                    let probes = std::cell::Cell::new(0usize);
+                    let matches = |idx: usize| {
+                        assert!(
+                            idx >= lo && idx < hi,
+                            "probed {idx} outside [{lo}, {hi})"
+                        );
+                        probes.set(probes.get() + 1);
+                        idx >= boundary
+                    };
+                    let expected = (lo..hi).find(|&idx| idx >= boundary).unwrap_or(hi);
+                    assert_eq!(
+                        first_match(lo, hi, matches),
+                        expected,
+                        "hi={hi} boundary={boundary} lo={lo}"
+                    );
+
+                    let bound = (usize::BITS - (hi - lo).leading_zeros()) as usize;
+                    assert!(
+                        probes.get() <= bound,
+                        "hi={hi} boundary={boundary} lo={lo}: {} probes > {bound}",
+                        probes.get()
+                    );
+                }
+            }
+        }
+    }
 }

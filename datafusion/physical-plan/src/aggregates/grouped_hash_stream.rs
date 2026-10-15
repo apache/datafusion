@@ -908,6 +908,14 @@ impl GroupedHashAggregateStream {
                 Ok::<_, DataFusionError>((input_values, filter_values))
             })?;
 
+        // Convert filters before timing accumulator calls. The timer covers
+        // one interval across all accumulator operations, rather than a
+        // prefix sum charged once per aggregate expression.
+        let filters = filter_values
+            .iter()
+            .map(|filter| filter.as_ref().map(|filter| filter.as_boolean()))
+            .collect::<Vec<_>>();
+
         for group_values in &group_by_values {
             // Calculate group indices and update ordering information.
             let total_num_groups =
@@ -927,13 +935,6 @@ impl GroupedHashAggregateStream {
                     Ok::<_, DataFusionError>(total_num_groups)
                 })?;
 
-            // Convert filters before timing accumulator calls. The timer covers
-            // one interval across all accumulator operations, rather than a
-            // prefix sum charged once per aggregate expression.
-            let filters = filter_values
-                .iter()
-                .map(|filter| filter.as_ref().map(|filter| filter.as_boolean()))
-                .collect::<Vec<_>>();
             self.group_by_metrics.time_aggregation(|| {
                 let group_indices = &self.current_group_indices;
                 let t = self
@@ -1120,7 +1121,7 @@ impl GroupedHashAggregateStream {
         let any_interned = group_by_metrics.time_group_key_preparation(|| {
             let max_ordinal = max_duplicate_ordinal(self.group_by.groups());
             let mut ordinals: std::collections::HashMap<&[bool], usize> =
-                std::collections::HashMap::new();
+                std::collections::HashMap::with_capacity(self.group_by.groups().len());
             let group_schema = self.group_by.group_schema(&self.input_schema)?;
             let n_expr = self.group_by.expr().len();
             let mut any_interned = false;

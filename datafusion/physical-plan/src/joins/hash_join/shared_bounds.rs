@@ -159,7 +159,7 @@ fn create_bounds_predicate(
     on_right: &[PhysicalExprRef],
     bounds: &PartitionBounds,
 ) -> Option<Arc<dyn PhysicalExpr>> {
-    let mut column_predicates = Vec::new();
+    let mut column_predicates = Vec::with_capacity(on_right.len());
 
     for (col_idx, right_expr) in on_right.iter().enumerate() {
         if let Some(column_bounds) = bounds.get_column_bounds(col_idx) {

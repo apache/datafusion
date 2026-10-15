@@ -17,7 +17,7 @@
 
 //! [`ParquetFormat`]: Parquet [`FileFormat`] abstractions
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fmt::Debug;
 use std::ops::Range;
@@ -99,7 +99,7 @@ impl FileFormatFactory for ParquetFormatFactory {
     fn create(
         &self,
         state: &dyn Session,
-        format_options: &std::collections::HashMap<String, String>,
+        format_options: &HashMap<String, String>,
     ) -> Result<Arc<dyn FileFormat>> {
         let parquet_options = match &self.options {
             None => {
@@ -272,6 +272,34 @@ fn clear_metadata(
     })
 }
 
+/// Marks every field that is missing from at least one of the `file_count`
+/// files as nullable: reading such a file yields nulls for that column.
+fn mark_partially_present_fields_nullable(
+    schema: Schema,
+    presence: &HashMap<String, usize>,
+    file_count: usize,
+) -> Schema {
+    if presence.values().all(|&count| count == file_count) {
+        return schema;
+    }
+    let metadata = schema.metadata().clone();
+    let fields = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            let present_everywhere = presence
+                .get(field.name())
+                .is_some_and(|&count| count == file_count);
+            if present_everywhere || field.is_nullable() {
+                Arc::clone(field)
+            } else {
+                Arc::new(field.as_ref().clone().with_nullable(true))
+            }
+        })
+        .collect::<Vec<_>>();
+    Schema::new_with_metadata(fields, metadata)
+}
+
 #[cfg(feature = "parquet_encryption")]
 async fn get_file_decryption_properties(
     state: &dyn Session,
@@ -400,6 +428,19 @@ impl FileFormat for ParquetFormat {
         }
         drop(seen);
 
+        // A column that some files do not have is read as all-null from those
+        // files, so the merged table schema must declare it nullable even
+        // when every file that has it declares it required. `Schema::try_merge`
+        // only widens nullability for fields that appear in more than one
+        // schema, so track presence separately.
+        let file_count = schemas.len();
+        let mut presence: HashMap<String, usize> = HashMap::new();
+        for (_, schema) in &schemas {
+            for field in schema.fields() {
+                *presence.entry(field.name().clone()).or_insert(0) += 1;
+            }
+        }
+
         // Normalize dict-promoted schemas before merging so mixed dict/plain files merge cleanly.
         let mut schemas: Vec<Schema> =
             schemas.into_iter().map(|(_, schema)| schema).collect();
@@ -412,6 +453,9 @@ impl FileFormat for ParquetFormat {
         } else {
             Schema::try_merge(schemas)
         }?;
+
+        let schema =
+            mark_partially_present_fields_nullable(schema, &presence, file_count);
 
         let schema = if self.binary_as_string() {
             transform_binary_to_string(&schema)

@@ -246,20 +246,14 @@ impl Unparser<'_> {
                     })
                     .collect::<Result<Vec<CaseWhen>>>()?;
 
-                let operand = match expr.as_ref() {
-                    Some(e) => match self.expr_to_sql_inner(e) {
-                        Ok(sql_expr) => Some(Box::new(sql_expr)),
-                        Err(_) => None,
-                    },
-                    None => None,
-                };
-                let else_result = match else_expr.as_ref() {
-                    Some(e) => match self.expr_to_sql_inner(e) {
-                        Ok(sql_expr) => Some(Box::new(sql_expr)),
-                        Err(_) => None,
-                    },
-                    None => None,
-                };
+                let operand = expr
+                    .as_ref()
+                    .map(|e| self.expr_to_sql_inner(e).map(Box::new))
+                    .transpose()?;
+                let else_result = else_expr
+                    .as_ref()
+                    .map(|e| self.expr_to_sql_inner(e).map(Box::new))
+                    .transpose()?;
 
                 Ok(ast::Expr::Case {
                     operand,
@@ -726,7 +720,7 @@ impl Unparser<'_> {
     }
 
     fn scalar_value_list_to_sql(&self, array: &ArrayRef) -> Result<ast::Expr> {
-        let mut elem = Vec::new();
+        let mut elem = Vec::with_capacity(array.len());
         for i in 0..array.len() {
             let value = ScalarValue::try_from_array(&array, i)?;
             elem.push(self.scalar_to_sql(&value)?);
@@ -1964,7 +1958,7 @@ mod tests {
     use std::ops::{Add, Sub};
     use std::{sync::Arc, vec};
 
-    use crate::unparser::dialect::{MySqlDialect, SqliteDialect};
+    use crate::unparser::dialect::{MySqlDialect, SnowflakeDialect, SqliteDialect};
     use arrow::array::{LargeListArray, LargeListViewArray, ListArray, ListViewArray};
     use arrow::datatypes::{DataType::Int8, Field, Int32Type, Schema, TimeUnit};
     use ast::ObjectName;
@@ -3454,6 +3448,28 @@ mod tests {
     }
 
     #[test]
+    fn case_propagates_operand_and_else_errors() {
+        let unsupported = Expr::Literal(ScalarValue::DurationSecond(Some(1)), None);
+        let expressions = [
+            Expr::Case(Case::new(
+                Some(Box::new(unsupported.clone())),
+                vec![(Box::new(lit(1)), Box::new(lit(2)))],
+                None,
+            )),
+            Expr::Case(Case::new(
+                None,
+                vec![(Box::new(lit(true)), Box::new(lit(1)))],
+                Some(Box::new(unsupported)),
+            )),
+        ];
+
+        for expr in expressions {
+            let error = expr_to_sql(&expr).expect_err("unsupported CASE child");
+            assert!(error.to_string().contains("Unsupported scalar"));
+        }
+    }
+
+    #[test]
     fn test_window_func_support_window_frame() -> Result<()> {
         let default_dialect: Arc<dyn Dialect> =
             Arc::new(CustomDialectBuilder::new().build());
@@ -3972,6 +3988,33 @@ mod tests {
                 .to_string(),
             "NULL"
         );
+    }
+
+    #[test]
+    fn test_random_function() -> Result<()> {
+        let duckdb_dialect = DuckDBDialect::new();
+        let dialects = vec![
+            (Unparser::new(&DefaultDialect {}), "random()"),
+            (Unparser::new(&PostgreSqlDialect {}), "random()"),
+            (Unparser::new(&duckdb_dialect), "random()"),
+            (Unparser::new(&MySqlDialect {}), "rand()"),
+            (Unparser::new(&SqliteDialect {}), "random()"),
+            (Unparser::new(&BigQueryDialect {}), "rand()"),
+            (Unparser::new(&SnowflakeDialect {}), "random()"),
+        ];
+
+        let expr = Expr::ScalarFunction(ScalarFunction {
+            func: Arc::new(ScalarUDF::from(
+                datafusion_functions::math::random::RandomFunc::new(),
+            )),
+            args: vec![],
+        });
+
+        for (unparser, result) in dialects {
+            assert_eq!(unparser.expr_to_sql(&expr)?.to_string(), result);
+        }
+
+        Ok(())
     }
 
     #[test]
