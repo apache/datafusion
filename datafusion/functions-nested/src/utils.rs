@@ -218,7 +218,7 @@ pub(crate) fn align_array_dimensions<O: OffsetSizeTrait>(
                 let mut aligned_array = Arc::clone(&array);
                 for _ in 0..(max_ndim - ndim) {
                     let data_type = aligned_array.data_type().to_owned();
-                    let array_lengths = vec![1; aligned_array.len()];
+                    let array_lengths = std::iter::repeat_n(1, aligned_array.len());
                     let offsets = OffsetBuffer::<O>::from_lengths(array_lengths);
 
                     aligned_array = Arc::new(GenericListArray::<O>::try_new(

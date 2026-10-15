@@ -16,7 +16,6 @@
 // under the License.
 
 use datafusion_expr::EmitTo;
-use std::mem::size_of;
 
 /// Tracks grouping state when the data is ordered entirely by its
 /// group keys
@@ -142,10 +141,6 @@ impl GroupOrderingFull {
                 panic!("Saw new group after input was complete");
             }
         };
-    }
-
-    pub(crate) fn size(&self) -> usize {
-        size_of::<Self>()
     }
 }
 

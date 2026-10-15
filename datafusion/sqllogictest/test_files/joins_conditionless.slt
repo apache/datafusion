@@ -1,0 +1,77 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+statement ok
+CREATE TABLE conditionless_left(a BIGINT) AS VALUES (1), (2);
+
+statement ok
+CREATE TABLE conditionless_right(b BIGINT) AS VALUES (10), (20);
+
+statement ok
+CREATE TABLE conditionless_empty(b BIGINT);
+
+# Optimization removes the true filter. Substrait still requires a join condition.
+query II rowsort
+SELECT a, b FROM conditionless_left LEFT JOIN conditionless_right ON true;
+----
+1 10
+1 20
+2 10
+2 20
+
+query II rowsort
+SELECT a, b FROM conditionless_left RIGHT JOIN conditionless_right ON true;
+----
+1 10
+1 20
+2 10
+2 20
+
+query II rowsort
+SELECT a, b FROM conditionless_left FULL JOIN conditionless_right ON true;
+----
+1 10
+1 20
+2 10
+2 20
+
+query II rowsort
+SELECT a, b FROM conditionless_left LEFT JOIN conditionless_empty ON true;
+----
+1 NULL
+2 NULL
+
+# Uncorrelated EXISTS and NOT EXISTS become conditionless semi and anti joins.
+query I rowsort
+SELECT a FROM conditionless_left WHERE EXISTS (SELECT 1 FROM conditionless_right);
+----
+1
+2
+
+query I rowsort
+SELECT a FROM conditionless_left WHERE EXISTS (SELECT 1 FROM conditionless_empty);
+----
+
+query I rowsort
+SELECT a FROM conditionless_left WHERE NOT EXISTS (SELECT 1 FROM conditionless_right);
+----
+
+query I rowsort
+SELECT a FROM conditionless_left WHERE NOT EXISTS (SELECT 1 FROM conditionless_empty);
+----
+1
+2
