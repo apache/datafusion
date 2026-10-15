@@ -193,8 +193,11 @@ impl ScalarUDFImpl for ParseUrl {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let ScalarFunctionArgs { args, .. } = args;
-        make_scalar_function(spark_parse_url, vec![])(&args)
+        let enable_ansi_mode = args.config_options.execution.enable_ansi_mode;
+        make_scalar_function(
+            move |arrays: &[ArrayRef]| spark_parse_url(arrays, enable_ansi_mode),
+            vec![],
+        )(&args.args)
     }
 }
 
@@ -213,8 +216,14 @@ impl ScalarUDFImpl for ParseUrl {
 /// - A string array with extracted URL components
 /// - `None` values where extraction failed or component doesn't exist
 /// - The output array type (StringArray or LargeStringArray) is determined by input types
-fn spark_parse_url(args: &[ArrayRef]) -> Result<ArrayRef> {
-    spark_handled_parse_url(args, |x| x)
+///
+/// Like Spark, a malformed URL is an error only in ANSI mode; otherwise it
+/// yields NULL, as `try_parse_url` does.
+fn spark_parse_url(args: &[ArrayRef], enable_ansi_mode: bool) -> Result<ArrayRef> {
+    spark_handled_parse_url(args, |x| match x {
+        Err(_) if !enable_ansi_mode => Ok(None),
+        result => result,
+    })
 }
 
 pub fn spark_handled_parse_url(
@@ -609,6 +618,24 @@ mod tests {
         assert_eq!(out_sa.value(0), "user:pwd");
         assert!(out_sa.is_null(1));
         assert!(out_sa.is_null(2));
+        Ok(())
+    }
+
+    #[test]
+    fn test_malformed_url_is_null_unless_ansi() -> Result<()> {
+        let urls = sa(&[
+            Some("inva lid://spark.apache.org/path?query=1"),
+            Some("https://example.com/a"),
+        ]);
+        let parts = sa(&[Some("QUERY"), Some("PATH")]);
+
+        let out = spark_parse_url(&[Arc::clone(&urls), Arc::clone(&parts)], false)?;
+        let out_sa = out.as_any().downcast_ref::<StringArray>().unwrap();
+        assert!(out_sa.is_null(0));
+        assert_eq!(out_sa.value(1), "/a");
+
+        let err = spark_parse_url(&[urls, parts], true).unwrap_err();
+        assert!(format!("{err}").contains("The url is invalid"));
         Ok(())
     }
 
