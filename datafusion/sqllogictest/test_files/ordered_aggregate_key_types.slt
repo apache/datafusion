@@ -1,0 +1,172 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Fully ordered multi-column aggregation agrees with unordered aggregation for
+# parameterized key types. Two-row batches split both null and non-null groups.
+statement ok
+SET datafusion.execution.batch_size = 2;
+
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+SET datafusion.execution.enable_migration_aggregate = true;
+
+statement ok
+SET datafusion.optimizer.enable_round_robin_repartition = false;
+
+statement ok
+SET datafusion.optimizer.prefer_existing_sort = true;
+
+statement ok
+SET datafusion.explain.physical_plan_only = true;
+
+statement ok
+CREATE TABLE ordered_key_types AS
+SELECT
+  arrow_cast(t, 'Timestamp(Nanosecond, Some("Europe/Paris"))') AS ts_ns,
+  arrow_cast(t, 'Timestamp(Millisecond)') AS ts_ms,
+  arrow_cast(n, 'Decimal32(9, 2)') AS d32,
+  arrow_cast(n, 'Decimal64(18, 4)') AS d64,
+  arrow_cast(n, 'Decimal128(20, 3)') AS d128,
+  arrow_cast(n, 'Decimal256(50, 7)') AS d256,
+  arrow_cast(b, 'FixedSizeBinary(5)') AS b,
+  arrow_cast(CAST(t AS INT), 'Date32') AS date32,
+  arrow_cast(t * 86400000, 'Date64') AS date64,
+  arrow_cast(CAST(t AS INT), 'Time32(Millisecond)') AS time32,
+  arrow_cast(t, 'Time64(Microsecond)') AS time64,
+  arrow_cast(t, 'Duration(Nanosecond)') AS duration,
+  arrow_cast(CAST(t AS VARCHAR) || ' months', 'Interval(YearMonth)') AS iym,
+  arrow_cast(CAST(t AS VARCHAR) || ' days', 'Interval(DayTime)') AS idt,
+  arrow_cast(CAST(t AS VARCHAR) || ' nanoseconds', 'Interval(MonthDayNano)') AS imdn,
+  v
+FROM (VALUES
+  (0, -1.25, X'00000000ff', 10),
+  (0, -1.25, X'00000000ff', 0),
+  (0, -1.25, X'00000000ff', 20),
+  (0, -1.25, X'00000000ff', NULL),
+  (0, -1.25, X'0000000001', 4),
+  (1, NULL, NULL, 0),
+  (1, NULL, NULL, 8),
+  (NULL, 2.5, X'ff00000000', 12),
+  (NULL, 2.5, X'ff00000000', 4),
+  (NULL, NULL, NULL, 0)
+) AS input(t, n, b, v);
+
+# LIMIT preserves the subquery's ordering. It exceeds the fixture's row count.
+# Mixed directions and explicit null ordering must not change group equality.
+statement ok
+CREATE VIEW ordered_key_types_sorted AS
+SELECT * FROM ordered_key_types
+ORDER BY ts_ns DESC NULLS FIRST, ts_ms, d32 DESC NULLS LAST,
+  d64, d128, d256, b DESC NULLS FIRST, date32, date64,
+  time32, time64, duration, iym, idt, imdn
+LIMIT 1000;
+
+query TT
+EXPLAIN SELECT ts_ns, ts_ms, d32, d64, d128, d256, b,
+  date32, date64, time32, time64, duration, iym, idt, imdn, SUM(v)
+FROM ordered_key_types_sorted
+GROUP BY ts_ns, ts_ms, d32, d64, d128, d256, b,
+  date32, date64, time32, time64, duration, iym, idt, imdn;
+----
+physical_plan
+01)AggregateExec: mode=Single,<slt:ignore>ordering_mode=Sorted
+<slt:ignore>
+
+# Unordered reference. FILTER must also prevent division by zero.
+query IR?IIII rowsort ordered-key-types
+SELECT CAST(ts_ns AS BIGINT), d128, b, MIN(v), SUM(10 / v) FILTER (WHERE v <> 0),
+  COUNT(v) FILTER (WHERE v <> 0), COUNT(*)
+FROM ordered_key_types
+GROUP BY ts_ns, ts_ms, d32, d64, d128, d256, b,
+  date32, date64, time32, time64, duration, iym, idt, imdn;
+----
+0 -1.250 0000000001 4 2 1 1
+0 -1.250 00000000ff 0 1 2 4
+1 NULL NULL 0 1 1 2
+NULL 2.500 ff00000000 4 2 2 2
+NULL NULL NULL 0 NULL 0 1
+
+# The same keys and aggregates through fully ordered Single aggregation.
+query IR?IIII rowsort ordered-key-types
+SELECT CAST(ts_ns AS BIGINT), d128, b, MIN(v), SUM(10 / v) FILTER (WHERE v <> 0),
+  COUNT(v) FILTER (WHERE v <> 0), COUNT(*)
+FROM ordered_key_types_sorted
+GROUP BY ts_ns, ts_ms, d32, d64, d128, d256, b,
+  date32, date64, time32, time64, duration, iym, idt, imdn;
+----
+0 -1.250 0000000001 4 2 1 1
+0 -1.250 00000000ff 0 1 2 4
+1 NULL NULL 0 1 1 2
+NULL 2.500 ff00000000 4 2 2 2
+NULL NULL NULL 0 NULL 0 1
+
+statement ok
+SET datafusion.execution.target_partitions = 2;
+
+# Partial and final stages must both retain complete group-key ordering.
+query TT
+EXPLAIN SELECT ts_ns, ts_ms, d32, d64, d128, d256, b,
+  date32, date64, time32, time64, duration, iym, idt, imdn, SUM(v)
+FROM ordered_key_types_sorted
+GROUP BY ts_ns, ts_ms, d32, d64, d128, d256, b,
+  date32, date64, time32, time64, duration, iym, idt, imdn;
+----
+physical_plan
+01)AggregateExec: mode=FinalPartitioned,<slt:ignore>ordering_mode=Sorted
+02)--RepartitionExec:<slt:ignore>maintains_sort_order=true<slt:ignore>
+03)----AggregateExec: mode=Partial,<slt:ignore>ordering_mode=Sorted
+<slt:ignore>
+
+query IR?IIII rowsort ordered-key-types
+SELECT CAST(ts_ns AS BIGINT), d128, b, MIN(v), SUM(10 / v) FILTER (WHERE v <> 0),
+  COUNT(v) FILTER (WHERE v <> 0), COUNT(*)
+FROM ordered_key_types_sorted
+GROUP BY ts_ns, ts_ms, d32, d64, d128, d256, b,
+  date32, date64, time32, time64, duration, iym, idt, imdn;
+----
+0 -1.250 0000000001 4 2 1 1
+0 -1.250 00000000ff 0 1 2 4
+1 NULL NULL 0 1 1 2
+NULL 2.500 ff00000000 4 2 2 2
+NULL NULL NULL 0 NULL 0 1
+
+statement ok
+DROP VIEW ordered_key_types_sorted;
+
+statement ok
+DROP TABLE ordered_key_types;
+
+# Restore the sqllogictest runner's settings.
+statement ok
+RESET datafusion.execution.batch_size;
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+statement ok
+RESET datafusion.execution.enable_migration_aggregate;
+
+statement ok
+RESET datafusion.optimizer.enable_round_robin_repartition;
+
+statement ok
+RESET datafusion.optimizer.prefer_existing_sort;
+
+statement ok
+RESET datafusion.explain.physical_plan_only;
