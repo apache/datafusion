@@ -2835,6 +2835,28 @@ impl NestedLoopJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> ControlFlow<Poll<Option<Result<RecordBatch>>>> {
+        // Left existence joins need no more probe input once every build row
+        // has a match. Spill passes must still consume the right input so it is
+        // available for replay against subsequent left chunks.
+        if !self.is_memory_limited()
+            && matches!(
+                self.join_type,
+                JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark
+            )
+            && let Some(left_data) = &self.buffered_left_data
+        {
+            let bitmap = left_data.bitmap().lock();
+            let full_bytes = bitmap.len() / 8;
+            let all_matched = bitmap.as_slice()[..full_bytes]
+                .iter()
+                .all(|&byte| byte == u8::MAX)
+                && (full_bytes * 8..bitmap.len()).all(|i| bitmap.get_bit(i));
+            if all_matched {
+                self.state = NLJState::ProbeEnd;
+                return ControlFlow::Continue(());
+            }
+        }
+
         let result = match self
             .right_data
             .as_mut()
@@ -3323,6 +3345,18 @@ impl NestedLoopJoinStream {
             .ok_or_else(|| internal_datafusion_err!("Right batch should be available"))?
             .clone();
 
+        if matches!(
+            self.join_type,
+            JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark
+        ) {
+            let bitmap = left_data.bitmap().lock();
+            while self.left_probe_idx < left_data.batch().num_rows()
+                && bitmap.get_bit(self.left_probe_idx)
+            {
+                self.left_probe_idx += 1;
+            }
+        }
+
         // stop probing, the caller will go to the next state
         if self.left_probe_idx >= left_data.batch().num_rows() {
             return Ok(false);
@@ -3351,6 +3385,8 @@ impl NestedLoopJoinStream {
             // Calculate max left rows to handle at once. This operator tries to handle
             // up to `datafusion.execution.batch_size` rows at once in the intermediate
             // batch.
+            // Keep full ranges even if some rows already matched. Splitting
+            // around those rows can turn vectorized probes into single-row work.
             let l_row_count = std::cmp::min(
                 l_row_cnt_ratio,
                 left_data.batch().num_rows() - self.left_probe_idx,

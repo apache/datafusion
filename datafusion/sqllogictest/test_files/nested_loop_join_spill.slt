@@ -379,6 +379,14 @@ Plan with Metrics
 05)--------LazyMemoryExec: partitions=1, batch_generators=[range: start=0, end=5000, batch_size=65], metrics=[<slt:ignore>]
 06)------LazyMemoryExec: partitions=1, batch_generators=[range: start=0, end=129, batch_size=65], metrics=[<slt:ignore>]
 
+# Left existence joins must finish recording the right input even when every
+# row in the first left chunk matches immediately. Later chunks need that input.
+query I
+SELECT count(*) FROM existence_spill_left l
+LEFT SEMI JOIN existence_spill_right r ON l.threshold > r.k
+----
+5000
+
 # Restore settings to slt runner defaults
 statement ok
 RESET datafusion.runtime.memory_limit

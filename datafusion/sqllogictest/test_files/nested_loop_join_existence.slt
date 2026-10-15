@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Candidate pruning and early stopping for right semi/anti nested loop joins.
+# Candidate pruning and early stopping for semi/anti/mark nested loop joins.
 statement ok
 SET datafusion.execution.target_partitions = 1
 
@@ -219,6 +219,86 @@ query I
 SELECT count(*) FROM existence_left l RIGHT SEMI JOIN existence_right r ON TRUE
 ----
 129
+
+# Sparse survivors retain their original left-row indices across right batches.
+# The short right batches also exercise vectorized probes of multiple left rows.
+query IIII
+SELECT count(*), sum(l.payload), min(l.payload), max(l.payload)
+FROM existence_right l LEFT SEMI JOIN existence_left r ON r.threshold > l.k
+----
+127 135064 1000 1127
+
+query IIT rowsort
+SELECT l.payload, l.k, l.label
+FROM existence_right l LEFT ANTI JOIN existence_left r ON r.threshold > l.k
+----
+1064 NULL payload-64
+1128 127 payload-128
+
+query BII rowsort
+SELECT matched, count(*), sum(payload) FROM (
+  SELECT l.payload, EXISTS (
+    SELECT 1 FROM existence_left r WHERE r.threshold > l.k
+  ) AS matched FROM existence_right l
+) GROUP BY matched
+----
+false 2 2192
+true 127 135064
+
+# No filter and an empty right input must retain existence-join semantics.
+query I
+SELECT count(*) FROM existence_right l LEFT SEMI JOIN existence_left r ON TRUE
+----
+129
+
+query I
+SELECT count(*) FROM existence_right l LEFT ANTI JOIN range(0) r ON l.k < r.value
+----
+129
+
+# Left existence joins stop reading the right input once every left row matches.
+statement ok
+SET datafusion.execution.batch_size = 64
+
+statement ok
+CREATE TABLE existence_left_early AS SELECT value AS k FROM range(65)
+
+query TT
+EXPLAIN ANALYZE SELECT count(*) FROM existence_left_early l
+LEFT SEMI JOIN range(1024) r ON l.k < r.value + 100
+----
+Plan with Metrics
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)], metrics=[<slt:ignore>]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1))], metrics=[<slt:ignore>]
+03)----ProjectionExec: expr=[], metrics=[<slt:ignore>]
+04)------NestedLoopJoinExec: join_type=LeftSemi, filter=k@0 < join_proj_push_down_1@1, projection=[k@0], metrics=[output_rows=65, <slt:ignore> spill_count=0, <slt:ignore> input_batches=1, input_rows=64, <slt:ignore>]
+05)--------DataSourceExec: partitions=1, partition_sizes=[2], metrics=[<slt:ignore>]
+06)--------ProjectionExec: expr=[value@0 as value, value@0 + 100 as join_proj_push_down_1], metrics=[<slt:ignore>]
+07)----------LazyMemoryExec: partitions=1, batch_generators=[range: start=0, end=1024, batch_size=64], metrics=[<slt:ignore>]
+
+query TT
+EXPLAIN ANALYZE SELECT count(*) FROM existence_left_early l
+LEFT ANTI JOIN range(1024) r ON l.k < r.value + 100
+----
+Plan with Metrics
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)], metrics=[<slt:ignore>]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1))], metrics=[<slt:ignore>]
+03)----ProjectionExec: expr=[], metrics=[<slt:ignore>]
+04)------NestedLoopJoinExec: join_type=LeftAnti, filter=k@0 < join_proj_push_down_1@1, projection=[k@0], metrics=[output_rows=0, <slt:ignore> spill_count=0, <slt:ignore> input_batches=1, input_rows=64, <slt:ignore>]
+05)--------DataSourceExec: partitions=1, partition_sizes=[2], metrics=[<slt:ignore>]
+06)--------ProjectionExec: expr=[value@0 as value, value@0 + 100 as join_proj_push_down_1], metrics=[<slt:ignore>]
+07)----------LazyMemoryExec: partitions=1, batch_generators=[range: start=0, end=1024, batch_size=64], metrics=[<slt:ignore>]
+
+query TT
+EXPLAIN ANALYZE SELECT l.k, EXISTS (
+  SELECT 1 FROM range(1024) r WHERE l.k < r.value + 100
+) FROM existence_left_early l
+----
+Plan with Metrics
+01)ProjectionExec: expr=[k@0 as k, mark@1 as EXISTS], metrics=[<slt:ignore>]
+02)--NestedLoopJoinExec: join_type=LeftMark, filter=k@0 < value@1 + 100, metrics=[output_rows=65, <slt:ignore> spill_count=0, <slt:ignore> input_batches=1, input_rows=64, <slt:ignore>]
+03)----DataSourceExec: partitions=1, partition_sizes=[2], metrics=[<slt:ignore>]
+04)----LazyMemoryExec: partitions=1, batch_generators=[range: start=0, end=1024, batch_size=64], metrics=[<slt:ignore>]
 
 # Restore the runner defaults.
 statement ok
