@@ -1554,6 +1554,10 @@ impl ScalarValue {
     /// Returns `None` if this value is not a timestamp, is `NULL`, or has a
     /// different unit or timezone.
     ///
+    /// The timezone is only used to check the type; it does not affect the
+    /// returned value. The returned value is always the offset in UTC in
+    /// `unit`s, regardless of `tz`.
+    ///
     /// # Example
     /// ```
     /// # use std::sync::Arc;
