@@ -163,6 +163,115 @@ SELECT t3.x, t4.x FROM (VALUES (1)) t3(x) CROSS JOIN (VALUES (2)) t4(x)
 ----
 1 2
 
+# Inputs of different types are compared in the type `=` compares them in, so
+# values that only become equal after the cast are counted together: '1' and
+# '01' are both the integer 1.
+query I
+SELECT a FROM (VALUES (1), (1)) AS t(a) EXCEPT ALL SELECT a FROM (VALUES ('1'), ('01')) AS s(a)
+----
+
+query I
+SELECT a FROM (VALUES (1)) AS t(a) INTERSECT ALL SELECT a FROM (VALUES ('1'), ('01')) AS s(a)
+----
+1
+
+query I
+SELECT a FROM (VALUES ('1'), ('01')) AS t(a) EXCEPT ALL SELECT a FROM (VALUES (1)) AS s(a)
+----
+1
+
+query I
+SELECT a FROM (VALUES ('1'), ('01')) AS t(a) INTERSECT ALL SELECT a FROM (VALUES (1)) AS s(a)
+----
+1
+
+# The same holds when the cast merges more than two spellings, for NULLs, and
+# for a mixed column that is not the first one
+query I rowsort
+SELECT a FROM (VALUES ('1'), ('01'), ('001'), (NULL), (NULL)) AS t(a)
+EXCEPT ALL
+SELECT a FROM (VALUES (1), (NULL)) AS s(a)
+----
+1
+1
+NULL
+
+query IT rowsort
+SELECT a, b FROM (VALUES (1, 'x'), (1, 'x'), (2, 'y')) AS t(a, b)
+INTERSECT ALL
+SELECT a, b FROM (VALUES ('1', 'x'), ('01', 'x'), ('1', 'x'), ('2', 'z')) AS s(a, b)
+----
+1 x
+1 x
+
+query TI rowsort
+SELECT b, a FROM (VALUES (1, 'x'), (1, 'x'), (2, 'y')) AS t(a, b)
+EXCEPT ALL
+SELECT b, a FROM (VALUES ('1', 'x'), ('01', 'x'), ('2', 'z')) AS s(a, b)
+----
+y 2
+
+# Numbers that are distinct as integers but equal as floats
+query R
+SELECT a FROM (VALUES (9007199254740992), (9007199254740993)) AS t(a)
+EXCEPT ALL
+SELECT a FROM (VALUES (9007199254740992.0)) AS s(a)
+----
+9007199254740992
+
+query R
+SELECT a FROM (VALUES (9007199254740992.0), (9007199254740992.0)) AS t(a)
+EXCEPT ALL
+SELECT a FROM (VALUES (9007199254740992), (9007199254740993)) AS s(a)
+----
+
+# The result has the type the two sides are compared in, whichever side that
+# came from, and equal types are left alone
+query T
+SELECT DISTINCT arrow_typeof(a) FROM (
+  SELECT a FROM (VALUES ('1'), ('01'), ('2')) AS t(a) EXCEPT ALL SELECT a FROM (VALUES (2)) AS s(a)
+) AS r
+----
+Int64
+
+query T
+SELECT DISTINCT arrow_typeof(a) FROM (
+  SELECT a FROM (VALUES (1), (1), (2)) AS t(a) INTERSECT ALL SELECT a FROM (VALUES (1.0), (1.0)) AS s(a)
+) AS r
+----
+Float64
+
+query T
+SELECT DISTINCT arrow_typeof(a) FROM (
+  SELECT arrow_cast(a, 'Int32') AS a FROM (VALUES (1), (1), (2)) AS t(a) EXCEPT ALL SELECT a FROM (VALUES (1)) AS s(a)
+) AS r
+----
+Int64
+
+query T
+SELECT DISTINCT arrow_typeof(a) FROM (
+  SELECT arrow_cast(a, 'Int32') AS a FROM (VALUES (1), (1), (2)) AS t(a) EXCEPT ALL SELECT arrow_cast(a, 'Int32') FROM (VALUES (1)) AS s(a)
+) AS r
+----
+Int32
+
+# The result keeps the left input's qualifiers and names
+query I
+SELECT t.a FROM (VALUES ('1'), ('01'), ('2')) AS t(a)
+EXCEPT ALL
+SELECT s.a FROM (VALUES (1), (3)) AS s(a)
+ORDER BY t.a
+----
+1
+2
+
+query II
+SELECT t1.x, t2.x FROM (VALUES ('1')) t1(x) CROSS JOIN (VALUES (2)) t2(x)
+INTERSECT ALL
+SELECT t3.x, t4.x FROM (VALUES (1)) t3(x) CROSS JOIN (VALUES ('2')) t4(x)
+----
+1 2
+
 statement ok
 DROP TABLE set_all_left;
 

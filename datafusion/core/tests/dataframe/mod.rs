@@ -1898,6 +1898,42 @@ async fn except() -> Result<()> {
 }
 
 #[tokio::test]
+async fn intersect_and_except_count_rows_in_the_type_they_are_compared_in() -> Result<()>
+{
+    // '1' and '01' are both the integer 1, so the strings are two copies of the
+    // row that the integers repeat twice, and the result is an integer column.
+    let ctx = SessionContext::new();
+    let integers = ctx.sql("SELECT * FROM VALUES (1), (1)").await?;
+    let strings = ctx.sql("SELECT * FROM VALUES ('1'), ('01')").await?;
+
+    let result = integers.clone().except(strings.clone())?.collect().await?;
+    assert_eq!(
+        result.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+        0
+    );
+    let result = strings.clone().except(integers.clone())?.collect().await?;
+    assert_eq!(
+        result.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+        0
+    );
+
+    let intersection = integers.intersect(strings)?;
+    assert_eq!(intersection.schema().field(0).data_type(), &DataType::Int64);
+    assert_batches_sorted_eq!(
+        [
+            "+---------+",
+            "| column1 |",
+            "+---------+",
+            "| 1       |",
+            "| 1       |",
+            "+---------+",
+        ],
+        &intersection.collect().await?
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn except_distinct() -> Result<()> {
     let df = test_table().await?.select_columns(&["c1", "c3"])?;
     let d2 = df.clone();

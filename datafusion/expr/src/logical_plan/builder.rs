@@ -64,7 +64,9 @@ use datafusion_common::{
     get_target_functional_dependencies, internal_datafusion_err, plan_datafusion_err,
     plan_err,
 };
-use datafusion_expr_common::type_coercion::binary::type_union_resolution;
+use datafusion_expr_common::type_coercion::binary::{
+    comparison_coercion_with_session_timezone, type_union_resolution,
+};
 
 use indexmap::IndexSet;
 
@@ -1516,6 +1518,12 @@ impl LogicalPlanBuilder {
     /// its counts on the left and right. `count` must be the `count` aggregate
     /// function and `range` the `range` scalar function: rows are counted on
     /// each side and then expanded back with `unnest(range(..))`.
+    ///
+    /// Rows are compared in the same type that `=` compares them in. If the
+    /// type of a column differs between the inputs, both are cast to that type
+    /// before the rows are counted, and the result has that type instead of the
+    /// type of the left input. Values that are equal after the cast, such as the
+    /// strings `'1'` and `'01'` and the integer `1`, count as the same row.
     pub fn intersect_all(
         left_plan: LogicalPlan,
         right_plan: LogicalPlan,
@@ -1528,7 +1536,8 @@ impl LogicalPlanBuilder {
     /// Build an `EXCEPT ALL` plan, subtracting matching row multiplicities.
     ///
     /// Each distinct row is returned `m - n` times when `m > n`. `count` and
-    /// `range` are as for [`Self::intersect_all`].
+    /// `range` are as for [`Self::intersect_all`], and so is the handling of
+    /// inputs whose column types differ.
     pub fn except_all(
         left_plan: LogicalPlan,
         right_plan: LogicalPlan,
@@ -1545,13 +1554,11 @@ impl LogicalPlanBuilder {
         range: &Arc<ScalarUDF>,
         join_type: JoinType,
     ) -> Result<LogicalPlan> {
-        let left_columns = left_plan.schema().columns();
-        let right_columns = right_plan.schema().columns();
-        if left_columns.len() != right_columns.len() {
+        let left_len = left_plan.schema().fields().len();
+        let right_len = right_plan.schema().fields().len();
+        if left_len != right_len {
             return plan_err!(
-                "INTERSECT/EXCEPT query must have the same number of columns. Left is {} and right is {}.",
-                left_columns.len(),
-                right_columns.len()
+                "INTERSECT/EXCEPT query must have the same number of columns. Left is {left_len} and right is {right_len}."
             );
         }
         let from_right = left_plan
@@ -1566,6 +1573,14 @@ impl LogicalPlanBuilder {
                     && left.data_type() == right.data_type()
             })
             .collect::<Vec<_>>();
+        // The join below compares the grouped rows with `=`, which casts a
+        // mismatched pair of columns to a common type. Two distinct groups of
+        // one side can be equal in that type, and their counts would then be
+        // matched one by one instead of added. Cast first, so that the rows
+        // are grouped in the type they are compared in.
+        let (left_plan, right_plan) = coerce_set_operation_inputs(left_plan, right_plan)?;
+        let left_columns = left_plan.schema().columns();
+        let right_columns = right_plan.schema().columns();
         // The synthetic columns get names that differ from each other and from
         // every input column, so the sides are only requalified when the
         // user's own columns conflict.
@@ -2086,6 +2101,75 @@ pub fn build_asof_join_schema(left: &DFSchema, right: &DFSchema) -> Result<DFSch
     dependencies.extend_target_indices(schema.fields().len());
     dependencies.extend(FunctionalDependencies::new(right_dependencies));
     schema.with_functional_dependencies(dependencies)
+}
+
+/// Cast the columns of the two inputs of an `INTERSECT ALL` or `EXCEPT ALL`
+/// whose types differ to the type `=` compares them in.
+///
+/// A column is left as it is when its type is the same on both sides, when the
+/// two types cannot be compared (the join reports that), and when the type
+/// depends on the session time zone, which is not known here: a timestamp
+/// with a time zone against one without is compared in the session time zone.
+fn coerce_set_operation_inputs(
+    left_plan: LogicalPlan,
+    right_plan: LogicalPlan,
+) -> Result<(LogicalPlan, LogicalPlan)> {
+    let common_types = left_plan
+        .schema()
+        .fields()
+        .iter()
+        .zip(right_plan.schema().fields())
+        .map(|(left, right)| common_comparison_type(left.data_type(), right.data_type()))
+        .collect::<Vec<_>>();
+    Ok((
+        cast_columns(left_plan, &common_types)?,
+        cast_columns(right_plan, &common_types)?,
+    ))
+}
+
+/// The type that `=` compares values of the two types in, unless it depends
+/// on the session time zone.
+fn common_comparison_type(left: &DataType, right: &DataType) -> Option<DataType> {
+    let common_type = |session_time_zone| {
+        comparison_coercion_with_session_timezone(left, right, session_time_zone)
+    };
+    let without_time_zone = common_type(None)?;
+    // Any answer that changes with the session time zone is up to the type
+    // coercion of the join, which knows it.
+    ["+00:00", "+01:00"]
+        .into_iter()
+        .all(|time_zone| {
+            common_type(Some(time_zone)).as_ref() == Some(&without_time_zone)
+        })
+        .then_some(without_time_zone)
+}
+
+/// Cast each column of `plan` to the type at the same position in `types`
+/// when there is one and it is not the column's own, keeping the qualifier and
+/// name of the column. A plan that needs no cast is returned as it is.
+fn cast_columns(plan: LogicalPlan, types: &[Option<DataType>]) -> Result<LogicalPlan> {
+    let mut cast_any = false;
+    let exprs = plan
+        .schema()
+        .iter()
+        .zip(types)
+        .map(|((relation, field), common_type)| {
+            let column = Column::from((relation, field));
+            match common_type {
+                Some(common_type) if !common_type.equals_datatype(field.data_type()) => {
+                    cast_any = true;
+                    Ok(Expr::Column(column.clone())
+                        .cast_to(common_type, plan.schema())?
+                        .alias_qualified(column.relation, column.name))
+                }
+                _ => Ok(Expr::Column(column)),
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if !cast_any {
+        return Ok(plan);
+    }
+    LogicalPlanBuilder::from(plan).project(exprs)?.build()
 }
 
 /// (Re)qualify the sides of a join if needed, i.e. if the columns from one side would otherwise
@@ -2650,6 +2734,7 @@ mod tests {
     use crate::{col, expr, expr_fn::exists, in_subquery, scalar_subquery};
 
     use crate::test::function_stub::sum;
+    use arrow::datatypes::TimeUnit;
     use datafusion_common::{
         Constraint, DataFusionError, Dependency, FunctionalDependence,
         FunctionalDependencies, RecursionUnnestOption, SchemaError,
@@ -3563,5 +3648,87 @@ mod tests {
             "Execution error: Types don't match and no valid cast exists, \
          received data of type Boolean for field of type Date32"
         );
+    }
+
+    /// The plan for `INTERSECT ALL` of a column of type `left` and a column of
+    /// type `right`. The `count` and `range` functions are stand-ins, since the
+    /// plan is only built and never run.
+    fn intersect_all_of(left: DataType, right: DataType) -> Result<LogicalPlan> {
+        let scan = |name: &str, data_type: DataType| {
+            let schema = Schema::new(vec![Field::new("a", data_type, true)]);
+            table_scan(Some(name), &schema, None)?.build()
+        };
+        let range = Arc::new(crate::create_udf(
+            "range",
+            vec![DataType::Int64],
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true))),
+            crate::Volatility::Immutable,
+            Arc::new(|_| unimplemented!("the plan is not run")),
+        ));
+        LogicalPlanBuilder::intersect_all(
+            scan("l", left)?,
+            scan("r", right)?,
+            &crate::test::function_stub::count_udaf(),
+            &range,
+        )
+    }
+
+    #[test]
+    fn intersect_all_does_not_cast_columns_of_the_same_type() -> Result<()> {
+        let plan = intersect_all_of(DataType::Int64, DataType::Int64)?;
+
+        assert_snapshot!(plan, @r"
+        Projection: l.a
+          Unnest: lists[__datafusion_set_operation_copies|depth=1] structs[]
+            Projection: l.a, range(CASE WHEN __datafusion_set_operation_left_count < __datafusion_set_operation_right_count THEN __datafusion_set_operation_left_count ELSE __datafusion_set_operation_right_count END) AS __datafusion_set_operation_copies
+              Inner Join: l.a = r.a
+                Aggregate: groupBy=[[l.a]], aggr=[[COUNT(Int64(1)) AS __datafusion_set_operation_left_count]]
+                  TableScan: l
+                Aggregate: groupBy=[[r.a]], aggr=[[COUNT(Int64(1)) AS __datafusion_set_operation_right_count]]
+                  TableScan: r
+        ");
+        Ok(())
+    }
+
+    #[test]
+    fn intersect_all_casts_columns_of_different_types_before_counting_rows() -> Result<()>
+    {
+        let plan = intersect_all_of(DataType::Utf8, DataType::Int64)?;
+
+        assert_snapshot!(plan, @r"
+        Projection: l.a
+          Unnest: lists[__datafusion_set_operation_copies|depth=1] structs[]
+            Projection: l.a, range(CASE WHEN __datafusion_set_operation_left_count < __datafusion_set_operation_right_count THEN __datafusion_set_operation_left_count ELSE __datafusion_set_operation_right_count END) AS __datafusion_set_operation_copies
+              Inner Join: l.a = r.a
+                Aggregate: groupBy=[[l.a]], aggr=[[COUNT(Int64(1)) AS __datafusion_set_operation_left_count]]
+                  Projection: CAST(l.a AS Int64) AS a
+                    TableScan: l
+                Aggregate: groupBy=[[r.a]], aggr=[[COUNT(Int64(1)) AS __datafusion_set_operation_right_count]]
+                  TableScan: r
+        ");
+        Ok(())
+    }
+
+    #[test]
+    fn intersect_all_leaves_session_time_zone_comparisons_to_type_coercion() -> Result<()>
+    {
+        // A timestamp without a time zone is compared with one that has a
+        // time zone in the session time zone, which is not known here.
+        let plan = intersect_all_of(
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+        )?;
+
+        assert_snapshot!(plan, @r"
+        Projection: l.a
+          Unnest: lists[__datafusion_set_operation_copies|depth=1] structs[]
+            Projection: l.a, range(CASE WHEN __datafusion_set_operation_left_count < __datafusion_set_operation_right_count THEN __datafusion_set_operation_left_count ELSE __datafusion_set_operation_right_count END) AS __datafusion_set_operation_copies
+              Inner Join: l.a = r.a
+                Aggregate: groupBy=[[l.a]], aggr=[[COUNT(Int64(1)) AS __datafusion_set_operation_left_count]]
+                  TableScan: l
+                Aggregate: groupBy=[[r.a]], aggr=[[COUNT(Int64(1)) AS __datafusion_set_operation_right_count]]
+                  TableScan: r
+        ");
+        Ok(())
     }
 }
