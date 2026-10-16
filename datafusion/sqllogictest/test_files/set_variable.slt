@@ -939,6 +939,40 @@ statement ok
 SET datafusion.optimizer.default_filter_selectivity = 20
 
 
+# join_integer_prefilter_min_pruning_ratio is a fraction in [0, 1];
+# out-of-range values are rejected at SET time instead of failing later
+# when a join executes with the prefilter enabled.
+statement error
+SET datafusion.execution.join_integer_prefilter_min_pruning_ratio = 2
+----
+DataFusion error: Error setting config datafusion.execution.join_integer_prefilter_min_pruning_ratio
+caused by
+Invalid or Unsupported Configuration: value must be finite and in [0, 1], got 2
+
+
+statement error
+SET datafusion.execution.join_integer_prefilter_min_pruning_ratio = -0.1
+----
+DataFusion error: Error setting config datafusion.execution.join_integer_prefilter_min_pruning_ratio
+caused by
+Invalid or Unsupported Configuration: value must be finite and in [0, 1], got -0.1
+
+
+statement error
+SET datafusion.execution.join_integer_prefilter_min_pruning_ratio = nan
+----
+DataFusion error: Error setting config datafusion.execution.join_integer_prefilter_min_pruning_ratio
+caused by
+Invalid or Unsupported Configuration: value must be finite and in [0, 1], got NaN
+
+
+statement ok
+SET datafusion.execution.join_integer_prefilter_min_pruning_ratio = 0.75
+
+statement ok
+SET datafusion.execution.join_integer_prefilter_min_pruning_ratio = 0
+
+
 # Config reset
 statement ok
 RESET datafusion.catalog.create_default_catalog_and_schema
