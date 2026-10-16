@@ -34,10 +34,10 @@ use std::hash::Hash;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
-use datafusion_common::tree_node::TreeNodeRecursion;
-use datafusion_common::{DFSchemaRef, Result};
+use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
+use datafusion_common::{Column, DFSchemaRef, Result};
 
-use crate::LogicalPlan;
+use crate::{Expr, LogicalPlan, Projection};
 
 /// Identifies one materialized CTE and binds its scans to it.
 ///
@@ -94,6 +94,12 @@ pub struct MaterializedCte {
     pub cte: Arc<LogicalPlan>,
     /// The query that declared the CTE and reads it
     pub continuation: Arc<LogicalPlan>,
+    /// `false` when the query asked for this node with `AS MATERIALIZED`.
+    /// `true` when the planner created the node without a directive from the
+    /// user (see `datafusion.optimizer.enable_automatic_cte_materialization`).
+    /// The optimizer can replace an automatic node with [`Self::inline`], and
+    /// never does that for an explicit node.
+    pub automatic: bool,
 }
 
 impl MaterializedCte {
@@ -122,7 +128,76 @@ impl MaterializedCte {
             name,
             cte,
             continuation,
+            automatic: false,
         })
+    }
+
+    /// Mark this node as automatic or explicit. See [`Self::automatic`].
+    pub fn with_automatic(mut self, automatic: bool) -> Self {
+        self.automatic = automatic;
+        self
+    }
+
+    /// Returns `true` when the user did not ask for this node with `AS
+    /// MATERIALIZED`, so the optimizer is free to inline it.
+    pub fn is_automatic(&self) -> bool {
+        self.automatic
+    }
+
+    /// Return the continuation with a copy of the body in place of each scan
+    /// of this CTE, also in subquery expressions. The result does not contain
+    /// this node, and computes the body once for each scan.
+    ///
+    /// Each copy has the schema of the scan that it replaces, so the parents
+    /// of the scans stay valid.
+    pub fn inline(&self) -> Result<LogicalPlan> {
+        let id = self.id;
+        self.continuation
+            .as_ref()
+            .clone()
+            .transform_down_with_subqueries(|node| match node {
+                // A nested occurrence of the same CTE owns the scans below it.
+                LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(ref nested))
+                    if nested.id == id =>
+                {
+                    Ok(Transformed::new(node, false, TreeNodeRecursion::Jump))
+                }
+                LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan))
+                    if scan.id == id =>
+                {
+                    Ok(Transformed::new(
+                        self.body_with_schema_of(&scan)?,
+                        true,
+                        TreeNodeRecursion::Jump,
+                    ))
+                }
+                _ => Ok(Transformed::no(node)),
+            })
+            .map(|t| t.data)
+    }
+
+    /// Return a copy of the body with the qualified column names of `scan`.
+    fn body_with_schema_of(&self, scan: &MaterializedCteScan) -> Result<LogicalPlan> {
+        let body = self.cte.as_ref().clone();
+        let same_names = scan
+            .schema
+            .iter()
+            .zip(body.schema().iter())
+            .all(|((sq, sf), (bq, bf))| sq == bq && sf.name() == bf.name());
+        if same_names {
+            return Ok(body);
+        }
+        // A rule changed the names of the body after the scan was created.
+        let exprs = scan
+            .schema
+            .iter()
+            .zip(body.schema().iter())
+            .map(|((sq, sf), (bq, bf))| {
+                Expr::Column(Column::from((bq, bf)))
+                    .alias_qualified(sq.cloned(), sf.name())
+            })
+            .collect();
+        Projection::try_new(exprs, Arc::new(body)).map(LogicalPlan::Projection)
     }
 
     /// The id that binds the scans in the continuation to this node.
@@ -168,6 +243,7 @@ impl MaterializedCte {
             name: self.name.clone(),
             cte,
             continuation,
+            automatic: self.automatic,
         }
     }
 }
@@ -315,6 +391,7 @@ mod tests {
             name: "c".to_string(),
             cte: empty(false),
             continuation: empty(false),
+            automatic: false,
         };
         let mut b = a.clone();
         assert_eq!(a.partial_cmp(&b), Some(Ordering::Equal));
@@ -398,6 +475,53 @@ mod tests {
         assert_eq!(MaterializedCteScan::find_in(&plan, other)?.len(), 1);
         assert!(
             MaterializedCteScan::find_in(&plan, MaterializedCteId::next())?.is_empty()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn inline_replaces_the_scans_and_keeps_their_schema() -> Result<()> {
+        let id = MaterializedCteId::next();
+        // The scan in the subquery expression has another qualifier than the
+        // body, so its copy of the body gets a projection.
+        let other_schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let other = LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(
+            MaterializedCteScan::new(
+                id,
+                "c",
+                Arc::new(DFSchema::try_from_qualified_schema("d", &other_schema)?),
+            ),
+        ));
+        let continuation = LogicalPlanBuilder::from(scan(id, DataType::Int32))
+            .filter(exists(Arc::new(other)))?
+            .build()?;
+        let cte = MaterializedCte::try_new(
+            id,
+            "c",
+            body(DataType::Int32),
+            Arc::new(continuation),
+        )?
+        .with_automatic(true);
+        assert!(cte.is_automatic());
+        assert_eq!(
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte.clone()))
+                .display_indent()
+                .to_string()
+                .lines()
+                .next(),
+            Some("MaterializedCte: name=c, automatic=true")
+        );
+
+        let inlined = cte.inline()?;
+        assert_eq!(inlined.schema(), cte.schema());
+        assert!(MaterializedCteScan::find_in(&inlined, id)?.is_empty());
+        assert_eq!(
+            inlined.display_indent().to_string(),
+            "Filter: EXISTS (<subquery>)\
+            \n  Subquery:\
+            \n    Projection: c.a AS a\
+            \n      EmptyRelation: rows=0\
+            \n  EmptyRelation: rows=0"
         );
         Ok(())
     }

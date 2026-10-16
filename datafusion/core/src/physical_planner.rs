@@ -318,6 +318,47 @@ fn renumber_materialized_ctes(plan: &LogicalPlan) -> Result<Option<LogicalPlan>>
         .map(|t| Some(t.data))
 }
 
+/// The body of the automatic [`MaterializedCte`] with this id is unbounded, so
+/// the CTE must be inlined. This error does not reach the user:
+/// `create_initial_plan` handles it.
+#[derive(Debug)]
+struct UnboundedAutomaticCte(MaterializedCteId);
+
+impl std::fmt::Display for UnboundedAutomaticCte {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "The automatic materialized CTE {} reads an unbounded source",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for UnboundedAutomaticCte {}
+
+/// Replace each occurrence of the [`MaterializedCte`] `id` in `plan` with its
+/// continuation, in which each scan is a copy of the body. A copy of the body
+/// can hold another materialized CTE, so the CTEs get new ids.
+fn inline_materialized_cte(
+    plan: &LogicalPlan,
+    id: MaterializedCteId,
+) -> Result<LogicalPlan> {
+    let inlined = plan
+        .clone()
+        .transform_up_with_subqueries(|node| match node {
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte))
+                if cte.id == id =>
+            {
+                Ok(Transformed::yes(cte.inline()?))
+            }
+            _ => Ok(Transformed::no(node)),
+        })?;
+    if !inlined.transformed {
+        return internal_err!("The materialized CTE {id} is not in the plan");
+    }
+    Ok(renumber_materialized_ctes(&inlined.data)?.unwrap_or(inlined.data))
+}
+
 /// Point every [`MaterializedCteScanExec`] at the buffer of the
 /// [`MaterializedCteExec`] with the same id.
 ///
@@ -503,6 +544,38 @@ impl DefaultPhysicalPlanner {
     /// [`ScalarSubqueryExpr`]: datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr
     /// [`BoxFuture`]: futures::future::BoxFuture
     fn create_initial_plan<'a>(
+        &'a self,
+        logical_plan: &'a LogicalPlan,
+        session_state: &'a dyn Session,
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            // An automatic materialized CTE with an unbounded body cannot be
+            // buffered. The query worked before the CTE was materialized, so
+            // inline the CTE and plan again.
+            let mut inlined: Option<LogicalPlan> = None;
+            loop {
+                let plan = inlined.as_ref().unwrap_or(logical_plan);
+                let result = self.create_initial_plan_once(plan, session_state).await;
+                let id = match &result {
+                    Err(e) => match e.find_root() {
+                        DataFusionError::External(e) => {
+                            e.downcast_ref::<UnboundedAutomaticCte>().map(|e| e.0)
+                        }
+                        _ => None,
+                    },
+                    Ok(_) => None,
+                };
+                let Some(id) = id else {
+                    return result;
+                };
+                inlined = Some(inline_materialized_cte(plan, id)?);
+            }
+        })
+    }
+
+    /// Plans `logical_plan` and its uncorrelated scalar subqueries. See
+    /// [`Self::create_initial_plan`].
+    fn create_initial_plan_once<'a>(
         &'a self,
         logical_plan: &'a LogicalPlan,
         session_state: &'a dyn Session,
@@ -1873,6 +1946,13 @@ impl DefaultPhysicalPlanner {
                 // The body is fully buffered before a scan yields a row, so an
                 // unbounded body would never produce output.
                 if body.boundedness().is_unbounded() {
+                    // The user did not ask for this CTE to be materialized.
+                    // `create_initial_plan` inlines it and plans again.
+                    if cte.is_automatic() {
+                        return Err(DataFusionError::External(Box::new(
+                            UnboundedAutomaticCte(cte.id),
+                        )));
+                    }
                     return plan_err!(
                         "MATERIALIZED CTE {} reads an unbounded source, which cannot be materialized",
                         cte.name

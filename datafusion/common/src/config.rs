@@ -1664,6 +1664,28 @@ config_namespace! {
         /// past window functions, if possible
         pub enable_window_limits: bool, default = true
 
+        /// When set to true, the SQL planner plans each non-recursive CTE that
+        /// has no `MATERIALIZED` or `NOT MATERIALIZED` directive as a
+        /// materialized CTE, and the optimizer rule `inline_automatic_ctes`
+        /// decides which of them stay materialized. A CTE stays materialized,
+        /// and is computed one time, when it has more than one reference and
+        /// its body is more than projections and filters on one table, and no
+        /// `LIMIT` is above all of its references. A CTE
+        /// with a volatile body is inlined, unless
+        /// `automatic_cte_materialization_keeps_volatile` is true. All other
+        /// CTEs are inlined at each reference.
+        /// When set to false, a CTE is materialized only with `AS MATERIALIZED`.
+        pub enable_automatic_cte_materialization: bool, default = false
+
+        /// When set to true, together with
+        /// `enable_automatic_cte_materialization`, a CTE with a volatile body
+        /// and more than one reference stays materialized, so that each
+        /// reference reads the same rows. PostgreSQL and DuckDB do the same.
+        /// When set to false, such a CTE is inlined at each reference, and
+        /// each reference evaluates the volatile expressions again, as with
+        /// `enable_automatic_cte_materialization` set to false.
+        pub automatic_cte_materialization_keeps_volatile: bool, default = false
+
         /// When set to true, the optimizer will replace
         /// Filter(rn<=K) → Window(ROW_NUMBER) → Sort patterns with a
         /// PartitionedTopKExec that maintains per-partition heaps, avoiding
