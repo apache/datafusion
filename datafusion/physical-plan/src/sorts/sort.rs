@@ -931,13 +931,15 @@ impl ExternalSorter {
 
     /// Calculates each run's reservation size and any shared input size.
     ///
-    /// Runs can share buffers, for example zero-copy slices of one larger batch,
-    /// and `self.reservation` covers each shared buffer once. A shared buffer
-    /// stays alive until the last run holding it is sorted, so if any buffers are
-    /// shared, the reservation for every run's input is held until all the runs
-    /// are sorted. Otherwise each run releases its input once it is sorted.
-    /// With shared input, each run's size covers only its sorted copy. Otherwise
-    /// it also includes that run's input.
+    /// - With no shared input size (`None`), each run's size covers its input
+    ///   buffers and an estimated sorted copy.
+    /// - With a shared input size (`Some`), that size counts all input buffers
+    ///   once, including buffers private to one run. Each run's size covers only
+    ///   its estimated sorted copy.
+    ///
+    /// Runs can share buffers, for example zero-copy slices of one larger batch.
+    /// Callers hold the shared input reservation until all runs are sorted.
+    /// Otherwise each run holds its input charge until its own sort finishes.
     fn sort_run_sizes(
         &self,
         runs: &[RecordBatch],
