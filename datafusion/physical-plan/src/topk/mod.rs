@@ -408,7 +408,9 @@ impl TopK {
             heap: TopKHeap::new(k),
             common_sort_prefix_converter: common_prefix_row_converter,
             common_sort_prefix: Arc::from(common_sort_prefix),
-            finished: false,
+            // A TopK with `k = 0` (e.g. `ORDER BY ... LIMIT 0`) can never
+            // retain a row, so it is finished before seeing any input.
+            finished: k == 0,
             filter,
         })
     }
@@ -416,6 +418,11 @@ impl TopK {
     /// Insert `batch`, remembering if any of its values are among
     /// the top k seen so far.
     pub fn insert_batch(&mut self, batch: RecordBatch) -> Result<()> {
+        // With `k = 0` no row can enter the heap, so there is nothing to do.
+        if self.heap.k == 0 {
+            return Ok(());
+        }
+
         // Updates on drop
         let elapsed_compute = self.metrics.baseline.elapsed_compute().clone();
         let _timer = elapsed_compute.timer();
@@ -943,7 +950,6 @@ struct TopKHeap {
 
 impl TopKHeap {
     fn new(k: usize) -> Self {
-        assert!(k > 0);
         Self {
             k,
             inner: BinaryHeap::new(),
@@ -3395,6 +3401,43 @@ mod tests {
         let row_counts: Vec<usize> = results.iter().map(|b| b.num_rows()).collect();
         assert_eq!(row_counts, vec![2, 2, 1]);
         assert_eq!(output_batches_and_rows(&metrics), (3, 5));
+
+        Ok(())
+    }
+
+    /// Regression test for #26431: a TopK with `k = 0` must not panic. It is
+    /// finished before any input, ignores inserted batches, emits no rows and
+    /// still marks its dynamic filter complete.
+    #[tokio::test]
+    async fn test_topk_with_zero_k() -> Result<()> {
+        let schema = make_ab_schema();
+        let filter = make_topk_filter();
+        let sort_expr = PhysicalSortExpr {
+            expr: col("a", schema.as_ref())?,
+            options: SortOptions::default(),
+        };
+        let mut topk = TopK::try_new(
+            0,
+            Arc::clone(&schema),
+            vec![],
+            LexOrdering::from([sort_expr]),
+            0,
+            2,
+            Arc::new(RuntimeEnv::default()),
+            &ExecutionPlanMetricsSet::new(),
+            Arc::clone(&filter),
+        )?;
+        assert!(topk.finished);
+
+        topk.insert_batch(make_ab_batch(
+            Arc::clone(&schema),
+            &[Some(3), Some(1), Some(2)],
+            &[0.0, 1.0, 2.0],
+        )?)?;
+
+        let results: Vec<_> = topk.emit()?.try_collect().await?;
+        assert_eq!(results.iter().map(|b| b.num_rows()).sum::<usize>(), 0);
+        assert!(filter.read().expr().is_complete());
 
         Ok(())
     }

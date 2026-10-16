@@ -1630,12 +1630,14 @@ impl ExecutionPlan for SortExec {
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
                     futures::stream::once(async move {
-                        while let Some(batch) = input.next().await {
-                            let batch = batch?;
-                            topk.insert_batch(batch)?;
-                            if topk.finished {
+                        // Check `finished` before polling so that a TopK that
+                        // is already complete (e.g. `fetch = 0`) does not read
+                        // any input.
+                        while !topk.finished {
+                            let Some(batch) = input.next().await else {
                                 break;
-                            }
+                            };
+                            topk.insert_batch(batch?)?;
                         }
                         drop(input);
                         topk.emit()
