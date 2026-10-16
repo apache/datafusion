@@ -76,8 +76,13 @@ pub fn apply_file_schema_type_coercions(
     table_schema: &Schema,
     file_schema: &Schema,
 ) -> Option<Schema> {
-    let fields =
-        coerce_fields_by_name(table_schema.fields(), file_schema.fields(), true, false)?;
+    let fields = coerce_fields_by_name(
+        table_schema.fields(),
+        file_schema.fields(),
+        true,
+        false,
+        false,
+    )?;
     Some(Schema::new_with_metadata(
         fields,
         file_schema.metadata.clone(),
@@ -91,12 +96,14 @@ pub(crate) fn apply_file_schema_type_coercions_with_rle(
     table_schema: &Schema,
     file_schema: &Schema,
     enable_rle_to_dictionary: bool,
+    binary_as_string: bool,
 ) -> Option<Schema> {
     let fields = coerce_fields_by_name(
         table_schema.fields(),
         file_schema.fields(),
         true,
         enable_rle_to_dictionary,
+        binary_as_string,
     )?;
     Some(Schema::new_with_metadata(
         fields,
@@ -114,6 +121,7 @@ fn coerce_fields_by_name(
     file_fields: &Fields,
     binary_to_string: bool,
     enable_rle: bool,
+    binary_as_string: bool,
 ) -> Option<Fields> {
     // Create a mapping of table field names to their data types for fast lookup
     let table_types: HashMap<_, _> = table_fields
@@ -123,8 +131,14 @@ fn coerce_fields_by_name(
 
     coerce_fields(file_fields, |_, field| {
         let table_type = table_types.get(field.name())?;
-        coerce_data_type(table_type, field.data_type(), binary_to_string, enable_rle)
-            .map(|new_type| field_with_new_type(field, new_type))
+        coerce_data_type(
+            table_type,
+            field.data_type(),
+            binary_to_string,
+            enable_rle,
+            binary_as_string,
+        )
+        .map(|new_type| field_with_new_type(field, new_type))
     })
 }
 
@@ -175,8 +189,18 @@ fn coerce_data_type(
     file_type: &DataType,
     binary_to_string: bool,
     enable_rle: bool,
+    binary_as_string: bool,
 ) -> Option<DataType> {
     use DataType::*;
+
+    if enable_rle
+        && binary_as_string
+        && let Some(dictionary_type) =
+            binary_as_string_dictionary_file_type(file_type, table_type)
+    {
+        return Some(dictionary_type);
+    }
+
     match (table_type, file_type) {
         // table schema uses string type, coerce the file schema to use string type
         (Utf8, Binary | LargeBinary | BinaryView) if binary_to_string => Some(Utf8),
@@ -191,31 +215,56 @@ fn coerce_data_type(
         (Utf8View, Utf8 | LargeUtf8) => Some(Utf8View),
         (BinaryView, Binary | LargeBinary) => Some(BinaryView),
         // Struct children match by name
-        (Struct(table_fields), Struct(file_fields)) => {
-            coerce_fields_by_name(table_fields, file_fields, binary_to_string, enable_rle)
-                .map(Struct)
-        }
+        (Struct(table_fields), Struct(file_fields)) => coerce_fields_by_name(
+            table_fields,
+            file_fields,
+            binary_to_string,
+            enable_rle,
+            binary_as_string,
+        )
+        .map(Struct),
         // List-like children match by position, regardless of their names.
         // The container kind and FixedSizeList width always come from the file.
-        (List(table_child), List(file_child)) => {
-            coerce_child(table_child, file_child, binary_to_string, enable_rle).map(List)
-        }
-        (LargeList(table_child), LargeList(file_child)) => {
-            coerce_child(table_child, file_child, binary_to_string, enable_rle)
-                .map(LargeList)
-        }
-        (ListView(table_child), ListView(file_child)) => {
-            coerce_child(table_child, file_child, binary_to_string, enable_rle)
-                .map(ListView)
-        }
-        (LargeListView(table_child), LargeListView(file_child)) => {
-            coerce_child(table_child, file_child, binary_to_string, enable_rle)
-                .map(LargeListView)
-        }
-        (FixedSizeList(table_child, _), FixedSizeList(file_child, size)) => {
-            coerce_child(table_child, file_child, binary_to_string, enable_rle)
-                .map(|child| FixedSizeList(child, *size))
-        }
+        (List(table_child), List(file_child)) => coerce_child(
+            table_child,
+            file_child,
+            binary_to_string,
+            enable_rle,
+            binary_as_string,
+        )
+        .map(List),
+        (LargeList(table_child), LargeList(file_child)) => coerce_child(
+            table_child,
+            file_child,
+            binary_to_string,
+            enable_rle,
+            binary_as_string,
+        )
+        .map(LargeList),
+        (ListView(table_child), ListView(file_child)) => coerce_child(
+            table_child,
+            file_child,
+            binary_to_string,
+            enable_rle,
+            binary_as_string,
+        )
+        .map(ListView),
+        (LargeListView(table_child), LargeListView(file_child)) => coerce_child(
+            table_child,
+            file_child,
+            binary_to_string,
+            enable_rle,
+            binary_as_string,
+        )
+        .map(LargeListView),
+        (FixedSizeList(table_child, _), FixedSizeList(file_child, size)) => coerce_child(
+            table_child,
+            file_child,
+            binary_to_string,
+            enable_rle,
+            binary_as_string,
+        )
+        .map(|child| FixedSizeList(child, *size)),
         // Map keys and values match by position: Parquet always names them
         // `key`/`value` while Arrow producers commonly use `keys`/`values`.
         (Map(table_entries, _), Map(file_entries, sorted)) => {
@@ -239,12 +288,14 @@ fn coerce_child(
     file_child: &FieldRef,
     binary_to_string: bool,
     enable_rle: bool,
+    binary_as_string: bool,
 ) -> Option<FieldRef> {
     coerce_data_type(
         table_child.data_type(),
         file_child.data_type(),
         binary_to_string,
         enable_rle,
+        binary_as_string,
     )
     .map(|new_type| field_with_new_type(file_child, new_type))
 }
@@ -270,7 +321,7 @@ fn coerce_map_entries(
     }
 
     let fields = coerce_fields(file_fields, |idx, file_child| {
-        coerce_child(&table_fields[idx], file_child, false, false)
+        coerce_child(&table_fields[idx], file_child, false, false, false)
     })?;
 
     Some(field_with_new_type(file_entries, DataType::Struct(fields)))
@@ -362,6 +413,40 @@ fn can_promote_to_dictionary_type(
     // this guard handles the case where can_promote_to_dictionary_type is called directly.
     common_dictionary_key_type(&DataType::Int32, table_key)
         .is_some_and(|common| &common == table_key.as_ref())
+}
+
+// Keep the reader schema binary-valued. The projection adapter can then cast only
+// the dictionary values to strings and reuse the decoded keys.
+fn binary_as_string_dictionary_file_type(
+    file_field_type: &DataType,
+    table_dictionary_type: &DataType,
+) -> Option<DataType> {
+    let DataType::Dictionary(table_key, table_value) = table_dictionary_type else {
+        return None;
+    };
+    let (file_key, file_value) = match file_field_type {
+        DataType::Dictionary(key, value) => (Some(key.as_ref()), value.as_ref()),
+        value => (None, value),
+    };
+
+    if !matches!(
+        (file_value, table_value.as_ref()),
+        (
+            DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+        )
+    ) {
+        return None;
+    }
+
+    let file_key = file_key.unwrap_or(&DataType::Int32);
+    common_dictionary_key_type(file_key, table_key)
+        .filter(|common| common == table_key.as_ref())?;
+
+    Some(DataType::Dictionary(
+        table_key.clone(),
+        Box::new(file_value.clone()),
+    ))
 }
 
 /// Normalize per-file schemas so that a column promoted to `Dictionary` in
@@ -2053,6 +2138,7 @@ mod tests {
                 &table_schema,
                 &file_schema,
                 true,
+                false,
             )
             .as_ref()
             .map(|s| s.field(0).data_type().clone())
@@ -2069,12 +2155,61 @@ mod tests {
             Field::new("dict_col", DataType::Utf8, true),
             Field::new("string_col", DataType::Binary, true),
         ]);
-        let result =
-            apply_file_schema_type_coercions_with_rle(&table_schema, &file_schema, false)
-                .unwrap();
+        let result = apply_file_schema_type_coercions_with_rle(
+            &table_schema,
+            &file_schema,
+            false,
+            false,
+        )
+        .unwrap();
 
         assert_eq!(result.field(0).data_type(), &DataType::Utf8);
         assert_eq!(result.field(1).data_type(), &DataType::Utf8);
+    }
+
+    #[test]
+    fn rle_schema_coercion_preserves_binary_as_string_dictionary() {
+        let coerce = |table: DataType, file: DataType, binary_as_string: bool| {
+            let table_schema = one_field_schema(table);
+            let file_schema = one_field_schema(file.clone());
+            apply_file_schema_type_coercions_with_rle(
+                &table_schema,
+                &file_schema,
+                true,
+                binary_as_string,
+            )
+            .as_ref()
+            .map(|schema| schema.field(0).data_type().clone())
+            .unwrap_or(file)
+        };
+
+        assert_eq!(
+            coerce(dict(DataType::Utf8), DataType::Binary, true),
+            dict(DataType::Binary)
+        );
+        assert_eq!(
+            coerce(dict(DataType::Utf8), DataType::Binary, false),
+            DataType::Binary
+        );
+        assert_eq!(
+            coerce(
+                dict(DataType::Utf8),
+                DataType::Dictionary(
+                    Box::new(DataType::Int16),
+                    Box::new(DataType::Binary),
+                ),
+                true,
+            ),
+            dict(DataType::Binary)
+        );
+        assert_eq!(
+            coerce(
+                DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8),),
+                DataType::Binary,
+                true,
+            ),
+            DataType::Binary
+        );
     }
 
     fn dk(key: DataType) -> DataType {
@@ -2186,7 +2321,7 @@ mod tests {
         let coerce = |table: DataType, file: DataType| {
             let t = one_field_schema(table);
             let f = one_field_schema(file.clone());
-            apply_file_schema_type_coercions_with_rle(&t, &f, true)
+            apply_file_schema_type_coercions_with_rle(&t, &f, true, false)
                 .as_ref()
                 .map(|s| s.field(0).data_type().clone())
                 .unwrap_or(file)

@@ -302,6 +302,8 @@ pub(super) struct ParquetMorselizer {
     pub max_in_list_size: usize,
     /// Whether to ask arrow-rs to read promoted dictionary columns directly.
     pub enable_rle_to_dictionary: bool,
+    /// Whether binary columns should be validated and read as strings.
+    pub binary_as_string: bool,
     /// How row groups are assigned to the byte ranges of a split file. Sourced
     /// from `datafusion.execution.parquet.row_group_range_assignment`.
     pub row_group_range_assignment: RowGroupRangeAssignment,
@@ -501,6 +503,7 @@ struct PreparedParquetOpen {
     max_predicate_cache_size: Option<usize>,
     max_in_list_size: usize,
     enable_rle_to_dictionary: bool,
+    binary_as_string: bool,
     row_group_range_assignment: RowGroupRangeAssignment,
     reverse_row_groups: bool,
     sort_order_for_reorder: Option<LexOrdering>,
@@ -1004,6 +1007,7 @@ impl ParquetMorselizer {
             max_predicate_cache_size: self.max_predicate_cache_size,
             max_in_list_size: self.max_in_list_size,
             enable_rle_to_dictionary: self.enable_rle_to_dictionary,
+            binary_as_string: self.binary_as_string,
             row_group_range_assignment: self.row_group_range_assignment,
             reverse_row_groups: self.reverse_row_groups,
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
@@ -1124,6 +1128,7 @@ impl MetadataLoadedParquetOpen {
             &prepared.logical_file_schema,
             &physical_file_schema,
             prepared.enable_rle_to_dictionary,
+            prepared.binary_as_string,
         ) {
             physical_file_schema = Arc::new(merged);
             options = options.with_schema(Arc::clone(&physical_file_schema));
@@ -2218,6 +2223,7 @@ mod test {
         max_predicate_cache_size: Option<usize>,
         max_in_list_size: usize,
         enable_rle_to_dictionary: bool,
+        binary_as_string: bool,
         row_group_range_assignment: RowGroupRangeAssignment,
         reverse_row_groups: bool,
         preserve_order: bool,
@@ -2438,6 +2444,7 @@ mod test {
                 max_predicate_cache_size: None,
                 max_in_list_size: MAX_IN_LIST_SIZE,
                 enable_rle_to_dictionary: false,
+                binary_as_string: false,
                 row_group_range_assignment: RowGroupRangeAssignment::default(),
                 reverse_row_groups: false,
                 preserve_order: false,
@@ -2516,6 +2523,11 @@ mod test {
 
         fn with_enable_rle_to_dictionary(mut self, enable: bool) -> Self {
             self.enable_rle_to_dictionary = enable;
+            self
+        }
+
+        fn with_binary_as_string(mut self, enable: bool) -> Self {
+            self.binary_as_string = enable;
             self
         }
 
@@ -2644,6 +2656,7 @@ mod test {
                 max_predicate_cache_size: self.max_predicate_cache_size,
                 max_in_list_size: self.max_in_list_size,
                 enable_rle_to_dictionary: self.enable_rle_to_dictionary,
+                binary_as_string: self.binary_as_string,
                 row_group_range_assignment: self.row_group_range_assignment,
                 reverse_row_groups: self.reverse_row_groups,
                 sort_order_for_reorder: None,
@@ -6050,5 +6063,30 @@ mod test {
             batches[0].schema().field(0).data_type(),
             &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary))
         );
+
+        let dict_utf8_schema = Arc::new(Schema::new(vec![Field::new(
+            "payload",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        )]));
+        let morselizer = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(dict_utf8_schema)
+            .with_enable_rle_to_dictionary(true)
+            .with_binary_as_string(true)
+            .build();
+        let batches = collect_batches(
+            &morselizer,
+            PartitionedFile::new("binary.parquet".to_string(), bin_size as u64),
+        )
+        .await;
+        let dictionary = batches[0].column(0).as_dictionary::<Int32Type>();
+        let values = dictionary.values().as_string::<i32>();
+        let actual: Vec<_> = dictionary
+            .keys()
+            .iter()
+            .map(|key| key.map(|key| values.value(key as usize)))
+            .collect();
+        assert_eq!(actual, vec![Some("a"), Some("b"), Some("a")]);
     }
 }

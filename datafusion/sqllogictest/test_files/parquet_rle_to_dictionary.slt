@@ -458,10 +458,10 @@ LOCATION 'test_files/scratch/parquet_rle_to_dictionary/binary_rle.parquet';
 
 # Dictionary(Int32, Binary) must be coerced to Dictionary(Int32, Utf8) when
 # binary_as_string is true, not left as Dictionary(Int32, Binary).
-query T
-SELECT DISTINCT arrow_typeof(payload) FROM binary_rle_as_string;
+query TT
+SELECT DISTINCT arrow_typeof(payload), payload FROM binary_rle_as_string;
 ----
-Dictionary(Int32, Utf8)
+Dictionary(Int32, Utf8) he
 
 statement ok
 DROP TABLE binary_rle_as_string;

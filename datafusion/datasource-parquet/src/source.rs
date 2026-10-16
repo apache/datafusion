@@ -681,6 +681,7 @@ impl FileSource for ParquetSource {
                 .table_parquet_options
                 .global
                 .enable_rle_to_dictionary,
+            binary_as_string: self.table_parquet_options.global.binary_as_string,
             row_group_range_assignment: self
                 .table_parquet_options
                 .global
