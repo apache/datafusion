@@ -134,6 +134,18 @@ fn scalar_argument_for_field(expr: &Expr, arg_field: &FieldRef) -> Option<Scalar
             sv.cast_to(arg_field.data_type())
                 .unwrap_or_else(|_| sv.clone()),
         ),
+        Expr::Cast(Cast { expr, field }) => {
+            if let Expr::Literal(sv, _) = expr.as_ref()
+                && (sv.data_type() == *field.data_type()
+                    || (sv.data_type().is_string() && field.data_type().is_string()))
+            {
+                return Some(
+                    sv.cast_to(arg_field.data_type())
+                        .unwrap_or_else(|_| sv.clone()),
+                );
+            }
+            None
+        }
         _ => None,
     }
 }
