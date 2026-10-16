@@ -58,6 +58,23 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
+/// Never return freed memory to the OS (`purge_delay = -1`) unless the user
+/// overrides `MIMALLOC_PURGE_DELAY`. Query execution repeatedly allocates and
+/// frees large buffers; with mimalloc's default 10ms purge delay these are
+/// decommitted and re-faulted, and the kernel spends a large fraction of the
+/// runtime zeroing pages.
+fn configure_mimalloc() {
+    unsafe extern "C" {
+        fn mi_option_set(option: std::ffi::c_int, value: std::ffi::c_long);
+    }
+    /// `mi_option_purge_delay` in mimalloc v2's `mi_option_t`
+    const MI_OPTION_PURGE_DELAY: std::ffi::c_int = 15;
+    if env::var_os("MIMALLOC_PURGE_DELAY").is_none() {
+        // SAFETY: setting a mimalloc option is thread safe and has no preconditions
+        unsafe { mi_option_set(MI_OPTION_PURGE_DELAY, -1) };
+    }
+}
+
 #[derive(Debug, Parser, PartialEq)]
 #[clap(author, version, about, long_about= None)]
 struct Args {
@@ -199,6 +216,7 @@ pub async fn main() -> ExitCode {
 
 /// Main CLI entrypoint
 async fn main_inner() -> Result<()> {
+    configure_mimalloc();
     env_logger::init();
     let args = Args::parse();
 
