@@ -20,6 +20,7 @@
 use crate::cli_context::CliSessionContext;
 use crate::helper::split_from_semicolon;
 use crate::print_format::PrintFormat;
+use crate::repl_options::ReplOptions;
 use crate::{
     command::{Command, OutputFormat},
     helper::CliHelper,
@@ -124,13 +125,14 @@ pub async fn exec_from_files(
 pub async fn exec_from_repl(
     ctx: &dyn CliSessionContext,
     print_options: &mut PrintOptions,
+    repl_options: &ReplOptions,
 ) -> rustyline::Result<()> {
     let mut rl = Editor::new()?;
     rl.set_helper(Some(CliHelper::new(
         &ctx.task_ctx().session_config().options().sql_parser.dialect,
         print_options.color,
     )));
-    rl.load_history(".history").ok();
+    rl.load_history(&repl_options.history_file).ok();
 
     loop {
         match rl.readline("> ") {
@@ -204,7 +206,7 @@ pub async fn exec_from_repl(
         }
     }
 
-    rl.save_history(".history")
+    rl.save_history(&repl_options.history_file)
 }
 
 pub(super) async fn exec_and_print(
