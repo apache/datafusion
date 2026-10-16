@@ -517,6 +517,7 @@ impl ExprSchemable for Expr {
     /// - **Column references**: Preserve original field metadata from input schema
     /// - **Literals**: Use explicitly provided metadata, otherwise empty
     /// - **Aliases**: Merge underlying expr metadata with alias-specific metadata, preferring the alias metadata
+    /// - **List unnesting**: Preserve the element field metadata
     /// - **Binary expressions**: field metadata is empty
     /// - **Boolean expressions**: field metadata is empty
     /// - **Cast expressions**: Type-only casts pass through source metadata (stripping extension
@@ -678,6 +679,23 @@ impl ExprSchemable for Expr {
             Expr::LambdaVariable(LambdaVariable {
                 field: Some(field), ..
             }) => Ok(Arc::clone(field).renamed(&schema_name)),
+            Expr::Unnest(Unnest { expr, .. }) => {
+                let data_type = expr.get_type(schema)?;
+                let nullable = self.nullable(schema)?;
+                if data_type.is_list() {
+                    Ok(Arc::new(
+                        utils::get_unnested_list_field(&data_type, 1)?
+                            .clone()
+                            .with_nullable(nullable),
+                    ))
+                } else {
+                    Ok(Arc::new(Field::new(
+                        &schema_name,
+                        self.get_type(schema)?,
+                        nullable,
+                    )))
+                }
+            }
             Expr::Like(_)
             | Expr::SimilarTo(_)
             | Expr::Not(_)
@@ -689,7 +707,6 @@ impl ExprSchemable for Expr {
             | Expr::Wildcard { .. }
             | Expr::GroupingSet(_)
             | Expr::Placeholder(_)
-            | Expr::Unnest(_)
             | Expr::Lambda(_)
             | Expr::LambdaVariable(_) => Ok(Arc::new(Field::new(
                 &schema_name,
