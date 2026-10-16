@@ -623,10 +623,10 @@ SET datafusion.execution.time_zone = 'America/Denver'
 query I
 SELECT count(*) FROM naive_col WHERE column1 = '2024-07-01T18:00:00Z'::timestamptz
 ----
-0
+1
 
-# The plan shows the rewrite: the filter compares the naive column against a
-# naive 18:00 (1719856800 s), not against 12:00.
+# The plan shows that the naive column is NOT unwrapped against the timezone-aware literal
+# because doing so would lose the timezone shift, so the CAST remains in place.
 statement ok
 set datafusion.explain.logical_plan_only = true
 
@@ -634,7 +634,7 @@ query TT
 EXPLAIN SELECT column1 FROM naive_col WHERE column1 = '2024-07-01T18:00:00Z'::timestamptz
 ----
 logical_plan
-01)Filter: naive_col.column1 = TimestampNanosecond(1719856800000000000, None)
+01)Filter: CAST(naive_col.column1 AS Timestamp(ns, "America/Denver")) = TimestampNanosecond(1719856800000000000, Some("America/Denver"))
 02)--TableScan: naive_col projection=[column1]
 
 statement ok
