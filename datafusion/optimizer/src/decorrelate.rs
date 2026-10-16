@@ -23,11 +23,14 @@ use std::sync::Arc;
 use crate::push_down_filter::lr_is_preserved;
 use crate::simplify_expressions::ExprSimplifier;
 
+use datafusion_common::nested_struct::is_injective_cast;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
+use datafusion_common::utils::has_float_leaf;
 use datafusion_common::{
-    Column, DFSchemaRef, HashMap, Result, ScalarValue, assert_or_internal_err, plan_err,
+    Column, DFSchema, DFSchemaRef, HashMap, Result, ScalarValue, assert_or_internal_err,
+    plan_err,
 };
 use datafusion_expr::expr::{Alias, GroupingSet};
 use datafusion_expr::logical_plan::{Join, JoinType};
@@ -60,7 +63,7 @@ pub struct PullUpCorrelatedExpr {
     /// above a aggregation without changing the meaning of the query.
     can_pull_over_aggregation: bool,
     /// Whether every correlated conjunct seen so far passes
-    /// [`is_column_equality`], so a Window above them can partition by their
+    /// [`is_partitionable_equality`], so a Window above them can partition by their
     /// columns.
     can_extend_partition_by: bool,
     /// Do we need to handle [the count bug] during the pull up process.
@@ -288,7 +291,9 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             //   outer row. A non-equality filter can return duplicates, see
             //   https://github.com/apache/datafusion/issues/25808.
             // - A Window keeps or drops whole partitions when the filter reads
-            //   only its `PARTITION BY` columns. `f_up` checks this.
+            //   only its `PARTITION BY` columns. For other filters, `f_up` adds
+            //   the columns of a column equality to `PARTITION BY` and keeps
+            //   the subquery correlated in the remaining cases.
             // - An Unnest maps each input row to its own output rows, so a
             //   filter on a column it passes through keeps the same rows.
             //   The arm above checks that the filter does not read an unnested
@@ -349,7 +354,8 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 let subquery_filter_exprs = split_conjunction(&plan_filter.predicate);
                 for &expr in subquery_filter_exprs.iter().filter(|e| e.contains_outer()) {
                     self.can_pull_over_aggregation &= can_pullup_over_aggregation(expr);
-                    self.can_extend_partition_by &= is_column_equality(expr);
+                    self.can_extend_partition_by &=
+                        is_partitionable_equality(expr, plan_filter.input.schema());
                 }
                 for expr in &subquery_filter_exprs {
                     if expr.contains_outer() && !self.correlated_filters.contains(expr) {
@@ -616,14 +622,13 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 {
                     // `inner.y = outer.k` keeps the rows of one `y` value for
                     // each outer row, so partitioning by `y` as well gives each
-                    // window function the same rows.
-                    if self.can_extend_partition_by
-                        && !self.collected_count_expr_map.contains_key(&*window.input)
-                    {
-                        return Ok(Transformed::yes(partition_window_by(
-                            window,
-                            &local_correlated_cols,
-                        )?));
+                    // window function the same rows. A window over an
+                    // aggregate with count bug handling stops the pull up in
+                    // `pass_through_pulled_up_cols`.
+                    if self.can_extend_partition_by {
+                        let extended =
+                            partition_window_by(window, &local_correlated_cols)?;
+                        return self.pass_through_pulled_up_cols(extended);
                     }
                     self.can_pull_up = false;
                 }
@@ -832,29 +837,17 @@ fn correlated_filter_columns(plan: &LogicalPlan) -> Vec<Column> {
     cols
 }
 
-/// Adds `cols` to the `PARTITION BY` of every window function of `window`. A
-/// Projection on top gives the window columns their old names back.
+/// Adds `cols` to the `PARTITION BY` of every window function of `window`. Each
+/// window expression keeps its old output name, so nothing above sees a change.
 fn partition_window_by(window: &Window, cols: &BTreeSet<Column>) -> Result<LogicalPlan> {
-    let new_window_expr = window
+    let window_expr = window
         .window_expr
         .iter()
-        .map(|expr| add_partition_by(expr, cols))
-        .collect::<Vec<_>>();
-    let mut proj_exprs = window
-        .input
-        .schema()
-        .columns()
-        .into_iter()
-        .map(Expr::Column)
-        .collect::<Vec<_>>();
-    for (old, new) in window.window_expr.iter().zip(&new_window_expr) {
-        let new_col = Expr::Column(Column::from_name(new.schema_name().to_string()));
-        proj_exprs.push(new_col.alias_if_changed(old.schema_name().to_string())?);
-    }
-    LogicalPlanBuilder::from(Arc::clone(&window.input))
-        .window(new_window_expr)?
-        .project(proj_exprs)?
-        .build()
+        .map(|expr| {
+            add_partition_by(expr, cols).alias_if_changed(expr.schema_name().to_string())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Window::try_new(window_expr, Arc::clone(&window.input)).map(LogicalPlan::Window)
 }
 
 fn add_partition_by(expr: &Expr, cols: &BTreeSet<Column>) -> Expr {
@@ -866,9 +859,16 @@ fn add_partition_by(expr: &Expr, cols: &BTreeSet<Column>) -> Expr {
         Expr::WindowFunction(window_fun) => {
             let mut window_fun = window_fun.clone();
             for col in cols {
-                let col = Expr::Column(col.clone());
-                if !window_fun.params.partition_by.contains(&col) {
-                    window_fun.params.partition_by.push(col);
+                let partitioned = window_fun
+                    .params
+                    .partition_by
+                    .iter()
+                    .any(|expr| matches!(expr, Expr::Column(c) if c == col));
+                if !partitioned {
+                    window_fun
+                        .params
+                        .partition_by
+                        .push(Expr::Column(col.clone()));
                 }
             }
             Expr::WindowFunction(window_fun)
@@ -896,48 +896,54 @@ fn partitions_by_all(expr: &Expr, cols: &BTreeSet<Column>) -> bool {
 }
 
 fn can_pullup_over_aggregation(expr: &Expr) -> bool {
-    if let Expr::BinaryExpr(BinaryExpr {
-        left,
-        op: Operator::Eq,
-        right,
-    }) = expr
-    {
-        match (&**left, &**right) {
-            (Expr::Column(_), right) => !right.any_column_refs(),
-            (left, Expr::Column(_)) => !left.any_column_refs(),
-            (Expr::Cast(Cast { expr, .. }), right)
-                if matches!(&**expr, Expr::Column(_)) =>
-            {
-                !right.any_column_refs()
-            }
-            (left, Expr::Cast(Cast { expr, .. }))
-                if matches!(&**expr, Expr::Column(_)) =>
-            {
-                !left.any_column_refs()
-            }
-            (_, _) => false,
-        }
-    } else {
-        false
-    }
+    split_column_equality(expr).is_some()
 }
 
-/// Whether `expr` is `col = <expr>` or `<expr> = col`, where `<expr>` reads no
-/// subquery column. `CAST(col AS ..)` does not qualify: a lossy cast lets
-/// several `col` values match one outer row, see #26014.
-fn is_column_equality(expr: &Expr) -> bool {
+/// Whether partitioning by the columns of `expr` keeps the rows `expr` matches
+/// for one outer row in one partition. That holds for `col = <expr>` or
+/// `<expr> = col`, where:
+/// - `<expr>` reads no subquery column and is not volatile.
+/// - `col` has no float leaf, because `-0.0 = 0.0` holds but a partition
+///   keeps the two apart.
+/// - `col` is cast only by a cast that keeps distinct values distinct. A lossy
+///   cast lets several `col` values match one outer row, see #26014.
+fn is_partitionable_equality(expr: &Expr, schema: &DFSchema) -> bool {
+    let Some((col_side, other)) = split_column_equality(expr) else {
+        return false;
+    };
+    let (col, cast_to) = match col_side {
+        Expr::Cast(Cast { expr, field }) => (&**expr, Some(field.data_type())),
+        _ => (col_side, None),
+    };
+    let Ok(col_type) = col.get_type(schema) else {
+        return false;
+    };
+    !other.is_volatile()
+        && !has_float_leaf(&col_type)
+        && cast_to.is_none_or(|to| is_injective_cast(&col_type, to))
+}
+
+/// Splits `col = <expr>` or `<expr> = col` into the subquery column side, a
+/// column or a cast of one, and the other side, which reads no subquery column.
+fn split_column_equality(expr: &Expr) -> Option<(&Expr, &Expr)> {
     let Expr::BinaryExpr(BinaryExpr {
         left,
         op: Operator::Eq,
         right,
     }) = expr
     else {
-        return false;
+        return None;
     };
-    match (&**left, &**right) {
-        (Expr::Column(_), other) | (other, Expr::Column(_)) => !other.any_column_refs(),
-        _ => false,
-    }
+    [(&**left, &**right), (&**right, &**left)]
+        .into_iter()
+        .find(|(col_side, other)| {
+            let is_col = match col_side {
+                Expr::Column(_) => true,
+                Expr::Cast(Cast { expr, .. }) => matches!(&**expr, Expr::Column(_)),
+                _ => false,
+            };
+            is_col && !other.any_column_refs()
+        })
 }
 
 fn collect_local_correlated_cols(

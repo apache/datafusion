@@ -3406,9 +3406,9 @@ logical_plan
 03)--SubqueryAlias: __correlated_sq_1
 04)----SubqueryAlias: w
 05)------Projection: b.y
-06)--------Filter: row_number() PARTITION BY [b.y] ORDER BY [b.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW = UInt64(1)
-07)----------Projection: b.y, row_number() PARTITION BY [b.y] ORDER BY [b.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-08)------------WindowAggr: windowExpr=[[row_number() PARTITION BY [b.y] ORDER BY [b.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+06)--------Filter: row_number() ORDER BY [b.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW = UInt64(1)
+07)----------Projection: b.y, row_number() ORDER BY [b.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+08)------------WindowAggr: windowExpr=[[row_number() PARTITION BY [b.y] ORDER BY [b.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS row_number() ORDER BY [b.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 09)--------------SubqueryAlias: b
 10)----------------TableScan: win_inner projection=[id, y]
 
@@ -3491,6 +3491,34 @@ SELECT win_outer.k, (SELECT max(w.rn) FROM (SELECT row_number() OVER (PARTITION 
 1 1
 2 1
 5 NULL
+
+# A window below another window whose output has the name the extended window
+# would get. The extended window keeps its old name, so the names stay unique.
+query II
+SELECT win_outer.k, (SELECT max(w.a + w.b) FROM (SELECT row_number() OVER (PARTITION BY win_inner.y ORDER BY win_inner.id) AS a, row_number() OVER (ORDER BY win_inner.id) AS b FROM win_inner WHERE win_inner.y = win_outer.k) AS w) AS m FROM win_outer ORDER BY win_outer.k;
+----
+1 2
+2 2
+5 NULL
+
+# A lossless widening cast, as coercion adds for `INT = BIGINT`, keeps the
+# distinct values of `y` apart, so the window is partitioned by `y`.
+query II
+SELECT win_outer.k, (SELECT max(w.rn) FROM (SELECT row_number() OVER (ORDER BY win_inner.id) AS rn FROM win_inner WHERE win_inner.y = CAST(win_outer.k AS BIGINT)) AS w) AS m FROM win_outer ORDER BY win_outer.k;
+----
+1 1
+2 1
+5 NULL
+
+# `-0.0 = 0.0` holds but a window partition keeps the two apart, so a float
+# `y` keeps the subquery correlated. The right answer is `(1, 2), (2, NULL), (5, NULL)`.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+SELECT win_outer.k, (SELECT max(w.rn) FROM (SELECT row_number() OVER (ORDER BY v.id) AS rn FROM (VALUES (1, 0.0), (2, -0.0)) AS v(id, f) WHERE v.f = CAST(win_outer.k - 1 AS DOUBLE)) AS w) AS m FROM win_outer ORDER BY win_outer.k;
+
+# A volatile outer expression can match several `y` values for one outer row, so
+# the subquery stays correlated.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+SELECT win_outer.k, (SELECT max(w.rn) FROM (SELECT row_number() OVER (ORDER BY win_inner.id) AS rn FROM win_inner WHERE win_inner.y = win_outer.k + CAST(random() * 0 AS INT)) AS w) AS m FROM win_outer ORDER BY win_outer.k;
 
 # A lossy `CAST(f AS INT) = k` matches several `f` values for one outer row, so
 # the subquery stays correlated. The right answer is `(1, 2), (2, NULL), (5, NULL)`.
