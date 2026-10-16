@@ -184,11 +184,8 @@ impl StreamedBatch {
             .streamed_indices
             .append_value_n(streamed_idx, len);
         let start = buffered_start as u64;
-        // SAFETY: a `Range<u64>` reports its exact length in `size_hint`.
-        unsafe {
-            current_chunk
-                .buffered_indices
-                .append_trusted_len_iter(start..start + len as u64);
+        for idx in start..start + len as u64 {
+            current_chunk.buffered_indices.append_value(idx);
         }
         self.num_output_rows += len;
     }
