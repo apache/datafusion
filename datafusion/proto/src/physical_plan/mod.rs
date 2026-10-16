@@ -424,7 +424,10 @@ mod file_scan_config_serde {
         assert!(!do_not_preserve_with_ordering.output_ordering.is_empty());
         let mut encoded = serde.encode(&do_not_preserve_with_ordering)?;
         assert_eq!(encoded.preserve_order, Some(false));
-        assert!(!serde.decode(&encoded)?.preserve_order);
+        let decoded = serde.decode(&encoded)?;
+        assert!(!decoded.preserve_order);
+        // The output ordering alone keeps the files in order.
+        assert!(decoded.preserves_file_order());
 
         // Older payloads had no flag and derived it from the ordering.
         encoded.preserve_order = None;
