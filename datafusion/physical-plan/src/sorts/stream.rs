@@ -151,6 +151,9 @@ impl ReusableRows {
         self.inner[stream_idx] = None;
         let reserved = mem::take(&mut self.reserved_sizes[stream_idx]);
         self.reservation.resize(self.reservation.size() - reserved);
+        // Verify the incremental accounting against a full recomputation, avoiding
+        // the cost of scanning all buffers in release builds.
+        debug_assert_eq!(self.reservation.size(), self.retained_size());
     }
 
     fn retained_size(&self) -> usize {
