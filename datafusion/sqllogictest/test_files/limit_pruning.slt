@@ -128,6 +128,103 @@ drop table tracking_data;
 statement ok
 reset datafusion.explain.analyze_level;
 
+# A scan that advertises an ordering must keep it when the fetch of a
+# SortPreservingMergeExec is pushed into it: no limit pruning, no work stealing.
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+# Row group 0 of a.parquet partially matches `passes = 1` (id 1 fails), row
+# group 1 fully matches. Limit pruning would skip row group 0 and return 4, 5, 6.
+query I
+COPY (SELECT value AS id, CASE WHEN value = 1 THEN 0 ELSE 1 END AS passes FROM generate_series(1, 6))
+TO 'test_files/scratch/limit_pruning/ordered_prune/a.parquet'
+STORED AS PARQUET OPTIONS ('format.max_row_group_size' '3');
+----
+6
+
+query I
+COPY (SELECT value AS id, 1 AS passes FROM generate_series(101, 103))
+TO 'test_files/scratch/limit_pruning/ordered_prune/b.parquet'
+STORED AS PARQUET OPTIONS ('format.max_row_group_size' '3');
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE ordered_prune STORED AS PARQUET
+LOCATION 'test_files/scratch/limit_pruning/ordered_prune/'
+WITH ORDER (id ASC);
+
+query TT
+explain select id from ordered_prune where passes = 1 order by id limit 3;
+----
+physical_plan
+01)SortPreservingMergeExec: [id@0 ASC NULLS LAST], fetch=3
+02)--DataSourceExec: <slt:ignore>limit=3, output_ordering=[id@0 ASC NULLS LAST], file_type=parquet<slt:ignore>
+
+query I
+select id from ordered_prune where passes = 1 order by id limit 3;
+----
+2
+3
+4
+
+statement ok
+drop table ordered_prune;
+
+# File groups are [a, b] and [c], each sorted, so the scan advertises `a ASC`.
+# c.parquet holds the smallest values. If the two partitions shared one file
+# queue (a, b, c), no partition would start with c and the limit would return 0..4.
+query I
+COPY (SELECT value AS a FROM generate_series(0, 9))
+TO 'test_files/scratch/limit_pruning/ordered_steal/a.parquet';
+----
+10
+
+query I
+COPY (SELECT value AS a FROM generate_series(10, 19))
+TO 'test_files/scratch/limit_pruning/ordered_steal/b.parquet';
+----
+10
+
+query I
+COPY (SELECT value AS a FROM generate_series(-10, -1))
+TO 'test_files/scratch/limit_pruning/ordered_steal/c.parquet';
+----
+10
+
+statement ok
+CREATE EXTERNAL TABLE ordered_steal STORED AS PARQUET
+LOCATION 'test_files/scratch/limit_pruning/ordered_steal/'
+WITH ORDER (a ASC);
+
+query TT
+explain select a from ordered_steal order by a limit 5;
+----
+physical_plan
+01)SortPreservingMergeExec: [a@0 ASC NULLS LAST], fetch=5
+02)--DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/limit_pruning/ordered_steal/a.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/limit_pruning/ordered_steal/b.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/limit_pruning/ordered_steal/c.parquet]]}, projection=[a], limit=5, output_ordering=[a@0 ASC NULLS LAST], file_type=parquet
+
+query I
+select a from ordered_steal order by a limit 5;
+----
+-10
+-9
+-8
+-7
+-6
+
+statement ok
+drop table ordered_steal;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+reset datafusion.explain.physical_plan_only;
+
 # Config reset
 statement ok
 RESET datafusion.execution.parquet.pushdown_filters;
