@@ -30,6 +30,7 @@ use crate::{
 use crate::cache::cache_manager::{CacheManager, CacheManagerConfig};
 #[cfg(feature = "parquet_encryption")]
 use crate::parquet_encryption::{EncryptionFactory, EncryptionFactoryRegistry};
+use crate::runtime_options::RuntimeOptions;
 use datafusion_common::{Result, config::ConfigEntry};
 use object_store::ObjectStore;
 use std::sync::Arc;
@@ -87,79 +88,6 @@ pub struct RuntimeEnv {
 impl Debug for RuntimeEnv {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(f, "RuntimeEnv")
-    }
-}
-
-struct RuntimeConfigValues {
-    memory_limit: Option<String>,
-    max_temp_directory_size: Option<String>,
-    max_spill_merge_fan_in: Option<String>,
-    temp_directory: Option<String>,
-    metadata_cache_limit: Option<String>,
-    list_files_cache_limit: Option<String>,
-    list_files_cache_ttl: Option<String>,
-    file_statistics_cache_limit: Option<String>,
-}
-
-impl RuntimeConfigValues {
-    /// Creates runtime configuration entries with the provided values.
-    ///
-    /// This defines the structure and metadata for all runtime configuration
-    /// entries to avoid duplication between `RuntimeEnv::config_entries()` and
-    /// `RuntimeEnvBuilder::entries()`.
-    fn into_config_entries(self) -> Vec<ConfigEntry> {
-        let Self {
-            memory_limit,
-            max_temp_directory_size,
-            max_spill_merge_fan_in,
-            temp_directory,
-            metadata_cache_limit,
-            list_files_cache_limit,
-            list_files_cache_ttl,
-            file_statistics_cache_limit,
-        } = self;
-        vec![
-            ConfigEntry {
-                key: "datafusion.runtime.memory_limit".to_string(),
-                value: memory_limit,
-                description: "Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
-            },
-            ConfigEntry {
-                key: "datafusion.runtime.max_temp_directory_size".to_string(),
-                value: max_temp_directory_size,
-                description: "Maximum temporary file directory size. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
-            },
-            ConfigEntry {
-                key: "datafusion.runtime.max_spill_merge_fan_in".to_string(),
-                value: max_spill_merge_fan_in,
-                description: "Maximum number of spill files opened by one external merge pass. Use 0 for unlimited. Values below 2 still use 2 so a merge can make progress.",
-            },
-            ConfigEntry {
-                key: "datafusion.runtime.temp_directory".to_string(),
-                value: temp_directory,
-                description: "The path to the temporary file directory.",
-            },
-            ConfigEntry {
-                key: "datafusion.runtime.metadata_cache_limit".to_string(),
-                value: metadata_cache_limit,
-                description: "Maximum memory to use for file metadata cache such as Parquet metadata. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
-            },
-            ConfigEntry {
-                key: "datafusion.runtime.list_files_cache_limit".to_string(),
-                value: list_files_cache_limit,
-                description: "Maximum memory to use for list files cache. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
-            },
-            ConfigEntry {
-                key: "datafusion.runtime.list_files_cache_ttl".to_string(),
-                value: list_files_cache_ttl,
-                description: "TTL (time-to-live) of the entries in the list file cache. Supports units m (minutes), and s (seconds). Example: '2m' for 2 minutes.",
-            },
-            ConfigEntry {
-                key: "datafusion.runtime.file_statistics_cache_limit".to_string(),
-                value: file_statistics_cache_limit,
-                description: "Maximum memory to use for file statistics cache. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
-            },
-        ]
     }
 }
 
@@ -253,95 +181,7 @@ impl RuntimeEnv {
 
     /// Returns the current runtime configuration entries
     pub fn config_entries(&self) -> Vec<ConfigEntry> {
-        use crate::memory_pool::MemoryLimit;
-
-        /// Convert bytes to a human-readable format
-        fn format_byte_size(size: u64) -> String {
-            const GB: u64 = 1024 * 1024 * 1024;
-            const MB: u64 = 1024 * 1024;
-            const KB: u64 = 1024;
-
-            match size {
-                s if s >= GB => format!("{}G", s / GB),
-                s if s >= MB => format!("{}M", s / MB),
-                s if s >= KB => format!("{}K", s / KB),
-                s => format!("{s}"),
-            }
-        }
-
-        fn format_duration(duration: Duration) -> String {
-            let total = duration.as_secs();
-            let mins = total / 60;
-            let secs = total % 60;
-
-            format!("{mins}m{secs}s")
-        }
-
-        let memory_limit_value = match self.memory_pool.memory_limit() {
-            MemoryLimit::Finite(size) => Some(format_byte_size(
-                size.try_into()
-                    .expect("Memory limit size conversion failed"),
-            )),
-            MemoryLimit::Infinite => Some("unlimited".to_string()),
-            MemoryLimit::Unknown => None,
-        };
-
-        let max_temp_dir_size = self.disk_manager.max_temp_directory_size();
-        let max_temp_dir_value = format_byte_size(max_temp_dir_size);
-        let max_spill_merge_fan_in =
-            self.disk_manager.max_spill_merge_fan_in().to_string();
-
-        let temp_paths = self.disk_manager.temp_dir_paths();
-        let temp_dir_value = if temp_paths.is_empty() {
-            None
-        } else {
-            Some(
-                temp_paths
-                    .iter()
-                    .map(|p| p.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(","),
-            )
-        };
-
-        let metadata_cache_limit = self.cache_manager.get_metadata_cache_limit();
-        let metadata_cache_value = format_byte_size(
-            metadata_cache_limit
-                .try_into()
-                .expect("Metadata cache size conversion failed"),
-        );
-
-        let list_files_cache_limit = self.cache_manager.get_list_files_cache_limit();
-        let list_files_cache_value = format_byte_size(
-            list_files_cache_limit
-                .try_into()
-                .expect("List files cache size conversion failed"),
-        );
-
-        let list_files_cache_ttl = self
-            .cache_manager
-            .get_list_files_cache_ttl()
-            .map(format_duration);
-
-        let file_statistics_cache_limit =
-            self.cache_manager.get_file_statistic_cache_limit();
-        let file_statistics_cache_value = format_byte_size(
-            file_statistics_cache_limit
-                .try_into()
-                .expect("File statistics cache size conversion failed"),
-        );
-
-        RuntimeConfigValues {
-            memory_limit: memory_limit_value,
-            max_temp_directory_size: Some(max_temp_dir_value),
-            max_spill_merge_fan_in: Some(max_spill_merge_fan_in),
-            temp_directory: temp_dir_value,
-            metadata_cache_limit: Some(metadata_cache_value),
-            list_files_cache_limit: Some(list_files_cache_value),
-            list_files_cache_ttl,
-            file_statistics_cache_limit: Some(file_statistics_cache_value),
-        }
-        .into_config_entries()
+        RuntimeOptions::env_entries(self)
     }
 }
 
@@ -546,19 +386,9 @@ impl RuntimeEnvBuilder {
         }
     }
 
-    /// Returns a list of all available runtime configurations with their current values and descriptions
+    /// Returns a list of all available runtime configurations with their default values and descriptions
     pub fn entries(&self) -> Vec<ConfigEntry> {
-        RuntimeConfigValues {
-            memory_limit: None,
-            max_temp_directory_size: Some("100G".to_string()),
-            max_spill_merge_fan_in: Some("0".to_string()),
-            temp_directory: None,
-            metadata_cache_limit: Some("50M".to_owned()),
-            list_files_cache_limit: Some("1M".to_owned()),
-            list_files_cache_ttl: None,
-            file_statistics_cache_limit: Some("20M".to_owned()),
-        }
-        .into_config_entries()
+        RuntimeOptions::default().entries()
     }
 
     /// Generate documentation that can be included in the user guide
