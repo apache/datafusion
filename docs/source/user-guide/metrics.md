@@ -61,6 +61,43 @@ subsequent join processing time.
 | avg_fanout              | Average number of build-side join-key matches per matched probe-side row before applying any join filter. |
 | array_map_created_count | Number of times `HashJoinExec` created an `ArrayMap` for perfect hash join lookup execution.              |
 
+### NestedLoopJoinExec
+
+`NestedLoopJoinExec` is a build-probe join without equijoin keys: it buffers
+the left input (which the optimizer assigns as the smaller side) and probes
+the right input against it with the join filter. It exposes the common
+`BaselineMetrics` plus the build-probe metrics below; `elapsed_compute` is the
+sum of the build-side collection time and the subsequent join processing time.
+
+| Metric              | Description                                                                     |
+| ------------------- | ------------------------------------------------------------------------------- |
+| build_time          | Total time spent collecting and buffering the build (left) side.                |
+| build_input_batches | Number of input batches consumed from the build (left) side.                    |
+| build_input_rows    | Number of input rows consumed from the build (left) side.                       |
+| build_mem_used      | Peak tracked memory used to buffer the build side, in bytes.                    |
+| join_time           | Total time spent probing and producing output after build-side collection.      |
+| input_batches       | Number of input batches consumed from the probe (right) side.                   |
+| input_rows          | Number of input rows consumed from the probe (right) side.                      |
+| selectivity         | Selectivity of the join, calculated as output_rows / (left_rows \* right_rows). |
+
+The `selectivity` metric is a `Summary`-level metric and appears even when
+`datafusion.explain.analyze_level` includes only `Summary`; the remaining
+operator-level metrics above are `Dev` metrics.
+
+### NestedLoopJoinExec spilling
+
+When the buffered left side exceeds its memory budget, `NestedLoopJoinExec`
+falls back to memory-limited execution: the left side is split into chunks,
+the right input for each output partition is spilled to disk once, and every
+later chunk re-reads the right side from the spill file. In that mode the
+operator additionally exposes the spill metrics:
+
+| Metric        | Description                                                                                                              |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| spill_count   | Number of spill files written when the buffered (build) side or the per-partition right input exceeds its memory budget. |
+| spilled_bytes | Total number of bytes written to spill files.                                                                            |
+| spilled_rows  | Total number of rows written to spill files.                                                                             |
+
 ### AggregateExec
 
 `AggregateExec` exposes the common `BaselineMetrics`, the operator-level
