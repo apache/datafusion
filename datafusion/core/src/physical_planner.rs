@@ -127,6 +127,10 @@ use tokio::sync::Mutex;
 // Re-export from this module for backwards compatibility.
 pub use datafusion_session::{ExtensionPlanner, PhysicalPlanner};
 
+/// Called with the plan after each physical optimizer rule.
+type OptimizerObserver<'a> =
+    dyn FnMut(&Arc<dyn ExecutionPlan>, &dyn PhysicalOptimizerRule) + 'a;
+
 struct SessionOptimizerContext<'a> {
     session: &'a dyn Session,
     statistics_context: StatisticsContext,
@@ -340,9 +344,12 @@ fn renumber_materialized_ctes(plan: &LogicalPlan) -> Result<Option<LogicalPlan>>
 /// [`renumber_materialized_ctes`] makes the ids unique before the physical
 /// plan is created.
 ///
-/// A scan that is already bound was planned and bound by a separate planning
-/// run, such as the `scan` of a [`ViewTable`], and is not bound again. Binding
-/// it again would count its partitions twice in the buffer.
+/// A scan that is already bound comes from a separate planning run, such as
+/// the `scan` of a [`ViewTable`], and is bound again. That run can have given
+/// it the ordering and the partitioning of a body that the optimizer now
+/// rewrites, and the new scan does not have them.
+/// [`register_materialized_ctes`] sets the partition counts of the scans of
+/// the final plan in the buffer.
 ///
 /// Scans are planned before the node that owns their CTE, and a scan inside a
 /// scalar subquery is planned in a separate subtree, so the binding is done
@@ -358,18 +365,7 @@ struct MaterializedCteBinder {
 
 impl MaterializedCteBinder {
     fn new(plan: &Arc<dyn ExecutionPlan>, session_state: &dyn Session) -> Result<Self> {
-        let mut ctes = HashMap::new();
-        plan.apply(|node| {
-            if let Some(cte) = node.downcast_ref::<MaterializedCteExec>()
-                && ctes.insert(cte.buffer().id(), Arc::clone(node)).is_some()
-            {
-                return internal_err!(
-                    "Two MaterializedCteExec nodes have the id {}",
-                    cte.buffer().id()
-                );
-            }
-            Ok(TreeNodeRecursion::Continue)
-        })?;
+        let ctes = materialized_ctes(plan)?;
         let context = match session_state.statistics_registry() {
             Some(registry) => StatisticsContext::new_with_registry(registry.clone()),
             None => StatisticsContext::new(),
@@ -388,8 +384,7 @@ impl MaterializedCteBinder {
     }
 
     /// Give every scan in `plan` whose CTE is in `self.ctes` the statistics
-    /// of the CTE body. If `bind` is true, also bind the scans that are not
-    /// bound.
+    /// of the CTE body. If `bind` is true, also bind the scans.
     fn bind(
         &mut self,
         plan: Arc<dyn ExecutionPlan>,
@@ -405,8 +400,7 @@ impl MaterializedCteBinder {
                 }
                 return internal_err!("MaterializedCteScanExec {} has no CTE", scan.id());
             };
-            let bound =
-                (bind && !scan.is_bound()).then(|| scan.bind(Arc::clone(cte.buffer())));
+            let bound = bind.then(|| scan.bind(Arc::clone(cte.buffer())));
             let scan = bound.as_ref().unwrap_or(scan);
             let scan = match self.body_statistics(scan.id())? {
                 Some(statistics) => scan.with_body_statistics(statistics),
@@ -453,6 +447,137 @@ fn bind_materialized_cte_scans(
         return Ok(plan);
     }
     binder.bind(plan, true)
+}
+
+/// The [`MaterializedCteExec`] nodes of `plan`, by id.
+fn materialized_ctes(
+    plan: &Arc<dyn ExecutionPlan>,
+) -> Result<HashMap<u64, Arc<dyn ExecutionPlan>>> {
+    let mut ctes = HashMap::new();
+    plan.apply(|node| {
+        if let Some(cte) = node.downcast_ref::<MaterializedCteExec>()
+            && ctes.insert(cte.buffer().id(), Arc::clone(node)).is_some()
+        {
+            return internal_err!(
+                "Two MaterializedCteExec nodes have the id {}",
+                cte.buffer().id()
+            );
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(ctes)
+}
+
+fn as_materialized_cte(plan: &Arc<dyn ExecutionPlan>) -> Result<&MaterializedCteExec> {
+    match plan.downcast_ref::<MaterializedCteExec>() {
+        Some(cte) => Ok(cte),
+        None => internal_err!("Expected a MaterializedCteExec"),
+    }
+}
+
+/// The ids of `ctes`, in an order in which each CTE comes after the CTEs
+/// that its body reads.
+fn materialized_cte_order(
+    ctes: &HashMap<u64, Arc<dyn ExecutionPlan>>,
+) -> Result<Vec<u64>> {
+    fn visit(
+        id: u64,
+        ctes: &HashMap<u64, Arc<dyn ExecutionPlan>>,
+        visiting: &mut HashSet<u64>,
+        order: &mut Vec<u64>,
+    ) -> Result<()> {
+        if order.contains(&id) {
+            return Ok(());
+        }
+        if !visiting.insert(id) {
+            return internal_err!("The body of MaterializedCteExec {id} reads itself");
+        }
+        let mut reads = vec![];
+        as_materialized_cte(&ctes[&id])?.body().apply(|node| {
+            if let Some(scan) = node.downcast_ref::<MaterializedCteScanExec>()
+                && ctes.contains_key(&scan.id())
+            {
+                reads.push(scan.id());
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        for read in reads {
+            visit(read, ctes, visiting, order)?;
+        }
+        order.push(id);
+        Ok(())
+    }
+
+    let mut ids: Vec<u64> = ctes.keys().copied().collect();
+    ids.sort_unstable();
+    let mut visiting = HashSet::new();
+    let mut order = vec![];
+    for id in ids {
+        visit(id, ctes, &mut visiting, &mut order)?;
+    }
+    Ok(order)
+}
+
+/// Give each scan in `plan` whose CTE is in `bodies` the partition count, the
+/// output ordering and the hash partitioning of that optimized body.
+fn with_materialized_cte_body_properties(
+    plan: Arc<dyn ExecutionPlan>,
+    bodies: &HashMap<u64, Arc<dyn ExecutionPlan>>,
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+    plan.transform_up(|node| {
+        if let Some(scan) = node.downcast_ref::<MaterializedCteScanExec>()
+            && let Some(body) = bodies.get(&scan.id())
+            && let Some(scan) = scan.with_body_properties(body.as_ref())
+        {
+            return Ok(Transformed::yes(Arc::new(scan) as Arc<dyn ExecutionPlan>));
+        }
+        Ok(Transformed::no(node))
+    })
+}
+
+/// Whether the body of every materialized CTE in `plan` has the properties
+/// that [`with_materialized_cte_body_properties`] gave to its scans.
+///
+/// A scan with such properties whose CTE is not in `plan` fails the check.
+fn materialized_cte_scans_match_bodies(plan: &Arc<dyn ExecutionPlan>) -> Result<bool> {
+    let ctes = materialized_ctes(plan)?;
+    let mut all_match = true;
+    plan.apply(|node| {
+        if let Some(scan) = node.downcast_ref::<MaterializedCteScanExec>() {
+            let holds = match ctes.get(&scan.id()) {
+                Some(cte) => {
+                    scan.body_properties_hold(as_materialized_cte(cte)?.body().as_ref())?
+                }
+                None => !scan.mirrors_body(),
+            };
+            if !holds {
+                all_match = false;
+                return Ok(TreeNodeRecursion::Stop);
+            }
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(all_match)
+}
+
+/// Make each [`MaterializedCteExec`] of the final `plan` the owner of its
+/// buffer. The planner makes more than one plan with the same buffers.
+fn register_materialized_ctes(plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
+    let mut scan_partitions: HashMap<u64, Vec<usize>> = HashMap::new();
+    plan.apply(|node| {
+        if let Some(scan) = node.downcast_ref::<MaterializedCteScanExec>() {
+            scan_partitions
+                .entry(scan.id())
+                .or_default()
+                .push(node.output_partitioning().partition_count());
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    for (id, cte) in materialized_ctes(plan)? {
+        as_materialized_cte(&cte)?
+            .register(scan_partitions.remove(&id).unwrap_or_default());
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -3409,10 +3534,25 @@ impl DefaultPhysicalPlanner {
     /// Optimize a physical plan by applying each physical optimizer,
     /// calling observer(plan, optimizer after each one)
     ///
-    /// Before the optimizers run, each [`MaterializedCteScanExec`] is bound
-    /// to the buffer of its [`MaterializedCteExec`] and gets the statistics
-    /// of the CTE body. A rewrite of the body does not change its rows, so
-    /// these statistics stay correct.
+    /// # Materialized CTEs
+    ///
+    /// A [`MaterializedCteScanExec`] is a leaf, and the CTE body is not its
+    /// child, so this function copies the properties of the body to the scan:
+    ///
+    /// 1. Each scan is bound to the buffer of its [`MaterializedCteExec`] and
+    ///    gets the statistics of the CTE body. A rewrite of the body does not
+    ///    change its rows, so these statistics stay correct.
+    /// 2. Each body is optimized on its own, after the bodies that it reads.
+    ///    A [`MaterializedCteExec`] puts no requirement on its body, so this
+    ///    plan of the body does not depend on the rest of the plan.
+    /// 3. Each scan gets the partition count, the output ordering and the hash
+    ///    partitioning of its optimized body, and the plan is optimized.
+    ///
+    /// The result of step 3 is used only if each body in it has the
+    /// properties that its scans report. If not, the plan of step 1 is
+    /// optimized and used, in which the scans have statistics only.
+    ///
+    /// The observer sees only the rules of the run that made the result.
     pub fn optimize_physical_plan<F>(
         &self,
         plan: Arc<dyn ExecutionPlan>,
@@ -3422,7 +3562,86 @@ impl DefaultPhysicalPlanner {
     where
         F: FnMut(&dyn ExecutionPlan, &dyn PhysicalOptimizerRule),
     {
-        let plan = bind_materialized_cte_scans(plan, session_state)?;
+        let mut observer =
+            |plan: &Arc<dyn ExecutionPlan>, optimizer: &dyn PhysicalOptimizerRule| {
+                observer(plan.as_ref(), optimizer)
+            };
+        let initial = bind_materialized_cte_scans(plan, session_state)?;
+        let ctes = materialized_ctes(&initial)?;
+        if ctes.is_empty() {
+            return self.run_physical_optimizers(initial, session_state, &mut observer);
+        }
+
+        let mut bodies = HashMap::new();
+        for id in materialized_cte_order(&ctes)? {
+            let cte = as_materialized_cte(&ctes[&id])?;
+            let body =
+                with_materialized_cte_body_properties(Arc::clone(cte.body()), &bodies)?
+                    .data;
+            // The body is optimized as the child of a `MaterializedCteExec`,
+            // as in the full plan, and not as the root of a plan.
+            let empty = Arc::new(EmptyExec::new(body.schema()));
+            let alone: Arc<dyn ExecutionPlan> = Arc::new(MaterializedCteExec::new(
+                body,
+                empty,
+                Arc::clone(cte.buffer()),
+            ));
+            let optimized =
+                self.run_physical_optimizers(alone, session_state, &mut |_, _| {})?;
+            if let Some(optimized) = optimized.downcast_ref::<MaterializedCteExec>() {
+                bodies.insert(id, Arc::clone(optimized.body()));
+            }
+        }
+
+        let candidate =
+            with_materialized_cte_body_properties(Arc::clone(&initial), &bodies)?;
+        let optimized = if candidate.transformed {
+            // The plan after each rule, to show the observer the run that made
+            // the result.
+            let mut steps = vec![];
+            let optimized = self.run_physical_optimizers(
+                candidate.data,
+                session_state,
+                &mut |plan, _| steps.push(Arc::clone(plan)),
+            )?;
+            if materialized_cte_scans_match_bodies(&optimized)? {
+                for (plan, optimizer) in
+                    steps.iter().zip(session_state.physical_optimizers())
+                {
+                    observer(plan, optimizer.as_ref());
+                }
+                Some(optimized)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let optimized = match optimized {
+            Some(optimized) => optimized,
+            None => {
+                let optimized =
+                    self.run_physical_optimizers(initial, session_state, &mut observer)?;
+                assert_or_internal_err!(
+                    materialized_cte_scans_match_bodies(&optimized)?,
+                    "A MaterializedCteScanExec reports properties that its CTE body does not have"
+                );
+                optimized
+            }
+        };
+        register_materialized_ctes(&optimized)?;
+        Ok(optimized)
+    }
+
+    /// Apply each physical optimizer to `plan`, and call `observer` with the
+    /// plan after each one.
+    #[expect(clippy::needless_pass_by_value)]
+    fn run_physical_optimizers(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        session_state: &dyn Session,
+        observer: &mut OptimizerObserver,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         let optimizers = session_state.physical_optimizers();
         debug!(
             "Input physical plan:\n{}\n",
@@ -3456,7 +3675,7 @@ impl DefaultPhysicalPlanner {
                 optimizer.name(),
                 displayable(new_plan.as_ref()).indent(false)
             );
-            observer(new_plan.as_ref(), optimizer.as_ref())
+            observer(&new_plan, optimizer.as_ref())
         }
 
         // This runs once after all optimizer runs are complete,
@@ -6389,5 +6608,166 @@ digraph {
 
         assert_eq!(plan.schema(), schema);
         assert!(plan.is::<EmptyExec>());
+    }
+}
+
+#[cfg(test)]
+mod materialized_cte_tests {
+    use super::*;
+    use crate::execution::session_state::SessionStateBuilder;
+    use crate::physical_plan::Partitioning;
+    use crate::physical_plan::repartition::RepartitionExec;
+    use crate::physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
+    use crate::prelude::{SessionConfig, SessionContext};
+    use datafusion_common::config::ConfigOptions;
+    use datafusion_common::test_util::batches_to_sort_string;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const QUERY: &str = "WITH c AS MATERIALIZED \
+           (SELECT column1 AS g, sum(column2) AS s FROM t GROUP BY column1) \
+         SELECT g, max(s) FROM c GROUP BY g";
+    const MIRROR_SCAN: &str =
+        "MaterializedCteScanExec: name=c, partitioning=Hash([g@0], 4)";
+
+    /// Changes the partitioning of every CTE body when a scan in the plan
+    /// reports the partitioning of a body. No correct rule does this. It
+    /// makes each plan in which a scan has the properties of its body wrong.
+    #[derive(Debug)]
+    struct RepartitionMirroredBodies;
+
+    impl PhysicalOptimizerRule for RepartitionMirroredBodies {
+        fn optimize(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+            _config: &ConfigOptions,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            if !displayable(plan.as_ref())
+                .indent(true)
+                .to_string()
+                .contains(MIRROR_SCAN)
+            {
+                return Ok(plan);
+            }
+            plan.transform_up(|node| {
+                let Some(cte) = node.downcast_ref::<MaterializedCteExec>() else {
+                    return Ok(Transformed::no(node));
+                };
+                let body = Arc::new(RepartitionExec::try_new(
+                    Arc::clone(cte.body()),
+                    Partitioning::RoundRobinBatch(3),
+                )?);
+                let continuation = Arc::clone(node.children()[1]);
+                node.replace_children(
+                    vec![body, continuation],
+                    ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+                )
+                .map(Transformed::yes)
+            })
+            .map(|t| t.data)
+        }
+
+        fn name(&self) -> &str {
+            "RepartitionMirroredBodies"
+        }
+
+        fn schema_check(&self) -> bool {
+            true
+        }
+    }
+
+    /// Counts the plans that the optimizer runs on.
+    #[derive(Debug, Default)]
+    struct CountRuns(AtomicUsize);
+
+    impl PhysicalOptimizerRule for CountRuns {
+        fn optimize(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+            _config: &ConfigOptions,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Ok(plan)
+        }
+
+        fn name(&self) -> &str {
+            "CountRuns"
+        }
+
+        fn schema_check(&self) -> bool {
+            true
+        }
+    }
+
+    /// Plans and runs [`QUERY`]. Returns the plan, the results and the
+    /// number of optimizer runs.
+    async fn plan_and_run(
+        rule: Option<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
+    ) -> Result<(String, String, usize)> {
+        let runs = Arc::new(CountRuns::default());
+        let config = SessionConfig::new()
+            .with_target_partitions(4)
+            .set_str("datafusion.sql_parser.dialect", "PostgreSQL");
+        let mut builder = SessionStateBuilder::new()
+            .with_config(config)
+            .with_default_features();
+        if let Some(rule) = rule {
+            builder = builder.with_physical_optimizer_rule(rule);
+        }
+        builder = builder.with_physical_optimizer_rule(Arc::clone(&runs) as _);
+        let ctx = SessionContext::new_with_state(builder.build());
+        ctx.sql("CREATE TABLE t AS VALUES (1, 10), (1, 20), (2, 30)")
+            .await?
+            .collect()
+            .await?;
+        let df = ctx.sql(QUERY).await?;
+        let before = runs.0.load(Ordering::Relaxed);
+        let plan = df.clone().create_physical_plan().await?;
+        let runs = runs.0.load(Ordering::Relaxed) - before;
+        let plan = displayable(plan.as_ref()).indent(true).to_string();
+        let results = batches_to_sort_string(&df.collect().await?);
+        Ok((plan, results, runs))
+    }
+
+    /// The scan gets the partitioning of the CTE body, so the aggregate above
+    /// it has no `RepartitionExec`. The body is optimized one time on its own,
+    /// and the full plan one time.
+    #[tokio::test]
+    async fn scan_has_partitioning_of_body() -> Result<()> {
+        let (plan, results, runs) = plan_and_run(None).await?;
+        assert_eq!(runs, 2);
+        assert!(plan.contains(MIRROR_SCAN), "{plan}");
+        assert_eq!(plan.matches("RepartitionExec").count(), 1, "{plan}");
+        insta::assert_snapshot!(results, @r"
+        +---+----------+
+        | g | max(c.s) |
+        +---+----------+
+        | 1 | 30       |
+        | 2 | 30       |
+        +---+----------+
+        ");
+        Ok(())
+    }
+
+    /// A rule changes the body after the scans got its properties. The
+    /// planner finds that the scans do not match the body, and optimizes the
+    /// plan in which the scans report no partitioning one more time.
+    #[tokio::test]
+    async fn scan_properties_that_do_not_hold_are_not_used() -> Result<()> {
+        let (plan, results, runs) =
+            plan_and_run(Some(Arc::new(RepartitionMirroredBodies))).await?;
+        assert_eq!(runs, 3);
+        assert!(!plan.contains(MIRROR_SCAN), "{plan}");
+        assert!(plan.contains("MaterializedCteScanExec: name=c\n"), "{plan}");
+        // One in the body, and one above the scan.
+        assert_eq!(plan.matches("RepartitionExec").count(), 2, "{plan}");
+        insta::assert_snapshot!(results, @r"
+        +---+----------+
+        | g | max(c.s) |
+        +---+----------+
+        | 1 | 30       |
+        | 2 | 30       |
+        +---+----------+
+        ");
+        Ok(())
     }
 }

@@ -446,9 +446,9 @@ Plan with Metrics
 07)--------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))], metrics=[<slt:ignore>]
 08)----------UnionExec, metrics=[<slt:ignore>]
 09)------------ProjectionExec: expr=[], metrics=[<slt:ignore>]
-10)--------------MaterializedCteScanExec: name=g, metrics=[output_rows=200.0 K, <slt:ignore>]
+10)--------------MaterializedCteScanExec: name=g, output_ordering=[x@0 ASC NULLS LAST], metrics=[output_rows=200.0 K, <slt:ignore>]
 11)------------ProjectionExec: expr=[], metrics=[<slt:ignore>]
-12)--------------MaterializedCteScanExec: name=g, metrics=[output_rows=200.0 K, <slt:ignore>]
+12)--------------MaterializedCteScanExec: name=g, output_ordering=[x@0 ASC NULLS LAST], metrics=[output_rows=200.0 K, <slt:ignore>]
 
 # Spill: the first batch has long strings and stays in memory. The next
 # batches are smaller and go to disk. The two references then need memory to
@@ -604,13 +604,251 @@ DROP TABLE small
 statement ok
 DROP TABLE huge
 
+# A reference to a materialized CTE has the output ordering and the hash
+# partitioning of the CTE body, so the continuation does not sort or
+# repartition its rows again.
 statement ok
 SET datafusion.execution.target_partitions = 4
 
 statement ok
 CREATE TABLE p AS SELECT value AS k, value % 10 AS g FROM generate_series(1, 1000)
 
-# A reference inside a scalar subquery is bound to the CTE.
+# Ordering: the body is sorted for its LIMIT, so the ORDER BY of the
+# continuation needs no SortExec.
+query TT
+EXPLAIN WITH c AS MATERIALIZED (SELECT k, g FROM p ORDER BY k DESC LIMIT 3)
+SELECT k FROM c ORDER BY k DESC
+----
+physical_plan
+01)MaterializedCteExec: name=c
+02)--SortPreservingMergeExec: [k@0 DESC], fetch=3
+03)----SortExec: TopK(fetch=3), expr=[k@0 DESC], preserve_partitioning=[true]
+04)------DataSourceExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+05)--ProjectionExec: expr=[k@0 as k]
+06)----MaterializedCteScanExec: name=c, output_ordering=[k@0 DESC]
+
+query I
+WITH c AS MATERIALIZED (SELECT k, g FROM p ORDER BY k DESC LIMIT 3)
+SELECT k FROM c ORDER BY k DESC
+----
+1000
+999
+998
+
+# A different ordering still needs a SortExec.
+query TT
+EXPLAIN WITH c AS MATERIALIZED (SELECT k, g FROM p ORDER BY k DESC LIMIT 3)
+SELECT k FROM c ORDER BY k
+----
+physical_plan
+01)MaterializedCteExec: name=c
+02)--SortPreservingMergeExec: [k@0 DESC], fetch=3
+03)----SortExec: TopK(fetch=3), expr=[k@0 DESC], preserve_partitioning=[true]
+04)------DataSourceExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+05)--SortExec: expr=[k@0 ASC NULLS LAST], preserve_partitioning=[false]
+06)----ProjectionExec: expr=[k@0 as k]
+07)------MaterializedCteScanExec: name=c, output_ordering=[k@0 DESC]
+
+query I
+WITH c AS MATERIALIZED (SELECT k, g FROM p ORDER BY k DESC LIMIT 3)
+SELECT k FROM c ORDER BY k
+----
+998
+999
+1000
+
+# The ORDER BY of a body without LIMIT is removed, because a CTE has no
+# order. The reference then has no ordering.
+query TT
+EXPLAIN WITH c AS MATERIALIZED (SELECT k, g FROM p ORDER BY k)
+SELECT k FROM c ORDER BY k LIMIT 2
+----
+physical_plan
+01)MaterializedCteExec: name=c
+02)--CoalescePartitionsExec
+03)----DataSourceExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+04)--SortPreservingMergeExec: [k@0 ASC NULLS LAST], fetch=2
+05)----SortExec: TopK(fetch=2), expr=[k@0 ASC NULLS LAST], preserve_partitioning=[true]
+06)------ProjectionExec: expr=[k@0 as k]
+07)--------MaterializedCteScanExec: name=c
+
+# Partitioning: the body is hash partitioned on `g` by its aggregate, so the
+# aggregate of the continuation needs no RepartitionExec and no partial
+# aggregate.
+query TT
+EXPLAIN WITH c AS MATERIALIZED (SELECT g, count(*) AS n FROM p GROUP BY g)
+SELECT g, sum(n) FROM c GROUP BY g
+----
+physical_plan
+01)MaterializedCteExec: name=c
+02)--ProjectionExec: expr=[g@0 as g, count(Int64(1))@1 as n]
+03)----AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[count(Int64(1))]
+04)------RepartitionExec: partitioning=Hash([g@0], 4), input_partitions=4
+05)--------AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[count(Int64(1))]
+06)----------DataSourceExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+07)--AggregateExec: mode=SinglePartitioned, gby=[g@0 as g], aggr=[sum(c.n)]
+08)----MaterializedCteScanExec: name=c, partitioning=Hash([g@0], 4)
+
+query II rowsort
+WITH c AS MATERIALIZED (SELECT g, count(*) AS n FROM p GROUP BY g)
+SELECT g, sum(n) FROM c GROUP BY g
+----
+0 100
+1 100
+2 100
+3 100
+4 100
+5 100
+6 100
+7 100
+8 100
+9 100
+
+# Two references with the same partitioning are joined partition by partition.
+statement ok
+SET datafusion.optimizer.hash_join_single_partition_threshold_rows = 0
+
+statement ok
+SET datafusion.optimizer.hash_join_single_partition_threshold = 0
+
+query TT
+EXPLAIN WITH c AS MATERIALIZED (SELECT g, count(*) AS n FROM p GROUP BY g)
+SELECT a.g, a.n + b.n FROM c a JOIN c b ON a.g = b.g
+----
+physical_plan
+01)MaterializedCteExec: name=c
+02)--ProjectionExec: expr=[g@0 as g, count(Int64(1))@1 as n]
+03)----AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[count(Int64(1))]
+04)------RepartitionExec: partitioning=Hash([g@0], 4), input_partitions=4
+05)--------AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[count(Int64(1))]
+06)----------DataSourceExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+07)--ProjectionExec: expr=[g@0 as g, n@1 + n@2 as a.n + b.n]
+08)----HashJoinExec: mode=Partitioned, join_type=Inner, on=[(g@0, g@0)], projection=[g@0, n@1, n@3]
+09)------MaterializedCteScanExec: name=c, partitioning=Hash([g@0], 4)
+10)------MaterializedCteScanExec: name=c, partitioning=Hash([g@0], 4)
+
+query II rowsort
+WITH c AS MATERIALIZED (SELECT g, count(*) AS n FROM p GROUP BY g)
+SELECT a.g, a.n + b.n FROM c a JOIN c b ON a.g = b.g
+----
+0 200
+1 200
+2 200
+3 200
+4 200
+5 200
+6 200
+7 200
+8 200
+9 200
+
+# A later CTE reads an earlier one. The body of `d` uses the partitioning of
+# `c`, and the references to `d` use the partitioning of that body.
+query TT
+EXPLAIN WITH c AS MATERIALIZED (SELECT g, count(*) AS n FROM p GROUP BY g),
+     d AS MATERIALIZED (SELECT g, sum(n) AS s FROM c GROUP BY g)
+SELECT a.g, a.s + b.s FROM d a JOIN d b ON a.g = b.g
+----
+physical_plan
+01)MaterializedCteExec: name=c
+02)--ProjectionExec: expr=[g@0 as g, count(Int64(1))@1 as n]
+03)----AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[count(Int64(1))]
+04)------RepartitionExec: partitioning=Hash([g@0], 4), input_partitions=4
+05)--------AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[count(Int64(1))]
+06)----------DataSourceExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+07)--MaterializedCteExec: name=d
+08)----ProjectionExec: expr=[g@0 as g, sum(c.n)@1 as s]
+09)------AggregateExec: mode=SinglePartitioned, gby=[g@0 as g], aggr=[sum(c.n)]
+10)--------MaterializedCteScanExec: name=c, partitioning=Hash([g@0], 4)
+11)----ProjectionExec: expr=[g@0 as g, s@1 + s@2 as a.s + b.s]
+12)------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(g@0, g@0)], projection=[g@0, s@1, s@3]
+13)--------MaterializedCteScanExec: name=d, partitioning=Hash([g@0], 4)
+14)--------MaterializedCteScanExec: name=d, partitioning=Hash([g@0], 4)
+
+query II rowsort
+WITH c AS MATERIALIZED (SELECT g, count(*) AS n FROM p GROUP BY g),
+     d AS MATERIALIZED (SELECT g, sum(n) AS s FROM c GROUP BY g)
+SELECT a.g, a.s + b.s FROM d a JOIN d b ON a.g = b.g
+----
+0 200
+1 200
+2 200
+3 200
+4 200
+5 200
+6 200
+7 200
+8 200
+9 200
+
+# A CTE that is defined inside the body of another CTE.
+query TT
+EXPLAIN WITH d AS MATERIALIZED (
+  WITH c AS MATERIALIZED (SELECT g, count(*) AS n FROM p GROUP BY g)
+  SELECT g, sum(n) AS s FROM c GROUP BY g
+)
+SELECT g, sum(s) FROM d GROUP BY g
+----
+physical_plan
+01)MaterializedCteExec: name=d
+02)--MaterializedCteExec: name=c
+03)----ProjectionExec: expr=[g@0 as g, count(Int64(1))@1 as n]
+04)------AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[count(Int64(1))]
+05)--------RepartitionExec: partitioning=Hash([g@0], 4), input_partitions=4
+06)----------AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[count(Int64(1))]
+07)------------DataSourceExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+08)----ProjectionExec: expr=[g@0 as g, sum(c.n)@1 as s]
+09)------AggregateExec: mode=SinglePartitioned, gby=[g@0 as g], aggr=[sum(c.n)]
+10)--------MaterializedCteScanExec: name=c, partitioning=Hash([g@0], 4)
+11)--AggregateExec: mode=SinglePartitioned, gby=[g@0 as g], aggr=[sum(d.s)]
+12)----MaterializedCteScanExec: name=d, partitioning=Hash([g@0], 4)
+
+query II rowsort
+WITH d AS MATERIALIZED (
+  WITH c AS MATERIALIZED (SELECT g, count(*) AS n FROM p GROUP BY g)
+  SELECT g, sum(n) AS s FROM c GROUP BY g
+)
+SELECT g, sum(s) FROM d GROUP BY g
+----
+0 100
+1 100
+2 100
+3 100
+4 100
+5 100
+6 100
+7 100
+8 100
+9 100
+
+# A reference inside a scalar subquery also has the properties of the body.
+query TT
+EXPLAIN WITH c AS MATERIALIZED (SELECT g, count(*) AS n FROM p GROUP BY g)
+SELECT (SELECT count(*) FROM (SELECT g FROM c GROUP BY g)), max(n) FROM c
+----
+physical_plan
+01)ScalarSubqueryExec: subqueries=1
+02)--MaterializedCteExec: name=c
+03)----ProjectionExec: expr=[g@0 as g, count(Int64(1))@1 as n]
+04)------AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[count(Int64(1))]
+05)--------RepartitionExec: partitioning=Hash([g@0], 4), input_partitions=4
+06)----------AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[count(Int64(1))]
+07)------------DataSourceExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+08)----ProjectionExec: expr=[scalar_subquery(<pending>) as count(*), max(c.n)@0 as max(c.n)]
+09)------AggregateExec: mode=Final, gby=[], aggr=[max(c.n)]
+10)--------CoalescePartitionsExec
+11)----------AggregateExec: mode=Partial, gby=[], aggr=[max(c.n)]
+12)------------ProjectionExec: expr=[n@1 as n]
+13)--------------MaterializedCteScanExec: name=c, partitioning=Hash([g@0], 4)
+14)--ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
+15)----AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+16)------CoalescePartitionsExec
+17)--------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+18)----------ProjectionExec: expr=[]
+19)------------AggregateExec: mode=SinglePartitioned, gby=[g@0 as g], aggr=[]
+20)--------------ProjectionExec: expr=[g@0 as g]
+21)----------------MaterializedCteScanExec: name=c, partitioning=Hash([g@0], 4)
+
 query II
 WITH c AS MATERIALIZED (SELECT g, count(*) AS n FROM p GROUP BY g)
 SELECT (SELECT count(*) FROM (SELECT g FROM c GROUP BY g)), max(n) FROM c
@@ -640,6 +878,12 @@ SELECT a.g, a.s + b.s FROM pv a JOIN pv b ON a.g = b.g
 
 statement ok
 DROP VIEW pv
+
+statement ok
+RESET datafusion.optimizer.hash_join_single_partition_threshold_rows
+
+statement ok
+RESET datafusion.optimizer.hash_join_single_partition_threshold
 
 statement ok
 RESET datafusion.explain.physical_plan_only
