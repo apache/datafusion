@@ -49,7 +49,7 @@ make_higher_order_function_expr_and_func!(
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "transforms the values of an array",
+    description = "transforms the values of an array. Lambda expressions require a dialect that supports them; set `datafusion.sql_parser.dialect` to `DuckDB` because the default dialect does not parse the `->` syntax.",
     syntax_example = "array_transform(array, lambda)",
     sql_example = r#"```sql
 > select array_transform([1, 2, 3, 4, 5], x -> x*2);
