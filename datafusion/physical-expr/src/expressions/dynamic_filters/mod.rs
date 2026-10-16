@@ -21,6 +21,7 @@ use std::{fmt::Display, hash::Hash, sync::Arc};
 use tokio::sync::watch;
 
 use crate::PhysicalExpr;
+use crate::filter_stats::RemovedRowWork;
 use arrow::datatypes::{DataType, Schema};
 #[cfg(feature = "proto")]
 use datafusion_common::internal_datafusion_err;
@@ -94,6 +95,10 @@ pub struct DynamicFilterPhysicalExpr {
     /// But this can have overhead in production, so it's only included in our tests.
     data_type: Arc<RwLock<Option<DataType>>>,
     nullable: Arc<RwLock<Option<bool>>>,
+    /// The work that the producer of the filter does for each row that the
+    /// filter removes, see [`Self::removed_row_work`]. Shared by all
+    /// derived filters.
+    removed_row_work: Arc<RemovedRowWork>,
 }
 
 impl std::fmt::Debug for DynamicFilterPhysicalExpr {
@@ -223,7 +228,18 @@ impl DynamicFilterPhysicalExpr {
             state_watch,
             data_type: Arc::new(RwLock::new(None)),
             nullable: Arc::new(RwLock::new(None)),
+            removed_row_work: Arc::default(),
         }
+    }
+
+    /// The work that the producer of this filter does for each row that
+    /// the filter removes before it (for example the probe of a hash join),
+    /// as the producer measures it. A consumer that decides if the filter
+    /// is worth its cost uses it as the saving of a removed row (see
+    /// [`OptionalFilterGate`](crate::optional_filter_gate::OptionalFilterGate)).
+    /// The producer records its work in it.
+    pub fn removed_row_work(&self) -> &Arc<RemovedRowWork> {
+        &self.removed_row_work
     }
 
     fn remap_children(
@@ -490,6 +506,7 @@ impl DynamicFilterPhysicalExpr {
             state_watch,
             data_type: Arc::new(RwLock::new(None)),
             nullable: Arc::new(RwLock::new(None)),
+            removed_row_work: Arc::default(),
         }
     }
 }
@@ -518,6 +535,7 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
             state_watch: self.state_watch.clone(),
             data_type: Arc::clone(&self.data_type),
             nullable: Arc::clone(&self.nullable),
+            removed_row_work: Arc::clone(&self.removed_row_work),
         }))
     }
 
@@ -614,6 +632,7 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
             state_watch: _, // Runtime channel, recreated from inner state by from_parts().
             data_type: _,   // Cached test invariant, recomputed from the expression.
             nullable: _,    // Cached test invariant, recomputed from the expression.
+            removed_row_work: _, // Runtime measurement of the producer.
         } = self;
 
         let children = children
@@ -837,6 +856,7 @@ impl DynamicFilterPhysicalExpr {
             state_watch: self.state_watch.clone(),
             data_type: Arc::clone(&self.data_type),
             nullable: Arc::clone(&self.nullable),
+            removed_row_work: Arc::clone(&self.removed_row_work),
         }
     }
 }
