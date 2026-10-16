@@ -357,6 +357,7 @@ fn build_join(
         .collected_count_expr_map
         .get(&decorrelated_subquery)
         .cloned();
+    let subquery_schema = Arc::clone(decorrelated_subquery.schema());
     let aliased_subquery = LogicalPlanBuilder::from(decorrelated_subquery)
         .alias(subquery_alias.to_string())?
         .build()?;
@@ -372,7 +373,14 @@ fn build_join(
     // so re-qualify them with the subquery alias.
     let join_filter_opt =
         conjunction(pull_up.join_filters).map_or(Ok(None), |filter| {
-            replace_qualified_name(filter, &all_correlated_cols, subquery_alias).map(Some)
+            replace_qualified_name(
+                filter,
+                &all_correlated_cols,
+                subquery_alias,
+                &subquery_schema,
+                aliased_subquery.schema(),
+            )
+            .map(Some)
         })?;
 
     // When pull-up did not extract any usable join keys (a correlated subquery

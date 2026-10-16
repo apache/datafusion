@@ -786,6 +786,7 @@ fn build_join(
         return Ok(None);
     }
 
+    let subquery_schema = Arc::clone(new_plan.schema());
     let sub_query_alias = LogicalPlanBuilder::from(new_plan)
         .alias(alias.to_string())?
         .build()?;
@@ -796,9 +797,16 @@ fn build_join(
         .for_each(|cols| all_correlated_cols.extend(cols.iter().cloned()));
 
     // alias the join filter
-    let join_filter_opt = conjunction(pull_up.join_filters)
-        .map_or(Ok(None), |filter| {
-            replace_qualified_name(filter, &all_correlated_cols, alias).map(Some)
+    let join_filter_opt =
+        conjunction(pull_up.join_filters).map_or(Ok(None), |filter| {
+            replace_qualified_name(
+                filter,
+                &all_correlated_cols,
+                alias,
+                &subquery_schema,
+                sub_query_alias.schema(),
+            )
+            .map(Some)
         })?;
 
     // The two sides of the `IN` predicate: the value from the outer plan and

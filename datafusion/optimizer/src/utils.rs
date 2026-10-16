@@ -159,14 +159,33 @@ pub(crate) fn has_all_column_refs(
         == column_refs.len()
 }
 
+/// Rewrites references to the correlated columns `cols` of a decorrelated
+/// subquery, whose schema is `subquery_schema`, into references to the same
+/// columns of the `SubqueryAlias` named `subquery_alias` over it, whose schema
+/// is `aliased_schema`.
+///
+/// `SubqueryAlias` gives columns that share a name unique aliases, so for
+/// example `u.k` and `e.k` become `k` and `k:1`. A column that appears with its
+/// qualifier in the subquery's schema is therefore looked up by its position
+/// there rather than by its name. Others, such as a column of a table inside a
+/// derived table, which the schema only has under the derived table's alias,
+/// keep their name.
 pub(crate) fn replace_qualified_name(
     expr: Expr,
     cols: &BTreeSet<Column>,
     subquery_alias: &str,
+    subquery_schema: &DFSchema,
+    aliased_schema: &DFSchema,
 ) -> Result<Expr> {
     let alias_cols: Vec<Column> = cols
         .iter()
-        .map(|col| Column::new(Some(subquery_alias), &col.name))
+        .map(|col| {
+            let name = match subquery_schema.maybe_index_of_column(col) {
+                Some(index) => aliased_schema.field(index).name(),
+                None => &col.name,
+            };
+            Column::new(Some(subquery_alias), name)
+        })
         .collect();
     let replace_map: HashMap<&Column, &Column> =
         cols.iter().zip(alias_cols.iter()).collect();

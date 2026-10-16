@@ -3575,3 +3575,54 @@ DROP TABLE unnest_outer;
 
 statement ok
 DROP TABLE unnest_inner;
+
+# Correlated predicates on same-named columns of different relations in one subquery
+# must stay distinct when the subquery is decorrelated.
+statement ok
+CREATE TABLE same_name(k INT) AS VALUES (1), (2);
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+query TT
+EXPLAIN SELECT r.k FROM same_name r WHERE EXISTS (SELECT 1 FROM same_name u, same_name e WHERE u.k = r.k AND e.k = r.k + 1);
+----
+logical_plan
+01)LeftSemi Join: r.k = __correlated_sq_1.k:1, CAST(r.k AS Int64) + Int64(1) = CAST(__correlated_sq_1.k AS Int64)
+02)--SubqueryAlias: r
+03)----TableScan: same_name projection=[k]
+04)--SubqueryAlias: __correlated_sq_1
+05)----Projection: e.k, u.k AS k:1
+06)------Cross Join:
+07)--------SubqueryAlias: u
+08)----------TableScan: same_name projection=[k]
+09)--------SubqueryAlias: e
+10)----------TableScan: same_name projection=[k]
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
+
+# Rows with a successor: only 1.
+query I
+SELECT r.k FROM same_name r WHERE EXISTS (SELECT 1 FROM same_name u, same_name e WHERE u.k = r.k AND e.k = r.k + 1);
+----
+1
+
+query I
+SELECT r.k FROM same_name r WHERE NOT EXISTS (SELECT 1 FROM same_name u, same_name e WHERE u.k = r.k AND e.k = r.k + 1);
+----
+2
+
+query I
+SELECT r.k FROM same_name r WHERE r.k IN (SELECT u.k FROM same_name u, same_name e WHERE u.k = r.k AND e.k = r.k + 1);
+----
+1
+
+query II
+SELECT r.k, (SELECT count(*) FROM same_name u, same_name e WHERE u.k = r.k AND e.k = r.k + 1) FROM same_name r ORDER BY r.k;
+----
+1 1
+2 0
+
+statement ok
+DROP TABLE same_name;
