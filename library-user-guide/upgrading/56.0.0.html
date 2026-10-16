@@ -501,6 +501,24 @@ its value type, which is what <code class="docutils literal notranslate"><span c
 <h3><code class="docutils literal notranslate"><span class="pre">MSRV</span></code> updated to 1.95.0<a class="headerlink" href="#msrv-updated-to-1-95-0" title="Link to this heading">#</a></h3>
 <p>The Minimum Supported Rust Version (MSRV) has been updated to <a class="reference external" href="https://releases.rs/docs/1.95.0/"><code class="docutils literal notranslate"><span class="pre">1.95.0</span></code></a>.</p>
 </section>
+<section id="aggregate-group-clustering-apis">
+<h3>Aggregate group-clustering APIs<a class="headerlink" href="#aggregate-group-clustering-apis" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">AggregateExec::input_order_mode()</span></code> has been replaced by
+<code class="docutils literal notranslate"><span class="pre">AggregateExec::group_clustering_mode()</span></code>. It returns a <code class="docutils literal notranslate"><span class="pre">GroupClusteringMode</span></code>:
+<code class="docutils literal notranslate"><span class="pre">None</span></code>, <code class="docutils literal notranslate"><span class="pre">Partial(indices)</span></code>, or <code class="docutils literal notranslate"><span class="pre">Full</span></code>, corresponding to the previous aggregate
+modes <code class="docutils literal notranslate"><span class="pre">Linear</span></code>, <code class="docutils literal notranslate"><span class="pre">PartiallySorted(indices)</span></code>, and <code class="docutils literal notranslate"><span class="pre">Sorted</span></code>.
+<code class="docutils literal notranslate"><span class="pre">AggregateExec::compute_properties</span></code> now accepts <code class="docutils literal notranslate"><span class="pre">&amp;GroupClusteringMode</span></code> in place of
+<code class="docutils literal notranslate"><span class="pre">&amp;InputOrderMode</span></code>.</p>
+<p><code class="docutils literal notranslate"><span class="pre">GroupClusteringMode</span></code> describes the input’s group-clustering guarantees, which
+determine when groups can be emitted during aggregation.</p>
+<p>In <code class="docutils literal notranslate"><span class="pre">datafusion_physical_plan::aggregates::order</span></code>, <code class="docutils literal notranslate"><span class="pre">GroupOrdering</span></code>,
+<code class="docutils literal notranslate"><span class="pre">GroupOrderingPartial</span></code>, and <code class="docutils literal notranslate"><span class="pre">GroupOrderingFull</span></code> have been renamed to
+<code class="docutils literal notranslate"><span class="pre">GroupClustering</span></code>, <code class="docutils literal notranslate"><span class="pre">GroupClusteringPartial</span></code>, and <code class="docutils literal notranslate"><span class="pre">GroupClusteringFull</span></code>.
+<code class="docutils literal notranslate"><span class="pre">GroupClustering::try_new</span></code> accepts <code class="docutils literal notranslate"><span class="pre">&amp;GroupClusteringMode</span></code>.</p>
+<p>Aggregate plans now display <code class="docutils literal notranslate"><span class="pre">group_clustering_mode=Full</span></code> or
+<code class="docutils literal notranslate"><span class="pre">group_clustering_mode=Partial(indices)</span></code> instead of <code class="docutils literal notranslate"><span class="pre">ordering_mode=Sorted</span></code> or
+<code class="docutils literal notranslate"><span class="pre">ordering_mode=PartiallySorted(indices)</span></code>.</p>
+</section>
 <section id="upgrade-arrow-parquet-to-60-0-0-and-object-store-to-0-14-2">
 <h3>Upgrade arrow/parquet to 60.0.0 and object_store to 0.14.2<a class="headerlink" href="#upgrade-arrow-parquet-to-60-0-0-and-object-store-to-0-14-2" title="Link to this heading">#</a></h3>
 <p>DataFusion 56.0.0 uses <code class="docutils literal notranslate"><span class="pre">arrow</span></code> and <code class="docutils literal notranslate"><span class="pre">parquet</span></code> 60.0.0, and <code class="docutils literal notranslate"><span class="pre">object_store</span></code> 0.14.2.
@@ -1524,6 +1542,7 @@ the API breaks.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#session-time-zone-now-applies-to-mixed-timestamp-operations">Session time zone now applies to mixed timestamp operations</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#get-coerce-type-for-list-and-get-coerce-type-for-case-when-are-deprecated"><code class="docutils literal notranslate"><span class="pre">get_coerce_type_for_list</span></code> and <code class="docutils literal notranslate"><span class="pre">get_coerce_type_for_case_when</span></code> are deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#msrv-updated-to-1-95-0"><code class="docutils literal notranslate"><span class="pre">MSRV</span></code> updated to 1.95.0</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#aggregate-group-clustering-apis">Aggregate group-clustering APIs</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#upgrade-arrow-parquet-to-60-0-0-and-object-store-to-0-14-2">Upgrade arrow/parquet to 60.0.0 and object_store to 0.14.2</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#field-and-schema-metadata-now-use-arrow-s-metadata-type">Field and schema metadata now use arrow’s <code class="docutils literal notranslate"><span class="pre">Metadata</span></code> type</a></li>
 </ul>
