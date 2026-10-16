@@ -3422,9 +3422,9 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
     assert_snapshot!(
         union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(false).await?,
         @r"
-    AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
+    AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], group_clustering_mode=Full
       SortPreservingMergeExec: [id@0 ASC NULLS LAST]
-        AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
+        AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[], group_clustering_mode=Full
           UnionExec
             DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
             SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
@@ -3440,9 +3440,9 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
     assert_snapshot!(
         union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(true).await?,
         @r"
-    AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
+    AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], group_clustering_mode=Full
       SortPreservingMergeExec: [id@0 ASC NULLS LAST]
-        AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
+        AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[], group_clustering_mode=Full
           UnionExec
             DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
             SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
@@ -7611,7 +7611,7 @@ async fn execute_logical_plan_rejects_duplicate_unqualified_names_in_replace_vie
 }
 
 #[tokio::test]
-async fn test_duplicate_state_fields_for_dfschema_construct() -> Result<()> {
+async fn test_partial_aggregate_state_fields_have_unique_names() -> Result<()> {
     let ctx = SessionContext::new();
 
     // Simple schema with just the fields we need
@@ -7686,15 +7686,14 @@ async fn test_duplicate_state_fields_for_dfschema_construct() -> Result<()> {
     )
     .expect("Failed to build partial agg");
 
-    // Assert that the schema field names match the expected names
     let expected_field_names = vec![
         "date",
         "ticker",
         "first_value(value)[first_value]",
-        "timestamp@0",
+        "first_value(value)[ordering_0]",
         "first_value(value)[first_value_is_set]",
         "last_value(value)[last_value]",
-        "timestamp@0",
+        "last_value(value)[ordering_0]",
         "last_value(value)[last_value_is_set]",
     ];
 
@@ -7702,12 +7701,7 @@ async fn test_duplicate_state_fields_for_dfschema_construct() -> Result<()> {
     let actual_field_names: Vec<_> = binding.fields().iter().map(|f| f.name()).collect();
     assert_eq!(actual_field_names, expected_field_names);
 
-    // Ensure that DFSchema::try_from does not fail
-    let partial_agg_exec_schema = DFSchema::try_from(partial_agg.schema());
-    assert!(
-        partial_agg_exec_schema.is_ok(),
-        "Expected get AggregateExec schema to succeed with duplicate state fields"
-    );
+    DFSchema::try_from(partial_agg.schema())?;
 
     Ok(())
 }

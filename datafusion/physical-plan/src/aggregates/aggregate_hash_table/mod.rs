@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod clustered_final_table;
+mod clustered_partial_table;
+mod clustered_single_table;
 mod common;
-mod common_ordered;
+mod common_clustered;
 mod final_table;
-mod ordered_final_table;
-mod ordered_partial_table;
-mod ordered_single_table;
 mod partial_reduce_table;
 mod partial_table;
 mod single_table;
@@ -70,7 +70,7 @@ pub(super) struct AggregateTableMetrics {
 impl AggregateTableMetrics {
     pub(super) fn new(agg: &AggregateExec, partition: usize) -> Self {
         let aggregate_labels = agg
-            .aggr_expr
+            .aggr_expr()
             .iter()
             .map(|agg_expr| aggregate_metric_label(agg_expr))
             .collect::<Vec<_>>();
@@ -99,9 +99,11 @@ impl AggregateTableMetrics {
 
 pub(super) use common::{
     AggregateHashTable, FinalMarker, PartialMarker, PartialReduceMarker,
-    PartialSkipMarker, SingleMarker,
+    PartialSkipMarker, SingleMarker, create_group_accumulator,
 };
-pub(super) use common_ordered::{OrderedAggregateTable, OrderedAggregateTableMetrics};
+pub(super) use common_clustered::{
+    ClusteredAggregateTable, ClusteredAggregateTableMetrics,
+};
 
 #[cfg(test)]
 mod tests {

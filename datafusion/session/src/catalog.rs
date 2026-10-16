@@ -20,12 +20,15 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 pub use crate::schema::SchemaProvider;
+use crate::session::Session;
+use async_trait::async_trait;
 use datafusion_common::Result;
 use datafusion_common::not_impl_err;
+use datafusion_expr::CreateExternalCatalog;
 
 /// A catalog list that contains no catalogs.
 ///
-/// [`Session`](crate::Session) implementations that do not provide catalog
+/// [`Session`] implementations that do not provide catalog
 /// access can return this list explicitly.
 #[derive(Debug, Default)]
 pub struct EmptyCatalogProviderList;
@@ -45,6 +48,14 @@ impl CatalogProviderList for EmptyCatalogProviderList {
 
     fn catalog(&self, _name: &str) -> Option<Arc<dyn CatalogProvider>> {
         None
+    }
+
+    fn deregister_catalog(
+        &self,
+        _name: &str,
+        _cascade: bool,
+    ) -> Result<Option<Arc<dyn CatalogProvider>>> {
+        Ok(None)
     }
 }
 
@@ -171,6 +182,14 @@ pub trait CatalogProvider: Any + Debug + Sync + Send {
     ) -> Result<Option<Arc<dyn SchemaProvider>>> {
         not_impl_err!("Deregistering new schemas is not supported")
     }
+
+    /// Called when a catalog is being dropped. Implementations can use this hook
+    /// to prevent a catalog from being dropped if it is not empty.
+    ///
+    /// By default returns a "Not Implemented" error
+    fn prepare_deregister_catalog(&self, _cascade: bool) -> Result<()> {
+        not_impl_err!("Deregistering all schemas is not supported")
+    }
 }
 
 impl dyn CatalogProvider {
@@ -206,6 +225,24 @@ pub trait CatalogProviderList: Any + Debug + Sync + Send {
         catalog: Arc<dyn CatalogProvider>,
     ) -> Option<Arc<dyn CatalogProvider>>;
 
+    /// Removes a catalog from this list, returning it if it existed.
+    ///
+    /// Implementations of this method should return `Ok(None)` if no catalog
+    /// with `name` exists.
+    ///
+    /// If `cascade` is `false`, implementations should return an error if the
+    /// catalog is not empty.
+    ///
+    /// By default returns a "Not Implemented" error
+    fn deregister_catalog(
+        &self,
+        name: &str,
+        cascade: bool,
+    ) -> Result<Option<Arc<dyn CatalogProvider>>> {
+        let _ = (name, cascade);
+        not_impl_err!("Deregistering catalogs is not supported")
+    }
+
     /// Retrieves the list of available catalog names
     fn catalog_names(&self) -> Vec<String>;
 
@@ -231,6 +268,17 @@ impl dyn CatalogProviderList {
     pub fn downcast_ref<T: CatalogProviderList>(&self) -> Option<&T> {
         (self as &dyn Any).downcast_ref()
     }
+}
+
+/// A factory which creates [`CatalogProvider`]s at runtime given a URL.
+#[async_trait]
+pub trait CatalogProviderFactory: Debug + Sync + Send {
+    /// Create a [`CatalogProvider`] using the given `cmd`
+    async fn create(
+        &self,
+        state: &dyn Session,
+        cmd: &CreateExternalCatalog,
+    ) -> Result<Arc<dyn CatalogProvider>>;
 }
 
 #[cfg(test)]

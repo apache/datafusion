@@ -1,0 +1,3 @@
+template sql_benchmarks/projection_subquery/projection_subquery.benchmark.template
+QPAD=05
+NAME=q05_not_in_bare

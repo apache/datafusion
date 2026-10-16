@@ -1,0 +1,19 @@
+name Q08
+group asof_join
+
+expect_plan AsOfJoinExec
+
+run
+-- Left: 10M rows before a 1%-selective predicate; right: 100K rows; no equality key.
+-- Both inputs are ordered by timestamp. The left predicate can run before matching.
+-- Matches the latest right row at or before each retained left timestamp (l.ts >= r.ts).
+WITH left_input AS (
+    SELECT value AS ts, value AS payload FROM range(10000000)
+),
+right_input AS (
+    SELECT value AS ts, value AS payload FROM range(100000)
+)
+SELECT l.ts, l.payload, r.payload AS right_payload
+FROM left_input l
+ASOF JOIN right_input r MATCH_CONDITION (l.ts >= r.ts)
+WHERE l.ts % 100 = 0;
