@@ -35,14 +35,14 @@ use std::task::{Context, Poll};
 use std::vec;
 
 use super::aggregate_hash_table::{accumulator_phases, create_group_accumulator};
-use super::order::GroupOrdering;
+use super::order::GroupClustering;
 use super::skip_partial::SkipAggregationProbe;
 use super::{AggregateExec, format_human_display};
 use crate::aggregates::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
     GroupByMetrics, GroupValues, aggregate_sub_metrics, new_group_values,
 };
-use crate::aggregates::order::GroupOrderingFull;
+use crate::aggregates::order::GroupClusteringFull;
 use crate::aggregates::{
     AggregateInputMode, AggregateMode, AggregateOutputMode, PhysicalGroupBy,
     aggregate_metric_label, create_schema, evaluate_group_by, evaluate_optional,
@@ -355,10 +355,8 @@ pub(crate) struct GroupedHashAggregateStream {
     // TASK-SPECIFIC STATES:
     // Inner states groups together properties, states for a specific task.
     // ========================================================================
-    /// Optional ordering information, that might allow groups to be
-    /// emitted from the hash table prior to seeing the end of the
-    /// input
-    group_ordering: GroupOrdering,
+    /// Tracks groups that can be emitted from the hash table before the input ends.
+    group_clustering: GroupClustering,
 
     /// The spill state object
     spill_state: SpillState,
@@ -533,20 +531,20 @@ impl GroupedHashAggregateStream {
             .collect::<Vec<_>>()
             .join(", ");
         let name = format!("GroupedHashAggregateStream[{partition}] ({agg_fn_names})");
-        let group_ordering = GroupOrdering::try_new(&agg.input_order_mode)?;
-        let oom_mode = match (agg.mode, &group_ordering) {
+        let group_clustering = GroupClustering::try_new(&agg.group_clustering_mode)?;
+        let oom_mode = match (agg.mode, &group_clustering) {
             // In partial aggregation mode, always prefer to emit incomplete results early.
             (AggregateMode::Partial, _) => OutOfMemoryMode::EmitEarly,
             // For non-partial aggregation modes, emitting incomplete results is not an option.
             // Instead, use disk spilling to store sorted, incomplete results, and merge them
             // afterwards.
-            (_, GroupOrdering::None | GroupOrdering::Partial(_))
+            (_, GroupClustering::None | GroupClustering::Partial(_))
                 if context.runtime_env().disk_manager.tmp_files_enabled() =>
             {
                 OutOfMemoryMode::Spill
             }
-            // For `GroupOrdering::Full`, the incoming stream is already sorted. This ensures the
-            // number of incomplete groups can be kept small at all times. If we still hit
+            // For `GroupClustering::Full`, each group is contiguous in the input. This keeps
+            // the number of incomplete groups small at all times. If we still hit
             // an out-of-memory condition, spilling to disk would not be beneficial since the same
             // situation is likely to reoccur when reading back the spilled data.
             // Therefore, we fall back to simply reporting the error immediately.
@@ -555,7 +553,7 @@ impl GroupedHashAggregateStream {
             _ => OutOfMemoryMode::ReportError,
         };
 
-        let group_values = new_group_values(group_schema, &group_ordering)?;
+        let group_values = new_group_values(group_schema, &group_clustering)?;
         let merge_pool = Arc::new(MergeMemoryPool::new(
             Arc::clone(context.memory_pool()),
             MemoryConsumer::new(name)
@@ -595,7 +593,7 @@ impl GroupedHashAggregateStream {
         //   since Final mode expects unique group values as its input
         // - there is only one GROUP BY expressions set
         let skip_aggregation_probe = if agg.mode == AggregateMode::Partial
-            && matches!(group_ordering, GroupOrdering::None)
+            && matches!(group_clustering, GroupClustering::None)
             && agg_group_by.is_single()
         {
             let options = &context.session_config().options().execution;
@@ -651,7 +649,7 @@ impl GroupedHashAggregateStream {
             aggregate_argument_metrics,
             aggregate_accumulator_metrics,
             batch_size,
-            group_ordering,
+            group_clustering,
             input_done: false,
             spill_state,
             group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
@@ -708,7 +706,7 @@ impl Stream for GroupedHashAggregateStream {
                             // this might lead to incorrect output ordering
                             if (self.spill_state.spills.is_empty()
                                 || self.spill_state.is_stream_merging)
-                                && let Some(to_emit) = self.group_ordering.emit_to()
+                                && let Some(to_emit) = self.group_clustering.emit_to()
                             {
                                 timer.done();
                                 if let Some(batch) = self.emit(to_emit, false)? {
@@ -917,7 +915,7 @@ impl GroupedHashAggregateStream {
             .collect::<Vec<_>>();
 
         for group_values in &group_by_values {
-            // Calculate group indices and update ordering information.
+            // Calculate group indices and update the completion tracker.
             let total_num_groups =
                 self.group_by_metrics.time_group_key_preparation(|| {
                     let starting_num_groups = self.group_values.len();
@@ -926,7 +924,7 @@ impl GroupedHashAggregateStream {
                     let group_indices = &self.current_group_indices;
                     let total_num_groups = self.group_values.len();
                     if total_num_groups > starting_num_groups {
-                        self.group_ordering.new_groups(
+                        self.group_clustering.new_groups(
                             group_values,
                             group_indices,
                             total_num_groups,
@@ -1008,7 +1006,7 @@ impl GroupedHashAggregateStream {
                     self.group_values.len()
                 };
 
-                if let Some(emit_to) = self.group_ordering.oom_emit_to(n)
+                if let Some(emit_to) = self.group_clustering.oom_emit_to(n)
                     && let Some(batch) = self.emit(emit_to, false)?
                 {
                     return Ok(Some(ExecutionState::ProducingOutput(batch)));
@@ -1025,7 +1023,7 @@ impl GroupedHashAggregateStream {
         let acc = self.accumulators.iter().map(|x| x.size()).sum::<usize>();
         let groups_and_acc_size = acc
             + self.group_values.size()
-            + self.group_ordering.size()
+            + self.group_clustering.size()
             + self.current_group_indices.allocated_size();
 
         // Reserve extra headroom for sorting during potential spill.
@@ -1071,7 +1069,7 @@ impl GroupedHashAggregateStream {
         let output = group_by_metrics.time_emitting(|| {
             let mut output = self.group_values.emit(emit_to)?;
             if let EmitTo::First(n) = emit_to {
-                self.group_ordering.remove_groups(n);
+                self.group_clustering.remove_groups(n);
             }
 
             // Next output each aggregate value.
@@ -1151,7 +1149,7 @@ impl GroupedHashAggregateStream {
                     .intern(&cols, &mut self.current_group_indices)?;
                 let total_groups = self.group_values.len();
                 if total_groups > starting_groups {
-                    self.group_ordering.new_groups(
+                    self.group_clustering.new_groups(
                         &cols,
                         &self.current_group_indices,
                         total_groups,
@@ -1325,7 +1323,7 @@ impl GroupedHashAggregateStream {
     /// in case of disk spilling, the SPM stream have been drained.
     fn set_input_done_and_produce_output(&mut self) -> Result<()> {
         self.input_done = true;
-        self.group_ordering.input_done();
+        self.group_clustering.input_done();
         // Release the original input pipeline's resources now that we're done
         // reading from it. In the spill branch below, `self.input` is replaced
         // again with a stream that merges spill files.
@@ -1371,12 +1369,12 @@ impl GroupedHashAggregateStream {
             // Reset the group values collectors.
             self.clear_all();
 
-            // We can now use `GroupOrdering::Full` since the spill files are sorted
+            // We can now use `GroupClustering::Full` since the spill files are sorted
             // on the grouping columns.
-            self.group_ordering = GroupOrdering::Full(GroupOrderingFull::new());
+            self.group_clustering = GroupClustering::Full(GroupClusteringFull::new());
 
             // Recreate `group_values` for streaming merge so group ids are assigned
-            // in first-seen order, as required by `GroupOrderingFull`.
+            // in first-seen order, as required by `GroupClusteringFull`.
             // The pre-spill collector may use `vectorized_intern`, which can assign
             // new group ids out of input order under hash collisions. That is the
             // multi-column collector, which also serves a single group column
@@ -1386,7 +1384,7 @@ impl GroupedHashAggregateStream {
                 .spill_state
                 .merging_group_by
                 .group_schema(&self.spill_state.spill_schema)?;
-            self.group_values = new_group_values(group_schema, &self.group_ordering)?;
+            self.group_values = new_group_values(group_schema, &self.group_clustering)?;
 
             // Use `OutOfMemoryMode::ReportError` from this point on
             // to ensure we don't spill the spilled data to disk again.
@@ -1495,7 +1493,7 @@ impl GroupedHashAggregateStream {
 mod tests {
     use super::*;
     use crate::ExecutionPlan;
-    use crate::InputOrderMode;
+    use crate::aggregates::GroupClusteringMode;
     use crate::test::TestMemoryExec;
     use arrow::array::{Int32Array, Int64Array, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
@@ -1782,7 +1780,7 @@ mod tests {
         Ok(())
     }
 
-    // Migrated to OrderedPartialAggregateStream coverage in aggregates/mod.rs;
+    // Migrated to ClusteredPartialAggregateStream coverage in aggregates/mod.rs;
     // kept here for the legacy GroupedHashAggregateStream implementation.
     #[tokio::test]
     async fn test_emit_early_with_partially_sorted() -> Result<()> {
@@ -1850,11 +1848,11 @@ mod tests {
             Arc::clone(&schema),
         )?;
         assert!(matches!(
-            aggregate_exec.input_order_mode(),
-            InputOrderMode::PartiallySorted(_)
+            aggregate_exec.group_clustering_mode(),
+            GroupClusteringMode::Partial(_)
         ));
 
-        // Must not panic with "assertion failed: *current_sort >= n"
+        // Must not panic with "assertion failed: *current_run_start >= n"
         let mut stream = GroupedHashAggregateStream::new(&aggregate_exec, &task_ctx, 0)?;
         while let Some(result) = stream.next().await {
             if let Err(e) = result {
