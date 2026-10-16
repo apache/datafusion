@@ -16,4 +16,5 @@
 // under the License.
 
 pub mod consumer;
+pub(crate) mod grouping_set;
 pub mod producer;

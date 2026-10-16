@@ -1,0 +1,97 @@
+{
+  "relations": [
+    {
+      "root": {
+        "names": [
+          "a",
+          "grouping_set"
+        ],
+        "input": {
+          "aggregate": {
+            "input": {
+              "read": {
+                "baseSchema": {
+                  "names": [
+                    "a",
+                    "b"
+                  ],
+                  "struct": {
+                    "types": [
+                      {
+                        "i64": {
+                          "nullability": "NULLABILITY_REQUIRED"
+                        }
+                      },
+                      {
+                        "i64": {
+                          "nullability": "NULLABILITY_REQUIRED"
+                        }
+                      }
+                    ],
+                    "nullability": "NULLABILITY_REQUIRED"
+                  }
+                },
+                "virtualTable": {
+                  "expressions": [
+                    {
+                      "fields": [
+                        {
+                          "literal": {
+                            "i64": "1"
+                          }
+                        },
+                        {
+                          "literal": {
+                            "i64": "10"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "fields": [
+                        {
+                          "literal": {
+                            "i64": "2"
+                          }
+                        },
+                        {
+                          "literal": {
+                            "i64": "20"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            "groupingExpressions": [
+              {
+                "selection": {
+                  "directReference": {
+                    "structField": {
+                      "field": 0
+                    }
+                  },
+                  "rootReference": {}
+                }
+              }
+            ],
+            "groupings": [
+              {
+                "expressionReferences": [
+                  0
+                ]
+              },
+              {
+                "expressionReferences": [
+                  0
+                ]
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}
