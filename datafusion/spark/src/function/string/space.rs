@@ -19,11 +19,12 @@ use arrow::array::{
     Array, ArrayRef, DictionaryArray, Int32Array, StringArray, StringBuilder,
     as_dictionary_array,
 };
-use arrow::datatypes::{DataType, Int32Type};
+use arrow::datatypes::{DataType, Field, FieldRef, Int32Type};
 use datafusion_common::cast::as_int32_array;
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use std::sync::Arc;
 
@@ -75,6 +76,25 @@ impl ScalarUDFImpl for SparkSpace {
             _ => DataType::Utf8,
         };
         Ok(return_type)
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        // Spark's UnaryExpression follows input nullability for plain integers:
+        // https://github.com/apache/spark/blob/32f7299601108917fb01920a54e084595b7b3bf8/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/Expression.scala#L596-L599
+        let input = &args.arg_fields[0];
+        // Retained dictionaries can have null values even with non-null keys.
+        let nullable = input.is_nullable()
+            || matches!(input.data_type(), DataType::Dictionary(_, _));
+        Ok(Arc::new(Field::new(
+            self.name(),
+            self.return_type(&arg_types)?,
+            nullable,
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -155,12 +175,14 @@ fn spark_space_array_inner(array: &Int32Array) -> StringArray {
 
 #[cfg(test)]
 mod tests {
-    use crate::function::string::space::spark_space;
-    use arrow::array::{Array, Int32Array, Int32DictionaryArray};
-    use arrow::datatypes::Int32Type;
+    use crate::function::string::space::{SparkSpace, spark_space};
+    use arrow::array::{Array, Int32Array, Int32DictionaryArray, RunArray};
+    use arrow::datatypes::{DataType, Field, Int32Type, Schema};
+    use arrow::record_batch::RecordBatch;
+    use datafusion::prelude::SessionContext;
     use datafusion_common::cast::{as_dictionary_array, as_string_array};
     use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr::ColumnarValue;
+    use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarUDF, ScalarUDFImpl};
     use std::sync::Arc;
 
     #[test]
@@ -197,9 +219,20 @@ mod tests {
                 None,
             ])),
         )));
+        let input = Field::new("length", dictionary.data_type(), false);
+        let return_field = SparkSpace::new().return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[input.into()],
+            scalar_arguments: &[None],
+        })?;
+        assert_eq!(
+            return_field.data_type(),
+            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
+        );
+        assert!(return_field.is_nullable());
         let ColumnarValue::Array(result) = spark_space(&[dictionary])? else {
             unreachable!()
         };
+        assert_eq!(result.logical_null_count(), 1);
         let result =
             as_string_array(as_dictionary_array::<Int32Type>(&result)?.values())?;
         assert_eq!(result.value(0), " ");
@@ -222,6 +255,32 @@ mod tests {
             }
             _ => unreachable!(),
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_spark_space_decodes_run_end_encoded_nulls() -> Result<()> {
+        let run_ends = Int32Array::from(vec![1, 2, 3]);
+        let values = Int32Array::from(vec![Some(1), None, Some(0)]);
+        let lengths = RunArray::<Int32Type>::try_new(&run_ends, &values)?;
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "n",
+            lengths.data_type().clone(),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(lengths)])?;
+        let ctx = SessionContext::new();
+        ctx.register_udf(ScalarUDF::from(SparkSpace::new()));
+        ctx.register_batch("lengths", batch)?;
+
+        let df = ctx.sql("SELECT space(n) AS spaces FROM lengths").await?;
+        assert!(df.schema().field(0).is_nullable());
+        let batches = df.collect().await?;
+        let spaces = as_string_array(batches[0].column(0))?;
+        assert_eq!(
+            spaces.iter().collect::<Vec<_>>(),
+            vec![Some(" "), None, Some("")]
+        );
         Ok(())
     }
 }

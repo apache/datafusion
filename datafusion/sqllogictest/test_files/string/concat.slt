@@ -85,6 +85,33 @@ SELECT concat_ws(NULL, 'hello', 'world');
 ----
 NULL
 
+query TTT
+DESCRIBE SELECT concat_ws(NULL, 'hello', 'world') AS joined;
+----
+joined Utf8 YES
+
+query T
+SELECT concat_ws('|', value) FROM VALUES ('hello'), (NULL) AS t(value);
+----
+hello
+(empty)
+
+query TTT
+DESCRIBE SELECT concat_ws('|', value) AS joined FROM VALUES ('hello'), (NULL) AS t(value);
+----
+joined Utf8 NO
+
+query T
+SELECT concat_ws(separator, 'hello', 'world') FROM VALUES ('|'), (NULL) AS t(separator);
+----
+hello|world
+NULL
+
+query TTT
+DESCRIBE SELECT concat_ws(separator, 'hello', 'world') AS joined FROM VALUES ('|'), (NULL) AS t(separator);
+----
+joined Utf8 YES
+
 # Test Binary + Binary scalar concat
 query ?T
 SELECT concat(arrow_cast('hello', 'Binary'), arrow_cast(' world', 'Binary')), arrow_typeof(concat(arrow_cast('hello', 'Binary'), arrow_cast(' world', 'Binary')));
@@ -113,11 +140,35 @@ SELECT concat_ws('|', arrow_cast('hello', 'Utf8View'), arrow_cast('there', 'Larg
 ----
 hello|there|world Utf8View
 
+query TTT
+DESCRIBE SELECT concat_ws('|', arrow_cast('hello', 'LargeUtf8')) AS large_string, concat_ws('|', arrow_cast('hello', 'Utf8View')) AS view_string;
+----
+large_string LargeUtf8 NO
+view_string Utf8View NO
+
 # Test Binary + Binary scalar concat
 query ?T
 SELECT concat_ws(x'7c', arrow_cast('hello', 'Binary'), arrow_cast('world', 'Binary')), arrow_typeof(concat_ws(x'7c', arrow_cast('hello', 'Binary'), arrow_cast('world', 'Binary')));
 ----
 68656c6c6f7c776f726c64 Binary
+
+query TTT
+DESCRIBE SELECT concat_ws(x'7c', arrow_cast('hello', 'Binary')) AS binary, concat_ws(x'7c', arrow_cast('hello', 'LargeBinary')) AS large_binary, concat_ws(x'7c', arrow_cast('hello', 'BinaryView')) AS view_binary;
+----
+binary Binary NO
+large_binary LargeBinary NO
+view_binary BinaryView NO
+
+query ?
+SELECT concat_ws(separator, x'68656c6c6f', x'776f726c64') FROM VALUES (x'7c'), (NULL) AS t(separator);
+----
+68656c6c6f7c776f726c64
+NULL
+
+query TTT
+DESCRIBE SELECT concat_ws(separator, x'68656c6c6f', x'776f726c64') AS joined FROM VALUES (x'7c'), (NULL) AS t(separator);
+----
+joined Binary YES
 
 statement ok
 create table t as values (x'636166c3a9', x'68656c6c6f');
