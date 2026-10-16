@@ -26,6 +26,7 @@ use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, EncodingPreservation, ScalarFunctionArgs,
     ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
 };
+use datafusion_expr_common::ExpressionPlacement;
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -90,6 +91,14 @@ impl ScalarUDFImpl for BitLengthFunc {
         match array {
             ColumnarValue::Array(v) => Ok(ColumnarValue::Array(bit_length(v.as_ref())?)),
             ColumnarValue::Scalar(v) => Ok(ColumnarValue::Scalar(bit_length_scalar(v))),
+        }
+    }
+
+    fn placement(&self, args: &[ExpressionPlacement]) -> ExpressionPlacement {
+        if args[0].should_push_to_leaves() {
+            ExpressionPlacement::MoveTowardsLeafNodes
+        } else {
+            ExpressionPlacement::KeepInPlace
         }
     }
 
