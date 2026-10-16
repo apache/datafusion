@@ -2212,6 +2212,7 @@ The following regular expression functions are supported:
 - [regexp_like](#regexp_like)
 - [regexp_match](#regexp_match)
 - [regexp_replace](#regexp_replace)
+- [regexp_split_to_array](#regexp_split_to_array)
 
 ### `regexp_count`
 
@@ -2368,6 +2369,31 @@ SELECT regexp_replace('aBc', '(b|d)', 'Ab\\1a', 'i');
 ```
 
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/regexp.rs)
+
+### `regexp_split_to_array`
+
+Splits a string into an array using a [regular expression](https://docs.rs/regex/latest/regex/#syntax) as the delimiter. Zero-length matches at the beginning or end of the string, or immediately after a previous match, are ignored. A NULL argument returns NULL without validating the delimiter or flags. Uses DataFusion's regular expression engine, whose syntax, flags, and alternation matching differ from PostgreSQL; for example, `a|ab` matches `a` first rather than the longest alternative `ab`.
+
+```sql
+regexp_split_to_array(str, regexp[, flags])
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **regexp**: Regular expression to use as the delimiter. Can be a constant, column, or function.
+- **flags**: Optional regular expression flags. Refer to the flags reference above for supported flags. The global flag 'g' is not supported.
+
+#### Example
+
+```sql
+> SELECT regexp_split_to_array('one,two;three', '[,;]') AS parts;
++-------------------+
+| parts             |
++-------------------+
+| [one, two, three] |
++-------------------+
+```
 
 ## Time and Date Functions
 
