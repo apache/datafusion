@@ -612,13 +612,8 @@ impl<'a> DFParquetMetadata<'a> {
             physical_file_schema = merged;
         }
 
-        // Both branches below resolve every logical field to a parquet leaf
-        // column. Doing that through `parquet_column` (directly, or via
-        // `StatisticsConverter::try_new`) is O(N) per field and so O(N²) per
-        // file; build the lookup maps once instead.
-        let parquet_schema_descr = file_metadata.schema_descr();
         let leaf_resolver =
-            LeafResolver::new(parquet_schema_descr, &physical_file_schema);
+            LeafResolver::new(file_metadata.schema_descr(), &physical_file_schema);
 
         statistics.column_statistics = if has_statistics {
             let (mut max_accs, mut min_accs) = create_max_min_accs(logical_file_schema);
@@ -637,7 +632,7 @@ impl<'a> DFParquetMetadata<'a> {
                 .iter()
                 .enumerate()
                 .for_each(|(idx, field)| {
-                    match leaf_resolver.converter(field.name(), parquet_schema_descr) {
+                    match leaf_resolver.converter(field.name()) {
                         Ok(stats_converter) => {
                             // An omitted count must not become an exact zero in
                             // file statistics used for pruning and aggregates.

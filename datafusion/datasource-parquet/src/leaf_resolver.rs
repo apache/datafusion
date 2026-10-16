@@ -22,50 +22,39 @@ use datafusion_common::HashMap;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::schema::types::SchemaDescriptor;
 
-/// Resolves an Arrow field name to the index of the matching Parquet leaf
-/// column in O(1), after an O(N) build.
+/// Resolves Arrow field names to Parquet leaf column indices in O(1), after
+/// an O(N) build.
 ///
-/// This exists because [`parquet::arrow::parquet_column`] — and therefore
-/// [`StatisticsConverter::try_new`], which calls it — is O(N) in the number of
-/// columns: it does a linear `Fields::find` over the Arrow schema (twice, in
-/// the `try_new` case) plus a linear scan for the first leaf descended from the
-/// matched root. Callers that resolve *every* field of a file, as
-/// per-file statistics collection does, therefore end up O(N²) per file.
-/// Hoisting the two lookups into maps built once per file makes that O(N).
+/// [`parquet::arrow::parquet_column`], and [`StatisticsConverter::try_new`]
+/// which calls it, is O(N) per lookup, so resolving every field of a file
+/// with it is O(N²). This resolver builds the lookup maps once per file
+/// instead.
 ///
-/// # Semantics
-///
-/// Deliberately identical to [`parquet::arrow::parquet_column`], including its
-/// tie-breaking rules — see [`Self::leaf_index`]. Any divergence would silently
-/// attribute one column's statistics to another, so the equivalence is pinned
-/// by a differential test against `parquet_column` itself.
+/// Results match `parquet_column` exactly, including its tie-breaks (see
+/// [`Self::leaf_index`]). A mismatch would attribute one column's statistics
+/// to another, so the tests compare the two directly.
 pub(crate) struct LeafResolver<'a> {
-    /// The Arrow schema the names are resolved against.
+    parquet_schema: &'a SchemaDescriptor,
     schema: &'a Schema,
-    /// Arrow field name to its root field index. First occurrence wins, to
-    /// match `Fields::find`.
+    /// Arrow field name to root field index. The first field with a name
+    /// wins, as in `Fields::find`.
     name_to_root: HashMap<&'a str, usize>,
-    /// Parquet root field index to the index of its first leaf column, or
-    /// `None` for a root with no leaves (an empty group).
+    /// Parquet root index to its lowest leaf index, or `None` for a root
+    /// with no leaves (an empty group).
     root_to_first_leaf: Vec<Option<usize>>,
 }
 
 impl<'a> LeafResolver<'a> {
-    /// Build the lookup maps. O(number of Arrow fields + number of Parquet
-    /// leaf columns).
-    pub(crate) fn new(parquet_schema: &SchemaDescriptor, schema: &'a Schema) -> Self {
+    pub(crate) fn new(parquet_schema: &'a SchemaDescriptor, schema: &'a Schema) -> Self {
         let fields = schema.fields();
         let mut name_to_root = HashMap::with_capacity(fields.len());
         for (idx, field) in fields.iter().enumerate() {
-            // `Fields::find` returns the *first* field with a given name, so
-            // earlier entries must win over later duplicates.
             name_to_root.entry(field.name().as_str()).or_insert(idx);
         }
 
         let num_roots = parquet_schema.root_schema().get_fields().len();
         let mut root_to_first_leaf = vec![None; num_roots];
-        // Iterate in reverse so that the lowest leaf index for each root is
-        // the value left behind — `parquet_column` takes the first match.
+        // Iterate in reverse so the lowest leaf index for each root is kept.
         for leaf in (0..parquet_schema.columns().len()).rev() {
             let root = parquet_schema.get_column_root_idx(leaf);
             if root < num_roots {
@@ -74,55 +63,52 @@ impl<'a> LeafResolver<'a> {
         }
 
         Self {
+            parquet_schema,
             schema,
             name_to_root,
             root_to_first_leaf,
         }
     }
 
-    /// The Parquet leaf column index for `name`, or `None` when there isn't
-    /// one.
+    /// The Parquet leaf column index for `name`.
     ///
-    /// Returns `None` in exactly the cases [`parquet::arrow::parquet_column`]
-    /// does:
+    /// Returns `None` in the same cases as [`parquet::arrow::parquet_column`]:
     /// * `name` is not in the Arrow schema,
-    /// * the matched field is nested (a struct/list/map may span anywhere from
-    ///   one to three Parquet levels, which this mapping does not model),
-    /// * the matched root has no leaf columns.
+    /// * the matched field is nested,
+    /// * the matched root has no Parquet leaf columns.
     pub(crate) fn leaf_index(&self, name: &str) -> Option<usize> {
+        self.resolve(name).map(|(_, leaf)| leaf)
+    }
+
+    /// Build a [`StatisticsConverter`] for `name`.
+    ///
+    /// When `name` has no leaf this falls back to
+    /// [`StatisticsConverter::try_new`], which is O(N). The fallback gives the
+    /// same error as `try_new` for an unknown column, and is needed because
+    /// [`StatisticsConverter::from_column_index`] cannot express a column with
+    /// no Parquet leaf. Flat schemas never take it.
+    pub(crate) fn converter(
+        &self,
+        name: &str,
+    ) -> parquet::errors::Result<StatisticsConverter<'a>> {
+        match self.resolve(name) {
+            Some((root, leaf)) => StatisticsConverter::from_column_index(
+                leaf,
+                self.schema.field(root),
+                self.parquet_schema,
+            ),
+            None => StatisticsConverter::try_new(name, self.schema, self.parquet_schema),
+        }
+    }
+
+    /// The Arrow root index and Parquet leaf index for `name`.
+    fn resolve(&self, name: &str) -> Option<(usize, usize)> {
         let root = *self.name_to_root.get(name)?;
         if self.schema.field(root).data_type().is_nested() {
             return None;
         }
-        self.root_to_first_leaf.get(root).copied().flatten()
-    }
-
-    /// Build a [`StatisticsConverter`] for `name` without the O(N) name
-    /// lookups [`StatisticsConverter::try_new`] performs.
-    ///
-    /// Falls back to `try_new` when [`Self::leaf_index`] finds no leaf, both to
-    /// reproduce its exact error for an unknown column and because
-    /// [`StatisticsConverter::from_column_index`] cannot express "this column
-    /// has no Parquet leaf". The fallback is O(N), so nested-heavy schemas keep
-    /// the quadratic term; flat schemas — the wide-schema case this targets —
-    /// never take it.
-    pub(crate) fn converter(
-        &self,
-        name: &str,
-        parquet_schema: &'a SchemaDescriptor,
-    ) -> parquet::errors::Result<StatisticsConverter<'a>> {
-        match self.leaf_index(name) {
-            Some(leaf) => {
-                // `leaf_index` returning `Some` guarantees the name is present.
-                let root = self.name_to_root[name];
-                StatisticsConverter::from_column_index(
-                    leaf,
-                    self.schema.field(root),
-                    parquet_schema,
-                )
-            }
-            None => StatisticsConverter::try_new(name, self.schema, parquet_schema),
-        }
+        let leaf = self.root_to_first_leaf.get(root).copied().flatten()?;
+        Some((root, leaf))
     }
 }
 
@@ -131,11 +117,11 @@ mod tests {
     use super::*;
     use arrow::datatypes::{DataType, Field, Fields};
     use parquet::arrow::{ArrowSchemaConverter, parquet_column};
+    use parquet::schema::parser::parse_message_type;
     use std::sync::Arc;
 
-    /// A schema exercising every branch the resolver has to agree with
-    /// `parquet_column` on: plain primitives, a nested struct, a nested list,
-    /// and duplicate field names.
+    /// Primitives, a nested struct, a nested list, and a duplicate field name
+    /// with a different type from the first.
     fn test_schema() -> Schema {
         Schema::new(vec![
             Field::new("a", DataType::Int64, true),
@@ -154,103 +140,154 @@ mod tests {
                 true,
             ),
             Field::new("c", DataType::Float64, true),
-            // Duplicate of "a": `Fields::find` resolves "a" to index 0, so this
-            // field is unreachable by name and the resolver must agree.
-            Field::new("a", DataType::Int64, true),
+            // Unreachable by name: "a" resolves to index 0.
+            Field::new("a", DataType::Utf8, true),
         ])
     }
 
-    /// The resolver must return exactly what `parquet_column` returns, for
-    /// every field name in the schema and for names that are absent.
-    #[test]
-    fn matches_parquet_column() {
-        let schema = test_schema();
-        let descr = ArrowSchemaConverter::new().convert(&schema).unwrap();
-        let resolver = LeafResolver::new(&descr, &schema);
+    fn descriptor(message: &str) -> SchemaDescriptor {
+        SchemaDescriptor::new(Arc::new(parse_message_type(message).unwrap()))
+    }
+
+    /// Asserts `leaf_index` and `converter` agree with `parquet_column` and
+    /// `try_new` for every field name in `schema`, plus some absent names.
+    fn assert_matches_upstream(descr: &SchemaDescriptor, schema: &Schema) {
+        let resolver = LeafResolver::new(descr, schema);
 
         let mut names: Vec<&str> =
             schema.fields().iter().map(|f| f.name().as_str()).collect();
-        // Names that are not in the Arrow schema at all.
         names.extend(["missing", "", "A"]);
 
         for name in names {
-            let expected = parquet_column(&descr, &schema, name).map(|(idx, _)| idx);
+            let expected = parquet_column(descr, schema, name).map(|(idx, _)| idx);
             assert_eq!(
                 resolver.leaf_index(name),
                 expected,
                 "leaf_index disagreed with parquet_column for {name:?}"
             );
+
+            match (
+                resolver.converter(name),
+                StatisticsConverter::try_new(name, schema, descr),
+            ) {
+                (Ok(actual), Ok(expected)) => {
+                    assert_eq!(
+                        actual.parquet_column_index(),
+                        expected.parquet_column_index(),
+                        "converter targeted a different column for {name:?}"
+                    );
+                    assert_eq!(
+                        actual.arrow_field(),
+                        expected.arrow_field(),
+                        "converter used a different Arrow field for {name:?}"
+                    );
+                }
+                (Err(actual), Err(expected)) => {
+                    assert_eq!(actual.to_string(), expected.to_string());
+                }
+                (actual, expected) => panic!(
+                    "converter for {name:?} returned {:?}, try_new returned {:?}",
+                    actual.map(|c| c.parquet_column_index()),
+                    expected.map(|c| c.parquet_column_index()),
+                ),
+            }
         }
     }
 
-    /// Nested fields and absent names must not resolve to a leaf.
     #[test]
-    fn nested_and_missing_have_no_leaf() {
+    fn matches_upstream() {
+        let schema = test_schema();
+        let descr = ArrowSchemaConverter::new().convert(&schema).unwrap();
+        assert_matches_upstream(&descr, &schema);
+    }
+
+    #[test]
+    fn resolves_expected_leaves() {
         let schema = test_schema();
         let descr = ArrowSchemaConverter::new().convert(&schema).unwrap();
         let resolver = LeafResolver::new(&descr, &schema);
 
-        assert_eq!(resolver.leaf_index("s"), None, "struct must not resolve");
-        assert_eq!(resolver.leaf_index("l"), None, "list must not resolve");
+        assert_eq!(resolver.leaf_index("a"), Some(0));
+        assert_eq!(resolver.leaf_index("b"), Some(1));
+        // "s" has two leaves and "l" one, so "c" is leaf 5.
+        assert_eq!(resolver.leaf_index("c"), Some(5));
+        assert_eq!(resolver.leaf_index("s"), None);
+        assert_eq!(resolver.leaf_index("l"), None);
         assert_eq!(resolver.leaf_index("missing"), None);
     }
 
-    /// Primitive fields resolve, and the duplicate name resolves to the first
-    /// occurrence rather than the last.
+    /// The converter for a duplicated name must use the first field's type.
     #[test]
-    fn duplicate_name_resolves_to_first_occurrence() {
+    fn duplicate_name_uses_first_field() {
         let schema = test_schema();
         let descr = ArrowSchemaConverter::new().convert(&schema).unwrap();
         let resolver = LeafResolver::new(&descr, &schema);
 
-        // "a" is roots 0 and 5; root 0's leaf is parquet column 0.
-        assert_eq!(resolver.leaf_index("a"), Some(0));
-        assert_eq!(resolver.leaf_index("b"), Some(1));
-        // "s" contributes two leaves and "l" one, so "c" is the sixth leaf.
-        assert_eq!(resolver.leaf_index("c"), Some(5));
+        let converter = resolver.converter("a").unwrap();
+        assert_eq!(converter.arrow_field().data_type(), &DataType::Int64);
     }
 
-    /// A converter built via the resolver must target the same Parquet column
-    /// as one built by `try_new`.
+    /// A root with no leaves must resolve to no leaf, even when the Arrow
+    /// field at that index is a primitive.
     #[test]
-    fn converter_matches_try_new() {
-        let schema = test_schema();
-        let descr = ArrowSchemaConverter::new().convert(&schema).unwrap();
-        let resolver = LeafResolver::new(&descr, &schema);
-
-        for name in ["a", "b", "c", "s", "l"] {
-            let expected = StatisticsConverter::try_new(name, &schema, &descr).unwrap();
-            let actual = resolver.converter(name, &descr).unwrap();
-            assert_eq!(
-                actual.parquet_column_index(),
-                expected.parquet_column_index(),
-                "converter targeted a different column for {name:?}"
-            );
-            assert_eq!(actual.arrow_field(), expected.arrow_field());
-        }
+    fn empty_group_root() {
+        let descr = descriptor(
+            "message schema {
+                required int64 a;
+                optional group g {}
+                required int64 c;
+            }",
+        );
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("g", DataType::Int64, true),
+            Field::new("c", DataType::Int64, false),
+        ]);
+        assert_eq!(LeafResolver::new(&descr, &schema).leaf_index("g"), None);
+        assert_matches_upstream(&descr, &schema);
     }
 
-    /// An unknown column must produce the same error `try_new` produces.
+    /// A primitive Arrow field over a multi-leaf Parquet root must resolve to
+    /// the root's lowest leaf.
     #[test]
-    fn converter_reports_unknown_column() {
-        let schema = test_schema();
-        let descr = ArrowSchemaConverter::new().convert(&schema).unwrap();
-        let resolver = LeafResolver::new(&descr, &schema);
-
-        let expected = StatisticsConverter::try_new("missing", &schema, &descr)
-            .expect_err("try_new should reject an unknown column");
-        let actual = resolver
-            .converter("missing", &descr)
-            .expect_err("resolver should reject an unknown column");
-        assert_eq!(actual.to_string(), expected.to_string());
+    fn multi_leaf_root_uses_lowest_leaf() {
+        let descr = descriptor(
+            "message schema {
+                required int64 a;
+                optional group g {
+                    required int64 x;
+                    required int64 y;
+                }
+            }",
+        );
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("g", DataType::Int64, true),
+        ]);
+        assert_eq!(LeafResolver::new(&descr, &schema).leaf_index("g"), Some(1));
+        assert_matches_upstream(&descr, &schema);
     }
 
-    /// An empty Arrow schema must not panic and must resolve nothing.
+    /// Arrow fields beyond the last Parquet root must resolve to no leaf.
+    #[test]
+    fn more_arrow_fields_than_parquet_roots() {
+        let descr = descriptor("message schema { required int64 a; }");
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, true),
+        ]);
+        assert_eq!(LeafResolver::new(&descr, &schema).leaf_index("b"), None);
+        assert_matches_upstream(&descr, &schema);
+    }
+
     #[test]
     fn empty_schema() {
         let schema = Schema::empty();
         let descr = ArrowSchemaConverter::new().convert(&schema).unwrap();
-        let resolver = LeafResolver::new(&descr, &schema);
-        assert_eq!(resolver.leaf_index("anything"), None);
+        assert_eq!(
+            LeafResolver::new(&descr, &schema).leaf_index("anything"),
+            None
+        );
+        assert_matches_upstream(&descr, &schema);
     }
 }
