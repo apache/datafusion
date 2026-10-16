@@ -44,7 +44,8 @@ use crate::{
         BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMapType,
         StatefulStreamResult, adjust_indices_by_join_type, apply_join_filter_to_indices,
         build_batch_empty_build_side, build_batch_from_indices,
-        build_null_aware_left_mark_column, need_produce_result_in_final,
+        build_null_aware_left_mark_column, get_anti_indices,
+        need_produce_result_in_final,
     },
 };
 
@@ -539,7 +540,7 @@ fn first_match_probe_rows(
         Map::ArrayMap(array_map) => {
             array_map
                 .get_probe_indices_with_any_match(&state.values, probe_indices_buffer)?;
-            Ok(Some(probe_indices_buffer.clone()))
+            Ok(Some(std::mem::take(probe_indices_buffer)))
         }
         Map::HashMap(map) => {
             let Some(probe) = map.first_match_probe() else {
@@ -549,7 +550,6 @@ fn first_match_probe_rows(
                 probe,
                 hashes,
                 state.valid_keys.as_ref(),
-                state.batch.num_rows(),
                 probe_indices_buffer,
                 build_indices_buffer,
                 |build_indices, probe_indices| {
@@ -581,7 +581,6 @@ fn first_match_hashmap_rows(
     probe: &dyn FirstMatchProbe,
     hashes: &[u64],
     valid_keys: Option<&NullBuffer>,
-    num_rows: usize,
     probe_indices_buffer: &mut Vec<u32>,
     build_indices_buffer: &mut Vec<u64>,
     mut equal_keys: impl FnMut(&UInt64Array, &UInt32Array) -> Result<UInt32Array>,
@@ -594,11 +593,8 @@ fn first_match_hashmap_rows(
     );
 
     let unique_hashes = probe.has_unique_hashes();
-    let mut matched_flags = if unique_hashes {
-        vec![]
-    } else {
-        vec![false; num_rows]
-    };
+    // Only allocated if a round leaves some candidate unresolved.
+    let mut matched_flags: Vec<bool> = vec![];
     let mut matched: Vec<u32> = vec![];
     let mut rounds = 0;
     while !probe_indices_buffer.is_empty() {
@@ -607,13 +603,24 @@ fn first_match_hashmap_rows(
         let probe_indices: UInt32Array = std::mem::take(probe_indices_buffer).into();
 
         let matched_probe_indices = equal_keys(&build_indices, &probe_indices)?;
+        // With a single build row per hash there is no next candidate, and
+        // when every candidate matched there is nothing left to advance.
+        let resolved =
+            unique_hashes || matched_probe_indices.len() == probe_indices.len();
 
         *build_indices_buffer = build_indices.into_parts().1.into();
         *probe_indices_buffer = probe_indices.into_parts().1.into();
 
-        if unique_hashes {
-            matched = matched_probe_indices.into_parts().1.into();
+        if resolved {
+            if matched.is_empty() {
+                matched = matched_probe_indices.into_parts().1.into();
+            } else {
+                matched.extend_from_slice(matched_probe_indices.values());
+            }
             break;
+        }
+        if matched_flags.is_empty() {
+            matched_flags = vec![false; hashes.len()];
         }
         for &probe_idx in matched_probe_indices.values() {
             matched_flags[probe_idx as usize] = true;
@@ -625,19 +632,6 @@ fn first_match_hashmap_rows(
         matched.sort_unstable();
     }
     Ok(matched)
-}
-
-/// Returns the indices in `0..num_rows` that are absent from `matched`, which
-/// must be sorted and in range.
-fn complement_indices(matched: &[u32], num_rows: usize) -> Vec<u32> {
-    let mut unmatched = Vec::with_capacity(num_rows - matched.len());
-    let mut next = 0;
-    for &idx in matched {
-        unmatched.extend(next..idx);
-        next = idx + 1;
-    }
-    unmatched.extend(next..num_rows as u32);
-    unmatched
 }
 
 /// Counts the number of distinct elements in the input array.
@@ -1029,14 +1023,16 @@ impl HashJoinStream {
         {
             self.join_metrics.probe_hit_rate.add_part(matched.len());
 
-            let mut right_indices: UInt32Array = if self.join_type == JoinType::RightSemi
-            {
-                matched.into()
+            // `avg_fanout` is intentionally not updated: the probe stops at the
+            // first match, so the number of matches per row is not known.
+            let matched = UInt32Array::from(matched);
+            let mut right_indices = if self.join_type == JoinType::RightSemi {
+                matched
             } else {
-                let unmatched = complement_indices(&matched, state.batch.num_rows());
+                let unmatched = get_anti_indices(0..state.batch.num_rows(), &matched);
                 // Keep the allocation for the next probe batch.
-                self.probe_indices_buffer = matched;
-                unmatched.into()
+                self.probe_indices_buffer = matched.into_parts().1.into();
+                unmatched
             };
             if self.null_aware == Some(NullAwareMode::RightAnti) {
                 right_indices = drop_null_probe_keys(state, right_indices);
@@ -1068,6 +1064,10 @@ impl HashJoinStream {
                     None,
                 )?
             };
+            if self.join_type == JoinType::RightSemi {
+                // Keep the allocation for the next probe batch.
+                self.probe_indices_buffer = right_indices.into_parts().1.into();
+            }
             let push_status = self.output_buffer.push_batch(batch)?;
             timer.done();
 
@@ -1980,7 +1980,6 @@ mod tests {
             probe,
             probe_hashes,
             valid_keys,
-            probe_keys.len(),
             &mut vec![],
             &mut vec![],
             |build_indices, probe_indices| {
@@ -2056,12 +2055,5 @@ mod tests {
             None,
         );
         assert_eq!(matched, vec![0, 2]);
-    }
-
-    #[test]
-    fn complement_indices_returns_unmatched_rows() {
-        assert_eq!(complement_indices(&[], 3), vec![0, 1, 2]);
-        assert_eq!(complement_indices(&[0, 2, 3], 6), vec![1, 4, 5]);
-        assert_eq!(complement_indices(&[0, 1, 2], 3), Vec::<u32>::new());
     }
 }
