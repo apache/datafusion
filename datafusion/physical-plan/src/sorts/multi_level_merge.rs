@@ -154,6 +154,8 @@ pub(crate) struct MultiLevelMergeBuilder {
     expr: LexOrdering,
     metrics: BaselineMetrics,
     batch_size: usize,
+    /// See [`StreamingMergeBuilder::with_max_batch_bytes`]
+    max_batch_bytes: Option<usize>,
     reservation: MemoryReservation,
     /// Workspace retained across retries and intermediate spill passes.
     merge_pool: Option<Arc<MergeMemoryPool>>,
@@ -198,6 +200,7 @@ impl MultiLevelMergeBuilder {
             expr,
             metrics,
             batch_size,
+            max_batch_bytes: None,
             reservation,
             merge_pool: None,
             reserve_replay_headroom: false,
@@ -209,6 +212,13 @@ impl MultiLevelMergeBuilder {
 
     pub(super) fn with_merge_pool(mut self, pool: Option<Arc<MergeMemoryPool>>) -> Self {
         self.merge_pool = pool;
+        self
+    }
+
+    /// Applies [`StreamingMergeBuilder::with_max_batch_bytes`] to every pass,
+    /// including the passes whose output is spilled again.
+    pub(super) fn with_max_batch_bytes(mut self, max_batch_bytes: Option<usize>) -> Self {
+        self.max_batch_bytes = max_batch_bytes;
         self
     }
 
@@ -542,7 +552,8 @@ impl MultiLevelMergeBuilder {
                 self.metrics.intermediate()
             })
             .with_round_robin_tie_breaker(self.enable_round_robin_tie_breaker)
-            .with_streams(streams);
+            .with_streams(streams)
+            .with_max_batch_bytes(self.max_batch_bytes);
 
         if !all_in_memory {
             // Don't track memory used by this stream as we reserve that memory by worst case sceneries
