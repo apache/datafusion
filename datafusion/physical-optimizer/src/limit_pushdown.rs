@@ -64,6 +64,9 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
+use crate::optimizer::{
+    ConfigOnlyContext, PhysicalOptimizerContext, with_statistics_context,
+};
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
@@ -111,7 +114,15 @@ impl PhysicalOptimizerRule for LimitPushdown {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _config: &ConfigOptions,
+        config: &ConfigOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.optimize_with_context(plan, &ConfigOnlyContext::new(config))
+    }
+
+    fn optimize_with_context(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        context: &dyn PhysicalOptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let global_state = GlobalRequirements {
             fetch: None,
@@ -119,7 +130,9 @@ impl PhysicalOptimizerRule for LimitPushdown {
             satisfied: false,
             preserve_order: false,
         };
-        pushdown_limits(plan, global_state)
+        with_statistics_context(context, |stats_ctx| {
+            pushdown_limits(plan, global_state, stats_ctx)
+        })
     }
 
     fn name(&self) -> &str {
@@ -145,9 +158,33 @@ struct LimitInfo {
 ///
 /// If a limit is encountered, a [`TreeNodeRecursion::Stop`] is returned. Otherwise,
 /// return a [`TreeNodeRecursion::Continue`].
+///
+/// Computes statistics with a new [`StatisticsContext`] that has no statistics
+/// providers. A context built from a statistics registry, as [`LimitPushdown`]
+/// uses, also consults the registered providers, so switching to
+/// [`pushdown_limit_helper_with_stats`] with such a context can change the
+/// result when providers are registered.
+#[deprecated(
+    since = "56.0.0",
+    note = "use `pushdown_limit_helper_with_stats` and share one `StatisticsContext` across calls"
+)]
 pub fn pushdown_limit_helper(
+    pushdown_plan: Arc<dyn ExecutionPlan>,
+    global_state: GlobalRequirements,
+) -> Result<(Transformed<Arc<dyn ExecutionPlan>>, GlobalRequirements)> {
+    pushdown_limit_helper_with_stats(
+        pushdown_plan,
+        global_state,
+        &StatisticsContext::new(),
+    )
+}
+
+/// Like [`pushdown_limit_helper`], but computes statistics with `stats_ctx`,
+/// so its cache can be shared with other calls and other rules.
+pub fn pushdown_limit_helper_with_stats(
     mut pushdown_plan: Arc<dyn ExecutionPlan>,
     mut global_state: GlobalRequirements,
+    stats_ctx: &StatisticsContext,
 ) -> Result<(Transformed<Arc<dyn ExecutionPlan>>, GlobalRequirements)> {
     // Extract limit, if exist, and return child inputs.
     if let Some(limit_info) = extract_limit(&pushdown_plan) {
@@ -165,7 +202,7 @@ pub fn pushdown_limit_helper(
         global_state.satisfied = false;
 
         if let Some(fetch) = fetch
-            && limit_satisfied_by_input(&limit_info.input, skip, fetch)?
+            && limit_satisfied_by_input(&limit_info.input, skip, fetch, stats_ctx)?
         {
             // The input already produces at most `fetch` rows, so no new limit
             // node is needed. Mark satisfied so downstream won't re-add one,
@@ -315,6 +352,7 @@ fn limit_satisfied_by_input(
     plan: &Arc<dyn ExecutionPlan>,
     skip: usize,
     fetch: usize,
+    stats_ctx: &StatisticsContext,
 ) -> Result<bool> {
     if skip > 0 {
         return Ok(false);
@@ -324,7 +362,7 @@ fn limit_satisfied_by_input(
         return Ok(false);
     }
 
-    let Some(num_rows) = limit_eliminable_exact_num_rows(plan)? else {
+    let Some(num_rows) = limit_eliminable_exact_num_rows(plan, stats_ctx)? else {
         return Ok(false);
     };
 
@@ -335,6 +373,7 @@ fn limit_satisfied_by_input(
 /// whose row-count guarantees are strong enough to remove a limit.
 fn limit_eliminable_exact_num_rows(
     plan: &Arc<dyn ExecutionPlan>,
+    stats_ctx: &StatisticsContext,
 ) -> Result<Option<usize>> {
     // Unwrap any wrapping ProjectionExec layers; projections preserve row count
     // but may derive statistics in ways that are not trustworthy, so we peek
@@ -353,8 +392,8 @@ fn limit_eliminable_exact_num_rows(
     }
 
     if matches!(
-        StatisticsContext::new()
-            .compute(current.as_ref(), &StatisticsArgs::new())?
+        stats_ctx
+            .compute_arc(current, &StatisticsArgs::new())?
             .num_rows,
         Precision::Exact(0)
     ) {
@@ -368,15 +407,17 @@ fn limit_eliminable_exact_num_rows(
 pub(crate) fn pushdown_limits(
     pushdown_plan: Arc<dyn ExecutionPlan>,
     global_state: GlobalRequirements,
+    stats_ctx: &StatisticsContext,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     // Call pushdown_limit_helper.
     // This will either extract the limit node (returning the child), or apply the limit pushdown.
     let (mut new_node, mut global_state) =
-        pushdown_limit_helper(pushdown_plan, global_state)?;
+        pushdown_limit_helper_with_stats(pushdown_plan, global_state, stats_ctx)?;
 
     // While limits exist, continue combining the global_state.
     while new_node.tnr == TreeNodeRecursion::Stop {
-        (new_node, global_state) = pushdown_limit_helper(new_node.data, global_state)?;
+        (new_node, global_state) =
+            pushdown_limit_helper_with_stats(new_node.data, global_state, stats_ctx)?;
     }
 
     // Once a limit has been materialized above the current node, child
@@ -396,6 +437,7 @@ pub(crate) fn pushdown_limits(
             let new_child = pushdown_limits(
                 Arc::<dyn ExecutionPlan>::clone(child),
                 global_state.clone(),
+                stats_ctx,
             )?;
             // Tracking if any of the children changed
             changed |= !Arc::ptr_eq(child, &new_child);

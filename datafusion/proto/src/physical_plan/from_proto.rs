@@ -269,7 +269,9 @@ pub fn parse_physical_expr_with_converter(
         // to the right constructor.
         ExprType::Column(_) => Column::try_from_proto(proto, &decode_ctx)?,
         ExprType::UnknownColumn(_) => UnKnownColumn::try_from_proto(proto, &decode_ctx)?,
-        ExprType::Literal(_) => Literal::try_from_proto(proto, &decode_ctx)?,
+        ExprType::Literal(_) | ExprType::LiteralWithMetadata(_) => {
+            Literal::try_from_proto(proto, &decode_ctx)?
+        }
         ExprType::BinaryExpr(_) => BinaryExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::AggregateExpr(_) => {
             return not_impl_err!(

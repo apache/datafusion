@@ -1,0 +1,12 @@
+# LEFT JOIN, selective: every streamed row matches, but only the 1-4 smallest buffered keys, so its
+# first match sits at the far end of the buffered side while the output stays small.
+
+subgroup selective
+
+template sql_benchmarks/pwmj/pwmj.benchmark.template
+QPAD=14
+JOIN=LEFT
+JOIN_KIND=Left
+RIGHT_ROWS=2000000
+RIGHT_KEY=2 + h % 4
+EXPECTED_ROWS=5099996

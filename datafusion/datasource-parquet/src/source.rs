@@ -537,24 +537,6 @@ impl ParquetSource {
     }
 }
 
-/// Parses datafusion.common.config.ParquetOptions.coerce_int96 String to a arrow_schema.datatype.TimeUnit
-pub(crate) fn parse_coerce_int96_string(
-    str_setting: &str,
-) -> datafusion_common::Result<TimeUnit> {
-    let str_setting_lower: &str = &str_setting.to_lowercase();
-
-    match str_setting_lower {
-        "ns" => Ok(TimeUnit::Nanosecond),
-        "us" => Ok(TimeUnit::Microsecond),
-        "ms" => Ok(TimeUnit::Millisecond),
-        "s" => Ok(TimeUnit::Second),
-        _ => Err(DataFusionError::Configuration(format!(
-            "Unknown or unsupported parquet coerce_int96: \
-        {str_setting}. Valid values are: ns, us, ms, and s."
-        ))),
-    }
-}
-
 /// Validates that `tz` is a parseable IANA timezone and returns it as an
 /// `Arc<str>` for use in `Timestamp(_, Some(tz))` types.
 pub(crate) fn parse_coerce_int96_tz_string(
@@ -617,8 +599,7 @@ impl FileSource for ParquetSource {
             .table_parquet_options
             .global
             .coerce_int96
-            .as_ref()
-            .map(|time_unit| parse_coerce_int96_string(time_unit.as_str()).unwrap());
+            .map(TimeUnit::from);
         let coerce_int96_tz = self
             .table_parquet_options
             .global
@@ -677,6 +658,14 @@ impl FileSource for ParquetSource {
             encryption_factory: self.get_encryption_factory_with_config(),
             max_predicate_cache_size: self.max_predicate_cache_size(),
             max_in_list_size: self.max_in_list_size(),
+            enable_rle_to_dictionary: self
+                .table_parquet_options
+                .global
+                .enable_rle_to_dictionary,
+            row_group_range_assignment: self
+                .table_parquet_options
+                .global
+                .row_group_range_assignment,
             reverse_row_groups: self.reverse_row_groups,
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             virtual_state,
@@ -844,15 +833,14 @@ impl FileSource for ParquetSource {
                         )?;
                     }
                 }
-                Ok(())
             }
             DisplayFormatType::TreeRender => {
                 if let Some(predicate) = self.filter() {
                     writeln!(f, "predicate={}", fmt_sql(predicate.as_ref()))?;
                 }
-                Ok(())
             }
         }
+        Ok(())
     }
 
     fn try_pushdown_filters(
@@ -996,8 +984,7 @@ impl FileSource for ParquetSource {
         // is already in prefix order the stats-based reorder is mostly
         // a no-op anyway, so the trade-off is plainly bad.
         for prefix_len in 1..order.len() {
-            let prefix = order[..prefix_len].to_vec();
-            if eq_properties.ordering_satisfy(prefix.iter().cloned())? {
+            if eq_properties.ordering_satisfy(order[..prefix_len].iter().cloned())? {
                 return Ok(SortOrderPushdownResult::Unsupported);
             }
         }

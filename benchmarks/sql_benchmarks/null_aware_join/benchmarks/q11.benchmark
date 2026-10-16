@@ -1,0 +1,35 @@
+name Q11
+group null_aware_join
+
+load sql_benchmarks/null_aware_join/init/load.sql
+
+# Correctness canary: the NOT IN result must match a reference count that does
+# not use NOT IN. It holds for every NAJ_ROWS. The outer tuple holds no NULL, so
+# a subquery row makes it UNKNOWN or TRUE exactly when `z` matches and `id_n1`
+# is NULL or equal; the row is kept only when no such subquery row exists.
+assert I
+SELECT count(*) = (
+  SELECT count(*)
+  FROM small_outer o
+  WHERE NOT EXISTS (
+    SELECT 1 FROM small_inner i
+    WHERE i.z = o.z AND (i.id_n1 IS NULL OR i.id_n1 = o.id_n0)
+  )
+)
+FROM small_outer o
+WHERE (o.id_n0, o.z) NOT IN (SELECT i.id_n1, i.z FROM small_inner i);
+----
+true
+
+expect_plan HashJoinExec
+
+run
+-- Q11: uncorrelated multi-column NOT IN with 1% NULL in one subquery element.
+-- Each NULL-valued subquery row is paired with every outer row and the pair is
+-- kept as UNKNOWN only when the other element matches, so the cost grows with
+-- (outer rows) x (NULL-valued subquery rows). Compare with Q10 and Q12.
+SELECT count(*)
+FROM small_outer o
+WHERE (o.id_n0, o.z) NOT IN (SELECT i.id_n1, i.z FROM small_inner i);
+
+cleanup sql_benchmarks/null_aware_join/init/cleanup.sql

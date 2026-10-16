@@ -137,7 +137,8 @@ fn try_push_down_join_filter(
         None => match join.join_type() {
             JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
                 // Build projections that ignore the newly projected columns.
-                let mut projections = Vec::new();
+                let mut projections =
+                    Vec::with_capacity(original_lhs_length + original_rhs_length);
                 projections.extend(0..original_lhs_length);
                 projections.extend(new_lhs_length..new_lhs_length + original_rhs_length);
                 projections
@@ -240,7 +241,7 @@ fn minimize_join_filter(
     lhs_schema: &Schema,
     rhs_schema: &Schema,
 ) -> JoinFilter {
-    let mut used_columns = HashSet::new();
+    let mut used_columns = HashSet::with_capacity(old_column_indices.len());
     expr.apply(|expr| {
         if let Some(col) = expr.downcast_ref::<Column>() {
             used_columns.insert(col.index());
