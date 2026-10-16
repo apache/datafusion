@@ -1727,3 +1727,34 @@ order by 1, 2;
 
 statement ok
 drop table test;
+
+# Dynamic filters produced by a recursive term must be reset between
+# iterations. Otherwise the second execution of this uncorrelated aggregate
+# reuses the first iteration's MAX bound and scans no rows.
+statement ok
+COPY (SELECT CAST(value AS DOUBLE) AS r FROM generate_series(0, 128)) TO 'test_files/scratch/cte/dynamic_filter_recursive.parquet' STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE dynamic_filter_recursive STORED AS PARQUET LOCATION 'test_files/scratch/cte/dynamic_filter_recursive.parquet';
+
+query IR rowsort
+WITH RECURSIVE w(n, m) AS (
+    SELECT 0, CAST(NULL AS DOUBLE)
+    UNION ALL
+    SELECT w.n + 1, x.m
+    FROM w CROSS JOIN (
+        SELECT MAX(r) AS m
+        FROM dynamic_filter_recursive
+        WHERE r % 2 = 0
+    ) x
+    WHERE w.n < 3
+)
+SELECT n, m FROM w;
+----
+0 NULL
+1 128
+2 128
+3 128
+
+statement ok
+DROP TABLE dynamic_filter_recursive;
