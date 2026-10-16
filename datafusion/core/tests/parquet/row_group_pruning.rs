@@ -1003,9 +1003,24 @@ async fn prune_decimal_eq() {
         .with_expected_rows(2)
         .test_row_group_prune()
         .await;
+    // Increasing scale here narrows integer capacity, so the retained cast
+    // has no literal guarantee and its Bloom filter is not evaluated.
     RowGroupPruningTest::new()
         .with_scenario(Scenario::DecimalLargePrecision)
         .with_query("SELECT * FROM t where decimal_col = 4.00")
+        .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(2))
+        .with_pruned_by_stats(Some(1))
+        .with_pruned_files(Some(0))
+        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_by_bloom_filter(Some(0))
+        .with_expected_rows(2)
+        .test_row_group_prune()
+        .await;
+    // A source-typed decimal literal exposes a usable Bloom-filter guarantee.
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::DecimalLargePrecision)
+        .with_query("SELECT * FROM t where decimal_col = cast(4.00 as decimal(38,2))")
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
