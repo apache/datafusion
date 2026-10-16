@@ -27,12 +27,12 @@ DataFusion operators expose runtime metrics so you can understand where time is 
 
 `BaselineMetrics` are available in most physical operators to capture common measurements.
 
-| Metric          | Description                                                                                                                                                                                        |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| elapsed_compute | CPU time the operator actively spends processing work.                                                                                                                                             |
-| output_rows     | Total number of rows the operator produces.                                                                                                                                                        |
-| output_bytes    | Memory usage of all output batches. Note: This value may be overestimated. If multiple output `RecordBatch` instances share underlying memory buffers, their sizes will be counted multiple times. |
-| output_batches  | Total number of output batches the operator produces.                                                                                                                                              |
+| Metric          | Description                                                                                                                                                                                                                                                                                                     |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| elapsed_compute | CPU time the operator actively spends processing work.                                                                                                                                                                                                                                                          |
+| output_rows     | Total number of rows the operator produces.                                                                                                                                                                                                                                                                     |
+| output_bytes    | Memory usage of all output batches, computed as the sum of each column's `Array::get_array_memory_size`. Note: This value may be overestimated: a buffer shared between two columns, or between an array and its children, is counted once per reference, and each array's own in-memory structure is included. |
+| output_batches  | Total number of output batches the operator produces.                                                                                                                                                                                                                                                           |
 
 ## Operator-specific Metrics
 
