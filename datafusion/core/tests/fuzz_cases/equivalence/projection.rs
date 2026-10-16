@@ -16,8 +16,9 @@
 // under the License.
 
 use crate::fuzz_cases::equivalence::utils::{
-    TestScalarUDF, apply_projection, contains_overflowable_arithmetic,
-    create_random_schema, generate_table_for_eq_properties, is_table_same_after_sort,
+    NULL_PCTS, TestScalarUDF, apply_projection, assert_random_ordering_satisfy_is_sound,
+    contains_conservative_ordering_op, create_random_schema,
+    generate_table_for_eq_properties, is_table_same_after_sort,
 };
 use arrow::compute::SortOptions;
 use datafusion_common::Result;
@@ -29,6 +30,8 @@ use datafusion_physical_expr::{PhysicalExprRef, ScalarFunctionExpr};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use itertools::Itertools;
+use rand::SeedableRng;
+use rand::rngs::StdRng;
 use std::sync::Arc;
 
 #[test]
@@ -37,12 +40,16 @@ fn project_orderings_random() -> Result<()> {
     const N_ELEMENTS: usize = 125;
     const N_DISTINCT: usize = 5;
 
-    for seed in 0..N_RANDOM_SCHEMA {
+    for (seed, &null_pct) in (0..N_RANDOM_SCHEMA).cartesian_product(NULL_PCTS) {
         // Create a random schema with random properties
-        let (test_schema, eq_properties) = create_random_schema(seed as u64)?;
+        let (test_schema, eq_properties) = create_random_schema(seed as u64, null_pct)?;
         // Generate a data that satisfies properties given
-        let table_data_with_properties =
-            generate_table_for_eq_properties(&eq_properties, N_ELEMENTS, N_DISTINCT)?;
+        let table_data_with_properties = generate_table_for_eq_properties(
+            &eq_properties,
+            N_ELEMENTS,
+            N_DISTINCT,
+            null_pct,
+        )?;
         // Floor(a)
         let test_fun = Arc::new(ScalarUDF::new_from_impl(TestScalarUDF::new()));
         let col_a = col("a", &test_schema)?;
@@ -84,7 +91,7 @@ fn project_orderings_random() -> Result<()> {
                 // Make sure each ordering after projection is valid.
                 for ordering in projected_eq.oeq_class().iter() {
                     let err_msg = format!(
-                        "Error in test case ordering:{ordering:?}, eq_properties {eq_properties}, proj_exprs: {proj_exprs:?}",
+                        "Error in test case seed: {seed}, null_pct: {null_pct}, ordering:{ordering:?}, eq_properties {eq_properties}, proj_exprs: {proj_exprs:?}",
                     );
                     // Since ordered section satisfies schema, we expect
                     // that result will be same after sort (e.g sort was unnecessary).
@@ -111,12 +118,16 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
         nulls_first: false,
     };
 
-    for seed in 0..N_RANDOM_SCHEMA {
+    for (seed, &null_pct) in (0..N_RANDOM_SCHEMA).cartesian_product(NULL_PCTS) {
         // Create a random schema with random properties
-        let (test_schema, eq_properties) = create_random_schema(seed as u64)?;
+        let (test_schema, eq_properties) = create_random_schema(seed as u64, null_pct)?;
         // Generate a data that satisfies properties given
-        let table_data_with_properties =
-            generate_table_for_eq_properties(&eq_properties, N_ELEMENTS, N_DISTINCT)?;
+        let table_data_with_properties = generate_table_for_eq_properties(
+            &eq_properties,
+            N_ELEMENTS,
+            N_DISTINCT,
+            null_pct,
+        )?;
         // Floor(a)
         let test_fun = Arc::new(ScalarUDF::new_from_impl(TestScalarUDF::new()));
         let col_a = col("a", &test_schema)?;
@@ -143,6 +154,7 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
             (a_plus_b, "a+b"),
         ];
 
+        let mut options_rng = StdRng::seed_from_u64(seed as u64);
         for n_req in 0..=proj_exprs.len() {
             for proj_exprs in proj_exprs.iter().combinations(n_req) {
                 let proj_exprs = proj_exprs
@@ -166,6 +178,13 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
 
                 for n_req in 1..=projected_exprs.len() {
                     for exprs in projected_exprs.iter().combinations(n_req) {
+                        assert_random_ordering_satisfy_is_sound(
+                            &projected_eq,
+                            &exprs,
+                            &projected_batch,
+                            &mut options_rng,
+                            &format!("seed: {seed}, null_pct: {null_pct}"),
+                        )?;
                         let sort_exprs = exprs.into_iter().map(|expr| {
                             PhysicalSortExpr::new(Arc::clone(expr), SORT_OPTIONS)
                         });
@@ -177,10 +196,11 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
                         let expected =
                             is_table_same_after_sort(ordering.clone(), &projected_batch)?;
                         let err_msg = format!(
-                            "Error in test case requirement:{ordering:?}, expected: {expected:?}, eq_properties: {eq_properties}, projected_eq: {projected_eq}, projection_mapping: {projection_mapping:?}"
+                            "Error in test case seed: {seed}, null_pct: {null_pct}, requirement:{ordering:?}, expected: {expected:?}, eq_properties: {eq_properties}, projected_eq: {projected_eq}, projection_mapping: {projection_mapping:?}"
                         );
                         // Same reasoning as in `ordering.rs`: only keys from
-                        // the first `+`/`-` source onwards are inconclusive,
+                        // the first source with a conservative ordering rule
+                        // onwards are inconclusive,
                         // so assert on the longest prefix without one.
                         let conclusive_prefix = LexOrdering::new(
                             ordering
@@ -190,7 +210,7 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
                                         targets
                                             .iter()
                                             .any(|(target, _)| target.eq(&sort_expr.expr))
-                                            && contains_overflowable_arithmetic(source)
+                                            && contains_conservative_ordering_op(source)
                                     })
                                 })
                                 .cloned(),
