@@ -112,7 +112,7 @@ impl OptimizerRule for EliminateGroupByConstant {
                 {
                     let (qualifier, field) = original_schema.qualified_field(i);
                     let expr = if redundant {
-                        expr.unalias()
+                        expr
                     } else {
                         let column =
                             Expr::from(simplified_schema.qualified_field(next_output));
