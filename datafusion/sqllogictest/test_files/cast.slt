@@ -21,6 +21,40 @@ SELECT cast(c as varchar) FROM (SELECT 1 as c)
 ----
 1
 
+# Narrowing TRY_CAST comparisons must preserve NULL-on-overflow semantics.
+statement ok
+CREATE TABLE try_cast_narrowing AS VALUES
+    (5::BIGINT),
+    (9999999999::BIGINT);
+
+query IIB rowsort
+SELECT column1,
+       try_cast(column1 AS INT),
+       try_cast(column1 AS INT) > 1
+FROM try_cast_narrowing;
+----
+5 5 true
+9999999999 NULL NULL
+
+query I
+SELECT column1
+FROM try_cast_narrowing
+WHERE try_cast(column1 AS INT) > 1;
+----
+5
+
+query IIB rowsort
+SELECT column1,
+       try_cast(column1 AS INT) IN (5),
+       try_cast(column1 AS INT) NOT IN (5)
+FROM try_cast_narrowing;
+----
+5 true false
+9999999999 NULL NULL
+
+statement ok
+DROP TABLE try_cast_narrowing;
+
 # cast tinyint
 query I
 SELECT cast(10 as tinyint)

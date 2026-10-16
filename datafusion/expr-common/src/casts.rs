@@ -157,6 +157,38 @@ pub fn is_date_narrowing_cast(from_type: &DataType, to_type: &DataType) -> bool 
     matches!((from_type, to_type), (DataType::Date64, DataType::Date32))
 }
 
+/// Returns true when the source integer domain is not fully representable in
+/// the target integer type.
+///
+/// Comparison cast unwrapping must retain a narrowing `TRY_CAST`: source values
+/// outside the target domain become `NULL`, while the unwrapped comparison
+/// would evaluate those values directly. This check includes signed/unsigned
+/// transitions as well as casts to a smaller integer width.
+pub fn is_integer_narrowing_cast(from_type: &DataType, to_type: &DataType) -> bool {
+    let Some((from_min, from_max)) = integer_bounds(from_type) else {
+        return false;
+    };
+    let Some((to_min, to_max)) = integer_bounds(to_type) else {
+        return false;
+    };
+
+    from_min < to_min || from_max > to_max
+}
+
+fn integer_bounds(data_type: &DataType) -> Option<(i128, i128)> {
+    match data_type {
+        DataType::Int8 => Some((i8::MIN.into(), i8::MAX.into())),
+        DataType::Int16 => Some((i16::MIN.into(), i16::MAX.into())),
+        DataType::Int32 => Some((i32::MIN.into(), i32::MAX.into())),
+        DataType::Int64 => Some((i64::MIN.into(), i64::MAX.into())),
+        DataType::UInt8 => Some((u8::MIN.into(), u8::MAX.into())),
+        DataType::UInt16 => Some((u16::MIN.into(), u16::MAX.into())),
+        DataType::UInt32 => Some((u32::MIN.into(), u32::MAX.into())),
+        DataType::UInt64 => Some((u64::MIN.into(), u64::MAX.into())),
+        _ => None,
+    }
+}
+
 fn timestamp_unit_scale(unit: &TimeUnit) -> i128 {
     match unit {
         TimeUnit::Second => 1,
@@ -1034,6 +1066,34 @@ mod tests {
             &DataType::Date64
         ));
         assert!(!is_date_narrowing_cast(&DataType::Int64, &DataType::Date32));
+    }
+
+    #[test]
+    fn test_is_integer_narrowing_cast() {
+        assert!(is_integer_narrowing_cast(
+            &DataType::Int64,
+            &DataType::Int32
+        ));
+        assert!(is_integer_narrowing_cast(
+            &DataType::Int32,
+            &DataType::UInt32
+        ));
+        assert!(is_integer_narrowing_cast(
+            &DataType::UInt32,
+            &DataType::Int32
+        ));
+        assert!(!is_integer_narrowing_cast(
+            &DataType::Int32,
+            &DataType::Int64
+        ));
+        assert!(!is_integer_narrowing_cast(
+            &DataType::UInt32,
+            &DataType::Int64
+        ));
+        assert!(!is_integer_narrowing_cast(
+            &DataType::Utf8,
+            &DataType::Int32
+        ));
     }
 
     #[test]
