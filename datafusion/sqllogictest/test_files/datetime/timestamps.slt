@@ -1655,6 +1655,128 @@ SELECT DATE_TRUNC('day', arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp
 2023-08-03T14:38:50
 2023-08-03T14:38:50
 
+# Constant precision and a fixed timezone permit removing the outer sort.
+statement ok
+CREATE VIEW date_trunc_ordering_utc AS
+SELECT arrow_cast(column1, 'Timestamp(Second, Some("UTC"))') AS ts
+FROM (VALUES (86401::bigint), (-1::bigint), (0::bigint), (NULL::bigint))
+ORDER BY ts NULLS FIRST
+LIMIT 4;
+
+query I
+SELECT arrow_cast(date_trunc('hour', ts), 'Int64')
+FROM date_trunc_ordering_utc
+ORDER BY date_trunc('hour', ts) NULLS FIRST;
+----
+NULL
+-3600
+0
+86400
+
+query TT
+EXPLAIN SELECT date_trunc('hour', ts)
+FROM date_trunc_ordering_utc
+ORDER BY date_trunc('hour', ts) NULLS FIRST;
+----
+logical_plan
+01)Sort: date_trunc(Utf8("hour"),date_trunc_ordering_utc.ts) ASC NULLS FIRST
+02)--Projection: date_trunc(Utf8("hour"), date_trunc_ordering_utc.ts)
+03)----SubqueryAlias: date_trunc_ordering_utc
+04)------Sort: ts ASC NULLS FIRST, fetch=4
+05)--------Projection: CAST(column1 AS Timestamp(s, "UTC")) AS ts
+06)----------Values: (Int64(86401)), (Int64(-1) AS (- Int64(1))), (Int64(0)), (Int64(NULL) AS NULL)
+physical_plan
+01)ProjectionExec: expr=[date_trunc(hour, ts@0) as date_trunc(Utf8("hour"),date_trunc_ordering_utc.ts)]
+02)--SortExec: TopK(fetch=4), expr=[ts@0 ASC], preserve_partitioning=[false]
+03)----ProjectionExec: expr=[CAST(column1@0 AS Timestamp(s, "UTC")) as ts]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Constant precision and a fixed timezone permit removing the outer sort.
+statement ok
+CREATE VIEW date_trunc_ordering_positive_offset AS
+SELECT arrow_cast(column1, 'Timestamp(Second, Some("+05:30"))') AS ts
+FROM (VALUES (86401::bigint), (-1::bigint), (0::bigint), (NULL::bigint))
+ORDER BY ts NULLS FIRST
+LIMIT 4;
+
+query I
+SELECT arrow_cast(date_trunc('hour', ts), 'Int64')
+FROM date_trunc_ordering_positive_offset
+ORDER BY date_trunc('hour', ts) NULLS FIRST;
+----
+NULL
+-1800
+-1800
+84600
+
+query TT
+EXPLAIN SELECT date_trunc('hour', ts)
+FROM date_trunc_ordering_positive_offset
+ORDER BY date_trunc('hour', ts) NULLS FIRST;
+----
+logical_plan
+01)Sort: date_trunc(Utf8("hour"),date_trunc_ordering_positive_offset.ts) ASC NULLS FIRST
+02)--Projection: date_trunc(Utf8("hour"), date_trunc_ordering_positive_offset.ts)
+03)----SubqueryAlias: date_trunc_ordering_positive_offset
+04)------Sort: ts ASC NULLS FIRST, fetch=4
+05)--------Projection: CAST(column1 AS Timestamp(s, "+05:30")) AS ts
+06)----------Values: (Int64(86401)), (Int64(-1) AS (- Int64(1))), (Int64(0)), (Int64(NULL) AS NULL)
+physical_plan
+01)ProjectionExec: expr=[date_trunc(hour, ts@0) as date_trunc(Utf8("hour"),date_trunc_ordering_positive_offset.ts)]
+02)--SortExec: TopK(fetch=4), expr=[ts@0 ASC], preserve_partitioning=[false]
+03)----ProjectionExec: expr=[CAST(column1@0 AS Timestamp(s, "+05:30")) as ts]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Constant precision and a fixed timezone permit removing the outer sort.
+statement ok
+CREATE VIEW date_trunc_ordering_negative_offset AS
+SELECT arrow_cast(column1, 'Timestamp(Second, Some("-03:30"))') AS ts
+FROM (VALUES (86401::bigint), (-1::bigint), (0::bigint), (NULL::bigint))
+ORDER BY ts DESC NULLS LAST
+LIMIT 4;
+
+query I
+SELECT arrow_cast(date_trunc('hour', ts), 'Int64')
+FROM date_trunc_ordering_negative_offset
+ORDER BY date_trunc('hour', ts) DESC NULLS LAST;
+----
+84600
+-1800
+-1800
+NULL
+
+query TT
+EXPLAIN SELECT date_trunc('hour', ts)
+FROM date_trunc_ordering_negative_offset
+ORDER BY date_trunc('hour', ts) DESC NULLS LAST;
+----
+logical_plan
+01)Sort: date_trunc(Utf8("hour"),date_trunc_ordering_negative_offset.ts) DESC NULLS LAST
+02)--Projection: date_trunc(Utf8("hour"), date_trunc_ordering_negative_offset.ts)
+03)----SubqueryAlias: date_trunc_ordering_negative_offset
+04)------Sort: ts DESC NULLS LAST, fetch=4
+05)--------Projection: CAST(column1 AS Timestamp(s, "-03:30")) AS ts
+06)----------Values: (Int64(86401)), (Int64(-1) AS (- Int64(1))), (Int64(0)), (Int64(NULL) AS NULL)
+physical_plan
+01)ProjectionExec: expr=[date_trunc(hour, ts@0) as date_trunc(Utf8("hour"),date_trunc_ordering_negative_offset.ts)]
+02)--SortExec: TopK(fetch=4), expr=[ts@0 DESC NULLS LAST], preserve_partitioning=[false]
+03)----ProjectionExec: expr=[CAST(column1@0 AS Timestamp(s, "-03:30")) as ts]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Truncation can merge distinct timestamps, so a trailing sort key may need reordering.
+query II
+SELECT id, arrow_cast(date_trunc('hour', ts), 'Int64') AS bucket
+FROM (
+  SELECT arrow_cast(t, 'Timestamp(Second, Some("UTC"))') AS ts, id
+  FROM (VALUES (1::bigint, 2::bigint), (2::bigint, 1::bigint)) AS input(t, id)
+  ORDER BY ts, id
+  LIMIT 2
+)
+ORDER BY date_trunc('hour', ts), id;
+----
+1 0
+2 0
+
 # date_trunc must not propagate ordering across named timezone transitions
 query II
 SELECT
