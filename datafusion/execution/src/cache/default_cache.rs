@@ -23,7 +23,7 @@ use datafusion_common::instant::Instant;
 use datafusion_common::{HashMap, Result};
 
 use crate::cache::lru_queue::LruQueue;
-use crate::cache::{Cache, CacheEntryInfo, CacheKey, CacheValue};
+use crate::cache::{Cache, CacheEntryInfo, CacheKey, CacheStatistics, CacheValue};
 
 /// Source of the current time used by a [`DefaultCache`] when applying TTLs.
 pub trait TimeProvider: Send + Sync {
@@ -55,6 +55,10 @@ struct DefaultCacheState<K: CacheKey, V: CacheValue> {
     memory_limit: usize,
     memory_used: usize,
     ttl: Option<Duration>,
+    /// Aggregate, lifetime counters. Kept inside the state so that they are
+    /// updated under the mutex already held by every `get`/`put`, rather than
+    /// adding a second point of synchronization on the hot path.
+    statistics: CacheStatistics,
 }
 
 impl<K: CacheKey, V: CacheValue> DefaultCacheState<K, V> {
@@ -65,19 +69,25 @@ impl<K: CacheKey, V: CacheValue> DefaultCacheState<K, V> {
             memory_limit,
             memory_used: 0,
             ttl,
+            statistics: CacheStatistics::default(),
         }
     }
 
     fn get(&mut self, key: &K, now: Instant) -> Option<V> {
-        let entry = self.lru_queue.get(key)?;
+        let Some(entry) = self.lru_queue.get(key) else {
+            self.statistics.misses += 1;
+            return None;
+        };
         if let Some(exp) = entry.expires
             && now > exp
         {
             self.remove(key);
+            self.statistics.misses += 1;
             return None;
         }
         let value = entry.value.clone();
         *self.hits.entry(key.clone()).or_insert(0) += 1;
+        self.statistics.hits += 1;
         Some(value)
     }
 
@@ -105,6 +115,8 @@ impl<K: CacheKey, V: CacheValue> DefaultCacheState<K, V> {
         let total_size = key_size + value_size;
 
         if total_size > self.memory_limit {
+            // The entry can never fit, no matter how much of the cache is free.
+            self.statistics.inserts_rejected_too_large += 1;
             // Remove potential stale entry
             return self.remove(key);
         }
@@ -145,9 +157,11 @@ impl<K: CacheKey, V: CacheValue> DefaultCacheState<K, V> {
                 self.memory_used = 0;
                 return;
             };
-            self.memory_used -= evicted_key.size();
-            self.memory_used -= evicted.value.size();
+            let evicted_size = evicted_key.size() + evicted.value.size();
+            self.memory_used -= evicted_size;
             self.hits.remove(&evicted_key);
+            self.statistics.evictions += 1;
+            self.statistics.bytes_evicted += evicted_size as u64;
         }
     }
 
@@ -203,6 +217,14 @@ impl<K: CacheKey, V: CacheValue> DefaultCache<K, V> {
     /// Number of bytes currently accounted for by live entries.
     pub fn memory_used(&self) -> usize {
         self.state.lock().unwrap().memory_used
+    }
+
+    /// Aggregate, lifetime counters for this cache.
+    ///
+    /// See [`Cache::statistics`] and [`CacheStatistics`] for the exact meaning
+    /// of each counter.
+    pub fn cache_statistics(&self) -> CacheStatistics {
+        self.state.lock().unwrap().statistics
     }
 }
 
@@ -293,6 +315,10 @@ impl<K: CacheKey, V: CacheValue> Cache<K, V> for DefaultCache<K, V> {
             })
             .collect()
     }
+
+    fn statistics(&self) -> Option<CacheStatistics> {
+        Some(self.cache_statistics())
+    }
 }
 
 #[cfg(test)]
@@ -308,7 +334,7 @@ mod tests {
     use crate::cache::cache_manager::{CachedFileMetadataEntry, FileMetadata};
     use crate::cache::default_cache::DefaultCache;
     use crate::cache::default_cache::TimeProvider;
-    use crate::cache::{Cache, CacheEntryInfo};
+    use crate::cache::{Cache, CacheEntryInfo, CacheStatistics};
     use crate::cache::{CacheKey, CacheValue};
     use crate::cache::{SchemaFingerprint, TableScopedPath};
     use arrow::array::{Int32Array, ListArray, RecordBatch};
@@ -2011,5 +2037,171 @@ mod tests {
         assert!(!cache.contains_key(&key1));
         assert!(!cache.contains_key(&key2));
         assert!(cache.contains_key(&key3));
+    }
+
+    #[test]
+    fn test_statistics_hits_and_misses() {
+        let cache = DefaultCache::new(DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT);
+        let table_ref = Some(TableReference::from("table"));
+        let (key1, value1) =
+            create_test_list_files_entry("path1", 1, 100, table_ref.clone());
+        let (key2, _value2) = create_test_list_files_entry("path2", 1, 100, table_ref);
+
+        assert_eq!(cache.cache_statistics(), CacheStatistics::default());
+        assert_eq!(cache.cache_statistics().hit_rate(), None);
+
+        // Lookup on an empty cache is a miss
+        assert!(cache.get(&key1).is_none());
+        assert_eq!(cache.cache_statistics().misses, 1);
+        assert_eq!(cache.cache_statistics().hits, 0);
+
+        cache.put(&key1, value1);
+
+        // Two hits on the entry we just inserted
+        assert!(cache.get(&key1).is_some());
+        assert!(cache.get(&key1).is_some());
+        assert_eq!(cache.cache_statistics().hits, 2);
+        assert_eq!(cache.cache_statistics().misses, 1);
+
+        // A lookup of an absent key is a miss
+        assert!(cache.get(&key2).is_none());
+        assert_eq!(cache.cache_statistics().misses, 2);
+
+        // `contains_key` is a probe, not a lookup, and is not counted
+        assert!(cache.contains_key(&key1));
+        assert!(!cache.contains_key(&key2));
+        assert_eq!(cache.cache_statistics().hits, 2);
+        assert_eq!(cache.cache_statistics().misses, 2);
+
+        assert_eq!(cache.cache_statistics().lookups(), 4);
+        assert_eq!(cache.cache_statistics().hit_rate(), Some(0.5));
+
+        // Statistics are exposed through the `Cache` trait too
+        assert_eq!(cache.statistics(), Some(cache.cache_statistics()));
+
+        // `clear` neither resets the counters nor counts as an eviction
+        cache.clear();
+        let stats = cache.cache_statistics();
+        assert_eq!(stats.hits, 2);
+        assert_eq!(stats.misses, 2);
+        assert_eq!(stats.evictions, 0);
+        assert_eq!(stats.bytes_evicted, 0);
+
+        // ... and a lookup after the clear is a miss
+        assert!(cache.get(&key1).is_none());
+        assert_eq!(cache.cache_statistics().misses, 3);
+    }
+
+    #[test]
+    fn test_statistics_expired_entry_counts_as_miss() {
+        let ttl = Duration::from_millis(100);
+        let mock_time = Arc::new(MockTimeProvider::new());
+        let cache = DefaultCache::new_with_ttl(10000, Some(ttl))
+            .with_time_provider(Arc::clone(&mock_time) as Arc<dyn TimeProvider>);
+
+        let table_ref = Some(TableReference::from("table"));
+        let (key, value) = create_test_list_files_entry("path1", 1, 50, table_ref);
+        cache.put(&key, value);
+
+        assert!(cache.get(&key).is_some());
+        assert_eq!(cache.cache_statistics().hits, 1);
+
+        mock_time.inc(Duration::from_millis(150));
+
+        // Expiration is not eviction: the entry is dropped lazily on access and
+        // the access itself is a miss.
+        assert!(cache.get(&key).is_none());
+        let stats = cache.cache_statistics();
+        assert_eq!(stats.hits, 1);
+        assert_eq!(stats.misses, 1);
+        assert_eq!(stats.evictions, 0);
+    }
+
+    #[test]
+    fn test_statistics_evictions() {
+        let table_ref = Some(TableReference::from("table"));
+        let (key1, value1) =
+            create_test_list_files_entry("path1", 1, 100, table_ref.clone());
+        let (key2, value2) =
+            create_test_list_files_entry("path2", 1, 100, table_ref.clone());
+        let (key3, value3) =
+            create_test_list_files_entry("path3", 1, 100, table_ref.clone());
+        let (key4, value4) =
+            create_test_list_files_entry("path4", 1, 100, table_ref.clone());
+
+        let entry_size = key1.size() + value1.size();
+
+        // A cache that fits exactly two entries
+        let cache = DefaultCache::new(entry_size * 2);
+        cache.put(&key1, value1);
+        cache.put(&key2, value2);
+        assert_eq!(cache.cache_statistics().evictions, 0);
+
+        // The third insert evicts the LRU entry
+        cache.put(&key3, value3);
+        let stats = cache.cache_statistics();
+        assert_eq!(stats.evictions, 1);
+        assert_eq!(stats.bytes_evicted, entry_size as u64);
+
+        // Replacing an existing entry with an equally sized one is not an eviction
+        let (_, value3_again) =
+            create_test_list_files_entry("path3", 1, 100, table_ref.clone());
+        cache.put(&key3, value3_again);
+        assert_eq!(cache.cache_statistics().evictions, 1);
+
+        // Explicitly removing an entry is not an eviction either
+        cache.remove(&key2);
+        assert_eq!(cache.cache_statistics().evictions, 1);
+
+        // Neither is dropping a whole table's entries
+        cache.put(&key4, value4);
+        cache
+            .drop_table_entries(&TableReference::from("table"))
+            .unwrap();
+        assert_eq!(cache.cache_statistics().evictions, 1);
+        assert_eq!(cache.len(), 0);
+
+        // Shrinking the limit evicts, and that is counted
+        let (key5, value5) = create_test_list_files_entry("path5", 1, 100, table_ref);
+        cache.put(&key5, value5);
+        cache.update_cache_limit(1);
+        let stats = cache.cache_statistics();
+        assert_eq!(stats.evictions, 2);
+        assert_eq!(stats.bytes_evicted, (entry_size * 2) as u64);
+    }
+
+    #[test]
+    fn test_statistics_inserts_rejected_too_large() {
+        let table_ref = Some(TableReference::from("table"));
+        let (key1, value1) =
+            create_test_list_files_entry("path1", 1, 100, table_ref.clone());
+        let entry_size = key1.size() + value1.size();
+
+        let cache = DefaultCache::new(entry_size);
+        cache.put(&key1, value1);
+        assert_eq!(cache.cache_statistics().inserts_rejected_too_large, 0);
+
+        // An entry larger than the whole cache can never fit and is rejected
+        // rather than evicting its way to space that will never be enough.
+        let (key_large, value_large) =
+            create_test_list_files_entry("large", 1, 1000, table_ref.clone());
+        cache.put(&key_large, value_large);
+        let stats = cache.cache_statistics();
+        assert_eq!(stats.inserts_rejected_too_large, 1);
+        assert_eq!(stats.evictions, 0);
+        assert!(!cache.contains_key(&key_large));
+
+        // A rejected insert also drops any stale entry stored under the same
+        // key. That removal is still a rejection, not an eviction.
+        assert!(cache.contains_key(&key1));
+        let (_, value1_too_large) =
+            create_test_list_files_entry("path1", 1, 1000, table_ref);
+        cache.put(&key1, value1_too_large);
+        let stats = cache.cache_statistics();
+        assert_eq!(stats.inserts_rejected_too_large, 2);
+        assert_eq!(stats.evictions, 0);
+        assert!(!cache.contains_key(&key1));
+        assert_eq!(cache.len(), 0);
+        assert_eq!(cache.memory_used(), 0);
     }
 }
