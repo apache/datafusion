@@ -30,7 +30,7 @@ use datafusion_common::cast::{
     as_fixed_size_list_array, as_float64_array, as_generic_list_array,
     as_large_list_array, as_large_list_view_array, as_list_array, as_list_view_array,
 };
-use datafusion_common::utils::{offset_span, offset_span_len};
+use datafusion_common::utils::{SetBitCounter, offset_span, offset_span_len};
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
 
 use datafusion_expr::ColumnarValue;
@@ -95,8 +95,7 @@ pub(crate) fn prepare_list_filter<O: OffsetSizeTrait>(
                         .append_packed_range(bit_start..bit_start + len, keep.values());
                 }
             } else if len != 0 {
-                let set_before_row = set_bits.count_before(start);
-                hidden_count += set_bits.count_before(end) - set_before_row;
+                hidden_count += set_bits.count_range(start, end);
                 keep_mask
                     .get_or_insert_with(|| {
                         let mut builder = BooleanBufferBuilder::new(keep.len());
@@ -118,45 +117,6 @@ pub(crate) fn prepare_list_filter<O: OffsetSizeTrait>(
     // element span, which fits in `O`, so converting it to `O` cannot overflow.
     let offsets = unsafe { OffsetBuffer::new_unchecked(offsets.into()) };
     (offsets, keep_mask)
-}
-
-/// Counts the set bits that precede a sequence of non-decreasing positions in a
-/// bitmap, reading each 64-bit word of the bitmap once.
-struct SetBitCounter<I> {
-    /// The bitmap's remaining words, with the final word padded with zeros.
-    words: I,
-    /// The word containing the most recent position.
-    word: u64,
-    /// Position of the first bit of `word`.
-    word_start: usize,
-    /// Set bits before `word_start`.
-    count_before_word: usize,
-}
-
-impl<I: Iterator<Item = u64>> SetBitCounter<I> {
-    fn new(mut words: I) -> Self {
-        let word = words.next().unwrap_or(0);
-        Self {
-            words,
-            word,
-            word_start: 0,
-            count_before_word: 0,
-        }
-    }
-
-    /// Returns the number of set bits before `end`. `end` must be no less than
-    /// in the previous call, and no greater than the bitmap's length.
-    #[inline]
-    fn count_before(&mut self, end: usize) -> usize {
-        debug_assert!(end >= self.word_start);
-        while end - self.word_start >= 64 {
-            self.count_before_word += self.word.count_ones() as usize;
-            self.word = self.words.next().unwrap_or(0);
-            self.word_start += 64;
-        }
-        let mask = (1u64 << (end - self.word_start)) - 1;
-        self.count_before_word + (self.word & mask).count_ones() as usize
-    }
 }
 
 /// Computes the return type of a function that produces a list with the same
@@ -755,21 +715,6 @@ pub(crate) mod tests {
             assert_eq!(mask.inner().ptr_eq(keep.inner()), !hides_elements);
             let list = null_element_list::<i64>(&lengths, nulls, offset, len);
             assert_list_filter_matches_reference(&list, &keep);
-        }
-    }
-
-    #[test]
-    fn set_bit_counter_matches_per_position_counts() {
-        // A sliced bitmap whose length is a whole number of 64-bit words.
-        let bits =
-            BooleanBuffer::collect_bool(200, |i| i % 3 != 0 && i % 7 != 0).slice(5, 192);
-        let mut counter = SetBitCounter::new(bits.bit_chunks().iter_padded());
-        let mut expected = 0;
-        for end in 0..=bits.len() {
-            assert_eq!(counter.count_before(end), expected, "end {end}");
-            if end < bits.len() {
-                expected += usize::from(bits.value(end));
-            }
         }
     }
 
