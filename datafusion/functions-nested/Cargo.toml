@@ -157,3 +157,7 @@ name = "cardinality"
 [[bench]]
 harness = false
 name = "range"
+
+[[bench]]
+harness = false
+name = "vector_math"
