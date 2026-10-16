@@ -55,8 +55,8 @@ use datafusion_expr::{
 
 use indexmap::IndexMap;
 use sqlparser::ast::{
-    Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr, OrderBy,
-    SelectItemQualifiedWildcardKind, WildcardAdditionalOptions, WindowType,
+    Distinct, Expr as SQLExpr, GroupByExpr, Ident, NamedWindowExpr, OrderBy,
+    SelectItemQualifiedWildcardKind, WildcardAdditionalOptions, WindowSpec, WindowType,
     visit_expressions_mut,
 };
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
@@ -1437,41 +1437,105 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             {
                 let mut err = None;
                 let _ = visit_expressions_mut(expr, |expr| {
-                    if let SQLExpr::Function(f) = expr
-                        && let Some(WindowType::NamedWindow(ident)) = &f.over
-                    {
-                        let normalized_ident =
-                            self.ident_normalizer.normalize(ident.clone());
-                        for (
-                            NamedWindowDefinition(_, window_expr),
-                            normalized_window_ident,
-                        ) in named_windows.iter()
-                        {
-                            if normalized_ident.eq(normalized_window_ident) {
-                                f.over = Some(match window_expr {
-                                    NamedWindowExpr::NamedWindow(ident) => {
-                                        WindowType::NamedWindow(ident.clone())
-                                    }
-                                    NamedWindowExpr::WindowSpec(spec) => {
-                                        WindowType::WindowSpec(spec.clone())
-                                    }
-                                })
+                    if let SQLExpr::Function(f) = expr {
+                        let resolved = match &f.over {
+                            Some(WindowType::NamedWindow(ident)) => {
+                                Some(self.resolve_named_window(ident, &named_windows))
                             }
-                        }
-                        // All named windows must be defined with a WindowSpec.
-                        if let Some(WindowType::NamedWindow(ident)) = &f.over {
-                            err = Some(plan_err!("The window {ident} is not defined!"));
-                            return ControlFlow::Break(());
+                            Some(WindowType::WindowSpec(spec))
+                                if spec.window_name.is_some() =>
+                            {
+                                Some(self.resolve_window_spec(spec, &named_windows))
+                            }
+                            _ => None,
+                        };
+                        match resolved {
+                            Some(Ok(spec)) => f.over = Some(WindowType::WindowSpec(spec)),
+                            Some(Err(e)) => {
+                                err = Some(e);
+                                return ControlFlow::Break(());
+                            }
+                            None => {}
                         }
                     }
                     ControlFlow::Continue(())
                 });
                 if let Some(err) = err {
-                    return err;
+                    return Err(err);
                 }
             }
         }
         Ok(())
+    }
+
+    /// Returns the window specification of the named window `ident`.
+    ///
+    /// A window definition may only reference windows defined before it, so
+    /// references cannot form a cycle.
+    fn resolve_named_window(
+        &self,
+        ident: &Ident,
+        named_windows: &[(&NamedWindowDefinition, String)],
+    ) -> Result<WindowSpec> {
+        let normalized_ident = self.ident_normalizer.normalize(ident.clone());
+        let Some(position) = named_windows
+            .iter()
+            .position(|(_, name)| *name == normalized_ident)
+        else {
+            return plan_err!("The window {ident} is not defined!");
+        };
+        let (NamedWindowDefinition(_, window_expr), _) = named_windows[position];
+        let earlier_windows = &named_windows[..position];
+        match window_expr {
+            NamedWindowExpr::NamedWindow(base) => {
+                self.resolve_named_window(base, earlier_windows)
+            }
+            NamedWindowExpr::WindowSpec(spec) => {
+                self.resolve_window_spec(spec, earlier_windows)
+            }
+        }
+    }
+
+    /// Resolves a window specification that may reference a named window, as
+    /// in `OVER (w ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)`.
+    ///
+    /// Following the SQL standard and PostgreSQL, the specification copies
+    /// the referenced window's `PARTITION BY` and `ORDER BY`, may add an
+    /// `ORDER BY` only when the referenced window has none, and may add a
+    /// frame only when the referenced window has none.
+    fn resolve_window_spec(
+        &self,
+        spec: &WindowSpec,
+        named_windows: &[(&NamedWindowDefinition, String)],
+    ) -> Result<WindowSpec> {
+        let Some(base_name) = &spec.window_name else {
+            return Ok(spec.clone());
+        };
+        let base = self.resolve_named_window(base_name, named_windows)?;
+        if !spec.partition_by.is_empty() {
+            return plan_err!(
+                "Cannot override PARTITION BY clause of window {base_name}"
+            );
+        }
+        if !spec.order_by.is_empty() && !base.order_by.is_empty() {
+            return plan_err!("Cannot override ORDER BY clause of window {base_name}");
+        }
+        if base.window_frame.is_some() {
+            return plan_err!(
+                "Cannot copy window {base_name} because it has a frame clause"
+            );
+        }
+        let order_by = if spec.order_by.is_empty() {
+            base.order_by
+        } else {
+            spec.order_by.clone()
+        };
+        Ok(WindowSpec {
+            window_name: None,
+            partition_by: base.partition_by,
+            order_by,
+            window_frame: spec.window_frame.clone(),
+        })
     }
 }
 
