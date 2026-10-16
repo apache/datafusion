@@ -27,6 +27,7 @@ use arrow::compute::{filter_record_batch, prep_null_mask_filter};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, internal_err};
+use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::{AggregateMetrics, EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::GroupsAccumulatorAdapter;
@@ -363,6 +364,42 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
     /// Returns the number of distinct groups accumulated so far.
     pub(in crate::aggregates) fn building_group_count(&self) -> usize {
         self.state.building().group_values.len()
+    }
+
+    /// Returns the size in bytes of the larger hash table that aggregating
+    /// `num_rows` input rows may allocate while the current one is still
+    /// allocated. See [`GroupValues::hash_table_growth_size`].
+    pub(in crate::aggregates) fn hash_table_growth_size(&self, num_rows: usize) -> usize {
+        let state = self.state.building();
+        // Each grouping set interns every row, so each can add a group per row
+        let num_groups = num_rows.saturating_mul(state.group_by.groups().len().max(1));
+        state.group_values.hash_table_growth_size(num_groups)
+    }
+
+    /// Grows `reservation`, which holds the memory of this table, by the
+    /// [`Self::hash_table_growth_size`] of `num_rows` rows before they are
+    /// aggregated.
+    ///
+    /// Returns `false` if the memory pool cannot provide that while the table
+    /// holds groups. The caller should then spill or emit them before
+    /// aggregating the rows, so that the hash table grows from empty instead.
+    pub(in crate::aggregates) fn try_reserve_hash_table_growth(
+        &self,
+        reservation: &MemoryReservation,
+        num_rows: usize,
+    ) -> Result<bool> {
+        let growth = self.hash_table_growth_size(num_rows);
+        if growth == 0 {
+            return Ok(true);
+        }
+        match reservation.try_grow(growth) {
+            Ok(()) => Ok(true),
+            // With no groups to spill or emit, aggregate the rows regardless
+            Err(datafusion_common::DataFusionError::ResourcesExhausted(_)) => {
+                Ok(self.building_group_count() == 0)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// Takes every intermediate aggregate state and resets the table so it can

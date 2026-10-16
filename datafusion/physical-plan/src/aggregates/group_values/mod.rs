@@ -102,6 +102,21 @@ pub trait GroupValues: Send {
     /// May be expensive; check the implementation before calling on hot paths.
     fn size(&self) -> usize;
 
+    /// Returns the size in bytes of the larger hash table that interning
+    /// `num_groups` new groups would allocate, or 0 if they fit in the current
+    /// one.
+    ///
+    /// A hash table that grows allocates the larger table before it frees the
+    /// current one, so while [`Self::intern`] grows it, it holds both in
+    /// addition to [`Self::size`]. Reserving this before interning a batch
+    /// lets the aggregate spill or emit first when the larger table does not
+    /// fit.
+    ///
+    /// Implementations without a hash table return 0.
+    fn hash_table_growth_size(&self, _num_groups: usize) -> usize {
+        0
+    }
+
     /// Returns true if this [`GroupValues`] is empty
     fn is_empty(&self) -> bool;
 
@@ -215,13 +230,71 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::{
-        ArrayRef, AsArray, BooleanArray, Int32Array, StringArray, StringViewArray,
+        ArrayRef, AsArray, BooleanArray, Int32Array, Int64Array, StringArray,
+        StringViewArray,
     };
-    use arrow::datatypes::{DataType, Field, Int32Type, Schema};
+    use arrow::compute::cast;
+    use arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
     use datafusion_expr::{EmitTo, GroupSelection};
 
-    use super::new_group_values;
+    use super::{GroupValues, GroupValuesRows, new_group_values};
     use crate::aggregates::order::GroupClustering;
+
+    #[test]
+    fn group_values_report_the_growth_of_their_hash_table() {
+        let schema = |types: &[DataType]| -> SchemaRef {
+            let fields: Vec<_> = types
+                .iter()
+                .enumerate()
+                .map(|(i, data_type)| {
+                    Field::new(format!("c{i}"), data_type.clone(), false)
+                })
+                .collect();
+            Arc::new(Schema::new(fields))
+        };
+        // Primitive, bytes, bytes view, multi-column and row group values
+        let mut cases: Vec<(SchemaRef, Box<dyn GroupValues>)> = [
+            vec![DataType::Int64],
+            vec![DataType::Utf8],
+            vec![DataType::Utf8View],
+            vec![DataType::Int64, DataType::Utf8],
+        ]
+        .iter()
+        .map(|types| {
+            let schema = schema(types);
+            let group_values =
+                new_group_values(Arc::clone(&schema), &GroupClustering::None).unwrap();
+            (schema, group_values)
+        })
+        .collect();
+        let rows_schema = schema(&[DataType::Int64]);
+        let rows = GroupValuesRows::try_new(Arc::clone(&rows_schema)).unwrap();
+        cases.push((rows_schema, Box::new(rows)));
+
+        let values = Arc::new(Int64Array::from_iter_values(0..1000)) as ArrayRef;
+        for (schema, mut group_values) in cases {
+            let columns: Vec<_> = schema
+                .fields()
+                .iter()
+                .map(|field| cast(&values, field.data_type()).unwrap())
+                .collect();
+            group_values.intern(&columns, &mut vec![]).unwrap();
+            // No new groups fit in the table, many more groups do not
+            assert_eq!(group_values.hash_table_growth_size(0), 0, "{schema:?}");
+            assert!(
+                group_values.hash_table_growth_size(100_000) > group_values.size(),
+                "{schema:?}"
+            );
+        }
+
+        // Boolean group values hold at most three groups, without a hash table
+        let mut group_values =
+            new_group_values(schema(&[DataType::Boolean]), &GroupClustering::None)
+                .unwrap();
+        let input = Arc::new(BooleanArray::from(vec![true, false])) as ArrayRef;
+        group_values.intern(&[input], &mut vec![]).unwrap();
+        assert_eq!(group_values.hash_table_growth_size(100_000), 0);
+    }
 
     #[test]
     fn preserving_values_keep_group_indices_valid() {

@@ -27,6 +27,7 @@ use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::{BinaryViewType, ByteViewType, DataType, StringViewType};
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
+use datafusion_common::utils::memory::estimate_hash_table_growth;
 use datafusion_common::utils::proxy::VecAllocExt;
 use datafusion_common::{Result, exec_err};
 use std::fmt::Debug;
@@ -593,6 +594,13 @@ where
             + in_progress_size
             + completed_size
             + self.hashes_buffer.allocated_size()
+    }
+
+    /// Returns the size in bytes of the larger hash table that inserting
+    /// `additional` new values would allocate while the current one is still
+    /// allocated, or 0 if they fit. See [`estimate_hash_table_growth`].
+    pub fn hash_table_growth_size(&self, additional: usize) -> usize {
+        estimate_hash_table_growth(&self.map, additional)
     }
 }
 
