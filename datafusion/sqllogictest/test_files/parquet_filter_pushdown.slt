@@ -40,7 +40,7 @@ STORED AS PARQUET;
 ## Create table without filter pushdown
 ## (pushdown setting is part of the table, but is copied from the session settings)
 
-# pushdown_filters (currently) defaults to false, but we set it here to be explicit
+# pushdown_filters defaults to true, but we set it to false here to test the non-pushdown plans first
 statement ok
 set datafusion.execution.parquet.pushdown_filters = false;
 
@@ -1095,7 +1095,7 @@ WHERE NOT (CASE WHEN a = 1 THEN NULL ELSE false END) AND b > 0 ORDER BY a;
 2 1
 
 statement ok
-set datafusion.execution.parquet.pushdown_filters = false;
+set datafusion.execution.parquet.pushdown_filters = true;
 
 statement ok
 DROP TABLE case_without_else;

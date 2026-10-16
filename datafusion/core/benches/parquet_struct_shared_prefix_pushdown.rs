@@ -26,8 +26,8 @@
 //! Two properties of the planner shape these queries, and both are easy to get
 //! wrong:
 //!
-//! * `execution.parquet.pushdown_filters` must be enabled. It defaults to
-//!   `false`, in which case no row filter is built and every case below
+//! * `execution.parquet.pushdown_filters` must be enabled (it is by
+//!   default). If it is disabled no row filter is built and every case below
 //!   degenerates to a plain scan.
 //! * The predicate must be a *single* conjunct. `build_row_filter` calls
 //!   `split_conjunction` before building filter candidates, and each candidate

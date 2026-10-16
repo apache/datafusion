@@ -162,9 +162,11 @@ mod tests {
             .select_columns(&["bool_col", "int_col"])?;
 
         let plan = df.explain(false, false)?.collect().await?;
-        // Filters all the way to Parquet
+        // Filters all the way to Parquet: with `pushdown_filters` enabled by
+        // default the predicate is evaluated by the scan itself
         let formatted = pretty::pretty_format_batches(&plan)?.to_string();
-        assert!(formatted.contains("FilterExec: id@0 = 1"), "{formatted}");
+        assert!(formatted.contains("predicate=id@0 = 1"), "{formatted}");
+        assert!(!formatted.contains("FilterExec"), "{formatted}");
 
         Ok(())
     }

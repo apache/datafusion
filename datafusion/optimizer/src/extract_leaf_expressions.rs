@@ -46,8 +46,8 @@
 //! The reason is that the extraction projection is the node a source absorbs.
 //! A Parquet scan merges it into the file projection and reads only the struct
 //! leaf. With the opposite precedence the scan reads the whole struct whenever
-//! `datafusion.execution.parquet.pushdown_filters` is `false`, which is the
-//! default. The filter loses nothing by staying one node higher, because
+//! `datafusion.execution.parquet.pushdown_filters` is `false`. The filter
+//! loses nothing by staying one node higher, because
 //! `PushDownFilter` records the predicate in
 //! [`TableScan::filters`](datafusion_expr::logical_plan::TableScan) in the pass
 //! that runs before the extraction projection exists, so row group pruning and

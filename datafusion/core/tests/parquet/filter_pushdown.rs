@@ -623,8 +623,10 @@ fn get_value(metrics: &MetricsSet, metric_name: &str) -> usize {
 }
 
 #[tokio::test]
-async fn predicate_cache_default() -> datafusion_common::Result<()> {
-    let ctx = SessionContext::new();
+async fn predicate_cache_pushdown_disabled() -> datafusion_common::Result<()> {
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.parquet.pushdown_filters = false;
+    let ctx = SessionContext::new_with_config(config);
     // The cache is on by default, but not used unless filter pushdown is enabled
     PredicateCacheTest {
         expected_inner_records: 0,

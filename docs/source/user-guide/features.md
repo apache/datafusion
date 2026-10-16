@@ -106,7 +106,7 @@ trait, DataFusion includes built in support for the following formats:
   - [x] Primitive and Nested Types
   - [x] Row Group and Data Page pruning on min/max statistics
   - [x] Row Group pruning on Bloom Filters
-  - [x] Predicate push down (late materialization) [not by default](https://github.com/apache/datafusion/issues/3463)
+  - [x] Predicate push down (late materialization)
 - [x] JSON
 - [x] Avro
 - [x] Arrow

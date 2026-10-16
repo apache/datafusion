@@ -973,9 +973,14 @@ async fn query_single_parquet_file() {
 
 #[tokio::test]
 async fn query_single_parquet_file_with_single_predicate() {
-    let test = Test::new().with_single_file_parquet().await;
-    // Note that evaluating predicates requires additional object store requests
-    // (to evaluate predicates)
+    let test = Test::new();
+    // This test documents the I/O pattern without filter pushdown (the
+    // `*_pushdown_filters_*` tests below cover the default); the predicate
+    // only prunes row groups here. The option is captured when the table is
+    // registered, so it is set first.
+    test.set("datafusion.execution.parquet.pushdown_filters", "false")
+        .await;
+    let test = test.with_single_file_parquet().await;
     assert_snapshot!(
         test.query("select min(a), max(b) from parquet_table WHERE a > 150").await,
         @r"
@@ -996,10 +1001,14 @@ async fn query_single_parquet_file_with_single_predicate() {
 
 #[tokio::test]
 async fn query_single_parquet_file_multi_row_groups_multiple_predicates() {
-    let test = Test::new().with_single_file_parquet().await;
-
-    // Note that evaluating predicates requires additional object store requests
-    // (to evaluate predicates)
+    let test = Test::new();
+    // This test documents the I/O pattern without filter pushdown (the
+    // `*_pushdown_filters_*` tests below cover the default); the predicates
+    // only prune row groups here. The option is captured when the table is
+    // registered, so it is set first.
+    test.set("datafusion.execution.parquet.pushdown_filters", "false")
+        .await;
+    let test = test.with_single_file_parquet().await;
     assert_snapshot!(
         test.query("select min(a), max(b) from parquet_table WHERE a > 50 AND b < 1150").await,
         @r"
@@ -1021,9 +1030,13 @@ async fn query_single_parquet_file_multi_row_groups_multiple_predicates() {
 
 #[tokio::test]
 async fn query_single_parquet_file_pushdown_filters_one_shot_io() {
-    let test = Test::new().with_single_file_parquet().await;
+    let test = Test::new();
+    // the options are captured when the table is registered, so set them first
     test.set("datafusion.execution.parquet.pushdown_filters", "true")
         .await;
+    test.set("datafusion.execution.parquet.progressive_io", "false")
+        .await;
+    let test = test.with_single_file_parquet().await;
 
     // With filter pushdown enabled and `progressive_io` disabled (the
     // default), all data needed for each row group (the columns needed by
@@ -1092,7 +1105,11 @@ async fn query_single_parquet_file_pushdown_filters_progressive_io() {
 
 #[tokio::test]
 async fn query_single_parquet_file_multi_page_no_pushdown() {
-    let test = Test::new().with_single_file_parquet_multi_page().await;
+    let test = Test::new();
+    // the option is captured when the table is registered, so it is set first
+    test.set("datafusion.execution.parquet.pushdown_filters", "false")
+        .await;
+    let test = test.with_single_file_parquet_multi_page().await;
 
     // Baseline for the `*_page_index` tests below: without filter pushdown
     // the page index still prunes the first two pages of `a` in row group 1
@@ -1120,9 +1137,13 @@ async fn query_single_parquet_file_multi_page_no_pushdown() {
 
 #[tokio::test]
 async fn query_single_parquet_file_pushdown_filters_one_shot_io_page_index() {
-    let test = Test::new().with_single_file_parquet_multi_page().await;
+    let test = Test::new();
+    // the options are captured when the table is registered, so set them first
     test.set("datafusion.execution.parquet.pushdown_filters", "true")
         .await;
+    test.set("datafusion.execution.parquet.progressive_io", "false")
+        .await;
+    let test = test.with_single_file_parquet_multi_page().await;
 
     // Each row group has five 20-row data pages per column. The page index
     // proves the first two pages of `a` in row group 1 (values 0..40) cannot

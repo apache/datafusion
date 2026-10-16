@@ -1377,9 +1377,7 @@ EXPLAIN SELECT b FROM pruning_only_eq WHERE a = 5 ORDER BY b LIMIT 1;
 ----
 physical_plan
 01)SortPreservingMergeExec: [b@0 ASC NULLS LAST], fetch=1
-02)--FilterExec: a@0 = 5, projection=[b@1], fetch=1
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST, b@1 ASC NULLS LAST
-04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/pruning_only_eq/f1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/pruning_only_eq/f2.parquet]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], file_type=parquet, predicate=a@0 = 5, pruning_predicate=a_null_count@2 != row_count@3 AND a_min@0 <= 5 AND 5 <= a_max@1, required_guarantees=[a in (5)]
+02)--DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/pruning_only_eq/f1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/pruning_only_eq/f2.parquet]]}, projection=[b], limit=1, file_type=parquet, predicate=a@0 = 5, pruning_predicate=a_null_count@2 != row_count@3 AND a_min@0 <= 5 AND 5 <= a_max@1, required_guarantees=[a in (5)]
 
 query I
 SELECT b FROM pruning_only_eq WHERE a = 5 ORDER BY b LIMIT 1;

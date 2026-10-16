@@ -541,11 +541,17 @@ impl TestFull {
 
         // Create a DataSourceExec to read the file
         let object_store_url = ObjectStoreUrl::local_filesystem();
-        // add the predicate, if requested
+        // add the predicate, if requested. The predicate is only used to
+        // prune row groups here, so the rows the access plan / row selection
+        // keep can be checked directly: disable filter pushdown explicitly
         let source = if let Some(predicate) = predicate {
             let df_schema = DFSchema::try_from(schema.clone())?;
             let predicate = ctx.create_physical_expr(predicate, &df_schema)?;
-            Arc::new(ParquetSource::new(schema.clone()).with_predicate(predicate))
+            Arc::new(
+                ParquetSource::new(schema.clone())
+                    .with_predicate(predicate)
+                    .with_pushdown_filters(false),
+            )
         } else {
             Arc::new(ParquetSource::new(schema.clone()))
         };
