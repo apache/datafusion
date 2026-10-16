@@ -35,7 +35,7 @@ use url::Url;
 /// * `file://` for local file system
 /// * `s3://bucket` for AWS S3 bucket
 /// * `oss://bucket` for Aliyun OSS bucket
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ObjectStoreUrl {
     url: Url,
 }
@@ -98,6 +98,14 @@ impl AsRef<str> for ObjectStoreUrl {
 impl AsRef<Url> for ObjectStoreUrl {
     fn as_ref(&self) -> &Url {
         &self.url
+    }
+}
+
+impl std::fmt::Debug for ObjectStoreUrl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ObjectStoreUrl")
+            .field("url", &diagnostic_url(&self.url))
+            .finish()
     }
 }
 
@@ -191,7 +199,12 @@ impl std::fmt::Debug for DefaultObjectStoreRegistry {
                 &self
                     .object_stores
                     .iter()
-                    .map(|o| o.key().clone())
+                    .map(|o| {
+                        Url::parse(o.key()).map_or_else(
+                            |_| "<invalid object store URL>".to_string(),
+                            |url| diagnostic_url(&url),
+                        )
+                    })
                     .collect::<Vec<_>>(),
             )
             .finish()
@@ -246,7 +259,8 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
         let (_, object_store) = self.object_stores
             .remove(&s)
             .ok_or_else(|| {
-                internal_datafusion_err!("Failed to deregister object store. No suitable object store found for {url}. See `RuntimeEnv::register_object_store`")
+                let diagnostic_url = diagnostic_url(url);
+                internal_datafusion_err!("Failed to deregister object store. No suitable object store found for {diagnostic_url}. See `RuntimeEnv::register_object_store`")
             })?;
 
         Ok(object_store)
@@ -258,9 +272,20 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
             .get(&s)
             .map(|o| Arc::clone(o.value()))
             .ok_or_else(|| {
-                internal_datafusion_err!("No suitable object store found for {url}. See `RuntimeEnv::register_object_store`")
+                let diagnostic_url = diagnostic_url(url);
+                internal_datafusion_err!("No suitable object store found for {diagnostic_url}. See `RuntimeEnv::register_object_store`")
             })
     }
+}
+
+/// Format only the scheme, host, and port for diagnostics. Registry keys may
+/// include userinfo (for example, an ABFS container), so do not reuse them here.
+fn diagnostic_url(url: &Url) -> String {
+    format!(
+        "{}://{}",
+        url.scheme(),
+        &url[url::Position::BeforeHost..url::Position::AfterPort],
+    )
 }
 
 /// Get the key of a url for object store registration.
@@ -276,6 +301,7 @@ fn get_url_key(url: &Url) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use object_store::memory::InMemory;
 
     #[test]
     fn test_object_store_url() {
@@ -330,5 +356,87 @@ mod tests {
         let url = ObjectStoreUrl::parse("s3://username:password@host:123").unwrap();
         let key = get_url_key(&url.url);
         assert_eq!(key.as_str(), "s3://host:123");
+    }
+
+    #[test]
+    fn test_object_store_url_debug_redacts_userinfo() {
+        let url = ObjectStoreUrl::parse("s3://u%40ser:p%40ss@host:123").unwrap();
+        let debug = format!("{url:?}");
+        assert_eq!(debug, "ObjectStoreUrl { url: \"s3://host:123\" }");
+        assert_eq!(url.as_str(), "s3://u%40ser:p%40ss@host:123/");
+        assert_eq!(url.to_string(), url.as_str());
+
+        let plain = ObjectStoreUrl::parse("s3://bucket").unwrap();
+        assert_eq!(
+            format!("{plain:?}"),
+            "ObjectStoreUrl { url: \"s3://bucket\" }"
+        );
+
+        for scheme in ["abfs", "abfss"] {
+            let abfs = ObjectStoreUrl::parse(format!(
+                "{scheme}://container@account.dfs.core.windows.net"
+            ))
+            .unwrap();
+            assert_eq!(
+                format!("{abfs:?}"),
+                format!(
+                    "ObjectStoreUrl {{ url: \"{scheme}://account.dfs.core.windows.net\" }}"
+                )
+            );
+            assert_eq!(
+                abfs.as_str(),
+                format!("{scheme}://container@account.dfs.core.windows.net/")
+            );
+        }
+    }
+
+    #[test]
+    fn test_registry_errors_redact_userinfo_and_query() {
+        let registry = DefaultObjectStoreRegistry::new();
+        for url in [
+            "s3://u%40ser:p%40ss@host:123/path?token=secret#fragment",
+            "abfs://container@account.dfs.core.windows.net/path?token=secret",
+            "abfss://container@account.dfs.core.windows.net/path?token=secret",
+        ] {
+            let url = Url::parse(url).unwrap();
+            let expected = format!(
+                "{}://{}",
+                url.scheme(),
+                &url[url::Position::BeforeHost..url::Position::AfterPort]
+            );
+            for err in [registry.get_store(&url), registry.deregister_store(&url)] {
+                let message = err.err().unwrap().strip_backtrace();
+                assert!(message.contains(&expected), "{message}");
+                for secret in
+                    ["u%40ser", "p%40ss", "container", "token=secret", "fragment"]
+                {
+                    assert!(!message.contains(secret), "{message}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_registry_lookup_preserves_original_url() {
+        let registry = DefaultObjectStoreRegistry::new();
+        let url =
+            Url::parse("abfss://container@account.dfs.core.windows.net/path").unwrap();
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        registry.register_store(&url, Arc::clone(&store));
+        assert!(Arc::ptr_eq(&registry.get_store(&url).unwrap(), &store));
+        assert_eq!(url.username(), "container");
+    }
+
+    #[test]
+    fn test_registry_debug_redacts_userinfo_in_keys() {
+        let registry = DefaultObjectStoreRegistry::new();
+        // Registry keys can include usernames (for example, ABFS containers).
+        registry.object_stores.insert(
+            "abfss://container@account.dfs.core.windows.net".to_string(),
+            Arc::new(InMemory::new()),
+        );
+        let debug = format!("{registry:?}");
+        assert!(debug.contains("abfss://account.dfs.core.windows.net"));
+        assert!(!debug.contains("container"));
     }
 }
