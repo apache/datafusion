@@ -14582,6 +14582,12 @@ impl serde::Serialize for LogicalPlanNode {
                 logical_plan_node::LogicalPlanType::AsOfJoin(v) => {
                     struct_ser.serialize_field("asOfJoin", v)?;
                 }
+                logical_plan_node::LogicalPlanType::MaterializedCte(v) => {
+                    struct_ser.serialize_field("materializedCte", v)?;
+                }
+                logical_plan_node::LogicalPlanType::MaterializedCteScan(v) => {
+                    struct_ser.serialize_field("materializedCteScan", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -14645,6 +14651,10 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
             "emptyTableScan",
             "as_of_join",
             "asOfJoin",
+            "materialized_cte",
+            "materializedCte",
+            "materialized_cte_scan",
+            "materializedCteScan",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -14683,6 +14693,8 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
             Dml,
             EmptyTableScan,
             AsOfJoin,
+            MaterializedCte,
+            MaterializedCteScan,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -14738,6 +14750,8 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
                             "dml" => Ok(GeneratedField::Dml),
                             "emptyTableScan" | "empty_table_scan" => Ok(GeneratedField::EmptyTableScan),
                             "asOfJoin" | "as_of_join" => Ok(GeneratedField::AsOfJoin),
+                            "materializedCte" | "materialized_cte" => Ok(GeneratedField::MaterializedCte),
+                            "materializedCteScan" | "materialized_cte_scan" => Ok(GeneratedField::MaterializedCteScan),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -14998,6 +15012,20 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
                             logical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::AsOfJoin)
 ;
                         }
+                        GeneratedField::MaterializedCte => {
+                            if logical_plan_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("materializedCte"));
+                            }
+                            logical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::MaterializedCte)
+;
+                        }
+                        GeneratedField::MaterializedCteScan => {
+                            if logical_plan_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("materializedCteScan"));
+                            }
+                            logical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::MaterializedCteScan)
+;
+                        }
                     }
                 }
                 Ok(LogicalPlanNode {
@@ -15006,6 +15034,577 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
             }
         }
         deserializer.deserialize_struct("datafusion.LogicalPlanNode", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for MaterializedCteExecNode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.id != 0 {
+            len += 1;
+        }
+        if !self.name.is_empty() {
+            len += 1;
+        }
+        if self.body.is_some() {
+            len += 1;
+        }
+        if self.continuation.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.MaterializedCteExecNode", len)?;
+        if self.id != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("id", ToString::to_string(&self.id).as_str())?;
+        }
+        if !self.name.is_empty() {
+            struct_ser.serialize_field("name", &self.name)?;
+        }
+        if let Some(v) = self.body.as_ref() {
+            struct_ser.serialize_field("body", v)?;
+        }
+        if let Some(v) = self.continuation.as_ref() {
+            struct_ser.serialize_field("continuation", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for MaterializedCteExecNode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "id",
+            "name",
+            "body",
+            "continuation",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Id,
+            Name,
+            Body,
+            Continuation,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "id" => Ok(GeneratedField::Id),
+                            "name" => Ok(GeneratedField::Name),
+                            "body" => Ok(GeneratedField::Body),
+                            "continuation" => Ok(GeneratedField::Continuation),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = MaterializedCteExecNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.MaterializedCteExecNode")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<MaterializedCteExecNode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut id__ = None;
+                let mut name__ = None;
+                let mut body__ = None;
+                let mut continuation__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Id => {
+                            if id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("id"));
+                            }
+                            id__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Name => {
+                            if name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("name"));
+                            }
+                            name__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Body => {
+                            if body__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("body"));
+                            }
+                            body__ = map_.next_value()?;
+                        }
+                        GeneratedField::Continuation => {
+                            if continuation__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("continuation"));
+                            }
+                            continuation__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(MaterializedCteExecNode {
+                    id: id__.unwrap_or_default(),
+                    name: name__.unwrap_or_default(),
+                    body: body__,
+                    continuation: continuation__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.MaterializedCteExecNode", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for MaterializedCteNode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.id != 0 {
+            len += 1;
+        }
+        if !self.name.is_empty() {
+            len += 1;
+        }
+        if self.cte.is_some() {
+            len += 1;
+        }
+        if self.continuation.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.MaterializedCteNode", len)?;
+        if self.id != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("id", ToString::to_string(&self.id).as_str())?;
+        }
+        if !self.name.is_empty() {
+            struct_ser.serialize_field("name", &self.name)?;
+        }
+        if let Some(v) = self.cte.as_ref() {
+            struct_ser.serialize_field("cte", v)?;
+        }
+        if let Some(v) = self.continuation.as_ref() {
+            struct_ser.serialize_field("continuation", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for MaterializedCteNode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "id",
+            "name",
+            "cte",
+            "continuation",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Id,
+            Name,
+            Cte,
+            Continuation,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "id" => Ok(GeneratedField::Id),
+                            "name" => Ok(GeneratedField::Name),
+                            "cte" => Ok(GeneratedField::Cte),
+                            "continuation" => Ok(GeneratedField::Continuation),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = MaterializedCteNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.MaterializedCteNode")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<MaterializedCteNode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut id__ = None;
+                let mut name__ = None;
+                let mut cte__ = None;
+                let mut continuation__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Id => {
+                            if id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("id"));
+                            }
+                            id__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Name => {
+                            if name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("name"));
+                            }
+                            name__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Cte => {
+                            if cte__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("cte"));
+                            }
+                            cte__ = map_.next_value()?;
+                        }
+                        GeneratedField::Continuation => {
+                            if continuation__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("continuation"));
+                            }
+                            continuation__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(MaterializedCteNode {
+                    id: id__.unwrap_or_default(),
+                    name: name__.unwrap_or_default(),
+                    cte: cte__,
+                    continuation: continuation__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.MaterializedCteNode", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for MaterializedCteScanExecNode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.id != 0 {
+            len += 1;
+        }
+        if !self.name.is_empty() {
+            len += 1;
+        }
+        if self.schema.is_some() {
+            len += 1;
+        }
+        if self.partitions != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.MaterializedCteScanExecNode", len)?;
+        if self.id != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("id", ToString::to_string(&self.id).as_str())?;
+        }
+        if !self.name.is_empty() {
+            struct_ser.serialize_field("name", &self.name)?;
+        }
+        if let Some(v) = self.schema.as_ref() {
+            struct_ser.serialize_field("schema", v)?;
+        }
+        if self.partitions != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("partitions", ToString::to_string(&self.partitions).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for MaterializedCteScanExecNode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "id",
+            "name",
+            "schema",
+            "partitions",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Id,
+            Name,
+            Schema,
+            Partitions,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "id" => Ok(GeneratedField::Id),
+                            "name" => Ok(GeneratedField::Name),
+                            "schema" => Ok(GeneratedField::Schema),
+                            "partitions" => Ok(GeneratedField::Partitions),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = MaterializedCteScanExecNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.MaterializedCteScanExecNode")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<MaterializedCteScanExecNode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut id__ = None;
+                let mut name__ = None;
+                let mut schema__ = None;
+                let mut partitions__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Id => {
+                            if id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("id"));
+                            }
+                            id__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Name => {
+                            if name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("name"));
+                            }
+                            name__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Schema => {
+                            if schema__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("schema"));
+                            }
+                            schema__ = map_.next_value()?;
+                        }
+                        GeneratedField::Partitions => {
+                            if partitions__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("partitions"));
+                            }
+                            partitions__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(MaterializedCteScanExecNode {
+                    id: id__.unwrap_or_default(),
+                    name: name__.unwrap_or_default(),
+                    schema: schema__,
+                    partitions: partitions__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.MaterializedCteScanExecNode", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for MaterializedCteScanNode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.id != 0 {
+            len += 1;
+        }
+        if !self.name.is_empty() {
+            len += 1;
+        }
+        if self.schema.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.MaterializedCteScanNode", len)?;
+        if self.id != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("id", ToString::to_string(&self.id).as_str())?;
+        }
+        if !self.name.is_empty() {
+            struct_ser.serialize_field("name", &self.name)?;
+        }
+        if let Some(v) = self.schema.as_ref() {
+            struct_ser.serialize_field("schema", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for MaterializedCteScanNode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "id",
+            "name",
+            "schema",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Id,
+            Name,
+            Schema,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "id" => Ok(GeneratedField::Id),
+                            "name" => Ok(GeneratedField::Name),
+                            "schema" => Ok(GeneratedField::Schema),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = MaterializedCteScanNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.MaterializedCteScanNode")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<MaterializedCteScanNode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut id__ = None;
+                let mut name__ = None;
+                let mut schema__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Id => {
+                            if id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("id"));
+                            }
+                            id__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Name => {
+                            if name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("name"));
+                            }
+                            name__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Schema => {
+                            if schema__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("schema"));
+                            }
+                            schema__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(MaterializedCteScanNode {
+                    id: id__.unwrap_or_default(),
+                    name: name__.unwrap_or_default(),
+                    schema: schema__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.MaterializedCteScanNode", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for MaybeFilter {
@@ -22246,6 +22845,12 @@ impl serde::Serialize for PhysicalPlanNode {
                 physical_plan_node::PhysicalPlanType::AsOfJoin(v) => {
                     struct_ser.serialize_field("asOfJoin", v)?;
                 }
+                physical_plan_node::PhysicalPlanType::MaterializedCte(v) => {
+                    struct_ser.serialize_field("materializedCte", v)?;
+                }
+                physical_plan_node::PhysicalPlanType::MaterializedCteScan(v) => {
+                    struct_ser.serialize_field("materializedCteScan", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -22322,6 +22927,10 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
             "piecewiseMergeJoin",
             "as_of_join",
             "asOfJoin",
+            "materialized_cte",
+            "materializedCte",
+            "materialized_cte_scan",
+            "materializedCteScan",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -22366,6 +22975,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
             ScalarSubquery,
             PiecewiseMergeJoin,
             AsOfJoin,
+            MaterializedCte,
+            MaterializedCteScan,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -22427,6 +23038,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
                             "scalarSubquery" | "scalar_subquery" => Ok(GeneratedField::ScalarSubquery),
                             "piecewiseMergeJoin" | "piecewise_merge_join" => Ok(GeneratedField::PiecewiseMergeJoin),
                             "asOfJoin" | "as_of_join" => Ok(GeneratedField::AsOfJoin),
+                            "materializedCte" | "materialized_cte" => Ok(GeneratedField::MaterializedCte),
+                            "materializedCteScan" | "materialized_cte_scan" => Ok(GeneratedField::MaterializedCteScan),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -22727,6 +23340,20 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
                                 return Err(serde::de::Error::duplicate_field("asOfJoin"));
                             }
                             physical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_plan_node::PhysicalPlanType::AsOfJoin)
+;
+                        }
+                        GeneratedField::MaterializedCte => {
+                            if physical_plan_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("materializedCte"));
+                            }
+                            physical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_plan_node::PhysicalPlanType::MaterializedCte)
+;
+                        }
+                        GeneratedField::MaterializedCteScan => {
+                            if physical_plan_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("materializedCteScan"));
+                            }
+                            physical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_plan_node::PhysicalPlanType::MaterializedCteScan)
 ;
                         }
                     }

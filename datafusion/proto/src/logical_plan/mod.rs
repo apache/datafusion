@@ -41,7 +41,7 @@ use datafusion_common::format::{
 };
 use datafusion_common::utils::{usize_from_wire, usize_to_wire};
 use datafusion_common::{
-    NullEquality, Result, TableReference, assert_or_internal_err, context,
+    DFSchema, NullEquality, Result, TableReference, assert_or_internal_err, context,
     internal_datafusion_err, internal_err, not_impl_err, plan_err,
 };
 use datafusion_datasource::file_format::FileFormat;
@@ -59,8 +59,9 @@ use datafusion_datasource_json::file_format::{
 use datafusion_datasource_parquet::file_format::{ParquetFormat, ParquetFormatFactory};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{
-    AggregateUDF, DmlStatement, FetchType, HigherOrderUDF, Operator, RangePartitioning,
-    RecursiveQuery, SkipType, TableSource, Unnest, WriteOp,
+    AggregateUDF, DmlStatement, FetchType, HigherOrderUDF, MaterializedCte,
+    MaterializedCteId, MaterializedCtePlan, MaterializedCteScan, Operator,
+    RangePartitioning, RecursiveQuery, SkipType, TableSource, Unnest, WriteOp,
 };
 use datafusion_expr::{
     DistinctOn, DropView, Expr, JoinConstraint, LogicalPlan, LogicalPlanBuilder,
@@ -1355,6 +1356,43 @@ impl AsLogicalPlan for LogicalPlanNode {
                 )
                 .map(LogicalPlan::RecursiveQuery)
             }
+            LogicalPlanType::MaterializedCte(cte_node) => {
+                let body = cte_node
+                    .cte
+                    .as_ref()
+                    .ok_or_else(|| internal_datafusion_err!(
+                        "Protobuf deserialization error, MaterializedCteNode was missing required field cte."
+                    ))?
+                    .try_into_logical_plan(ctx, extension_codec)?;
+                let continuation = cte_node
+                    .continuation
+                    .as_ref()
+                    .ok_or_else(|| internal_datafusion_err!(
+                        "Protobuf deserialization error, MaterializedCteNode was missing required field continuation."
+                    ))?
+                    .try_into_logical_plan(ctx, extension_codec)?;
+
+                // The ids of the encoded plan are kept, so the scans in the
+                // continuation, which are decoded before this node, stay
+                // bound to it. `try_new` checks their schemas.
+                MaterializedCte::try_new(
+                    MaterializedCteId::from_u64(cte_node.id),
+                    cte_node.name.clone(),
+                    Arc::new(body),
+                    Arc::new(continuation),
+                )
+                .map(|cte| LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)))
+            }
+            LogicalPlanType::MaterializedCteScan(scan) => {
+                let schema: DFSchema = convert_required!(scan.schema)?;
+                Ok(LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(
+                    MaterializedCteScan::new(
+                        MaterializedCteId::from_u64(scan.id),
+                        scan.name.clone(),
+                        Arc::new(schema),
+                    ),
+                )))
+            }
             LogicalPlanType::CteWorkTableScan(cte_work_table_scan_node) => {
                 let CteWorkTableScanNode { name, schema } = cte_work_table_scan_node;
                 let schema = convert_required!(*schema)?;
@@ -2411,11 +2449,35 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::DescribeTable(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DescribeTable",
             )),
-            LogicalPlan::MaterializedCte(_) => {
-                not_impl_err!(
-                    "LogicalPlan serde is not yet implemented for MATERIALIZED CTEs"
-                )
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
+                let body = LogicalPlanNode::try_from_logical_plan(
+                    cte.body().as_ref(),
+                    extension_codec,
+                )?;
+                let continuation = LogicalPlanNode::try_from_logical_plan(
+                    cte.continuation().as_ref(),
+                    extension_codec,
+                )?;
+                Ok(LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::MaterializedCte(Box::new(
+                        protobuf::MaterializedCteNode {
+                            id: cte.id().as_u64(),
+                            name: cte.name().to_string(),
+                            cte: Some(Box::new(body)),
+                            continuation: Some(Box::new(continuation)),
+                        },
+                    ))),
+                })
             }
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan)) => Ok(LogicalPlanNode {
+                logical_plan_type: Some(LogicalPlanType::MaterializedCteScan(
+                    protobuf::MaterializedCteScanNode {
+                        id: scan.id().as_u64(),
+                        name: scan.name().to_string(),
+                        schema: Some(scan.schema().try_into()?),
+                    },
+                )),
+            }),
             LogicalPlan::RecursiveQuery(recursive) => {
                 let static_term = LogicalPlanNode::try_from_logical_plan(
                     recursive.static_term.as_ref(),

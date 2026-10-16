@@ -36,6 +36,7 @@ use datafusion_common::parquet_config::{
     DFParquetWriterVersion, RowGroupRangeAssignment,
 };
 use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_expr::logical_plan::MaterializedCtePlan;
 use datafusion_functions_aggregate::sum::sum_distinct;
 use prost::Message;
 use std::any::Any;
@@ -3600,6 +3601,68 @@ async fn roundtrip_recursive_query() {
         format!("{}", pretty_format_batches(&output).unwrap()),
         format!("{}", pretty_format_batches(&output_round_trip).unwrap())
     );
+}
+
+/// Round trip the plan of `sql`, which uses a materialized CTE, before and
+/// after the optimizer. The decoded plans must return the rows of `sql`.
+async fn roundtrip_materialized_cte(sql: &str, scans: usize) -> Result<()> {
+    // sqlparser only parses `MATERIALIZED` for the PostgreSQL dialect.
+    let config =
+        SessionConfig::new().set_str("datafusion.sql_parser.dialect", "PostgreSQL");
+    let ctx = SessionContext::new_with_config(config.clone());
+    let dataframe = ctx.sql(sql).await?;
+    let plans = [
+        dataframe.logical_plan().clone(),
+        dataframe.clone().into_optimized_plan()?,
+    ];
+    let output = dataframe.collect().await?;
+
+    for plan in plans {
+        let bytes = logical_plan_to_bytes(&plan)?;
+        let ctx = SessionContext::new_with_config(config.clone());
+        let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+        // The ids are part of the debug format: the scans keep the id of
+        // their CTE.
+        assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+        assert_eq!(plan, logical_round_trip);
+
+        let mut cte_scans = vec![];
+        logical_round_trip.apply_with_subqueries(|node| {
+            if let LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) = node {
+                cte_scans.push(cte.scans()?.len());
+            }
+            Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
+        })?;
+        assert_eq!(cte_scans, vec![scans]);
+
+        let dataframe = ctx.execute_logical_plan(logical_round_trip).await?;
+        let output_round_trip = dataframe.collect().await?;
+        assert_eq!(
+            format!("{}", pretty_format_batches(&output)?),
+            format!("{}", pretty_format_batches(&output_round_trip)?)
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_materialized_cte_with_two_scans() -> Result<()> {
+    roundtrip_materialized_cte(
+        "WITH c AS MATERIALIZED (SELECT * FROM (VALUES (1), (2), (3), (4), (5)) AS t(v))
+        SELECT a.v, b.v FROM c AS a JOIN c AS b ON a.v + 1 = b.v ORDER BY a.v",
+        2,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn roundtrip_materialized_cte_scan_in_scalar_subquery() -> Result<()> {
+    roundtrip_materialized_cte(
+        "WITH c AS MATERIALIZED (SELECT * FROM (VALUES (1), (2), (3), (4), (5)) AS t(v))
+        SELECT v FROM c WHERE v < (SELECT max(v) FROM c) ORDER BY v",
+        2,
+    )
+    .await
 }
 
 #[tokio::test]

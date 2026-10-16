@@ -66,6 +66,10 @@ use datafusion_physical_plan::joins::{
     PiecewiseMergeJoinExec, SortMergeJoinExec, SymmetricHashJoinExec,
 };
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion_physical_plan::materialized_cte::{
+    DecodedMaterializedCteBuffers, MaterializedCteBuffer, MaterializedCteExec,
+    MaterializedCteScanExec,
+};
 use datafusion_physical_plan::memory::LazyMemoryExec;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::ProjectionExec;
@@ -1042,11 +1046,19 @@ mod tests {
 /// This bundles the stable per-call inputs for deserialization and the
 /// per-scope `ScalarSubqueryResults` handle needed while reconstructing
 /// `ScalarSubqueryExpr` nodes inside a `ScalarSubqueryExec` input plan.
+///
+/// It also holds the buffers that bind each decoded `MaterializedCteScanExec`
+/// to the decoded `MaterializedCteExec` with the same id. Create one root
+/// context for one plan and pass it (or a context derived from it) to every
+/// nested decode call. A scan that is decoded with a different root context
+/// than its `MaterializedCteExec` is not bound to it, and fails when it is
+/// executed.
 #[derive(Clone)]
 pub struct PhysicalPlanDecodeContext<'a> {
     task_ctx: &'a TaskContext,
     codec: &'a dyn PhysicalExtensionCodec,
     scalar_subquery_results: Option<ScalarSubqueryResults>,
+    materialized_cte_buffers: Arc<DecodedMaterializedCteBuffers>,
 }
 
 impl<'a> PhysicalPlanDecodeContext<'a> {
@@ -1056,6 +1068,7 @@ impl<'a> PhysicalPlanDecodeContext<'a> {
             task_ctx,
             codec,
             scalar_subquery_results: None,
+            materialized_cte_buffers: Arc::default(),
         }
     }
 
@@ -1085,6 +1098,7 @@ impl<'a> PhysicalPlanDecodeContext<'a> {
             task_ctx: self.task_ctx,
             codec: self.codec,
             scalar_subquery_results: Some(scalar_subquery_results),
+            materialized_cte_buffers: Arc::clone(&self.materialized_cte_buffers),
         }
     }
 }
@@ -1325,6 +1339,12 @@ pub trait PhysicalPlanNodeExt: Sized {
             }
             PhysicalPlanType::PiecewiseMergeJoin(_) => {
                 PiecewiseMergeJoinExec::try_from_proto(self.node(), &decode_ctx)
+            }
+            PhysicalPlanType::MaterializedCte(_) => {
+                MaterializedCteExec::try_from_proto(self.node(), &decode_ctx)
+            }
+            PhysicalPlanType::MaterializedCteScan(_) => {
+                MaterializedCteScanExec::try_from_proto(self.node(), &decode_ctx)
             }
         }
     }
@@ -2338,5 +2358,15 @@ impl ExecutionPlanDecode for ConverterPlanDecoder<'_, '_> {
                 .udwf(name)
                 .or_else(|_| self.ctx.codec().try_decode_udwf(name, &[])),
         }
+    }
+
+    // The buffers live in the root decode context, so a scan and its
+    // `MaterializedCteExec` get the same buffer wherever they are in the plan.
+    fn materialized_cte_buffer(
+        &self,
+        encoded_id: u64,
+        name: &str,
+    ) -> Result<Arc<MaterializedCteBuffer>> {
+        Ok(self.ctx.materialized_cte_buffers.buffer(encoded_id, name))
     }
 }
