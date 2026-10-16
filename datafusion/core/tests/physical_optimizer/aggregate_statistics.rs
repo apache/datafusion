@@ -34,7 +34,7 @@ use datafusion_common::cast::as_int64_array;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, Result, Statistics};
-use datafusion_common::{ScalarValue, assert_batches_eq};
+use datafusion_common::{ScalarValue, assert_batches_eq, assert_contains};
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_execution::TaskContext;
 use datafusion_execution::object_store::ObjectStoreUrl;
@@ -906,11 +906,11 @@ async fn aggregate_statistics_consults_statistics_providers() -> Result<()> {
     Ok(())
 }
 
-/// A provider reporting fewer column statistics than the scan has columns must
-/// not make `AggregateStatistics` index out of bounds: the rule falls back and
-/// the count is still computed from the data.
+/// A provider reporting fewer column statistics than the scan has columns
+/// breaks the invariant that consumers index by column, so the statistics walk
+/// reports it instead of letting them read out of bounds.
 #[tokio::test]
-async fn aggregate_statistics_falls_back_on_short_column_statistics() -> Result<()> {
+async fn short_column_statistics_are_reported() -> Result<()> {
     let provider = ClosureStatisticsProvider::with_matches(
         |plan| plan.is::<DataSourceExec>(),
         |plan, child_stats| {
@@ -922,7 +922,7 @@ async fn aggregate_statistics_falls_back_on_short_column_statistics() -> Result<
                 plan.statistics_from_inputs(&child_stats, &StatisticsArgs::new())?,
             );
             // Drop the trailing column's statistics so every scan reports one
-            // fewer entry than its schema has columns, whatever the projection.
+            // fewer entry than its schema has columns.
             stats.column_statistics.pop();
             Ok(StatisticsResult::Computed(stats.into()))
         },
@@ -934,25 +934,30 @@ async fn aggregate_statistics_falls_back_on_short_column_statistics() -> Result<
         )]))
         .build();
     let ctx = SessionContext::new_with_state(state);
-    ctx.sql(
-        "CREATE TABLE t AS SELECT * FROM \
-         (VALUES (1, 10), (2, 10), (3, NULL), (4, 20)) AS v(a, b)",
-    )
-    .await?
-    .collect()
-    .await?;
 
-    // NULL and duplicate values make a wrong fallback visible in the count.
-    let batches = ctx.sql("SELECT count(b) FROM t").await?.collect().await?;
-    assert_batches_eq!(
-        &[
-            "+------------+",
-            "| count(t.b) |",
-            "+------------+",
-            "| 3          |",
-            "+------------+"
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, true),
+        Field::new("b", DataType::Int32, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4)])),
+            Arc::new(Int32Array::from(vec![Some(10), Some(10), None, Some(20)])),
         ],
-        &batches
+    )?;
+    ctx.register_batch("t", batch)?;
+
+    let err = ctx
+        .sql("SELECT count(b) FROM t")
+        .await?
+        .collect()
+        .await
+        .expect_err("short column statistics should be reported");
+    // The scan only reads `b`, so the provider leaves it no column statistics.
+    assert_contains!(
+        err.to_string(),
+        "Statistics provider ClosureStatisticsProvider returned 0 column statistics for DataSourceExec"
     );
     Ok(())
 }
