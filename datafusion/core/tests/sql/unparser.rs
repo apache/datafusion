@@ -889,7 +889,7 @@ async fn optimized_filter_after_projection() -> Result<()> {
     let sql = unparser.plan_to_sql(&plan)?.to_string();
     assert_eq!(
         sql,
-        "SELECT * FROM (SELECT `t`.`a`, random() AS `x` FROM `t`) AS `derived_projection` WHERE (`x` > CAST(`derived_projection`.`a` AS DOUBLE))"
+        "SELECT * FROM (SELECT `t`.`a`, rand() AS `x` FROM `t`) AS `derived_projection` WHERE (`x` > CAST(`derived_projection`.`a` AS DOUBLE))"
     );
 
     Ok(())

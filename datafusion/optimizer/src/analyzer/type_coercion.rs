@@ -28,7 +28,9 @@ use crate::utils::{NamePreserver, merge_into_schema};
 use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use arrow::temporal_conversions::SECONDS_IN_DAY;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
+use datafusion_common::tree_node::{
+    Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
+};
 use datafusion_common::{
     Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err,
@@ -41,7 +43,9 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::expr_schema::{cast_subquery, cast_subquery_columns};
-use datafusion_expr::logical_plan::Subquery;
+use datafusion_expr::logical_plan::{
+    Extension, MaterializedCte, MaterializedCteId, MaterializedCteScan, Subquery,
+};
 use datafusion_expr::type_coercion::binary::{
     comparison_coercion_with_session_timezone, like_coercion, regex_coercion,
     type_union_coercion,
@@ -96,22 +100,132 @@ impl AnalyzerRule for TypeCoercion {
     }
 
     fn analyze(&self, plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan> {
-        static EMPTY_SCHEMA: LazyLock<DFSchema> = LazyLock::new(DFSchema::empty);
-
-        // recurse
-        let transformed_plan = plan
+        // Record bare row-count parameter types before coercion makes them indistinguishable
+        // from explicit casts. A type inferred elsewhere takes precedence over the default.
+        let parameter_fields = plan.get_parameter_fields()?;
+        let plan = plan
             .transform_up_with_subqueries(|plan| {
-                analyze_internal(
-                    &EMPTY_SCHEMA,
-                    plan,
-                    config.execution.time_zone.as_ref().map(|tz| tz.as_str()),
-                )
+                if !matches!(plan, LogicalPlan::Limit(_)) {
+                    return Ok(Transformed::no(plan));
+                }
+                plan.map_expressions(|expr| match expr {
+                    Expr::Placeholder(mut placeholder) if placeholder.field.is_none() => {
+                        placeholder.field =
+                            parameter_fields.get(&placeholder.id).cloned().flatten();
+                        Ok(Transformed::yes(Expr::Placeholder(placeholder)))
+                    }
+                    expr => Ok(Transformed::no(expr)),
+                })
             })?
             .data;
+
+        // recurse
+        let transformed_plan = coerce_plan_and_subqueries(plan, config)?;
 
         // finish
         coerce_output(transformed_plan, config)
     }
+}
+
+/// Coerce each node of `plan` and of its subqueries, from the leaves up.
+fn coerce_plan_and_subqueries(
+    plan: LogicalPlan,
+    config: &ConfigOptions,
+) -> Result<LogicalPlan> {
+    static EMPTY_SCHEMA: LazyLock<DFSchema> = LazyLock::new(DFSchema::empty);
+
+    plan.transform_down_up_with_subqueries(
+        |plan| {
+            let cte = match &plan {
+                LogicalPlan::Extension(Extension { node }) => {
+                    node.as_any().downcast_ref::<MaterializedCte>().cloned()
+                }
+                _ => None,
+            };
+            let Some(cte) = cte else {
+                return Ok(Transformed::no(plan));
+            };
+            // Coercion can change the types of the body, for example the type
+            // of a `NULL` column of a `UNION`. Coerce the body first, and give
+            // its new schema to the scans before the continuation is coerced.
+            let body = coerce_plan_and_subqueries(cte.cte, config)?;
+            let continuation = with_materialized_cte_scan_schema(
+                cte.continuation,
+                cte.id,
+                body.schema(),
+            )?;
+            let continuation = coerce_plan_and_subqueries(continuation, config)?;
+            Ok(Transformed::new(
+                LogicalPlan::Extension(Extension {
+                    node: Arc::new(MaterializedCte {
+                        id: cte.id,
+                        name: cte.name,
+                        cte: body,
+                        continuation,
+                    }),
+                }),
+                true,
+                TreeNodeRecursion::Jump,
+            ))
+        },
+        |plan| {
+            analyze_internal(
+                &EMPTY_SCHEMA,
+                plan,
+                config.execution.time_zone.as_ref().map(|tz| tz.as_str()),
+            )
+        },
+    )
+    .map(|t| t.data)
+}
+
+/// Give the fields of `body_schema` to each scan of the materialized CTE `id`
+/// in `continuation`, also in subquery expressions. A scan keeps its
+/// qualifiers.
+fn with_materialized_cte_scan_schema(
+    continuation: LogicalPlan,
+    id: MaterializedCteId,
+    body_schema: &DFSchemaRef,
+) -> Result<LogicalPlan> {
+    continuation
+        .transform_down_with_subqueries(|plan| {
+            let LogicalPlan::Extension(Extension { node }) = &plan else {
+                return Ok(Transformed::no(plan));
+            };
+            // A nested occurrence of the same CTE owns the scans below it.
+            if node
+                .as_any()
+                .downcast_ref::<MaterializedCte>()
+                .is_some_and(|nested| nested.id == id)
+            {
+                return Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump));
+            }
+            let Some(scan) =
+                node.as_any()
+                    .downcast_ref::<MaterializedCteScan>()
+                    .filter(|scan| {
+                        scan.id == id && scan.schema.inner() != body_schema.inner()
+                    })
+            else {
+                return Ok(Transformed::no(plan));
+            };
+            let qualifiers = scan.schema.iter().map(|(q, _)| q.cloned()).collect();
+            let schema = DFSchema::from_field_specific_qualified_schema(
+                qualifiers,
+                body_schema.inner(),
+            )?
+            .with_functional_dependencies(
+                body_schema.functional_dependencies().clone(),
+            )?;
+            Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                node: Arc::new(MaterializedCteScan {
+                    id: scan.id,
+                    name: scan.name.clone(),
+                    schema: Arc::new(schema),
+                }),
+            })))
+        })
+        .map(|t| t.data)
 }
 
 /// use the external schema to handle the correlated subqueries case
@@ -158,8 +272,7 @@ fn analyze_internal(
         TypeCoercionRewriter::new(&schema).with_session_time_zone(session_time_zone);
 
     let name_preserver = NamePreserver::new(&plan);
-    // apply coercion rewrite all expressions in the plan individually
-    plan.map_expressions(|expr| {
+    let mut coerce_expr = |expr: Expr| {
         let original_name = name_preserver.save(&expr);
 
         // A lambda variable carries the field recorded when the plan was built, which
@@ -173,6 +286,17 @@ fn analyze_internal(
 
         expr.rewrite(&mut expr_rewrite)
             .map(|transformed| transformed.update_data(|e| original_name.restore(e)))
+    };
+
+    // apply coercion rewrite all expressions in the plan individually
+    plan.map_expressions(|expr| {
+        // Preserve the names of grouping set members, not of the grouping set itself.
+        // An aliased grouping set is no longer recognized as a grouping set.
+        if let Expr::GroupingSet(_) = &expr {
+            expr.map_children(&mut coerce_expr)
+        } else {
+            coerce_expr(expr)
+        }
     })?
     // some plans need extra coercion after their expressions are coerced
     .map_data(|plan| expr_rewrite.coerce_plan(plan))?
@@ -1743,10 +1867,10 @@ mod test {
     use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, TimeUnit};
     use insta::assert_snapshot;
 
-    use crate::analyzer::Analyzer;
     use crate::analyzer::type_coercion::{
         TypeCoercion, TypeCoercionRewriter, coerce_case_expression,
     };
+    use crate::analyzer::{Analyzer, AnalyzerRule};
     use crate::assert_analyzed_plan_with_config_eq_snapshot;
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
@@ -1756,13 +1880,13 @@ mod test {
     use datafusion_expr::expr::{
         self, InSubquery, Like, ScalarFunction, SetComparison, SetQuantifier,
     };
-    use datafusion_expr::logical_plan::{EmptyRelation, Projection, Sort};
+    use datafusion_expr::logical_plan::{EmptyRelation, Projection, Sort, table_scan};
     use datafusion_expr::test::function_stub::avg_udaf;
     use datafusion_expr::{
         AccumulatorFactoryFunction, AggregateUDF, BinaryExpr, Case, ColumnarValue, Expr,
-        ExprSchemable, Filter, LogicalPlan, Operator, ScalarFunctionArgs, ScalarUDF,
-        ScalarUDFImpl, Signature, SimpleAggregateUDF, Subquery, Union, Volatility, cast,
-        col, create_udaf, is_true, lit,
+        ExprSchemable, Filter, Limit, LogicalPlan, Operator, ScalarFunctionArgs,
+        ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF, Subquery, Union,
+        Volatility, cast, col, create_udaf, grouping_set, is_true, lit, placeholder,
     };
     use datafusion_functions_aggregate::average::AvgAccumulator;
 
@@ -1844,6 +1968,19 @@ mod test {
             }
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn untyped_limit_parameter_remains_inferable_after_coercion() -> Result<()> {
+        let plan = LogicalPlan::Limit(Limit {
+            input: empty(),
+            fetch: Some(Box::new(placeholder("$1"))),
+            skip: None,
+        });
+        let analyzed = TypeCoercion::new().analyze(plan, &ConfigOptions::default())?;
+
+        assert_eq!(analyzed.get_parameter_types()?["$1"], Some(DataType::Int64));
         Ok(())
     }
 
@@ -2339,6 +2476,41 @@ mod test {
           EmptyRelation: rows=0
         "
         )
+    }
+
+    #[test]
+    fn scalar_udf_in_grouping_set() -> Result<()> {
+        let udf = ScalarUDF::from(TestScalarUDF {
+            signature: Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
+        })
+        .call(vec![lit(123_i32)]);
+        let schema = Schema::new(vec![Field::new("a", Utf8, false)]);
+        let plan = table_scan(Some("t"), &schema, None)?
+            .aggregate(
+                vec![grouping_set(vec![
+                    vec![col("t.a"), udf.clone()],
+                    vec![udf],
+                    vec![],
+                ])],
+                Vec::<Expr>::new(),
+            )?
+            .build()?;
+
+        // Each renamed member is aliased to its original name, not the grouping set
+        let analyzed = TypeCoercion::new().analyze(plan, &ConfigOptions::default())?;
+        assert_snapshot!(
+            analyzed,
+            @r#"
+        Aggregate: groupBy=[[GROUPING SETS ((t.a, TestScalarUDF(Float32(123)) AS TestScalarUDF(Int32(123))), (TestScalarUDF(Float32(123)) AS TestScalarUDF(Int32(123))), ())]], aggr=[[]]
+          TableScan: t
+        "#
+        );
+
+        // A second pass leaves the plan unchanged
+        let reanalyzed =
+            TypeCoercion::new().analyze(analyzed.clone(), &ConfigOptions::default())?;
+        assert_eq!(analyzed, reanalyzed);
+        Ok(())
     }
 
     #[test]

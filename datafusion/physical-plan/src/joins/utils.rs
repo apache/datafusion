@@ -37,7 +37,15 @@ use crate::{
 };
 // compatibility
 pub use super::join_filter::JoinFilter;
+///
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
 pub use super::join_hash_map::JoinHashMapType;
+pub use super::join_hash_map::ProbeOffset;
 pub use crate::joins::{JoinOn, JoinOnRef};
 
 use arrow::array::{
@@ -1382,12 +1390,14 @@ pub(crate) fn build_batch_from_indices(
 /// For correlated scalar `NOT IN`, `null_indices_bitmap` carries the same UNKNOWN
 /// decision per build row, scoped by the correlated equality keys.
 ///
+/// When present, `build_key_nulls` is indexed by the original build row number.
+///
 /// This is the helper equivalent of the paper's "null bucket" and `hadNull` handling.
 /// It is intentionally scoped to scalar null-aware mark joins.
 pub(crate) fn build_null_aware_left_mark_column(
     build_indices: &UInt64Array,
     probe_indices: &UInt32Array,
-    build_key_column: &dyn Array,
+    build_key_nulls: Option<&NullBuffer>,
     null_indices_bitmap: Option<&BooleanBufferBuilder>,
     probe_side_has_null: bool,
     probe_side_non_empty: bool,
@@ -1397,7 +1407,9 @@ pub(crate) fn build_null_aware_left_mark_column(
     // uncorrelated rules are cases 1-4 in the doc above.
     let unmatched_mark_is_null = |build_idx: usize| match null_indices_bitmap {
         Some(bitmap) => bitmap.get_bit(build_idx),
-        None if build_key_column.is_null(build_idx) => probe_side_non_empty,
+        None if build_key_nulls.is_some_and(|nulls| nulls.is_null(build_idx)) => {
+            probe_side_non_empty
+        }
         None => probe_side_has_null,
     };
 
@@ -2763,6 +2775,7 @@ mod tests {
     use datafusion_common::{ScalarValue, SplitPoint, arrow_datafusion_err, arrow_err};
     use datafusion_physical_expr::PhysicalSortExpr;
 
+    use crate::joins::join_hash_map::ProbeOffset::AtRow;
     use rstest::rstest;
 
     fn assert_u32_values(array: &UInt32Array, expected: &[u32]) {
@@ -2815,7 +2828,7 @@ mod tests {
                     hashes_buffer,
                     None,
                     8192,
-                    (0, None),
+                    AtRow { row: 0 },
                     &mut input_indices,
                     &mut match_indices,
                 );
@@ -2860,6 +2873,72 @@ mod tests {
             matched_build_indices(&map, &hashes_buffer),
             vec![0, 1, 2, 3, 4]
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn update_hash_null_key_does_not_change_matches() -> Result<()> {
+        use crate::joins::join_hash_map::JoinHashMapU32;
+
+        let random_state = RandomState::with_seed(42);
+        let probe: ArrayRef = Arc::new(StringArray::from(vec!["c", "a", "x", "b"]));
+        let mut probe_hashes = vec![0; probe.len()];
+        create_hashes([&probe], &random_state, &mut probe_hashes)?;
+
+        // Probes a unique-key build side 2 rows at a time and returns the
+        // matched (probe row, build key) pairs.
+        let matches = |build: Vec<Option<&str>>| -> Result<Vec<(u32, String)>> {
+            let build = StringArray::from(build);
+            let schema =
+                Arc::new(Schema::new(vec![Field::new("k", DataType::Utf8, true)]));
+            let batch = RecordBatch::try_new(schema, vec![Arc::new(build.clone())])?;
+            let on: Vec<PhysicalExprRef> = vec![Arc::new(Column::new("k", 0))];
+            let mut map = JoinHashMapU32::with_capacity(batch.num_rows());
+            let mut hashes_buffer = vec![0; batch.num_rows()];
+            update_hash(
+                &on,
+                &batch,
+                &mut map,
+                0,
+                &random_state,
+                &mut hashes_buffer,
+                0,
+                true,
+                NullEquality::NullEqualsNothing,
+            )?;
+            let (mut input_indices, mut match_indices, mut pairs) =
+                (vec![], vec![], vec![]);
+            let mut offset = Some(AtRow { row: 0 });
+            while let Some(current) = offset {
+                offset = map.get_matched_indices_with_limit_offset(
+                    &probe_hashes,
+                    None,
+                    2,
+                    current,
+                    &mut input_indices,
+                    &mut match_indices,
+                );
+                pairs.extend(
+                    input_indices
+                        .iter()
+                        .zip(&match_indices)
+                        .map(|(&p, &b)| (p, build.value(b as usize).to_string())),
+                );
+            }
+            pairs.sort();
+            Ok(pairs)
+        };
+
+        let without_null = matches(vec![Some("a"), Some("b"), Some("c")])?;
+        let with_null = matches(vec![Some("a"), None, Some("b"), Some("c")])?;
+        assert_eq!(with_null, without_null);
+        if cfg!(not(feature = "force_hash_collisions")) {
+            let expected = [(0, "c"), (1, "a"), (3, "b")];
+            let expected: Vec<_> =
+                expected.iter().map(|&(p, k)| (p, k.to_string())).collect();
+            assert_eq!(without_null, expected);
+        }
 
         Ok(())
     }
