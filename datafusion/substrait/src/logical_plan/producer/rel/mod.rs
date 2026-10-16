@@ -37,7 +37,7 @@ pub use sort_rel::*;
 
 use crate::logical_plan::producer::SubstraitProducer;
 use datafusion::common::not_impl_err;
-use datafusion::logical_expr::LogicalPlan;
+use datafusion::logical_expr::{LogicalPlan, MaterializedCtePlan};
 use substrait::proto::Rel;
 
 pub fn to_substrait_rel(
@@ -76,6 +76,12 @@ pub fn to_substrait_rel(
         LogicalPlan::Unnest(plan) => not_impl_err!("Unsupported plan type: {plan:?}")?,
         LogicalPlan::RecursiveQuery(plan) => {
             not_impl_err!("Unsupported plan type: {plan:?}")?
+        }
+        LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(plan)) => {
+            not_impl_err!("Substrait MATERIALIZED CTE is not supported: {plan:?}")?
+        }
+        LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(plan)) => {
+            not_impl_err!("Substrait MATERIALIZED CTE is not supported: {plan:?}")?
         }
     }
 }

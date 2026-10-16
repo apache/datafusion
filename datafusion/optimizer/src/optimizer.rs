@@ -36,9 +36,9 @@ use datafusion_expr::dml::CopyTo;
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{
     Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement, Distinct,
-    DistinctOn, DmlStatement, Explain, Expr, Extension, Filter, Join, Limit, Projection,
-    RecursiveQuery, Repartition, Sort, Statement, Subquery, SubqueryAlias, Union, Unnest,
-    Window,
+    DistinctOn, DmlStatement, Explain, Expr, Extension, Filter, Join, Limit,
+    MaterializedCte, MaterializedCtePlan, Projection, RecursiveQuery, Repartition, Sort,
+    Statement, Subquery, SubqueryAlias, Union, Unnest, Window,
 };
 
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
@@ -443,6 +443,15 @@ fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
             let r = f(Arc::make_mut(recursive_term))?;
             s || r
         }
+        LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(MaterializedCte {
+            cte,
+            continuation,
+            ..
+        })) => {
+            let b = f(Arc::make_mut(cte))?;
+            let c = f(Arc::make_mut(continuation))?;
+            b || c
+        }
         LogicalPlan::Statement(Statement::Prepare(p)) => f(Arc::make_mut(&mut p.input))?,
         LogicalPlan::Extension(Extension { node }) => {
             let inputs = node.inputs();
@@ -471,6 +480,7 @@ fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
         LogicalPlan::TableScan { .. }
         | LogicalPlan::EmptyRelation { .. }
         | LogicalPlan::Values { .. }
+        | LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_))
         | LogicalPlan::DescribeTable(_)
         | LogicalPlan::Ddl(DdlStatement::CreateExternalTable(_))
         | LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(_))
