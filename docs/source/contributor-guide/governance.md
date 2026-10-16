@@ -86,7 +86,7 @@ Notes:
 | Brent Gardner             | avantgardner     | [avantgardnerio](https://github.com/avantgardnerio)     | Coralogix      | Committer |
 | Bhargava Vadlamani        | bhargava         | [coderfender](https://github.com/coderfender)           |                | Committer |
 | Dmitrii Blaginin          | blaginin         | [blaginin](https://github.com/blaginin)                 | SpiralDB       | Committer |
-| Piotr Findeisen           | findepi          | [findepi](https://github.com/findepi)                   | dbt Labs       | Committer |
+| Piotr Findeisen           | findepi          | [findepi](https://github.com/findepi)                   |                | Committer |
 | Gabriel Musat             | gabotechs        | [gabotechs](https://github.com/gabotechs)               | DataDog        | Committer |
 | Jax Liu                   | goldmedal        | [goldmedal](https://github.com/goldmedal)               | Canner         | Committer |
 | Huaxin Gao                | huaxingao        | [huaxingao](https://github.com/huaxingao)               |                | Committer |

@@ -174,6 +174,10 @@ impl CsvSource {
     }
 
     /// Whether values may contain newline characters
+    #[deprecated(
+        since = "56.0.0",
+        note = "No replacement getter exists. Retain CsvOptions and read its newlines_in_values field with unwrap_or(false)."
+    )]
     pub fn newlines_in_values(&self) -> bool {
         self.options.newlines_in_values.unwrap_or(false)
     }
@@ -354,7 +358,7 @@ impl FileSource for CsvSource {
                     )
                 })
                 .transpose()?,
-            newlines_in_values: self.newlines_in_values(),
+            newlines_in_values: self.options.newlines_in_values.unwrap_or(false),
             truncate_rows: self.truncate_rows(),
             terminator: self.terminator().map(|terminator| vec![terminator]),
         };

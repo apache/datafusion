@@ -777,7 +777,8 @@ impl PreparedAccessPlan {
         // expression that isn't a plain `Column` in the file schema —
         // stats for later columns can't refine the order once an
         // unresolvable key sits between them and the resolved prefix.
-        let mut sort_columns: Vec<arrow::compute::SortColumn> = Vec::new();
+        let mut sort_columns: Vec<arrow::compute::SortColumn> =
+            Vec::with_capacity(sort_order.len());
         for (i, sort_expr) in sort_order.iter().enumerate() {
             let column: &Column = match sort_expr.expr.downcast_ref::<Column>() {
                 Some(col) => col,
