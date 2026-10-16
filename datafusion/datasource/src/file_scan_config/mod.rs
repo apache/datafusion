@@ -431,6 +431,9 @@ impl FileScanConfigBuilder {
     /// [`FileScanConfig::statistics`] will mark the statistics as inexact
     /// (counts are not adjusted).
     ///
+    /// [`DataSource::partition_statistics`] fails if these statistics, or those
+    /// of a file group, hold more column statistics than the table has columns.
+    ///
     /// Projections and filters may be applied by the file source, either by
     /// [`Self::with_projection_indices`] or a preexisting
     /// [`FileSource::projection`] or [`FileSource::filter`].
@@ -956,6 +959,7 @@ impl DataSource for FileScanConfig {
             if let Some(file_group) = self.file_groups.get(partition)
                 && let Some(stat) = file_group.file_statistics(None)
             {
+                self.check_column_statistics_count(stat, Some(partition))?;
                 // Project the statistics based on the projection
                 let output_schema = self.projected_schema()?;
                 return if let Some(projection) = self.file_source.projection() {
@@ -975,6 +979,7 @@ impl DataSource for FileScanConfig {
         } else {
             // Return aggregate statistics across all partitions
             let statistics = self.statistics();
+            self.check_column_statistics_count(&statistics, None)?;
             let projection = self.file_source.projection();
             let output_schema = self.projected_schema()?;
             if let Some(projection) = &projection {
@@ -1331,6 +1336,34 @@ impl FileScanConfig {
         } else {
             self.statistics.clone()
         }
+    }
+
+    /// Returns an error if `statistics`, of the table if `partition` is `None`
+    /// and of that file group otherwise, have more column statistics than the
+    /// table has columns: unless the extra ones are all at the end, projecting
+    /// them gives some columns the statistics of others.
+    fn check_column_statistics_count(
+        &self,
+        statistics: &Statistics,
+        partition: Option<usize>,
+    ) -> Result<()> {
+        let num_columns = self
+            .file_source
+            .table_schema()
+            .table_schema()
+            .fields()
+            .len();
+        let num_column_statistics = statistics.column_statistics.len();
+        if num_column_statistics > num_columns {
+            let source = match partition {
+                Some(partition) => format!("statistics of file group {partition}"),
+                None => "table statistics".to_string(),
+            };
+            return internal_err!(
+                "FileScanConfig {source} have {num_column_statistics} column statistics, expected at most one per table column ({num_columns})"
+            );
+        }
+        Ok(())
     }
 
     pub fn projected_schema(&self) -> Result<Arc<Schema>> {
@@ -2913,6 +2946,87 @@ mod tests {
         // Verify row count and byte size
         assert_eq!(partition_stats.num_rows, Precision::Exact(100));
         assert_eq!(partition_stats.total_byte_size, Precision::Exact(800));
+    }
+
+    /// `FileScanConfig` rejects table and file group statistics with more
+    /// column statistics than the table has columns. With a projection, as all
+    /// built-in sources have, it treats missing trailing ones as unknown, which
+    /// virtual columns rely on; without one, the statistics walk rejects them.
+    #[test]
+    fn statistics_of_the_wrong_length() {
+        use datafusion_common::assert_contains;
+        use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        let table_schema = TableSchema::from(&schema);
+        let known = ColumnStatistics {
+            null_count: Precision::Exact(0),
+            ..ColumnStatistics::new_unknown()
+        };
+        for num_columns in [1, 3] {
+            let statistics = Statistics {
+                num_rows: Precision::Exact(10),
+                total_byte_size: Precision::Absent,
+                column_statistics: vec![known.clone(); num_columns],
+            };
+            let sources: [(Arc<dyn FileSource>, bool); 2] = [
+                (Arc::new(MockSource::new(table_schema.clone())), true),
+                (
+                    Arc::new(InexactSortPushdownSource::new(table_schema.clone())),
+                    false,
+                ),
+            ];
+            for (source, has_projection) in sources {
+                assert_eq!(source.projection().is_some(), has_projection);
+                let file_group =
+                    FileGroup::new(vec![PartitionedFile::new("test.parquet", 1024)])
+                        .with_statistics(Arc::new(statistics.clone()));
+                let config = FileScanConfigBuilder::new(
+                    ObjectStoreUrl::parse("test:///").unwrap(),
+                    source,
+                )
+                .with_file_groups(vec![file_group])
+                .with_statistics(statistics.clone())
+                .build();
+                let exec = DataSourceExec::from_data_source(config);
+                // The statistics of the table, then of the file group.
+                for partition in [None, Some(0)] {
+                    let result = StatisticsContext::new().compute(
+                        exec.as_ref(),
+                        &StatisticsArgs::new().with_partition(partition),
+                    );
+                    match (num_columns, has_projection) {
+                        (1, true) => {
+                            assert_eq!(
+                                result.unwrap().column_statistics,
+                                vec![known.clone(), ColumnStatistics::new_unknown()]
+                            );
+                        }
+                        (1, false) => {
+                            assert_contains!(
+                                result.unwrap_err().to_string(),
+                                "DataSourceExec::statistics_from_inputs returned 1 column statistics"
+                            );
+                        }
+                        _ => {
+                            let statistics = match partition {
+                                Some(_) => "statistics of file group 0",
+                                None => "table statistics",
+                            };
+                            assert_contains!(
+                                result.unwrap_err().to_string(),
+                                format!(
+                                    "FileScanConfig {statistics} have 3 column statistics"
+                                )
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]

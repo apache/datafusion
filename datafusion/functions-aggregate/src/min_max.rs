@@ -193,7 +193,7 @@ trait FromColumnStatistics {
                             statistics_args.exprs[0].downcast_ref::<expressions::Column>()
                         {
                             return self.value_from_column_statistics(
-                                &col_stats[col_expr.index()],
+                                col_stats.get(col_expr.index())?,
                             );
                         }
                     }
@@ -1721,5 +1721,27 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    /// `value_from_stats` is public and has no error channel, so a direct
+    /// caller passing fewer column statistics than the schema has fields gets
+    /// `None` instead of a panic, as with `count` and `sum`.
+    #[test]
+    fn min_max_value_from_stats_out_of_bounds_column_returns_none() {
+        let statistics = datafusion_common::Statistics {
+            num_rows: Precision::Exact(10),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics::new_unknown()],
+        };
+        let exprs: Vec<Arc<dyn datafusion_physical_expr::PhysicalExpr>> =
+            vec![Arc::new(expressions::Column::new("b", 1))];
+        let statistics_args = StatisticsArgs {
+            statistics: &statistics,
+            return_type: &DataType::Int32,
+            is_distinct: false,
+            exprs: &exprs,
+        };
+        assert_eq!(Min::new().value_from_stats(&statistics_args), None);
+        assert_eq!(Max::new().value_from_stats(&statistics_args), None);
     }
 }

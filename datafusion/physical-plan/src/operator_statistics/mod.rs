@@ -263,6 +263,12 @@ pub enum StatisticsResult {
 /// `COUNT(*)`, `MIN` and `MAX` without scanning and remove limits. Return
 /// `Inexact` for anything that is an estimate.
 ///
+/// Computed statistics must also hold one [`ColumnStatistics`] per field of the
+/// node's schema, or the statistics walk returns an error. To override only
+/// some values, start from [`Statistics::new_unknown`].
+///
+/// [`ColumnStatistics`]: datafusion_common::ColumnStatistics
+///
 /// # Implementing a Custom Provider
 ///
 /// ```ignore
@@ -1224,7 +1230,9 @@ mod tests {
     };
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::stats::Precision;
-    use datafusion_common::{ColumnStatistics, ScalarValue, internal_err};
+    use datafusion_common::{
+        ColumnStatistics, ScalarValue, assert_contains, internal_err,
+    };
     use datafusion_execution::TaskContext;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::PhysicalExpr;
@@ -2777,11 +2785,8 @@ mod tests {
         let provider = ClosureStatisticsProvider::new(|plan, _child_stats| {
             if plan.downcast_ref::<FilterExec>().is_some() {
                 Ok(StatisticsResult::Computed(ExtendedStatistics::from(
-                    Statistics {
-                        num_rows: Precision::Inexact(42),
-                        total_byte_size: Precision::Absent,
-                        column_statistics: vec![],
-                    },
+                    Statistics::new_unknown(&plan.schema())
+                        .with_num_rows(Precision::Inexact(42)),
                 )))
             } else {
                 Ok(StatisticsResult::Delegate)
@@ -2810,18 +2815,12 @@ mod tests {
             }
             match child_stats[0].base.num_rows.get_value().copied() {
                 Some(500) => Ok(StatisticsResult::Computed(ExtendedStatistics::from(
-                    Statistics {
-                        num_rows: Precision::Inexact(100),
-                        total_byte_size: Precision::Absent,
-                        column_statistics: vec![],
-                    },
+                    Statistics::new_unknown(&plan.schema())
+                        .with_num_rows(Precision::Inexact(100)),
                 ))),
                 Some(200) => Ok(StatisticsResult::Computed(ExtendedStatistics::from(
-                    Statistics {
-                        num_rows: Precision::Inexact(50),
-                        total_byte_size: Precision::Absent,
-                        column_statistics: vec![],
-                    },
+                    Statistics::new_unknown(&plan.schema())
+                        .with_num_rows(Precision::Inexact(50)),
                 ))),
                 _ => Ok(StatisticsResult::Delegate),
             }
@@ -2840,5 +2839,50 @@ mod tests {
         assert_eq!(stats_a.base.num_rows, Precision::Inexact(100));
         assert_eq!(stats_b.base.num_rows, Precision::Inexact(50));
         Ok(())
+    }
+
+    /// Consumers index `column_statistics` by column, so the walk rejects an
+    /// operator or a provider that does not report one entry per field.
+    #[test]
+    fn test_wrong_column_statistics_count_is_rejected() {
+        // Two fields: one entry too few, and one too many.
+        for num_columns in [1, 3] {
+            let source = MockSourceExec::with_column_stats(
+                make_schema(),
+                Precision::Exact(10),
+                vec![ColumnStatistics::new_unknown(); num_columns],
+            );
+            let err = compute(&StatisticsRegistry::new(), &source).unwrap_err();
+            assert_contains!(
+                err.to_string(),
+                format!(
+                    "MockSourceExec::statistics_from_inputs returned {num_columns} column statistics"
+                )
+            );
+        }
+
+        // No entries, and one too many.
+        for num_columns in [0, 3] {
+            let provider = ClosureStatisticsProvider::new(move |_plan, _child_stats| {
+                Ok(StatisticsResult::Computed(ExtendedStatistics::from(
+                    Statistics {
+                        num_rows: Precision::Exact(10),
+                        total_byte_size: Precision::Absent,
+                        column_statistics: vec![
+                            ColumnStatistics::new_unknown();
+                            num_columns
+                        ],
+                    },
+                )))
+            });
+            let registry = StatisticsRegistry::with_providers(vec![Arc::new(provider)]);
+            let err = compute(&registry, make_source(10).as_ref()).unwrap_err();
+            assert_contains!(
+                err.to_string(),
+                format!(
+                    "Statistics provider ClosureStatisticsProvider returned {num_columns} column statistics for MockSourceExec"
+                )
+            );
+        }
     }
 }

@@ -23,7 +23,7 @@
 use crate::ExecutionPlan;
 use crate::displayable;
 use crate::operator_statistics::{
-    ExtendedStatistics, StatisticsRegistry, StatisticsResult,
+    ExtendedStatistics, StatisticsProvider, StatisticsRegistry, StatisticsResult,
 };
 use datafusion_common::extensions::Extensions;
 use datafusion_common::stats::Precision;
@@ -471,7 +471,10 @@ impl StatisticsContext {
                     self.validate_child_requests(plan, &children, &requests)?;
                     let child_statistics =
                         self.resolve_children(plan, &children, &requests)?;
-                    (plan.statistics_from_inputs(&child_statistics, args)?, None)
+                    let statistics =
+                        plan.statistics_from_inputs(&child_statistics, args)?;
+                    validate_column_statistics(plan, &statistics, None)?;
+                    (statistics, None)
                 }
             };
         if let Some(owner) = retained_plan {
@@ -596,6 +599,7 @@ impl StatisticsContext {
                 provider.compute_statistics_with_args(plan, &child_extended, args)?
             {
                 let (statistics, extensions) = computed.into_parts();
+                validate_column_statistics(plan, &statistics, Some(provider.as_ref()))?;
                 let extensions = if extensions.is_empty() {
                     None
                 } else {
@@ -707,6 +711,36 @@ impl StatisticsContext {
             extensions,
         );
     }
+}
+
+/// Validates that `statistics`, computed for `plan` by `provider` or, if
+/// `None`, by the operator itself, holds one [`ColumnStatistics`] per field of
+/// `plan`'s schema, as [`Statistics::column_statistics`] requires. Consumers
+/// index it by column, so a mismatch could make them go out of bounds.
+///
+/// [`ColumnStatistics`]: datafusion_common::ColumnStatistics
+fn validate_column_statistics(
+    plan: &dyn ExecutionPlan,
+    statistics: &Statistics,
+    provider: Option<&dyn StatisticsProvider>,
+) -> Result<()> {
+    let column_statistics = statistics.column_statistics.len();
+    let fields = plan.schema().fields().len();
+    match provider {
+        Some(provider) => assert_eq_or_internal_err!(
+            column_statistics,
+            fields,
+            "Statistics provider {provider:?} returned {column_statistics} column statistics for {}, expected one per schema field",
+            plan.name()
+        ),
+        None => assert_eq_or_internal_err!(
+            column_statistics,
+            fields,
+            "{}::statistics_from_inputs returned {column_statistics} column statistics, expected one per schema field",
+            plan.name()
+        ),
+    }
+    Ok(())
 }
 
 #[cfg(all(test, feature = "test_utils"))]
