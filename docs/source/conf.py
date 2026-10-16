@@ -37,6 +37,7 @@ sys.path.insert(0, os.path.abspath(".."))
 project = "Apache DataFusion"
 copyright = "2019-2025, Apache Software Foundation"
 author = "Apache Software Foundation"
+version = release = "main"
 
 
 # -- General configuration ---------------------------------------------------
@@ -95,7 +96,13 @@ html_theme_options = {
     },
     "use_edit_page_button": True,
     "navbar_center": [],
-    "navbar_end": ["theme-switcher"],
+    "navbar_end": ["version-switcher", "theme-switcher"],
+    # Release docs are published separately; the manifest may not be live yet.
+    "check_switcher": False,
+    "switcher": {
+        "json_url": "/_static/versions.json",
+        "version_match": version,
+    },
 }
 
 html_context = {
