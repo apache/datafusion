@@ -1153,7 +1153,7 @@ fn roundtrip_parquet_exec_range_output_partitioning_dict_split_points() -> Resul
         false,
     )]));
     let file_source = Arc::new(ParquetSource::new(Arc::clone(&file_schema)));
-    let output_partitioning = Partitioning::Range(RangePartitioning::new(
+    let output_partitioning = Partitioning::Range(RangePartitioning::try_new(
         LexOrdering::new(vec![PhysicalSortExpr::new_default(Arc::new(Column::new(
             "col", 0,
         )))])
@@ -1161,7 +1161,7 @@ fn roundtrip_parquet_exec_range_output_partitioning_dict_split_points() -> Resul
         vec![SplitPoint::new(vec![wrap_partition_value_in_dict(
             ScalarValue::from("B"),
         )])],
-    ));
+    )?);
     let scan_config =
         FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
             .with_file_groups(vec![
@@ -1194,7 +1194,7 @@ fn roundtrip_parquet_exec_range_output_partitioning_utf8view_split_points() -> R
         false,
     )]));
     let file_source = Arc::new(ParquetSource::new(Arc::clone(&file_schema)));
-    let output_partitioning = Partitioning::Range(RangePartitioning::new(
+    let output_partitioning = Partitioning::Range(RangePartitioning::try_new(
         LexOrdering::new(vec![PhysicalSortExpr::new_default(Arc::new(Column::new(
             "col", 0,
         )))])
@@ -1202,7 +1202,7 @@ fn roundtrip_parquet_exec_range_output_partitioning_utf8view_split_points() -> R
         vec![SplitPoint::new(vec![ScalarValue::Utf8View(Some(
             "B".to_string(),
         ))])],
-    ));
+    )?);
     let scan_config =
         FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
             .with_file_groups(vec![
