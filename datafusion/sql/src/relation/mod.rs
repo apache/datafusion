@@ -21,7 +21,8 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
-    DFSchema, Diagnostic, Result, Span, Spans, TableReference, not_impl_err, plan_err,
+    DFSchema, DataFusionError, Diagnostic, HashMap, Result, SchemaError, Span, Spans,
+    TableReference, not_impl_err, plan_err,
 };
 use datafusion_expr::builder::subquery_alias;
 use datafusion_expr::planner::{
@@ -90,7 +91,124 @@ impl<S: ContextProvider> RelationPlannerContext for SqlToRelRelationContext<'_, 
     }
 }
 
+/// A relation name used more than once in a `FROM` scope.
+pub(crate) struct DuplicateRelationName {
+    qualifier: TableReference,
+    /// Span of the first relation with this name, if known.
+    first_span: Option<Span>,
+    /// Span of the repeated relation.
+    span: Option<Span>,
+}
+
+impl DuplicateRelationName {
+    fn diagnostic(&self, new: fn(String, Option<Span>) -> Diagnostic) -> Diagnostic {
+        let msg = format!("table name \"{}\" specified more than once", self.qualifier);
+        let diagnostic = new(msg, self.span);
+        match self.first_span {
+            Some(first) => diagnostic.with_note("first defined here", Some(first)),
+            None => diagnostic,
+        }
+    }
+}
+
 impl<S: ContextProvider> SqlToRel<'_, S> {
+    /// Finds relations in the same `FROM` scope that are visible under the
+    /// same name. This never fails planning: callers report each result as a
+    /// warning and, if planning then fails on the duplicate qualifier, attach
+    /// it to the error (see [`Self::with_duplicate_diagnostic`]).
+    pub(crate) fn find_duplicate_relation_names<'a>(
+        &self,
+        relations: impl IntoIterator<Item = &'a TableFactor>,
+    ) -> Vec<DuplicateRelationName> {
+        let mut seen: HashMap<TableReference, Option<Span>> = HashMap::new();
+        let mut duplicates = vec![];
+        for relation in relations {
+            let Some((qualifier, span)) = self.extract_relation_name(relation) else {
+                continue;
+            };
+            if let Some(first_span) = seen.get(&qualifier) {
+                duplicates.push(DuplicateRelationName {
+                    qualifier,
+                    first_span: *first_span,
+                    span,
+                });
+            } else {
+                seen.insert(qualifier, span);
+            }
+        }
+        duplicates
+    }
+
+    /// Adds one warning per duplicate relation name.
+    pub(crate) fn warn_duplicate_relation_names(
+        &self,
+        duplicates: &[DuplicateRelationName],
+    ) {
+        for duplicate in duplicates {
+            self.add_warning(duplicate.diagnostic(Diagnostic::new_warning));
+        }
+    }
+
+    /// If `err` is a duplicate qualified field error for one of `duplicates`,
+    /// attaches a [`Diagnostic`] pointing at both relations. The error message
+    /// is unchanged.
+    pub(crate) fn with_duplicate_diagnostic(
+        err: DataFusionError,
+        duplicates: &[DuplicateRelationName],
+    ) -> DataFusionError {
+        let diagnostic = match err.find_root() {
+            DataFusionError::SchemaError(schema_err, _) => match &**schema_err {
+                SchemaError::DuplicateQualifiedField { qualifier, .. } => duplicates
+                    .iter()
+                    .find(|d| d.qualifier == **qualifier)
+                    .map(|d| d.diagnostic(Diagnostic::new_error)),
+                _ => None,
+            },
+            _ => None,
+        };
+        match diagnostic {
+            Some(diagnostic) => err.with_diagnostic(diagnostic),
+            None => err,
+        }
+    }
+
+    /// Returns the qualified name a relation is visible under in its `FROM`
+    /// scope (matching the qualifier of the planned relation), and the span of
+    /// that name. Returns `None` when the name cannot be resolved here, so
+    /// that planning reports the real error.
+    fn extract_relation_name(
+        &self,
+        relation: &TableFactor,
+    ) -> Option<(TableReference, Option<Span>)> {
+        match relation {
+            TableFactor::Table { alias: Some(a), .. }
+            | TableFactor::Derived { alias: Some(a), .. }
+            | TableFactor::Function { alias: Some(a), .. }
+            | TableFactor::UNNEST { alias: Some(a), .. }
+            | TableFactor::NestedJoin { alias: Some(a), .. } => {
+                let span = Span::try_from_sqlparser_span(a.name.span);
+                let name = self.ident_normalizer.normalize(a.name.clone());
+                Some((TableReference::bare(name), span))
+            }
+            TableFactor::Table {
+                name,
+                alias: None,
+                args,
+                ..
+            } => {
+                let span = Span::try_from_sqlparser_span(relation.span());
+                let table_ref = if args.is_some() {
+                    let func = name.0.first()?.as_ident()?;
+                    TableReference::bare(format!("{func}()"))
+                } else {
+                    self.object_name_to_table_reference(name.clone()).ok()?
+                };
+                Some((table_ref, span))
+            }
+            _ => None,
+        }
+    }
+
     /// Create a `LogicalPlan` that scans the named relation.
     ///
     /// First tries any registered extension planners. If no extension handles
