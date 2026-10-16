@@ -206,7 +206,12 @@ impl TDigest {
         v.clamp(min, max)
     }
 
-    // public for testing in other modules
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
     pub fn merge_unsorted_f64(&self, unsorted_values: Vec<f64>) -> TDigest {
         let mut values = unsorted_values;
         values.sort_by(|a, b| a.total_cmp(b));
@@ -307,8 +312,9 @@ impl TDigest {
         first: usize,
         middle: usize,
         last: usize,
+        result: &mut Vec<Centroid>,
     ) {
-        let mut result: Vec<Centroid> = Vec::with_capacity(centroids.len());
+        result.clear();
 
         let mut i = first;
         let mut j = middle;
@@ -341,7 +347,7 @@ impl TDigest {
         }
 
         i = first;
-        for centroid in result.into_iter() {
+        for centroid in result.drain(..) {
             centroids[i] = centroid;
             i += 1;
         }
@@ -384,6 +390,7 @@ impl TDigest {
             return TDigest::default();
         }
 
+        let mut merge_buffer: Vec<Centroid> = Vec::with_capacity(centroids.len());
         let mut digests_per_block: usize = 1;
         while digests_per_block < starts.len() {
             for i in (0..starts.len()).step_by(digests_per_block * 2) {
@@ -397,7 +404,13 @@ impl TDigest {
                     };
 
                     debug_assert!(first <= middle && middle <= last);
-                    Self::external_merge(&mut centroids, first, middle, last);
+                    Self::external_merge(
+                        &mut centroids,
+                        first,
+                        middle,
+                        last,
+                        &mut merge_buffer,
+                    );
                 }
             }
 

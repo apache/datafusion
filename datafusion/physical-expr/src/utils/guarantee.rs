@@ -609,12 +609,14 @@ fn find_common_columns<'a>(
     }
 
     // Intersect with columns from remaining termsets
+    let mut termset_cols: HashSet<&crate::expressions::Column> = HashSet::new();
     for termset in termsets.iter().skip(1) {
-        let termset_cols: HashSet<_> = termset.iter().map(|term| term.col()).collect();
+        termset_cols.clear();
+        termset_cols.extend(termset.iter().map(|term| term.col()));
         if termset_cols.len() != termset.len() {
             return Vec::new();
         }
-        common_cols = common_cols.intersection(&termset_cols).copied().collect();
+        common_cols.retain(|col| termset_cols.contains(col));
     }
 
     common_cols.into_iter().collect()

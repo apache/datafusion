@@ -74,7 +74,7 @@ use arrow::array::{
     Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
     TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
     TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array, UnionArray,
-    downcast_run_array, new_empty_array, new_null_array,
+    downcast_run_array, make_comparator, new_empty_array, new_null_array,
 };
 use arrow::buffer::{BooleanBuffer, ScalarBuffer};
 use arrow::compute::kernels::cast::{CastOptions, cast_with_options};
@@ -481,6 +481,19 @@ impl Hash for Fl<f16> {
     }
 }
 
+/// Equality of the arrays inside nested scalars.
+///
+/// Arrow's array equality converts both arrays to `ArrayData` before it
+/// compares anything, which is costly for wide nested types. Values of
+/// different lengths or types are unequal without that, and an array is
+/// equal to itself.
+fn nested_eq<T: Array + PartialEq>(a: &Arc<T>, b: &Arc<T>) -> bool {
+    Arc::ptr_eq(a, b)
+        || (a.len() == b.len()
+            && a.data_type() == b.data_type()
+            && a.as_ref() == b.as_ref())
+}
+
 // manual implementation of `PartialEq`
 impl PartialEq for ScalarValue {
     fn eq(&self, other: &Self) -> bool {
@@ -552,19 +565,19 @@ impl PartialEq for ScalarValue {
             (FixedSizeBinary(_, _), _) => false,
             (LargeBinary(v1), LargeBinary(v2)) => v1.eq(v2),
             (LargeBinary(_), _) => false,
-            (FixedSizeList(v1), FixedSizeList(v2)) => v1.eq(v2),
+            (FixedSizeList(v1), FixedSizeList(v2)) => nested_eq(v1, v2),
             (FixedSizeList(_), _) => false,
-            (List(v1), List(v2)) => v1.eq(v2),
+            (List(v1), List(v2)) => nested_eq(v1, v2),
             (List(_), _) => false,
-            (LargeList(v1), LargeList(v2)) => v1.eq(v2),
+            (LargeList(v1), LargeList(v2)) => nested_eq(v1, v2),
             (LargeList(_), _) => false,
-            (ListView(v1), ListView(v2)) => v1.eq(v2),
+            (ListView(v1), ListView(v2)) => nested_eq(v1, v2),
             (ListView(_), _) => false,
-            (LargeListView(v1), LargeListView(v2)) => v1.eq(v2),
+            (LargeListView(v1), LargeListView(v2)) => nested_eq(v1, v2),
             (LargeListView(_), _) => false,
-            (Struct(v1), Struct(v2)) => v1.eq(v2),
+            (Struct(v1), Struct(v2)) => nested_eq(v1, v2),
             (Struct(_), _) => false,
-            (Map(v1), Map(v2)) => v1.eq(v2),
+            (Map(v1), Map(v2)) => nested_eq(v1, v2),
             (Map(_), _) => false,
             (Date32(v1), Date32(v2)) => v1.eq(v2),
             (Date32(_), _) => false,
@@ -920,23 +933,11 @@ fn partial_cmp_map(m1: &Arc<MapArray>, m2: &Arc<MapArray>) -> Option<Ordering> {
         return None;
     }
 
-    for col_index in 0..m1.len() {
-        let arr1 = m1.entries().column(col_index);
-        let arr2 = m2.entries().column(col_index);
-
-        let lt_res = arrow::compute::kernels::cmp::lt(arr1, arr2).ok()?;
-        let eq_res = arrow::compute::kernels::cmp::eq(arr1, arr2).ok()?;
-
-        for j in 0..lt_res.len() {
-            if lt_res.is_valid(j) && lt_res.value(j) {
-                return Some(Ordering::Less);
-            }
-            if eq_res.is_valid(j) && !eq_res.value(j) {
-                return Some(Ordering::Greater);
-            }
-        }
-    }
-    Some(Ordering::Equal)
+    // Keep ScalarValue ordering consistent with Arrow sorting and nested comparison.
+    // Maps compare lexicographically by entry (key, value), including offsets and nulls.
+    let comparator =
+        make_comparator(m1.as_ref(), m2.as_ref(), Default::default()).ok()?;
+    Some(comparator(0, 0))
 }
 
 impl Eq for ScalarValue {}
@@ -3757,7 +3758,6 @@ impl ScalarValue {
             ),
             ScalarValue::Union(value, fields, mode) => match value {
                 Some((v_id, value)) => {
-                    let mut new_fields = Vec::with_capacity(fields.len());
                     let mut child_arrays = Vec::<ArrayRef>::with_capacity(fields.len());
                     for (f_id, field) in fields.iter() {
                         let ar = if f_id == *v_id {
@@ -3771,9 +3771,7 @@ impl ScalarValue {
                                 UnionMode::Dense => new_null_array(dt, 0),
                             }
                         };
-                        let field = (**field).clone();
                         child_arrays.push(ar);
-                        new_fields.push(field.clone());
                     }
                     let type_ids = repeat_n(*v_id, size);
                     let type_ids = ScalarBuffer::<i8>::from_iter(type_ids);
@@ -4392,7 +4390,7 @@ impl ScalarValue {
     pub fn cast_to_with_options(
         &self,
         target_type: &DataType,
-        cast_options: &CastOptions<'static>,
+        cast_options: &CastOptions<'_>,
     ) -> Result<Self> {
         let source_type = self.data_type();
 
@@ -5658,7 +5656,10 @@ impl fmt::Display for ScalarValue {
                 f,
                 e.map(|v| {
                     let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-                    match epoch.checked_add_signed(Duration::try_milliseconds(v).unwrap())
+                    // `try_milliseconds` is `None` for `i64::MIN`, which
+                    // `Duration` cannot hold: treat it as out of range too
+                    match Duration::try_milliseconds(v)
+                        .and_then(|d| epoch.checked_add_signed(d))
                     {
                         Some(date) => date.to_string(),
                         None => "".to_string(),
@@ -5729,7 +5730,7 @@ impl fmt::Display for ScalarValue {
                         .iter()
                         .map(|struct_array| {
                             if let Some(arr) = struct_array {
-                                let mut buffer = VecDeque::new();
+                                let mut buffer = VecDeque::with_capacity(arr.len());
                                 for i in 0..arr.len() {
                                     let key =
                                         array_value_to_string(arr.column(0), i).unwrap();
@@ -7422,6 +7423,41 @@ mod tests {
                 )]),
             ));
         assert_eq!(a.partial_cmp(&b), Some(Ordering::Greater));
+    }
+
+    #[test]
+    fn test_map_partial_cmp() {
+        fn map(entries: Option<Vec<(&str, Option<i32>)>>) -> ScalarValue {
+            ScalarValue::Map(Arc::new(MapArray::from_vec_of_maps::<
+                StringArray,
+                Int32Array,
+                _,
+                _,
+            >(vec![entries], false)))
+        }
+
+        let a1 = map(Some(vec![("a", Some(1))]));
+        let a2 = map(Some(vec![("a", Some(2))]));
+        assert_eq!(a1.partial_cmp(&a2), Some(Ordering::Less));
+        assert_eq!(a2.partial_cmp(&a1), Some(Ordering::Greater));
+
+        // Map entries compare as (key, value) pairs, rather than comparing all keys
+        // before all values. The first pair therefore determines this ordering.
+        let high_first_value = map(Some(vec![("a", Some(100)), ("b", Some(1))]));
+        let low_first_value = map(Some(vec![("a", Some(1)), ("c", Some(999))]));
+        assert_eq!(
+            high_first_value.partial_cmp(&low_first_value),
+            Some(Ordering::Greater)
+        );
+
+        let prefix = map(Some(vec![("a", Some(1))]));
+        let longer = map(Some(vec![("a", Some(1)), ("b", Some(2))]));
+        assert_eq!(prefix.partial_cmp(&longer), Some(Ordering::Less));
+
+        let null = map(None);
+        let empty = map(Some(vec![]));
+        assert_eq!(null.partial_cmp(&empty), Some(Ordering::Less));
+        assert_eq!(empty.partial_cmp(&empty), Some(Ordering::Equal));
     }
 
     #[test]
@@ -9907,6 +9943,49 @@ mod tests {
     }
 
     #[test]
+    fn test_nested_scalar_eq() {
+        let struct_type = |name: &str| {
+            DataType::Struct(Fields::from(vec![
+                Field::new(format!("{name}_a"), DataType::Int32, true),
+                Field::new(format!("{name}_b"), DataType::Utf8, true),
+            ]))
+        };
+        let null_x = ScalarValue::try_from(&struct_type("x")).unwrap();
+        let null_x_again = ScalarValue::try_from(&struct_type("x")).unwrap();
+        let null_y = ScalarValue::try_from(&struct_type("y")).unwrap();
+        assert_eq!(null_x, null_x.clone());
+        assert_eq!(null_x, null_x_again);
+        assert_ne!(null_x, null_y);
+
+        let value = |a: i32| {
+            ScalarValue::Struct(Arc::new(StructArray::from(vec![
+                (
+                    Arc::new(Field::new("x_a", DataType::Int32, true)),
+                    Arc::new(Int32Array::from(vec![Some(a)])) as ArrayRef,
+                ),
+                (
+                    Arc::new(Field::new("x_b", DataType::Utf8, true)),
+                    Arc::new(StringArray::from(vec![Some("b")])) as ArrayRef,
+                ),
+            ])))
+        };
+        assert_eq!(value(1), value(1));
+        assert_ne!(value(1), value(2));
+        assert_ne!(value(1), null_x);
+
+        let list_i32 = ScalarValue::List(ScalarValue::new_list_nullable(
+            &[ScalarValue::Int32(Some(1))],
+            &DataType::Int32,
+        ));
+        let list_i64 = ScalarValue::List(ScalarValue::new_list_nullable(
+            &[ScalarValue::Int64(Some(1))],
+            &DataType::Int64,
+        ));
+        assert_eq!(list_i32, list_i32.clone());
+        assert_ne!(list_i32, list_i64);
+    }
+
+    #[test]
     fn test_struct_nulls() {
         let fields_b = Fields::from(vec![
             Field::new("ba", DataType::UInt64, true),
@@ -10104,6 +10183,9 @@ mod tests {
             format!("{}", ScalarValue::Date64(Some(-790179464505600000))),
             ""
         );
+        // These used to panic too, see https://github.com/apache/datafusion/issues/24892
+        assert_eq!(format!("{}", ScalarValue::Date64(Some(i64::MIN))), "");
+        assert_eq!(format!("{}", ScalarValue::Date64(Some(i64::MAX))), "");
     }
 
     #[test]

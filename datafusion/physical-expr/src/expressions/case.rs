@@ -1348,7 +1348,7 @@ impl PhysicalExpr for CaseExpr {
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
-        let mut children = vec![];
+        let mut children = Vec::with_capacity(self.body.when_then_expr.len() * 2 + 2);
         if let Some(expr) = &self.body.expr {
             children.push(expr)
         }
@@ -3497,6 +3497,52 @@ mod tests {
             &lookup_map,
             Some(ScalarValue::Int32(Some(else_value))),
             Arc::new(expected_with_else),
+        );
+    }
+
+    #[test]
+    fn test_case_when_literal_lookup_fixed_size_binary_to_int32() {
+        let lookup_map = vec![
+            (
+                ScalarValue::FixedSizeBinary(1, Some(vec![1])),
+                ScalarValue::Int32(Some(10)),
+            ),
+            (
+                ScalarValue::FixedSizeBinary(1, Some(vec![2])),
+                ScalarValue::Int32(Some(20)),
+            ),
+        ];
+
+        let input_values = ScalarValue::iter_to_array(vec![
+            ScalarValue::FixedSizeBinary(1, Some(vec![1])),
+            ScalarValue::FixedSizeBinary(1, Some(vec![2])),
+            ScalarValue::FixedSizeBinary(1, Some(vec![3])),
+            ScalarValue::FixedSizeBinary(1, None),
+        ])
+        .expect("valid fixed size binary array");
+
+        let expected_no_else =
+            Arc::new(Int32Array::from(vec![Some(10), Some(20), None, None])) as ArrayRef;
+
+        test_case_when_literal_lookup(
+            Arc::clone(&input_values),
+            &lookup_map,
+            None,
+            expected_no_else,
+        );
+
+        let expected_with_else = Arc::new(Int32Array::from(vec![
+            Some(10),
+            Some(20),
+            Some(99),
+            Some(99),
+        ])) as ArrayRef;
+
+        test_case_when_literal_lookup(
+            input_values,
+            &lookup_map,
+            Some(ScalarValue::Int32(Some(99))),
+            expected_with_else,
         );
     }
 

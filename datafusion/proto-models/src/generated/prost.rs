@@ -123,6 +123,12 @@ pub struct ListingTableScanNode {
     pub table_partition_cols: ::prost::alloc::vec::Vec<PartitionColumn>,
     #[prost(message, repeated, tag = "13")]
     pub file_sort_order: ::prost::alloc::vec::Vec<SortExprNodeCollection>,
+    /// Optional number of rows to read.
+    #[prost(uint64, optional, tag = "17")]
+    pub fetch: ::core::option::Option<u64>,
+    /// Optional number of rows to skip.
+    #[prost(uint64, optional, tag = "18")]
+    pub skip: ::core::option::Option<u64>,
     #[prost(
         oneof = "listing_table_scan_node::FileFormatType",
         tags = "10, 11, 12, 15, 16"
@@ -159,6 +165,12 @@ pub struct ViewTableScanNode {
     pub projection: ::core::option::Option<ProjectionColumns>,
     #[prost(string, tag = "5")]
     pub definition: ::prost::alloc::string::String,
+    /// Optional number of rows to read.
+    #[prost(uint64, optional, tag = "7")]
+    pub fetch: ::core::option::Option<u64>,
+    /// Optional number of rows to skip.
+    #[prost(uint64, optional, tag = "8")]
+    pub skip: ::core::option::Option<u64>,
 }
 /// Logical Plan to Scan a CustomTableProvider registered at runtime
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -173,6 +185,12 @@ pub struct CustomTableScanNode {
     pub filters: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(bytes = "vec", tag = "5")]
     pub custom_table_data: ::prost::alloc::vec::Vec<u8>,
+    /// Optional number of rows to read.
+    #[prost(uint64, optional, tag = "7")]
+    pub fetch: ::core::option::Option<u64>,
+    /// Optional number of rows to skip.
+    #[prost(uint64, optional, tag = "8")]
+    pub skip: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ProjectionNode {
@@ -246,10 +264,12 @@ pub struct HashRepartition {
     #[prost(uint64, tag = "2")]
     pub partition_count: u64,
 }
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EmptyRelationNode {
     #[prost(bool, tag = "1")]
     pub produce_one_row: bool,
+    #[prost(message, optional, tag = "2")]
+    pub schema: ::core::option::Option<super::datafusion_common::DfSchema>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateExternalTableNode {
@@ -421,6 +441,11 @@ pub struct JoinNode {
     pub filter: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
     #[prost(bool, tag = "9")]
     pub null_aware: bool,
+    /// Number of `NOT IN` value keys of a null-aware join (see
+    /// `Join::null_aware_value_keys`). Messages predating this field decode it
+    /// as 0, which is read as 1: they can only hold scalar `NOT IN` joins.
+    #[prost(uint32, tag = "10")]
+    pub null_aware_value_keys: u32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AsOfJoinNode {
@@ -1601,6 +1626,13 @@ pub struct PhysicalExtensionNode {
     pub node: ::prost::alloc::vec::Vec<u8>,
     #[prost(message, repeated, tag = "2")]
     pub inputs: ::prost::alloc::vec::Vec<PhysicalPlanNode>,
+    /// Globally unique, namespaced name of the extension plan type (e.g.
+    /// `my-crate.MyExec`), written by plans that serialize themselves through
+    /// `ExecutionPlan::try_to_proto`. When present and registered on the decoding
+    /// session, it selects the decoder directly; otherwise decoding falls back to
+    /// the `PhysicalExtensionCodec` chain. Absent for codec-encoded plans.
+    #[prost(string, optional, tag = "3")]
+    pub plan_name: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// physical expressions
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1613,7 +1645,7 @@ pub struct PhysicalExprNode {
     pub expr_id: ::core::option::Option<u64>,
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -1682,7 +1714,19 @@ pub mod physical_expr_node {
         SqlSimilarToPattern(
             ::prost::alloc::boxed::Box<super::PhysicalSqlSimilarToPatternNode>,
         ),
+        #[prost(message, tag = "29")]
+        LiteralWithMetadata(super::PhysicalLiteralNode),
     }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalLiteralNode {
+    #[prost(message, optional, tag = "1")]
+    pub value: ::core::option::Option<super::datafusion_common::ScalarValue>,
+    #[prost(map = "string, string", tag = "2")]
+    pub metadata: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalDynamicFilterNode {
@@ -1833,10 +1877,12 @@ pub struct PhysicalBinaryExprNode {
     pub r: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
     #[prost(string, tag = "3")]
     pub op: ::prost::alloc::string::String,
-    /// Linearized operands for chains of the same operator (e.g. a AND b AND c).
+    /// Linearized operands for chains of the same operator and overflow policy.
     /// When present, `l` and `r` are ignored and `operands` holds the flattened list.
     #[prost(message, repeated, tag = "4")]
     pub operands: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(bool, tag = "5")]
+    pub fail_on_overflow: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalDateTimeIntervalExprNode {
@@ -1898,6 +1944,10 @@ pub struct PhysicalTryCastNode {
     pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
     #[prost(message, optional, tag = "2")]
     pub arrow_type: ::core::option::Option<super::datafusion_common::ArrowType>,
+    /// Present only for an explicit target. Absent nodes retain the legacy
+    /// type-only behavior, inheriting metadata from the input expression.
+    #[prost(message, optional, tag = "3")]
+    pub target_field: ::core::option::Option<super::datafusion_common::Field>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalCastNode {
@@ -1905,6 +1955,43 @@ pub struct PhysicalCastNode {
     pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
     #[prost(message, optional, tag = "2")]
     pub arrow_type: ::core::option::Option<super::datafusion_common::ArrowType>,
+    /// Present only for an explicit target. Absent nodes retain the legacy
+    /// type-only behavior, inheriting metadata and nullability from the input.
+    #[prost(message, optional, tag = "3")]
+    pub target_field: ::core::option::Option<super::datafusion_common::Field>,
+    /// Absent means DataFusion's default cast options.
+    #[prost(message, optional, tag = "4")]
+    pub cast_options: ::core::option::Option<PhysicalCastOptions>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PhysicalCastOptions {
+    #[prost(bool, tag = "1")]
+    pub safe: bool,
+    #[prost(message, optional, tag = "2")]
+    pub format_options: ::core::option::Option<PhysicalFormatOptions>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PhysicalFormatOptions {
+    #[prost(bool, tag = "1")]
+    pub safe: bool,
+    #[prost(string, tag = "2")]
+    pub null: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "3")]
+    pub date_format: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "4")]
+    pub datetime_format: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "5")]
+    pub timestamp_format: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "6")]
+    pub timestamp_tz_format: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "7")]
+    pub time_format: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(enumeration = "PhysicalDurationFormat", tag = "8")]
+    pub duration_format: i32,
+    #[prost(bool, tag = "9")]
+    pub types_info: bool,
+    #[prost(bool, tag = "10")]
+    pub quoted_strings: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalNegativeNode {
@@ -2141,6 +2228,12 @@ pub struct HashJoinExecNode {
     /// `None`, which is the correct reading of an older message.
     #[prost(uint64, optional, tag = "12")]
     pub fetch: ::core::option::Option<u64>,
+    /// Number of `NOT IN` value keys of a null-aware join (see
+    /// `HashJoinExec::null_aware_value_keys`). Messages predating this field
+    /// decode it as 0, which is read as 1: they can only hold scalar `NOT IN`
+    /// joins.
+    #[prost(uint32, tag = "13")]
+    pub null_aware_value_keys: u32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SymmetricHashJoinExecNode {
@@ -2259,6 +2352,12 @@ pub struct ProjectionExecNode {
     pub expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
     #[prost(string, repeated, tag = "3")]
     pub expr_name: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Only field and schema metadata are used; output types are derived from expr.
+    /// Present when the projection output has metadata or explicitly overrides
+    /// inherited metadata, including an explicit clear. Absent for older plans
+    /// and metadata-free projections.
+    #[prost(message, optional, tag = "4")]
+    pub schema: ::core::option::Option<super::datafusion_common::Schema>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PartiallySortedInputOrderMode {
@@ -2432,8 +2531,15 @@ pub struct PhysicalHashRepartition {
 pub struct PhysicalRangePartitioning {
     #[prost(message, repeated, tag = "1")]
     pub sort_expr: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
+    /// Effective split points. Kept for compatibility with older readers.
     #[prost(message, repeated, tag = "2")]
     pub split_point: ::prost::alloc::vec::Vec<PhysicalRangeSplitPoint>,
+    /// Maximum-resolution sample points used to derive effective split points.
+    #[prost(message, repeated, tag = "3")]
+    pub sample_point: ::prost::alloc::vec::Vec<PhysicalRangeSplitPoint>,
+    /// Zero in legacy payloads means split_point.len() + 1.
+    #[prost(uint64, tag = "4")]
+    pub partition_count: u64,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalRangeSplitPoint {
@@ -2967,6 +3073,32 @@ impl InsertOp {
             "Append" => Some(Self::Append),
             "Overwrite" => Some(Self::Overwrite),
             "Replace" => Some(Self::Replace),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum PhysicalDurationFormat {
+    Iso8601 = 0,
+    Pretty = 1,
+}
+impl PhysicalDurationFormat {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Iso8601 => "PHYSICAL_DURATION_FORMAT_ISO8601",
+            Self::Pretty => "PHYSICAL_DURATION_FORMAT_PRETTY",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "PHYSICAL_DURATION_FORMAT_ISO8601" => Some(Self::Iso8601),
+            "PHYSICAL_DURATION_FORMAT_PRETTY" => Some(Self::Pretty),
             _ => None,
         }
     }
