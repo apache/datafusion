@@ -340,7 +340,10 @@ fn bind_materialized_cte_scans(
     plan.apply(|node| {
         if let Some(cte) = node.downcast_ref::<MaterializedCteExec>()
             && buffers
-                .insert(cte.buffer().id(), Arc::clone(cte.buffer()))
+                .insert(
+                    cte.buffer().id(),
+                    (Arc::clone(cte.buffer()), cte.children()[0].schema()),
+                )
                 .is_some()
         {
             return internal_err!(
@@ -360,9 +363,11 @@ fn bind_materialized_cte_scans(
         if scan.is_bound() {
             return Ok(Transformed::no(node));
         }
-        let Some(buffer) = buffers.get(&scan.id()) else {
+        let Some((buffer, body_schema)) = buffers.get(&scan.id()) else {
             return internal_err!("MaterializedCteScanExec {} has no CTE", scan.id());
         };
+        // The scan reads the batches of the body by position.
+        scan.check_body_schema(body_schema)?;
         Ok(Transformed::yes(
             Arc::new(scan.bind(Arc::clone(buffer))) as Arc<dyn ExecutionPlan>
         ))
@@ -823,12 +828,15 @@ impl DefaultPhysicalPlanner {
 
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan)) => {
                 // Unbound until `bind_materialized_cte_scans` runs on the whole plan.
-                Arc::new(MaterializedCteScanExec::new(
-                    scan.id.as_u64(),
-                    &scan.name,
-                    Arc::clone(scan.schema.inner()),
-                    session_state.config().target_partitions(),
-                ))
+                Arc::new(
+                    MaterializedCteScanExec::new(
+                        scan.id.as_u64(),
+                        &scan.name,
+                        Arc::clone(scan.schema.inner()),
+                        session_state.config().target_partitions(),
+                    )
+                    .with_projection(scan.projection.clone()),
+                )
             }
 
             // 1 Child

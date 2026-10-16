@@ -763,8 +763,8 @@ impl LogicalPlan {
             LogicalPlan::Limit(_) => Ok(self),
             LogicalPlan::Ddl(_) => Ok(self),
             // A `Cte` takes the schema of its continuation, and does not store
-            // it. A `Scan` keeps the schema of the CTE body, which also keeps
-            // its schema.
+            // it. The schema of a `Scan` is fixed by the columns of the CTE
+            // body that the scan reads.
             LogicalPlan::MaterializedCte(_) => Ok(self),
             LogicalPlan::Extension(Extension { node }) => {
                 // todo make an API that does not require cloning
@@ -2471,9 +2471,23 @@ impl LogicalPlan {
                         write!(f, "MaterializedCte: name={name}")
                     }
                     LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(
-                        MaterializedCteScan { name, .. },
+                        MaterializedCteScan {
+                            name,
+                            schema,
+                            projection,
+                            ..
+                        },
                     )) => {
-                        write!(f, "MaterializedCteScan: name={name}")
+                        write!(f, "MaterializedCteScan: name={name}")?;
+                        if projection.is_some() {
+                            let names: Vec<&str> = schema
+                                .fields()
+                                .iter()
+                                .map(|field| field.name().as_str())
+                                .collect();
+                            write!(f, " projection=[{}]", names.join(", "))?;
+                        }
+                        Ok(())
                     }
                     LogicalPlan::DescribeTable(DescribeTable { .. }) => {
                         write!(f, "DescribeTable")

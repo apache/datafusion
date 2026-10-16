@@ -105,12 +105,9 @@ Plan with Metrics
 05)------CoalescePartitionsExec, metrics=[<slt:ignore>]
 06)--------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))], metrics=[<slt:ignore>]
 07)----------UnionExec, metrics=[<slt:ignore>]
-08)------------ProjectionExec: expr=[], metrics=[<slt:ignore>]
-09)--------------MaterializedCteScanExec: name=c, metrics=[output_rows=4, <slt:ignore>]
-10)------------ProjectionExec: expr=[], metrics=[<slt:ignore>]
-11)--------------MaterializedCteScanExec: name=c, metrics=[output_rows=4, <slt:ignore>]
-12)------------ProjectionExec: expr=[], metrics=[<slt:ignore>]
-13)--------------MaterializedCteScanExec: name=c, metrics=[output_rows=4, <slt:ignore>]
+08)------------MaterializedCteScanExec: name=c, projection=[], metrics=[output_rows=4, <slt:ignore>]
+09)------------MaterializedCteScanExec: name=c, projection=[], metrics=[output_rows=4, <slt:ignore>]
+10)------------MaterializedCteScanExec: name=c, projection=[], metrics=[output_rows=4, <slt:ignore>]
 
 # For comparison, the inlined CTE scans the source once per reference.
 query TT
@@ -302,11 +299,9 @@ logical_plan
 10)----Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 11)------Cross Join:
 12)--------SubqueryAlias: a
-13)----------Projection:
-14)------------MaterializedCteScan: name=r
-15)--------SubqueryAlias: b
-16)----------Projection:
-17)------------MaterializedCteScan: name=r
+13)----------MaterializedCteScan: name=r projection=[]
+14)--------SubqueryAlias: b
+15)----------MaterializedCteScan: name=r projection=[]
 physical_plan
 01)MaterializedCteExec: name=r
 02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
@@ -324,10 +319,8 @@ physical_plan
 14)--------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
 15)----------CrossJoinExec
 16)------------CoalescePartitionsExec
-17)--------------ProjectionExec: expr=[]
-18)----------------MaterializedCteScanExec: name=r
-19)------------ProjectionExec: expr=[]
-20)--------------MaterializedCteScanExec: name=r
+17)--------------MaterializedCteScanExec: name=r, projection=[]
+18)------------MaterializedCteScanExec: name=r, projection=[]
 
 query I
 WITH RECURSIVE r AS MATERIALIZED (
@@ -444,10 +437,8 @@ Plan with Metrics
 06)------CoalescePartitionsExec, metrics=[<slt:ignore>]
 07)--------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))], metrics=[<slt:ignore>]
 08)----------UnionExec, metrics=[<slt:ignore>]
-09)------------ProjectionExec: expr=[], metrics=[<slt:ignore>]
-10)--------------MaterializedCteScanExec: name=g, metrics=[output_rows=200.0 K, <slt:ignore>]
-11)------------ProjectionExec: expr=[], metrics=[<slt:ignore>]
-12)--------------MaterializedCteScanExec: name=g, metrics=[output_rows=200.0 K, <slt:ignore>]
+09)------------MaterializedCteScanExec: name=g, projection=[], metrics=[output_rows=200.0 K, <slt:ignore>]
+10)------------MaterializedCteScanExec: name=g, projection=[], metrics=[output_rows=200.0 K, <slt:ignore>]
 
 # Spill: the first batch has long strings and stays in memory. The next
 # batches are smaller and go to disk. The two references then need memory to
@@ -990,6 +981,350 @@ WITH RECURSIVE r AS (
 SELECT count(DISTINCT x) FROM (SELECT x FROM r UNION ALL SELECT x FROM r)
 ----
 2
+
+##########
+# Column pruning: the body keeps only the columns that a reference reads
+##########
+
+statement ok
+CREATE TABLE wide(a INT, b INT, c INT, d INT, e INT) AS VALUES
+  (1, 10, 100, 1000, 10000), (2, 20, 200, 2000, 20000), (3, 30, 300, 3000, 30000);
+
+# Only `a` and `b` are read from the table and buffered. Each reference reads
+# one of the two buffered columns.
+query TT
+EXPLAIN WITH w AS MATERIALIZED (SELECT * FROM wide)
+SELECT a FROM w
+UNION ALL
+SELECT b FROM w
+----
+logical_plan
+01)MaterializedCte: name=w
+02)--SubqueryAlias: w
+03)----TableScan: wide projection=[a, b]
+04)--Union
+05)----MaterializedCteScan: name=w projection=[a]
+06)----Projection: w.b AS a
+07)------MaterializedCteScan: name=w projection=[b]
+physical_plan
+01)MaterializedCteExec: name=w
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--UnionExec
+04)----MaterializedCteScanExec: name=w, projection=[a]
+05)----ProjectionExec: expr=[b@0 as a]
+06)------MaterializedCteScanExec: name=w, projection=[b]
+
+query I rowsort
+WITH w AS MATERIALIZED (SELECT * FROM wide)
+SELECT a FROM w
+UNION ALL
+SELECT b FROM w
+----
+1
+10
+2
+20
+3
+30
+
+# A column that only a filter of one reference reads is kept.
+query TT
+EXPLAIN WITH w AS MATERIALIZED (SELECT * FROM wide)
+SELECT a FROM w WHERE d > 1000
+UNION ALL
+SELECT e FROM w
+----
+logical_plan
+01)MaterializedCte: name=w
+02)--SubqueryAlias: w
+03)----TableScan: wide projection=[a, d, e]
+04)--Union
+05)----Projection: w.a
+06)------Filter: w.d > Int32(1000)
+07)--------MaterializedCteScan: name=w projection=[a, d]
+08)----Projection: w.e AS a
+09)------MaterializedCteScan: name=w projection=[e]
+physical_plan
+01)MaterializedCteExec: name=w
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--UnionExec
+04)----FilterExec: d@1 > 1000, projection=[a@0]
+05)------MaterializedCteScanExec: name=w, projection=[a, d]
+06)----ProjectionExec: expr=[e@0 as a]
+07)------MaterializedCteScanExec: name=w, projection=[e]
+
+query I rowsort
+WITH w AS MATERIALIZED (SELECT * FROM wide)
+SELECT a FROM w WHERE d > 1000
+UNION ALL
+SELECT e FROM w
+----
+10000
+2
+20000
+3
+30000
+
+# The references read no column. The body keeps one column for the row count.
+query TT
+EXPLAIN WITH w AS MATERIALIZED (SELECT * FROM wide)
+SELECT count(*) FROM w
+----
+logical_plan
+01)MaterializedCte: name=w
+02)--SubqueryAlias: w
+03)----TableScan: wide projection=[a]
+04)--Projection: count(Int64(1)) AS count(*)
+05)----Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+06)------MaterializedCteScan: name=w projection=[]
+physical_plan
+01)MaterializedCteExec: name=w
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
+04)----AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+05)------CoalescePartitionsExec
+06)--------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+07)----------MaterializedCteScanExec: name=w, projection=[]
+
+query I
+WITH w AS MATERIALIZED (SELECT * FROM wide)
+SELECT count(*) FROM w
+----
+3
+
+query II
+WITH w AS MATERIALIZED (SELECT * FROM wide)
+SELECT (SELECT count(*) FROM w) AS n1, (SELECT count(*) FROM w) AS n2
+----
+3 3
+
+# One reference reads no column and the other reads `c`.
+query II
+WITH w AS MATERIALIZED (SELECT * FROM wide)
+SELECT (SELECT count(*) FROM w) AS n, (SELECT sum(c) FROM w) AS s
+----
+3 600
+
+# A CTE that another CTE reads. The scan of `w` in the body of `x` and the scan
+# of `w` in the main query are both counted: `w` keeps `a`, `b` and `e`.
+query TT
+EXPLAIN WITH w AS MATERIALIZED (SELECT * FROM wide),
+     x AS MATERIALIZED (SELECT a, b, c FROM w)
+SELECT x.a, x.b, w.e FROM x JOIN w ON x.a = w.a
+----
+logical_plan
+01)MaterializedCte: name=w
+02)--SubqueryAlias: w
+03)----TableScan: wide projection=[a, b, e]
+04)--MaterializedCte: name=x
+05)----SubqueryAlias: x
+06)------MaterializedCteScan: name=w projection=[a, b]
+07)----Projection: x.a, x.b, w.e
+08)------Inner Join: x.a = w.a
+09)--------MaterializedCteScan: name=x
+10)--------MaterializedCteScan: name=w projection=[a, e]
+physical_plan
+01)MaterializedCteExec: name=w
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--MaterializedCteExec: name=x
+04)----MaterializedCteScanExec: name=w, projection=[a, b]
+05)----HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0)], projection=[a@0, b@1, e@3]
+06)------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
+07)--------MaterializedCteScanExec: name=x
+08)------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
+09)--------MaterializedCteScanExec: name=w, projection=[a, e]
+
+query III rowsort
+WITH w AS MATERIALIZED (SELECT * FROM wide),
+     x AS MATERIALIZED (SELECT a, b, c FROM w)
+SELECT x.a, x.b, w.e FROM x JOIN w ON x.a = w.a
+----
+1 10 10000
+2 20 20000
+3 30 30000
+
+# A reference in an uncorrelated scalar subquery and in an IN subquery.
+query TT
+EXPLAIN WITH w AS MATERIALIZED (SELECT * FROM wide)
+SELECT a, (SELECT max(d) FROM w) FROM w WHERE b IN (SELECT b FROM w WHERE c > 100)
+----
+logical_plan
+01)MaterializedCte: name=w
+02)--SubqueryAlias: w
+03)----TableScan: wide projection=[a, b, c, d]
+04)--Projection: w.a, (<subquery>)
+05)----Subquery:
+06)------Aggregate: groupBy=[[]], aggr=[[max(w.d)]]
+07)--------MaterializedCteScan: name=w projection=[d]
+08)----LeftSemi Join: w.b = __correlated_sq_1.b
+09)------MaterializedCteScan: name=w projection=[a, b]
+10)------SubqueryAlias: __correlated_sq_1
+11)--------Projection: w.b
+12)----------Filter: w.c > Int32(100)
+13)------------MaterializedCteScan: name=w projection=[b, c]
+physical_plan
+01)ScalarSubqueryExec: subqueries=1
+02)--MaterializedCteExec: name=w
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----ProjectionExec: expr=[a@0 as a, scalar_subquery(<pending>) as max(w.d)]
+05)------HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(b@1, b@0)], projection=[a@0]
+06)--------RepartitionExec: partitioning=Hash([b@1], 4), input_partitions=4
+07)----------MaterializedCteScanExec: name=w, projection=[a, b]
+08)--------RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=4
+09)----------FilterExec: c@1 > 100, projection=[b@0]
+10)------------MaterializedCteScanExec: name=w, projection=[b, c]
+11)--AggregateExec: mode=Final, gby=[], aggr=[max(w.d)]
+12)----CoalescePartitionsExec
+13)------AggregateExec: mode=Partial, gby=[], aggr=[max(w.d)]
+14)--------MaterializedCteScanExec: name=w, projection=[d]
+
+query II rowsort
+WITH w AS MATERIALIZED (SELECT * FROM wide)
+SELECT a, (SELECT max(d) FROM w) FROM w WHERE b IN (SELECT b FROM w WHERE c > 100)
+----
+2 3000
+3 3000
+
+# A reference in a correlated subquery.
+query II rowsort
+WITH w AS MATERIALIZED (SELECT * FROM wide)
+SELECT a, (SELECT max(w2.e) FROM w AS w2 WHERE w2.a = w.a) FROM w
+WHERE EXISTS (SELECT 1 FROM w AS w3 WHERE w3.d > w.d)
+----
+1 10000
+2 20000
+
+# A pruned volatile column does not change the number of rows, and the body
+# still runs once: both references see the same value of `r`.
+query TT
+EXPLAIN WITH w AS MATERIALIZED (SELECT a, random() AS r, random() AS unused FROM wide)
+SELECT count(DISTINCT r) FROM (SELECT a, r FROM w UNION ALL SELECT a, r FROM w)
+----
+logical_plan
+01)MaterializedCte: name=w
+02)--SubqueryAlias: w
+03)----Projection: random() AS r
+04)------TableScan: wide projection=[]
+05)--Projection: count(alias1) AS count(DISTINCT r)
+06)----Aggregate: groupBy=[[]], aggr=[[count(alias1)]]
+07)------Aggregate: groupBy=[[r AS alias1]], aggr=[[]]
+08)--------Union
+09)----------MaterializedCteScan: name=w
+10)----------MaterializedCteScan: name=w
+physical_plan
+01)MaterializedCteExec: name=w
+02)--ProjectionExec: expr=[random() as r]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--ProjectionExec: expr=[count(alias1)@0 as count(DISTINCT r)]
+05)----AggregateExec: mode=Final, gby=[], aggr=[count(alias1)]
+06)------CoalescePartitionsExec
+07)--------AggregateExec: mode=Partial, gby=[], aggr=[count(alias1)]
+08)----------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
+09)------------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=8
+10)--------------AggregateExec: mode=Partial, gby=[r@0 as alias1], aggr=[]
+11)----------------UnionExec
+12)------------------MaterializedCteScanExec: name=w
+13)------------------MaterializedCteScanExec: name=w
+
+query I
+WITH w AS MATERIALIZED (SELECT a, random() AS r, random() AS unused FROM wide)
+SELECT count(DISTINCT r) FROM (SELECT a, r FROM w UNION ALL SELECT a, r FROM w)
+----
+3
+
+# Unused columns are not removed below a DISTINCT, because that would change
+# the number of rows.
+query I rowsort
+WITH w AS MATERIALIZED (SELECT DISTINCT a % 2 AS p, a FROM wide)
+SELECT p FROM w
+----
+0
+1
+1
+
+# Aliased columns, and two columns with the same source.
+query II rowsort
+WITH w(x, y, z) AS MATERIALIZED (SELECT a, a AS a2, b FROM wide)
+SELECT z, y FROM w UNION ALL SELECT y, x FROM w
+----
+1 1
+10 1
+2 2
+20 2
+3 3
+30 3
+
+# A self join reads different columns on each side.
+query II rowsort
+WITH w AS MATERIALIZED (SELECT * FROM wide)
+SELECT l.b, r.d FROM w AS l JOIN w AS r ON l.a = r.a
+----
+10 1000
+20 2000
+30 3000
+
+# A recursive body is projected above the recursion.
+query TT
+EXPLAIN WITH RECURSIVE r AS MATERIALIZED (
+  SELECT 1 AS n, 10 AS m, 100 AS unused
+  UNION ALL
+  SELECT n + 1, m + 10, unused FROM r WHERE n < 3)
+SELECT n FROM r UNION ALL SELECT m FROM r
+----
+logical_plan
+01)MaterializedCte: name=r
+02)--SubqueryAlias: r
+03)----Projection: n, m
+04)------RecursiveQuery: is_distinct=false
+05)--------Projection: Int64(1) AS n, Int64(10) AS m, Int64(100) AS unused
+06)----------EmptyRelation: rows=1
+07)--------Projection: r.n + Int64(1), r.m + Int64(10), r.unused
+08)----------Filter: r.n < Int64(3)
+09)------------TableScan: r projection=[n, m, unused]
+10)--Union
+11)----MaterializedCteScan: name=r projection=[n]
+12)----Projection: r.m AS n
+13)------MaterializedCteScan: name=r projection=[m]
+physical_plan
+01)MaterializedCteExec: name=r
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----ProjectionExec: expr=[n@0 as n, m@1 as m]
+04)------RecursiveQueryExec: name=r, is_distinct=false
+05)--------ProjectionExec: expr=[CAST(1 AS Int64) as n, CAST(10 AS Int64) as m, CAST(100 AS Int64) as unused]
+06)----------PlaceholderRowExec
+07)--------CoalescePartitionsExec
+08)----------ProjectionExec: expr=[n@0 + 1 as n, m@1 + 10 as m, unused@2 as unused]
+09)------------FilterExec: n@0 < 3
+10)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+11)----------------WorkTableExec: name=r
+12)--UnionExec
+13)----MaterializedCteScanExec: name=r, projection=[n]
+14)----ProjectionExec: expr=[m@0 as n]
+15)------MaterializedCteScanExec: name=r, projection=[m]
+
+query I rowsort
+WITH RECURSIVE r AS MATERIALIZED (
+  SELECT 1 AS n, 10 AS m, 100 AS unused
+  UNION ALL
+  SELECT n + 1, m + 10, unused FROM r WHERE n < 3)
+SELECT n FROM r UNION ALL SELECT m FROM r
+----
+1
+10
+2
+20
+3
+30
+
+# A CTE that nothing reads is not planned.
+query I
+WITH w AS MATERIALIZED (SELECT * FROM wide)
+SELECT 1
+----
+1
+
+statement ok
+DROP TABLE wide;
 
 statement ok
 DROP TABLE t;
