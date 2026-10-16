@@ -528,6 +528,167 @@ statement ok
 DEALLOCATE mc_tuple_qualified;
 
 #############
+## NOT NULL tuple elements
+#############
+
+# `b` and `y` cannot be NULL, so they never make the tuple comparison UNKNOWN
+# and the join reads them as a scope key: a NULL `a` is compared only with the
+# subquery rows whose `y` equals its `b`.
+statement ok
+CREATE TABLE mc_nn_outer(k INT NOT NULL, a INT, b INT NOT NULL, value TEXT) AS VALUES
+(1, 1, 2, 'p'),
+(1, NULL, 2, 'q'),
+(1, NULL, 3, 'r'),
+(1, 5, 2, 's'),
+(2, NULL, 2, 't'),
+(2, 7, 9, 'u'),
+(1, 6, 4, 'v');
+
+statement ok
+CREATE TABLE mc_nn_inner(k INT NOT NULL, x INT, y INT NOT NULL) AS VALUES
+(1, 1, 2),
+(1, NULL, 4),
+(2, 8, 9);
+
+# p matches (1, 2). q and t vs (1, 2) and v vs (NULL, 4) are UNKNOWN. r, s and
+# u mismatch every row.
+query T rowsort
+SELECT value FROM mc_nn_outer
+WHERE (a, b) NOT IN (SELECT x, y FROM mc_nn_inner);
+----
+r
+s
+u
+
+# The NOT NULL element first gives the same rows.
+query T rowsort
+SELECT value FROM mc_nn_outer
+WHERE (b, a) NOT IN (SELECT y, x FROM mc_nn_inner);
+----
+r
+s
+u
+
+# With one nullable element the tuple is a scalar NOT IN on it, correlated by
+# the other elements.
+query T rowsort
+SELECT value FROM mc_nn_outer
+WHERE a NOT IN (SELECT x FROM mc_nn_inner WHERE y = b);
+----
+r
+s
+u
+
+# With a correlation, t's scope is k = 2, {(8, 9)}, which it mismatches.
+query T rowsort
+SELECT value FROM mc_nn_outer o
+WHERE (a, b) NOT IN (SELECT x, y FROM mc_nn_inner i WHERE i.k = o.k);
+----
+r
+s
+t
+u
+
+# The correlation as a NOT NULL tuple element gives the same rows.
+query T rowsort
+SELECT value FROM mc_nn_outer
+WHERE (a, k, b) NOT IN (SELECT x, k, y FROM mc_nn_inner);
+----
+r
+s
+t
+u
+
+# Two nullable elements and a scope key. The subquery gives (1, 2, 1),
+# (NULL, 4, 1) and (8, 9, NULL): t's k = 2 and u's a = 7 are definite
+# mismatches.
+query T rowsort
+SELECT value FROM mc_nn_outer
+WHERE (a, b, k) NOT IN (SELECT x, y, NULLIF(k, 2) FROM mc_nn_inner);
+----
+r
+s
+t
+u
+
+# A constant NOT NULL element: only (1, 2) is in scope.
+query T rowsort
+SELECT value FROM mc_nn_outer
+WHERE (a, 2) NOT IN (SELECT x, y FROM mc_nn_inner);
+----
+s
+u
+v
+
+# An empty subquery keeps every row, NULLs included.
+query T rowsort
+SELECT value FROM mc_nn_outer
+WHERE (a, b) NOT IN (SELECT x, y FROM mc_nn_inner WHERE x > 100);
+----
+p
+q
+r
+s
+t
+u
+v
+
+# A RunEndEncoded element is not hashable, so it stays in the join filter. That
+# is rejected for an element that can be NULL (see above), but an element that
+# cannot is read like any correlation.
+statement ok
+CREATE TABLE mc_nn_ree_outer AS
+SELECT k, a, arrow_cast(b, 'RunEndEncoded("run_ends": non-null Int32, "values": Int32)') AS b, value
+FROM mc_nn_outer;
+
+statement ok
+CREATE TABLE mc_nn_ree_inner AS
+SELECT k, x, arrow_cast(y, 'RunEndEncoded("run_ends": non-null Int32, "values": Int32)') AS y
+FROM mc_nn_inner;
+
+query T rowsort
+SELECT value FROM mc_nn_ree_outer
+WHERE (b, a) NOT IN (SELECT y, x FROM mc_nn_ree_inner);
+----
+r
+s
+u
+
+# As a nullable value.
+query TB rowsort
+SELECT value, (a, b) NOT IN (SELECT x, y FROM mc_nn_inner) AS r
+FROM mc_nn_outer;
+----
+p false
+q NULL
+r true
+s true
+t NULL
+u true
+v NULL
+
+query TB rowsort
+SELECT value, (a, b) NOT IN (SELECT x, y FROM mc_nn_inner i WHERE i.k = o.k) AS r
+FROM mc_nn_outer o;
+----
+p false
+q NULL
+r true
+s true
+t true
+u true
+v NULL
+
+query T rowsort
+SELECT value FROM mc_nn_outer
+WHERE (a, b) NOT IN (SELECT x, y FROM mc_nn_inner) OR value = 'q';
+----
+q
+r
+s
+u
+
+#############
 ## Cleanup
 #############
 
@@ -593,3 +754,15 @@ DROP TABLE mc_p1;
 
 statement ok
 DROP TABLE mc_p2;
+
+statement ok
+DROP TABLE mc_nn_outer;
+
+statement ok
+DROP TABLE mc_nn_inner;
+
+statement ok
+DROP TABLE mc_nn_ree_outer;
+
+statement ok
+DROP TABLE mc_nn_ree_inner;
