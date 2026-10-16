@@ -22,6 +22,14 @@ STORED AS CSV
 LOCATION '../core/tests/data/duplicate_header.csv'
 OPTIONS ('format.has_header' 'true');
 
+# A malformed null_regex is reported as an error rather than panicking the
+# query. Schema inference compiles the pattern, so CREATE is where it surfaces.
+statement error Unable to parse CSV null regex
+CREATE EXTERNAL TABLE csv_with_invalid_null_regex
+STORED AS CSV
+LOCATION '../core/tests/data/quote.csv'
+OPTIONS ('format.has_header' 'true', 'format.null_regex' '(');
+
 # create_external_table_with_quote_escape
 statement ok
 CREATE EXTERNAL TABLE csv_with_quote (

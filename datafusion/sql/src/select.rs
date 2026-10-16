@@ -24,10 +24,10 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::query::to_order_by_exprs_with_select;
 use crate::utils::{
     CheckColumnsMustReferenceAggregatePurpose, CheckColumnsSatisfyExprsPurpose,
-    check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
-    resolve_columns, resolve_positions_to_exprs, rewrite_recursive_unnest_bottom_up,
-    rewrite_recursive_unnests_bottom_up, substitute_top_level_alias,
-    substitute_top_level_aliases_in_sorts,
+    DedupedProjection, check_columns_satisfy_exprs, extract_aliases, rebase_expr,
+    resolve_aliases_to_exprs, resolve_columns, resolve_positions_to_exprs,
+    rewrite_recursive_unnest_bottom_up, rewrite_recursive_unnests_bottom_up,
+    substitute_top_level_alias, substitute_top_level_aliases_in_sorts,
 };
 
 use arrow::datatypes::DataType;
@@ -662,7 +662,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             let mut unnest_columns = IndexMap::new();
             // from which columns used for projection, before the unnest happen
             // including non unnest columns and unnest columns
-            let mut inner_projection_exprs = vec![];
+            let mut inner_projection_exprs = DedupedProjection::default();
             let mut outer_expr_groups =
                 Vec::with_capacity(intermediate_expr_groups.len());
 
@@ -708,7 +708,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             let null_handling = collect_unnest_null_handling(&intermediate_expr_groups)?;
             let mut unnest_options =
                 UnnestOptions::new().with_null_handling(null_handling);
-            let mut unnest_col_vec = vec![];
+            let mut unnest_col_vec = Vec::with_capacity(unnest_columns.len());
 
             for (col, maybe_list_unnest) in unnest_columns.into_iter() {
                 if let Some(list_unnest) = maybe_list_unnest {
@@ -727,7 +727,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
 
             intermediate_plan = LogicalPlanBuilder::from(intermediate_plan)
-                .project(inner_projection_exprs)?
+                .project(inner_projection_exprs.into_exprs())?
                 .unnest_columns_with_options(unnest_col_vec, unnest_options)?
                 .build()?;
             intermediate_expr_groups = outer_expr_groups;
@@ -830,7 +830,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         loop {
             let mut unnest_columns = IndexMap::new();
-            let mut inner_projection_exprs = vec![];
+            let mut inner_projection_exprs = DedupedProjection::default();
 
             let outer_projection_exprs = rewrite_recursive_unnests_bottom_up(
                 &intermediate_plan,
@@ -865,9 +865,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         columns
                     }
                 };
-                projection_exprs.extend(inner_projection_exprs);
+                projection_exprs.extend(inner_projection_exprs.into_exprs());
 
-                let mut unnest_col_vec = vec![];
+                let mut unnest_col_vec = Vec::with_capacity(unnest_columns.len());
 
                 for (col, maybe_list_unnest) in unnest_columns.into_iter() {
                     if let Some(list_unnest) = maybe_list_unnest {
@@ -1001,7 +1001,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         empty_from: bool,
         planner_context: &mut PlannerContext,
     ) -> Result<Vec<SelectExpr>> {
-        let mut prepared_select_exprs = vec![];
+        let mut prepared_select_exprs = Vec::with_capacity(projection.len());
         let mut error_builder = DataFusionErrorBuilder::new();
 
         for expr in projection {
@@ -1251,7 +1251,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         // combine the original grouping and aggregate expressions into one list (note that
         // we do not add the "having" expression since that is not part of the projection)
-        let mut aggr_projection_exprs = vec![];
+        let mut aggr_projection_exprs =
+            Vec::with_capacity(group_by_exprs.len() + aggr_exprs.len());
         for expr in group_by_exprs {
             match expr {
                 Expr::GroupingSet(GroupingSet::Rollup(exprs)) => {

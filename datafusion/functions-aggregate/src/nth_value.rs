@@ -30,6 +30,7 @@ use datafusion_common::utils::{SingleRowListArrayBuilder, get_row_at_idx};
 use datafusion_common::{
     Result, ScalarValue, assert_or_internal_err, exec_err, not_impl_err,
 };
+use datafusion_expr::DistinctHandling;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -188,6 +189,13 @@ impl AggregateUDFImpl for NthValueAgg {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // Duplicate-sensitive, but the accumulator does not read
+        // `is_distinct` and today silently returns the non-distinct answer.
+        // The tag records the intent; enforcement is a follow-up change.
+        DistinctHandling::Unsupported
     }
 }
 
@@ -355,8 +363,8 @@ impl NthValueAccumulator {
     fn evaluate_orderings(&self) -> Result<ScalarValue> {
         let fields = ordering_fields(&self.ordering_req, &self.datatypes[1..]);
 
-        let mut column_wise_ordering_values = vec![];
         let num_columns = fields.len();
+        let mut column_wise_ordering_values = Vec::with_capacity(num_columns);
         for i in 0..num_columns {
             let column_values = self
                 .ordering_values

@@ -84,6 +84,10 @@ pub struct AlignedBoundaryStream {
 }
 
 /// Fetch a bounded byte range from `store` and return it as a stream
+#[expect(
+    clippy::result_large_err,
+    reason = "error type is dictated by the object_store API"
+)]
 async fn get_stream(
     store: Arc<dyn ObjectStore>,
     location: object_store::path::Path,
@@ -148,6 +152,10 @@ impl AlignedBoundaryStream {
     /// newline is not found within that window, `ScanningLastTerminator`
     /// automatically issues additional `END_SCAN_LOOKAHEAD`-sized GETs
     /// via `store` until the newline is found or EOF is reached.
+    #[expect(
+        clippy::result_large_err,
+        reason = "error type is dictated by the object_store API"
+    )]
     pub async fn new(
         store: Arc<dyn ObjectStore>,
         location: object_store::path::Path,

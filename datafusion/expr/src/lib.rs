@@ -70,7 +70,7 @@ pub mod dml {
 }
 pub mod planner;
 /// Protobuf conversions for [`WindowFrame`], [`WindowFrameBound`],
-/// [`WindowFrameUnits`], [`MergeIntoClauseKind`](dml::MergeIntoClauseKind) and
+/// [`WindowFrameUnits`], [`MergeIntoClauseKind`] and
 /// [`NullTreatment`](expr::NullTreatment), gated on the `proto` feature.
 #[cfg(feature = "proto")]
 mod proto;
@@ -88,6 +88,12 @@ pub mod preimage;
 pub mod ptr_eq;
 #[cfg(not(feature = "sql"))]
 pub mod sql;
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
 pub mod test;
 pub mod tree_node;
 pub mod type_coercion;
@@ -101,7 +107,9 @@ pub use datafusion_doc::{
     DocSection, Documentation, DocumentationBuilder, aggregate_doc_sections,
     scalar_doc_sections, window_doc_sections,
 };
-pub use datafusion_expr_common::accumulator::Accumulator;
+pub use datafusion_expr_common::accumulator::{
+    Accumulator, AggregateMetric, AggregateMetricRecorder, AggregateMetrics,
+};
 pub use datafusion_expr_common::columnar_value::ColumnarValue;
 pub use datafusion_expr_common::groups_accumulator::{
     EmitTo, GroupSelection, GroupsAccumulator,
@@ -137,10 +145,10 @@ pub use partition_evaluator::PartitionEvaluator;
 pub use sqlparser;
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
 pub use udaf::{
-    AggregateUDF, AggregateUDFImpl, ReversedUDAF, SetMonotonicity, StatisticsArgs,
-    UdafDisplayNameBuilder, UdafHumanDisplayBuilder, UdafSchemaNameBuilder,
-    UdafWindowFunctionDisplayNameBuilder, UdafWindowFunctionSchemaNameBuilder,
-    udaf_default_return_field,
+    AggregateUDF, AggregateUDFImpl, DistinctHandling, ReversedUDAF, SetMonotonicity,
+    StatisticsArgs, UdafDisplayNameBuilder, UdafHumanDisplayBuilder,
+    UdafSchemaNameBuilder, UdafWindowFunctionDisplayNameBuilder,
+    UdafWindowFunctionSchemaNameBuilder, udaf_default_return_field,
 };
 #[expect(deprecated)]
 pub use udaf::{

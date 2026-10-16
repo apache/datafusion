@@ -228,7 +228,7 @@ impl DFHeapSize for SchemaFingerprint {
 #[cfg(test)]
 mod schema_fingerprint_tests {
     use super::*;
-    use datafusion_common::arrow::datatypes::Field;
+    use datafusion_common::arrow::datatypes::{Field, Metadata};
 
     fn fp(fields: Vec<Field>) -> SchemaFingerprint {
         SchemaFingerprint::from_schema(&Schema::new(fields))
@@ -263,13 +263,13 @@ mod schema_fingerprint_tests {
 
         let field_md = SchemaFingerprint::from_schema(&Schema::new(vec![
             Field::new("id", DataType::Int64, false)
-                .with_metadata([("note".to_string(), "x".to_string())].into()),
+                .with_metadata(Metadata::new().with("note", "x")),
         ]));
         assert_eq!(plain, field_md, "field metadata must be ignored");
 
         let schema_md = SchemaFingerprint::from_schema(
             &Schema::new(vec![Field::new("id", DataType::Int64, false)])
-                .with_metadata([("k".to_string(), "v".to_string())].into()),
+                .with_metadata(Metadata::new().with("k", "v")),
         );
         assert_eq!(plain, schema_md, "schema metadata must be ignored");
     }

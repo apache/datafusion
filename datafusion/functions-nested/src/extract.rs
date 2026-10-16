@@ -33,6 +33,7 @@ use datafusion_common::cast::{
 };
 use datafusion_common::internal_err;
 use datafusion_common::utils::ListCoercion;
+use datafusion_common::utils::offset_span_len;
 use datafusion_common::{
     Result, exec_datafusion_err, exec_err, internal_datafusion_err, plan_err,
     utils::take_function_args,
@@ -213,7 +214,7 @@ where
     }
 
     let original_data = values.to_data();
-    let capacity = Capacities::Array(original_data.len());
+    let capacity = Capacities::Array(array.len());
 
     // use_nulls: true, we don't construct List for array_element, so we need explicit nulls.
     let mut mutable =
@@ -508,9 +509,9 @@ enum SlicePlan<O: OffsetSizeTrait> {
     /// A contiguous run starting at `start` (relative to the row) with `len`
     /// elements can be copied in one go.
     Contiguous { start: O, len: O },
-    /// Arbitrary positions (already relative to the row) must be copied in
-    /// sequence.
-    Indices(Vec<O>),
+    /// Arbitrary positions (already relative to the row), written to the
+    /// caller's index buffer, must be copied in sequence.
+    Indices,
 }
 
 /// Produces a [`SlicePlan`] for the given logical slice parameters.
@@ -519,6 +520,7 @@ fn compute_slice_plan<O: OffsetSizeTrait>(
     from_raw: i64,
     to_raw: i64,
     stride_raw: Option<i64>,
+    indices: &mut Vec<O>,
 ) -> Result<SlicePlan<O>>
 where
     i64: TryInto<O>,
@@ -557,22 +559,22 @@ where
             let len = to - from + O::usize_as(1);
             Ok(SlicePlan::Contiguous { start: from, len })
         } else {
-            let mut indices = Vec::new();
+            indices.clear();
             let mut index = from;
             while index <= to {
                 indices.push(index);
                 index += stride;
             }
-            Ok(SlicePlan::Indices(indices))
+            Ok(SlicePlan::Indices)
         }
     } else {
-        let mut indices = Vec::new();
+        indices.clear();
         let mut index = from;
         while index >= to {
             indices.push(index);
             index += stride;
         }
-        Ok(SlicePlan::Indices(indices))
+        Ok(SlicePlan::Indices)
     }
 }
 
@@ -602,7 +604,7 @@ where
 {
     let values = array.values();
     let original_data = values.to_data();
-    let capacity = Capacities::Array(original_data.len());
+    let capacity = Capacities::Array(offset_span_len(array.offsets()));
     // Carry the input's list field through to the output so that the returned
     // type matches the one promised by `return_type` / `return_field_from_args`,
     // including the field name, nullability and metadata.
@@ -617,7 +619,9 @@ where
     // We have the slice syntax compatible with DuckDB v0.8.1.
     // The rule `adjusted_from_index` and `adjusted_to_index` follows the rule of array_slice in duckdb.
 
-    let mut offsets = vec![O::usize_as(0)];
+    let mut offsets = Vec::with_capacity(array.len() + 1);
+    offsets.push(O::usize_as(0));
+    let mut indices = Vec::new();
 
     let nulls = combine_input_nulls(array, from_array, to_array, stride);
 
@@ -645,6 +649,7 @@ where
             from_array.value(row_index),
             to_array.value(row_index),
             stride.map(|s| s.value(row_index)),
+            &mut indices,
         )?;
 
         match slice_plan {
@@ -658,9 +663,9 @@ where
                 mutable.try_extend(0, start_index, end_index)?;
                 offsets.push(offsets[row_index] + slice_len);
             }
-            SlicePlan::Indices(indices) => {
+            SlicePlan::Indices => {
                 let count = indices.len();
-                for rel_index in indices {
+                for &rel_index in &indices {
                     let absolute_index = (start + rel_index).to_usize().unwrap();
                     mutable.try_extend(0, absolute_index, absolute_index + 1)?;
                 }
@@ -709,6 +714,7 @@ where
     let mut offsets = Vec::with_capacity(array.len());
     let mut sizes = Vec::with_capacity(array.len());
     let mut current_offset = O::usize_as(0);
+    let mut indices = Vec::new();
 
     let nulls = combine_input_nulls(array, from_array, to_array, stride);
 
@@ -733,6 +739,7 @@ where
             from_array.value(row_index),
             to_array.value(row_index),
             stride.map(|s| s.value(row_index)),
+            &mut indices,
         )?;
 
         let start = array.value_offset(row_index);
@@ -752,9 +759,9 @@ where
                 sizes.push(slice_len);
                 current_offset += slice_len;
             }
-            SlicePlan::Indices(indices) => {
+            SlicePlan::Indices => {
                 let count = indices.len();
-                for rel_index in indices {
+                for &rel_index in &indices {
                     let absolute_index = (start + rel_index).to_usize().unwrap();
                     mutable.try_extend(0, absolute_index, absolute_index + 1)?;
                 }
@@ -1395,5 +1402,26 @@ mod tests {
         assert_eq!(first_row, vec![Some(1), None]);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_element_sliced_capacity() -> Result<()> {
+        crate::utils::tests::check_sliced_list_behavior(|input| {
+            super::array_element_inner(&[
+                Arc::clone(input),
+                Arc::new(Int64Array::from(vec![1; input.len()])),
+            ])
+        })
+    }
+
+    #[test]
+    fn test_slice_sliced_capacity() -> Result<()> {
+        crate::utils::tests::check_sliced_list_behavior(|input| {
+            super::array_slice_inner(&[
+                Arc::clone(input),
+                Arc::new(Int64Array::from(vec![1; input.len()])),
+                Arc::new(Int64Array::from(vec![3; input.len()])),
+            ])
+        })
     }
 }

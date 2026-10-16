@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use crate::expr::{Alias, Sort, Unnest};
 use crate::logical_plan::Projection;
-use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
+use crate::{Expr, ExprSchemable, LogicalPlan};
 
 use datafusion_common::TableReference;
 use datafusion_common::config::ConfigOptions;
@@ -64,20 +64,54 @@ pub trait FunctionRewrite: Debug {
     ) -> Result<Transformed<Expr>>;
 }
 
-/// Recursively call `LogicalPlanBuilder::normalize` on all [`Column`] expressions
-/// in the `expr` expression tree.
+/// Recursively normalize all [`Column`] expressions in the `expr` expression tree.
 pub fn normalize_col(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
-    expr.transform(|expr| {
-        Ok({
-            if let Expr::Column(c) = expr {
-                let col = LogicalPlanBuilder::normalize(plan, c)?;
-                Transformed::yes(Expr::Column(col))
-            } else {
-                Transformed::no(expr)
-            }
+    ColumnNormalizer::new(plan).normalize(expr)
+}
+
+/// Reuses the plan's normalization context across expressions. Initialize it
+/// lazily so literals and already-qualified columns need no plan traversal.
+pub(crate) struct ColumnNormalizer<'a> {
+    plan: &'a LogicalPlan,
+    context: Option<(Vec<&'a DFSchema>, Vec<HashSet<Column>>)>,
+}
+
+impl<'a> ColumnNormalizer<'a> {
+    pub(crate) fn new(plan: &'a LogicalPlan) -> Self {
+        Self {
+            plan,
+            context: None,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn normalize_column(&mut self, column: Column) -> Result<Column> {
+        if column.relation.is_some() {
+            return Ok(column);
+        }
+
+        let (fallback_schemas, using_columns) = match &mut self.context {
+            Some(context) => context,
+            context @ None => context.insert((
+                self.plan.fallback_normalize_schemas(),
+                self.plan.using_columns()?,
+            )),
+        };
+        column.normalize_with_schemas_and_ambiguity_check(
+            &[&[self.plan.schema()], fallback_schemas],
+            using_columns,
+        )
+    }
+
+    pub(crate) fn normalize(&mut self, expr: Expr) -> Result<Expr> {
+        expr.transform(|expr| match expr {
+            Expr::Column(column) => self
+                .normalize_column(column)
+                .map(|column| Transformed::yes(Expr::Column(column))),
+            _ => Ok(Transformed::no(expr)),
         })
-    })
-    .data()
+        .data()
+    }
 }
 
 /// See [`Column::normalize_with_schemas_and_ambiguity_check`] for usage
@@ -118,9 +152,10 @@ pub fn normalize_cols(
     exprs: impl IntoIterator<Item = impl Into<Expr>>,
     plan: &LogicalPlan,
 ) -> Result<Vec<Expr>> {
+    let mut normalizer = ColumnNormalizer::new(plan);
     exprs
         .into_iter()
-        .map(|e| normalize_col(e.into(), plan))
+        .map(|e| normalizer.normalize(e.into()))
         .collect()
 }
 
@@ -128,11 +163,13 @@ pub fn normalize_sorts(
     sorts: impl IntoIterator<Item = impl Into<Sort>>,
     plan: &LogicalPlan,
 ) -> Result<Vec<Sort>> {
+    let mut normalizer = ColumnNormalizer::new(plan);
     sorts
         .into_iter()
         .map(|e| {
             let sort = e.into();
-            normalize_col(sort.expr, plan)
+            normalizer
+                .normalize(sort.expr)
                 .map(|expr| Sort::new(expr, sort.asc, sort.nulls_first))
         })
         .collect()
@@ -382,7 +419,7 @@ mod test {
 
     use super::*;
     use crate::literal::lit_with_metadata;
-    use crate::{Cast, col, lit};
+    use crate::{Cast, LogicalPlanBuilder, col, lit};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::ScalarValue;
     use datafusion_common::tree_node::TreeNodeRewriter;
@@ -489,6 +526,93 @@ mod test {
         let expected = "Schema error: No field named b.\n\
             Valid fields are \"tableA\".a.";
         assert_eq!(error, expected);
+    }
+
+    #[test]
+    fn normalize_batch_schema_precedence() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+        let plan = crate::logical_plan::table_scan(Some("t"), &schema, None)?
+            .project([col("t.a").alias("b")])?
+            .build()?;
+        let exprs = vec![col("b") + col("a"), col("other.missing"), lit(1)];
+        let expected = vec![col("b") + col("t.a"), col("other.missing"), lit(1)];
+        assert_eq!(super::normalize_cols(exprs.clone(), &plan)?, expected);
+        assert_eq!(normalize_col(exprs[0].clone(), &plan)?, expected[0]);
+        let sorts = exprs.into_iter().map(|e| e.sort(false, true));
+        assert_eq!(
+            normalize_sorts(sorts, &plan)?,
+            expected
+                .into_iter()
+                .map(|e| e.sort(false, true))
+                .collect::<Vec<_>>()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn normalize_batch_using_join() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+        let right =
+            crate::logical_plan::table_scan(Some("right"), &schema, None)?.build()?;
+        let plan = crate::logical_plan::table_scan(Some("left"), &schema, None)?
+            .join_using(right, crate::JoinType::Inner, vec![Column::from_name("a")])?
+            .build()?;
+        assert_eq!(
+            super::normalize_cols([col("a"), col("a") + col("right.a")], &plan)?,
+            vec![col("left.a"), col("left.a") + col("right.a")]
+        );
+        let projected = LogicalPlanBuilder::from(plan.clone())
+            .project([col("a").alias("key"), col("left.b").alias("value")])?
+            .build()?;
+        assert_eq!(
+            projected.expressions(),
+            vec![col("left.a").alias("key"), col("left.b").alias("value")]
+        );
+        let err = super::normalize_cols([col("a"), col("b"), col("missing")], &plan)
+            .unwrap_err();
+        assert!(
+            err.strip_backtrace()
+                .contains("Ambiguous reference to unqualified field b")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn normalize_batch_skips_unused_plan_context() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let right =
+            crate::logical_plan::table_scan(Some("right"), &schema, None)?.build()?;
+        let mut plan = crate::logical_plan::table_scan(Some("left"), &schema, None)?
+            .join_using(right, crate::JoinType::Inner, vec![Column::from_name("a")])?
+            .build()?;
+        // Invalid USING keys must only be inspected when an unqualified column
+        // needs normalization, just as with a single expression.
+        let LogicalPlan::Join(join) = &mut plan else {
+            unreachable!()
+        };
+        join.on[0].0 = lit(1);
+        assert!(plan.using_columns().is_err());
+        assert!(super::normalize_cols(Vec::<Expr>::new(), &plan)?.is_empty());
+        let exprs = vec![lit(1), col("left.a"), col("other.missing")];
+        assert_eq!(super::normalize_cols(exprs.clone(), &plan)?, exprs);
+        assert_eq!(normalize_col(col("left.a"), &plan)?, col("left.a"));
+        assert_eq!(
+            normalize_sorts([col("left.a").sort(true, false)], &plan)?,
+            vec![col("left.a").sort(true, false)]
+        );
+        assert!(super::normalize_cols([col("left.a"), col("a")], &plan).is_err());
+        let projected = LogicalPlanBuilder::from(plan.clone())
+            .project([col("left.a")])?
+            .build()?;
+        assert_eq!(projected.expressions(), vec![col("left.a")]);
+        assert!(LogicalPlanBuilder::from(plan).project([col("a")]).is_err());
+        Ok(())
     }
 
     #[test]

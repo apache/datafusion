@@ -44,6 +44,7 @@ use datafusion_expr::{
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::decorrelate_lateral_join::DecorrelateLateralJoin;
 use crate::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
+use crate::eliminate_aggregate_distinct::EliminateAggregateDistinct;
 use crate::eliminate_cross_join::EliminateCrossJoin;
 use crate::eliminate_duplicated_expr::EliminateDuplicatedExpr;
 use crate::eliminate_filter::EliminateFilter;
@@ -90,12 +91,6 @@ pub trait OptimizerRule: Debug {
     /// If returns `None`, the default, the rule must handle recursion itself
     fn apply_order(&self) -> Option<ApplyOrder> {
         None
-    }
-
-    /// Does this rule support rewriting owned plans (rather than by reference)?
-    #[deprecated(since = "47.0.0", note = "This method is no longer used")]
-    fn supports_rewrite(&self) -> bool {
-        true
     }
 
     /// Try to rewrite `plan` to an optimized form, returning [`Transformed::yes`]
@@ -250,7 +245,10 @@ impl OptimizerConfig for OptimizerContext {
     }
 }
 
-/// A rule-based optimizer.
+/// A rule-based logical optimizer.
+///
+/// Applies rules in order for up to `datafusion.optimizer.max_passes` passes,
+/// stopping early if the plan repeats.
 #[derive(Clone, Debug)]
 pub struct Optimizer {
     /// All optimizer rules to apply
@@ -308,6 +306,7 @@ impl Optimizer {
             // Filters can't be pushed down past Limits, we should do PushDownFilter after PushDownLimit
             Arc::new(PushDownLimit::new()),
             Arc::new(PushDownFilter::new()),
+            Arc::new(EliminateAggregateDistinct::new()),
             Arc::new(SingleDistinctToGroupBy::new()),
             // The previous optimizations added expressions and projections,
             // that might benefit from the following rules
@@ -464,9 +463,7 @@ fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
                         Ok(plan)
                     })
                     .collect::<Result<Vec<_>>>()?;
-                if changed {
-                    *node = node.with_exprs_and_inputs(exprs, new_inputs)?;
-                }
+                *node = node.with_exprs_and_inputs(exprs, new_inputs)?;
                 changed
             }
         }
@@ -478,10 +475,12 @@ fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
         | LogicalPlan::Ddl(DdlStatement::CreateExternalTable(_))
         | LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(_))
         | LogicalPlan::Ddl(DdlStatement::CreateCatalog(_))
+        | LogicalPlan::Ddl(DdlStatement::CreateExternalCatalog(_))
         | LogicalPlan::Ddl(DdlStatement::CreateIndex(_))
         | LogicalPlan::Ddl(DdlStatement::DropTable(_))
         | LogicalPlan::Ddl(DdlStatement::DropView(_))
         | LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(_))
+        | LogicalPlan::Ddl(DdlStatement::DropCatalog(_))
         | LogicalPlan::Ddl(DdlStatement::CreateFunction(_))
         | LogicalPlan::Ddl(DdlStatement::DropFunction(_))
         | LogicalPlan::Statement(_) => false,
@@ -788,6 +787,8 @@ fn assert_valid_optimization(
 mod tests {
     use std::sync::{Arc, Mutex};
 
+    use arrow::datatypes::Metadata;
+
     use datafusion_common::tree_node::Transformed;
     use datafusion_common::{
         Column, DFSchema, DFSchemaRef, DataFusionError, Result, assert_contains, plan_err,
@@ -967,8 +968,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(i, (qualifier, field))| {
-                let metadata =
-                    std::iter::once(("key".into(), format!("value {i}"))).collect();
+                let metadata = Metadata::new().with("key", format!("value {i}"));
 
                 let new_arrow_field = field.as_ref().clone().with_metadata(metadata);
                 (qualifier.cloned(), Arc::new(new_arrow_field))
@@ -989,10 +989,6 @@ mod tests {
             "bad rule"
         }
 
-        fn supports_rewrite(&self) -> bool {
-            true
-        }
-
         fn rewrite(
             &self,
             _plan: LogicalPlan,
@@ -1009,10 +1005,6 @@ mod tests {
     impl OptimizerRule for GetTableScanRule {
         fn name(&self) -> &str {
             "get table_scan rule"
-        }
-
-        fn supports_rewrite(&self) -> bool {
-            true
         }
 
         fn rewrite(
@@ -1037,10 +1029,6 @@ mod tests {
 
         fn apply_order(&self) -> Option<ApplyOrder> {
             Some(ApplyOrder::TopDown)
-        }
-
-        fn supports_rewrite(&self) -> bool {
-            true
         }
 
         fn rewrite(
@@ -1084,10 +1072,6 @@ mod tests {
 
         fn apply_order(&self) -> Option<ApplyOrder> {
             Some(ApplyOrder::TopDown)
-        }
-
-        fn supports_rewrite(&self) -> bool {
-            true
         }
 
         fn rewrite(

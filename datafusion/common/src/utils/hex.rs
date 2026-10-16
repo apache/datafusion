@@ -153,8 +153,8 @@ pub fn encode_bytes_to_slice(bytes: &[u8], case: HexCase, out: &mut [u8]) -> Res
         );
     }
     let lookup = case.lookup();
-    for (&b, chunk) in bytes.iter().zip(out.chunks_exact_mut(2)) {
-        chunk.copy_from_slice(&lookup[b as usize]);
+    for (&b, chunk) in bytes.iter().zip(out.as_chunks_mut::<2>().0) {
+        *chunk = lookup[b as usize];
     }
     Ok(())
 }
