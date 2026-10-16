@@ -141,11 +141,11 @@ fn first_instant_of_date(date: NaiveDate, tz: Option<&Tz>) -> Option<NaiveDateTi
             // the transition and after any earlier transition, and the exact
             // value does not matter.
             //
-            // Thus, Local midnight minus one day, read as UTC, is at most
-            // |offset| < 1 day away from the true local midnight, and thus
-            // guaranteed to fall before the transition. This assumes that
-            // transitions are separated by more than two days, so subtracting a
-            // day also cannot cross an earlier one.
+            // Read as UTC, the transition instant is within |offset| < 1 day of
+            // `midnight`, so `midnight` minus one day is guaranteed to fall
+            // before it. This assumes that transitions are separated by more
+            // than two days, so subtracting a day does not cross an earlier
+            // one.
             let probe = midnight.checked_sub_signed(Duration::days(1))?;
             let offset_before = tz.offset_from_utc_datetime(&probe).fix();
             let transition = midnight.checked_sub_offset(offset_before)?;
