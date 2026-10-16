@@ -479,6 +479,19 @@ impl MergeIntoOp {
     }
 }
 
+impl Display for MergeIntoOp {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "on=[{}] clauses=[", self.on)?;
+        for (i, clause) in self.clauses.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{clause}")?;
+        }
+        write!(f, "]")
+    }
+}
+
 /// A single WHEN clause within a MERGE INTO statement.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct MergeIntoClause {
@@ -488,6 +501,16 @@ pub struct MergeIntoClause {
     pub predicate: Option<Expr>,
     /// The action to take.
     pub action: MergeIntoAction,
+}
+
+impl Display for MergeIntoClause {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "WHEN {}", self.kind)?;
+        if let Some(predicate) = &self.predicate {
+            write!(f, " AND {predicate}")?;
+        }
+        write!(f, " THEN {}", self.action)
+    }
 }
 
 /// Which rows a MERGE WHEN clause applies to.
@@ -514,6 +537,17 @@ pub enum MergeIntoClauseKind {
     NotMatchedByTarget,
     /// `WHEN NOT MATCHED BY SOURCE`
     NotMatchedBySource,
+}
+
+impl Display for MergeIntoClauseKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Matched => write!(f, "MATCHED"),
+            Self::NotMatched => write!(f, "NOT MATCHED"),
+            Self::NotMatchedByTarget => write!(f, "NOT MATCHED BY TARGET"),
+            Self::NotMatchedBySource => write!(f, "NOT MATCHED BY SOURCE"),
+        }
+    }
 }
 
 impl MergeIntoClauseKind {
@@ -560,6 +594,38 @@ pub enum MergeIntoAction {
     Delete,
 }
 
+impl Display for MergeIntoAction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Update(assignments) => {
+                write!(f, "UPDATE SET ")?;
+                for (i, (column, value)) in assignments.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{column} = {value}")?;
+                }
+                Ok(())
+            }
+            Self::Insert { columns, values } => {
+                write!(f, "INSERT")?;
+                if !columns.is_empty() {
+                    write!(f, " ({})", columns.join(", "))?;
+                }
+                write!(f, " VALUES (")?;
+                for (i, value) in values.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{value}")?;
+                }
+                write!(f, ")")
+            }
+            Self::Delete => write!(f, "DELETE"),
+        }
+    }
+}
+
 fn make_count_schema() -> DFSchemaRef {
     Arc::new(
         Schema::new(vec![Field::new("count", DataType::UInt64, false)])
@@ -589,6 +655,16 @@ mod tests {
         )));
         assert_eq!(op.name(), "MergeInto");
         assert_eq!(format!("{op}"), "MergeInto");
+        let WriteOp::MergeInto(merge_op) = &op else {
+            unreachable!("constructed as MergeInto")
+        };
+        assert_eq!(
+            merge_op.to_string(),
+            "on=[id = source_id] clauses=[WHEN MATCHED AND qty > Int64(0) THEN UPDATE SET qty = source_qty]"
+        );
+
+        let empty = MergeIntoOp::new("target", lit(true), vec![]);
+        assert_eq!(empty.to_string(), "on=[Boolean(true)] clauses=[]");
     }
 
     #[test]

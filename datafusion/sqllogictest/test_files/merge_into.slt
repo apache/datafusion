@@ -64,7 +64,7 @@ when matched then update set val = source.val
 when not matched then insert (id, val) values (source.id, source.val);
 ----
 logical_plan
-01)Dml: op=[MergeInto] table=[target]
+01)Dml: op=[MergeInto] table=[target] on=[target.id = source.id] clauses=[WHEN MATCHED THEN UPDATE SET val = source.val, WHEN NOT MATCHED THEN INSERT (id, val) VALUES (source.id, source.val)]
 02)--TableScan: source projection=[id, val, is_active]
 physical_plan_error
 01)MERGE INTO operation on table 'target'
@@ -77,7 +77,7 @@ explain merge into target using source on target.id = source.id
 when matched then delete;
 ----
 logical_plan
-01)Dml: op=[MergeInto] table=[target]
+01)Dml: op=[MergeInto] table=[target] on=[target.id = source.id] clauses=[WHEN MATCHED THEN DELETE]
 02)--TableScan: source projection=[id, val, is_active]
 physical_plan_error
 01)MERGE INTO operation on table 'target'
@@ -91,7 +91,7 @@ when matched and s.is_active then update set val = s.val
 when not matched by source then delete;
 ----
 logical_plan
-01)Dml: op=[MergeInto] table=[target]
+01)Dml: op=[MergeInto] table=[target] on=[t.id = s.id] clauses=[WHEN MATCHED AND s.is_active THEN UPDATE SET val = s.val, WHEN NOT MATCHED BY SOURCE THEN DELETE]
 02)--SubqueryAlias: s
 03)----TableScan: source projection=[id, val, is_active]
 physical_plan_error
@@ -110,7 +110,7 @@ explain merge into target using source on target.id = source.id
 when not matched by source then delete;
 ----
 logical_plan
-01)Dml: op=[MergeInto] table=[target]
+01)Dml: op=[MergeInto] table=[target] on=[target.id = source.id] clauses=[WHEN NOT MATCHED BY SOURCE THEN DELETE]
 02)--TableScan: source projection=[id, val, is_active]
 physical_plan_error
 01)MERGE INTO operation on table 'target'
@@ -124,7 +124,7 @@ on target.id = s.id
 when matched then update set val = s.val;
 ----
 logical_plan
-01)Dml: op=[MergeInto] table=[target]
+01)Dml: op=[MergeInto] table=[target] on=[target.id = s.id] clauses=[WHEN MATCHED THEN UPDATE SET val = s.val]
 02)--SubqueryAlias: s
 03)----Projection: source.id, max(source.val) AS val
 04)------Aggregate: groupBy=[[source.id]], aggr=[[max(source.val)]]
@@ -140,7 +140,7 @@ explain merge into target using source on target.id = source.id
 when not matched then insert values (source.id, source.val, 0);
 ----
 logical_plan
-01)Dml: op=[MergeInto] table=[target]
+01)Dml: op=[MergeInto] table=[target] on=[target.id = source.id] clauses=[WHEN NOT MATCHED THEN INSERT VALUES (source.id, source.val, Int32(0) AS Int64(0))]
 02)--TableScan: source projection=[id, val, is_active]
 physical_plan_error
 01)MERGE INTO operation on table 'target'
