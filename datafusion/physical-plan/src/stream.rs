@@ -96,6 +96,27 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
         self.join_set.spawn_on(task, handle);
     }
 
+    /// Like [`Self::spawn`], but dropping the builder or stream also drops the
+    /// task's future right away when no worker is polling it, with the
+    /// destructor contract of
+    /// [`SpawnedTask::spawn_reclaimable`](datafusion_common_runtime::SpawnedTask::spawn_reclaimable)
+    pub fn spawn_reclaimable<F>(&mut self, task: F)
+    where
+        F: Future<Output = Result<()>>,
+        F: Send + 'static,
+    {
+        self.join_set.spawn_reclaimable(task);
+    }
+
+    /// Same as [`Self::spawn_reclaimable`] but it spawns the task on the provided runtime
+    pub fn spawn_reclaimable_on<F>(&mut self, task: F, handle: &Handle)
+    where
+        F: Future<Output = Result<()>>,
+        F: Send + 'static,
+    {
+        self.join_set.spawn_reclaimable_on(task, handle);
+    }
+
     /// Spawn a blocking task that will be aborted if this builder (or the stream
     /// built from it) are dropped.
     ///
@@ -278,6 +299,27 @@ impl RecordBatchReceiverStreamBuilder {
         self.inner.spawn_on(task, handle)
     }
 
+    /// Like [`Self::spawn`], but dropping the builder or stream also drops the
+    /// task's future right away when no worker is polling it, with the
+    /// destructor contract of
+    /// [`SpawnedTask::spawn_reclaimable`](datafusion_common_runtime::SpawnedTask::spawn_reclaimable)
+    pub fn spawn_reclaimable<F>(&mut self, task: F)
+    where
+        F: Future<Output = Result<()>>,
+        F: Send + 'static,
+    {
+        self.inner.spawn_reclaimable(task)
+    }
+
+    /// Same as [`Self::spawn_reclaimable`] but it spawns the task on the provided runtime.
+    pub fn spawn_reclaimable_on<F>(&mut self, task: F, handle: &Handle)
+    where
+        F: Future<Output = Result<()>>,
+        F: Send + 'static,
+    {
+        self.inner.spawn_reclaimable_on(task, handle)
+    }
+
     /// Spawn a blocking task tied to the builder and stream.
     ///
     /// # Drop / Cancel Behavior
@@ -332,7 +374,7 @@ impl RecordBatchReceiverStreamBuilder {
             String::new()
         };
 
-        self.inner.spawn(async move {
+        self.inner.spawn_reclaimable(async move {
             let mut stream = match input.execute(partition, context) {
                 Err(e) => {
                     // If send fails, the plan being torn down, there
