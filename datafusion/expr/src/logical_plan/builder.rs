@@ -24,7 +24,10 @@ use std::iter::once;
 use std::sync::Arc;
 
 use crate::dml::CopyTo;
-use crate::expr::{Alias, PlannedReplaceSelectItem, Sort as SortExpr};
+use crate::expr::{
+    AggregateFunction, Alias, Cast, PlannedReplaceSelectItem, ScalarFunction,
+    Sort as SortExpr,
+};
 use crate::expr_rewriter::{
     ColumnNormalizer, coerce_plan_expr_for_schema, normalize_col,
     normalize_col_with_schemas_and_ambiguity_check, normalize_cols, normalize_sorts,
@@ -38,15 +41,15 @@ use crate::logical_plan::{
 };
 use crate::select_expr::SelectExpr;
 use crate::utils::{
-    Columnizer, can_hash, check_all_columns_from_schema, compare_sort_expr,
-    expand_qualified_wildcard, expand_wildcard, expr_to_columns,
+    COUNT_STAR_EXPANSION, Columnizer, can_hash, check_all_columns_from_schema,
+    compare_sort_expr, expand_qualified_wildcard, expand_wildcard, expr_to_columns,
     find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
     passthrough_field_index, split_conjunction_owned,
 };
 use crate::{
-    BinaryExpr, DmlStatement, ExplainOption, Expr, ExprSchemable, Operator,
-    RecursiveQuery, Statement, TableProviderFilterPushDown, TableScan, TableSource,
-    WriteOp, and, binary_expr, lit,
+    AggregateUDF, BinaryExpr, DmlStatement, ExplainOption, Expr, ExprSchemable, Operator,
+    RecursiveQuery, ScalarUDF, Statement, TableProviderFilterPushDown, TableScan,
+    TableSource, WriteOp, and, binary_expr, lit, when,
 };
 
 use super::dml::InsertOp;
@@ -61,7 +64,9 @@ use datafusion_common::{
     get_target_functional_dependencies, internal_datafusion_err, plan_datafusion_err,
     plan_err,
 };
-use datafusion_expr_common::type_coercion::binary::type_union_resolution;
+use datafusion_expr_common::type_coercion::binary::{
+    comparison_coercion_with_session_timezone, type_union_resolution,
+};
 
 use indexmap::IndexSet;
 
@@ -1470,6 +1475,11 @@ impl LogicalPlanBuilder {
     }
 
     /// Process intersect set operator
+    ///
+    /// With `is_all = true` this builds a left semi join, which keeps every
+    /// matching left row and so does not preserve row multiplicities: a row
+    /// appearing twice on the left and once on the right is returned twice.
+    /// Use [`Self::intersect_all`] for `INTERSECT ALL` semantics.
     pub fn intersect(
         left_plan: LogicalPlan,
         right_plan: LogicalPlan,
@@ -1484,6 +1494,11 @@ impl LogicalPlanBuilder {
     }
 
     /// Process except set operator
+    ///
+    /// With `is_all = true` this builds a left anti join, which removes every
+    /// left row that has any match and so does not preserve row
+    /// multiplicities: a row appearing twice on the left and once on the right
+    /// is removed entirely. Use [`Self::except_all`] for `EXCEPT ALL` semantics.
     pub fn except(
         left_plan: LogicalPlan,
         right_plan: LogicalPlan,
@@ -1495,6 +1510,197 @@ impl LogicalPlanBuilder {
             JoinType::LeftAnti,
             is_all,
         )
+    }
+
+    /// Build an `INTERSECT ALL` plan, preserving the multiplicity of each row.
+    ///
+    /// Each distinct row is returned `min(m, n)` times, where `m` and `n` are
+    /// its counts on the left and right. `count` must be the `count` aggregate
+    /// function and `range` the `range` scalar function: rows are counted on
+    /// each side and then expanded back with `unnest(range(..))`.
+    ///
+    /// Rows are compared in the same type that `=` compares them in. If the
+    /// type of a column differs between the inputs, both are cast to that type
+    /// before the rows are counted, and the result has that type instead of the
+    /// type of the left input. Values that are equal after the cast, such as the
+    /// strings `'1'` and `'01'` and the integer `1`, count as the same row.
+    pub fn intersect_all(
+        left_plan: LogicalPlan,
+        right_plan: LogicalPlan,
+        count: &Arc<AggregateUDF>,
+        range: &Arc<ScalarUDF>,
+    ) -> Result<LogicalPlan> {
+        Self::multiset_set_operation(left_plan, right_plan, count, range, JoinType::Inner)
+    }
+
+    /// Build an `EXCEPT ALL` plan, subtracting matching row multiplicities.
+    ///
+    /// Each distinct row is returned `m - n` times when `m > n`. `count` and
+    /// `range` are as for [`Self::intersect_all`], and so is the handling of
+    /// inputs whose column types differ.
+    pub fn except_all(
+        left_plan: LogicalPlan,
+        right_plan: LogicalPlan,
+        count: &Arc<AggregateUDF>,
+        range: &Arc<ScalarUDF>,
+    ) -> Result<LogicalPlan> {
+        Self::multiset_set_operation(left_plan, right_plan, count, range, JoinType::Left)
+    }
+
+    fn multiset_set_operation(
+        left_plan: LogicalPlan,
+        right_plan: LogicalPlan,
+        count: &Arc<AggregateUDF>,
+        range: &Arc<ScalarUDF>,
+        join_type: JoinType,
+    ) -> Result<LogicalPlan> {
+        let left_len = left_plan.schema().fields().len();
+        let right_len = right_plan.schema().fields().len();
+        if left_len != right_len {
+            return plan_err!(
+                "INTERSECT/EXCEPT query must have the same number of columns. Left is {left_len} and right is {right_len}."
+            );
+        }
+        let from_right = left_plan
+            .schema()
+            .fields()
+            .iter()
+            .zip(right_plan.schema().fields())
+            .map(|(left, right)| {
+                join_type == JoinType::Inner
+                    && left.is_nullable()
+                    && !right.is_nullable()
+                    && left.data_type() == right.data_type()
+            })
+            .collect::<Vec<_>>();
+        // The join below compares the grouped rows with `=`, which casts a
+        // mismatched pair of columns to a common type. Two distinct groups of
+        // one side can be equal in that type, and their counts would then be
+        // matched one by one instead of added. Cast first, so that the rows
+        // are grouped in the type they are compared in.
+        let (left_plan, right_plan) = coerce_set_operation_inputs(left_plan, right_plan)?;
+        let left_columns = left_plan.schema().columns();
+        let right_columns = right_plan.schema().columns();
+        // The synthetic columns get names that differ from each other and from
+        // every input column, so the sides are only requalified when the
+        // user's own columns conflict.
+        let mut base = "__datafusion_set_operation".to_string();
+        let name_in_use = |name: &str| {
+            [left_plan.schema(), right_plan.schema()]
+                .iter()
+                .any(|schema| schema.fields().iter().any(|field| field.name() == name))
+        };
+        let suffixes = ["_left_count", "_right_count", "_copies"];
+        while suffixes
+            .iter()
+            .any(|suffix| name_in_use(&format!("{base}{suffix}")))
+        {
+            base.push('_');
+        }
+        let [left_count, right_count, copies] =
+            suffixes.map(|suffix| format!("{base}{suffix}"));
+        // Count each distinct row on both sides. Grouping treats NULLs, and
+        // 0.0 and -0.0, as equal, like the rest of the set operations.
+        let count_rows = |plan: LogicalPlan, columns: &[Column], name: &str| {
+            let count_star = Expr::AggregateFunction(AggregateFunction::new_udf(
+                Arc::clone(count),
+                vec![lit(COUNT_STAR_EXPANSION)],
+                false,
+                None,
+                vec![],
+                None,
+            ));
+            LogicalPlanBuilder::from(plan)
+                .aggregate(
+                    columns.iter().cloned().map(Expr::Column),
+                    vec![count_star.alias(name)],
+                )?
+                .build()
+        };
+        let left_plan = count_rows(left_plan, &left_columns, &left_count)?;
+        let right_plan = count_rows(right_plan, &right_columns, &right_count)?;
+        let (left_builder, right_builder, requalified) = requalify_sides_if_needed(
+            LogicalPlanBuilder::from(left_plan),
+            LogicalPlanBuilder::from(right_plan),
+        )?;
+        let left_plan = left_builder.build()?;
+        let right_plan = right_builder.build()?;
+        // Requalifying can also rename columns (`x` becomes `x:1` when two
+        // relations on one side both have an `x`), so read the join keys from
+        // the schemas the join actually sees.
+        let mut left_join_columns = left_plan.schema().columns();
+        let mut right_join_columns = right_plan.schema().columns();
+        let left_count = Expr::Column(left_join_columns.pop().unwrap());
+        let right_count = Expr::Column(right_join_columns.pop().unwrap());
+        let join_keys = left_join_columns
+            .iter()
+            .cloned()
+            .zip(right_join_columns.iter().cloned())
+            .collect();
+        // The output keeps the left input's qualifiers and names, so a query
+        // can keep referring to them after the set operation.
+        let mut projection = left_columns
+            .iter()
+            .cloned()
+            .zip(left_join_columns)
+            .zip(right_join_columns)
+            .zip(from_right)
+            .zip(left_plan.schema().fields())
+            .map(
+                |((((column, left_column), right_column), from_right), field)| {
+                    let expr = if from_right {
+                        let target_field = Arc::new(
+                            Field::new(&column.name, field.data_type().clone(), false)
+                                .with_metadata(field.metadata().clone()),
+                        );
+                        Expr::Cast(Cast::new_from_field(
+                            Box::new(Expr::Column(right_column)),
+                            target_field,
+                        ))
+                    } else if requalified {
+                        Expr::Column(left_column)
+                    } else {
+                        return Expr::Column(column);
+                    };
+                    expr.alias_qualified(column.relation, column.name)
+                },
+            )
+            .collect::<Vec<_>>();
+        let joined = LogicalPlanBuilder::from(left_plan).join_detailed(
+            right_plan,
+            join_type,
+            join_keys,
+            None,
+            NullEquality::NullEqualsNull,
+        )?;
+        let (joined, repeat) = if join_type == JoinType::Inner {
+            let repeat = when(left_count.clone().lt(right_count.clone()), left_count)
+                .otherwise(right_count)?;
+            (joined, repeat)
+        } else {
+            let unmatched = right_count.clone().is_null();
+            let joined = joined.filter(
+                unmatched
+                    .clone()
+                    .or(left_count.clone().gt(right_count.clone())),
+            )?;
+            let repeat = when(unmatched, left_count.clone())
+                .otherwise(left_count - right_count)?;
+            (joined, repeat)
+        };
+        // Emit each distinct row `repeat` times.
+        projection.push(
+            Expr::ScalarFunction(ScalarFunction::new_udf(
+                Arc::clone(range),
+                vec![repeat],
+            ))
+            .alias(&copies),
+        );
+        joined
+            .project(projection)?
+            .unnest_column(Column::from_name(copies))?
+            .project(left_columns.into_iter().map(Expr::Column))?
+            .build()
     }
 
     /// Process intersect or except
@@ -1895,6 +2101,75 @@ pub fn build_asof_join_schema(left: &DFSchema, right: &DFSchema) -> Result<DFSch
     dependencies.extend_target_indices(schema.fields().len());
     dependencies.extend(FunctionalDependencies::new(right_dependencies));
     schema.with_functional_dependencies(dependencies)
+}
+
+/// Cast the columns of the two inputs of an `INTERSECT ALL` or `EXCEPT ALL`
+/// whose types differ to the type `=` compares them in.
+///
+/// A column is left as it is when its type is the same on both sides, when the
+/// two types cannot be compared (the join reports that), and when the type
+/// depends on the session time zone, which is not known here: a timestamp
+/// with a time zone against one without is compared in the session time zone.
+fn coerce_set_operation_inputs(
+    left_plan: LogicalPlan,
+    right_plan: LogicalPlan,
+) -> Result<(LogicalPlan, LogicalPlan)> {
+    let common_types = left_plan
+        .schema()
+        .fields()
+        .iter()
+        .zip(right_plan.schema().fields())
+        .map(|(left, right)| common_comparison_type(left.data_type(), right.data_type()))
+        .collect::<Vec<_>>();
+    Ok((
+        cast_columns(left_plan, &common_types)?,
+        cast_columns(right_plan, &common_types)?,
+    ))
+}
+
+/// The type that `=` compares values of the two types in, unless it depends
+/// on the session time zone.
+fn common_comparison_type(left: &DataType, right: &DataType) -> Option<DataType> {
+    let common_type = |session_time_zone| {
+        comparison_coercion_with_session_timezone(left, right, session_time_zone)
+    };
+    let without_time_zone = common_type(None)?;
+    // Any answer that changes with the session time zone is up to the type
+    // coercion of the join, which knows it.
+    ["+00:00", "+01:00"]
+        .into_iter()
+        .all(|time_zone| {
+            common_type(Some(time_zone)).as_ref() == Some(&without_time_zone)
+        })
+        .then_some(without_time_zone)
+}
+
+/// Cast each column of `plan` to the type at the same position in `types`
+/// when there is one and it is not the column's own, keeping the qualifier and
+/// name of the column. A plan that needs no cast is returned as it is.
+fn cast_columns(plan: LogicalPlan, types: &[Option<DataType>]) -> Result<LogicalPlan> {
+    let mut cast_any = false;
+    let exprs = plan
+        .schema()
+        .iter()
+        .zip(types)
+        .map(|((relation, field), common_type)| {
+            let column = Column::from((relation, field));
+            match common_type {
+                Some(common_type) if !common_type.equals_datatype(field.data_type()) => {
+                    cast_any = true;
+                    Ok(Expr::Column(column.clone())
+                        .cast_to(common_type, plan.schema())?
+                        .alias_qualified(column.relation, column.name))
+                }
+                _ => Ok(Expr::Column(column)),
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if !cast_any {
+        return Ok(plan);
+    }
+    LogicalPlanBuilder::from(plan).project(exprs)?.build()
 }
 
 /// (Re)qualify the sides of a join if needed, i.e. if the columns from one side would otherwise
@@ -2459,6 +2734,7 @@ mod tests {
     use crate::{col, expr, expr_fn::exists, in_subquery, scalar_subquery};
 
     use crate::test::function_stub::sum;
+    use arrow::datatypes::TimeUnit;
     use datafusion_common::{
         Constraint, DataFusionError, Dependency, FunctionalDependence,
         FunctionalDependencies, RecursionUnnestOption, SchemaError,
@@ -3372,5 +3648,87 @@ mod tests {
             "Execution error: Types don't match and no valid cast exists, \
          received data of type Boolean for field of type Date32"
         );
+    }
+
+    /// The plan for `INTERSECT ALL` of a column of type `left` and a column of
+    /// type `right`. The `count` and `range` functions are stand-ins, since the
+    /// plan is only built and never run.
+    fn intersect_all_of(left: DataType, right: DataType) -> Result<LogicalPlan> {
+        let scan = |name: &str, data_type: DataType| {
+            let schema = Schema::new(vec![Field::new("a", data_type, true)]);
+            table_scan(Some(name), &schema, None)?.build()
+        };
+        let range = Arc::new(crate::create_udf(
+            "range",
+            vec![DataType::Int64],
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true))),
+            crate::Volatility::Immutable,
+            Arc::new(|_| unimplemented!("the plan is not run")),
+        ));
+        LogicalPlanBuilder::intersect_all(
+            scan("l", left)?,
+            scan("r", right)?,
+            &crate::test::function_stub::count_udaf(),
+            &range,
+        )
+    }
+
+    #[test]
+    fn intersect_all_does_not_cast_columns_of_the_same_type() -> Result<()> {
+        let plan = intersect_all_of(DataType::Int64, DataType::Int64)?;
+
+        assert_snapshot!(plan, @r"
+        Projection: l.a
+          Unnest: lists[__datafusion_set_operation_copies|depth=1] structs[]
+            Projection: l.a, range(CASE WHEN __datafusion_set_operation_left_count < __datafusion_set_operation_right_count THEN __datafusion_set_operation_left_count ELSE __datafusion_set_operation_right_count END) AS __datafusion_set_operation_copies
+              Inner Join: l.a = r.a
+                Aggregate: groupBy=[[l.a]], aggr=[[COUNT(Int64(1)) AS __datafusion_set_operation_left_count]]
+                  TableScan: l
+                Aggregate: groupBy=[[r.a]], aggr=[[COUNT(Int64(1)) AS __datafusion_set_operation_right_count]]
+                  TableScan: r
+        ");
+        Ok(())
+    }
+
+    #[test]
+    fn intersect_all_casts_columns_of_different_types_before_counting_rows() -> Result<()>
+    {
+        let plan = intersect_all_of(DataType::Utf8, DataType::Int64)?;
+
+        assert_snapshot!(plan, @r"
+        Projection: l.a
+          Unnest: lists[__datafusion_set_operation_copies|depth=1] structs[]
+            Projection: l.a, range(CASE WHEN __datafusion_set_operation_left_count < __datafusion_set_operation_right_count THEN __datafusion_set_operation_left_count ELSE __datafusion_set_operation_right_count END) AS __datafusion_set_operation_copies
+              Inner Join: l.a = r.a
+                Aggregate: groupBy=[[l.a]], aggr=[[COUNT(Int64(1)) AS __datafusion_set_operation_left_count]]
+                  Projection: CAST(l.a AS Int64) AS a
+                    TableScan: l
+                Aggregate: groupBy=[[r.a]], aggr=[[COUNT(Int64(1)) AS __datafusion_set_operation_right_count]]
+                  TableScan: r
+        ");
+        Ok(())
+    }
+
+    #[test]
+    fn intersect_all_leaves_session_time_zone_comparisons_to_type_coercion() -> Result<()>
+    {
+        // A timestamp without a time zone is compared with one that has a
+        // time zone in the session time zone, which is not known here.
+        let plan = intersect_all_of(
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+        )?;
+
+        assert_snapshot!(plan, @r"
+        Projection: l.a
+          Unnest: lists[__datafusion_set_operation_copies|depth=1] structs[]
+            Projection: l.a, range(CASE WHEN __datafusion_set_operation_left_count < __datafusion_set_operation_right_count THEN __datafusion_set_operation_left_count ELSE __datafusion_set_operation_right_count END) AS __datafusion_set_operation_copies
+              Inner Join: l.a = r.a
+                Aggregate: groupBy=[[l.a]], aggr=[[COUNT(Int64(1)) AS __datafusion_set_operation_left_count]]
+                  TableScan: l
+                Aggregate: groupBy=[[r.a]], aggr=[[COUNT(Int64(1)) AS __datafusion_set_operation_right_count]]
+                  TableScan: r
+        ");
+        Ok(())
     }
 }

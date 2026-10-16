@@ -33,7 +33,7 @@ use arrow::datatypes::{
 use arrow::error::ArrowError;
 use arrow::util::pretty::pretty_format_batches;
 use arrow_schema::{SortOptions, TimeUnit};
-use datafusion::{assert_batches_eq, dataframe};
+use datafusion::{assert_batches_eq, assert_batches_sorted_eq, dataframe};
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_functions_aggregate::count::{count_all, count_all_window};
 use datafusion_functions_aggregate::expr_fn::{
@@ -1846,31 +1846,90 @@ async fn sendable() {
 
 #[tokio::test]
 async fn intersect() -> Result<()> {
-    let df = test_table().await?.select_columns(&["c1", "c3"])?;
-    let d2 = df.clone();
-    let plan = df.intersect(d2)?;
-    let result = plan.logical_plan().clone();
-    let expected = create_plan(
-        "SELECT c1, c3 FROM aggregate_test_100
-            INTERSECT ALL SELECT c1, c3 FROM aggregate_test_100",
-    )
-    .await?;
-    assert_same_plan(&result, &expected);
+    let ctx = SessionContext::new();
+    let left = ctx
+        .sql(
+            "SELECT * FROM VALUES (NULL, 'n'), (NULL, 'n'), (1, 'x'), (1, 'x'), (2, 'y')",
+        )
+        .await?;
+    let right = ctx
+        .sql("SELECT * FROM VALUES (NULL, 'n'), (1, 'x'), (1, 'x'), (1, 'x'), (3, 'z')")
+        .await?;
+    let result = left.intersect(right)?.collect().await?;
+    assert_batches_sorted_eq!(
+        [
+            "+---------+---------+",
+            "| column1 | column2 |",
+            "+---------+---------+",
+            "|         | n       |",
+            "| 1       | x       |",
+            "| 1       | x       |",
+            "+---------+---------+",
+        ],
+        &result
+    );
     Ok(())
 }
 
 #[tokio::test]
 async fn except() -> Result<()> {
-    let df = test_table().await?.select_columns(&["c1", "c3"])?;
-    let d2 = df.clone();
-    let plan = df.except(d2)?;
-    let result = plan.logical_plan().clone();
-    let expected = create_plan(
-        "SELECT c1, c3 FROM aggregate_test_100
-            EXCEPT ALL SELECT c1, c3 FROM aggregate_test_100",
-    )
-    .await?;
-    assert_same_plan(&result, &expected);
+    let ctx = SessionContext::new();
+    let left = ctx
+        .sql(
+            "SELECT * FROM VALUES (NULL, 'n'), (NULL, 'n'), (1, 'x'), (1, 'x'), (2, 'y')",
+        )
+        .await?;
+    let right = ctx
+        .sql("SELECT * FROM VALUES (NULL, 'n'), (1, 'x'), (1, 'x'), (1, 'x'), (3, 'z')")
+        .await?;
+    let result = left.except(right)?.collect().await?;
+    assert_batches_sorted_eq!(
+        [
+            "+---------+---------+",
+            "| column1 | column2 |",
+            "+---------+---------+",
+            "|         | n       |",
+            "| 2       | y       |",
+            "+---------+---------+",
+        ],
+        &result
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn intersect_and_except_count_rows_in_the_type_they_are_compared_in() -> Result<()>
+{
+    // '1' and '01' are both the integer 1, so the strings are two copies of the
+    // row that the integers repeat twice, and the result is an integer column.
+    let ctx = SessionContext::new();
+    let integers = ctx.sql("SELECT * FROM VALUES (1), (1)").await?;
+    let strings = ctx.sql("SELECT * FROM VALUES ('1'), ('01')").await?;
+
+    let result = integers.clone().except(strings.clone())?.collect().await?;
+    assert_eq!(
+        result.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+        0
+    );
+    let result = strings.clone().except(integers.clone())?.collect().await?;
+    assert_eq!(
+        result.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+        0
+    );
+
+    let intersection = integers.intersect(strings)?;
+    assert_eq!(intersection.schema().field(0).data_type(), &DataType::Int64);
+    assert_batches_sorted_eq!(
+        [
+            "+---------+",
+            "| column1 |",
+            "+---------+",
+            "| 1       |",
+            "| 1       |",
+            "+---------+",
+        ],
+        &intersection.collect().await?
+    );
     Ok(())
 }
 

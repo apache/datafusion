@@ -42,3 +42,330 @@ query IR
 SELECT int_col, double_col FROM alltypes_plain where int_col > 0 INTERSECT SELECT int_col, double_col FROM alltypes_plain
 ----
 1 10.1
+
+# INTERSECT ALL keeps min(m, n) copies of each row and EXCEPT ALL keeps
+# max(m - n, 0), with NULLs compared as equal.
+statement ok
+CREATE TABLE set_all_left(v INT) AS VALUES (NULL), (NULL), (NULL), (1), (1), (2);
+
+statement ok
+CREATE TABLE set_all_right(v INT) AS VALUES (NULL), (NULL), (1), (1), (1), (3);
+
+query I rowsort
+SELECT v FROM set_all_left INTERSECT ALL SELECT v FROM set_all_right
+----
+1
+1
+NULL
+NULL
+
+query I rowsort
+SELECT v FROM set_all_left EXCEPT ALL SELECT v FROM set_all_right
+----
+2
+NULL
+
+query I rowsort
+SELECT v FROM set_all_right EXCEPT ALL SELECT v FROM set_all_left
+----
+1
+3
+
+# Rows that are NULL in only some columns
+statement ok
+CREATE TABLE set_all_pairs_left(a INT, b INT) AS VALUES
+  (1, NULL), (1, NULL), (NULL, 1), (1, 1), (NULL, NULL);
+
+statement ok
+CREATE TABLE set_all_pairs_right(a INT, b INT) AS VALUES
+  (1, NULL), (NULL, 1), (NULL, 1), (NULL, NULL), (NULL, NULL);
+
+query II rowsort
+SELECT a, b FROM set_all_pairs_left INTERSECT ALL SELECT a, b FROM set_all_pairs_right
+----
+1 NULL
+NULL 1
+NULL NULL
+
+query II rowsort
+SELECT a, b FROM set_all_pairs_left EXCEPT ALL SELECT a, b FROM set_all_pairs_right
+----
+1 1
+1 NULL
+
+# INTERSECT binds tighter than EXCEPT
+statement ok
+CREATE TABLE set_all_a(v INT) AS VALUES (1), (1), (1), (2), (2), (3);
+
+statement ok
+CREATE TABLE set_all_b(v INT) AS VALUES (1), (1), (2), (2), (2);
+
+statement ok
+CREATE TABLE set_all_c(v INT) AS VALUES (1), (2), (2), (2), (4);
+
+query I rowsort
+SELECT v FROM set_all_a EXCEPT ALL SELECT v FROM set_all_b INTERSECT ALL SELECT v FROM set_all_c
+----
+1
+1
+3
+
+query I rowsort
+(SELECT v FROM set_all_a EXCEPT ALL SELECT v FROM set_all_b) INTERSECT ALL SELECT v FROM set_all_c
+----
+1
+
+# The output keeps the left input's qualifiers
+statement ok
+CREATE TABLE set_all_t(x INT) AS VALUES (1), (1), (2);
+
+statement ok
+CREATE TABLE set_all_u(x INT) AS VALUES (1), (3);
+
+query I
+SELECT set_all_t.x FROM set_all_t INTERSECT ALL SELECT set_all_u.x FROM set_all_u ORDER BY set_all_t.x
+----
+1
+
+query I
+SELECT set_all_t.x FROM set_all_t EXCEPT ALL SELECT set_all_u.x FROM set_all_u ORDER BY set_all_t.x
+----
+1
+2
+
+# Both sides read the same table, so the planner has to requalify them internally
+query I
+SELECT set_all_t.x FROM set_all_t INTERSECT ALL SELECT set_all_t.x FROM set_all_t ORDER BY set_all_t.x
+----
+1
+1
+2
+
+# Columns with the same name from different relations on one side
+query II
+SELECT t1.x, t2.x FROM (VALUES (1)) t1(x) CROSS JOIN (VALUES (2)) t2(x)
+INTERSECT ALL
+SELECT t1.x, t2.x FROM (VALUES (1)) t1(x) CROSS JOIN (VALUES (2)) t2(x)
+----
+1 2
+
+query II
+SELECT t1.x, t2.x FROM (VALUES (1), (1)) t1(x) CROSS JOIN (VALUES (2)) t2(x)
+EXCEPT ALL
+SELECT t1.x, t2.x FROM (VALUES (1)) t1(x) CROSS JOIN (VALUES (2)) t2(x)
+----
+1 2
+
+query II
+SELECT t1.x, t2.x FROM (VALUES (1)) t1(x) CROSS JOIN (VALUES (2)) t2(x)
+INTERSECT ALL
+SELECT t3.x, t4.x FROM (VALUES (1)) t3(x) CROSS JOIN (VALUES (2)) t4(x)
+----
+1 2
+
+# An empty input, written as an empty table or as a filter that removes every row
+statement ok
+CREATE TABLE set_all_empty(v INT);
+
+# Empty left input
+query I
+SELECT v FROM set_all_empty INTERSECT ALL SELECT v FROM set_all_left
+----
+
+query I
+SELECT v FROM set_all_empty EXCEPT ALL SELECT v FROM set_all_left
+----
+
+query I
+SELECT v FROM set_all_left WHERE false INTERSECT ALL SELECT v FROM set_all_left
+----
+
+query I
+SELECT v FROM set_all_left WHERE false EXCEPT ALL SELECT v FROM set_all_left
+----
+
+# Empty right input: nothing intersects, and EXCEPT ALL keeps every left row,
+# duplicates and NULLs included
+query I
+SELECT v FROM set_all_left INTERSECT ALL SELECT v FROM set_all_empty
+----
+
+query I rowsort
+SELECT v FROM set_all_left EXCEPT ALL SELECT v FROM set_all_empty
+----
+1
+1
+2
+NULL
+NULL
+NULL
+
+query I
+SELECT v FROM set_all_left INTERSECT ALL SELECT v FROM set_all_left WHERE false
+----
+
+query I rowsort
+SELECT v FROM set_all_left EXCEPT ALL SELECT v FROM set_all_left WHERE false
+----
+1
+1
+2
+NULL
+NULL
+NULL
+
+# Both inputs empty
+query I
+SELECT v FROM set_all_empty INTERSECT ALL SELECT v FROM set_all_empty
+----
+
+query I
+SELECT v FROM set_all_empty EXCEPT ALL SELECT v FROM set_all_empty
+----
+
+query I
+SELECT v FROM set_all_left WHERE false INTERSECT ALL SELECT v FROM set_all_left WHERE false
+----
+
+query I
+SELECT v FROM set_all_left WHERE false EXCEPT ALL SELECT v FROM set_all_left WHERE false
+----
+
+# Inputs of different types are compared in the type `=` compares them in, so
+# values that only become equal after the cast are counted together: '1' and
+# '01' are both the integer 1.
+query I
+SELECT a FROM (VALUES (1), (1)) AS t(a) EXCEPT ALL SELECT a FROM (VALUES ('1'), ('01')) AS s(a)
+----
+
+query I
+SELECT a FROM (VALUES (1)) AS t(a) INTERSECT ALL SELECT a FROM (VALUES ('1'), ('01')) AS s(a)
+----
+1
+
+query I
+SELECT a FROM (VALUES ('1'), ('01')) AS t(a) EXCEPT ALL SELECT a FROM (VALUES (1)) AS s(a)
+----
+1
+
+query I
+SELECT a FROM (VALUES ('1'), ('01')) AS t(a) INTERSECT ALL SELECT a FROM (VALUES (1)) AS s(a)
+----
+1
+
+# The same holds when the cast merges more than two spellings, for NULLs, and
+# for a mixed column that is not the first one
+query I rowsort
+SELECT a FROM (VALUES ('1'), ('01'), ('001'), (NULL), (NULL)) AS t(a)
+EXCEPT ALL
+SELECT a FROM (VALUES (1), (NULL)) AS s(a)
+----
+1
+1
+NULL
+
+query IT rowsort
+SELECT a, b FROM (VALUES (1, 'x'), (1, 'x'), (2, 'y')) AS t(a, b)
+INTERSECT ALL
+SELECT a, b FROM (VALUES ('1', 'x'), ('01', 'x'), ('1', 'x'), ('2', 'z')) AS s(a, b)
+----
+1 x
+1 x
+
+query TI rowsort
+SELECT b, a FROM (VALUES (1, 'x'), (1, 'x'), (2, 'y')) AS t(a, b)
+EXCEPT ALL
+SELECT b, a FROM (VALUES ('1', 'x'), ('01', 'x'), ('2', 'z')) AS s(a, b)
+----
+y 2
+
+# Numbers that are distinct as integers but equal as floats
+query R
+SELECT a FROM (VALUES (9007199254740992), (9007199254740993)) AS t(a)
+EXCEPT ALL
+SELECT a FROM (VALUES (9007199254740992.0)) AS s(a)
+----
+9007199254740992
+
+query R
+SELECT a FROM (VALUES (9007199254740992.0), (9007199254740992.0)) AS t(a)
+EXCEPT ALL
+SELECT a FROM (VALUES (9007199254740992), (9007199254740993)) AS s(a)
+----
+
+# The result has the type the two sides are compared in, whichever side that
+# came from, and equal types are left alone
+query T
+SELECT DISTINCT arrow_typeof(a) FROM (
+  SELECT a FROM (VALUES ('1'), ('01'), ('2')) AS t(a) EXCEPT ALL SELECT a FROM (VALUES (2)) AS s(a)
+) AS r
+----
+Int64
+
+query T
+SELECT DISTINCT arrow_typeof(a) FROM (
+  SELECT a FROM (VALUES (1), (1), (2)) AS t(a) INTERSECT ALL SELECT a FROM (VALUES (1.0), (1.0)) AS s(a)
+) AS r
+----
+Float64
+
+query T
+SELECT DISTINCT arrow_typeof(a) FROM (
+  SELECT arrow_cast(a, 'Int32') AS a FROM (VALUES (1), (1), (2)) AS t(a) EXCEPT ALL SELECT a FROM (VALUES (1)) AS s(a)
+) AS r
+----
+Int64
+
+query T
+SELECT DISTINCT arrow_typeof(a) FROM (
+  SELECT arrow_cast(a, 'Int32') AS a FROM (VALUES (1), (1), (2)) AS t(a) EXCEPT ALL SELECT arrow_cast(a, 'Int32') FROM (VALUES (1)) AS s(a)
+) AS r
+----
+Int32
+
+# The result keeps the left input's qualifiers and names
+query I
+SELECT t.a FROM (VALUES ('1'), ('01'), ('2')) AS t(a)
+EXCEPT ALL
+SELECT s.a FROM (VALUES (1), (3)) AS s(a)
+ORDER BY t.a
+----
+1
+2
+
+query II
+SELECT t1.x, t2.x FROM (VALUES ('1')) t1(x) CROSS JOIN (VALUES (2)) t2(x)
+INTERSECT ALL
+SELECT t3.x, t4.x FROM (VALUES (1)) t3(x) CROSS JOIN (VALUES ('2')) t4(x)
+----
+1 2
+
+statement ok
+DROP TABLE set_all_left;
+
+statement ok
+DROP TABLE set_all_right;
+
+statement ok
+DROP TABLE set_all_empty;
+
+statement ok
+DROP TABLE set_all_pairs_left;
+
+statement ok
+DROP TABLE set_all_pairs_right;
+
+statement ok
+DROP TABLE set_all_a;
+
+statement ok
+DROP TABLE set_all_b;
+
+statement ok
+DROP TABLE set_all_c;
+
+statement ok
+DROP TABLE set_all_t;
+
+statement ok
+DROP TABLE set_all_u;
