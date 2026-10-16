@@ -31,13 +31,15 @@ use datafusion_common::{
 use datafusion_expr::expr::Alias;
 use datafusion_expr::utils::passthrough_field_index;
 use datafusion_expr::{
-    Aggregate, Distinct, EmptyRelation, Expr, Projection, TableScanBuilder, Unnest,
-    Window, logical_plan::LogicalPlan,
+    Aggregate, Distinct, EmptyRelation, Expr, MaterializedCte, MaterializedCteScan,
+    Projection, TableScanBuilder, Unnest, Window, logical_plan::LogicalPlan,
 };
 
 use crate::optimize_projections::required_indices::RequiredIndices;
 use crate::utils::NamePreserver;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeContainer};
+use datafusion_common::tree_node::{
+    Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
+};
 
 /// Optimizer rule to prune unnecessary columns from intermediate schemas
 /// inside the [`LogicalPlan`]. This rule:
@@ -280,6 +282,20 @@ fn optimize_projections(
             return Transformed::yes(LogicalPlan::TableScan(new_scan))
                 .transform_data(|plan| optimize_subqueries(plan, config));
         }
+        LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan)) => {
+            // Read only the necessary columns of the CTE body. The node that
+            // owns the CTE then removes from the body the columns that no
+            // scan reads.
+            let new_scan = scan.with_projection(indices.indices())?;
+            let transformed = new_scan.projection != scan.projection;
+            return Ok(Transformed::new_transformed(
+                LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(new_scan)),
+                transformed,
+            ));
+        }
+        LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
+            return optimize_materialized_cte(cte, config, indices);
+        }
         // Other node types are handled below
         _ => {}
     }
@@ -365,18 +381,8 @@ fn optimize_projections(
                     .collect()
             }
         }
-        LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
-            // The scans are leaves whose schema is the schema of the body, so
-            // the body keeps every column. The output is the output of the
-            // continuation, so the continuation needs what the parent needs.
-            vec![
-                RequiredIndices::new_for_all_exprs(&cte.cte),
-                RequiredIndices::new_from_indices(indices.into_inner()),
-            ]
-        }
         LogicalPlan::EmptyRelation(_)
         | LogicalPlan::Values(_)
-        | LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_))
         | LogicalPlan::DescribeTable(_) => {
             // These operators have no inputs, so stop the optimization process.
             return Ok(Transformed::no(plan));
@@ -441,7 +447,8 @@ fn optimize_projections(
         LogicalPlan::Projection(_)
         | LogicalPlan::Aggregate(_)
         | LogicalPlan::Window(_)
-        | LogicalPlan::TableScan(_) => {
+        | LogicalPlan::TableScan(_)
+        | LogicalPlan::MaterializedCte(_) => {
             return internal_err!(
                 "OptimizeProjection: should have handled in the match statement above"
             );
@@ -507,6 +514,104 @@ fn optimize_projections(
     } else {
         Ok(transformed_plan)
     }
+}
+
+/// Removes unnecessary columns from a [`MaterializedCte`]: from its
+/// continuation, and then from its body.
+///
+/// The columns that the body must keep are not known from the parent of the
+/// node. They are the columns that the scans of the CTE read, and the scans
+/// are leaves of the continuation, of a subquery expression in it, or of the
+/// body of another CTE in it. Thus the continuation is optimized first, which
+/// narrows each scan to the columns that its parent needs. The body is then
+/// projected to the union of the columns of all the scans, and each scan gets
+/// the new positions of its columns. The output schema of a scan does not
+/// change in this second step.
+fn optimize_materialized_cte(
+    cte: MaterializedCte,
+    config: &dyn OptimizerConfig,
+    indices: RequiredIndices,
+) -> Result<Transformed<LogicalPlan>> {
+    let MaterializedCte {
+        id,
+        name,
+        cte: body,
+        continuation,
+    } = cte;
+    // The output is the output of the continuation, so the continuation
+    // needs what the parent needs.
+    let continuation =
+        optimize_projections(Arc::unwrap_or_clone(continuation), config, indices)?;
+    let mut transformed = continuation.transformed;
+    let mut continuation = continuation.data;
+    let mut body = Arc::unwrap_or_clone(body);
+
+    let body_len = body.schema().fields().len();
+    let scans = MaterializedCteScan::find_in(&continuation, id)?;
+    let mut is_read = vec![false; body_len];
+    for scan in &scans {
+        match scan.projection() {
+            None => is_read.fill(true),
+            Some(projection) => {
+                for index in projection {
+                    let Some(is_read) = is_read.get_mut(*index) else {
+                        return internal_err!(
+                            "A scan of the materialized CTE {name} reads the column {index}, but the CTE has {body_len} columns"
+                        );
+                    };
+                    *is_read = true;
+                }
+            }
+        }
+    }
+    // A reference such as `SELECT count(*) FROM c` reads no column. Keep one
+    // column then, so that the body is never a projection without columns.
+    if !is_read.contains(&true)
+        && let Some(first) = is_read.first_mut()
+    {
+        *first = true;
+    }
+    let kept: Vec<usize> = (0..body_len).filter(|index| is_read[*index]).collect();
+    // A CTE that nothing reads is not planned, so its body is left as it is.
+    if !scans.is_empty() && kept.len() < body_len {
+        let exprs = RequiredIndices::new_from_indices(kept.clone())
+            .get_required_exprs(body.schema());
+        body = Projection::try_new(exprs, Arc::new(body)).map(LogicalPlan::Projection)?;
+        continuation = continuation
+            .transform_down_with_subqueries(|node| match node {
+                // A nested occurrence of the same CTE has its own body and
+                // owns the scans below it.
+                LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(ref nested))
+                    if nested.id == id =>
+                {
+                    Ok(Transformed::new(node, false, TreeNodeRecursion::Jump))
+                }
+                LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan))
+                    if scan.id == id =>
+                {
+                    Ok(Transformed::yes(LogicalPlan::MaterializedCte(
+                        MaterializedCtePlan::Scan(scan.with_body_columns(&kept)?),
+                    )))
+                }
+                _ => Ok(Transformed::no(node)),
+            })?
+            .data;
+        transformed = true;
+    }
+
+    // All the columns that the body has now are necessary.
+    let body_indices = RequiredIndices::new_for_all_exprs(&body);
+    let body = optimize_projections(body, config, body_indices)?;
+    transformed |= body.transformed;
+    Ok(Transformed::new_transformed(
+        LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(MaterializedCte::try_new(
+            id,
+            name,
+            Arc::new(body.data),
+            Arc::new(continuation),
+        )?)),
+        transformed,
+    ))
 }
 
 /// Optimizes uncorrelated subquery plans embedded in expressions of the given
@@ -929,8 +1034,9 @@ mod tests {
     };
     use datafusion_expr::ExprFunctionExt;
     use datafusion_expr::{
-        BinaryExpr, Expr, Extension, Like, LogicalPlan, Operator, Projection,
-        UserDefinedLogicalNodeCore, WindowFunctionDefinition, binary_expr,
+        BinaryExpr, Expr, Extension, Like, LogicalPlan, MaterializedCte,
+        MaterializedCteId, MaterializedCtePlan, MaterializedCteScan, Operator,
+        Projection, UserDefinedLogicalNodeCore, WindowFunctionDefinition, binary_expr,
         build_join_schema,
         builder::table_scan_with_filters,
         col,
@@ -2534,6 +2640,101 @@ mod tests {
                   TableScan: s2 projection=[a]
               SubqueryAlias: __correlated_sq_3
                 TableScan: s3 projection=[a]
+        "
+        )
+    }
+
+    /// `WITH w AS MATERIALIZED (test), x AS MATERIALIZED (SELECT a, b FROM w)
+    /// SELECT a FROM x UNION ALL SELECT c FROM w`
+    fn nested_materialized_ctes() -> Result<LogicalPlan> {
+        let w = MaterializedCteId::next();
+        let x = MaterializedCteId::next();
+        let body_w = test_table_scan()?;
+        let scan_w = LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(
+            MaterializedCteScan::new(w, "w", Arc::clone(body_w.schema())),
+        ));
+        let body_x = LogicalPlanBuilder::from(scan_w.clone())
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let scan_x = LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(
+            MaterializedCteScan::new(x, "x", Arc::clone(body_x.schema())),
+        ));
+        let continuation = LogicalPlanBuilder::from(scan_x)
+            .project(vec![col("a")])?
+            .union(
+                LogicalPlanBuilder::from(scan_w)
+                    .project(vec![col("c")])?
+                    .build()?,
+            )?
+            .build()?;
+        let inner = LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
+            MaterializedCte::try_new(x, "x", Arc::new(body_x), Arc::new(continuation))?,
+        ));
+        Ok(LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
+            MaterializedCte::try_new(w, "w", Arc::new(body_w), Arc::new(inner))?,
+        )))
+    }
+
+    /// The body of `w` keeps the columns that its scan in the body of `x` and
+    /// its scan in the main query read. The body of `x` keeps `a` only, so
+    /// `w` does not keep `b`.
+    #[test]
+    fn materialized_cte_body_keeps_the_columns_that_the_scans_read() -> Result<()> {
+        let plan = nested_materialized_ctes()?;
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        MaterializedCte: name=w
+          TableScan: test projection=[a, c]
+          MaterializedCte: name=x
+            MaterializedCteScan: name=w projection=[a]
+            Union
+              MaterializedCteScan: name=x
+              MaterializedCteScan: name=w projection=[c]
+        "
+        )
+    }
+
+    #[test]
+    fn materialized_cte_pruning_is_idempotent() -> Result<()> {
+        let once = optimize(nested_materialized_ctes()?)?;
+        let twice = optimize(once.clone())?;
+        assert_eq!(once, twice);
+        // The checks of `try_new` pass for the pruned plan.
+        let LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) = &twice else {
+            panic!("expected a MaterializedCte, got {twice}");
+        };
+        MaterializedCte::try_new(
+            cte.id(),
+            cte.name(),
+            Arc::clone(cte.body()),
+            Arc::clone(cte.continuation()),
+        )?;
+        Ok(())
+    }
+
+    /// A scan that needs no column keeps the row count: the body keeps its
+    /// first column.
+    #[test]
+    fn materialized_cte_scan_without_columns() -> Result<()> {
+        let id = MaterializedCteId::next();
+        let body = test_table_scan()?;
+        let scan = LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(
+            MaterializedCteScan::new(id, "w", Arc::clone(body.schema())),
+        ));
+        let continuation = LogicalPlanBuilder::from(scan)
+            .aggregate(Vec::<Expr>::new(), vec![count(lit(1))])?
+            .build()?;
+        let plan = LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
+            MaterializedCte::try_new(id, "w", Arc::new(body), Arc::new(continuation))?,
+        ));
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        MaterializedCte: name=w
+          TableScan: test projection=[a]
+          Aggregate: groupBy=[[]], aggr=[[count(Int32(1))]]
+            MaterializedCteScan: name=w projection=[]
         "
         )
     }
