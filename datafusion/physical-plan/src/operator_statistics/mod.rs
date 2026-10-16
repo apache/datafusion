@@ -263,9 +263,11 @@ pub enum StatisticsResult {
 /// `COUNT(*)`, `MIN` and `MAX` without scanning and remove limits. Return
 /// `Inexact` for anything that is an estimate.
 ///
-/// Also as for operators, computed statistics must hold one `ColumnStatistics`
-/// per field of the node's schema; the statistics walk returns an error
-/// otherwise. Start from [`Statistics::new_unknown`] to override some values.
+/// Computed statistics must also hold one [`ColumnStatistics`] per field of the
+/// node's schema, or the statistics walk returns an error. To override only
+/// some values, start from [`Statistics::new_unknown`].
+///
+/// [`ColumnStatistics`]: datafusion_common::ColumnStatistics
 ///
 /// # Implementing a Custom Provider
 ///
