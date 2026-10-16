@@ -134,8 +134,8 @@ fn bench_case(c: &mut Criterion, name: &str, case: &Case) {
 
     // Independently check logical output before timing, including NULL elements
     // deliberately retained by IS NULL and values hidden by NULL list rows.
-    let mut selected = Vec::new();
-    let mut result_lengths = Vec::new();
+    let mut selected = Vec::with_capacity(values.len());
+    let mut result_lengths = Vec::with_capacity(list.len());
     for (row, offsets) in list.offsets().windows(2).enumerate() {
         let before = selected.len();
         if row_valid[first_row + row] {

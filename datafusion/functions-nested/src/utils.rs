@@ -65,45 +65,57 @@ pub(crate) fn prepare_list_filter<O: OffsetSizeTrait>(
     debug_assert_eq!(keep.len(), span_len);
     let mut offsets = Vec::with_capacity(list.len() + 1);
     offsets.push(O::zero());
-    let mut kept_count = 0;
     // Count the set bits before each row end in one pass over `keep`, which
     // stays cheap for short rows.
-    let mut set_bits = SetBitCounter::new(keep.bit_chunks().iter_padded());
-    // Set bits stored under NULL rows, which the result does not keep.
-    let mut hidden_count = 0;
-    // NULL list rows are usually empty, so reuse `keep` until a NULL row stores
-    // elements. Copy the bits of the preceding rows when that first happens.
-    let mut keep_mask: Option<BooleanBufferBuilder> = None;
-    for (row, window) in list_offsets.windows(2).enumerate() {
-        let start = window[0].as_usize() - first_offset;
-        let end = window[1].as_usize() - first_offset;
-        let len = end - start;
-        let bit_start = keep.offset() + start;
-        if list.is_valid(row) {
-            kept_count = set_bits.count_before(end) - hidden_count;
-            if let Some(keep_mask) = &mut keep_mask {
-                keep_mask.append_packed_range(bit_start..bit_start + len, keep.values());
+    let keep_mask = if list.null_count() == 0 {
+        // Without NULL rows, every set bit is kept.
+        let mut set_bits = SetBitCounter::new(keep.bit_chunks().iter_padded());
+        offsets.extend(list_offsets[1..].iter().map(|end| {
+            O::usize_as(set_bits.count_before(end.as_usize() - first_offset))
+        }));
+        keep.clone()
+    } else {
+        let mut set_bits = SetBitCounter::new(keep.bit_chunks().iter_padded());
+        let mut kept_count = 0;
+        // Set bits stored under NULL rows, which the result does not keep.
+        let mut hidden_count = 0;
+        // NULL list rows are usually empty, so reuse `keep` until a NULL row
+        // stores elements. Copy the bits of the preceding rows when that first
+        // happens.
+        let mut keep_mask: Option<BooleanBufferBuilder> = None;
+        for (row, window) in list_offsets.windows(2).enumerate() {
+            let start = window[0].as_usize() - first_offset;
+            let end = window[1].as_usize() - first_offset;
+            let len = end - start;
+            let bit_start = keep.offset() + start;
+            if list.is_valid(row) {
+                kept_count = set_bits.count_before(end) - hidden_count;
+                if let Some(keep_mask) = &mut keep_mask {
+                    keep_mask
+                        .append_packed_range(bit_start..bit_start + len, keep.values());
+                }
+            } else if len != 0 {
+                let set_before_row = set_bits.count_before(start);
+                hidden_count += set_bits.count_before(end) - set_before_row;
+                keep_mask
+                    .get_or_insert_with(|| {
+                        let mut builder = BooleanBufferBuilder::new(keep.len());
+                        builder
+                            .append_packed_range(keep.offset()..bit_start, keep.values());
+                        builder
+                    })
+                    .append_n(len, false);
             }
-        } else if len != 0 {
-            let set_before_row = set_bits.count_before(start);
-            hidden_count += set_bits.count_before(end) - set_before_row;
-            keep_mask
-                .get_or_insert_with(|| {
-                    let mut builder = BooleanBufferBuilder::new(keep.len());
-                    builder.append_packed_range(keep.offset()..bit_start, keep.values());
-                    builder
-                })
-                .append_n(len, false);
+            offsets.push(O::usize_as(kept_count));
         }
-        offsets.push(O::usize_as(kept_count));
-    }
-    let keep_mask = keep_mask
-        .map(BooleanBufferBuilder::build)
-        .unwrap_or_else(|| keep.clone());
+        keep_mask
+            .map(BooleanBufferBuilder::build)
+            .unwrap_or_else(|| keep.clone())
+    };
     debug_assert_eq!(keep_mask.len(), keep.len());
-    // SAFETY: offsets start at zero and `kept_count` never decreases. The count
-    // cannot exceed the input's element span, which fits in `O`, so converting
-    // it to `O` cannot overflow.
+    // SAFETY: offsets start at zero and never decrease, since each one counts
+    // the kept elements up to a row's end. A count cannot exceed the input's
+    // element span, which fits in `O`, so converting it to `O` cannot overflow.
     let offsets = unsafe { OffsetBuffer::new_unchecked(offsets.into()) };
     (offsets, keep_mask)
 }
@@ -625,25 +637,15 @@ pub(crate) mod tests {
     use arrow::array::ListArray;
     use arrow::datatypes::Int64Type;
     use datafusion_common::utils::SingleRowListArrayBuilder;
+    use rand::{Rng, SeedableRng, rngs::StdRng};
 
-    /// Compare `prepare_list_filter` with a per-row reference on a sliced list
-    /// with the given row lengths and validity, returning the input and output
-    /// bitmaps so callers can check whether the input was reused.
-    fn check_list_filter<O: OffsetSizeTrait>(
-        lengths: [usize; 8],
-        valid: [bool; 8],
-    ) -> (BooleanBuffer, BooleanBuffer) {
-        let list = GenericListArray::<O>::new(
-            Arc::new(Field::new_list_field(DataType::Int32, true)),
-            OffsetBuffer::from_lengths(lengths),
-            // The helper must permit selecting NULL elements.
-            arrow::array::new_null_array(&DataType::Int32, lengths.iter().sum()),
-            Some(NullBuffer::from(valid.to_vec())),
-        )
-        .slice(1, 7);
-        let (first, len) = offset_span(list.offsets());
-        // Use an offset that is not a multiple of the bitmap's three-bit period.
-        let keep = BooleanBuffer::collect_bool(len + 1, |i| i % 3 != 0).slice(1, len);
+    /// Compare `prepare_list_filter` with a per-row reference, returning the
+    /// output bitmap so callers can check whether `keep` was reused.
+    fn assert_list_filter_matches_reference<O: OffsetSizeTrait>(
+        list: &GenericListArray<O>,
+        keep: &BooleanBuffer,
+    ) -> BooleanBuffer {
+        let first = list.offsets()[0].as_usize();
         let mut expected = keep.iter().collect::<Vec<_>>();
         let mut expected_offsets = vec![0];
         for (row, window) in list.offsets().windows(2).enumerate() {
@@ -654,12 +656,45 @@ pub(crate) mod tests {
             }
             expected_offsets.push(expected[..end].iter().filter(|&&v| v).count());
         }
-        let (offsets, mask) = prepare_list_filter(&list, &keep);
+        let (offsets, mask) = prepare_list_filter(list, keep);
         assert_eq!(mask.iter().collect::<Vec<_>>(), expected);
         assert_eq!(
             offsets.iter().map(|o| o.as_usize()).collect::<Vec<_>>(),
             expected_offsets
         );
+        mask
+    }
+
+    /// A list of NULL elements with the given row lengths and row validity,
+    /// sliced to `len` rows starting at row `offset`.
+    fn null_element_list<O: OffsetSizeTrait>(
+        lengths: &[usize],
+        nulls: Option<NullBuffer>,
+        offset: usize,
+        len: usize,
+    ) -> GenericListArray<O> {
+        GenericListArray::<O>::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::from_lengths(lengths.iter().copied()),
+            // `prepare_list_filter` must permit selecting NULL elements.
+            arrow::array::new_null_array(&DataType::Int32, lengths.iter().sum()),
+            nulls,
+        )
+        .slice(offset, len)
+    }
+
+    /// Check a list sliced to its last seven rows, returning the input and output
+    /// bitmaps so callers can check whether the input was reused.
+    fn check_list_filter<O: OffsetSizeTrait>(
+        lengths: [usize; 8],
+        valid: [bool; 8],
+    ) -> (BooleanBuffer, BooleanBuffer) {
+        let nulls = Some(NullBuffer::from(valid.to_vec()));
+        let list = null_element_list::<O>(&lengths, nulls, 1, 7);
+        let len = offset_span(list.offsets()).1;
+        // Use an offset that is not a multiple of the bitmap's three-bit period.
+        let keep = BooleanBuffer::collect_bool(len + 1, |i| i % 3 != 0).slice(1, len);
+        let mask = assert_list_filter_matches_reference(&list, &keep);
         (keep, mask)
     }
 
@@ -681,6 +716,45 @@ pub(crate) mod tests {
             assert!(mask.inner().ptr_eq(keep.inner()));
             check_list_filter::<i64>(hidden, valid);
             check_list_filter::<i64>(empty, valid);
+        }
+    }
+
+    #[test]
+    fn list_filter_matches_reference_on_random_lists() {
+        let mut rng = StdRng::seed_from_u64(42);
+        for _ in 0..500 {
+            let rows = rng.random_range(0..=24);
+            // Mostly short rows, plus some long enough to span 64-bit words.
+            let lengths = (0..rows)
+                .map(|_| {
+                    let max_len = if rng.random_bool(0.2) { 130 } else { 4 };
+                    rng.random_range(0..=max_len)
+                })
+                .collect::<Vec<_>>();
+            // Either no NULL buffer, or rows that are NULL with this probability.
+            let null_rows = [0.0, 0.3, 0.9][rng.random_range(0..3)];
+            let valid = (0..rows)
+                .map(|_| !rng.random_bool(null_rows))
+                .collect::<Vec<_>>();
+            let nulls = (null_rows > 0.0).then(|| NullBuffer::from(valid.clone()));
+            let offset = rng.random_range(0..=rows);
+            let len = rng.random_range(0..=rows - offset);
+            let span = lengths[offset..offset + len].iter().sum::<usize>();
+            let density = [0.0, 0.1, 0.5, 0.9, 1.0][rng.random_range(0..5)];
+            let keep_offset = rng.random_range(0..130);
+            let keep = BooleanBuffer::collect_bool(keep_offset + span, |_| {
+                rng.random_bool(density)
+            })
+            .slice(keep_offset, span);
+
+            let list = null_element_list::<i32>(&lengths, nulls.clone(), offset, len);
+            let mask = assert_list_filter_matches_reference(&list, &keep);
+            // `keep` is copied only when a visible NULL row stores elements.
+            let hides_elements =
+                (offset..offset + len).any(|row| !valid[row] && lengths[row] != 0);
+            assert_eq!(mask.inner().ptr_eq(keep.inner()), !hides_elements);
+            let list = null_element_list::<i64>(&lengths, nulls, offset, len);
+            assert_list_filter_matches_reference(&list, &keep);
         }
     }
 

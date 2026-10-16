@@ -340,6 +340,38 @@ mod tests {
     }
 
     #[test]
+    fn filter_passing_values_under_null_rows_are_not_kept() {
+        let nulls = Some(NullBuffer::from(vec![true, false, true]));
+        for (values, threshold, expected_values, expected_lengths) in [
+            // Only the elements stored under the NULL row pass, so the result
+            // keeps no elements.
+            (vec![1, 2, 99, 100, 3], 50, vec![], [0, 0, 0]),
+            // Every element passes, but the elements stored under the NULL row
+            // must still be dropped rather than returning the input as is.
+            (vec![3, 4, 98, 99, 5], 2, vec![3, 4, 5], [2, 0, 1]),
+        ] {
+            let list = create_i32_list(
+                values,
+                OffsetBuffer::<i32>::from_lengths([2, 2, 1]),
+                nulls.clone(),
+            );
+            let res = eval_hof_on_i32_list(
+                array_filter_higher_order_function(),
+                list,
+                v().gt(lit(threshold)),
+            )
+            .unwrap();
+            let expected = create_i32_list(
+                expected_values,
+                OffsetBuffer::<i32>::from_lengths(expected_lengths),
+                nulls.clone(),
+            );
+            assert_eq!(res.as_list::<i32>(), &expected);
+            assert_same_layout::<i32>(&res, &expected);
+        }
+    }
+
+    #[test]
     fn filter_all_filtered_out() {
         let list =
             create_i32_list(vec![1, 2], OffsetBuffer::<i32>::from_lengths(vec![2]), None);

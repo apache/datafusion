@@ -17,11 +17,11 @@
 
 //! Shared utilities for `(array, lambda)` style higher-order functions.
 
-use arrow::array::{ArrayRef, AsArray, BooleanArray, new_null_array};
-use arrow::buffer::NullBuffer;
+use arrow::array::{ArrayRef, AsArray, BooleanArray, OffsetSizeTrait, new_null_array};
+use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::compute::take_arrays;
-use arrow::datatypes::{ArrowNativeType, DataType, FieldRef};
-use datafusion_common::utils::{adjust_offsets_for_slice, list_values_row_number};
+use arrow::datatypes::{DataType, FieldRef};
+use datafusion_common::utils::list_values_row_number;
 use datafusion_common::{
     Result, ScalarValue, plan_err,
     utils::{list_values, take_function_args},
@@ -173,16 +173,16 @@ impl EvaluatedListLambda {
 
 fn adjusted_row_offsets(list: &ArrayRef) -> Result<Vec<usize>> {
     Ok(match list.data_type() {
-        DataType::List(_) => adjust_offsets_for_slice(list.as_list::<i32>())
-            .iter()
-            .map(|o| o.as_usize())
-            .collect(),
-        DataType::LargeList(_) => adjust_offsets_for_slice(list.as_list::<i64>())
-            .iter()
-            .map(|o| o.as_usize())
-            .collect(),
+        DataType::List(_) => offsets_from_zero(list.as_list::<i32>().offsets()),
+        DataType::LargeList(_) => offsets_from_zero(list.as_list::<i64>().offsets()),
         other => return exec_err!("expected list, got {other}"),
     })
+}
+
+/// Shift `offsets` so the first one is zero.
+fn offsets_from_zero<O: OffsetSizeTrait>(offsets: &OffsetBuffer<O>) -> Vec<usize> {
+    let first = offsets[0].as_usize();
+    offsets.iter().map(|o| o.as_usize() - first).collect()
 }
 
 fn evaluate_single_list_lambda(
