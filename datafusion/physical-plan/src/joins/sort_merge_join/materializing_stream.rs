@@ -131,60 +131,64 @@ impl StreamedBatch {
         self.num_output_rows += 1;
     }
 
-    /// Appends one pair for each row in `buffered_range` of the buffered batch with
-    /// `buffered_batch_idx` index, all with the current streamed index. The indices
-    /// are appended in bulk, which matters when a streamed row matches many buffered
-    /// rows.
+    /// Appends a pair of the current streamed index and each of the `len` rows from
+    /// `buffered_start` on in the buffered batch with `buffered_batch_idx` index. The
+    /// indices are appended in bulk, which matters when a streamed row matches many
+    /// buffered rows.
     fn append_output_pairs(
         &mut self,
         buffered_batch_idx: usize,
-        buffered_range: Range<usize>,
+        buffered_start: usize,
+        len: usize,
         batch_size: usize,
     ) {
-        let len = buffered_range.len();
         debug_assert!(
             len > 0 && self.num_output_rows + len <= batch_size,
             "appending {len} pairs to {} with batch_size {batch_size}",
             self.num_output_rows
         );
-        if len > 1 {
-            return self.append_output_run(
+        match len {
+            // A single match, as in a one-to-one join, is cheaper to append directly.
+            1 => {
+                let streamed_idx = self.idx as u64;
+                let current_chunk = self.chunk_for(Some(buffered_batch_idx), batch_size);
+                current_chunk.streamed_indices.append_value(streamed_idx);
+                current_chunk
+                    .buffered_indices
+                    .append_value(buffered_start as u64);
+                self.num_output_rows += 1;
+            }
+            _ => self.append_output_range(
                 buffered_batch_idx,
-                buffered_range,
+                buffered_start,
+                len,
                 batch_size,
-            );
+            ),
         }
-        // A single match, as in a one-to-one join, is cheaper to append directly.
-        let streamed_idx = self.idx as u64;
-        let current_chunk = self.chunk_for(Some(buffered_batch_idx), batch_size);
-        current_chunk.streamed_indices.append_value(streamed_idx);
-        current_chunk
-            .buffered_indices
-            .append_value(buffered_range.start as u64);
-        self.num_output_rows += 1;
     }
 
     /// The bulk half of [`Self::append_output_pairs`], kept out of line so that the
     /// one-row case, which one-to-one joins take for every row, does not pay for its
     /// setup.
     #[inline(never)]
-    fn append_output_run(
+    fn append_output_range(
         &mut self,
         buffered_batch_idx: usize,
-        buffered_range: Range<usize>,
+        buffered_start: usize,
+        len: usize,
         batch_size: usize,
     ) {
-        let len = buffered_range.len();
         let streamed_idx = self.idx as u64;
         let current_chunk = self.chunk_for(Some(buffered_batch_idx), batch_size);
         current_chunk
             .streamed_indices
             .append_value_n(streamed_idx, len);
+        let start = buffered_start as u64;
         // SAFETY: a `Range<u64>` reports its exact length in `size_hint`.
         unsafe {
-            current_chunk.buffered_indices.append_trusted_len_iter(
-                buffered_range.start as u64..buffered_range.end as u64,
-            );
+            current_chunk
+                .buffered_indices
+                .append_trusted_len_iter(start..start + len as u64);
         }
         self.num_output_rows += len;
     }
@@ -790,21 +794,20 @@ impl MaterializingSortMergeJoinStream {
     /// paused. Returns true when the group scan is complete and there is
     /// room for more pairs.
     fn pair_streamed_row_with_group(&mut self) -> bool {
-        while !self.buffered_data.scanning_finished()
-            && self.num_unfrozen_pairs() < self.batch_size
-        {
-            // Pair the streamed row with the rest of the scanning buffered batch at
-            // once, up to the room left in the output batch.
+        let mut room = self.batch_size - self.num_unfrozen_pairs();
+        while !self.buffered_data.scanning_finished() && room > 0 {
             let rows = self.buffered_data.scanning_remaining();
-            let len = rows.len().min(self.batch_size - self.num_unfrozen_pairs());
+            let len = rows.len().min(room);
             self.streamed_batch.append_output_pairs(
                 self.buffered_data.scanning_batch_idx,
-                rows.start..rows.start + len,
+                rows.start,
+                len,
                 self.batch_size,
             );
             self.buffered_data.scanning_advance_by(len);
+            room -= len;
         }
-        if self.num_unfrozen_pairs() >= self.batch_size {
+        if room == 0 {
             return false;
         }
 
