@@ -64,15 +64,17 @@ macro_rules! group_accumulator_helper {
     };
 }
 
-/// `accumulator_helper` is a macro accepting (ArrowPrimitiveType, BitwiseOperationType, bool)
+/// Create an accumulator for the integer type and bitwise operation.
 macro_rules! accumulator_helper {
-    ($t:ty, $opr:expr, $is_distinct: expr) => {
+    ($t:ty, $opr:expr, $is_distinct:expr, $is_sliding:expr) => {
         match $opr {
             BitwiseOperationType::And => Ok(Box::<BitAndAccumulator<$t>>::default()),
             BitwiseOperationType::Or => Ok(Box::<BitOrAccumulator<$t>>::default()),
             BitwiseOperationType::Xor => {
                 if $is_distinct {
                     Ok(Box::<DistinctBitXorAccumulator<$t>>::default())
+                } else if $is_sliding {
+                    Ok(Box::<SlidingBitXorAccumulator<$t>>::default())
                 } else {
                     Ok(Box::<BitXorAccumulator<$t>>::default())
                 }
@@ -87,17 +89,33 @@ macro_rules! accumulator_helper {
 /// `opr` is [BitwiseOperationType]
 /// `is_distinct` is boolean value indicating whether the operation is distinct or not.
 macro_rules! downcast_bitwise_accumulator {
-    ($args:ident, $opr:expr, $is_distinct: expr) => {
+    ($args:ident, $opr:expr, $is_distinct:expr, $is_sliding:expr) => {
         match $args.return_field.data_type() {
             DataType::Null => Ok(Box::new(NoopAccumulator::default())),
-            DataType::Int8 => accumulator_helper!(Int8Type, $opr, $is_distinct),
-            DataType::Int16 => accumulator_helper!(Int16Type, $opr, $is_distinct),
-            DataType::Int32 => accumulator_helper!(Int32Type, $opr, $is_distinct),
-            DataType::Int64 => accumulator_helper!(Int64Type, $opr, $is_distinct),
-            DataType::UInt8 => accumulator_helper!(UInt8Type, $opr, $is_distinct),
-            DataType::UInt16 => accumulator_helper!(UInt16Type, $opr, $is_distinct),
-            DataType::UInt32 => accumulator_helper!(UInt32Type, $opr, $is_distinct),
-            DataType::UInt64 => accumulator_helper!(UInt64Type, $opr, $is_distinct),
+            DataType::Int8 => {
+                accumulator_helper!(Int8Type, $opr, $is_distinct, $is_sliding)
+            }
+            DataType::Int16 => {
+                accumulator_helper!(Int16Type, $opr, $is_distinct, $is_sliding)
+            }
+            DataType::Int32 => {
+                accumulator_helper!(Int32Type, $opr, $is_distinct, $is_sliding)
+            }
+            DataType::Int64 => {
+                accumulator_helper!(Int64Type, $opr, $is_distinct, $is_sliding)
+            }
+            DataType::UInt8 => {
+                accumulator_helper!(UInt8Type, $opr, $is_distinct, $is_sliding)
+            }
+            DataType::UInt16 => {
+                accumulator_helper!(UInt16Type, $opr, $is_distinct, $is_sliding)
+            }
+            DataType::UInt32 => {
+                accumulator_helper!(UInt32Type, $opr, $is_distinct, $is_sliding)
+            }
+            DataType::UInt64 => {
+                accumulator_helper!(UInt64Type, $opr, $is_distinct, $is_sliding)
+            }
             _ => {
                 not_impl_err!(
                     "{} not supported for {}: {}",
@@ -253,7 +271,24 @@ impl AggregateUDFImpl for BitwiseOperation {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        downcast_bitwise_accumulator!(acc_args, self.operation, acc_args.is_distinct)
+        downcast_bitwise_accumulator!(
+            acc_args,
+            self.operation,
+            acc_args.is_distinct,
+            false
+        )
+    }
+
+    fn create_sliding_accumulator(
+        &self,
+        acc_args: AccumulatorArgs,
+    ) -> Result<Box<dyn Accumulator>> {
+        downcast_bitwise_accumulator!(
+            acc_args,
+            self.operation,
+            acc_args.is_distinct,
+            true
+        )
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
@@ -460,15 +495,6 @@ where
         Ok(())
     }
 
-    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        // XOR is it's own inverse
-        self.update_batch(values)
-    }
-
-    fn supports_retract_batch(&self) -> bool {
-        true
-    }
-
     fn evaluate(&mut self) -> Result<ScalarValue> {
         ScalarValue::new_primitive::<T>(self.value, &T::DATA_TYPE)
     }
@@ -483,6 +509,85 @@ where
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         self.update_batch(states)
+    }
+}
+
+/// Tracks non-null cardinality so an empty window returns NULL, while a
+/// non-empty window whose values cancel returns zero. Ordinary aggregation
+/// retains its single-field state and primitive groups accumulator.
+struct SlidingBitXorAccumulator<T: ArrowNumericType> {
+    value: T::Native,
+    count: u64,
+}
+
+impl<T: ArrowNumericType> std::fmt::Debug for SlidingBitXorAccumulator<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SlidingBitXorAccumulator({})", T::DATA_TYPE)
+    }
+}
+
+impl<T: ArrowNumericType> Default for SlidingBitXorAccumulator<T> {
+    fn default() -> Self {
+        Self {
+            value: T::Native::usize_as(0),
+            count: 0,
+        }
+    }
+}
+
+impl<T: ArrowNumericType> Accumulator for SlidingBitXorAccumulator<T>
+where
+    T::Native: std::ops::BitXor<Output = T::Native>,
+{
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let values = values[0].as_primitive::<T>();
+        self.count += (values.len() - values.null_count()) as u64;
+        if let Some(value) = arrow::compute::bit_xor(values) {
+            self.value = self.value ^ value;
+        }
+        Ok(())
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let values = values[0].as_primitive::<T>();
+        self.count -= (values.len() - values.null_count()) as u64;
+        // XOR is its own inverse; nullness also depends on the remaining count.
+        if let Some(value) = arrow::compute::bit_xor(values) {
+            self.value = self.value ^ value;
+        }
+        Ok(())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        ScalarValue::new_primitive::<T>(
+            (self.count != 0).then_some(self.value),
+            &T::DATA_TYPE,
+        )
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self)
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![
+            self.evaluate()?,
+            ScalarValue::UInt64(Some(self.count)),
+        ])
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        if let Some(value) = arrow::compute::bit_xor(states[0].as_primitive::<T>()) {
+            self.value = self.value ^ value;
+        }
+        if let Some(count) = arrow::compute::sum(states[1].as_primitive::<UInt64Type>()) {
+            self.count += count;
+        }
+        Ok(())
     }
 }
 
@@ -572,35 +677,97 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::{ArrayRef, UInt64Array};
-    use arrow::datatypes::UInt64Type;
-    use datafusion_common::ScalarValue;
-
-    use crate::bit_and_or_xor::BitXorAccumulator;
+    use arrow::datatypes::{DataType, Field, Schema, UInt64Type};
+    use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::Accumulator;
+    use datafusion_expr::function::AccumulatorArgs;
+
+    use super::{SlidingBitXorAccumulator, bit_xor_udaf};
+
+    fn array(values: &[Option<u64>]) -> ArrayRef {
+        Arc::new(UInt64Array::from(values.to_vec()))
+    }
+
+    fn accumulator_args(schema: &Schema) -> AccumulatorArgs<'_> {
+        AccumulatorArgs {
+            return_field: schema.field(0).clone().into(),
+            schema,
+            ignore_nulls: false,
+            order_bys: &[],
+            is_reversed: false,
+            name: "bit_xor(v)",
+            is_distinct: false,
+            exprs: &[],
+            expr_fields: &[],
+        }
+    }
 
     #[test]
-    fn test_bit_xor_accumulator() {
-        let mut accumulator = BitXorAccumulator::<UInt64Type> { value: None };
-        let batches: Vec<_> = vec![vec![1, 2], vec![1]]
-            .into_iter()
-            .map(|b| Arc::new(b.into_iter().collect::<UInt64Array>()) as ArrayRef)
-            .collect();
+    fn sliding_bit_xor_retract_last_non_null() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("v", DataType::UInt64, true)]);
+        let mut accumulator =
+            bit_xor_udaf().create_sliding_accumulator(accumulator_args(&schema))?;
+        accumulator.update_batch(&[array(&[Some(7), None, Some(7), None])])?;
+        assert_eq!(accumulator.evaluate()?, ScalarValue::UInt64(Some(0)));
+        accumulator.retract_batch(&[array(&[Some(7), None])])?;
+        assert_eq!(accumulator.evaluate()?, ScalarValue::UInt64(Some(7)));
+        accumulator.retract_batch(&[array(&[Some(7)])])?;
+        assert_eq!(accumulator.evaluate()?, ScalarValue::UInt64(None));
 
-        let added = &[Arc::clone(&batches[0])];
-        let retracted = &[Arc::clone(&batches[1])];
+        // A real zero remains non-null when the empty accumulator is reused.
+        accumulator.update_batch(&[array(&[Some(0)])])?;
+        assert_eq!(accumulator.evaluate()?, ScalarValue::UInt64(Some(0)));
+        accumulator.retract_batch(&[array(&[None, Some(0)])])?;
+        assert_eq!(accumulator.evaluate()?, ScalarValue::UInt64(None));
+        Ok(())
+    }
 
-        // XOR of 1..3 is 3
-        accumulator.update_batch(added).unwrap();
-        assert_eq!(
-            accumulator.evaluate().unwrap(),
-            ScalarValue::UInt64(Some(3))
-        );
+    #[test]
+    fn sliding_bit_xor_merge_preserves_count() -> Result<()> {
+        let mut states = Vec::new();
+        for values in [vec![Some(7); 4], vec![Some(9)], vec![None]] {
+            let mut partial = SlidingBitXorAccumulator::<UInt64Type>::default();
+            partial.update_batch(&[array(&values)])?;
+            states.push(partial.state()?);
+        }
+        let arrays = (0..2)
+            .map(|index| {
+                ScalarValue::iter_to_array(
+                    states.iter().map(|state| state[index].clone()),
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut accumulator = SlidingBitXorAccumulator::<UInt64Type>::default();
+        accumulator.merge_batch(&arrays)?;
 
-        // Removing [1] ^ 3 = 2
-        accumulator.retract_batch(retracted).unwrap();
-        assert_eq!(
-            accumulator.evaluate().unwrap(),
-            ScalarValue::UInt64(Some(2))
-        );
+        // The zero-valued partial contributes four input rows.
+        accumulator.retract_batch(&[array(&[Some(7); 4])])?;
+        assert_eq!(accumulator.evaluate()?, ScalarValue::UInt64(Some(9)));
+        accumulator.retract_batch(&[array(&[Some(9)])])?;
+        assert_eq!(accumulator.evaluate()?, ScalarValue::UInt64(None));
+        Ok(())
+    }
+
+    #[test]
+    fn bit_xor_factory_contracts() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("v", DataType::UInt64, true)]);
+        let udf = bit_xor_udaf();
+        let args = accumulator_args(&schema);
+        let values = array(&[Some(7), Some(7), None]);
+
+        let mut ordinary = udf.accumulator(args.clone())?;
+        assert!(!ordinary.supports_retract_batch());
+        ordinary.update_batch(&[Arc::clone(&values)])?;
+        assert_eq!(ordinary.state()?, vec![ScalarValue::UInt64(Some(0))]);
+
+        let mut distinct = udf.create_sliding_accumulator(AccumulatorArgs {
+            is_distinct: true,
+            ..args
+        })?;
+        assert!(!distinct.supports_retract_batch());
+        distinct.update_batch(&[values])?;
+        assert_eq!(distinct.evaluate()?, ScalarValue::UInt64(Some(7)));
+        assert_eq!(distinct.state()?.len(), 1);
+        Ok(())
     }
 }
