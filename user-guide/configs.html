@@ -606,7 +606,7 @@ example, to configure <code class="docutils literal notranslate"><span class="pr
 </tr>
 <tr class="row-even"><td><p>datafusion.execution.parquet.coerce_int96</p></td>
 <td><p>NULL</p></td>
-<td><p>(reading) If true, parquet reader will read columns of physical type int96 as originating from a different resolution than nanosecond. This is useful for reading data from systems like Spark which stores microsecond resolution timestamps in an int96 allowing it to write values with a larger date range than 64-bit timestamps with nanosecond resolution.</p></td>
+<td><p>(reading) If set, parquet reader will read columns of physical type int96 as originating from this resolution instead of nanosecond. Valid values are: ns, us, ms, and s. This is useful for reading data from systems like Spark which store microsecond resolution timestamps in an int96, allowing them to write values with a larger date range than 64-bit timestamps with nanosecond resolution.</p></td>
 </tr>
 <tr class="row-odd"><td><p>datafusion.execution.parquet.coerce_int96_tz</p></td>
 <td><p>NULL</p></td>
