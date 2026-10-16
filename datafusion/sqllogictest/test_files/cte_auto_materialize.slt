@@ -1,0 +1,842 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for `datafusion.optimizer.enable_automatic_cte_materialization`: the
+# SQL planner plans each CTE without a directive as an automatic materialized
+# CTE, and the optimizer rule `inline_automatic_ctes` decides which of them
+# stay materialized.
+
+statement ok
+CREATE TABLE t(k INT, v INT) AS VALUES (1, 10), (2, 20), (3, 30), (4, 40);
+
+# The option is off by default: the body runs once for each reference.
+query TT
+EXPLAIN WITH c AS (SELECT k, sum(v) AS s FROM t GROUP BY k)
+SELECT a.k FROM c a JOIN c b ON a.s = b.s
+----
+logical_plan
+01)Projection: a.k
+02)--Inner Join: a.s = b.s
+03)----SubqueryAlias: a
+04)------SubqueryAlias: c
+05)--------Projection: t.k, sum(t.v) AS s
+06)----------Aggregate: groupBy=[[t.k]], aggr=[[sum(CAST(t.v AS Int64))]]
+07)------------TableScan: t projection=[k, v]
+08)----SubqueryAlias: b
+09)------SubqueryAlias: c
+10)--------Projection: sum(t.v) AS s
+11)----------Aggregate: groupBy=[[t.k]], aggr=[[sum(CAST(t.v AS Int64))]]
+12)------------TableScan: t projection=[k, v]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(s@0, s@1)], projection=[k@1]
+02)--CoalescePartitionsExec
+03)----ProjectionExec: expr=[sum(t.v)@1 as s]
+04)------AggregateExec: mode=FinalPartitioned, gby=[k@0 as k], aggr=[sum(t.v)]
+05)--------RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=1
+06)----------AggregateExec: mode=Partial, gby=[k@0 as k], aggr=[sum(t.v)]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+08)--ProjectionExec: expr=[k@0 as k, sum(t.v)@1 as s]
+09)----AggregateExec: mode=FinalPartitioned, gby=[k@0 as k], aggr=[sum(t.v)]
+10)------RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=1
+11)--------AggregateExec: mode=Partial, gby=[k@0 as k], aggr=[sum(t.v)]
+12)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+set datafusion.optimizer.enable_automatic_cte_materialization = true;
+
+# Two references to an aggregate body: the body is computed once. This is the
+# default dialect, which has no MATERIALIZED keyword.
+query TT
+EXPLAIN WITH c AS (SELECT k, sum(v) AS s FROM t GROUP BY k)
+SELECT a.k FROM c a JOIN c b ON a.s = b.s
+----
+logical_plan
+01)MaterializedCte: name=c, automatic=true
+02)--SubqueryAlias: c
+03)----Projection: t.k, sum(t.v) AS s
+04)------Aggregate: groupBy=[[t.k]], aggr=[[sum(CAST(t.v AS Int64))]]
+05)--------TableScan: t projection=[k, v]
+06)--Projection: a.k
+07)----Inner Join: a.s = b.s
+08)------SubqueryAlias: a
+09)--------MaterializedCteScan: name=c
+10)------SubqueryAlias: b
+11)--------Projection: c.s
+12)----------MaterializedCteScan: name=c
+physical_plan
+01)MaterializedCteExec: name=c
+02)--ProjectionExec: expr=[k@0 as k, sum(t.v)@1 as s]
+03)----AggregateExec: mode=FinalPartitioned, gby=[k@0 as k], aggr=[sum(t.v)]
+04)------RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[k@0 as k], aggr=[sum(t.v)]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)--HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s@1, s@0)], projection=[k@0]
+08)----RepartitionExec: partitioning=Hash([s@1], 4), input_partitions=4
+09)------MaterializedCteScanExec: name=c
+10)----RepartitionExec: partitioning=Hash([s@0], 4), input_partitions=4
+11)------ProjectionExec: expr=[s@1 as s]
+12)--------MaterializedCteScanExec: name=c
+
+query I rowsort
+WITH c AS (SELECT k, sum(v) AS s FROM t GROUP BY k)
+SELECT a.k FROM c a JOIN c b ON a.s = b.s
+----
+1
+2
+3
+4
+
+# One reference: the CTE is inlined, and the filter of the reference is pushed
+# below the aggregate. The plan is the same as the plan with the option off.
+query TT
+EXPLAIN WITH c AS (SELECT k, sum(v) AS s FROM t GROUP BY k)
+SELECT s FROM c WHERE k = 1
+----
+logical_plan
+01)SubqueryAlias: c
+02)--Projection: sum(t.v) AS s
+03)----Aggregate: groupBy=[[t.k]], aggr=[[sum(CAST(t.v AS Int64))]]
+04)------Filter: t.k = Int32(1)
+05)--------TableScan: t projection=[k, v]
+physical_plan
+01)ProjectionExec: expr=[sum(t.v)@1 as s]
+02)--AggregateExec: mode=FinalPartitioned, gby=[k@0 as k], aggr=[sum(t.v)]
+03)----RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=4
+04)------AggregateExec: mode=Partial, gby=[k@0 as k], aggr=[sum(t.v)]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------FilterExec: k@0 = 1
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+set datafusion.optimizer.enable_automatic_cte_materialization = false;
+
+query TT
+EXPLAIN WITH c AS (SELECT k, sum(v) AS s FROM t GROUP BY k)
+SELECT s FROM c WHERE k = 1
+----
+logical_plan
+01)SubqueryAlias: c
+02)--Projection: sum(t.v) AS s
+03)----Aggregate: groupBy=[[t.k]], aggr=[[sum(CAST(t.v AS Int64))]]
+04)------Filter: t.k = Int32(1)
+05)--------TableScan: t projection=[k, v]
+physical_plan
+01)ProjectionExec: expr=[sum(t.v)@1 as s]
+02)--AggregateExec: mode=FinalPartitioned, gby=[k@0 as k], aggr=[sum(t.v)]
+03)----RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=4
+04)------AggregateExec: mode=Partial, gby=[k@0 as k], aggr=[sum(t.v)]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------FilterExec: k@0 = 1
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+set datafusion.optimizer.enable_automatic_cte_materialization = true;
+
+# No reference: the CTE is removed.
+query TT
+EXPLAIN WITH c AS (SELECT k, sum(v) AS s FROM t GROUP BY k)
+SELECT k FROM t
+----
+logical_plan TableScan: t projection=[k]
+physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A cheap body (projections and filters on one table) is inlined for each
+# reference, so the filter of each reference reaches the table scan.
+query TT
+EXPLAIN WITH c AS (SELECT k, v * 2 AS v2 FROM t WHERE v > 5)
+SELECT k FROM c WHERE k = 1
+UNION ALL
+SELECT k FROM c WHERE k = 2
+----
+logical_plan
+01)Union
+02)--SubqueryAlias: c
+03)----Projection: t.k
+04)------Filter: t.v > Int32(5) AND t.k = Int32(1)
+05)--------TableScan: t projection=[k, v]
+06)--SubqueryAlias: c
+07)----Projection: t.k
+08)------Filter: t.v > Int32(5) AND t.k = Int32(2)
+09)--------TableScan: t projection=[k, v]
+physical_plan
+01)UnionExec
+02)--FilterExec: v@1 > 5 AND k@0 = 1, projection=[k@0]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--FilterExec: v@1 > 5 AND k@0 = 2, projection=[k@0]
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A volatile body is inlined: each reference evaluates random() again, as with
+# the option off. Materialization would change the result from 2 to 1.
+query TT
+EXPLAIN WITH r AS (SELECT sum(random()) AS x FROM t)
+SELECT x FROM r UNION ALL SELECT x FROM r
+----
+logical_plan
+01)Union
+02)--SubqueryAlias: r
+03)----Projection: sum(random()) AS x
+04)------Aggregate: groupBy=[[]], aggr=[[sum(random())]]
+05)--------TableScan: t projection=[]
+06)--SubqueryAlias: r
+07)----Projection: sum(random()) AS x
+08)------Aggregate: groupBy=[[]], aggr=[[sum(random())]]
+09)--------TableScan: t projection=[]
+physical_plan
+01)UnionExec
+02)--ProjectionExec: expr=[sum(random())@0 as x]
+03)----AggregateExec: mode=Single, gby=[], aggr=[sum(random())]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)--ProjectionExec: expr=[sum(random())@0 as x]
+06)----AggregateExec: mode=Single, gby=[], aggr=[sum(random())]
+07)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+WITH r AS (SELECT sum(random()) AS x FROM t)
+SELECT count(DISTINCT x) FROM (SELECT x FROM r UNION ALL SELECT x FROM r)
+----
+2
+
+# With automatic_cte_materialization_keeps_volatile, a volatile body stays
+# materialized, as in PostgreSQL and DuckDB. Both references read the same row.
+statement ok
+set datafusion.optimizer.automatic_cte_materialization_keeps_volatile = true;
+
+query I
+WITH r AS (SELECT sum(random()) AS x FROM t)
+SELECT count(DISTINCT x) FROM (SELECT x FROM r UNION ALL SELECT x FROM r)
+----
+1
+
+statement ok
+set datafusion.optimizer.automatic_cte_materialization_keeps_volatile = false;
+
+# A scan in a subquery expression is a reference.
+query TT
+EXPLAIN WITH c AS (SELECT k, sum(v) AS s FROM t GROUP BY k)
+SELECT k FROM c WHERE s = (SELECT max(s) FROM c)
+----
+logical_plan
+01)MaterializedCte: name=c, automatic=true
+02)--SubqueryAlias: c
+03)----Projection: t.k, sum(t.v) AS s
+04)------Aggregate: groupBy=[[t.k]], aggr=[[sum(CAST(t.v AS Int64))]]
+05)--------TableScan: t projection=[k, v]
+06)--Projection: c.k
+07)----Filter: c.s = (<subquery>)
+08)------Subquery:
+09)--------Aggregate: groupBy=[[]], aggr=[[max(c.s)]]
+10)----------Projection: c.s
+11)------------MaterializedCteScan: name=c
+12)------MaterializedCteScan: name=c
+physical_plan
+01)ScalarSubqueryExec: subqueries=1
+02)--MaterializedCteExec: name=c
+03)----ProjectionExec: expr=[k@0 as k, sum(t.v)@1 as s]
+04)------AggregateExec: mode=FinalPartitioned, gby=[k@0 as k], aggr=[sum(t.v)]
+05)--------RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=1
+06)----------AggregateExec: mode=Partial, gby=[k@0 as k], aggr=[sum(t.v)]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+08)----FilterExec: s@1 = scalar_subquery(<pending>), projection=[k@0]
+09)------MaterializedCteScanExec: name=c
+10)--AggregateExec: mode=Final, gby=[], aggr=[max(c.s)]
+11)----CoalescePartitionsExec
+12)------AggregateExec: mode=Partial, gby=[], aggr=[max(c.s)]
+13)--------ProjectionExec: expr=[s@1 as s]
+14)----------MaterializedCteScanExec: name=c
+
+query I
+WITH c AS (SELECT k, sum(v) AS s FROM t GROUP BY k)
+SELECT k FROM c WHERE s = (SELECT max(s) FROM c)
+----
+4
+
+# A scan in the body of another CTE is a reference. `d` has one reference and
+# is inlined, and then `c` has two references and stays materialized.
+query TT
+EXPLAIN WITH c AS (SELECT k, sum(v) AS s FROM t GROUP BY k),
+     d AS (SELECT max(s) AS m FROM c)
+SELECT c.k FROM c JOIN d ON c.s = d.m
+----
+logical_plan
+01)MaterializedCte: name=c, automatic=true
+02)--SubqueryAlias: c
+03)----Projection: t.k, sum(t.v) AS s
+04)------Aggregate: groupBy=[[t.k]], aggr=[[sum(CAST(t.v AS Int64))]]
+05)--------TableScan: t projection=[k, v]
+06)--Projection: c.k
+07)----Inner Join: c.s = d.m
+08)------MaterializedCteScan: name=c
+09)------SubqueryAlias: d
+10)--------Projection: max(c.s) AS m
+11)----------Aggregate: groupBy=[[]], aggr=[[max(c.s)]]
+12)------------Projection: c.s
+13)--------------MaterializedCteScan: name=c
+physical_plan
+01)MaterializedCteExec: name=c
+02)--ProjectionExec: expr=[k@0 as k, sum(t.v)@1 as s]
+03)----AggregateExec: mode=FinalPartitioned, gby=[k@0 as k], aggr=[sum(t.v)]
+04)------RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[k@0 as k], aggr=[sum(t.v)]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(m@0, s@1)], projection=[k@1]
+08)----ProjectionExec: expr=[max(c.s)@0 as m]
+09)------AggregateExec: mode=Final, gby=[], aggr=[max(c.s)]
+10)--------CoalescePartitionsExec
+11)----------AggregateExec: mode=Partial, gby=[], aggr=[max(c.s)]
+12)------------ProjectionExec: expr=[s@1 as s]
+13)--------------MaterializedCteScanExec: name=c
+14)----MaterializedCteScanExec: name=c
+
+query I
+WITH c AS (SELECT k, sum(v) AS s FROM t GROUP BY k),
+     d AS (SELECT max(s) AS m FROM c)
+SELECT c.k FROM c JOIN d ON c.s = d.m
+----
+4
+
+# `d` is a cheap body on `c` and is inlined at its two references. `c` has one
+# reference in the query text, and two references after `d` is inlined, so it
+# stays materialized.
+query TT
+EXPLAIN WITH c AS (SELECT k, sum(v) AS s FROM t GROUP BY k),
+     d AS (SELECT k, s FROM c WHERE s > 10)
+SELECT a.k FROM d a JOIN d b ON a.s = b.s
+----
+logical_plan
+01)MaterializedCte: name=c, automatic=true
+02)--SubqueryAlias: c
+03)----Projection: t.k, sum(t.v) AS s
+04)------Aggregate: groupBy=[[t.k]], aggr=[[sum(CAST(t.v AS Int64))]]
+05)--------TableScan: t projection=[k, v]
+06)--Projection: a.k
+07)----Inner Join: a.s = b.s
+08)------SubqueryAlias: a
+09)--------SubqueryAlias: d
+10)----------Filter: c.s > Int64(10)
+11)------------MaterializedCteScan: name=c
+12)------SubqueryAlias: b
+13)--------SubqueryAlias: d
+14)----------Filter: c.s > Int64(10)
+15)------------Projection: c.s
+16)--------------MaterializedCteScan: name=c
+physical_plan
+01)MaterializedCteExec: name=c
+02)--ProjectionExec: expr=[k@0 as k, sum(t.v)@1 as s]
+03)----AggregateExec: mode=FinalPartitioned, gby=[k@0 as k], aggr=[sum(t.v)]
+04)------RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[k@0 as k], aggr=[sum(t.v)]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)--HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s@1, s@0)], projection=[k@0]
+08)----RepartitionExec: partitioning=Hash([s@1], 4), input_partitions=4
+09)------FilterExec: s@1 > 10
+10)--------MaterializedCteScanExec: name=c
+11)----RepartitionExec: partitioning=Hash([s@0], 4), input_partitions=4
+12)------FilterExec: s@0 > 10
+13)--------ProjectionExec: expr=[s@1 as s]
+14)----------MaterializedCteScanExec: name=c
+
+query I rowsort
+WITH c AS (SELECT k, sum(v) AS s FROM t GROUP BY k),
+     d AS (SELECT k, s FROM c WHERE s > 10)
+SELECT a.k FROM d a JOIN d b ON a.s = b.s
+----
+2
+3
+4
+
+# `c` has one reference, in the body of `d`, and is inlined into that body.
+# `d` has two references and stays materialized.
+query TT
+EXPLAIN WITH c AS (SELECT k, sum(v) AS s FROM t GROUP BY k),
+     d AS (SELECT s, count(*) AS n FROM c GROUP BY s)
+SELECT a.s FROM d a JOIN d b ON a.n = b.n
+----
+logical_plan
+01)MaterializedCte: name=d, automatic=true
+02)--SubqueryAlias: d
+03)----Projection: c.s, count(Int64(1)) AS count(*) AS n
+04)------Aggregate: groupBy=[[c.s]], aggr=[[count(Int64(1))]]
+05)--------SubqueryAlias: c
+06)----------Projection: sum(t.v) AS s
+07)------------Aggregate: groupBy=[[t.k]], aggr=[[sum(CAST(t.v AS Int64))]]
+08)--------------TableScan: t projection=[k, v]
+09)--Projection: a.s
+10)----Inner Join: a.n = b.n
+11)------SubqueryAlias: a
+12)--------MaterializedCteScan: name=d
+13)------SubqueryAlias: b
+14)--------Projection: d.n
+15)----------MaterializedCteScan: name=d
+physical_plan
+01)MaterializedCteExec: name=d
+02)--ProjectionExec: expr=[s@0 as s, count(Int64(1))@1 as n]
+03)----AggregateExec: mode=FinalPartitioned, gby=[s@0 as s], aggr=[count(Int64(1))]
+04)------RepartitionExec: partitioning=Hash([s@0], 4), input_partitions=4
+05)--------AggregateExec: mode=Partial, gby=[s@0 as s], aggr=[count(Int64(1))]
+06)----------ProjectionExec: expr=[sum(t.v)@1 as s]
+07)------------AggregateExec: mode=FinalPartitioned, gby=[k@0 as k], aggr=[sum(t.v)]
+08)--------------RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=1
+09)----------------AggregateExec: mode=Partial, gby=[k@0 as k], aggr=[sum(t.v)]
+10)------------------DataSourceExec: partitions=1, partition_sizes=[1]
+11)--HashJoinExec: mode=Partitioned, join_type=Inner, on=[(n@1, n@0)], projection=[s@0]
+12)----RepartitionExec: partitioning=Hash([n@1], 4), input_partitions=4
+13)------MaterializedCteScanExec: name=d
+14)----RepartitionExec: partitioning=Hash([n@0], 4), input_partitions=4
+15)------ProjectionExec: expr=[n@1 as n]
+16)--------MaterializedCteScanExec: name=d
+
+# Type coercion changes the type of `a` in the body from Null to Int64, and
+# the scans get the new type.
+query II
+WITH c AS (SELECT DISTINCT a, b FROM (SELECT NULL a, 12 b UNION ALL SELECT 11 a, 13 b))
+SELECT x.a, x.b FROM c x JOIN c y ON x.a = y.a
+----
+11 13
+
+# A CTE in a subquery, and a CTE with a column list.
+query I rowsort
+SELECT k FROM t WHERE v IN (
+  WITH c(x) AS (SELECT sum(v) FROM t GROUP BY k)
+  SELECT a.x FROM c a JOIN c b ON a.x = b.x WHERE a.x > 15
+)
+----
+2
+3
+4
+
+# A body that refers to the outer query is inlined by the SQL planner.
+query II rowsort
+SELECT k, (WITH c AS (SELECT sum(v) AS s FROM t WHERE t.k = o.k)
+           SELECT s FROM c) FROM t o
+----
+1 10
+2 20
+3 30
+4 40
+
+# A recursive CTE is planned as before.
+query TT
+EXPLAIN WITH RECURSIVE n AS (SELECT 1 AS i UNION ALL SELECT i + 1 FROM n WHERE i < 3)
+SELECT a.i FROM n a JOIN n b ON a.i = b.i
+----
+logical_plan
+01)Projection: a.i
+02)--Inner Join: a.i = b.i
+03)----SubqueryAlias: a
+04)------SubqueryAlias: n
+05)--------RecursiveQuery: is_distinct=false
+06)----------Projection: Int64(1) AS i
+07)------------EmptyRelation: rows=1
+08)----------Projection: n.i + Int64(1)
+09)------------Filter: n.i < Int64(3)
+10)--------------TableScan: n projection=[i]
+11)----SubqueryAlias: b
+12)------SubqueryAlias: n
+13)--------RecursiveQuery: is_distinct=false
+14)----------Projection: Int64(1) AS i
+15)------------EmptyRelation: rows=1
+16)----------Projection: n.i + Int64(1)
+17)------------Filter: n.i < Int64(3)
+18)--------------TableScan: n projection=[i]
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=Inner, on=[(i@0, i@0)], projection=[i@0]
+02)--RepartitionExec: partitioning=Hash([i@0], 4), input_partitions=1
+03)----RecursiveQueryExec: name=n, is_distinct=false
+04)------ProjectionExec: expr=[CAST(1 AS Int64) as i]
+05)--------PlaceholderRowExec
+06)------CoalescePartitionsExec
+07)--------ProjectionExec: expr=[i@0 + 1 as i]
+08)----------FilterExec: i@0 < 3
+09)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+10)--------------WorkTableExec: name=n
+11)--RepartitionExec: partitioning=Hash([i@0], 4), input_partitions=1
+12)----RecursiveQueryExec: name=n, is_distinct=false
+13)------ProjectionExec: expr=[CAST(1 AS Int64) as i]
+14)--------PlaceholderRowExec
+15)------CoalescePartitionsExec
+16)--------ProjectionExec: expr=[i@0 + 1 as i]
+17)----------FilterExec: i@0 < 3
+18)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+19)--------------WorkTableExec: name=n
+
+# SELECT INTO keeps the DDL statement at the root, so the CTE is inlined.
+statement ok
+WITH c AS (SELECT k, sum(v) AS s FROM t GROUP BY k)
+SELECT a.k INTO into_t FROM c a JOIN c b ON a.s = b.s
+
+query I rowsort
+SELECT * FROM into_t
+----
+1
+2
+3
+4
+
+statement ok
+DROP TABLE into_t;
+
+# CREATE TABLE AS and CREATE VIEW keep the materialized CTE.
+statement ok
+CREATE TABLE ctas_t AS
+WITH c AS (SELECT k, sum(v) AS s FROM t GROUP BY k)
+SELECT a.k FROM c a JOIN c b ON a.s = b.s
+
+query I
+SELECT count(*) FROM ctas_t
+----
+4
+
+statement ok
+DROP TABLE ctas_t;
+
+statement ok
+CREATE VIEW cte_v AS
+WITH c AS (SELECT k, sum(v) AS s FROM t GROUP BY k)
+SELECT a.k FROM c a JOIN c b ON a.s = b.s
+
+query I
+SELECT count(*) FROM cte_v x JOIN cte_v y ON x.k = y.k
+----
+4
+
+statement ok
+DROP VIEW cte_v;
+
+# The directives override the rule. They need the PostgreSQL dialect.
+statement ok
+set datafusion.sql_parser.dialect = 'PostgreSQL';
+
+# NOT MATERIALIZED: two references to an aggregate body, inlined.
+query TT
+EXPLAIN WITH c AS NOT MATERIALIZED (SELECT k, sum(v) AS s FROM t GROUP BY k)
+SELECT a.k FROM c a JOIN c b ON a.s = b.s
+----
+logical_plan
+01)Projection: a.k
+02)--Inner Join: a.s = b.s
+03)----SubqueryAlias: a
+04)------SubqueryAlias: c
+05)--------Projection: t.k, sum(t.v) AS s
+06)----------Aggregate: groupBy=[[t.k]], aggr=[[sum(CAST(t.v AS Int64))]]
+07)------------TableScan: t projection=[k, v]
+08)----SubqueryAlias: b
+09)------SubqueryAlias: c
+10)--------Projection: sum(t.v) AS s
+11)----------Aggregate: groupBy=[[t.k]], aggr=[[sum(CAST(t.v AS Int64))]]
+12)------------TableScan: t projection=[k, v]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(s@0, s@1)], projection=[k@1]
+02)--CoalescePartitionsExec
+03)----ProjectionExec: expr=[sum(t.v)@1 as s]
+04)------AggregateExec: mode=FinalPartitioned, gby=[k@0 as k], aggr=[sum(t.v)]
+05)--------RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=1
+06)----------AggregateExec: mode=Partial, gby=[k@0 as k], aggr=[sum(t.v)]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+08)--ProjectionExec: expr=[k@0 as k, sum(t.v)@1 as s]
+09)----AggregateExec: mode=FinalPartitioned, gby=[k@0 as k], aggr=[sum(t.v)]
+10)------RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=1
+11)--------AggregateExec: mode=Partial, gby=[k@0 as k], aggr=[sum(t.v)]
+12)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# MATERIALIZED: one reference to a cheap body, materialized. The node is not
+# marked as automatic.
+query TT
+EXPLAIN WITH c AS MATERIALIZED (SELECT k, v * 2 AS v2 FROM t)
+SELECT k FROM c WHERE v2 > 30
+----
+logical_plan
+01)MaterializedCte: name=c
+02)--SubqueryAlias: c
+03)----Projection: t.k, CAST(t.v AS Int64) * Int64(2) AS v2
+04)------TableScan: t projection=[k, v]
+05)--Projection: c.k
+06)----Filter: c.v2 > Int64(30)
+07)------MaterializedCteScan: name=c
+physical_plan
+01)MaterializedCteExec: name=c
+02)--ProjectionExec: expr=[k@0 as k, CAST(v@1 AS Int64) * 2 as v2]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--FilterExec: v2@1 > 30, projection=[k@0]
+05)----MaterializedCteScanExec: name=c
+
+# MATERIALIZED: a volatile body is evaluated once.
+query I
+WITH r AS MATERIALIZED (SELECT random() AS x)
+SELECT count(DISTINCT x) FROM (SELECT x FROM r UNION ALL SELECT x FROM r)
+----
+1
+
+# A dialect other than PostgreSQL.
+statement ok
+set datafusion.sql_parser.dialect = 'MySQL';
+
+query TT
+EXPLAIN WITH c AS (SELECT k, sum(v) AS s FROM t GROUP BY k)
+SELECT a.k FROM c a JOIN c b ON a.s = b.s
+----
+logical_plan
+01)MaterializedCte: name=c, automatic=true
+02)--SubqueryAlias: c
+03)----Projection: t.k, sum(t.v) AS s
+04)------Aggregate: groupBy=[[t.k]], aggr=[[sum(CAST(t.v AS Int64))]]
+05)--------TableScan: t projection=[k, v]
+06)--Projection: a.k
+07)----Inner Join: a.s = b.s
+08)------SubqueryAlias: a
+09)--------MaterializedCteScan: name=c
+10)------SubqueryAlias: b
+11)--------Projection: c.s
+12)----------MaterializedCteScan: name=c
+physical_plan
+01)MaterializedCteExec: name=c
+02)--ProjectionExec: expr=[k@0 as k, sum(t.v)@1 as s]
+03)----AggregateExec: mode=FinalPartitioned, gby=[k@0 as k], aggr=[sum(t.v)]
+04)------RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[k@0 as k], aggr=[sum(t.v)]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)--HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s@1, s@0)], projection=[k@0]
+08)----RepartitionExec: partitioning=Hash([s@1], 4), input_partitions=4
+09)------MaterializedCteScanExec: name=c
+10)----RepartitionExec: partitioning=Hash([s@0], 4), input_partitions=4
+11)------ProjectionExec: expr=[s@1 as s]
+12)--------MaterializedCteScanExec: name=c
+
+statement ok
+set datafusion.sql_parser.dialect = 'Generic';
+
+# An unbounded body cannot be buffered. An automatic CTE with such a body
+# stays in the logical plan, and the physical planner inlines it, so the query
+# still plans.
+statement ok
+CREATE UNBOUNDED EXTERNAL TABLE unbounded_t(c1 integer, c2 integer, c3 integer)
+STORED AS CSV
+LOCATION '../core/tests/data/empty.csv'
+OPTIONS ('format.has_header' 'true');
+
+query TT
+EXPLAIN WITH u AS (SELECT c1 FROM unbounded_t UNION ALL SELECT c1 + 1 FROM unbounded_t)
+SELECT c1 FROM u UNION ALL SELECT c1 FROM u
+----
+logical_plan
+01)MaterializedCte: name=u, automatic=true
+02)--SubqueryAlias: u
+03)----Union
+04)------Projection: CAST(unbounded_t.c1 AS Int64) AS c1
+05)--------TableScan: unbounded_t projection=[c1]
+06)------Projection: CAST(unbounded_t.c1 AS Int64) + Int64(1) AS c1
+07)--------TableScan: unbounded_t projection=[c1]
+08)--Union
+09)----MaterializedCteScan: name=u
+10)----MaterializedCteScan: name=u
+physical_plan
+01)UnionExec
+02)--UnionExec
+03)----ProjectionExec: expr=[CAST(c1@0 AS Int64) as c1]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------StreamingTableExec: partition_sizes=1, projection=[c1], infinite_source=true
+06)----ProjectionExec: expr=[CAST(c1@0 AS Int64) + 1 as c1]
+07)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------StreamingTableExec: partition_sizes=1, projection=[c1], infinite_source=true
+09)--UnionExec
+10)----ProjectionExec: expr=[CAST(c1@0 AS Int64) as c1]
+11)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+12)--------StreamingTableExec: partition_sizes=1, projection=[c1], infinite_source=true
+13)----ProjectionExec: expr=[CAST(c1@0 AS Int64) + 1 as c1]
+14)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+15)--------StreamingTableExec: partition_sizes=1, projection=[c1], infinite_source=true
+
+# The same with one reference in a scalar subquery.
+query TT
+EXPLAIN WITH u AS (SELECT c1 FROM unbounded_t UNION ALL SELECT c1 + 1 FROM unbounded_t)
+SELECT c1 FROM u WHERE c1 = (SELECT c1 FROM u LIMIT 1)
+----
+logical_plan
+01)MaterializedCte: name=u, automatic=true
+02)--SubqueryAlias: u
+03)----Union
+04)------Projection: CAST(unbounded_t.c1 AS Int64) AS c1
+05)--------TableScan: unbounded_t projection=[c1]
+06)------Projection: CAST(unbounded_t.c1 AS Int64) + Int64(1) AS c1
+07)--------TableScan: unbounded_t projection=[c1]
+08)--Filter: u.c1 = (<subquery>)
+09)----Subquery:
+10)------Limit: skip=0, fetch=1
+11)--------MaterializedCteScan: name=u
+12)----MaterializedCteScan: name=u
+physical_plan
+01)ScalarSubqueryExec: subqueries=1
+02)--UnionExec
+03)----FilterExec: c1@0 = scalar_subquery(<pending>)
+04)------ProjectionExec: expr=[CAST(c1@0 AS Int64) as c1]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------StreamingTableExec: partition_sizes=1, projection=[c1], infinite_source=true
+07)----FilterExec: c1@0 = scalar_subquery(<pending>)
+08)------ProjectionExec: expr=[CAST(c1@0 AS Int64) + 1 as c1]
+09)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+10)----------StreamingTableExec: partition_sizes=1, projection=[c1], infinite_source=true
+11)--CoalescePartitionsExec: fetch=1
+12)----UnionExec
+13)------ProjectionExec: expr=[CAST(c1@0 AS Int64) as c1]
+14)--------LocalLimitExec: fetch=1
+15)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+16)------------StreamingTableExec: partition_sizes=1, projection=[c1], infinite_source=true
+17)------ProjectionExec: expr=[CAST(c1@0 AS Int64) + 1 as c1]
+18)--------LocalLimitExec: fetch=1
+19)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+20)------------StreamingTableExec: partition_sizes=1, projection=[c1], infinite_source=true
+
+# The query also runs. The file has no rows.
+query I
+WITH u AS (SELECT c1 FROM unbounded_t UNION ALL SELECT c1 + 1 FROM unbounded_t)
+SELECT c1 FROM u WHERE c1 = (SELECT c1 FROM u LIMIT 1)
+----
+
+statement ok
+DROP TABLE unbounded_t;
+
+# Limits and automatic materialization.
+
+# A `LIMIT` above all references inlines the CTE, so the limit can stop each
+# copy early.
+query TT
+EXPLAIN WITH c AS (SELECT k, sum(v) AS s FROM t GROUP BY k)
+SELECT a.k FROM c a JOIN c b ON a.s = b.s LIMIT 1
+----
+logical_plan
+01)Projection: a.k
+02)--Limit: skip=0, fetch=1
+03)----Inner Join: a.s = b.s
+04)------SubqueryAlias: a
+05)--------SubqueryAlias: c
+06)----------Projection: t.k, sum(t.v) AS s
+07)------------Aggregate: groupBy=[[t.k]], aggr=[[sum(CAST(t.v AS Int64))]]
+08)--------------TableScan: t projection=[k, v]
+09)------SubqueryAlias: b
+10)--------SubqueryAlias: c
+11)----------Projection: sum(t.v) AS s
+12)------------Aggregate: groupBy=[[t.k]], aggr=[[sum(CAST(t.v AS Int64))]]
+13)--------------TableScan: t projection=[k, v]
+physical_plan
+01)CoalescePartitionsExec: fetch=1
+02)--ProjectionExec: expr=[k@0 as k]
+03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(s@0, s@1)], projection=[k@1, s@2, s@0], fetch=1
+04)------CoalescePartitionsExec
+05)--------ProjectionExec: expr=[sum(t.v)@1 as s]
+06)----------AggregateExec: mode=FinalPartitioned, gby=[k@0 as k], aggr=[sum(t.v)]
+07)------------RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=1
+08)--------------AggregateExec: mode=Partial, gby=[k@0 as k], aggr=[sum(t.v)]
+09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
+10)------ProjectionExec: expr=[k@0 as k, sum(t.v)@1 as s]
+11)--------AggregateExec: mode=FinalPartitioned, gby=[k@0 as k], aggr=[sum(t.v)]
+12)----------RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=1
+13)------------AggregateExec: mode=Partial, gby=[k@0 as k], aggr=[sum(t.v)]
+14)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I rowsort
+WITH c AS (SELECT k, sum(v) AS s FROM t GROUP BY k)
+SELECT a.k FROM c a JOIN c b ON a.s = b.s ORDER BY a.k LIMIT 2
+----
+1
+2
+
+# A `LIMIT` above only one side of the join keeps the CTE materialized,
+# because the other side reads the full body.
+query TT
+EXPLAIN WITH c AS (SELECT k, sum(v) AS s FROM t GROUP BY k)
+SELECT a.k FROM (SELECT * FROM c LIMIT 2) a JOIN c b ON a.s = b.s
+----
+logical_plan
+01)MaterializedCte: name=c, automatic=true
+02)--SubqueryAlias: c
+03)----Projection: t.k, sum(t.v) AS s
+04)------Aggregate: groupBy=[[t.k]], aggr=[[sum(CAST(t.v AS Int64))]]
+05)--------TableScan: t projection=[k, v]
+06)--Projection: a.k
+07)----Inner Join: a.s = b.s
+08)------SubqueryAlias: a
+09)--------Limit: skip=0, fetch=2
+10)----------MaterializedCteScan: name=c
+11)------SubqueryAlias: b
+12)--------Projection: c.s
+13)----------MaterializedCteScan: name=c
+physical_plan
+01)MaterializedCteExec: name=c
+02)--ProjectionExec: expr=[k@0 as k, sum(t.v)@1 as s]
+03)----AggregateExec: mode=FinalPartitioned, gby=[k@0 as k], aggr=[sum(t.v)]
+04)------RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[k@0 as k], aggr=[sum(t.v)]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(s@1, s@0)], projection=[k@0]
+08)----CoalescePartitionsExec: fetch=2
+09)------LocalLimitExec: fetch=2
+10)--------MaterializedCteScanExec: name=c
+11)----ProjectionExec: expr=[s@1 as s]
+12)------MaterializedCteScanExec: name=c
+
+query I rowsort
+WITH c AS (SELECT k, sum(v) AS s FROM t GROUP BY k)
+SELECT a.k FROM (SELECT * FROM c ORDER BY k LIMIT 2) a JOIN c b ON a.s = b.s
+----
+1
+2
+
+# Without a limit the CTE stays materialized.
+query TT
+EXPLAIN WITH c AS (SELECT k, sum(v) AS s FROM t GROUP BY k)
+SELECT a.k FROM c a JOIN c b ON a.s = b.s
+----
+logical_plan
+01)MaterializedCte: name=c, automatic=true
+02)--SubqueryAlias: c
+03)----Projection: t.k, sum(t.v) AS s
+04)------Aggregate: groupBy=[[t.k]], aggr=[[sum(CAST(t.v AS Int64))]]
+05)--------TableScan: t projection=[k, v]
+06)--Projection: a.k
+07)----Inner Join: a.s = b.s
+08)------SubqueryAlias: a
+09)--------MaterializedCteScan: name=c
+10)------SubqueryAlias: b
+11)--------Projection: c.s
+12)----------MaterializedCteScan: name=c
+physical_plan
+01)MaterializedCteExec: name=c
+02)--ProjectionExec: expr=[k@0 as k, sum(t.v)@1 as s]
+03)----AggregateExec: mode=FinalPartitioned, gby=[k@0 as k], aggr=[sum(t.v)]
+04)------RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[k@0 as k], aggr=[sum(t.v)]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)--HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s@1, s@0)], projection=[k@0]
+08)----RepartitionExec: partitioning=Hash([s@1], 4), input_partitions=4
+09)------MaterializedCteScanExec: name=c
+10)----RepartitionExec: partitioning=Hash([s@0], 4), input_partitions=4
+11)------ProjectionExec: expr=[s@1 as s]
+12)--------MaterializedCteScanExec: name=c
+
+query I rowsort
+WITH c AS (SELECT k, sum(v) AS s FROM t GROUP BY k)
+SELECT a.k FROM c a JOIN c b ON a.s = b.s
+----
+1
+2
+3
+4
+
+statement ok
+set datafusion.optimizer.enable_automatic_cte_materialization = false;
+
+statement ok
+DROP TABLE t;
