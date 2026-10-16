@@ -111,6 +111,7 @@ impl<T: ArrowPrimitiveType + Send> ValueState for PrimitiveValueState<T> {
 ///    in the input, while `BytesValueState` needs to support setting `NULL` values
 ///    to correctly implement `RESPECT NULLS` behavior.
 ///
+#[derive(Debug)]
 pub(crate) struct BytesValueState {
     vals: Vec<Option<Vec<u8>>>,
     data_type: DataType,
