@@ -117,6 +117,11 @@ const NANOS_PER_MILLISECOND: i64 = 1_000_000;
 /// example a daylight saving transition from 00:00 to 01:00), in which case
 /// it is the first instant after the gap. If midnight occurs twice (a
 /// transition back from 01:00 to 00:00) the earlier instant is returned.
+///
+/// This follows the convention for local times that fall in a gap or are
+/// ambiguous described in [RFC 5545 §3.3.5].
+///
+/// [RFC 5545 §3.3.5]: https://datatracker.ietf.org/doc/html/rfc5545#section-3.3.5
 fn first_instant_of_date(date: NaiveDate, tz: Option<&Tz>) -> Option<NaiveDateTime> {
     let midnight = date.and_hms_opt(0, 0, 0)?;
     let Some(tz) = tz else {
@@ -127,10 +132,20 @@ fn first_instant_of_date(date: NaiveDate, tz: Option<&Tz>) -> Option<NaiveDateTi
         LocalResult::Ambiguous(earliest, _) => Some(earliest.naive_utc()),
         LocalResult::None => {
             // Midnight falls in a gap, so the first instant of the day is the
-            // instant of the transition itself. Find the offset in effect
-            // before the transition by probing a day earlier (any offset is
-            // less than a day, so that instant is before the transition), and
-            // use it to convert midnight to the transition instant.
+            // instant of the transition itself. To find it we need the UTC
+            // offset that was in effect just before the transition to follow
+            // the RFC convention.
+            //
+            // `midnight` is a local time, but here it is deliberately treated
+            // as if it were UTC: we only need *some* UTC instant that is before
+            // the transition and after any earlier transition, and the exact
+            // value does not matter.
+            //
+            // Thus, Local midnight minus one day, read as UTC, is at most
+            // |offset| < 1 day away from the true local midnight, and thus
+            // guaranteed to fall before the transition. This assumes that
+            // transitions are separated by more than two days, so subtracting a
+            // day also cannot cross an earlier one.
             let probe = midnight.checked_sub_signed(Duration::days(1))?;
             let offset_before = tz.offset_from_utc_datetime(&probe).fix();
             let transition = midnight.checked_sub_offset(offset_before)?;
