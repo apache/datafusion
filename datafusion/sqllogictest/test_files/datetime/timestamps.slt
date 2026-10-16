@@ -823,13 +823,13 @@ query error
 SELECT DATE_BIN(INTERVAL '0 second', 25, TIMESTAMP '1970-01-01T00:00:00Z')
 
 # not support interval 0
-statement error Execution error: DATE_BIN stride must be non-zero
+statement error Execution error: DATE_BIN stride must be greater than zero
 SELECT DATE_BIN(INTERVAL '0 second', TIMESTAMP '2022-08-03 14:38:50.000000006Z', TIMESTAMP '1970-01-01T00:00:00Z')
 
-statement error Execution error: DATE_BIN stride must be non-zero
+statement error Execution error: DATE_BIN stride must be greater than zero
 SELECT DATE_BIN(INTERVAL '0 month', TIMESTAMP '2022-08-03 14:38:50.000000006Z')
 
-statement error Execution error: DATE_BIN stride must be non-zero
+statement error Execution error: DATE_BIN stride must be greater than zero
 SELECT
   DATE_BIN(INTERVAL '0' minute, time) AS time,
   count(val)
@@ -1679,122 +1679,121 @@ ORDER BY date_trunc('hour', ts);
 562129260 562125600
 562129259 562129200
 
-# Typed bounds from a child function must retain named timezone metadata
-query II
-SELECT
-  c,
-  arrow_cast(
-    date_trunc('hour', from_unixtime(c, 'America/Goose_Bay')),
-    'Int64'
-  ) AS truncated
-FROM (
-  SELECT column1 AS c
-  FROM (
-    VALUES
-      (562129260::bigint),
-      (562129259::bigint)
-  )
-  ORDER BY c
-  LIMIT 2
-)
-ORDER BY date_trunc('hour', from_unixtime(c, 'America/Goose_Bay'));
-----
-562129260 562125600
-562129259 562129200
+# The ordering propagation tests below read from tables declared sorted with
+# `WITH ORDER`, so a plan has no sort at all when the ordering propagates, and
+# exactly the final sort when it must not. Each file is written in its
+# declared order.
 
 # Typed bounds allow date_trunc to propagate ordering through timezone-free from_unixtime
+query I
+COPY (VALUES (3600::bigint), (7200::bigint))
+TO 'test_files/scratch/timestamps/ordered_epochs.csv'
+OPTIONS ('format.has_header' 'true');
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE ordered_epochs (c BIGINT)
+STORED AS CSV
+WITH ORDER (c ASC)
+LOCATION 'test_files/scratch/timestamps/ordered_epochs.csv'
+OPTIONS ('format.has_header' 'true');
+
 query TT
 EXPLAIN SELECT date_trunc('hour', from_unixtime(c)) AS truncated
-FROM (
-  SELECT column1 AS c
-  FROM (
-    VALUES
-      (7200::bigint),
-      (3600::bigint)
-  )
-  ORDER BY c
-  LIMIT 2
-)
+FROM ordered_epochs
 ORDER BY date_trunc('hour', from_unixtime(c));
 ----
 logical_plan
 01)Sort: truncated ASC NULLS LAST
-02)--Projection: date_trunc(Utf8("hour"), from_unixtime(c)) AS truncated
-03)----Sort: c ASC NULLS LAST, fetch=2
-04)------Projection: column1 AS c
-05)--------Values: (Int64(7200)), (Int64(3600))
+02)--Projection: date_trunc(Utf8("hour"), from_unixtime(ordered_epochs.c)) AS truncated
+03)----TableScan: ordered_epochs projection=[c]
 physical_plan
-01)ProjectionExec: expr=[date_trunc(hour, from_unixtime(column1@0)) as truncated]
-02)--SortExec: TopK(fetch=2), expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortPreservingMergeExec: [truncated@0 ASC NULLS LAST]
+02)--ProjectionExec: expr=[date_trunc(hour, from_unixtime(c@0)) as truncated]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/ordered_epochs.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], file_type=csv, has_header=true
+
+statement ok
+DROP TABLE ordered_epochs;
 
 # Typed bounds allow date_trunc to propagate ordering through timezone-free date_bin
+query I
+COPY (
+  SELECT arrow_cast(column1, 'Timestamp(Second)')
+  FROM (VALUES (3600::bigint), (7200::bigint))
+)
+TO 'test_files/scratch/timestamps/ordered_seconds.csv'
+OPTIONS ('format.has_header' 'true');
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE ordered_seconds (ts TIMESTAMP(0))
+STORED AS CSV
+WITH ORDER (ts ASC)
+LOCATION 'test_files/scratch/timestamps/ordered_seconds.csv'
+OPTIONS ('format.has_header' 'true');
+
 query TT
 EXPLAIN SELECT date_trunc('hour', date_bin(INTERVAL '1 minute', ts)) AS truncated
-FROM (
-  SELECT arrow_cast(column1, 'Timestamp(Second)') AS ts
-  FROM (
-    VALUES
-      (7200::bigint),
-      (3600::bigint)
-  )
-  ORDER BY ts
-  LIMIT 2
-)
+FROM ordered_seconds
 ORDER BY date_trunc('hour', date_bin(INTERVAL '1 minute', ts));
 ----
 logical_plan
 01)Sort: truncated ASC NULLS LAST
-02)--Projection: date_trunc(Utf8("hour"), date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"), ts)) AS truncated
-03)----Sort: ts ASC NULLS LAST, fetch=2
-04)------Projection: CAST(column1 AS Timestamp(s)) AS ts
-05)--------Values: (Int64(7200)), (Int64(3600))
+02)--Projection: date_trunc(Utf8("hour"), date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"), ordered_seconds.ts)) AS truncated
+03)----TableScan: ordered_seconds projection=[ts]
 physical_plan
-01)ProjectionExec: expr=[date_trunc(hour, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }, ts@0)) as truncated]
-02)--SortExec: TopK(fetch=2), expr=[ts@0 ASC NULLS LAST], preserve_partitioning=[false]
-03)----ProjectionExec: expr=[CAST(column1@0 AS Timestamp(s)) as ts]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortPreservingMergeExec: [truncated@0 ASC NULLS LAST]
+02)--ProjectionExec: expr=[date_trunc(hour, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }, ts@0)) as truncated]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/ordered_seconds.csv]]}, projection=[ts], output_ordering=[ts@0 ASC NULLS LAST], file_type=csv, has_header=true
+
+statement ok
+DROP TABLE ordered_seconds;
 
 # Coarse-precision values outside the nanosecond range are binned without
 # overflowing, so date_bin keeps both their values and their ordering.
-query TT
-EXPLAIN SELECT date_trunc('second', date_bin(INTERVAL '1 second', ts)) AS b
-FROM (
-  SELECT arrow_cast(column1, 'Timestamp(Second)') AS ts
+query I
+COPY (
+  SELECT arrow_cast(column1, 'Timestamp(Second)')
   FROM (VALUES
     (-10000000000::bigint),
     (0::bigint),
     (10000000000::bigint)
   )
-  ORDER BY ts
-  LIMIT 3
 )
+TO 'test_files/scratch/timestamps/ordered_wide_seconds.csv'
+OPTIONS ('format.has_header' 'true');
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE ordered_wide_seconds (ts TIMESTAMP(0))
+STORED AS CSV
+WITH ORDER (ts ASC)
+LOCATION 'test_files/scratch/timestamps/ordered_wide_seconds.csv'
+OPTIONS ('format.has_header' 'true');
+
+query TT
+EXPLAIN SELECT date_trunc('second', date_bin(INTERVAL '1 second', ts)) AS b
+FROM ordered_wide_seconds
 ORDER BY b ASC NULLS LAST
 ----
 logical_plan
 01)Sort: b ASC NULLS LAST
-02)--Projection: date_trunc(Utf8("second"), date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 1000000000 }"), ts)) AS b
-03)----Sort: ts ASC NULLS LAST, fetch=3
-04)------Projection: CAST(column1 AS Timestamp(s)) AS ts
-05)--------Values: (Int64(-10000000000) AS (- Int64(10000000000))), (Int64(0)), (Int64(10000000000))
+02)--Projection: date_trunc(Utf8("second"), date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 1000000000 }"), ordered_wide_seconds.ts)) AS b
+03)----TableScan: ordered_wide_seconds projection=[ts]
 physical_plan
-01)ProjectionExec: expr=[date_trunc(second, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 1000000000 }, ts@0)) as b]
-02)--SortExec: TopK(fetch=3), expr=[ts@0 ASC NULLS LAST], preserve_partitioning=[false]
-03)----ProjectionExec: expr=[CAST(column1@0 AS Timestamp(s)) as ts]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortPreservingMergeExec: [b@0 ASC NULLS LAST]
+02)--ProjectionExec: expr=[date_trunc(second, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 1000000000 }, ts@0)) as b]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/ordered_wide_seconds.csv]]}, projection=[ts], output_ordering=[ts@0 ASC NULLS LAST], file_type=csv, has_header=true
 
 query P
 SELECT date_trunc('second', date_bin(INTERVAL '1 second', ts)) AS b
-FROM (
-  SELECT arrow_cast(column1, 'Timestamp(Second)') AS ts
-  FROM (VALUES
-    (-10000000000::bigint),
-    (0::bigint),
-    (10000000000::bigint)
-  )
-  ORDER BY ts
-  LIMIT 3
-)
+FROM ordered_wide_seconds
 ORDER BY b ASC NULLS LAST
 ----
 1653-02-10T06:13:20
@@ -1805,136 +1804,83 @@ ORDER BY b ASC NULLS LAST
 # range type.
 query P
 SELECT date_bin(INTERVAL '1 second', date_trunc('second', ts)) AS b
-FROM (
-  SELECT arrow_cast(column1, 'Timestamp(Second)') AS ts
-  FROM (VALUES
-    (-10000000000::bigint),
-    (0::bigint),
-    (10000000000::bigint)
-  )
-  ORDER BY ts
-  LIMIT 3
-)
+FROM ordered_wide_seconds
 ORDER BY b ASC NULLS LAST
 ----
 1653-02-10T06:13:20
 1970-01-01T00:00:00
 2286-11-20T17:46:40
 
-# A negative month stride does not shift every bin by the same amount: here
-# 2023-01-01 bins forward to 2023-02-28, while 2023-01-31 bins to itself. The
-# output is not sorted, so date_bin keeps the final sort for it.
-query TT
-EXPLAIN SELECT date_bin(INTERVAL '-1 month', ts, TIMESTAMP '2023-01-31 00:00:00') AS b
-FROM (
-  SELECT arrow_cast(column1, 'Timestamp(Second)') AS ts
-  FROM (VALUES
-    (TIMESTAMP '2023-01-01 00:00:00'),
-    (TIMESTAMP '2023-01-31 00:00:00')
-  )
-  ORDER BY ts
-  LIMIT 2
-)
-ORDER BY b
-----
-logical_plan
-01)Sort: b ASC NULLS LAST
-02)--Projection: date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: -1, days: 0, nanoseconds: 0 }"), ts, TimestampNanosecond(1675123200000000000, None)) AS b
-03)----Sort: ts ASC NULLS LAST, fetch=2
-04)------Projection: CAST(column1 AS Timestamp(s)) AS ts
-05)--------Values: (TimestampNanosecond(1672531200000000000, None) AS Utf8("2023-01-01 00:00:00")), (TimestampNanosecond(1675123200000000000, None) AS Utf8("2023-01-31 00:00:00"))
-physical_plan
-01)SortExec: expr=[b@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--ProjectionExec: expr=[date_bin(IntervalMonthDayNano { months: -1, days: 0, nanoseconds: 0 }, ts@0, 1675123200000000000) as b]
-03)----SortExec: TopK(fetch=2), expr=[ts@0 ASC NULLS LAST], preserve_partitioning=[false]
-04)------ProjectionExec: expr=[CAST(column1@0 AS Timestamp(s)) as ts]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
-
-query P
-SELECT date_bin(INTERVAL '-1 month', ts, TIMESTAMP '2023-01-31 00:00:00') AS b
-FROM (
-  SELECT arrow_cast(column1, 'Timestamp(Second)') AS ts
-  FROM (VALUES
-    (TIMESTAMP '2023-01-01 00:00:00'),
-    (TIMESTAMP '2023-01-31 00:00:00')
-  )
-  ORDER BY ts
-  LIMIT 2
-)
-ORDER BY b
-----
-2023-01-31T00:00:00
-2023-02-28T00:00:00
-
-# Same for nanosecond timestamps.
-query P
-SELECT date_bin(INTERVAL '-1 month', ts, TIMESTAMP '2023-01-31 00:00:00') AS b
-FROM (
-  SELECT column1 AS ts
-  FROM (VALUES
-    (TIMESTAMP '2023-01-01 00:00:00'),
-    (TIMESTAMP '2023-01-31 00:00:00')
-  )
-  ORDER BY ts
-  LIMIT 2
-)
-ORDER BY b
-----
-2023-01-31T00:00:00
-2023-02-28T00:00:00
+statement ok
+DROP TABLE ordered_wide_seconds;
 
 # A positive month stride is monotonic, so the final sort is removed.
-query TT
-EXPLAIN SELECT date_bin(INTERVAL '1 month', ts, TIMESTAMP '2023-01-31 00:00:00') AS b
-FROM (
-  SELECT arrow_cast(column1, 'Timestamp(Second)') AS ts
+query I
+COPY (
+  SELECT arrow_cast(column1, 'Timestamp(Second)')
   FROM (VALUES
     (TIMESTAMP '2023-01-01 00:00:00'),
     (TIMESTAMP '2023-01-31 00:00:00')
   )
-  ORDER BY ts
-  LIMIT 2
 )
+TO 'test_files/scratch/timestamps/ordered_month_seconds.csv'
+OPTIONS ('format.has_header' 'true');
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE ordered_month_seconds (ts TIMESTAMP(0))
+STORED AS CSV
+WITH ORDER (ts ASC)
+LOCATION 'test_files/scratch/timestamps/ordered_month_seconds.csv'
+OPTIONS ('format.has_header' 'true');
+
+query TT
+EXPLAIN SELECT date_bin(INTERVAL '1 month', ts, TIMESTAMP '2023-01-31 00:00:00') AS b
+FROM ordered_month_seconds
 ORDER BY b
 ----
 logical_plan
 01)Sort: b ASC NULLS LAST
-02)--Projection: date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 1, days: 0, nanoseconds: 0 }"), ts, TimestampNanosecond(1675123200000000000, None)) AS b
-03)----Sort: ts ASC NULLS LAST, fetch=2
-04)------Projection: CAST(column1 AS Timestamp(s)) AS ts
-05)--------Values: (TimestampNanosecond(1672531200000000000, None) AS Utf8("2023-01-01 00:00:00")), (TimestampNanosecond(1675123200000000000, None) AS Utf8("2023-01-31 00:00:00"))
+02)--Projection: date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 1, days: 0, nanoseconds: 0 }"), ordered_month_seconds.ts, TimestampNanosecond(1675123200000000000, None)) AS b
+03)----TableScan: ordered_month_seconds projection=[ts]
 physical_plan
-01)ProjectionExec: expr=[date_bin(IntervalMonthDayNano { months: 1, days: 0, nanoseconds: 0 }, ts@0, 1675123200000000000) as b]
-02)--SortExec: TopK(fetch=2), expr=[ts@0 ASC NULLS LAST], preserve_partitioning=[false]
-03)----ProjectionExec: expr=[CAST(column1@0 AS Timestamp(s)) as ts]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortPreservingMergeExec: [b@0 ASC NULLS LAST]
+02)--ProjectionExec: expr=[date_bin(IntervalMonthDayNano { months: 1, days: 0, nanoseconds: 0 }, ts@0, 1675123200000000000) as b]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/ordered_month_seconds.csv]]}, projection=[ts], output_ordering=[ts@0 ASC NULLS LAST], file_type=csv, has_header=true
 
 query P
 SELECT date_bin(INTERVAL '1 month', ts, TIMESTAMP '2023-01-31 00:00:00') AS b
-FROM (
-  SELECT arrow_cast(column1, 'Timestamp(Second)') AS ts
-  FROM (VALUES
-    (TIMESTAMP '2023-01-01 00:00:00'),
-    (TIMESTAMP '2023-01-31 00:00:00')
-  )
-  ORDER BY ts
-  LIMIT 2
-)
+FROM ordered_month_seconds
 ORDER BY b
 ----
 2022-12-31T00:00:00
 2023-01-31T00:00:00
 
+statement ok
+DROP TABLE ordered_month_seconds;
+
 # Default bounds from nested functions retain their resolved output type.
 statement ok
 SET datafusion.explain.physical_plan_only = true;
 
+query I
+COPY (
+  SELECT arrow_cast(column1, 'Timestamp(Second)')
+  FROM (VALUES (3601::bigint), (90001::bigint))
+)
+TO 'test_files/scratch/timestamps/nested_trunc_ordering.csv'
+OPTIONS ('format.has_header' 'true');
+----
+2
+
 statement ok
-CREATE VIEW nested_trunc_ordering AS
-SELECT arrow_cast(column1, 'Timestamp(Second)') AS ts
-FROM (VALUES (90001::bigint), (3601::bigint))
-ORDER BY ts
-LIMIT 2;
+CREATE EXTERNAL TABLE nested_trunc_ordering (ts TIMESTAMP(0))
+STORED AS CSV
+WITH ORDER (ts ASC)
+LOCATION 'test_files/scratch/timestamps/nested_trunc_ordering.csv'
+OPTIONS ('format.has_header' 'true');
 
 query I
 SELECT arrow_cast(date_trunc('day', date_trunc('hour', ts)), 'Int64') AS bucket
@@ -1950,30 +1896,57 @@ FROM nested_trunc_ordering
 ORDER BY bucket;
 ----
 physical_plan
-01)ProjectionExec: expr=[date_trunc(day, date_trunc(hour, ts@0)) as bucket]
-02)--SortExec: TopK(fetch=2), expr=[ts@0 ASC NULLS LAST], preserve_partitioning=[false]
-03)----ProjectionExec: expr=[CAST(column1@0 AS Timestamp(s)) as ts]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortPreservingMergeExec: [bucket@0 ASC NULLS LAST]
+02)--ProjectionExec: expr=[date_trunc(day, date_trunc(hour, ts@0)) as bucket]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/nested_trunc_ordering.csv]]}, projection=[ts], output_ordering=[ts@0 ASC NULLS LAST], file_type=csv, has_header=true
 
 statement ok
-DROP VIEW nested_trunc_ordering;
+DROP TABLE nested_trunc_ordering;
 
 # Recovering a named timezone must still retain the outer sort.
+query I
+COPY (VALUES (562129259::bigint), (562129260::bigint))
+TO 'test_files/scratch/timestamps/goose_bay_epochs.csv'
+OPTIONS ('format.has_header' 'true');
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE goose_bay_epochs (c BIGINT)
+STORED AS CSV
+WITH ORDER (c ASC)
+LOCATION 'test_files/scratch/timestamps/goose_bay_epochs.csv'
+OPTIONS ('format.has_header' 'true');
+
+# Typed bounds from a child function must retain named timezone metadata
+query II
+SELECT
+  c,
+  arrow_cast(
+    date_trunc('hour', from_unixtime(c, 'America/Goose_Bay')),
+    'Int64'
+  ) AS truncated
+FROM goose_bay_epochs
+ORDER BY date_trunc('hour', from_unixtime(c, 'America/Goose_Bay'));
+----
+562129260 562125600
+562129259 562129200
+
 query TT
 EXPLAIN SELECT date_trunc('hour', from_unixtime(c, 'America/Goose_Bay')) AS bucket
-FROM (
-  SELECT column1 AS c
-  FROM (VALUES (562129260::bigint), (562129259::bigint))
-  ORDER BY c
-  LIMIT 2
-)
+FROM goose_bay_epochs
 ORDER BY bucket;
 ----
 physical_plan
-01)SortExec: expr=[bucket@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--ProjectionExec: expr=[date_trunc(hour, from_unixtime(column1@0, America/Goose_Bay)) as bucket]
-03)----SortExec: TopK(fetch=2), expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortPreservingMergeExec: [bucket@0 ASC NULLS LAST]
+02)--SortExec: expr=[bucket@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[date_trunc(hour, from_unixtime(c@0, America/Goose_Bay)) as bucket]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/goose_bay_epochs.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], file_type=csv, has_header=true
+
+statement ok
+DROP TABLE goose_bay_epochs;
 
 statement ok
 RESET datafusion.explain.physical_plan_only;
