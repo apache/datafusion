@@ -6695,9 +6695,15 @@ impl serde::Serialize for EmptyRelationNode {
         if self.produce_one_row {
             len += 1;
         }
+        if self.schema.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.EmptyRelationNode", len)?;
         if self.produce_one_row {
             struct_ser.serialize_field("produceOneRow", &self.produce_one_row)?;
+        }
+        if let Some(v) = self.schema.as_ref() {
+            struct_ser.serialize_field("schema", v)?;
         }
         struct_ser.end()
     }
@@ -6711,11 +6717,13 @@ impl<'de> serde::Deserialize<'de> for EmptyRelationNode {
         const FIELDS: &[&str] = &[
             "produce_one_row",
             "produceOneRow",
+            "schema",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             ProduceOneRow,
+            Schema,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -6738,6 +6746,7 @@ impl<'de> serde::Deserialize<'de> for EmptyRelationNode {
                     {
                         match value {
                             "produceOneRow" | "produce_one_row" => Ok(GeneratedField::ProduceOneRow),
+                            "schema" => Ok(GeneratedField::Schema),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -6758,6 +6767,7 @@ impl<'de> serde::Deserialize<'de> for EmptyRelationNode {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut produce_one_row__ = None;
+                let mut schema__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::ProduceOneRow => {
@@ -6766,10 +6776,17 @@ impl<'de> serde::Deserialize<'de> for EmptyRelationNode {
                             }
                             produce_one_row__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Schema => {
+                            if schema__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("schema"));
+                            }
+                            schema__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(EmptyRelationNode {
                     produce_one_row: produce_one_row__.unwrap_or_default(),
+                    schema: schema__,
                 })
             }
         }
@@ -20391,6 +20408,9 @@ impl serde::Serialize for PhysicalExtensionNode {
         if !self.inputs.is_empty() {
             len += 1;
         }
+        if self.plan_name.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalExtensionNode", len)?;
         if !self.node.is_empty() {
             #[allow(clippy::needless_borrow)]
@@ -20399,6 +20419,9 @@ impl serde::Serialize for PhysicalExtensionNode {
         }
         if !self.inputs.is_empty() {
             struct_ser.serialize_field("inputs", &self.inputs)?;
+        }
+        if let Some(v) = self.plan_name.as_ref() {
+            struct_ser.serialize_field("planName", v)?;
         }
         struct_ser.end()
     }
@@ -20412,12 +20435,15 @@ impl<'de> serde::Deserialize<'de> for PhysicalExtensionNode {
         const FIELDS: &[&str] = &[
             "node",
             "inputs",
+            "plan_name",
+            "planName",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Node,
             Inputs,
+            PlanName,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -20441,6 +20467,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalExtensionNode {
                         match value {
                             "node" => Ok(GeneratedField::Node),
                             "inputs" => Ok(GeneratedField::Inputs),
+                            "planName" | "plan_name" => Ok(GeneratedField::PlanName),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -20462,6 +20489,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalExtensionNode {
             {
                 let mut node__ = None;
                 let mut inputs__ = None;
+                let mut plan_name__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Node => {
@@ -20478,11 +20506,18 @@ impl<'de> serde::Deserialize<'de> for PhysicalExtensionNode {
                             }
                             inputs__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::PlanName => {
+                            if plan_name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("planName"));
+                            }
+                            plan_name__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(PhysicalExtensionNode {
                     node: node__.unwrap_or_default(),
                     inputs: inputs__.unwrap_or_default(),
+                    plan_name: plan_name__,
                 })
             }
         }

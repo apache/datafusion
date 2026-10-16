@@ -53,6 +53,11 @@ SELECT "EventDate" FROM hits_raw LIMIT 1;
 
 # queries.sql came from
 # https://github.com/ClickHouse/ClickBench/blob/8b9e3aa05ea18afa427f14909ddc678b8ef0d5e6/datafusion/queries.sql
+#
+# Keep benchmark query bodies synchronized with:
+# - benchmarks/queries/clickbench/queries/qN.sql
+# - benchmarks/sql_benchmarks/clickbench/benchmarks/qNN.benchmark
+# The `clickbench_parity` test enforces this contract.
 
 ## Q0
 query TT
