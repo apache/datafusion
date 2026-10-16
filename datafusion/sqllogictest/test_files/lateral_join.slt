@@ -936,6 +936,215 @@ physical_plan
 03)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 ###########################################################
+# Section 8: Derived-table alias differs from the inner table
+#
+# https://github.com/apache/datafusion/issues/25837
+# The correlated filter is pulled through a SubqueryAlias whose name is
+# not the inner table's name. The join condition must use the alias.
+###########################################################
+
+statement ok
+CREATE TABLE o(k INT) AS VALUES (1), (2);
+
+statement ok
+CREATE TABLE l(id INT, v INT) AS VALUES (1, 10), (2, 20);
+
+statement ok
+CREATE TABLE m(id INT) AS VALUES (1), (2);
+
+query II
+SELECT o.k, s.v
+FROM o, LATERAL (
+  SELECT l2.v FROM (SELECT * FROM l WHERE l.id = o.k) AS l2
+) AS s
+ORDER BY o.k;
+----
+1 10
+2 20
+
+# Projection inside the derived table still uses the inner qualifier.
+query II
+SELECT o.k, s.v
+FROM o, LATERAL (
+  SELECT x.v FROM (SELECT l.v, l.id FROM l WHERE l.id = o.k) AS x
+) AS s
+ORDER BY o.k;
+----
+1 10
+2 20
+
+# Matching alias and table name already worked; keep it that way.
+query II
+SELECT o.k, s.v
+FROM o, LATERAL (
+  SELECT l.v FROM (SELECT * FROM l WHERE l.id = o.k) AS l
+) AS s
+ORDER BY o.k;
+----
+1 10
+2 20
+
+# The derived table is one input of a join inside the LATERAL subquery.
+query II
+SELECT o.k, s.v
+FROM o, LATERAL (
+  SELECT l2.v
+  FROM (SELECT * FROM l WHERE l.id = o.k) AS l2
+  JOIN m ON m.id = l2.id
+) AS s
+ORDER BY o.k;
+----
+1 10
+2 20
+
+# Pull-up appends l.id next to another projected id. SubqueryAlias
+# keeps the first id and suffixes the pulled-up column to id:1. The
+# join has to follow that output name; decoy.id is 100, so using the
+# unsuffixed id matches nothing.
+statement ok
+CREATE TABLE decoy(id INT) AS VALUES (100);
+
+statement ok
+CREATE TABLE other(id INT) AS VALUES (7);
+
+query II
+SELECT o.k, s.v
+FROM o, LATERAL (
+  SELECT l2.v
+  FROM (
+    SELECT decoy.id, l.v
+    FROM l, decoy
+    WHERE l.id = o.k
+  ) AS l2
+) AS s
+ORDER BY o.k;
+----
+1 10
+2 20
+
+# The lateral alias itself is what SubqueryAlias suffixes. There is no
+# inner alias. decoy.id keeps `id`; the pulled-up l.id becomes `id:1`.
+query II
+SELECT o.k, s.v
+FROM o, LATERAL (
+  SELECT decoy.id, l.v
+  FROM l, decoy
+  WHERE l.id = o.k
+) s
+ORDER BY o.k;
+----
+1 10
+2 20
+
+# Same collision on a LEFT JOIN. A filter on decoy.id matches nothing,
+# so the outer rows would come back with NULL v.
+query II
+SELECT o.k, s.v
+FROM o
+LEFT JOIN LATERAL (
+  SELECT decoy.id, l.v
+  FROM l, decoy
+  WHERE l.id = o.k
+) s ON true
+ORDER BY o.k;
+----
+1 10
+2 20
+
+# decoy.id, other.id, then pulled-up l.id. The filter has to use id:2.
+query II
+SELECT o.k, s.v
+FROM o, LATERAL (
+  SELECT decoy.id, other.id, l.v
+  FROM l, decoy, other
+  WHERE l.id = o.k
+) s
+ORDER BY o.k;
+----
+1 10
+2 20
+
+# l.v is already named id:1, so the pulled-up l.id becomes id:2.
+# s."id:1" is l.v.
+query II
+SELECT o.k, s."id:1"
+FROM o, LATERAL (
+  SELECT decoy.id, l.v AS "id:1"
+  FROM l, decoy
+  WHERE l.id = o.k
+) s
+ORDER BY o.k;
+----
+1 10
+2 20
+
+statement ok
+DROP TABLE decoy;
+
+statement ok
+DROP TABLE other;
+
+statement ok
+DROP TABLE o;
+
+statement ok
+DROP TABLE l;
+
+statement ok
+DROP TABLE m;
+
+# The user's ON clause names the alias output (`s.id` is decoy.id, the
+# first id). The inner table is also `s`, so a positional map of that
+# ON predicate follows the later field and filters `l` instead.
+statement ok
+CREATE TABLE o(k INT) AS VALUES (1), (100);
+
+statement ok
+CREATE TABLE l(id INT, v INT) AS VALUES (1, 10), (100, 99);
+
+statement ok
+CREATE TABLE decoy(id INT) AS VALUES (100);
+
+query IIII
+SELECT o.k, s.id, s."id:1", s.v
+FROM o
+JOIN LATERAL (
+  SELECT decoy.id, s.id, s.v
+  FROM l AS s, decoy
+  WHERE s.id = o.k
+) s
+ON s.id = 100
+ORDER BY o.k, s.v;
+----
+1 100 1 10
+100 100 100 99
+
+# `s.id` in ON is decoy.id, which is 100, so both correlated rows pass.
+# Remapping that ON onto l.id turns the k=1 row into NULLs.
+query IIII
+SELECT o.k, s.id, s."id:1", s.v
+FROM o
+LEFT JOIN LATERAL (
+  SELECT decoy.id, s.id, s.v
+  FROM l AS s, decoy
+  WHERE s.id = o.k
+) s
+ON s.id = 100
+ORDER BY o.k, s.v;
+----
+1 100 1 10
+100 100 100 99
+
+statement ok
+DROP TABLE o;
+
+statement ok
+DROP TABLE l;
+
+statement ok
+DROP TABLE decoy;
+
+###########################################################
 # Cleanup
 ###########################################################
 
