@@ -18,12 +18,12 @@
 use arrow::datatypes::FieldRef;
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::{
-    Column, DFSchema, Result, Span, TableReference, assert_or_internal_err,
+    Column, DFSchema, Result, ScalarValue, Span, TableReference, assert_or_internal_err,
     exec_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr::expr::LambdaVariable;
-use datafusion_expr::planner::PlannerResult;
-use datafusion_expr::{Case, Expr};
+use datafusion_expr::planner::{PlannerResult, RawFieldAccessExpr};
+use datafusion_expr::{Case, Expr, GetFieldAccess};
 use sqlparser::ast::{CaseWhen, Expr as SQLExpr, Ident};
 use std::sync::Arc;
 
@@ -144,6 +144,33 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 })?;
             Ok(Expr::ScalarVariable(field, var_names))
         } else {
+            let root_name = self.ident_normalizer.normalize(ids[0].clone());
+            if planner_context.lambda_parameters().contains_key(&root_name) {
+                let mut expr =
+                    self.sql_identifier_to_expr(ids[0].clone(), schema, planner_context)?;
+                'fields: for id in ids.into_iter().skip(1) {
+                    let field_access = GetFieldAccess::NamedStructField {
+                        name: ScalarValue::from(self.ident_normalizer.normalize(id)),
+                    };
+                    let mut field_access_expr = RawFieldAccessExpr { expr, field_access };
+                    for planner in self.context_provider.get_expr_planners() {
+                        match planner.plan_field_access(field_access_expr, schema)? {
+                            PlannerResult::Planned(planned) => {
+                                expr = planned;
+                                continue 'fields;
+                            }
+                            PlannerResult::Original(original) => {
+                                field_access_expr = original;
+                            }
+                        }
+                    }
+                    return not_impl_err!(
+                        "GetFieldAccess not supported by ExprPlanner: {field_access_expr:?}"
+                    );
+                }
+                return Ok(expr);
+            }
+
             let ids = ids
                 .into_iter()
                 .map(|id| self.ident_normalizer.normalize(id))
