@@ -349,7 +349,7 @@ requires-dist = [
     { name = "jinja2", specifier = ">=3.1.6,<4" },
     { name = "maturin", specifier = ">=1.14.1,<2" },
     { name = "myst-parser", specifier = ">=5.1.0,<6" },
-    { name = "pydata-sphinx-theme", specifier = ">=0.21.0,<1" },
+    { name = "pydata-sphinx-theme", specifier = ">=0.23.0,<1" },
     { name = "setuptools", specifier = ">=84.0.0,<85" },
     { name = "sphinx", specifier = ">=9,<10" },
     { name = "sphinx-reredirects", specifier = ">=1.1,<2" },
@@ -757,7 +757,7 @@ wheels = [
 
 [[package]]
 name = "pydata-sphinx-theme"
-version = "0.21.0"
+version = "0.23.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "accessible-pygments" },
@@ -770,9 +770,9 @@ dependencies = [
     { name = "sphinx", version = "9.0.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "sphinx", version = "9.1.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/bd/ac/692035c97b732b26ee269fb14ec790046b21c7383a46bedfb3d40c3a4884/pydata_sphinx_theme-0.21.0.tar.gz", hash = "sha256:dc3f71216ea34725ddad68e505497eab4ba134a88abfb971a7df6b28a35c1997", size = 5010490, upload-time = "2026-08-25T14:16:47.949Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/54/24/efb184268dc958ea894821b8643954be7746f67cdd2c08f8f47f9b0c4735/pydata_sphinx_theme-0.23.0.tar.gz", hash = "sha256:f9e647e0bb3f1d8eaa6d866248812711211313627cc4ae76b5f88a17a4be38ce", size = 5015474, upload-time = "2026-10-08T08:52:13.975Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b5/8d/fb90c2ada1a938ba55f1730139f4d43736aee22d5f82f927c64cd858256f/pydata_sphinx_theme-0.21.0-py3-none-any.whl", hash = "sha256:d36a754bf9580b01789efa8a01869f2d7c87fa6c543ecbcafb14b6bdd4364f90", size = 6208465, upload-time = "2026-08-25T14:16:46.223Z" },
+    { url = "https://files.pythonhosted.org/packages/e4/a9/187b2aa8ea213d72c13ce3627e605d922d697c470532d67b5b707d944b2c/pydata_sphinx_theme-0.23.0-py3-none-any.whl", hash = "sha256:7bf56f1eda7b03c62719dd0dd3b50035c8bfb72caf4faefa5ac46400a82e408f", size = 6214022, upload-time = "2026-10-08T08:52:11.881Z" },
 ]
 
 [[package]]
