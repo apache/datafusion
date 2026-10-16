@@ -1,0 +1,126 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Inner joins against a single row of literals become a filter over the other
+# input, which keeps that input's ordering (EliminateConstantJoin).
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+# Events sorted by account
+query I
+COPY (SELECT * FROM (VALUES ('a', 10), ('a', 30), ('b', 20), ('b', NULL), ('c', 5)) AS v(acct, t))
+TO 'test_files/scratch/eliminate_constant_join/events.parquet'
+STORED AS PARQUET;
+----
+5
+
+statement ok
+CREATE EXTERNAL TABLE events
+STORED AS PARQUET
+WITH ORDER (acct ASC NULLS LAST)
+LOCATION 'test_files/scratch/eliminate_constant_join/events.parquet';
+
+query I
+COPY (SELECT * FROM (VALUES (25), (40)) AS v(ts))
+TO 'test_files/scratch/eliminate_constant_join/live.parquet'
+STORED AS PARQUET;
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE live
+STORED AS PARQUET
+LOCATION 'test_files/scratch/eliminate_constant_join/live.parquet';
+
+# min(ts) is answered from Parquet statistics, so the join only filters the
+# events, and the aggregation keeps their account order
+query TT
+EXPLAIN SELECT e.acct, count(*) AS n
+FROM events e CROSS JOIN (SELECT min(ts) AS first_ts FROM live) l
+WHERE e.t < l.first_ts
+GROUP BY e.acct;
+----
+physical_plan
+01)ProjectionExec: expr=[acct@0 as acct, count(Int64(1))@1 as n]
+02)--AggregateExec: mode=Single, gby=[acct@0 as acct], aggr=[count(Int64(1))], ordering_mode=Sorted
+03)----FilterExec: 25 > t@1, projection=[acct@0]
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/eliminate_constant_join/events.parquet]]}, projection=[acct, t], output_ordering=[acct@0 ASC NULLS LAST], file_type=parquet, predicate=25 > t@1, pruning_predicate=t_null_count@1 != row_count@2 AND t_min@0 < 25, required_guarantees=[]
+
+query TI
+SELECT e.acct, count(*) AS n
+FROM events e CROSS JOIN (SELECT min(ts) AS first_ts FROM live) l
+WHERE e.t < l.first_ts
+GROUP BY e.acct
+ORDER BY e.acct;
+----
+a 1
+b 1
+c 1
+
+# The constant row's columns stay in the output
+query TT
+EXPLAIN SELECT e.acct, e.t, c.cutoff
+FROM (SELECT 25 AS cutoff) c JOIN events e ON e.t < c.cutoff;
+----
+physical_plan
+01)ProjectionExec: expr=[acct@0 as acct, t@1 as t, 25 as cutoff]
+02)--FilterExec: t@1 < 25
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/eliminate_constant_join/events.parquet]]}, projection=[acct, t], output_ordering=[acct@0 ASC NULLS LAST], file_type=parquet, predicate=t@1 < 25, pruning_predicate=t_null_count@1 != row_count@2 AND t_min@0 < 25, required_guarantees=[]
+
+query TII rowsort
+SELECT e.acct, e.t, c.cutoff
+FROM (SELECT 25 AS cutoff) c JOIN events e ON e.t < c.cutoff;
+----
+a 10 25
+b 20 25
+c 5 25
+
+# A left join keeps the constant row when nothing matches
+query IT
+SELECT c.cutoff, e.acct
+FROM (SELECT 25 AS cutoff) c LEFT JOIN events e ON e.t > c.cutoff + 100;
+----
+25 NULL
+
+# The join evaluates random() once; a filter would evaluate it for every row
+query TT
+EXPLAIN SELECT e.acct
+FROM (SELECT random() AS r) c JOIN events e ON e.t < c.r * 100;
+----
+physical_plan
+01)ProjectionExec: expr=[acct@1 as acct]
+02)--NestedLoopJoinExec: join_type=Inner, filter=join_proj_push_down_2@1 < join_proj_push_down_1@0, projection=[r@0, acct@2, t@3]
+03)----ProjectionExec: expr=[r@0 as r, r@0 * 100 as join_proj_push_down_1]
+04)------ProjectionExec: expr=[random() as r]
+05)--------PlaceholderRowExec
+06)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/eliminate_constant_join/events.parquet]]}, projection=[acct, t, CAST(t@1 AS Float64) as join_proj_push_down_2], output_ordering=[acct@0 ASC NULLS LAST], file_type=parquet
+
+statement ok
+DROP TABLE events;
+
+statement ok
+DROP TABLE live;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+RESET datafusion.explain.physical_plan_only;
