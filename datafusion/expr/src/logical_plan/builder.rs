@@ -50,14 +50,13 @@ use crate::{
 };
 
 use super::dml::InsertOp;
-use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
     Column, Constraints, DFSchema, DFSchemaRef, FunctionalDependencies, NullEquality,
-    Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions, exec_err,
+    Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions,
     get_target_functional_dependencies, internal_datafusion_err, plan_datafusion_err,
     plan_err,
 };
@@ -275,23 +274,14 @@ impl LogicalPlanBuilder {
         let n_cols = values[0].len();
         let mut fields = ValuesFields::new();
         for j in 0..n_cols {
-            let field_type = schema.field(j).data_type();
-            let field_nullable = schema.field(j).is_nullable();
-            for row in values.iter() {
-                let value = &row[j];
-                let data_type = value.get_type(schema)?;
+            let field = schema.field(j);
+            let field_type = field.data_type();
 
-                if !data_type.equals_datatype(field_type)
-                    && !can_cast_types(&data_type, field_type)
-                {
-                    return exec_err!(
-                        "Types don't match and no valid cast exists, received data of type {} for field of type {}",
-                        data_type,
-                        field_type
-                    );
-                }
-            }
-            fields.push(field_type.to_owned(), field_nullable);
+            fields.push_with_metadata(
+                field_type.clone(),
+                field.is_nullable(),
+                Some(FieldMetadata::new_from_field(field)),
+            );
         }
 
         Self::infer_inner(values, fields, schema)
@@ -1680,10 +1670,6 @@ struct ValuesFields {
 impl ValuesFields {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    pub fn push(&mut self, data_type: DataType, nullable: bool) {
-        self.push_with_metadata(data_type, nullable, None);
     }
 
     pub fn push_with_metadata(
@@ -3369,8 +3355,7 @@ mod tests {
 
         assert_eq!(
             err.strip_backtrace(),
-            "Execution error: Types don't match and no valid cast exists, \
-         received data of type Boolean for field of type Date32"
+            "Error during planning: Cannot automatically convert Boolean to Date32"
         );
     }
 }
