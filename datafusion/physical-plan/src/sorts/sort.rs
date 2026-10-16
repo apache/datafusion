@@ -791,7 +791,9 @@ impl ExternalSorter {
         concurrency: &SortConcurrency,
     ) -> Result<Vec<SendableRecordBatchStream>> {
         let mut streams: Vec<_> = (0..runs.len()).map(|_| None).collect();
-        let (sizes, shared_input) = self.sort_run_reservations(&runs)?;
+        let (sizes, shared_input_size) = self.sort_run_sizes(&runs)?;
+        let shared_input =
+            shared_input_size.map(|size| Arc::new(self.reservation.split(size)));
         let jobs =
             runs.into_iter()
                 .zip(sizes)
@@ -927,17 +929,19 @@ impl ExternalSorter {
             .map(|_| RecordBatchMemoryCounter::new())
     }
 
-    /// Calculates each run's reservation size and reserves any shared input.
+    /// Calculates each run's reservation size and any shared input size.
     ///
     /// Runs can share buffers, for example zero-copy slices of one larger batch,
     /// and `self.reservation` covers each shared buffer once. A shared buffer
     /// stays alive until the last run holding it is sorted, so if any buffers are
     /// shared, the reservation for every run's input is held until all the runs
     /// are sorted. Otherwise each run releases its input once it is sorted.
-    fn sort_run_reservations(
+    /// With shared input, each run's size covers only its sorted copy. Otherwise
+    /// it also includes that run's input.
+    fn sort_run_sizes(
         &self,
         runs: &[RecordBatch],
-    ) -> Result<(Vec<usize>, Option<Arc<MemoryReservation>>)> {
+    ) -> Result<(Vec<usize>, Option<usize>)> {
         let mut counter = self.new_buffered_batches_counter();
         let mut shares_buffers = false;
         let mut sizes = Vec::with_capacity(runs.len());
@@ -950,19 +954,17 @@ impl ExternalSorter {
             sizes.push((retained, run.get_sliced_size()?));
         }
 
-        let shared_input = shares_buffers.then(|| {
-            let retained = sizes.iter().map(|(retained, _)| retained).sum();
-            Arc::new(self.reservation.split(retained))
-        });
+        let shared_input_size =
+            shares_buffers.then(|| sizes.iter().map(|(retained, _)| retained).sum());
 
         let sizes = sizes
             .into_iter()
-            .map(|(retained, sliced)| match shared_input {
+            .map(|(retained, sliced)| match shared_input_size {
                 Some(_) => sliced,
                 None => get_reserved_bytes_for_record_batch_size(retained, sliced),
             })
             .collect();
-        Ok((sizes, shared_input))
+        Ok((sizes, shared_input_size))
     }
 
     /// Sorts each run into its own stream, splitting `self.reservation` between
@@ -971,7 +973,9 @@ impl ExternalSorter {
         &self,
         runs: Vec<RecordBatch>,
     ) -> Result<Vec<SendableRecordBatchStream>> {
-        let (sizes, shared_input) = self.sort_run_reservations(&runs)?;
+        let (sizes, shared_input_size) = self.sort_run_sizes(&runs)?;
+        let shared_input =
+            shared_input_size.map(|size| Arc::new(self.reservation.split(size)));
         runs.into_iter()
             .zip(sizes)
             .map(|(run, size)| {
