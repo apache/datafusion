@@ -136,3 +136,17 @@ SELECT concat_ws(x'7c', column1, column2) from t;
 
 statement ok
 drop table t
+
+query TT
+SELECT
+  concat(c0, ',', c1, ',', c2),
+  arrow_cast(concat(arrow_cast(c0, 'Binary'), arrow_cast(',', 'Binary'), arrow_cast(c1, 'Binary'), arrow_cast(',', 'Binary'), arrow_cast(c2, 'Binary')), 'Utf8')
+FROM VALUES
+  ('foo', 'x', 'a'),
+  ('bar', null, null),
+  ('baz', 'z', 'b')
+t(c0, c1, c2)
+----
+foo,x,a foo,x,a
+bar,, bar,,
+baz,z,b baz,z,b
