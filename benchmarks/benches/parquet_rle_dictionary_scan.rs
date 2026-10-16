@@ -22,7 +22,7 @@ use std::fs::File;
 use std::hint::black_box;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use arrow::array::{ArrayRef, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -33,6 +33,7 @@ use datafusion::physical_plan::{
     ExecutionPlan, ExecutionPlanVisitor, accept, execute_stream,
 };
 use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
+use datafusion_common::instant::Instant;
 use futures::StreamExt;
 use parquet::arrow::ArrowWriter;
 use parquet::basic::{Compression, Encoding};
