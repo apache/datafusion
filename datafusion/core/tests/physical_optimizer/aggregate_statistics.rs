@@ -907,8 +907,8 @@ async fn aggregate_statistics_consults_statistics_providers() -> Result<()> {
 }
 
 /// A provider reporting fewer column statistics than the scan has columns
-/// breaks the invariant that consumers index by column, so the statistics walk
-/// reports it instead of letting them read out of bounds.
+/// breaks the invariant that consumers index by column, so planning fails with
+/// an error naming the provider instead of a consumer reading out of bounds.
 #[tokio::test]
 async fn short_column_statistics_are_reported() -> Result<()> {
     let provider = ClosureStatisticsProvider::with_matches(
@@ -942,22 +942,21 @@ async fn short_column_statistics_are_reported() -> Result<()> {
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
-            Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4)])),
-            Arc::new(Int32Array::from(vec![Some(10), Some(10), None, Some(20)])),
+            Arc::new(Int32Array::from(vec![1, 2])),
+            Arc::new(Int32Array::from(vec![10, 20])),
         ],
     )?;
     ctx.register_batch("t", batch)?;
 
-    let err = ctx
-        .sql("SELECT count(b) FROM t")
-        .await?
-        .collect()
-        .await
-        .expect_err("short column statistics should be reported");
-    // The scan only reads `b`, so the provider leaves it no column statistics.
-    assert_contains!(
-        err.to_string(),
-        "Statistics provider ClosureStatisticsProvider returned 0 column statistics for DataSourceExec"
-    );
+    // `count(b)` reads the statistics; a plain scan fails during planning too.
+    for (sql, entries) in [("SELECT count(b) FROM t", 0), ("SELECT * FROM t", 1)] {
+        let err = ctx.sql(sql).await?.collect().await.expect_err(sql);
+        assert_contains!(
+            err.to_string(),
+            format!(
+                "Statistics provider ClosureStatisticsProvider returned {entries} column statistics for DataSourceExec"
+            )
+        );
+    }
     Ok(())
 }
