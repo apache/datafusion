@@ -340,10 +340,11 @@ mod parquet {
         }
 
         #[test]
-        fn enable_rle_to_dictionary_round_trips_through_codec() {
+        fn rle_to_dictionary_options_round_trip_through_codec() {
             use datafusion_common::config::TableParquetOptions;
             let mut options = TableParquetOptions::default();
             options.global.enable_rle_to_dictionary = true;
+            options.global.rle_to_dictionary_max_distinct_values = Some(200);
             let original: Arc<dyn FileFormatFactory> = Arc::new(ParquetFormatFactory {
                 options: Some(options),
             });
@@ -364,6 +365,10 @@ mod parquet {
                 .expect("parquet options");
 
             assert!(decoded_options.global.enable_rle_to_dictionary);
+            assert_eq!(
+                decoded_options.global.rle_to_dictionary_max_distinct_values,
+                Some(200)
+            );
         }
     }
 }

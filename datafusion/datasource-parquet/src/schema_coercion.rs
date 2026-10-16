@@ -440,6 +440,69 @@ pub(crate) fn uniform_dict_schemas(schemas: Vec<Schema>) -> Vec<Schema> {
         .collect()
 }
 
+/// Return columns that are already dictionaries in every schema where they are
+/// present.
+///
+/// Used when dictionary promotion is guarded by footer statistics: if any file
+/// keeps a column plain because it is above the configured distinct-value cap
+/// (or lacks NDV statistics), the merged table schema must also stay plain.
+pub(crate) fn columns_dictionary_in_all_present_schemas(
+    schemas: &[Schema],
+) -> HashSet<String> {
+    #[derive(Default)]
+    struct State {
+        saw_dictionary: bool,
+        saw_plain: bool,
+    }
+
+    let mut states: HashMap<String, State> = HashMap::new();
+    for schema in schemas {
+        for field in schema.fields() {
+            let state = states.entry(field.name().clone()).or_default();
+            match field.data_type() {
+                DataType::Dictionary(_, _) => state.saw_dictionary = true,
+                _ => state.saw_plain = true,
+            }
+        }
+    }
+
+    states
+        .into_iter()
+        .filter_map(|(name, state)| {
+            (state.saw_dictionary && !state.saw_plain).then_some(name)
+        })
+        .collect()
+}
+
+/// Convert dictionary fields not listed in `keep_dictionary_columns` back to
+/// their value type.
+pub(crate) fn demote_dictionary_columns(
+    schemas: Vec<Schema>,
+    keep_dictionary_columns: &HashSet<String>,
+) -> Vec<Schema> {
+    schemas
+        .into_iter()
+        .map(|schema| {
+            let fields: Vec<Arc<Field>> = schema
+                .fields()
+                .iter()
+                .map(|field| {
+                    if keep_dictionary_columns.contains(field.name()) {
+                        return Arc::clone(field);
+                    }
+
+                    if let DataType::Dictionary(_, value_type) = field.data_type() {
+                        return field_with_new_type(field, value_type.as_ref().clone());
+                    }
+
+                    Arc::clone(field)
+                })
+                .collect();
+            Schema::new_with_metadata(fields, schema.metadata().clone())
+        })
+        .collect()
+}
+
 /// Coerces the file schema's Timestamps to the provided TimeUnit if the
 /// Parquet schema contains INT96.
 ///
