@@ -113,6 +113,124 @@ Dictionary(Int32, Utf8) Int64
 statement ok
 DROP TABLE products_dict;
 
+statement ok
+set datafusion.execution.parquet.rle_to_dictionary_max_distinct_values = 2;
+
+# With an NDV cap set, files without NDV statistics are not promoted because
+# DataFusion cannot prove the dictionary cardinality is within the cap.
+statement ok
+CREATE EXTERNAL TABLE products_threshold_no_ndv
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_rle_to_dictionary/products.parquet';
+
+query TT
+SELECT DISTINCT arrow_typeof(product_category), arrow_typeof(status) FROM products_threshold_no_ndv;
+----
+Utf8View Utf8View
+
+statement ok
+DROP TABLE products_threshold_no_ndv;
+
+statement ok
+set datafusion.execution.parquet.write_row_group_number_distinct_values = true;
+
+query I
+COPY (
+  SELECT column1 AS low_card, column2 AS high_card
+  FROM (VALUES
+    ('a', 'v0'),
+    ('a', 'v1'),
+    ('a', 'v2'),
+    ('b', 'v3'),
+    ('b', 'v4'),
+    ('b', 'v5')
+  )
+)
+TO 'test_files/scratch/parquet_rle_to_dictionary/threshold.parquet'
+STORED AS PARQUET
+OPTIONS ('format.dictionary_enabled' true);
+----
+6
+
+statement ok
+CREATE EXTERNAL TABLE thresholded_dict
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_rle_to_dictionary/threshold.parquet';
+
+query TT
+SELECT DISTINCT arrow_typeof(low_card), arrow_typeof(high_card) FROM thresholded_dict;
+----
+Dictionary(Int32, Utf8) Utf8View
+
+statement ok
+DROP TABLE thresholded_dict;
+
+# The cap uses the sum of row-group NDVs as a conservative upper bound.
+# Each row group has two distinct values, but their summed NDV exceeds the cap.
+query I
+COPY (
+  SELECT column1 AS category
+  FROM (VALUES ('a'), ('b'), ('a'), ('b'))
+)
+TO 'test_files/scratch/parquet_rle_to_dictionary/threshold_multi_rg.parquet'
+STORED AS PARQUET
+OPTIONS (
+  'format.dictionary_enabled' true,
+  'format.max_row_group_size' 2
+);
+----
+4
+
+statement ok
+CREATE EXTERNAL TABLE threshold_multi_rg
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_rle_to_dictionary/threshold_multi_rg.parquet';
+
+query T
+SELECT DISTINCT arrow_typeof(category) FROM threshold_multi_rg;
+----
+Utf8View
+
+statement ok
+DROP TABLE threshold_multi_rg;
+
+# A column remains dictionary encoded only when every file containing it
+# proves that its NDV is within the cap.
+query I
+COPY (SELECT column1 AS category FROM (VALUES ('a'), ('b')))
+TO 'test_files/scratch/parquet_rle_to_dictionary/threshold_mixed/low.parquet'
+STORED AS PARQUET
+OPTIONS ('format.dictionary_enabled' true);
+----
+2
+
+query I
+COPY (SELECT column1 AS category FROM (VALUES ('a'), ('b'), ('c')))
+TO 'test_files/scratch/parquet_rle_to_dictionary/threshold_mixed/high.parquet'
+STORED AS PARQUET
+OPTIONS ('format.dictionary_enabled' true);
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE threshold_mixed
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_rle_to_dictionary/threshold_mixed/';
+
+query TI
+SELECT arrow_typeof(category), COUNT(*) FROM threshold_mixed GROUP BY arrow_typeof(category);
+----
+Utf8View 5
+
+statement ok
+DROP TABLE threshold_mixed;
+
+statement ok
+reset datafusion.execution.parquet.write_row_group_number_distinct_values;
+
+statement ok
+reset datafusion.execution.parquet.rle_to_dictionary_max_distinct_values;
+
 # Per-column writer options: only columns with dictionary pages are promoted.
 
 statement ok
@@ -340,10 +458,10 @@ LOCATION 'test_files/scratch/parquet_rle_to_dictionary/binary_rle.parquet';
 
 # Dictionary(Int32, Binary) must be coerced to Dictionary(Int32, Utf8) when
 # binary_as_string is true, not left as Dictionary(Int32, Binary).
-query T
-SELECT DISTINCT arrow_typeof(payload) FROM binary_rle_as_string;
+query TT
+SELECT DISTINCT arrow_typeof(payload), payload FROM binary_rle_as_string;
 ----
-Dictionary(Int32, Utf8)
+Dictionary(Int32, Utf8) he
 
 statement ok
 DROP TABLE binary_rle_as_string;

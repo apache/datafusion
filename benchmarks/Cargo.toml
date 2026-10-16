@@ -76,3 +76,7 @@ name = "sql"
 [[bench]]
 harness = false
 name = "parquet_pruning_setup_cache"
+
+[[bench]]
+harness = false
+name = "parquet_rle_dictionary_scan"

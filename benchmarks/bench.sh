@@ -738,6 +738,23 @@ main() {
 # Creates data in $DATA_DIR/tpch_sf1 for scale factor 1
 # Creates data in $DATA_DIR/tpch_sf10 for scale factor 10
 # etc
+ensure_parquet_ndv_data() {
+    SOURCE=$1
+    DESTINATION=$2
+    MARKER="${DESTINATION}/.ndv_stats_v1"
+    if test -f "${MARKER}"; then
+        return
+    fi
+
+    echo "Rewriting Parquet data with row-group NDV statistics: ${SOURCE} -> ${DESTINATION}"
+    mkdir -p "${DESTINATION}"
+    debug_run cargo run --release --bin parquet_rewrite_ndv -- \
+      --source "${SOURCE}" \
+      --destination "${DESTINATION}" \
+      --jobs "${BENCHMARK_NDV_REWRITE_JOBS:-4}"
+    touch "${MARKER}"
+}
+
 data_tpch() {
     SCALE_FACTOR=$1
     if [ -z "$SCALE_FACTOR" ] ; then
@@ -840,12 +857,19 @@ run_tpch() {
         exit 1
     fi
     FORMAT=$2
+    BENCHMARK_DATA_DIR="${DATA_DIR}"
+    if [ "${BENCHMARK_PARQUET_WITH_NDV:-false}" = "true" ] && [ "${FORMAT}" = "parquet" ]; then
+        BENCHMARK_DATA_DIR="${DATA_DIR}/ndv_stats_v1"
+        ensure_parquet_ndv_data \
+          "${DATA_DIR}/tpch_sf${SCALE_FACTOR}" \
+          "${BENCHMARK_DATA_DIR}/tpch_sf${SCALE_FACTOR}"
+    fi
     echo "Running tpch benchmark..."
 
     debug_run env BENCH_NAME=tpch \
       BENCH_RESULTS_FILE="$(sql_results_file tpch_sf${SCALE_FACTOR}_${FORMAT})" \
       BENCH_SIZE="${SCALE_FACTOR}" \
-      DATA_DIR="${DATA_DIR}" \
+      DATA_DIR="${BENCHMARK_DATA_DIR}" \
       PREFER_HASH_JOIN="${PREFER_HASH_JOIN}" \
       TPCH_FILE_TYPE="${FORMAT}" \
       SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
@@ -1162,10 +1186,17 @@ run_clickbench_1() {
 
  # Runs the clickbench benchmark with the partitioned parquet dataset (100 files)
 run_clickbench_partitioned() {
+    BENCHMARK_DATA_DIR="${DATA_DIR}"
+    if [ "${BENCHMARK_PARQUET_WITH_NDV:-false}" = "true" ]; then
+        BENCHMARK_DATA_DIR="${DATA_DIR}/ndv_stats_v1"
+        ensure_parquet_ndv_data \
+          "${DATA_DIR}/hits_partitioned" \
+          "${BENCHMARK_DATA_DIR}/hits_partitioned"
+    fi
     RESULTS_FILE="${RESULTS_DIR}/clickbench_partitioned.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (partitioned, 100 files) benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${BENCHMARK_DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 
