@@ -347,6 +347,12 @@ impl ScalarUDFImpl for ArrayConcat {
         // to `GenericListArray<i64>` and fail.
         let promote_to_large_list = matches!(return_type, DataType::LargeList(_));
         let arg_types = arg_types.iter().map(|arg_type| {
+            // An untyped `NULL` becomes a `NULL` of the result type:
+            // `coerced_type_with_base_type_only` would turn it into the
+            // (non-list) base type, which `return_type` then rejects.
+            if arg_type.is_null() {
+                return return_type.clone();
+            }
             let coerced =
                 coerced_type_with_base_type_only(arg_type, &base_type, coercion);
             match coerced {
