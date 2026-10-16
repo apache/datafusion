@@ -92,13 +92,14 @@ pub struct PullUpCorrelatedExpr {
     /// The list is cleared when the pull up passes a node that can put a NULL
     /// back into such a column: an outer join, a union or a grouping set.
     pub correlated_filters: Vec<Expr>,
-    /// Columns read, above the subquery's `Aggregate`, by a node the rewrite
-    /// has not reached yet when it visits that `Aggregate` (the rewrite runs
-    /// bottom-up, so a `Projection` or `HAVING` above it is only visited
-    /// afterwards). Populated once, from the original subquery plan, by
-    /// [`Self::with_column_refs_above_aggregate`], since [`Self::f_up`] has no
-    /// way to compute it on its own.
-    column_refs_above_aggregate: BTreeSet<Column>,
+    /// Columns each node on the path from the subquery's root to the node
+    /// [`Self::f_down`]/[`Self::f_up`] is currently visiting reads in its own
+    /// expressions: one entry per node on that path, pushed in `f_down` and
+    /// popped in `f_up`. When `f_up` visits an `Aggregate`, this holds every
+    /// node strictly above it - its own entry is popped first - so a
+    /// grouping set that omits a correlated column can tell whether
+    /// something above it reads the column the pull up would fill in.
+    column_refs_above: Vec<BTreeSet<Column>>,
 }
 
 impl Default for PullUpCorrelatedExpr {
@@ -121,7 +122,7 @@ impl PullUpCorrelatedExpr {
             pull_up_having_expr: None,
             pulled_up_scalar_agg: false,
             correlated_filters: Vec::new(),
-            column_refs_above_aggregate: BTreeSet::new(),
+            column_refs_above: Vec::new(),
         }
     }
 
@@ -142,21 +143,6 @@ impl PullUpCorrelatedExpr {
     /// Set if this is an Exists(Not Exists) SubQuery
     pub fn with_exists_sub_query(mut self, exists_sub_query: bool) -> Self {
         self.exists_sub_query = exists_sub_query;
-        self
-    }
-
-    /// Record the columns read above the subquery's `Aggregate`, computed
-    /// from `subquery_plan` (the plan as it is before this rewrite runs).
-    ///
-    /// A grouping set that omits a correlated column only needs to reject the
-    /// pull up when something reads the column the pull up would fill in, so
-    /// [`Self::f_up`] needs this computed ahead of time. See
-    /// `columns_read_above_aggregate`.
-    pub fn with_column_refs_above_aggregate(
-        mut self,
-        subquery_plan: &LogicalPlan,
-    ) -> Self {
-        self.column_refs_above_aggregate = columns_read_above_aggregate(subquery_plan);
         self
     }
 }
@@ -191,6 +177,15 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
     type Node = LogicalPlan;
 
     fn f_down(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+        // Tracks the columns this node's own expressions read, so a
+        // descendant `Aggregate` can later tell what reads above it. Popped
+        // by the matching `f_up` call for this same node.
+        let mut column_refs = BTreeSet::new();
+        for expr in plan.expressions() {
+            column_refs.extend(expr.column_refs().into_iter().cloned());
+        }
+        self.column_refs_above.push(column_refs);
+
         // This match is exhaustive on purpose. A correlated filter moves above
         // a node only when the node is known to keep the result the same. Add
         // each new `LogicalPlan` variant to one of the groups below.
@@ -300,7 +295,12 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 match (limit.get_skip_type()?, fetch) {
                     (SkipType::Literal(0), FetchType::Literal(_)) => {
                         // The rewriter does not call `f_down` on the returned
-                        // node, so do it here
+                        // node, so do it here. This call pushes its own
+                        // entry onto `column_refs_above`; pop the one this
+                        // call pushed for the `Limit` itself first; only one
+                        // `f_up` call reaches this tree position once `Limit`
+                        // is gone, so only one entry must remain pushed.
+                        self.column_refs_above.pop();
                         let mut t = self.f_down((*limit.input).clone())?;
                         t.transformed = true;
                         Ok(t)
@@ -370,6 +370,10 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
     }
 
     fn f_up(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+        // Pop this node's own entry, pushed by the matching `f_down` call, so
+        // `column_refs_above` holds only the nodes strictly above `plan`.
+        self.column_refs_above.pop();
+
         // A node that null-extends or regroups rows can put a NULL back into
         // a column that a correlated filter below it rejected, so the filters
         // recorded so far no longer bound what the subquery returns.
@@ -723,9 +727,8 @@ impl PullUpCorrelatedExpr {
     ///  - the aggregate does not compute `GROUPING`/`GROUPING_ID`, which
     ///    reads whether a row's set groups by a column.
     ///  - nothing above the aggregate reads the column, which
-    ///    `column_refs_above_aggregate` was populated with ahead of time (this
-    ///    rewrite runs bottom-up, so a `HAVING` or `Projection` above the
-    ///    aggregate is only visited after it).
+    ///    `column_refs_above` tracks as `f_down`/`f_up` push and pop a node's
+    ///    own columns while they walk down to and back up from it.
     ///
     /// When one of these fails, [`GroupingSetsPullUp::Unsafe`] is returned:
     /// the columns are still added, so the schema the nodes above expect
@@ -785,15 +788,11 @@ impl PullUpCorrelatedExpr {
         // above the aggregate by `ResolveGroupingFunction` before this rule
         // runs, so `aggregate.aggr_expr` never holds a `GROUPING` call by the
         // time this is reached; adding a column shifts those bits instead.
-        let reads_grouping_id = self
-            .column_refs_above_aggregate
-            .iter()
-            .any(|col| col.name == Aggregate::INTERNAL_GROUPING_ID);
-        let read_above = required_cols
-            .iter()
-            .any(|col| self.column_refs_above_aggregate.contains(*col));
+        let unsafe_read = self.column_refs_above.iter().flatten().any(|col| {
+            col.name == Aggregate::INTERNAL_GROUPING_ID || required_cols.contains(col)
+        });
 
-        if has_empty_set || reads_grouping_id || read_above {
+        if has_empty_set || unsafe_read {
             GroupingSetsPullUp::Unsafe
         } else {
             GroupingSetsPullUp::SafeToExtend
@@ -951,46 +950,6 @@ fn can_pullup_over_aggregation(expr: &Expr) -> bool {
     } else {
         false
     }
-}
-
-/// Columns read by a node that has a grouping set `Aggregate` below it in
-/// `plan`, which is the subquery's original, not yet rewritten, plan.
-///
-/// [`PullUpCorrelatedExpr::f_up`] runs bottom-up, so by the time it visits an
-/// `Aggregate` it cannot yet tell whether a `HAVING` or `Projection` above it
-/// reads one of the columns a grouping set pull up would add. This walks the
-/// plan top-down instead, before the rewrite starts, collecting the columns
-/// every node above a grouping set `Aggregate` reads in its own expressions.
-/// It visits every input and walks through every `Aggregate` - a node that
-/// reads the pulled-up column may sit in a later input, above another
-/// (non-grouping-set) `Aggregate`, or between nested grouping sets, not only
-/// directly above the first `Aggregate` found. A nested `Subquery` is a
-/// different correlation scope and is skipped, the same way
-/// [`PullUpCorrelatedExpr::f_down`] skips it.
-fn columns_read_above_aggregate(plan: &LogicalPlan) -> BTreeSet<Column> {
-    fn walk(plan: &LogicalPlan, above: &mut BTreeSet<Column>) -> bool {
-        if matches!(plan, LogicalPlan::Subquery(_)) {
-            return false;
-        }
-        let mut found_below = false;
-        for child in plan.inputs() {
-            found_below |= walk(child, above);
-        }
-        if found_below {
-            for expr in plan.expressions() {
-                above.extend(expr.column_refs().into_iter().cloned());
-            }
-        }
-        found_below
-            || matches!(plan, LogicalPlan::Aggregate(aggregate) if aggregate
-                .group_expr
-                .iter()
-                .any(|expr| matches!(expr, Expr::GroupingSet(_))))
-    }
-
-    let mut above = BTreeSet::new();
-    walk(plan, &mut above);
-    above
 }
 
 fn collect_local_correlated_cols(
