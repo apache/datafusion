@@ -485,10 +485,9 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
                 .coerce_int96_tz_opt
                 .as_ref()
                 .map(|opt| match opt {
-                    parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(tz) => {
-                        tz.clone()
-                    }
-                }),
+                    parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(tz) => tz.parse(),
+                })
+                .transpose()?,
             max_predicate_cache_size: proto
                 .max_predicate_cache_size_opt
                 .as_ref()
@@ -598,6 +597,23 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("Invalid parquet statistics setting: invalid")
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_parquet_coerce_int96_tz() {
+        let proto = ParquetOptionsProto {
+            coerce_int96_tz_opt: Some(parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(
+                "Not/A_Timezone".to_string(),
+            )),
+            ..Default::default()
+        };
+
+        let err = ParquetOptions::try_from(&proto).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Invalid time zone: Not/A_Timezone."),
+            "unexpected error: {err}"
         );
     }
 }

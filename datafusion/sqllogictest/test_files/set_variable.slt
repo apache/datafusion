@@ -837,6 +837,58 @@ OPTIONS ('format.coerce_int96' 'nanos');
 DataFusion error: Invalid or Unsupported Configuration: Invalid parquet coerce_int96 setting: nanos. Expected one of: ns, us, ms, s
 
 
+# parquet.coerce_int96_tz is validated when it is set, even without
+# coerce_int96
+statement ok
+SET datafusion.execution.parquet.coerce_int96_tz = '+08'
+
+query TT
+SHOW datafusion.execution.parquet.coerce_int96_tz
+----
+datafusion.execution.parquet.coerce_int96_tz +08
+
+statement error
+SET datafusion.execution.parquet.coerce_int96_tz = 'Not/A_Timezone'
+----
+DataFusion error: Error setting config datafusion.execution.parquet.coerce_int96_tz
+caused by
+Invalid or Unsupported Configuration: Invalid time zone: Not/A_Timezone. Valid values are UTC offsets such as +08:00 or IANA time zone names such as Asia/Taipei
+
+
+# The rejected value did not change the setting
+query TT
+SHOW datafusion.execution.parquet.coerce_int96_tz
+----
+datafusion.execution.parquet.coerce_int96_tz +08
+
+statement ok
+RESET datafusion.execution.parquet.coerce_int96_tz
+
+query TT
+SHOW datafusion.execution.parquet.coerce_int96_tz
+----
+datafusion.execution.parquet.coerce_int96_tz NULL
+
+# Table options are validated at CREATE time, with an inferred or an explicit
+# schema
+statement error
+CREATE EXTERNAL TABLE int96_bad_tz
+STORED AS PARQUET
+LOCATION '../../parquet-testing/data/int96_from_spark.parquet'
+OPTIONS ('format.coerce_int96_tz' 'Not/A_Timezone');
+----
+DataFusion error: Invalid or Unsupported Configuration: Invalid time zone: Not/A_Timezone. Valid values are UTC offsets such as +08:00 or IANA time zone names such as Asia/Taipei
+
+
+statement error
+CREATE EXTERNAL TABLE int96_bad_tz (a TIMESTAMP)
+STORED AS PARQUET
+LOCATION '../../parquet-testing/data/int96_from_spark.parquet'
+OPTIONS ('format.coerce_int96' 'us', 'format.coerce_int96_tz' 'Not/A_Timezone');
+----
+DataFusion error: Invalid or Unsupported Configuration: Invalid time zone: Not/A_Timezone. Valid values are UTC offsets such as +08:00 or IANA time zone names such as Asia/Taipei
+
+
 statement error DataFusion error: Error setting config datafusion\.execution\.batch_size\ncaused by\nInvalid or Unsupported Configuration: value must be greater than 0
 SET datafusion.execution.batch_size = 0
 

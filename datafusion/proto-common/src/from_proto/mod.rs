@@ -1286,9 +1286,9 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             coerce_int96: value.coerce_int96_opt.as_ref().map(|opt| match opt {
                 protobuf::parquet_options::CoerceInt96Opt::CoerceInt96(v) => v.parse(),
             }).transpose()?,
-            coerce_int96_tz: value.coerce_int96_tz_opt.clone().map(|opt| match opt {
-                protobuf::parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(v) => Some(v),
-            }).unwrap_or(None),
+            coerce_int96_tz: value.coerce_int96_tz_opt.as_ref().map(|opt| match opt {
+                protobuf::parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(v) => v.parse(),
+            }).transpose()?,
             skip_arrow_metadata: value.skip_arrow_metadata,
             write_row_group_number_distinct_values: value.write_row_group_number_distinct_values,
             max_predicate_cache_size: value.max_predicate_cache_size_opt.map(|opt| match opt {
@@ -1672,12 +1672,12 @@ mod tests {
     fn test_parquet_options_coerce_int96_tz_set_round_trip() {
         let opts = ParquetOptions {
             coerce_int96: Some(DFTimeUnit::Microsecond),
-            coerce_int96_tz: Some("UTC".to_string()),
+            coerce_int96_tz: Some("UTC".parse().unwrap()),
             ..ParquetOptions::default()
         };
         let recovered = parquet_options_proto_round_trip(opts.clone());
         assert_eq!(recovered.coerce_int96, Some(DFTimeUnit::Microsecond));
-        assert_eq!(recovered.coerce_int96_tz, Some("UTC".to_string()));
+        assert_eq!(recovered.coerce_int96_tz, opts.coerce_int96_tz);
     }
 
     #[test]
@@ -1741,6 +1741,26 @@ mod tests {
     }
 
     #[test]
+    fn test_invalid_parquet_coerce_int96_tz_rejected_from_proto() {
+        // Rejected even when no coerce_int96 unit is set.
+        let opts = ParquetOptions::default();
+        let mut proto: crate::protobuf_common::ParquetOptions =
+            (&opts).try_into().expect("to_proto");
+        proto.coerce_int96_tz_opt = Some(
+            crate::protobuf_common::parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(
+                "Not/A_Timezone".to_string(),
+            ),
+        );
+
+        let err = ParquetOptions::try_from(&proto).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Invalid time zone: Not/A_Timezone."),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn test_invalid_parquet_coerce_int96_rejected_from_proto() {
         let opts = ParquetOptions::default();
         let mut proto: crate::protobuf_common::ParquetOptions =
@@ -1799,12 +1819,12 @@ mod tests {
     fn test_table_parquet_options_coerce_int96_tz_round_trip() {
         let mut opts = TableParquetOptions::default();
         opts.global.coerce_int96 = Some(DFTimeUnit::Microsecond);
-        opts.global.coerce_int96_tz = Some("America/Los_Angeles".to_string());
+        opts.global.coerce_int96_tz = Some("America/Los_Angeles".parse().unwrap());
         let recovered = table_parquet_options_proto_round_trip(opts.clone());
         assert_eq!(recovered.global.coerce_int96, Some(DFTimeUnit::Microsecond));
         assert_eq!(
             recovered.global.coerce_int96_tz,
-            Some("America/Los_Angeles".to_string())
+            opts.global.coerce_int96_tz
         );
     }
 
