@@ -103,6 +103,9 @@ impl FusedStreams {
 #[derive(Debug)]
 struct ReusableRows {
     inner: Vec<Option<Arc<Rows>>>,
+    /// Each stream's charge stays reserved while its buffer is taken for reuse.
+    /// The sum of these sizes equals `reservation.size()`.
+    reserved_sizes: Vec<usize>,
     reservation: MemoryReservation,
 }
 
@@ -130,23 +133,24 @@ impl ReusableRows {
     /// reservation is free for the same reason. A pool that cannot cover the buffer
     /// fails the query here, as it did before the buffer was cached at all.
     fn save(&mut self, stream_idx: usize, rows: &Arc<Rows>) -> Result<()> {
-        self.inner[stream_idx] = Some(Arc::clone(rows));
-        let retained = self.retained_size();
+        let size = rows.size();
+        let retained = self.reservation.size() - self.reserved_sizes[stream_idx] + size;
         debug_assert!(retained >= self.reservation.size());
         if let Err(e) = self.reservation.try_resize(retained) {
-            self.inner[stream_idx] = None;
-            self.reservation.try_resize(self.retained_size())?;
+            self.release(stream_idx)?;
             return Err(e);
         }
+        self.inner[stream_idx] = Some(Arc::clone(rows));
+        self.reserved_sizes[stream_idx] = size;
         Ok(())
     }
 
     // drop whatever a finished stream was holding
-    fn release(&mut self, stream_idx: usize) {
+    fn release(&mut self, stream_idx: usize) -> Result<()> {
         debug_assert!(self.reservation.size() >= self.retained_size());
-        if let Some(rows) = self.inner[stream_idx].take() {
-            self.reservation.shrink(rows.size());
-        }
+        self.inner[stream_idx] = None;
+        self.reserved_sizes[stream_idx] = 0;
+        self.reservation.try_resize(self.retained_size())
     }
 
     fn retained_size(&self) -> usize {
@@ -200,6 +204,7 @@ impl RowCursorStream {
             streams: FusedStreams(streams),
             rows: ReusableRows {
                 inner: vec![None; stream_count],
+                reserved_sizes: vec![0; stream_count],
                 reservation: rows_reservation,
             },
         })
@@ -247,7 +252,9 @@ impl PartitionedStream for RowCursorStream {
         let polled = ready!(self.streams.poll_next(cx, stream_idx));
         if polled.is_none() {
             // The stream is finished, so its retained buffer will never be reused.
-            self.rows.release(stream_idx);
+            if let Err(error) = self.rows.release(stream_idx) {
+                return Poll::Ready(Some(Err(error)));
+            }
         }
         Poll::Ready(polled.map(|r| {
             r.and_then(|batch| {
@@ -442,7 +449,7 @@ mod tests {
     use datafusion_common::DataFusionError;
     use datafusion_execution::RecordBatchStream;
     use datafusion_execution::memory_pool::{
-        GreedyMemoryPool, MemoryConsumer, MemoryPool,
+        GreedyMemoryPool, MemoryConsumer, MemoryLimit, MemoryPool,
     };
     use datafusion_physical_expr::expressions::col;
     use futures::Stream;
@@ -905,6 +912,38 @@ mod tests {
         assert!(!harness.poll_and_drop_cursor(1)?);
         assert_eq!(harness.reserved(), converter_size);
 
+        Ok(())
+    }
+
+    // The buffer has already been taken out of the cache when its reservation fails
+    // to grow. Cleanup must still release its previous charge.
+    #[test]
+    fn failed_buffer_growth_releases_only_its_stream_reservation() -> Result<()> {
+        let small = (64, 8);
+        let large = (2048, 128);
+        let mut harness =
+            RowCursorHarness::with_shapes(vec![vec![small, large], vec![small]])?;
+
+        // Cache stream 1's buffer and record the reservation that must survive.
+        assert!(harness.poll_and_drop_cursor(1)?);
+        let expected_remaining = harness.reserved();
+        assert!(harness.poll_and_drop_cursor(0)?);
+
+        // Leave no space for stream 0's larger batch.
+        let MemoryLimit::Finite(limit) = harness.pool.memory_limit() else {
+            unreachable!("the harness uses a bounded memory pool");
+        };
+        let competitor = MemoryConsumer::new("competitor").register(&harness.pool);
+        competitor.try_grow(limit - harness.reserved())?;
+
+        assert!(matches!(
+            harness.poll_cursor(0),
+            Err(DataFusionError::ResourcesExhausted(_))
+        ));
+        drop(competitor);
+
+        // Only stream 1's buffer and the shared converter remain reserved.
+        assert_eq!(harness.reserved(), expected_remaining);
         Ok(())
     }
 }
