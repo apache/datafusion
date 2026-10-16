@@ -356,6 +356,13 @@ SELECT id FROM cast_interval_text_ids WHERE CAST(id AS INT) > 1 ORDER BY id;
 10
 2
 
+# Selective filtering through the cast must apply the numeric predicate after
+# casting, not string-ordered interval bounds derived from the statistics.
+query T
+SELECT id FROM cast_interval_text_ids WHERE CAST(id AS INT) > 5;
+----
+10
+
 statement ok
 DROP VIEW cast_interval_text_ids;
 
