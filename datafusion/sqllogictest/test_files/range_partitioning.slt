@@ -41,6 +41,33 @@ set datafusion.optimizer.enable_aggregate_dynamic_filter_pushdown = false;
 statement ok
 set datafusion.execution.parquet.pushdown_filters = false;
 
+# A filter below the first split point should leave the other file groups empty
+# while retaining all four range partition indexes.
+query TT
+EXPLAIN SELECT range_key FROM range_partitioned WHERE range_key < 10;
+----
+physical_plan
+01)FilterExec: range_key@0 < 10
+02)--DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.parquet], [], [], []]}, projection=[range_key], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet, predicate=range_key@0 < 10, pruning_predicate=range_key_null_count@1 != row_count@2 AND range_key_min@0 < 10, required_guarantees=[]
+
+# A row equal to a split point belongs to the partition after that split.
+query TT
+EXPLAIN SELECT range_key FROM range_partitioned WHERE range_key = 10;
+----
+physical_plan
+01)FilterExec: range_key@0 = 10
+02)--DataSourceExec: file_groups={4 groups: [[], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.parquet], [], []]}, projection=[range_key], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet, predicate=range_key@0 = 10, pruning_predicate=range_key_null_count@2 != row_count@3 AND range_key_min@0 <= 10 AND 10 <= range_key_max@1, required_guarantees=[range_key in (10)]
+
+# A range-key join must still align the surviving rows with their partition.
+query II
+SELECT l.range_key, r.value
+FROM (SELECT range_key FROM range_partitioned WHERE range_key < 10) l
+JOIN range_partitioned r ON l.range_key = r.range_key
+ORDER BY l.range_key;
+----
+1 10
+5 50
+
 ##########
 # TEST 1: Aggregate on Range Partition Column
 # With subset threshold met and preserve-file disabled, Range([range_key])
