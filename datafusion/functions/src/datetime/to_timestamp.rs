@@ -583,13 +583,20 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
-        if let [value] = input
-            && value.range.data_type().is_integer()
-        {
-            Ok(value.sort_properties)
+        Ok(if is_integer_input(input) {
+            input[0].sort_properties
         } else {
-            Ok(SortProperties::Unordered)
-        }
+            SortProperties::Unordered
+        })
+    }
+
+    fn preserves_lex_ordering(&self, input: &[ExprProperties]) -> Result<bool> {
+        Ok(is_integer_input(input))
+    }
+
+    fn strictly_order_preserving(&self, input: &[ExprProperties]) -> Result<bool> {
+        // A lossless cast cannot restore strictness lost by its input.
+        Ok(is_integer_input(input) && input[0].strictly_order_preserving)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -662,13 +669,20 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
-        if let [value] = input
-            && value.range.data_type().is_integer()
-        {
-            Ok(value.sort_properties)
+        Ok(if is_integer_input(input) {
+            input[0].sort_properties
         } else {
-            Ok(SortProperties::Unordered)
-        }
+            SortProperties::Unordered
+        })
+    }
+
+    fn preserves_lex_ordering(&self, input: &[ExprProperties]) -> Result<bool> {
+        Ok(is_integer_input(input))
+    }
+
+    fn strictly_order_preserving(&self, input: &[ExprProperties]) -> Result<bool> {
+        // A lossless cast cannot restore strictness lost by its input.
+        Ok(is_integer_input(input) && input[0].strictly_order_preserving)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -741,13 +755,20 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
-        if let [value] = input
-            && value.range.data_type().is_integer()
-        {
-            Ok(value.sort_properties)
+        Ok(if is_integer_input(input) {
+            input[0].sort_properties
         } else {
-            Ok(SortProperties::Unordered)
-        }
+            SortProperties::Unordered
+        })
+    }
+
+    fn preserves_lex_ordering(&self, input: &[ExprProperties]) -> Result<bool> {
+        Ok(is_integer_input(input))
+    }
+
+    fn strictly_order_preserving(&self, input: &[ExprProperties]) -> Result<bool> {
+        // A lossless cast cannot restore strictness lost by its input.
+        Ok(is_integer_input(input) && input[0].strictly_order_preserving)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -820,18 +841,32 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
-        if let [value] = input
-            && value.range.data_type().is_integer()
-        {
-            Ok(value.sort_properties)
+        Ok(if is_integer_input(input) {
+            input[0].sort_properties
         } else {
-            Ok(SortProperties::Unordered)
-        }
+            SortProperties::Unordered
+        })
+    }
+
+    fn preserves_lex_ordering(&self, input: &[ExprProperties]) -> Result<bool> {
+        Ok(is_integer_input(input))
+    }
+
+    fn strictly_order_preserving(&self, input: &[ExprProperties]) -> Result<bool> {
+        // A lossless cast cannot restore strictness lost by its input.
+        Ok(is_integer_input(input) && input[0].strictly_order_preserving)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+}
+
+/// The single-argument integer form casts the value to `Timestamp(unit, tz)`
+/// unchanged: one-to-one, order-preserving, and nulls map to nulls.
+/// Strict ordering of the full expression still depends on the input expression.
+fn is_integer_input(input: &[ExprProperties]) -> bool {
+    matches!(input, [value] if value.range.data_type().is_integer())
 }
 
 fn to_timestamp_impl<T: ArrowTimestampType + ScalarType<i64>>(
@@ -931,24 +966,41 @@ mod tests {
                     ] {
                         let input = ExprProperties::new_unknown()
                             .with_order(ordering)
-                            .with_range(Interval::make_unbounded(&data_type)?);
+                            .with_range(Interval::make_unbounded(&data_type)?)
+                            .with_strictly_order_preserving(true);
                         let expected = if supported {
                             ordering
                         } else {
                             SortProperties::Unordered
                         };
+                        let single_input = std::slice::from_ref(&input);
+                        assert_eq!(function.output_ordering(single_input)?, expected);
                         assert_eq!(
-                            function.output_ordering(std::slice::from_ref(&input))?,
-                            expected
+                            function.preserves_lex_ordering(single_input)?,
+                            supported
                         );
                         assert_eq!(
-                            function.output_ordering(&[input.clone(), input])?,
+                            function.strictly_order_preserving(single_input)?,
+                            supported
+                        );
+                        let non_strict_input =
+                            input.clone().with_strictly_order_preserving(false);
+                        assert!(
+                            !function.strictly_order_preserving(&[non_strict_input])?
+                        );
+                        let multiple_inputs = [input.clone(), input];
+                        assert_eq!(
+                            function.output_ordering(&multiple_inputs)?,
                             SortProperties::Unordered
                         );
+                        assert!(!function.preserves_lex_ordering(&multiple_inputs)?);
+                        assert!(!function.strictly_order_preserving(&multiple_inputs)?);
                     }
                 }
             }
             assert_eq!(function.output_ordering(&[])?, SortProperties::Unordered);
+            assert!(!function.preserves_lex_ordering(&[])?);
+            assert!(!function.strictly_order_preserving(&[])?);
         }
         Ok(())
     }
