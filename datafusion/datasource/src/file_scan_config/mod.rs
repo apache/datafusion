@@ -2915,10 +2915,11 @@ mod tests {
         assert_eq!(partition_stats.total_byte_size, Precision::Exact(800));
     }
 
-    /// With a projection, as all built-in sources have, the statistics of the
-    /// table and of a file group may lack trailing columns, which are then
-    /// unknown, or have extra ones, which are ignored. Without a projection
-    /// they must hold one entry per table column.
+    /// The statistics walk rejects table and file group statistics of the
+    /// wrong length only for a source without a projection. With one, as all
+    /// built-in sources have, their length is not checked: missing trailing
+    /// entries are unknown, which virtual columns rely on, and extra ones are
+    /// ignored.
     #[test]
     fn statistics_of_the_wrong_length() {
         use datafusion_common::assert_contains;
