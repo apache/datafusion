@@ -850,6 +850,26 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
     }
 
+    // Nested SELECTs that each name every column of the one below
+    {
+        let columns = |qualifier: &str| {
+            (0..700)
+                .map(|i| format!("{qualifier}.c{i} AS c{i}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let mut query = format!("SELECT {} FROM t700", columns("t700"));
+        for level in 0..8 {
+            query = format!(
+                "SELECT {} FROM ({query}) l{level}",
+                columns(&format!("l{level}"))
+            );
+        }
+        c.bench_function("logical_nested_select_700_columns_8_levels", |b| {
+            b.iter(|| logical_plan(&ctx, &rt, &query))
+        });
+    }
+
     // --- Mixed: deep plan + wide expressions ---
     // This is the worst case for optimizer: many nodes AND many expressions.
 
