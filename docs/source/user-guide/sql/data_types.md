@@ -139,6 +139,70 @@ DataFusion rejects each other value of `p`. If you omit `p`, the unit is
 `WITH TIME ZONE`: use `TIMESTAMPTZ(3)` or `TIMESTAMP(3) WITH TIME ZONE`.
 `DATE`, `TIME` and `INTERVAL` do not accept a precision.
 
+### Timestamp timezones and comparisons
+
+DataFusion follows the [Arrow timestamp representation]. A timestamp has a time
+unit and an optional timezone:
+
+- `Timestamp(unit, Some(timezone))` identifies an instant. Its integer value is
+  measured from the UTC Unix epoch; the timezone controls how that instant is
+  displayed. Changing between two timezone-aware types preserves the instant.
+- `Timestamp(unit, None)` is timezone-naive. It represents a wall-clock time
+  without identifying the timezone in which that time occurs. It is not the same
+  type as a timestamp with the timezone `"UTC"`.
+
+For timestamp comparisons (`=`, `!=`, `<`, `<=`, `>` and `>=`), DataFusion coerces
+the operands to a common timestamp type:
+
+| Operand timezones               | Common timezone             |
+| ------------------------------- | --------------------------- |
+| Neither operand has a timezone  | None                        |
+| Only one operand has a timezone | That operand's timezone     |
+| Both operands have a timezone   | The left operand's timezone |
+
+The common type uses the finer of the two time units. Two timezone-aware
+timestamps are compared as instants, even when their timezones differ. For
+example, noon at `+01:00` is the same instant as 11:00 UTC:
+
+```sql
+SELECT
+  arrow_cast('2024-01-01T12:00:00+01:00', 'Timestamp(s, "+01:00")') =
+  arrow_cast('2024-01-01T11:00:00Z', 'Timestamp(ms, "UTC")') AS same_instant;
++--------------+
+| same_instant |
++--------------+
+| true         |
++--------------+
+```
+
+When a timezone-naive timestamp is compared with a timezone-aware timestamp,
+the naive value is interpreted as a local wall-clock time in the common
+timezone. It is not implicitly interpreted as UTC. Here, the naive noon value
+is interpreted in `+01:00`, so it also equals 11:00 UTC:
+
+```sql
+SELECT
+  arrow_cast('2024-01-01T12:00:00', 'Timestamp(s)') =
+  arrow_cast('2024-01-01T11:00:00Z', 'Timestamp(ms, "+01:00")') AS naive_is_local;
++----------------+
+| naive_is_local |
++----------------+
+| true           |
++----------------+
+```
+
+Use an explicit cast to a timezone-aware type before comparing if a naive
+column's values belong to a different timezone from the other operand. For
+named timezones, daylight saving transitions can make a local time ambiguous
+or nonexistent; such a cast can fail.
+
+These comparison rules do not apply to every timestamp operation. For example,
+subtracting timestamps with different timezone metadata can fail during
+planning. Cast both operands to the same timezone-aware type before performing
+that operation. `"UTC"` and `"+00:00"` are treated as equivalent for timestamp
+arithmetic.
+
+[arrow timestamp representation]: https://docs.rs/arrow-schema/latest/arrow_schema/enum.DataType.html#variant.Timestamp
 [`datafusion.execution.time_zone`]: ../configs.md
 [issue #25166]: https://github.com/apache/datafusion/issues/25166
 
