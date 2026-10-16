@@ -106,7 +106,7 @@ fn try_get_bytes_iterator(
 
         DataType::LargeBinary => Box::new(array.as_binary::<i64>().into_iter()),
 
-        DataType::FixedSizeBinary(_) => Box::new(array.as_binary::<i64>().into_iter()),
+        DataType::FixedSizeBinary(_) => Box::new(array.as_fixed_size_binary().iter()),
 
         DataType::Utf8View => Box::new(
             array

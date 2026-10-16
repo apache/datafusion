@@ -175,10 +175,10 @@ NULL
 query error DataFusion error: Error during planning: 'round' does not support zero arguments
 SELECT round();
 
-query error Error during planning: Internal error: Function 'round' failed to match any signature
+query error Error during planning: Function 'round' failed to match any signature
 SELECT round(1, 2, 3);
 
-query error Error during planning: Internal error: Function 'round' failed to match any signature
+query error Error during planning: Function 'round' failed to match any signature
 SELECT round('x');
 
 query error round decimal_places 2147483648 is out of supported i32 range
