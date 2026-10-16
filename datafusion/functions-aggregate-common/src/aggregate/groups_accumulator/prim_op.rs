@@ -216,6 +216,11 @@ where
 
         Ok(vec![Arc::new(state_values)])
     }
+    fn reserve_groups(&mut self, capacity: usize) {
+        self.values
+            .reserve_exact(capacity.saturating_sub(self.values.len()));
+    }
+
     fn size(&self) -> usize {
         self.values.capacity() * size_of::<T::Native>() + self.null_state.size()
     }
