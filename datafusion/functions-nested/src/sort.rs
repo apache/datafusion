@@ -18,11 +18,11 @@
 //! [`ScalarUDFImpl`] definitions for array_sort function.
 
 use crate::utils::make_scalar_function;
-use arrow::array::BooleanBufferBuilder;
 use arrow::array::{
     Array, ArrayRef, ArrowPrimitiveType, GenericListArray, OffsetSizeTrait,
-    PrimitiveArray, UInt32Array, UInt64Array, new_empty_array, new_null_array,
+    PrimitiveArray, UInt32Array, UInt64Array, new_empty_array,
 };
+use arrow::array::{BooleanBufferBuilder, StringArray};
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::datatypes::{ArrowNativeTypeOp, DataType, FieldRef};
 use arrow::row::{RowConverter, Rows, SortField};
@@ -162,22 +162,14 @@ fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         return Ok(Arc::clone(&args[0]));
     }
 
-    if args[1..].iter().any(|array| array.is_null(0)) {
-        return Ok(new_null_array(args[0].data_type(), args[0].len()));
-    }
+    let sort_order = if args.len() > 1 {
+        Some(as_string_array(&args[1])?)
+    } else {
+        None
+    };
 
-    let sort_options = if args.len() >= 2 {
-        let order = as_string_array(&args[1])?.value(0);
-        let descending = order_desc(order)?;
-        let nulls_first = if args.len() >= 3 {
-            order_nulls_first(as_string_array(&args[2])?.value(0))?
-        } else {
-            true
-        };
-        Some(SortOptions {
-            descending,
-            nulls_first,
-        })
+    let null_order = if args.len() > 2 {
+        Some(as_string_array(&args[2])?)
     } else {
         None
     };
@@ -190,11 +182,11 @@ fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
         DataType::List(field) => {
             let array = as_list_array(&args[0])?;
-            array_sort_generic(array, Arc::clone(field), sort_options)
+            array_sort_generic(array, Arc::clone(field), sort_order, null_order)
         }
         DataType::LargeList(field) => {
             let array = as_large_list_array(&args[0])?;
-            array_sort_generic(array, Arc::clone(field), sort_options)
+            array_sort_generic(array, Arc::clone(field), sort_order, null_order)
         }
         // Signature should prevent this arm ever occurring
         _ => exec_err!("array_sort expects list for first argument"),
@@ -204,14 +196,15 @@ fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 fn array_sort_generic<OffsetSize: OffsetSizeTrait>(
     list_array: &GenericListArray<OffsetSize>,
     field: FieldRef,
-    sort_options: Option<SortOptions>,
+    sort_order: Option<&StringArray>,
+    null_order: Option<&StringArray>,
 ) -> Result<ArrayRef> {
     let values = list_array.values();
 
     if values.data_type().is_primitive() {
-        array_sort_primitive(list_array, field, sort_options)
+        array_sort_primitive(list_array, field, sort_order, null_order)
     } else {
-        array_sort_non_primitive(list_array, field, sort_options)
+        array_sort_non_primitive(list_array, field, sort_order, null_order)
     }
 }
 
@@ -220,11 +213,12 @@ fn array_sort_generic<OffsetSize: OffsetSizeTrait>(
 fn array_sort_primitive<OffsetSize: OffsetSizeTrait>(
     list_array: &GenericListArray<OffsetSize>,
     field: FieldRef,
-    sort_options: Option<SortOptions>,
+    sort_order: Option<&StringArray>,
+    null_order: Option<&StringArray>,
 ) -> Result<ArrayRef> {
     let values = list_array.values().as_ref();
     downcast_primitive_array! {
-        values => sort_primitive_list(values, list_array, field, sort_options),
+        values => sort_primitive_list(values, list_array, field, sort_order, null_order),
         _ => exec_err!("array_sort: unsupported primitive type")
     }
 }
@@ -233,15 +227,16 @@ fn sort_primitive_list<T: ArrowPrimitiveType, OffsetSize: OffsetSizeTrait>(
     prim_values: &PrimitiveArray<T>,
     list_array: &GenericListArray<OffsetSize>,
     field: FieldRef,
-    sort_options: Option<SortOptions>,
+    sort_order: Option<&StringArray>,
+    null_order: Option<&StringArray>,
 ) -> Result<ArrayRef>
 where
     T::Native: ArrowNativeTypeOp,
 {
-    let descending = sort_options.is_some_and(|o| o.descending);
-    let nulls_first = sort_options.is_none_or(|o| o.nulls_first);
+    let row_count = list_array.len();
     let list_nulls = list_array.nulls();
     let offsets = list_array.offsets();
+    let mut list_validity = BooleanBufferBuilder::new(row_count);
 
     let (values, validity) = match prim_values.nulls() {
         Some(element_nulls) if element_nulls.null_count() > 0 => {
@@ -250,15 +245,23 @@ where
                 element_nulls,
                 offsets,
                 list_nulls,
-                descending,
-                nulls_first,
-            );
+                sort_order,
+                null_order,
+                &mut list_validity,
+            )?;
             (values, Some(validity))
         }
-        _ => (
-            sort_rows_no_nulls(prim_values.values(), offsets, list_nulls, descending),
-            None,
-        ),
+        _ => {
+            let values = sort_rows_no_nulls(
+                prim_values.values(),
+                offsets,
+                list_nulls,
+                sort_order,
+                null_order,
+                &mut list_validity,
+            )?;
+            (values, None)
+        }
     };
 
     let sorted_values = Arc::new(
@@ -270,7 +273,7 @@ where
         field,
         rebase_offsets(offsets),
         sorted_values,
-        list_nulls.cloned(),
+        Some(NullBuffer::from(list_validity.finish())),
     )?))
 }
 
@@ -294,8 +297,10 @@ fn sort_rows_no_nulls<N: ArrowNativeTypeOp, O: OffsetSizeTrait>(
     src_values: &[N],
     offsets: &OffsetBuffer<O>,
     list_nulls: Option<&NullBuffer>,
-    descending: bool,
-) -> Vec<N> {
+    sort_order: Option<&StringArray>,
+    null_order: Option<&StringArray>,
+    list_validity: &mut BooleanBufferBuilder,
+) -> Result<Vec<N>> {
     let (values_start, total_values) = offset_span(offsets);
 
     // Copy all values into a mutable buffer
@@ -303,14 +308,35 @@ fn sort_rows_no_nulls<N: ArrowNativeTypeOp, O: OffsetSizeTrait>(
 
     for (row_index, window) in offsets.windows(2).enumerate() {
         if list_nulls.is_some_and(|n| n.is_null(row_index)) {
+            list_validity.append(false);
             continue;
         }
+
+        let descending = if let Some(sort_order) = sort_order {
+            if sort_order.is_null(row_index) {
+                list_validity.append(false);
+                continue;
+            }
+            order_desc(sort_order.value(row_index))?
+        } else {
+            false
+        };
+
+        if let Some(null_order) = null_order {
+            if null_order.is_null(row_index) {
+                list_validity.append(false);
+                continue;
+            }
+            order_nulls_first(null_order.value(row_index))?;
+        }
+
         let start = window[0].as_usize() - values_start;
         let end = window[1].as_usize() - values_start;
         sort_row(&mut values[start..end], descending);
+        list_validity.append(true);
     }
 
-    values
+    Ok(values)
 }
 
 /// Slow path for primitive values with element-level nulls.
@@ -319,9 +345,10 @@ fn sort_rows_with_nulls<N: ArrowNativeTypeOp, O: OffsetSizeTrait>(
     src_nulls: &NullBuffer,
     offsets: &OffsetBuffer<O>,
     list_nulls: Option<&NullBuffer>,
-    descending: bool,
-    nulls_first: bool,
-) -> (Vec<N>, NullBuffer) {
+    sort_order: Option<&StringArray>,
+    null_order: Option<&StringArray>,
+    list_validity: &mut BooleanBufferBuilder,
+) -> Result<(Vec<N>, NullBuffer)> {
     let (values_start, total_values) = offset_span(offsets);
 
     let mut out_values: Vec<N> = vec![N::default(); total_values];
@@ -333,10 +360,33 @@ fn sort_rows_with_nulls<N: ArrowNativeTypeOp, O: OffsetSizeTrait>(
         let row_len = end - start;
         let out_start = start - values_start;
 
-        if list_nulls.is_some_and(|n| n.is_null(row_index)) || row_len == 0 {
+        if list_nulls.is_some_and(|n| n.is_null(row_index)) {
             validity.append_n(row_len, false);
+            list_validity.append(false);
             continue;
         }
+
+        let descending = if let Some(sort_order) = sort_order {
+            if sort_order.is_null(row_index) {
+                validity.append_n(row_len, false);
+                list_validity.append(false);
+                continue;
+            }
+            order_desc(sort_order.value(row_index))?
+        } else {
+            false
+        };
+
+        let nulls_first = if let Some(null_order) = null_order {
+            if null_order.is_null(row_index) {
+                list_validity.append(false);
+                validity.append_n(row_len, false);
+                continue;
+            }
+            order_nulls_first(null_order.value(row_index))?
+        } else {
+            true
+        };
 
         let null_count = src_nulls.slice(start, row_len).null_count();
         let valid_count = row_len - null_count;
@@ -366,31 +416,71 @@ fn sort_rows_with_nulls<N: ArrowNativeTypeOp, O: OffsetSizeTrait>(
             validity.append_n(valid_count, true);
             validity.append_n(null_count, false);
         }
+
+        list_validity.append(true);
     }
 
-    (out_values, NullBuffer::from(validity.finish()))
+    Ok((out_values, NullBuffer::from(validity.finish())))
 }
 
-/// Sort a non-pritive-typed ListArray by converting all rows at once using
+/// Sort a non-primitive-typed ListArray by converting all rows at once using
 /// `RowConverter`, and then sort row indices by comparing encoded bytes (sort
 /// direction and null ordering are baked into the encoding), and materialize
 /// the result with a single `take()`.
 fn array_sort_non_primitive<OffsetSize: OffsetSizeTrait>(
     list_array: &GenericListArray<OffsetSize>,
     field: FieldRef,
-    sort_options: Option<SortOptions>,
+    sort_order: Option<&StringArray>,
+    null_order: Option<&StringArray>,
 ) -> Result<ArrayRef> {
     let row_count = list_array.len();
     let values = list_array.values();
     let offsets = list_array.offsets();
     let (values_start, total_values) = offset_span(offsets);
 
-    let converter = RowConverter::new(vec![SortField::new_with_options(
+    let mut list_validity = BooleanBufferBuilder::new(row_count);
+
+    let desc_first_converter = RowConverter::new(vec![SortField::new_with_options(
         values.data_type().clone(),
-        sort_options.unwrap_or_default(),
+        SortOptions {
+            descending: true,
+            nulls_first: true,
+        },
     )])?;
+
+    let desc_last_converter = RowConverter::new(vec![SortField::new_with_options(
+        values.data_type().clone(),
+        SortOptions {
+            descending: true,
+            nulls_first: false,
+        },
+    )])?;
+
+    let asc_first_converter = RowConverter::new(vec![SortField::new_with_options(
+        values.data_type().clone(),
+        SortOptions {
+            descending: false,
+            nulls_first: true,
+        },
+    )])?;
+
+    let asc_last_converter = RowConverter::new(vec![SortField::new_with_options(
+        values.data_type().clone(),
+        SortOptions {
+            descending: false,
+            nulls_first: false,
+        },
+    )])?;
+
     let values_sliced = values.slice(values_start, total_values);
-    let rows = converter.convert_columns(&[Arc::clone(&values_sliced)])?;
+    let desc_first_rows =
+        desc_first_converter.convert_columns(&[Arc::clone(&values_sliced)])?;
+    let desc_last_rows =
+        desc_last_converter.convert_columns(&[Arc::clone(&values_sliced)])?;
+    let asc_first_rows =
+        asc_first_converter.convert_columns(&[Arc::clone(&values_sliced)])?;
+    let asc_last_rows =
+        asc_last_converter.convert_columns(&[Arc::clone(&values_sliced)])?;
 
     let mut indices: Vec<OffsetSize> = Vec::with_capacity(total_values);
     let mut new_offsets = Vec::with_capacity(row_count + 1);
@@ -403,9 +493,32 @@ fn array_sort_non_primitive<OffsetSize: OffsetSizeTrait>(
         let end = window[1];
 
         if list_array.is_null(row_index) {
+            list_validity.append(false);
             new_offsets.push(new_offsets[row_index]);
             continue;
         }
+
+        let descending = if let Some(sort_order) = sort_order {
+            if sort_order.is_null(row_index) {
+                list_validity.append(false);
+                new_offsets.push(new_offsets[row_index]);
+                continue;
+            }
+            order_desc(sort_order.value(row_index))?
+        } else {
+            false
+        };
+
+        let nulls_first = if let Some(null_order) = null_order {
+            if null_order.is_null(row_index) {
+                list_validity.append(false);
+                new_offsets.push(new_offsets[row_index]);
+                continue;
+            }
+            order_nulls_first(null_order.value(row_index))?
+        } else {
+            true
+        };
 
         let len = (end - start).as_usize();
         let local_start = start.as_usize() - values_start;
@@ -413,11 +526,25 @@ fn array_sort_non_primitive<OffsetSize: OffsetSizeTrait>(
         if len <= 1 {
             indices.extend((local_start..local_start + len).map(OffsetSize::usize_as));
         } else {
-            sort_row_indices(&mut sort_scratch, &rows, local_start, len);
+            let rows = if descending {
+                if nulls_first {
+                    &desc_first_rows
+                } else {
+                    &desc_last_rows
+                }
+            } else {
+                if nulls_first {
+                    &asc_first_rows
+                } else {
+                    &asc_last_rows
+                }
+            };
+            sort_row_indices(&mut sort_scratch, rows, local_start, len);
             indices.extend(sort_scratch.iter().map(|&i| OffsetSize::usize_as(i)));
         }
 
         new_offsets.push(new_offsets[row_index] + (end - start));
+        list_validity.append(true);
     }
 
     let sorted_values = if indices.is_empty() {
@@ -430,7 +557,7 @@ fn array_sort_non_primitive<OffsetSize: OffsetSizeTrait>(
         field,
         OffsetBuffer::<OffsetSize>::new(new_offsets.into()),
         sorted_values,
-        list_array.nulls().cloned(),
+        Some(NullBuffer::from(list_validity.finish())),
     )?))
 }
 
