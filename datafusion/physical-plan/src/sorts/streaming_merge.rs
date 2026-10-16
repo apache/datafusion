@@ -98,6 +98,9 @@ pub struct StreamingMergeBuilder<'a> {
     merge_pool: Option<Arc<MergeMemoryPool>>,
     /// Leave memory for the aggregate consuming the merged spill rows.
     reserve_replay_headroom: bool,
+    /// Leave memory for others sharing the pool when seating more than the
+    /// minimum two runs.
+    reserve_fan_in_headroom: bool,
     min_spill_batch_rows: Option<usize>,
     enable_round_robin_tie_breaker: bool,
 }
@@ -171,6 +174,13 @@ impl<'a> StreamingMergeBuilder<'a> {
         self
     }
 
+    /// Seat spill runs beyond the minimum two only while the pool can admit
+    /// their buffers plus equal headroom. Release the headroom before merging.
+    pub(crate) fn with_fan_in_headroom(mut self) -> Self {
+        self.reserve_fan_in_headroom = true;
+        self
+    }
+
     /// Limit intermediate rewrites when the retained buffer reservation can
     /// also admit the final replay pass with its headroom.
     /// `min_spill_batch_rows` is the minimum largest-batch row count across input
@@ -218,6 +228,7 @@ impl<'a> StreamingMergeBuilder<'a> {
             reservation,
             merge_pool,
             reserve_replay_headroom,
+            reserve_fan_in_headroom,
             min_spill_batch_rows,
             fetch,
             expressions,
@@ -261,6 +272,7 @@ impl<'a> StreamingMergeBuilder<'a> {
             )
             .with_merge_pool(merge_pool)
             .with_replay_headroom(reserve_replay_headroom)
+            .with_fan_in_headroom(reserve_fan_in_headroom)
             .with_intermediate_merge_sizing(min_spill_batch_rows)
             .create_spillable_merge_stream());
         }

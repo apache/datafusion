@@ -397,6 +397,11 @@ impl ExternalSorter {
                 .with_fetch(None)
                 .with_reservation(self.merge_reservation.take())
                 .with_merge_pool(Arc::clone(&self.merge_pool))
+                // The operator consuming the sorted output, and the other
+                // partitions of this sort still buffering input, share the
+                // pool with this merge. Seating every run the pool admits
+                // would leave them nothing.
+                .with_fan_in_headroom()
                 .build()
         } else {
             // Final output needs no reserve for future spills. Return unused
