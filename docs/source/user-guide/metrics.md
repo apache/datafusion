@@ -61,6 +61,9 @@ subsequent join processing time.
 | avg_fanout              | Average number of build-side join-key matches per matched probe-side row before applying any join filter. |
 | array_map_created_count | Number of times `HashJoinExec` created an `ArrayMap` for perfect hash join lookup execution.              |
 
+`RightSemi` and `RightAnti` joins without a join filter stop probing a row at
+its first build-side match, so they do not report `avg_fanout`.
+
 ### AggregateExec
 
 `AggregateExec` exposes the common `BaselineMetrics`, the operator-level

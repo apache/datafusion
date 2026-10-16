@@ -139,6 +139,51 @@ pub trait JoinHashMapType: Send + Sync {
 
     /// Returns the number of entries in the join hash map.
     fn len(&self) -> usize;
+
+    /// Returns the first-match probing interface if this map supports it,
+    /// `None` otherwise. Callers that receive `None` must use
+    /// [`Self::get_matched_indices_with_limit_offset`].
+    fn first_match_probe(&self) -> Option<&dyn FirstMatchProbe> {
+        None
+    }
+}
+
+/// First-match probing, used by joins that only need to know *whether* a probe
+/// row has a build-side match (`RightSemi`/`RightAnti` without a join filter).
+///
+/// Unlike [`JoinHashMapType::get_matched_indices_with_limit_offset`], which
+/// walks each probe row's whole hash chain, this walks chains one link per
+/// round. The caller checks key equality for the round's candidates and marks
+/// the probe rows that matched, then calls [`Self::next_candidates`] to advance
+/// only the rows still unmatched. Since hash collisions are rare, almost every
+/// row resolves in the first round.
+pub trait FirstMatchProbe {
+    /// Collects, for each probe row whose hash is present in the map, the
+    /// head of its hash chain as the first candidate build row.
+    ///
+    /// Probe rows marked NULL in `valid_keys` are skipped. `probe_indices` is
+    /// in ascending order, and the two vectors are parallel.
+    fn first_candidates(
+        &self,
+        hash_values: &[u64],
+        valid_keys: Option<&NullBuffer>,
+        probe_indices: &mut Vec<u32>,
+        build_indices: &mut Vec<u64>,
+    );
+
+    /// Advances every candidate to the next build row in its hash chain, in
+    /// place. Candidates whose probe row is marked in `matched`, and those
+    /// at the end of their chain, are dropped.
+    fn next_candidates(
+        &self,
+        matched: &[bool],
+        probe_indices: &mut Vec<u32>,
+        build_indices: &mut Vec<u64>,
+    );
+
+    /// Returns `true` if every hash chain has exactly one build row, so a
+    /// single round of [`Self::first_candidates`] sees every candidate.
+    fn has_unique_hashes(&self) -> bool;
 }
 
 pub struct JoinHashMapU32 {
@@ -219,6 +264,41 @@ impl JoinHashMapType for JoinHashMapU32 {
     fn len(&self) -> usize {
         self.map.len()
     }
+
+    fn first_match_probe(&self) -> Option<&dyn FirstMatchProbe> {
+        Some(self)
+    }
+}
+
+impl FirstMatchProbe for JoinHashMapU32 {
+    fn first_candidates(
+        &self,
+        hash_values: &[u64],
+        valid_keys: Option<&NullBuffer>,
+        probe_indices: &mut Vec<u32>,
+        build_indices: &mut Vec<u64>,
+    ) {
+        first_candidates(
+            &self.map,
+            hash_values,
+            valid_keys,
+            probe_indices,
+            build_indices,
+        )
+    }
+
+    fn next_candidates(
+        &self,
+        matched: &[bool],
+        probe_indices: &mut Vec<u32>,
+        build_indices: &mut Vec<u64>,
+    ) {
+        next_candidates(&self.next, matched, probe_indices, build_indices)
+    }
+
+    fn has_unique_hashes(&self) -> bool {
+        self.map.len() == self.next.len()
+    }
 }
 
 pub struct JoinHashMapU64 {
@@ -298,6 +378,41 @@ impl JoinHashMapType for JoinHashMapU64 {
 
     fn len(&self) -> usize {
         self.map.len()
+    }
+
+    fn first_match_probe(&self) -> Option<&dyn FirstMatchProbe> {
+        Some(self)
+    }
+}
+
+impl FirstMatchProbe for JoinHashMapU64 {
+    fn first_candidates(
+        &self,
+        hash_values: &[u64],
+        valid_keys: Option<&NullBuffer>,
+        probe_indices: &mut Vec<u32>,
+        build_indices: &mut Vec<u64>,
+    ) {
+        first_candidates(
+            &self.map,
+            hash_values,
+            valid_keys,
+            probe_indices,
+            build_indices,
+        )
+    }
+
+    fn next_candidates(
+        &self,
+        matched: &[bool],
+        probe_indices: &mut Vec<u32>,
+        build_indices: &mut Vec<u64>,
+    ) {
+        next_candidates(&self.next, matched, probe_indices, build_indices)
+    }
+
+    fn has_unique_hashes(&self) -> bool {
+        self.map.len() == self.next.len()
     }
 }
 
@@ -481,6 +596,64 @@ where
         }
     }
     None
+}
+
+/// See [`FirstMatchProbe::first_candidates`].
+fn first_candidates<T>(
+    map: &HashTable<(u64, T)>,
+    hash_values: &[u64],
+    valid_keys: Option<&NullBuffer>,
+    probe_indices: &mut Vec<u32>,
+    build_indices: &mut Vec<u64>,
+) where
+    T: Copy + TryFrom<usize> + Into<u64> + Sub<Output = T>,
+    <T as TryFrom<usize>>::Error: Debug,
+{
+    probe_indices.clear();
+    build_indices.clear();
+    let one = T::try_from(1).unwrap();
+
+    for (row_idx, &hash) in hash_values.iter().enumerate() {
+        if valid_keys.is_some_and(|valid| valid.is_null(row_idx)) {
+            continue;
+        }
+        if let Some((_, idx)) = map.find(hash, |(h, _)| hash == *h) {
+            probe_indices.push(row_idx as u32);
+            build_indices.push((*idx - one).into());
+        }
+    }
+}
+
+/// See [`FirstMatchProbe::next_candidates`].
+fn next_candidates<T>(
+    next_chain: &[T],
+    matched: &[bool],
+    probe_indices: &mut Vec<u32>,
+    build_indices: &mut Vec<u64>,
+) where
+    T: Copy + TryFrom<usize> + PartialEq + Into<u64> + Sub<Output = T>,
+    <T as TryFrom<usize>>::Error: Debug,
+{
+    debug_assert_eq!(probe_indices.len(), build_indices.len());
+    let zero = T::try_from(0).unwrap();
+    let one = T::try_from(1).unwrap();
+
+    let mut kept = 0;
+    for i in 0..probe_indices.len() {
+        let probe_idx = probe_indices[i];
+        if matched[probe_idx as usize] {
+            continue;
+        }
+        let next = next_chain[build_indices[i] as usize];
+        if next == zero {
+            continue;
+        }
+        probe_indices[kept] = probe_idx;
+        build_indices[kept] = (next - one).into();
+        kept += 1;
+    }
+    probe_indices.truncate(kept);
+    build_indices.truncate(kept);
 }
 
 pub fn contain_hashes<T>(map: &HashTable<(u64, T)>, hash_values: &[u64]) -> BooleanArray {

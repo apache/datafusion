@@ -32,6 +32,7 @@ use crate::joins::hash_join::probe_completion::ProbeSideSummary;
 use crate::joins::hash_join::shared_bounds::{
     PartitionBounds, PartitionBuildData, SharedBuildAccumulator,
 };
+use crate::joins::join_hash_map::FirstMatchProbe;
 use crate::joins::utils::{
     JoinKeyComparator, OnceFut, equal_rows_arr_with_normalized_left, matchable_join_keys,
 };
@@ -517,6 +518,128 @@ pub(super) fn lookup_join_hashmap(
     Ok((build_indices, probe_indices, next_offset))
 }
 
+/// Returns the probe rows of `state`, in ascending order, that have at least one
+/// build-side row with an equal key. Used by `RightSemi`/`RightAnti` joins
+/// without a join filter.
+///
+/// Returns `None` if the build-side map cannot do first-match probing, in which
+/// case the caller must use the general path. Unlike [`lookup_join_hashmap`],
+/// this stops at the first key-equal build row of each hash chain, so build rows
+/// with duplicate keys cost one comparison per probe row instead of one per
+/// duplicate, and no probe row is produced twice.
+fn first_match_probe_rows(
+    left_data: &JoinLeftData,
+    state: &mut ProcessProbeBatchState,
+    hashes: &[u64],
+    null_equality: NullEquality,
+    probe_indices_buffer: &mut Vec<u32>,
+    build_indices_buffer: &mut Vec<u64>,
+) -> Result<Option<Vec<u32>>> {
+    match left_data.map() {
+        Map::ArrayMap(array_map) => {
+            array_map
+                .get_probe_indices_with_any_match(&state.values, probe_indices_buffer)?;
+            Ok(Some(probe_indices_buffer.clone()))
+        }
+        Map::HashMap(map) => {
+            let Some(probe) = map.first_match_probe() else {
+                return Ok(None);
+            };
+            first_match_hashmap_rows(
+                probe,
+                hashes,
+                state.valid_keys.as_ref(),
+                state.batch.num_rows(),
+                probe_indices_buffer,
+                build_indices_buffer,
+                |build_indices, probe_indices| {
+                    let (_, matched_probe_indices) = equal_rows_arr_with_normalized_left(
+                        build_indices,
+                        probe_indices,
+                        left_data.values(),
+                        &state.values,
+                        null_equality,
+                        &mut state.key_comparator,
+                    )?;
+                    Ok(matched_probe_indices)
+                },
+            )
+            .map(Some)
+        }
+    }
+}
+
+/// Drives [`FirstMatchProbe`] rounds for [`first_match_probe_rows`].
+///
+/// `equal_keys` receives parallel candidate `(build, probe)` indices and returns
+/// the probe indices, in ascending order, whose candidate has an equal key.
+///
+/// Hash collisions are rare, so almost every probe row is resolved by the first
+/// round. Later rounds only revisit the rows that did not match their previous
+/// candidate.
+fn first_match_hashmap_rows(
+    probe: &dyn FirstMatchProbe,
+    hashes: &[u64],
+    valid_keys: Option<&NullBuffer>,
+    num_rows: usize,
+    probe_indices_buffer: &mut Vec<u32>,
+    build_indices_buffer: &mut Vec<u64>,
+    mut equal_keys: impl FnMut(&UInt64Array, &UInt32Array) -> Result<UInt32Array>,
+) -> Result<Vec<u32>> {
+    probe.first_candidates(
+        hashes,
+        valid_keys,
+        probe_indices_buffer,
+        build_indices_buffer,
+    );
+
+    let unique_hashes = probe.has_unique_hashes();
+    let mut matched_flags = if unique_hashes {
+        vec![]
+    } else {
+        vec![false; num_rows]
+    };
+    let mut matched: Vec<u32> = vec![];
+    let mut rounds = 0;
+    while !probe_indices_buffer.is_empty() {
+        rounds += 1;
+        let build_indices: UInt64Array = std::mem::take(build_indices_buffer).into();
+        let probe_indices: UInt32Array = std::mem::take(probe_indices_buffer).into();
+
+        let matched_probe_indices = equal_keys(&build_indices, &probe_indices)?;
+
+        *build_indices_buffer = build_indices.into_parts().1.into();
+        *probe_indices_buffer = probe_indices.into_parts().1.into();
+
+        if unique_hashes {
+            matched = matched_probe_indices.into_parts().1.into();
+            break;
+        }
+        for &probe_idx in matched_probe_indices.values() {
+            matched_flags[probe_idx as usize] = true;
+        }
+        matched.extend_from_slice(matched_probe_indices.values());
+        probe.next_candidates(&matched_flags, probe_indices_buffer, build_indices_buffer);
+    }
+    if rounds > 1 {
+        matched.sort_unstable();
+    }
+    Ok(matched)
+}
+
+/// Returns the indices in `0..num_rows` that are absent from `matched`, which
+/// must be sorted and in range.
+fn complement_indices(matched: &[u32], num_rows: usize) -> Vec<u32> {
+    let mut unmatched = Vec::with_capacity(num_rows - matched.len());
+    let mut next = 0;
+    for &idx in matched {
+        unmatched.extend(next..idx);
+        next = idx + 1;
+    }
+    unmatched.extend(next..num_rows as u32);
+    unmatched
+}
+
 /// Counts the number of distinct elements in the input array.
 ///
 /// The input array must be sorted (e.g., `[0, 1, 1, 2, 2, ...]`) and contain no null values.
@@ -888,6 +1011,72 @@ impl HashJoinStream {
             self.output_buffer.push_batch(result)?;
             self.state = HashJoinStreamState::FetchProbeBatch;
 
+            return Ok(StatefulStreamResult::Continue);
+        }
+
+        // `RightSemi`/`RightAnti` without a join filter only need to know whether
+        // each probe row has a match, so they skip materializing match pairs.
+        if self.filter.is_none()
+            && matches!(self.join_type, JoinType::RightSemi | JoinType::RightAnti)
+            && let Some(matched) = first_match_probe_rows(
+                &build_side.left_data,
+                state,
+                &self.hashes_buffer,
+                self.null_equality,
+                &mut self.probe_indices_buffer,
+                &mut self.build_indices_buffer,
+            )?
+        {
+            self.join_metrics.probe_hit_rate.add_part(matched.len());
+
+            let mut right_indices: UInt32Array = if self.join_type == JoinType::RightSemi
+            {
+                matched.into()
+            } else {
+                let unmatched = complement_indices(&matched, state.batch.num_rows());
+                // Keep the allocation for the next probe batch.
+                self.probe_indices_buffer = matched;
+                unmatched.into()
+            };
+            if self.null_aware == Some(NullAwareMode::RightAnti) {
+                right_indices = drop_null_probe_keys(state, right_indices);
+            }
+
+            // Every probe row is emitted, so reuse the probe columns as-is
+            // instead of gathering them.
+            let batch = if right_indices.len() == state.batch.num_rows()
+                && !self.schema.fields().is_empty()
+            {
+                let columns = self
+                    .column_indices
+                    .iter()
+                    .map(|column_index| {
+                        Arc::clone(state.batch.column(column_index.index))
+                    })
+                    .collect();
+                RecordBatch::try_new(Arc::clone(&self.schema), columns)?
+            } else {
+                build_batch_from_indices(
+                    &self.schema,
+                    build_side.left_data.batch(),
+                    &state.batch,
+                    &UInt64Array::from_iter_values(vec![]),
+                    &right_indices,
+                    &self.column_indices,
+                    JoinSide::Left,
+                    self.join_type,
+                    None,
+                )?
+            };
+            let push_status = self.output_buffer.push_batch(batch)?;
+            timer.done();
+
+            if push_status == PushBatchStatus::LimitReached {
+                self.output_buffer.finish()?;
+                self.state = HashJoinStreamState::Completed;
+            } else {
+                self.state = HashJoinStreamState::FetchProbeBatch;
+            }
             return Ok(StatefulStreamResult::Continue);
         }
 
@@ -1770,5 +1959,109 @@ mod tests {
         handle.cancel_pending();
 
         assert_eq!(handle.state(), &BuildReportState::Finalized);
+    }
+
+    /// Runs `first_match_hashmap_rows` over a map built from `build_hashes`,
+    /// treating a candidate as a match when the integer keys are equal.
+    fn first_match_rows_for_keys(
+        build_keys: &[i32],
+        build_hashes: &[u64],
+        probe_keys: &[i32],
+        probe_hashes: &[u64],
+        valid_keys: Option<&NullBuffer>,
+    ) -> Vec<u32> {
+        use crate::joins::join_hash_map::{JoinHashMapType, JoinHashMapU32};
+
+        let mut map = JoinHashMapU32::with_capacity(build_keys.len());
+        map.update_from_iter(Box::new(build_hashes.iter().enumerate()), 0);
+        let probe = map.first_match_probe().unwrap();
+
+        first_match_hashmap_rows(
+            probe,
+            probe_hashes,
+            valid_keys,
+            probe_keys.len(),
+            &mut vec![],
+            &mut vec![],
+            |build_indices, probe_indices| {
+                Ok(UInt32Array::from_iter_values(
+                    build_indices
+                        .values()
+                        .iter()
+                        .zip(probe_indices.values())
+                        .filter(|(b, p)| {
+                            build_keys[**b as usize] == probe_keys[**p as usize]
+                        })
+                        .map(|(_, p)| *p),
+                ))
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn first_match_distinct_hashes_resolve_in_one_round() {
+        let matched = first_match_rows_for_keys(
+            &[1, 2, 3],
+            &[1, 2, 3],
+            &[3, 4, 1, 2],
+            &[3, 4, 1, 2],
+            None,
+        );
+        assert_eq!(matched, vec![0, 2, 3]);
+    }
+
+    #[test]
+    fn first_match_walks_hash_collision_chains() {
+        // Keys 1, 2, 3 and 5 share hash 10, so a probe key may need several
+        // links of the chain (5 -> 3 -> 2 -> 1) before it finds its match.
+        let build_keys = [1, 2, 3, 4, 5];
+        let build_hashes = [10, 10, 10, 20, 10];
+        // Key 9 collides with the chain but matches nothing; key 7 has no
+        // entry for its hash at all.
+        let probe_keys = [1, 9, 3, 4, 5, 2, 7];
+        let probe_hashes = [10, 10, 10, 20, 10, 10, 30];
+
+        let matched = first_match_rows_for_keys(
+            &build_keys,
+            &build_hashes,
+            &probe_keys,
+            &probe_hashes,
+            None,
+        );
+        assert_eq!(matched, vec![0, 2, 3, 4, 5]);
+
+        // A probe row with a NULL key is never looked up.
+        let valid_keys =
+            NullBuffer::from(vec![true, true, false, true, true, true, true]);
+        let matched = first_match_rows_for_keys(
+            &build_keys,
+            &build_hashes,
+            &probe_keys,
+            &probe_hashes,
+            Some(&valid_keys),
+        );
+        assert_eq!(matched, vec![0, 3, 4, 5]);
+    }
+
+    #[test]
+    fn first_match_with_duplicate_build_keys() {
+        // Duplicate build keys form a hash chain too, but the first candidate
+        // already matches, so a probe row is emitted once.
+        let matched = first_match_rows_for_keys(
+            &[1, 1, 1],
+            &[10, 10, 10],
+            &[1, 2, 1],
+            &[10, 10, 10],
+            None,
+        );
+        assert_eq!(matched, vec![0, 2]);
+    }
+
+    #[test]
+    fn complement_indices_returns_unmatched_rows() {
+        assert_eq!(complement_indices(&[], 3), vec![0, 1, 2]);
+        assert_eq!(complement_indices(&[0, 2, 3], 6), vec![1, 4, 5]);
+        assert_eq!(complement_indices(&[0, 1, 2], 3), Vec::<u32>::new());
     }
 }

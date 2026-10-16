@@ -6066,6 +6066,77 @@ mod tests {
         Ok(())
     }
 
+    /// `RightSemi`/`RightAnti` emit each probe row at most once, however many
+    /// build rows share its key, and treat NULL keys per the null equality.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn join_right_semi_anti_duplicate_build_keys_and_null_probe_keys(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        // Key 1 has three build rows, key 2 has one.
+        let build = || {
+            build_table_two_cols(
+                ("a1", &vec![Some(1), Some(1), Some(2), Some(1)]),
+                ("b1", &vec![Some(1), Some(1), Some(2), Some(1)]),
+            )
+        };
+        let probe = || {
+            build_table_two_cols(
+                (
+                    "a2",
+                    &vec![Some(0), Some(1), Some(2), Some(3), Some(4), Some(5)],
+                ),
+                (
+                    "b2",
+                    &vec![None, Some(1), Some(3), Some(2), Some(1), Some(9)],
+                ),
+            )
+        };
+
+        for (join_type, null_equality, expected) in [
+            (
+                JoinType::RightSemi,
+                NullEquality::NullEqualsNothing,
+                vec![1, 3, 4],
+            ),
+            (
+                JoinType::RightAnti,
+                NullEquality::NullEqualsNothing,
+                vec![0, 2, 5],
+            ),
+            (
+                JoinType::RightSemi,
+                NullEquality::NullEqualsNull,
+                vec![1, 3, 4],
+            ),
+            (
+                JoinType::RightAnti,
+                NullEquality::NullEqualsNull,
+                vec![0, 2, 5],
+            ),
+        ] {
+            let task_ctx =
+                prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
+            let left = build();
+            let right = probe();
+            let on = vec![(
+                Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+            )];
+            let join = join(left, right, on, &join_type, null_equality)?;
+
+            let batches = common::collect(join.execute(0, task_ctx)?).await?;
+            let mut a2 = vec![];
+            for batch in &batches {
+                let col = batch.column(0).as_primitive::<Int32Type>();
+                a2.extend(col.values().iter().copied());
+            }
+            assert_eq!(a2, expected, "{join_type} with {null_equality:?}");
+        }
+        Ok(())
+    }
+
     #[apply(hash_join_exec_configs)]
     #[tokio::test]
     async fn join_right_semi_with_filter(
