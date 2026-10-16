@@ -1,0 +1,116 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# interval * integer → interval
+# Multiply an interval by an integer, which scales it exactly
+# interval '1 second' * 900 → 00:15:00
+# interval '1 day' * 21 → 21 days
+# interval '1 month' * 2 → 2 mons
+
+query ?
+SELECT interval '1 second' * 900
+----
+15 mins
+
+query ?
+SELECT 900 * interval '1 second'
+----
+15 mins
+
+query ?
+SELECT interval '1 day' * 21
+----
+21 days
+
+query ?
+SELECT interval '1 month' * 2
+----
+2 mons
+
+query ?
+SELECT interval '1 year 2 months 3 days 4 hours' * 2
+----
+28 mons 6 days 8 hours
+
+query ?
+SELECT interval '1 day' * -1
+----
+-1 days
+
+query ?
+SELECT interval '1 day' * 2::smallint
+----
+2 days
+
+query T
+SELECT arrow_typeof(interval '1 second' * 900)
+----
+Interval(MonthDayNano)
+
+# interval / integer → interval
+query ?
+SELECT interval '1 day' / 2
+----
+12 hours
+
+query ?
+SELECT interval '1 hour' / 4
+----
+15 mins
+
+query T
+SELECT arrow_typeof(interval '1 day' / 2)
+----
+Interval(MonthDayNano)
+
+# NULL operands
+query ?
+SELECT interval '1 day' * NULL
+----
+NULL
+
+query ?
+SELECT NULL * interval '1 day'
+----
+NULL
+
+# column inputs
+statement ok
+CREATE TABLE interval_factors (iv INTERVAL, n INT) AS VALUES
+  (interval '1 day', 2),
+  (interval '2 hours', 3),
+  (NULL, 4),
+  (interval '1 month', NULL);
+
+query ???
+SELECT iv * n, n * iv, iv / n FROM interval_factors ORDER BY n
+----
+2 days 2 days 12 hours
+6 hours 6 hours 40 mins
+NULL NULL NULL
+NULL NULL NULL
+
+statement ok
+DROP TABLE interval_factors;
+
+# number / interval is not an interval operation
+query error
+SELECT 2 / interval '1 day'
+
+# interval + number is not supported either
+query error
+SELECT interval '1 day' + 2
