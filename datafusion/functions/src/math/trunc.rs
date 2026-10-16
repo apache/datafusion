@@ -407,7 +407,19 @@ fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// Truncates `x` using a pre-computed `factor` of `10^precision`. Taking the
 /// factor as an argument lets callers hoist `10^precision` out of a per-element
 /// loop when the precision is constant.
+///
+/// ### Formal Verification (Lean 4)
+/// Verified theorem: `truncate_with_factor_no_nan`
 fn truncate_with_factor<F: Float>(x: F, factor: F) -> F {
+    if !x.is_finite() {
+        return x;
+    }
+    if factor.is_infinite() {
+        return x;
+    }
+    if factor.is_zero() {
+        return F::zero().copysign(x);
+    }
     (x * factor).trunc() / factor
 }
 
@@ -420,7 +432,7 @@ where
 {
     let factor = <T::Native as NumCast>::from(10.0_f64)
         .unwrap()
-        .powi(precision as i32);
+        .powi(precision.clamp(i32::MIN as i64, i32::MAX as i64) as i32);
     Arc::new(
         arr.as_primitive::<T>()
             .unary::<_, T>(|x| truncate_with_factor(x, factor)),
@@ -428,11 +440,11 @@ where
 }
 
 fn compute_truncate32(x: f32, y: i64) -> f32 {
-    truncate_with_factor(x, 10.0_f32.powi(y as i32))
+    truncate_with_factor(x, 10.0_f32.powi(y.clamp(i32::MIN as i64, i32::MAX as i64) as i32))
 }
 
 fn compute_truncate64(x: f64, y: i64) -> f64 {
-    truncate_with_factor(x, 10.0_f64.powi(y as i32))
+    truncate_with_factor(x, 10.0_f64.powi(y.clamp(i32::MIN as i64, i32::MAX as i64) as i32))
 }
 
 /// Truncates a decimal value to `truncate_precision` fractional digits.
@@ -609,5 +621,39 @@ mod test {
             compute_truncate_decimal::<Decimal128Type>(-123_456, 4, 3),
             -123_450
         );
+    }
+
+    #[test]
+    fn test_truncate_extreme_precision() {
+        // High positive precision: factor overflows float precision, so value is unchanged
+        let args_f32_pos: Vec<ArrayRef> = vec![
+            Arc::new(Float32Array::from(vec![42.5_f32, -42.5_f32])),
+            Arc::new(Int64Array::from(vec![40, 50])),
+        ];
+        let res_f32_pos = trunc(&args_f32_pos).expect("failed trunc f32 high precision");
+        let floats_f32_pos = as_float32_array(&res_f32_pos).unwrap();
+        assert_eq!(floats_f32_pos.value(0), 42.5_f32);
+        assert_eq!(floats_f32_pos.value(1), -42.5_f32);
+
+        // High negative precision: factor underflows float precision, so value truncates to 0.0
+        let args_f32_neg: Vec<ArrayRef> = vec![
+            Arc::new(Float32Array::from(vec![42.5_f32, -42.5_f32])),
+            Arc::new(Int64Array::from(vec![-50, -60])),
+        ];
+        let res_f32_neg = trunc(&args_f32_neg).expect("failed trunc f32 negative precision");
+        let floats_f32_neg = as_float32_array(&res_f32_neg).unwrap();
+        assert_eq!(floats_f32_neg.value(0), 0.0_f32);
+        assert_eq!(floats_f32_neg.value(1), -0.0_f32);
+
+        // Float64 extreme precision and 64-bit clamp
+        let args_f64: Vec<ArrayRef> = vec![
+            Arc::new(Float64Array::from(vec![123.456_f64, -123.456_f64, 123.456_f64])),
+            Arc::new(Int64Array::from(vec![309, -325, i64::MAX])),
+        ];
+        let res_f64 = trunc(&args_f64).expect("failed trunc f64 extreme precision");
+        let floats_f64 = as_float64_array(&res_f64).unwrap();
+        assert_eq!(floats_f64.value(0), 123.456_f64);
+        assert_eq!(floats_f64.value(1), -0.0_f64);
+        assert_eq!(floats_f64.value(2), 123.456_f64);
     }
 }

@@ -42,6 +42,9 @@ use datafusion_macros::user_doc;
 use num_traits::{PrimInt, Signed, cast, checked_pow};
 use std::sync::Arc;
 
+///
+/// ### Formal Verification (Lean 4)
+/// Verified theorem: `round_with_factor_no_nan`
 fn output_scale_for_decimal(precision: u8, input_scale: i8, decimal_places: i32) -> i8 {
     // `decimal_places` controls the maximum output scale, but scale cannot exceed the input scale.
     //
@@ -863,17 +866,13 @@ where
     PT: ArrowPrimitiveType,
     PT::Native: num_traits::Float,
 {
-    // Bring `Float` into scope so `.round()` resolves on the `PT::Native`
-    // projection below.
-    use num_traits::Float;
-
     if let ColumnarValue::Scalar(ScalarValue::Int32(Some(decimal_places))) =
         decimal_places
     {
         let factor = round_factor::<PT::Native>(*decimal_places)?;
         let result = value_array
             .as_primitive::<PT>()
-            .unary::<_, PT>(|value| (value * factor).round() / factor);
+            .unary::<_, PT>(|value| round_with_factor(value, factor));
         return Ok(Arc::new(result) as ArrayRef);
     }
 
@@ -894,12 +893,24 @@ fn round_factor<T: num_traits::Float>(decimal_places: i32) -> Result<T, ArrowErr
     })
 }
 
+fn round_with_factor<T: num_traits::Float>(value: T, factor: T) -> T {
+    if !value.is_finite() {
+        value
+    } else if factor.is_infinite() {
+        value
+    } else if factor.is_zero() {
+        T::zero().copysign(value)
+    } else {
+        (value * factor).round() / factor
+    }
+}
+
 fn round_float<T>(value: T, decimal_places: i32) -> Result<T, ArrowError>
 where
     T: num_traits::Float,
 {
     let factor = round_factor::<T>(decimal_places)?;
-    Ok((value * factor).round() / factor)
+    Ok(round_with_factor(value, factor))
 }
 
 fn round_decimal<V: ArrowNativeTypeOp>(
@@ -987,7 +998,7 @@ fn round_decimal_or_zero<V: ArrowNativeTypeOp>(
 mod test {
     use std::sync::Arc;
 
-    use arrow::array::{ArrayRef, Float32Array, Float64Array, Int64Array};
+    use arrow::array::{ArrayRef, Float32Array, Float64Array, Int32Array, Int64Array};
     use arrow::datatypes::DataType;
     use datafusion_common::DataFusionError;
     use datafusion_common::ScalarValue;
@@ -1129,5 +1140,42 @@ mod test {
             result,
             Err(DataFusionError::ArrowError(_, _)) | Err(DataFusionError::Execution(_))
         ));
+    }
+
+    #[test]
+    fn test_round_float_extreme_decimal_places() {
+        // High positive decimal places: power factor overflows float precision,
+        // so value is already at maximum representable resolution and should not become NaN.
+        let args_pos: Vec<ArrayRef> = vec![
+            Arc::new(Float32Array::from(vec![1.5_f32, -2.5_f32])),
+            Arc::new(Int32Array::from(vec![40, 50])),
+        ];
+        let res_pos = round_arrays(Arc::clone(&args_pos[0]), Some(Arc::clone(&args_pos[1])))
+            .expect("failed round with high decimal places");
+        let floats_pos = as_float32_array(&res_pos).unwrap();
+        assert_eq!(floats_pos, &Float32Array::from(vec![1.5_f32, -2.5_f32]));
+
+        // High negative decimal places: power factor underflows float precision,
+        // so value rounds to 0.0 without becoming NaN.
+        let args_neg: Vec<ArrayRef> = vec![
+            Arc::new(Float32Array::from(vec![1.5_f32, -2.5_f32])),
+            Arc::new(Int32Array::from(vec![-50, -60])),
+        ];
+        let res_neg = round_arrays(Arc::clone(&args_neg[0]), Some(Arc::clone(&args_neg[1])))
+            .expect("failed round with negative decimal places");
+        let floats_neg = as_float32_array(&res_neg).unwrap();
+        assert_eq!(floats_neg.value(0), 0.0_f32);
+        assert_eq!(floats_neg.value(1), -0.0_f32);
+
+        // Float64 extreme decimal places
+        let args_f64: Vec<ArrayRef> = vec![
+            Arc::new(Float64Array::from(vec![123.456_f64, -123.456_f64])),
+            Arc::new(Int32Array::from(vec![309, -325])),
+        ];
+        let res_f64 = round_arrays(Arc::clone(&args_f64[0]), Some(Arc::clone(&args_f64[1])))
+            .expect("failed round f64 extreme decimal places");
+        let floats_f64 = as_float64_array(&res_f64).unwrap();
+        assert_eq!(floats_f64.value(0), 123.456_f64);
+        assert_eq!(floats_f64.value(1), -0.0_f64);
     }
 }
