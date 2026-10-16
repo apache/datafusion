@@ -30,7 +30,9 @@ use super::VIEW_SIZE_BYTES;
 /// A row counts its fixed-width values, the offsets and bytes of its
 /// variable-width values, and the elements of its nested values. Buffers that
 /// every row shares, such as validity bitmaps and dictionary values, are not
-/// counted.
+/// counted. Each view counts the bytes of its value, so views that share bytes
+/// are counted as if compaction copied them, although it can write shared bytes
+/// only once.
 pub(crate) struct SpilledRowSizes {
     /// Bytes that every row takes in the fixed-width columns
     fixed: usize,

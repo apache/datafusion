@@ -785,11 +785,36 @@ const VIEW_SIZE_BYTES: usize = 16;
 ///   `List`, `Map`, `Union`, `Dictionary`, and other child-bearing arrays are compacted too
 /// - The Arrow `gc()` method itself is optimized and only copies referenced data
 pub(crate) fn gc_view_arrays(batch: &RecordBatch) -> Result<RecordBatch> {
+    gc_view_arrays_of_columns(batch, |_| true)
+}
+
+/// Like [`gc_view_arrays`], but only compacts the view arrays of nested
+/// columns, such as lists of strings.
+///
+/// A batch built by `interleave`, such as the output of a sort-preserving
+/// merge, references the whole data buffers of the batches it takes rows from.
+/// An accumulator that keeps the arrays it merges, such as `array_agg`, keeps
+/// those buffers alive with each group. Top-level columns are left as they
+/// are, since group keys and the accumulators of top-level states typically
+/// copy the values they keep.
+pub(crate) fn gc_nested_view_arrays(batch: &RecordBatch) -> Result<RecordBatch> {
+    gc_view_arrays_of_columns(batch, |array| array.data_type().is_nested())
+}
+
+/// Compacts the view arrays of the columns of `batch` that `include` selects.
+fn gc_view_arrays_of_columns(
+    batch: &RecordBatch,
+    include: impl Fn(&ArrayRef) -> bool,
+) -> Result<RecordBatch> {
     let mut mutated = false;
     let mut new_columns: Vec<Arc<dyn Array>> = Vec::with_capacity(batch.num_columns());
 
     for array in batch.columns() {
-        let (gc_array, array_mutated) = gc_array(array)?;
+        let (gc_array, array_mutated) = if include(array) {
+            gc_array(array)?
+        } else {
+            (Arc::clone(array), false)
+        };
         mutated |= array_mutated;
         new_columns.push(gc_array);
     }
@@ -2704,6 +2729,56 @@ mod tests {
         assert!(
             calculate_string_view_waste_ratio(gc_dictionary_values) < 0.2,
             "GC should compact nested Dictionary values"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_gc_nested_view_arrays_skips_top_level_columns() -> Result<()> {
+        use arrow::buffer::Buffer;
+
+        let strings: Vec<String> = (0..400)
+            .map(|i| format!("http://example.com/nested/path/that/is/not/inlined/{i}"))
+            .collect();
+        let string_values = Arc::new(StringViewArray::from(strings)) as ArrayRef;
+
+        // Both columns hold 20 of the strings, but reference the data of all 400
+        let top_level = string_values.slice(0, 20);
+        let list_data = ArrayDataBuilder::new(DataType::List(Arc::new(
+            Field::new_list_field(DataType::Utf8View, true),
+        )))
+        .len(20)
+        .buffers(vec![Buffer::from_iter(0..=20_i32)])
+        .child_data(vec![string_values.slice(20, 20).to_data()])
+        .build()?;
+        let list_array = make_array(list_data);
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("strings", DataType::Utf8View, false),
+            Field::new(
+                "list_strings",
+                DataType::List(Arc::new(Field::new_list_field(DataType::Utf8View, true))),
+                false,
+            ),
+        ]));
+        let batch =
+            RecordBatch::try_new(schema, vec![Arc::clone(&top_level), list_array])?;
+
+        // `gc_view_arrays` compacts the top-level column, `gc_nested_view_arrays` does not
+        assert!(!Arc::ptr_eq(gc_view_arrays(&batch)?.column(0), &top_level));
+        let gc_batch = gc_nested_view_arrays(&batch)?;
+        assert!(Arc::ptr_eq(gc_batch.column(0), &top_level));
+
+        let gc_list_values =
+            make_array(gc_batch.column(1).to_data().child_data()[0].clone());
+        let gc_list_values = gc_list_values
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .unwrap();
+        assert!(
+            calculate_string_view_waste_ratio(gc_list_values) < 0.2,
+            "GC should compact nested List child views"
         );
 
         Ok(())
