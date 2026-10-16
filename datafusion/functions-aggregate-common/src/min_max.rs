@@ -18,8 +18,8 @@
 //! Basic min/max functionality shared across DataFusion aggregate functions
 
 use arrow::array::{
-    ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
-    Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
+    Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
+    Date64Array, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
     DurationMicrosecondArray, DurationMillisecondArray, DurationNanosecondArray,
     DurationSecondArray, FixedSizeBinaryArray, Float16Array, Float32Array, Float64Array,
     Int8Array, Int16Array, Int32Array, Int64Array, IntervalDayTimeArray,
@@ -28,6 +28,7 @@ use arrow::array::{
     Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
     TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
     TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
+    downcast_run_array,
 };
 use arrow::compute;
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
@@ -35,7 +36,7 @@ use datafusion_common::{
     DataFusionError, Result, ScalarValue, downcast_value, internal_err,
 };
 use datafusion_expr_common::accumulator::Accumulator;
-use std::{cmp::Ordering, mem::size_of_val};
+use std::{cmp::Ordering, mem::size_of_val, sync::Arc};
 
 macro_rules! choose_min_max {
     (min) => {
@@ -172,6 +173,44 @@ fn min_max_dictionary_scalar(
     }
 }
 
+fn min_max_run_end_encoded_scalar(
+    lhs: &ScalarValue,
+    rhs: &ScalarValue,
+    ordering: Ordering,
+) -> Result<Option<ScalarValue>> {
+    match (lhs, rhs) {
+        (
+            ScalarValue::RunEndEncoded(lhs_rf, lhs_vf, lhs_value),
+            ScalarValue::RunEndEncoded(rhs_rf, rhs_vf, rhs_value),
+        ) => {
+            if lhs_rf != rhs_rf || lhs_vf != rhs_vf {
+                return internal_err!(
+                    "MIN/MAX is not expected to receive RunEndEncoded scalars with different fields ({:?}, {:?} vs {:?}, {:?})",
+                    lhs_rf,
+                    lhs_vf,
+                    rhs_rf,
+                    rhs_vf
+                );
+            }
+
+            let result =
+                min_max_scalar(lhs_value.as_ref(), rhs_value.as_ref(), ordering)?;
+            Ok(Some(ScalarValue::RunEndEncoded(
+                Arc::clone(lhs_rf),
+                Arc::clone(lhs_vf),
+                Box::new(result),
+            )))
+        }
+        (ScalarValue::RunEndEncoded(_, _, lhs_value), rhs_scalar) => {
+            min_max_scalar(lhs_value.as_ref(), rhs_scalar, ordering).map(Some)
+        }
+        (lhs_scalar, ScalarValue::RunEndEncoded(_, _, rhs_value)) => {
+            min_max_scalar(lhs_scalar, rhs_value.as_ref(), ordering).map(Some)
+        }
+        _ => Ok(None),
+    }
+}
+
 // min/max of two logically compatible scalar values.
 // Dictionary scalars participate by comparing their inner logical values.
 // When both inputs are dictionaries, matching key types are preserved in the
@@ -186,6 +225,10 @@ fn min_max_scalar(
     }
 
     if let Some(result) = min_max_dictionary_scalar(lhs, rhs, ordering)? {
+        return Ok(result);
+    }
+
+    if let Some(result) = min_max_run_end_encoded_scalar(lhs, rhs, ordering)? {
         return Ok(result);
     }
 
@@ -791,6 +834,7 @@ pub fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
                 min_binary_view
             )
         }
+        DataType::RunEndEncoded(_, _) => min_max_batch_run_encoded(values, false)?,
         DataType::Struct(_)
         | DataType::List(_)
         | DataType::LargeList(_)
@@ -822,6 +866,43 @@ fn min_max_batch_generic(array: &ArrayRef, ordering: Ordering) -> Result<ScalarV
     }
 
     Ok(extreme)
+}
+
+/// Min/max implementation for RunEndEncoded arrays.
+fn min_max_batch_run_encoded(array: &ArrayRef, is_max: bool) -> Result<ScalarValue> {
+    if array.is_empty() || array.len() == array.null_count() {
+        return ScalarValue::try_from(array.data_type());
+    }
+
+    downcast_run_array! {
+        array => {
+            let start_phys = array.get_physical_index(0);
+            let end_phys = array.get_physical_index(array.len() - 1);
+            let (min_phys, max_phys) = if start_phys <= end_phys {
+                (start_phys, end_phys)
+            } else {
+                (end_phys, start_phys)
+            };
+            let sliced_values = array.values().slice(min_phys, max_phys - min_phys + 1);
+            let extreme_inner = if is_max {
+                max_batch(&sliced_values)?
+            } else {
+                min_batch(&sliced_values)?
+            };
+
+            match array.data_type() {
+                DataType::RunEndEncoded(run_ends_field, value_field) => {
+                    Ok(ScalarValue::RunEndEncoded(
+                        Arc::clone(run_ends_field),
+                        Arc::clone(value_field),
+                        Box::new(extreme_inner),
+                    ))
+                }
+                _ => unreachable!(),
+            }
+        },
+        dt => internal_err!("Unsupported run-ends type in min/max: {dt}")
+    }
 }
 
 /// dynamically-typed max(array) -> ScalarValue
@@ -869,6 +950,7 @@ pub fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
             let value = value.map(|e| e.to_vec());
             ScalarValue::FixedSizeBinary(*size, value)
         }
+        DataType::RunEndEncoded(_, _) => min_max_batch_run_encoded(values, true)?,
         DataType::Struct(_)
         | DataType::List(_)
         | DataType::LargeList(_)
@@ -1069,6 +1151,152 @@ mod tests {
                 .to_string()
                 .contains("logically incompatible scalar values")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn min_max_run_end_encoded_batch() -> Result<()> {
+        use arrow::array::RunArray;
+        use arrow::datatypes::{Field, Int32Type};
+
+        let run_ends = Int32Array::from(vec![2, 3, 5]);
+        let values = Int32Array::from(vec![Some(10), None, Some(50)]);
+        let ree_array = RunArray::<Int32Type>::try_new(&run_ends, &values)?;
+        let ree_ref: ArrayRef = Arc::new(ree_array);
+
+        let min_val = min_batch(&ree_ref)?;
+        let max_val = max_batch(&ree_ref)?;
+
+        let expected_min = ScalarValue::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Int32, true)),
+            Box::new(ScalarValue::Int32(Some(10))),
+        );
+        let expected_max = ScalarValue::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Int32, true)),
+            Box::new(ScalarValue::Int32(Some(50))),
+        );
+
+        assert_eq!(min_val, expected_min);
+        assert_eq!(max_val, expected_max);
+        Ok(())
+    }
+
+    #[test]
+    fn min_max_run_end_encoded_batch_empty() -> Result<()> {
+        use arrow::array::RunArray;
+        use arrow::datatypes::{Field, Int32Type};
+
+        let run_ends = Int32Array::from(Vec::<i32>::new());
+        let values = Int32Array::from(Vec::<Option<i32>>::new());
+        let ree_array = RunArray::<Int32Type>::try_new(&run_ends, &values)?;
+        let ree_ref: ArrayRef = Arc::new(ree_array);
+
+        let min_val = min_batch(&ree_ref)?;
+        let max_val = max_batch(&ree_ref)?;
+
+        let expected_null = ScalarValue::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Int32, true)),
+            Box::new(ScalarValue::Int32(None)),
+        );
+
+        assert_eq!(min_val, expected_null);
+        assert_eq!(max_val, expected_null);
+        Ok(())
+    }
+
+    #[test]
+    fn min_max_run_end_encoded_batch_all_nulls() -> Result<()> {
+        use arrow::array::RunArray;
+        use arrow::datatypes::{Field, Int32Type};
+
+        let run_ends = Int32Array::from(vec![3, 7]);
+        let values = Int32Array::from(vec![None, None]);
+        let ree_array = RunArray::<Int32Type>::try_new(&run_ends, &values)?;
+        let ree_ref: ArrayRef = Arc::new(ree_array);
+
+        let min_val = min_batch(&ree_ref)?;
+        let max_val = max_batch(&ree_ref)?;
+
+        let expected_null = ScalarValue::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Int32, true)),
+            Box::new(ScalarValue::Int32(None)),
+        );
+
+        assert_eq!(min_val, expected_null);
+        assert_eq!(max_val, expected_null);
+        Ok(())
+    }
+
+    #[test]
+    fn min_max_run_end_encoded_batch_single_element() -> Result<()> {
+        use arrow::array::RunArray;
+        use arrow::datatypes::{Field, Int32Type};
+
+        let run_ends = Int32Array::from(vec![1]);
+        let values = Int32Array::from(vec![Some(42)]);
+        let ree_array = RunArray::<Int32Type>::try_new(&run_ends, &values)?;
+        let ree_ref: ArrayRef = Arc::new(ree_array);
+
+        let min_val = min_batch(&ree_ref)?;
+        let max_val = max_batch(&ree_ref)?;
+
+        let expected_val = ScalarValue::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Int32, true)),
+            Box::new(ScalarValue::Int32(Some(42))),
+        );
+
+        assert_eq!(min_val, expected_val);
+        assert_eq!(max_val, expected_val);
+        Ok(())
+    }
+
+    #[test]
+    fn min_max_run_end_encoded_scalar_comparisons() -> Result<()> {
+        use arrow::datatypes::Field;
+
+        let run_ends_field = Arc::new(Field::new("run_ends", DataType::Int32, false));
+        let values_field = Arc::new(Field::new("values", DataType::Int32, true));
+
+        let s1 = ScalarValue::RunEndEncoded(
+            Arc::clone(&run_ends_field),
+            Arc::clone(&values_field),
+            Box::new(ScalarValue::Int32(Some(10))),
+        );
+        let s2 = ScalarValue::RunEndEncoded(
+            Arc::clone(&run_ends_field),
+            Arc::clone(&values_field),
+            Box::new(ScalarValue::Int32(Some(20))),
+        );
+
+        let min_res = min_max_scalar(&s1, &s2, choose_min_max!(min))?;
+        let max_res = min_max_scalar(&s1, &s2, choose_min_max!(max))?;
+        assert_eq!(min_res, s1);
+        assert_eq!(max_res, s2);
+
+        let prim = ScalarValue::Int32(Some(15));
+        let min_res2 = min_max_scalar(&s1, &prim, choose_min_max!(min))?;
+        let max_res2 = min_max_scalar(&prim, &s2, choose_min_max!(max))?;
+        assert_eq!(min_res2, ScalarValue::Int32(Some(10)));
+        assert_eq!(max_res2, ScalarValue::Int32(Some(20)));
+
+        let other_values_field =
+            Arc::new(Field::new("other_values", DataType::Int64, true));
+        let s_diff = ScalarValue::RunEndEncoded(
+            Arc::clone(&run_ends_field),
+            other_values_field,
+            Box::new(ScalarValue::Int64(Some(10))),
+        );
+        let err = min_max_scalar(&s1, &s_diff, Ordering::Less).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("RunEndEncoded scalars with different fields")
+        );
+
         Ok(())
     }
 }

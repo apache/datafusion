@@ -2257,5 +2257,43 @@ physical_plan
 08)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 09)------LazyMemoryExec: partitions=1, batch_generators=[range: start=0, end=3, batch_size=8192]
 
+# RunEndEncoded keys in existence joins (LeftSemi, LeftAnti, RightSemi, RightAnti)
+statement ok
+CREATE TABLE l_ree AS SELECT column1 AS id, arrow_cast(column2, 'RunEndEncoded("run_ends": non-null Int32, "values": Int32)') AS v
+FROM (VALUES (1, 1), (2, 1), (3, NULL), (4, 5));
+
+statement ok
+CREATE TABLE r_ree AS SELECT column1 AS rid, arrow_cast(column2, 'RunEndEncoded("run_ends": non-null Int32, "values": Int32)') AS v
+FROM (VALUES (20, 2), (21, NULL), (22, 6));
+
+query I
+SELECT id FROM l_ree WHERE EXISTS (SELECT 1 FROM r_ree WHERE l_ree.v < r_ree.v) ORDER BY id;
+----
+1
+2
+4
+
+query I
+SELECT id FROM l_ree WHERE NOT EXISTS (SELECT 1 FROM r_ree WHERE l_ree.v < r_ree.v) ORDER BY id;
+----
+3
+
+query I
+SELECT r_ree.rid FROM l_ree RIGHT SEMI JOIN r_ree ON l_ree.v < r_ree.v ORDER BY rid;
+----
+20
+22
+
+query I
+SELECT r_ree.rid FROM l_ree RIGHT ANTI JOIN r_ree ON l_ree.v < r_ree.v ORDER BY rid;
+----
+21
+
+statement ok
+DROP TABLE l_ree;
+
+statement ok
+DROP TABLE r_ree;
+
 statement ok
 set datafusion.optimizer.enable_piecewise_merge_join = false;
