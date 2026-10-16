@@ -18,7 +18,9 @@
 use std::sync::Arc;
 
 use datafusion_common::Result;
-use datafusion_physical_expr::{Distribution, LexOrdering, LexRequirement};
+use datafusion_physical_expr::{
+    AcrossPartitions, Distribution, LexOrdering, LexRequirement,
+};
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -28,6 +30,35 @@ use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+
+/// Builds the ordering of a `SortExec` placed above `plan`, dropping the
+/// requirements that are constant in `plan`'s output.
+///
+/// A constant that differs between partitions
+/// ([`AcrossPartitions::Heterogeneous`]) is kept when the sort has a `fetch`
+/// and `plan` has more than one partition. The per-partition TopKs of such a
+/// `SortExec` share one dynamic filter threshold, and a threshold on the
+/// remaining keys alone is not comparable across partitions whose constant
+/// differs: one partition could then discard rows that another one needs.
+fn sort_ordering_above(
+    plan: &Arc<dyn ExecutionPlan>,
+    sort_requirements: LexRequirement,
+    fetch: Option<usize>,
+) -> Option<LexOrdering> {
+    let keep_heterogeneous =
+        fetch.is_some() && plan.output_partitioning().partition_count() > 1;
+    let eq_properties = plan.equivalence_properties();
+    let sort_exprs = sort_requirements
+        .into_iter()
+        .filter(|req| match eq_properties.is_expr_constant(&req.expr) {
+            None => true,
+            Some(AcrossPartitions::Heterogeneous) => keep_heterogeneous,
+            Some(AcrossPartitions::Uniform(_)) => false,
+        })
+        .map(Into::into)
+        .collect::<Vec<_>>();
+    LexOrdering::new(sort_exprs)
+}
 
 /// This utility function adds a `SortExec` above an operator according to the
 /// given ordering requirements while preserving the original partitioning.
@@ -40,15 +71,7 @@ pub fn add_sort_above<T: Clone + Default>(
     sort_requirements: LexRequirement,
     fetch: Option<usize>,
 ) -> PlanContext<T> {
-    let mut sort_reqs: Vec<_> = sort_requirements.into();
-    sort_reqs.retain(|sort_expr| {
-        node.plan
-            .equivalence_properties()
-            .is_expr_constant(&sort_expr.expr)
-            .is_none()
-    });
-    let sort_exprs = sort_reqs.into_iter().map(Into::into).collect::<Vec<_>>();
-    let Some(ordering) = LexOrdering::new(sort_exprs) else {
+    let Some(ordering) = sort_ordering_above(&node.plan, sort_requirements, fetch) else {
         return node;
     };
     let mut new_sort = SortExec::new(ordering, Arc::clone(&node.plan)).with_fetch(fetch);
@@ -68,15 +91,7 @@ pub fn add_sort_above_with_distribution<T: Clone + Default>(
     fetch: Option<usize>,
     required_distribution: &Distribution,
 ) -> PlanContext<T> {
-    let mut sort_reqs: Vec<_> = sort_requirements.into();
-    sort_reqs.retain(|sort_expr| {
-        node.plan
-            .equivalence_properties()
-            .is_expr_constant(&sort_expr.expr)
-            .is_none()
-    });
-    let sort_exprs = sort_reqs.into_iter().map(Into::into).collect::<Vec<_>>();
-    let Some(ordering) = LexOrdering::new(sort_exprs) else {
+    let Some(ordering) = sort_ordering_above(&node.plan, sort_requirements, fetch) else {
         return node;
     };
     let input_has_multiple_partitions =

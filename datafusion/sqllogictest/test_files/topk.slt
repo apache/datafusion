@@ -396,3 +396,92 @@ set datafusion.explain.physical_plan_only = false
 
 statement ok
 set datafusion.execution.batch_size = 8192
+
+# A partitioned TopK must not drop a sort key that is constant within each
+# partition but differs between partitions. All partitions of one `SortExec`
+# share a single TopK threshold, so a threshold on `c1` alone, published by the
+# `c0 = 5` arm, would discard rows that the `c0 = 1` arm needs.
+statement ok
+CREATE TABLE heterogeneous_const(id BIGINT, g BIGINT) AS VALUES (0, 0), (1, 0), (2, 1), (3, 1), (4, 1);
+
+statement ok
+set datafusion.explain.physical_plan_only = true
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+query TT
+EXPLAIN SELECT 5 AS c0, id AS c1 FROM heterogeneous_const
+UNION ALL
+SELECT 1 AS c0, id AS c1 FROM heterogeneous_const WHERE g = 0
+ORDER BY c0, c1 LIMIT 2;
+----
+physical_plan
+01)SortPreservingMergeExec: [c0@0 ASC NULLS LAST, c1@1 ASC NULLS LAST], fetch=2
+02)--SortExec: TopK(fetch=2), expr=[c0@0 ASC NULLS LAST, c1@1 ASC NULLS LAST], preserve_partitioning=[true], sort_prefix=[c0@0 ASC NULLS LAST]
+03)----UnionExec
+04)------ProjectionExec: expr=[5 as c0, id@0 as c1]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)------ProjectionExec: expr=[1 as c0, id@0 as c1]
+07)--------FilterExec: g@1 = 0, projection=[id@0]
+08)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT 5 AS c0, id AS c1 FROM heterogeneous_const
+UNION ALL
+SELECT 1 AS c0, id AS c1 FROM heterogeneous_const WHERE g = 0
+ORDER BY c0, c1 LIMIT 2;
+----
+1 0
+1 1
+
+# Control: with LIMIT 3 the `c0 = 1` arm never needs a row the threshold cuts
+query II
+SELECT 5 AS c0, id AS c1 FROM heterogeneous_const
+UNION ALL
+SELECT 1 AS c0, id AS c1 FROM heterogeneous_const WHERE g = 0
+ORDER BY c0, c1 LIMIT 3;
+----
+1 0
+1 1
+5 0
+
+# Same bug without the filter: both arms hold the same `c1` values
+query II
+SELECT 5 AS c0, id AS c1 FROM heterogeneous_const
+UNION ALL
+SELECT 1 AS c0, id AS c1 FROM heterogeneous_const
+ORDER BY c0, c1 LIMIT 2;
+----
+1 0
+1 1
+
+# Descending on the constant key: the `c0 = 5` arm comes first
+query II
+SELECT 5 AS c0, id AS c1 FROM heterogeneous_const
+UNION ALL
+SELECT 1 AS c0, id AS c1 FROM heterogeneous_const WHERE g = 0
+ORDER BY c0 DESC, c1 LIMIT 2;
+----
+5 0
+5 1
+
+# Same query with several partitions. The SLT runner uses 4, so this also
+# restores its setting.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+query II
+SELECT 5 AS c0, id AS c1 FROM heterogeneous_const
+UNION ALL
+SELECT 1 AS c0, id AS c1 FROM heterogeneous_const WHERE g = 0
+ORDER BY c0, c1 LIMIT 2;
+----
+1 0
+1 1
+
+statement ok
+set datafusion.explain.physical_plan_only = false
+
+statement ok
+DROP TABLE heterogeneous_const;
