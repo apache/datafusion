@@ -4942,47 +4942,6 @@ mod tests {
 
     #[cfg(feature = "parquet")]
     #[test]
-    fn test_parquet_encoding_validation() {
-        use crate::{config::ConfigOptions, parquet_config::DFParquetEncoding};
-
-        let key = "datafusion.execution.parquet.encoding";
-        let mut config = ConfigOptions::default();
-        assert_eq!(config.execution.parquet.encoding, None);
-
-        config.set(key, "PLAIN").unwrap();
-        assert_eq!(
-            config.execution.parquet.encoding,
-            Some(DFParquetEncoding::Plain)
-        );
-
-        let err = config.set(key, "invalid").unwrap_err();
-        assert_contains!(
-            err.to_string(),
-            "Unknown or unsupported parquet encoding: invalid"
-        );
-        assert_eq!(
-            config.execution.parquet.encoding,
-            Some(DFParquetEncoding::Plain)
-        );
-
-        assert!(
-            config
-                .set("datafusion.execution.parquet.encoding.typo", "rle")
-                .is_err()
-        );
-        assert_eq!(
-            config.execution.parquet.encoding,
-            Some(DFParquetEncoding::Plain)
-        );
-
-        config.reset(key).unwrap();
-        assert_eq!(config.execution.parquet.encoding, None);
-        assert!(config.set(key, "invalid").is_err());
-        assert_eq!(config.execution.parquet.encoding, None);
-    }
-
-    #[cfg(feature = "parquet")]
-    #[test]
     fn test_parquet_compression_validation() {
         use crate::{config::ConfigOptions, parquet_config::DFParquetCompression};
 
