@@ -26,7 +26,9 @@
 //!
 //! The scans are leaves, so filters and projections of one reference are not
 //! pushed into the shared body. This is the same optimization fence that
-//! PostgreSQL applies to `MATERIALIZED` CTEs.
+//! PostgreSQL applies to `MATERIALIZED` CTEs. One exception: if each
+//! reference has a filter, the optimizer filters the body with the disjunction
+//! of these filters (see [`MaterializedCte::pushed_filter`]).
 
 use std::cmp::Ordering;
 use std::fmt;
@@ -37,7 +39,7 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DFSchemaRef, Result};
 
-use crate::LogicalPlan;
+use crate::{Expr, LogicalPlan};
 
 /// Identifies one materialized CTE and binds its scans to it.
 ///
@@ -94,6 +96,9 @@ pub struct MaterializedCte {
     pub cte: Arc<LogicalPlan>,
     /// The query that declared the CTE and reads it
     pub continuation: Arc<LogicalPlan>,
+    /// The filter that the optimizer added to `cte` from the filters of the
+    /// scans, if any. See [`Self::pushed_filter`].
+    pub pushed_filter: Option<Expr>,
 }
 
 impl MaterializedCte {
@@ -122,6 +127,7 @@ impl MaterializedCte {
             name,
             cte,
             continuation,
+            pushed_filter: None,
         })
     }
 
@@ -156,8 +162,19 @@ impl MaterializedCte {
         MaterializedCteScan::find_in(&self.continuation, self.id)
     }
 
-    /// Return a node with the same id and name, and new inputs. The schemas
-    /// of the scans are not checked again.
+    /// The filter that the optimizer added to the body from the filters of
+    /// the scans, with the columns that the body had at that time.
+    ///
+    /// This is a record only, and it is not an expression of the node. The
+    /// filter itself is in the body, where other rules can move or change it.
+    /// The optimizer uses the record so that it does not add the same filter
+    /// to the body again in a subsequent pass.
+    pub fn pushed_filter(&self) -> Option<&Expr> {
+        self.pushed_filter.as_ref()
+    }
+
+    /// Return a node with the same id, name and [`Self::pushed_filter`], and
+    /// new inputs. The schemas of the scans are not checked again.
     pub fn with_new_inputs(
         &self,
         cte: Arc<LogicalPlan>,
@@ -168,6 +185,7 @@ impl MaterializedCte {
             name: self.name.clone(),
             cte,
             continuation,
+            pushed_filter: self.pushed_filter.clone(),
         }
     }
 }
@@ -315,9 +333,24 @@ mod tests {
             name: "c".to_string(),
             cte: empty(false),
             continuation: empty(false),
+            pushed_filter: None,
         };
         let mut b = a.clone();
         assert_eq!(a.partial_cmp(&b), Some(Ordering::Equal));
+
+        // The record of the pushed filter is part of the node, and stays when
+        // the inputs are replaced.
+        b.pushed_filter = Some(crate::lit(true));
+        assert_ne!(a, b);
+        assert_eq!(a.partial_cmp(&b), None);
+        assert_eq!(b.with_new_inputs(empty(false), empty(false)), b);
+        let plan = LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(b.clone()));
+        assert_eq!(
+            plan.with_new_exprs(vec![], vec![(*empty(false)).clone(); 2])
+                .unwrap(),
+            plan
+        );
+        b.pushed_filter = None;
 
         b.continuation = empty(true);
         assert_ne!(a, b);
