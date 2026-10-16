@@ -823,13 +823,13 @@ query error
 SELECT DATE_BIN(INTERVAL '0 second', 25, TIMESTAMP '1970-01-01T00:00:00Z')
 
 # not support interval 0
-statement error Execution error: DATE_BIN stride must be non-zero
+statement error Execution error: DATE_BIN stride must be greater than zero
 SELECT DATE_BIN(INTERVAL '0 second', TIMESTAMP '2022-08-03 14:38:50.000000006Z', TIMESTAMP '1970-01-01T00:00:00Z')
 
-statement error Execution error: DATE_BIN stride must be non-zero
+statement error Execution error: DATE_BIN stride must be greater than zero
 SELECT DATE_BIN(INTERVAL '0 month', TIMESTAMP '2022-08-03 14:38:50.000000006Z')
 
-statement error Execution error: DATE_BIN stride must be non-zero
+statement error Execution error: DATE_BIN stride must be greater than zero
 SELECT
   DATE_BIN(INTERVAL '0' minute, time) AS time,
   count(val)
@@ -1679,6 +1679,246 @@ ORDER BY date_trunc('hour', ts);
 562129260 562125600
 562129259 562129200
 
+# The ordering propagation tests below read from tables declared sorted with
+# `WITH ORDER`, so a plan has no sort at all when the ordering propagates, and
+# exactly the final sort when it must not. Each file is written in its
+# declared order.
+
+# Typed bounds allow date_trunc to propagate ordering through timezone-free from_unixtime
+query I
+COPY (VALUES (3600::bigint), (7200::bigint))
+TO 'test_files/scratch/timestamps/ordered_epochs.csv'
+OPTIONS ('format.has_header' 'true');
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE ordered_epochs (c BIGINT)
+STORED AS CSV
+WITH ORDER (c ASC)
+LOCATION 'test_files/scratch/timestamps/ordered_epochs.csv'
+OPTIONS ('format.has_header' 'true');
+
+query TT
+EXPLAIN SELECT date_trunc('hour', from_unixtime(c)) AS truncated
+FROM ordered_epochs
+ORDER BY date_trunc('hour', from_unixtime(c));
+----
+logical_plan
+01)Sort: truncated ASC NULLS LAST
+02)--Projection: date_trunc(Utf8("hour"), from_unixtime(ordered_epochs.c)) AS truncated
+03)----TableScan: ordered_epochs projection=[c]
+physical_plan
+01)SortPreservingMergeExec: [truncated@0 ASC NULLS LAST]
+02)--ProjectionExec: expr=[date_trunc(hour, from_unixtime(c@0)) as truncated]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/ordered_epochs.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], file_type=csv, has_header=true
+
+statement ok
+DROP TABLE ordered_epochs;
+
+# Typed bounds allow date_trunc to propagate ordering through timezone-free date_bin
+query I
+COPY (
+  SELECT arrow_cast(column1, 'Timestamp(Second)')
+  FROM (VALUES (3600::bigint), (7200::bigint))
+)
+TO 'test_files/scratch/timestamps/ordered_seconds.csv'
+OPTIONS ('format.has_header' 'true');
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE ordered_seconds (ts TIMESTAMP(0))
+STORED AS CSV
+WITH ORDER (ts ASC)
+LOCATION 'test_files/scratch/timestamps/ordered_seconds.csv'
+OPTIONS ('format.has_header' 'true');
+
+query TT
+EXPLAIN SELECT date_trunc('hour', date_bin(INTERVAL '1 minute', ts)) AS truncated
+FROM ordered_seconds
+ORDER BY date_trunc('hour', date_bin(INTERVAL '1 minute', ts));
+----
+logical_plan
+01)Sort: truncated ASC NULLS LAST
+02)--Projection: date_trunc(Utf8("hour"), date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"), ordered_seconds.ts)) AS truncated
+03)----TableScan: ordered_seconds projection=[ts]
+physical_plan
+01)SortPreservingMergeExec: [truncated@0 ASC NULLS LAST]
+02)--ProjectionExec: expr=[date_trunc(hour, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }, ts@0)) as truncated]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/ordered_seconds.csv]]}, projection=[ts], output_ordering=[ts@0 ASC NULLS LAST], file_type=csv, has_header=true
+
+statement ok
+DROP TABLE ordered_seconds;
+
+# Coarse-precision values outside the nanosecond range are binned without
+# overflowing, so date_bin keeps both their values and their ordering.
+query I
+COPY (
+  SELECT arrow_cast(column1, 'Timestamp(Second)')
+  FROM (VALUES
+    (-10000000000::bigint),
+    (0::bigint),
+    (10000000000::bigint)
+  )
+)
+TO 'test_files/scratch/timestamps/ordered_wide_seconds.csv'
+OPTIONS ('format.has_header' 'true');
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE ordered_wide_seconds (ts TIMESTAMP(0))
+STORED AS CSV
+WITH ORDER (ts ASC)
+LOCATION 'test_files/scratch/timestamps/ordered_wide_seconds.csv'
+OPTIONS ('format.has_header' 'true');
+
+query TT
+EXPLAIN SELECT date_trunc('second', date_bin(INTERVAL '1 second', ts)) AS b
+FROM ordered_wide_seconds
+ORDER BY b ASC NULLS LAST
+----
+logical_plan
+01)Sort: b ASC NULLS LAST
+02)--Projection: date_trunc(Utf8("second"), date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 1000000000 }"), ordered_wide_seconds.ts)) AS b
+03)----TableScan: ordered_wide_seconds projection=[ts]
+physical_plan
+01)SortPreservingMergeExec: [b@0 ASC NULLS LAST]
+02)--ProjectionExec: expr=[date_trunc(second, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 1000000000 }, ts@0)) as b]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/ordered_wide_seconds.csv]]}, projection=[ts], output_ordering=[ts@0 ASC NULLS LAST], file_type=csv, has_header=true
+
+query P
+SELECT date_trunc('second', date_bin(INTERVAL '1 second', ts)) AS b
+FROM ordered_wide_seconds
+ORDER BY b ASC NULLS LAST
+----
+1653-02-10T06:13:20
+1970-01-01T00:00:00
+2286-11-20T17:46:40
+
+# The same holds when the source is an ordered expression with an unknown
+# range type.
+query P
+SELECT date_bin(INTERVAL '1 second', date_trunc('second', ts)) AS b
+FROM ordered_wide_seconds
+ORDER BY b ASC NULLS LAST
+----
+1653-02-10T06:13:20
+1970-01-01T00:00:00
+2286-11-20T17:46:40
+
+statement ok
+DROP TABLE ordered_wide_seconds;
+
+# A positive month stride is monotonic, so the final sort is removed.
+query I
+COPY (
+  SELECT arrow_cast(column1, 'Timestamp(Second)')
+  FROM (VALUES
+    (TIMESTAMP '2023-01-01 00:00:00'),
+    (TIMESTAMP '2023-01-31 00:00:00')
+  )
+)
+TO 'test_files/scratch/timestamps/ordered_month_seconds.csv'
+OPTIONS ('format.has_header' 'true');
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE ordered_month_seconds (ts TIMESTAMP(0))
+STORED AS CSV
+WITH ORDER (ts ASC)
+LOCATION 'test_files/scratch/timestamps/ordered_month_seconds.csv'
+OPTIONS ('format.has_header' 'true');
+
+query TT
+EXPLAIN SELECT date_bin(INTERVAL '1 month', ts, TIMESTAMP '2023-01-31 00:00:00') AS b
+FROM ordered_month_seconds
+ORDER BY b
+----
+logical_plan
+01)Sort: b ASC NULLS LAST
+02)--Projection: date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 1, days: 0, nanoseconds: 0 }"), ordered_month_seconds.ts, TimestampNanosecond(1675123200000000000, None)) AS b
+03)----TableScan: ordered_month_seconds projection=[ts]
+physical_plan
+01)SortPreservingMergeExec: [b@0 ASC NULLS LAST]
+02)--ProjectionExec: expr=[date_bin(IntervalMonthDayNano { months: 1, days: 0, nanoseconds: 0 }, ts@0, 1675123200000000000) as b]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/ordered_month_seconds.csv]]}, projection=[ts], output_ordering=[ts@0 ASC NULLS LAST], file_type=csv, has_header=true
+
+query P
+SELECT date_bin(INTERVAL '1 month', ts, TIMESTAMP '2023-01-31 00:00:00') AS b
+FROM ordered_month_seconds
+ORDER BY b
+----
+2022-12-31T00:00:00
+2023-01-31T00:00:00
+
+statement ok
+DROP TABLE ordered_month_seconds;
+
+# Default bounds from nested functions retain their resolved output type.
+statement ok
+SET datafusion.explain.physical_plan_only = true;
+
+query I
+COPY (
+  SELECT arrow_cast(column1, 'Timestamp(Second)')
+  FROM (VALUES (3601::bigint), (90001::bigint))
+)
+TO 'test_files/scratch/timestamps/nested_trunc_ordering.csv'
+OPTIONS ('format.has_header' 'true');
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE nested_trunc_ordering (ts TIMESTAMP(0))
+STORED AS CSV
+WITH ORDER (ts ASC)
+LOCATION 'test_files/scratch/timestamps/nested_trunc_ordering.csv'
+OPTIONS ('format.has_header' 'true');
+
+query I
+SELECT arrow_cast(date_trunc('day', date_trunc('hour', ts)), 'Int64') AS bucket
+FROM nested_trunc_ordering
+ORDER BY bucket;
+----
+0
+86400
+
+query TT
+EXPLAIN SELECT date_trunc('day', date_trunc('hour', ts)) AS bucket
+FROM nested_trunc_ordering
+ORDER BY bucket;
+----
+physical_plan
+01)SortPreservingMergeExec: [bucket@0 ASC NULLS LAST]
+02)--ProjectionExec: expr=[date_trunc(day, date_trunc(hour, ts@0)) as bucket]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/nested_trunc_ordering.csv]]}, projection=[ts], output_ordering=[ts@0 ASC NULLS LAST], file_type=csv, has_header=true
+
+statement ok
+DROP TABLE nested_trunc_ordering;
+
+# Recovering a named timezone must still retain the outer sort.
+query I
+COPY (VALUES (562129259::bigint), (562129260::bigint))
+TO 'test_files/scratch/timestamps/goose_bay_epochs.csv'
+OPTIONS ('format.has_header' 'true');
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE goose_bay_epochs (c BIGINT)
+STORED AS CSV
+WITH ORDER (c ASC)
+LOCATION 'test_files/scratch/timestamps/goose_bay_epochs.csv'
+OPTIONS ('format.has_header' 'true');
+
 # Typed bounds from a child function must retain named timezone metadata
 query II
 SELECT
@@ -1687,73 +1927,29 @@ SELECT
     date_trunc('hour', from_unixtime(c, 'America/Goose_Bay')),
     'Int64'
   ) AS truncated
-FROM (
-  SELECT column1 AS c
-  FROM (
-    VALUES
-      (562129260::bigint),
-      (562129259::bigint)
-  )
-  ORDER BY c
-  LIMIT 2
-)
+FROM goose_bay_epochs
 ORDER BY date_trunc('hour', from_unixtime(c, 'America/Goose_Bay'));
 ----
 562129260 562125600
 562129259 562129200
 
-# Typed bounds allow date_trunc to propagate ordering through timezone-free from_unixtime
 query TT
-EXPLAIN SELECT date_trunc('hour', from_unixtime(c)) AS truncated
-FROM (
-  SELECT column1 AS c
-  FROM (
-    VALUES
-      (7200::bigint),
-      (3600::bigint)
-  )
-  ORDER BY c
-  LIMIT 2
-)
-ORDER BY date_trunc('hour', from_unixtime(c));
+EXPLAIN SELECT date_trunc('hour', from_unixtime(c, 'America/Goose_Bay')) AS bucket
+FROM goose_bay_epochs
+ORDER BY bucket;
 ----
-logical_plan
-01)Sort: truncated ASC NULLS LAST
-02)--Projection: date_trunc(Utf8("hour"), from_unixtime(c)) AS truncated
-03)----Sort: c ASC NULLS LAST, fetch=2
-04)------Projection: column1 AS c
-05)--------Values: (Int64(7200)), (Int64(3600))
 physical_plan
-01)ProjectionExec: expr=[date_trunc(hour, from_unixtime(column1@0)) as truncated]
-02)--SortExec: TopK(fetch=2), expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortPreservingMergeExec: [bucket@0 ASC NULLS LAST]
+02)--SortExec: expr=[bucket@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[date_trunc(hour, from_unixtime(c@0, America/Goose_Bay)) as bucket]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/goose_bay_epochs.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], file_type=csv, has_header=true
 
-# Typed bounds allow date_trunc to propagate ordering through timezone-free date_bin
-query TT
-EXPLAIN SELECT date_trunc('hour', date_bin(INTERVAL '1 minute', ts)) AS truncated
-FROM (
-  SELECT arrow_cast(column1, 'Timestamp(Second)') AS ts
-  FROM (
-    VALUES
-      (7200::bigint),
-      (3600::bigint)
-  )
-  ORDER BY ts
-  LIMIT 2
-)
-ORDER BY date_trunc('hour', date_bin(INTERVAL '1 minute', ts));
-----
-logical_plan
-01)Sort: truncated ASC NULLS LAST
-02)--Projection: date_trunc(Utf8("hour"), date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"), ts)) AS truncated
-03)----Sort: ts ASC NULLS LAST, fetch=2
-04)------Projection: CAST(column1 AS Timestamp(s)) AS ts
-05)--------Values: (Int64(7200)), (Int64(3600))
-physical_plan
-01)ProjectionExec: expr=[date_trunc(hour, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }, ts@0)) as truncated]
-02)--SortExec: TopK(fetch=2), expr=[ts@0 ASC NULLS LAST], preserve_partitioning=[false]
-03)----ProjectionExec: expr=[CAST(column1@0 AS Timestamp(s)) as ts]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+statement ok
+DROP TABLE goose_bay_epochs;
+
+statement ok
+RESET datafusion.explain.physical_plan_only;
 
 statement ok
 CREATE TABLE timestamp_strings(ts varchar)
@@ -2078,6 +2274,168 @@ query ?
 SELECT '2000-01-01T00:00:00'::timestamp - '2010-01-01T00:00:00'::timestamp;
 ----
 -3653 days 0 hours 0 mins 0.000000000 secs
+
+# Regression test for https://github.com/apache/datafusion/issues/13212
+statement ok
+SET TIME ZONE = '+08'
+
+query ???
+WITH timestamps(ts_tz, ts) AS (
+  VALUES ('2024-11-01T00:00:00+00:00'::timestamptz, '2024-11-01T00:00:00'::timestamp)
+)
+SELECT
+  '2024-11-01T00:00:00+00:00'::timestamptz - '2024-11-01T00:00:00'::timestamp,
+  ts_tz - ts,
+  ts - ts_tz
+FROM timestamps;
+----
+0 days 8 hours 0 mins 0.000000000 secs 0 days 8 hours 0 mins 0.000000000 secs 0 days -8 hours 0 mins 0.000000000 secs
+
+# The session timezone is propagated when coercing a scalar subquery.
+query ?
+SELECT (
+  SELECT ts_tz - ts
+  FROM (
+    VALUES ('2024-11-01T00:00:00+00:00'::timestamptz, '2024-11-01T00:00:00'::timestamp)
+  ) AS timestamps(ts_tz, ts)
+);
+----
+0 days 8 hours 0 mins 0.000000000 secs
+
+# The session timezone, not the aware operand's timezone, controls coercion.
+query BBBBBB??
+WITH timestamps(ts_tz, ts) AS (
+  VALUES (
+    arrow_cast('2024-11-01T00:00:00-04:00', 'Timestamp(Nanosecond, Some("America/New_York"))'),
+    '2024-11-01T00:00:00'::timestamp
+  )
+)
+SELECT
+  ts_tz = ts,
+  ts_tz > ts,
+  ts_tz IN (ts),
+  ts_tz BETWEEN ts AND ts,
+  ts_tz BETWEEN ts_tz AND ts,
+  CASE ts_tz WHEN ts THEN true ELSE false END,
+  ts_tz - ts,
+  ts - ts_tz
+FROM timestamps;
+----
+false true false false false false 0 days 12 hours 0 mins 0.000000000 secs 0 days -12 hours 0 mins 0.000000000 secs
+
+# Session-timezone coercion also applies through encoded and nested types.
+query BBB
+WITH timestamps(ts_tz, ts) AS (
+  VALUES (
+    arrow_cast('2024-11-01T00:00:00-04:00', 'Timestamp(Nanosecond, Some("America/New_York"))'),
+    '2024-11-01T00:00:00'::timestamp
+  )
+)
+SELECT
+  arrow_cast(ts_tz, 'Dictionary(Int32, Timestamp(Nanosecond, Some("America/New_York")))') = ts,
+  arrow_cast(ts_tz, 'RunEndEncoded("run_ends": non-null Int32, "values": Timestamp(Nanosecond, Some("America/New_York")))') = ts,
+  make_array(ts_tz) = make_array(ts)
+FROM timestamps;
+----
+false false false
+
+# IN subqueries use the same session-timezone comparison coercion.
+query I
+WITH timestamps(ts_tz, ts) AS (
+  VALUES (
+    arrow_cast('2024-11-01T00:00:00-04:00', 'Timestamp(Nanosecond, Some("America/New_York"))'),
+    '2024-11-01T00:00:00'::timestamp
+  )
+)
+SELECT count(*)
+FROM timestamps
+WHERE ts_tz IN (SELECT ts FROM timestamps);
+----
+0
+
+statement ok
+SET TIME ZONE = 'America/New_York'
+
+# The timezone-naive operand is interpreted in EST and EDT, respectively.
+query ??
+SELECT
+  '2024-01-15T00:00:00+00:00'::timestamptz - '2024-01-15T00:00:00'::timestamp,
+  '2024-07-15T00:00:00+00:00'::timestamptz - '2024-07-15T00:00:00'::timestamp;
+----
+0 days -5 hours 0 mins 0.000000000 secs 0 days -4 hours 0 mins 0.000000000 secs
+
+statement ok
+RESET datafusion.execution.time_zone
+
+# Subtracting a timezone-naive timestamp from a timezone-aware one reads the
+# naive operand in the aware operand's time zone at every time unit, as `=`
+# does. At equal units arrow can subtract the raw values directly, which used to
+# skip coercion and read the naive operand as UTC, so the answer depended on the
+# time unit of the aware operand.
+statement ok
+CREATE TABLE mixed_tz_minus AS SELECT
+  arrow_cast('2024-11-01T00:00:00-04:00', 'Timestamp(Nanosecond, Some("America/New_York"))') AS ts_tz_ns,
+  arrow_cast('2024-11-01T00:00:00-04:00', 'Timestamp(Millisecond, Some("America/New_York"))') AS ts_tz_ms,
+  '2024-11-01T00:00:00'::timestamp AS ts;
+
+# postgresql / duckdb (session time zone America/New_York): 00:00:00, 00:00:00, true
+query ??B
+SELECT ts_tz_ns - ts, ts_tz_ms - ts, ts_tz_ns = ts FROM mixed_tz_minus;
+----
+0 days 0 hours 0 mins 0.000000000 secs 0 days 0 hours 0 mins 0.000000000 secs true
+
+query ??
+SELECT ts - ts_tz_ns, ts - ts_tz_ms FROM mixed_tz_minus;
+----
+0 days 0 hours 0 mins 0.000000000 secs 0 days 0 hours 0 mins 0.000000000 secs
+
+# The same at every time unit, with the aware and naive operands at equal units:
+# seconds, milliseconds, microseconds and nanoseconds.
+statement ok
+CREATE TABLE mixed_tz_minus_units AS SELECT
+  arrow_cast('2024-11-01T00:00:00-04:00', 'Timestamp(Second, Some("America/New_York"))') AS ts_tz_s,
+  arrow_cast('2024-11-01T00:00:00-04:00', 'Timestamp(Millisecond, Some("America/New_York"))') AS ts_tz_ms,
+  arrow_cast('2024-11-01T00:00:00-04:00', 'Timestamp(Microsecond, Some("America/New_York"))') AS ts_tz_us,
+  arrow_cast('2024-11-01T00:00:00-04:00', 'Timestamp(Nanosecond, Some("America/New_York"))') AS ts_tz_ns,
+  arrow_cast('2024-11-01T00:00:00', 'Timestamp(Second, None)') AS ts_s,
+  arrow_cast('2024-11-01T00:00:00', 'Timestamp(Millisecond, None)') AS ts_ms,
+  arrow_cast('2024-11-01T00:00:00', 'Timestamp(Microsecond, None)') AS ts_us,
+  arrow_cast('2024-11-01T00:00:00', 'Timestamp(Nanosecond, None)') AS ts_ns;
+
+# postgresql / duckdb (session time zone America/New_York): 00:00:00 for every unit
+query ????
+SELECT ts_tz_s - ts_s, ts_tz_ms - ts_ms, ts_tz_us - ts_us, ts_tz_ns - ts_ns FROM mixed_tz_minus_units;
+----
+0 days 0 hours 0 mins 0 secs 0 days 0 hours 0 mins 0.000 secs 0 days 0 hours 0 mins 0.000000 secs 0 days 0 hours 0 mins 0.000000000 secs
+
+query ????
+SELECT ts_s - ts_tz_s, ts_ms - ts_tz_ms, ts_us - ts_tz_us, ts_ns - ts_tz_ns FROM mixed_tz_minus_units;
+----
+0 days 0 hours 0 mins 0 secs 0 days 0 hours 0 mins 0.000 secs 0 days 0 hours 0 mins 0.000000 secs 0 days 0 hours 0 mins 0.000000000 secs
+
+query BBBB
+SELECT ts_tz_s = ts_s, ts_tz_ms = ts_ms, ts_tz_us = ts_us, ts_tz_ns = ts_ns FROM mixed_tz_minus_units;
+----
+true true true true
+
+statement ok
+DROP TABLE mixed_tz_minus_units
+
+statement ok
+SET datafusion.explain.logical_plan_only = true
+
+query TT
+EXPLAIN SELECT ts_tz_ns - ts FROM mixed_tz_minus;
+----
+logical_plan
+01)Projection: mixed_tz_minus.ts_tz_ns - CAST(mixed_tz_minus.ts AS Timestamp(ns, "America/New_York"))
+02)--TableScan: mixed_tz_minus projection=[ts_tz_ns, ts]
+
+statement ok
+SET datafusion.explain.logical_plan_only = false
+
+statement ok
+DROP TABLE mixed_tz_minus
 
 # Interval - Timestamp => error
 query error Cannot coerce arithmetic expression Interval\(MonthDayNano\) - Timestamp\(ns\) to valid types
@@ -2576,9 +2934,32 @@ SELECT arrow_typeof(date_trunc('hour', TIME '14:30:45'));
 ----
 Time64(ns)
 
+# date_trunc accepts the same timestamps as a scalar as it does as a column,
+# including ones beyond the range of a nanosecond timestamp
+query P
+SELECT date_trunc('second', to_timestamp_seconds(10000000000));
+----
+2286-11-20T17:46:40
+
+query P
+SELECT date_trunc('second', to_timestamp_seconds(ts))
+FROM (VALUES (10000000000)) AS timestamps(ts);
+----
+2286-11-20T17:46:40
+
+query P
+SELECT date_trunc('minute', to_timestamp_millis(10000000019999));
+----
+2286-11-20T17:46:00
+
+query P
+SELECT date_trunc('millisecond', to_timestamp_micros(10000000000123456));
+----
+2286-11-20T17:46:40.123
+
 query error DataFusion error: Execution error: Timestamp 9223372036854775807 out of range
 SELECT date_trunc(
-  'hour',
+  'week',
   arrow_cast(9223372036854775807, 'Timestamp(Second, None)')
 );
 
@@ -3851,6 +4232,13 @@ query T
 select to_char('2000-02-03'::date, '%Y:%d:%m');
 ----
 2000:03:02
+
+# scalar datetime with a column of formats
+query T
+select to_char('2000-01-01'::date, time_format) from formats;
+----
+00-00-00
+00::00::00
 
 query T
 select to_char(arrow_cast(12345::int, 'Time32(Second)'), '%H-%M-%S')

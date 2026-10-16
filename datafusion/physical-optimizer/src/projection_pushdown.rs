@@ -137,7 +137,8 @@ fn try_push_down_join_filter(
         None => match join.join_type() {
             JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
                 // Build projections that ignore the newly projected columns.
-                let mut projections = Vec::new();
+                let mut projections =
+                    Vec::with_capacity(original_lhs_length + original_rhs_length);
                 projections.extend(0..original_lhs_length);
                 projections.extend(new_lhs_length..new_lhs_length + original_rhs_length);
                 projections
@@ -240,7 +241,7 @@ fn minimize_join_filter(
     lhs_schema: &Schema,
     rhs_schema: &Schema,
 ) -> JoinFilter {
-    let mut used_columns = HashSet::new();
+    let mut used_columns = HashSet::with_capacity(old_column_indices.len());
     expr.apply(|expr| {
         if let Some(col) = expr.downcast_ref::<Column>() {
             used_columns.insert(col.index());
@@ -405,26 +406,17 @@ impl<'a> JoinFilterRewriter<'a> {
         Ok(new_intermediate_idx)
     }
 
-    /// Checks whether the entire expression depends on the given `join_side`.
+    /// Checks whether the expression references any columns from `join_side`.
     fn depends_on_join_side(
-        &mut self,
+        &self,
         expr: &Arc<dyn PhysicalExpr>,
         join_side: JoinSide,
     ) -> Result<bool> {
-        let mut result = false;
-        expr.apply(|expr| match expr.downcast_ref::<Column>() {
-            None => Ok(TreeNodeRecursion::Continue),
-            Some(c) => {
-                let column_index = &self.intermediate_column_indices[c.index()];
-                if column_index.side == join_side {
-                    result = true;
-                    return Ok(TreeNodeRecursion::Stop);
-                }
-                Ok(TreeNodeRecursion::Continue)
-            }
-        })?;
-
-        Ok(result)
+        expr.exists(|expr| {
+            Ok(expr.downcast_ref::<Column>().is_some_and(|c| {
+                self.intermediate_column_indices[c.index()].side == join_side
+            }))
+        })
     }
 }
 
