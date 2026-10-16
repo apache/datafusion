@@ -27,9 +27,9 @@ use crate::file_groups::FileGroup;
 
 use arrow::array::RecordBatch;
 use arrow::compute::SortColumn;
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{DataType, SchemaRef};
 use arrow::row::{Row, Rows};
-use datafusion_common::stats::NdvFallback;
+use datafusion_common::stats::{NdvFallback, Precision};
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, plan_datafusion_err, plan_err,
 };
@@ -83,17 +83,28 @@ impl MinMaxStatistics {
         };
 
         // Helper function to get min/max statistics for a given column of projected_schema
-        let get_min_max = |i: usize| -> Result<(Vec<ScalarValue>, Vec<ScalarValue>)> {
+        let get_min_max = |i: usize,
+                           data_type: &DataType|
+         -> Result<(Vec<ScalarValue>, Vec<ScalarValue>)> {
             Ok(statistics_and_partition_values
                 .iter()
                 .map(|(s, pv)| {
                     if i < s.column_statistics.len() {
-                        s.column_statistics[i]
-                            .min_value
-                            .get_value()
-                            .cloned()
-                            .zip(s.column_statistics[i].max_value.get_value().cloned())
-                            .ok_or_else(|| plan_datafusion_err!("statistics not found"))
+                        let col_stats = &s.column_statistics[i];
+                        match (
+                            col_stats.min_value.get_value(),
+                            col_stats.max_value.get_value(),
+                        ) {
+                            (Some(min), Some(max)) => Ok((min.clone(), max.clone())),
+                            // An all-null column, e.g. a null partition value, has a null min and max.
+                            _ if matches!(s.num_rows, Precision::Exact(_))
+                                && col_stats.null_count == s.num_rows =>
+                            {
+                                let null = ScalarValue::try_new_null(data_type)?;
+                                Ok((null.clone(), null))
+                            }
+                            _ => Err(plan_datafusion_err!("statistics not found")),
+                        }
                     } else if let Some(partition_value) =
                         pv.get(i - s.column_statistics.len())
                     {
@@ -143,7 +154,8 @@ impl MinMaxStatistics {
                     .map(|p| p[c.index()])
                     .unwrap_or_else(|| c.index());
 
-                let (min, max) = get_min_max(i).map_err(|e| {
+                let data_type = projected_schema.field(c.index()).data_type();
+                let (min, max) = get_min_max(i, data_type).map_err(|e| {
                     e.context(format!("get min/max for column: '{}'", c.name()))
                 })?;
                 Ok((
@@ -384,8 +396,7 @@ mod tests {
     use super::*;
     use crate::PartitionedFile;
     use crate::file_groups::FileGroup;
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::stats::Precision;
+    use arrow::datatypes::{Field, Schema};
     use datafusion_physical_plan::ColumnStatistics;
 
     fn test_schema() -> SchemaRef {
@@ -499,6 +510,58 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("statistics not found for partition"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn min_max_statistics_null_partition_value() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("d", DataType::Date32, true),
+        ]));
+        let sort_order =
+            [PhysicalSortExpr::new_default(Arc::new(Column::new("d", 1)))].into();
+        let file = |path: &str, d: Option<i32>| {
+            let mut pf = PartitionedFile::new(path, 1);
+            pf.partition_values = vec![ScalarValue::Date32(d)];
+            pf.with_statistics(Arc::new(
+                Statistics::new_unknown(&test_schema())
+                    .with_num_rows(Precision::Exact(1)),
+            ))
+        };
+        let files = [file("d=1/f.parquet", Some(1)), file("null/f.parquet", None)];
+
+        let stats =
+            MinMaxStatistics::new_from_files(&sort_order, &schema, None, files.iter())?;
+
+        let sorted = stats.min_values_sorted();
+        assert_eq!(sorted.iter().map(|(i, _)| *i).collect::<Vec<_>>(), [1, 0]);
+        assert!(!stats.is_sorted());
+
+        Ok(())
+    }
+
+    #[test]
+    fn min_max_statistics_null_partition_value_unknown_num_rows() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("d", DataType::Date32, true),
+        ]));
+        let sort_order =
+            [PhysicalSortExpr::new_default(Arc::new(Column::new("d", 1)))].into();
+        let mut pf = PartitionedFile::new("null/f.parquet", 1);
+        pf.partition_values = vec![ScalarValue::Date32(None)];
+        let files =
+            [pf.with_statistics(Arc::new(Statistics::new_unknown(&test_schema())))];
+
+        let Err(err) =
+            MinMaxStatistics::new_from_files(&sort_order, &schema, None, files.iter())
+        else {
+            panic!("expected missing statistics error")
+        };
+        assert!(
+            err.to_string().contains("statistics not found"),
             "unexpected error: {err:?}"
         );
     }

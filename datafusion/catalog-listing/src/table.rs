@@ -252,10 +252,12 @@ impl ListingTable {
             file_schema
         };
 
-        // Add the partition columns to the file schema
+        // Add the partition columns to the file schema. They are nullable because a Hive
+        // compliant writer spells a null partition value with a placeholder directory name
+        // (see `ExecutionOptions::listing_table_hive_default_partition_name`).
         let mut builder = SchemaBuilder::from(file_schema.as_ref().to_owned());
         for (part_col_name, part_col_type) in &options.table_partition_cols {
-            builder.push(Field::new(part_col_name, part_col_type.clone(), false));
+            builder.push(Field::new(part_col_name, part_col_type.clone(), true));
         }
 
         let table_schema = Arc::new(
@@ -371,7 +373,8 @@ impl ListingTable {
                 self.options
                     .table_partition_cols
                     .iter()
-                    .map(|(col, field)| Arc::new(Field::new(col, field.clone(), false)))
+                    // Nullable to match the table schema built in `try_new`.
+                    .map(|(col, field)| Arc::new(Field::new(col, field.clone(), true)))
                     .collect::<Vec<_>>(),
             )
             .build();
@@ -1123,7 +1126,7 @@ impl ListingTable {
 
         // Note: Statistics already include both file columns and partition columns.
         // PartitionedFile::with_statistics automatically appends exact partition column
-        // statistics (min=max=partition_value, null_count=0, distinct_count=1) computed
+        // statistics (e.g. min=max=partition_value, null_count=0, distinct_count=1) computed
         // from partition_values.
         Ok(ListFilesResult {
             file_groups,

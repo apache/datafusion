@@ -140,3 +140,80 @@ select year, count(*) from root_file_test group by year order by year;
 ----
 2024 2
 2025 1
+
+# Test: a null partition value, which Hive compliant writers spell with a
+# `__HIVE_DEFAULT_PARTITION__` directory, is read as NULL.
+
+query I
+copy (values(1, 'alice'))
+to 'test_files/scratch/listing_table_partitions/null_part/d=2024-01-01/data.parquet';
+----
+1
+
+query I
+copy (values(2, 'bob'))
+to 'test_files/scratch/listing_table_partitions/null_part/d=__HIVE_DEFAULT_PARTITION__/data.parquet';
+----
+1
+
+statement count 0
+create external table null_part (column1 int, column2 varchar, d date)
+stored as parquet
+partitioned by (d)
+location 'test_files/scratch/listing_table_partitions/null_part/';
+
+query ITD
+select column1, column2, d from null_part order by column1;
+----
+1 alice 2024-01-01
+2 bob NULL
+
+query ITD
+select column1, column2, d from null_part where d is null;
+----
+2 bob NULL
+
+# The null partition does not match an equality filter.
+query ITD
+select column1, column2, d from null_part where d = '2024-01-01';
+----
+1 alice 2024-01-01
+
+# Statistics for the null partition count its rows as nulls.
+query I
+select count(d) from null_part;
+----
+1
+
+query DD
+select min(d), max(d) from null_part;
+----
+2024-01-01 2024-01-01
+
+# A null partition still lets files be ordered by their partition value.
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement count 0
+create external table null_part_ordered (column1 int, column2 varchar, d date)
+stored as parquet
+partitioned by (d)
+with order (d)
+location 'test_files/scratch/listing_table_partitions/null_part/';
+
+query TT
+explain select column1, d from null_part_ordered order by d;
+----
+logical_plan
+01)Sort: null_part_ordered.d ASC NULLS LAST
+02)--TableScan: null_part_ordered projection=[column1, d]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/listing_table_partitions/null_part/d=2024-01-01/data.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/listing_table_partitions/null_part/d=__HIVE_DEFAULT_PARTITION__/data.parquet]]}, projection=[column1, d], output_ordering=[d@1 ASC NULLS LAST], file_type=parquet
+
+query ID
+select column1, d from null_part_ordered order by d;
+----
+1 2024-01-01
+2 NULL
+
+statement ok
+set datafusion.execution.target_partitions = 4;
