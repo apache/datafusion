@@ -51,10 +51,12 @@ use datafusion_common::{
     DEFAULT_PARQUET_EXTENSION, DataFusionError, GetExt, Result, internal_datafusion_err,
     internal_err, not_impl_err,
 };
+use datafusion_common_runtime::SpawnedTask;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::sink::DataSinkExec;
 use datafusion_datasource::write::get_writer_schema;
+use datafusion_execution::cache::cache_manager::FileMetadataCache;
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::ExecutionPlan;
@@ -333,6 +335,32 @@ async fn get_file_decryption_properties(
     Ok(None)
 }
 
+/// Fetch the footer of `object` and compute its statistics and ordering for
+/// [`ParquetFormat::infer_stats_and_ordering`].
+async fn fetch_stats_and_ordering(
+    store: &dyn ObjectStore,
+    object: &ObjectMeta,
+    metadata_size_hint: Option<usize>,
+    file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
+    file_metadata_cache: Arc<FileMetadataCache>,
+    table_schema: &SchemaRef,
+) -> Result<datafusion_datasource::file_format::FileMeta> {
+    let metadata = DFParquetMetadata::new(store, object)
+        .with_metadata_size_hint(metadata_size_hint)
+        .with_decryption_properties(file_decryption_properties)
+        .with_file_metadata_cache(Some(file_metadata_cache))
+        .fetch_metadata()
+        .await?;
+    let statistics =
+        DFParquetMetadata::statistics_from_parquet_metadata(&metadata, table_schema)?;
+    let ordering =
+        crate::metadata::ordering_from_parquet_metadata(&metadata, table_schema)?;
+    Ok(
+        datafusion_datasource::file_format::FileMeta::new(statistics)
+            .with_ordering(ordering),
+    )
+}
+
 #[async_trait]
 impl FileFormat for ParquetFormat {
     fn get_ext(&self) -> String {
@@ -521,22 +549,51 @@ impl FileFormat for ParquetFormat {
                 .await?;
         let file_metadata_cache =
             state.runtime_env().cache_manager.get_file_metadata_cache();
-        let metadata = DFParquetMetadata::new(store, object)
-            .with_metadata_size_hint(self.metadata_size_hint())
-            .with_decryption_properties(file_decryption_properties)
-            .with_file_metadata_cache(Some(file_metadata_cache))
-            .fetch_metadata()
-            .await?;
-        let statistics = DFParquetMetadata::statistics_from_parquet_metadata(
-            &metadata,
-            &table_schema,
-        )?;
-        let ordering =
-            crate::metadata::ordering_from_parquet_metadata(&metadata, &table_schema)?;
-        Ok(
-            datafusion_datasource::file_format::FileMeta::new(statistics)
-                .with_ordering(ordering),
-        )
+        let metadata_size_hint = self.metadata_size_hint();
+
+        // Decoding the footer and converting its statistics is CPU bound and
+        // grows with the number of columns. Callers such as `ListingTable` run
+        // this for many files concurrently from a single planning task, so run
+        // it in its own task to spread that work over the runtime's threads
+        // instead of decoding every file on the thread polling the planner.
+        // As in `spawn_buffered`, only spawn from a multi-thread tokio runtime.
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle)
+                if handle.runtime_flavor()
+                    == tokio::runtime::RuntimeFlavor::MultiThread =>
+            {
+                let store = Arc::clone(store);
+                let object = object.clone();
+                SpawnedTask::spawn(async move {
+                    fetch_stats_and_ordering(
+                        store.as_ref(),
+                        &object,
+                        metadata_size_hint,
+                        file_decryption_properties,
+                        file_metadata_cache,
+                        &table_schema,
+                    )
+                    .await
+                })
+                .join_unwind()
+                .await
+                .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))?
+            }
+            // Otherwise do the work on this task, where the caller polls it
+            // together with the other files (for example in `ListingTable`'s
+            // `buffer_unordered`).
+            _ => {
+                fetch_stats_and_ordering(
+                    store.as_ref(),
+                    object,
+                    metadata_size_hint,
+                    file_decryption_properties,
+                    file_metadata_cache,
+                    &table_schema,
+                )
+                .await
+            }
+        }
     }
 
     async fn create_physical_plan(
