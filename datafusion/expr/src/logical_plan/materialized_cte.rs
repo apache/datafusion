@@ -57,6 +57,17 @@ impl MaterializedCteId {
     pub fn as_u64(self) -> u64 {
         self.0
     }
+
+    /// Create an id from the value that [`Self::as_u64`] returned, to decode
+    /// a serialized plan.
+    ///
+    /// Such an id comes from another process, so it can be equal to an id
+    /// that [`Self::next`] returns in this process. This is safe in a logical
+    /// plan: a scan reads the nearest [`MaterializedCte`] above it that has
+    /// its id, and the physical planner gives every CTE a new id.
+    pub fn from_u64(id: u64) -> Self {
+        Self(id)
+    }
 }
 
 impl fmt::Display for MaterializedCteId {
