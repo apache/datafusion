@@ -324,6 +324,21 @@ config_namespace! {
         /// Disable this option to preserve explicit subquery ordering in the
         /// planned query.
         pub enable_subquery_sort_elimination: bool, default = true
+
+        /// When set to true, each unaliased output column of a top-level SQL
+        /// query gets a readable label, such as `a + 1` for a column named
+        /// `t.a + Int64(1)`. Labels leave out type wrappers and table
+        /// qualifiers, and window functions use `OVER (...)` syntax without
+        /// default parts. The label is stored in the field metadata key
+        /// `datafusion.label`, and `DataFrame::show` and `datafusion-cli`
+        /// table output display it as the column header.
+        ///
+        /// Column names don't change, so name resolution and code that reads
+        /// columns by name work as before. Columns that you name in the
+        /// outermost `SELECT` list, and statements that store column names
+        /// (`CREATE VIEW`, `CREATE TABLE AS`, `INSERT`, `COPY`), get no
+        /// labels.
+        pub column_labels: bool, default = false
     }
 }
 
