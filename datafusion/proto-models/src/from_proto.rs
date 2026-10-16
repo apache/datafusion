@@ -601,6 +601,23 @@ mod tests {
     }
 
     #[test]
+    fn accepts_parquet_coerce_int96_tz_without_unit() {
+        let proto = ParquetOptionsProto {
+            coerce_int96_tz_opt: Some(parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(
+                "+08".to_string(),
+            )),
+            ..Default::default()
+        };
+
+        let options = ParquetOptions::try_from(&proto).unwrap();
+        assert_eq!(options.coerce_int96, None);
+        assert_eq!(
+            options.coerce_int96_tz.as_ref().map(|tz| tz.as_str()),
+            Some("+08")
+        );
+    }
+
+    #[test]
     fn rejects_invalid_parquet_coerce_int96_tz() {
         let proto = ParquetOptionsProto {
             coerce_int96_tz_opt: Some(parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(

@@ -1669,6 +1669,17 @@ mod tests {
     }
 
     #[test]
+    fn test_parquet_options_coerce_int96_tz_without_unit_round_trip() {
+        let opts = ParquetOptions {
+            coerce_int96_tz: Some("+08".parse().unwrap()),
+            ..ParquetOptions::default()
+        };
+        let recovered = parquet_options_proto_round_trip(opts.clone());
+        assert_eq!(recovered.coerce_int96, None);
+        assert_eq!(recovered.coerce_int96_tz, opts.coerce_int96_tz);
+    }
+
+    #[test]
     fn test_parquet_options_coerce_int96_tz_set_round_trip() {
         let opts = ParquetOptions {
             coerce_int96: Some(DFTimeUnit::Microsecond),
