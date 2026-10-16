@@ -44,13 +44,27 @@ fn generate_int64_data(size: usize, null_density: f32) -> PrimitiveArray<Int64Ty
 }
 
 fn generate_utf8_data(size: usize, null_density: f32) -> StringArray {
+    generate_utf8_data_with_len(size, null_density, 1, 100)
+}
+
+/// Strings whose hex encoding is at most 12 bytes (the StringView inline limit).
+fn generate_utf8_short_data(size: usize, null_density: f32) -> StringArray {
+    generate_utf8_data_with_len(size, null_density, 1, 6)
+}
+
+fn generate_utf8_data_with_len(
+    size: usize,
+    null_density: f32,
+    min_len: usize,
+    max_len: usize,
+) -> StringArray {
     let mut rng = seedable_rng();
     let mut builder = StringBuilder::new();
     for _ in 0..size {
         if rng.random::<f32>() < null_density {
             builder.append_null();
         } else {
-            let len = rng.random_range::<usize, _>(1..=100);
+            let len = rng.random_range::<usize, _>(min_len..=max_len);
             let s: String =
                 std::iter::repeat_with(|| rng.random_range(b'a'..=b'z') as char)
                     .take(len)
@@ -112,7 +126,7 @@ fn run_benchmark(c: &mut Criterion, name: &str, size: usize, array: Arc<dyn Arra
                         args: args.clone(),
                         arg_fields: arg_fields.clone(),
                         number_rows: size,
-                        return_field: Arc::new(Field::new("f", DataType::Utf8, true)),
+                        return_field: Arc::new(Field::new("f", DataType::Utf8View, true)),
                         config_options: Arc::clone(&config_options),
                     })
                     .unwrap(),
@@ -138,6 +152,11 @@ fn criterion_benchmark(c: &mut Criterion) {
     for &size in &sizes {
         let data = generate_utf8_data(size, 0.0);
         run_benchmark(c, "hex_utf8_no_nulls", size, Arc::new(data));
+    }
+
+    for &size in &sizes {
+        let data = generate_utf8_short_data(size, 0.0);
+        run_benchmark(c, "hex_utf8_inline", size, Arc::new(data));
     }
 
     for &size in &sizes {
