@@ -6124,15 +6124,19 @@ mod tests {
                 Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
                 Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
             )];
-            let join = join(left, right, on, &join_type, null_equality)?;
-
-            let batches = common::collect(join.execute(0, task_ctx)?).await?;
+            let (_, batches, metrics) =
+                join_collect(left, right, on, &join_type, null_equality, task_ctx)
+                    .await?;
             let mut a2 = vec![];
             for batch in &batches {
                 let col = batch.column(0).as_primitive::<Int32Type>();
                 a2.extend(col.values().iter().copied());
             }
             assert_eq!(a2, expected, "{join_type} with {null_equality:?}");
+            // Probe rows 1, 3 and 4 have a build-side match.
+            assert_ratio_metric(&metrics, "probe_hit_rate", 3, 6);
+            // The probe stops at the first match, so the fanout is unknown.
+            assert_ratio_metric(&metrics, "avg_fanout", 0, 0);
         }
         Ok(())
     }
