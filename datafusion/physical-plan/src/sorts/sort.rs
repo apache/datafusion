@@ -937,6 +937,9 @@ impl ExternalSorter {
     ///   once, including buffers private to one run. Each run's size covers only
     ///   its estimated sorted copy.
     ///
+    /// Deduplication is local to these runs. Other operators can retain and reserve
+    /// the same buffers independently, so their reservations can overlap.
+    ///
     /// Runs can share buffers, for example zero-copy slices of one larger batch.
     /// Callers hold the shared input reservation until all runs are sorted.
     /// Otherwise each run holds its input charge until its own sort finishes.
