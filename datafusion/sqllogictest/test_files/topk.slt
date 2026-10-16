@@ -56,6 +56,30 @@ select * from (select * from topk limit 8) order by x limit 3;
 2
 2
 
+# `LIMIT 0` must return no rows instead of panicking in TopK when
+# `eliminate_limit` does not run (https://github.com/apache/datafusion/issues/26431)
+statement ok
+set datafusion.optimizer.max_passes = 0;
+
+query TT
+explain select * from topk order by x limit 0;
+----
+logical_plan
+01)Limit: skip=0, fetch=0
+02)--Sort: topk.x ASC NULLS LAST
+03)----Projection: topk.x
+04)------TableScan: topk
+physical_plan
+01)SortExec: TopK(fetch=0), expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+select * from topk order by x limit 0;
+----
+
+statement ok
+RESET datafusion.optimizer.max_passes;
+
 
 statement ok
 CREATE EXTERNAL TABLE aggregate_test_100 (
