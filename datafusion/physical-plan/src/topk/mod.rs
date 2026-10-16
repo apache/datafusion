@@ -34,7 +34,7 @@ use super::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
     RecordOutput,
 };
-use crate::spill::get_record_batch_memory_size;
+use crate::spill::{gc_view_arrays, get_record_batch_memory_size};
 use crate::{SendableRecordBatchStream, stream::RecordBatchStreamAdapter};
 
 use arrow::array::{ArrayRef, RecordBatch, UInt32Array, UInt64Array};
@@ -1073,6 +1073,7 @@ impl TopKHeap {
         let Some(new_batch) = new_batch else {
             return Ok(());
         };
+        let new_batch = gc_view_arrays(&new_batch)?;
 
         // clear all old entries in store (this invalidates all
         // store_ids in `inner`)
@@ -1267,7 +1268,9 @@ impl RecordBatchStore {
             return Ok(());
         }
         let gather_idx = UInt32Array::from_iter_values(rows.iter().copied());
-        let mut entry = self.register(take_record_batch(batch, &gather_idx)?);
+        let gathered = take_record_batch(batch, &gather_idx)?;
+        let gathered = gc_view_arrays(&gathered)?;
+        let mut entry = self.register(gathered);
         debug_assert_eq!(
             entry.id, id,
             "the id handed to the slots must be the id the gather got"
@@ -1434,8 +1437,9 @@ impl RecordBatchStore {
                 Vec::with_capacity(coords.len().div_ceil(batch_size));
             let mut remap = vec![usize::MAX; old.len()];
             for chunk in coords.chunks(batch_size) {
-                chunks
-                    .push((interleave_referenced(&old, chunk, &mut remap)?, chunk.len()));
+                let interleaved = interleave_referenced(&old, chunk, &mut remap)?;
+                let interleaved = gc_view_arrays(&interleaved)?;
+                chunks.push((interleaved, chunk.len()));
             }
             chunks
         };
@@ -3200,7 +3204,7 @@ mod tests {
     use crate::metrics::MetricValue;
     use arrow::array::{
         AsArray, BooleanArray, Float64Array, Int32Array, StringArray,
-        StringDictionaryBuilder,
+        StringDictionaryBuilder, StringViewArray,
     };
     use arrow::datatypes::{DataType, Field, Int32Type, Schema, UInt64Type};
     use arrow_schema::SortOptions;
@@ -3240,6 +3244,44 @@ mod tests {
         // when unuse record batch entry
         record_batch_store.unuse(0);
         assert_eq!(record_batch_store.batches_size, 0);
+    }
+
+    #[test]
+    fn test_record_batch_store_compacts_view_arrays() {
+        // Create a large StringViewArray where data buffers exceed the 10KB compaction threshold
+        // e.g. 100 rows with 120 bytes each = 12,000 bytes in data buffer.
+        let large_string = "a".repeat(120);
+        let strings: Vec<&str> = (0..100).map(|_| large_string.as_str()).collect();
+        let view_array = StringViewArray::from(strings);
+        let initial_buffer_size: usize =
+            view_array.data_buffers().iter().map(|b| b.len()).sum();
+        assert!(
+            initial_buffer_size >= 12000,
+            "Initial buffer should exceed 10KB threshold"
+        );
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            DataType::Utf8View,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(view_array)]).unwrap();
+
+        let mut store = RecordBatchStore::new();
+        let mut pending = store.pending();
+        pending.uses = 1;
+        // Insert only 1 row (row 0)
+        store.insert_rows(&batch, &[0], pending).unwrap();
+
+        // Without gc_view_arrays, store.batches_size would retain the entire >=12,000 byte buffer.
+        // With gc_view_arrays, it is compacted down to only the 120-byte string retained.
+        assert_eq!(store.len(), 1);
+        assert_eq!(store.total_rows, 1);
+        assert!(
+            store.batches_size < 1000,
+            "batches_size ({}) should be compacted well below the initial 12,000 byte buffer",
+            store.batches_size
+        );
     }
 
     fn make_ab_schema() -> SchemaRef {
