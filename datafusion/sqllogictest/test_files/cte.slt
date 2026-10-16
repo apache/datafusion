@@ -977,6 +977,126 @@ WITH RECURSIVE my_cte AS(
 1 Int32
 3 Int32
 
+# Test issue: https://github.com/apache/datafusion/issues/25893
+# A fractional recursive value must not be truncated to the seed's integer type.
+# EXPLAIN checks planning without running a potentially non-terminating query.
+query error DataFusion error: Error during planning: Recursive CTE 'my_cte' column 1 has type Int64 in the non-recursive term but Float64 in the recursive term
+EXPLAIN WITH RECURSIVE my_cte AS (
+    SELECT 1::BIGINT AS a
+    UNION ALL
+    SELECT a::DOUBLE + 0.5::DOUBLE FROM my_cte WHERE a < 3
+) SELECT * FROM my_cte;
+
+# Decimal recursion must likewise not be coerced to an integer seed.
+query error DataFusion error: Error during planning: Recursive CTE 'my_cte' column 1 has type Int64 in the non-recursive term but Decimal128.* in the recursive term
+EXPLAIN WITH RECURSIVE my_cte AS (
+    SELECT 1::BIGINT AS a
+    UNION ALL
+    SELECT a::DECIMAL(10, 1) + 0.5::DECIMAL(10, 1) FROM my_cte WHERE a < 3
+) SELECT * FROM my_cte;
+
+# Casting the seed to the intended result type preserves fractional values.
+query RT
+WITH RECURSIVE my_cte AS (
+    SELECT 1::DOUBLE AS a
+    UNION ALL
+    SELECT a + 0.5::DOUBLE FROM my_cte WHERE a < 2
+) SELECT a, arrow_typeof(a) FROM my_cte ORDER BY a;
+----
+1 Float64
+1.5 Float64
+2 Float64
+
+# Safe decimal widening remains supported.
+query I
+WITH RECURSIVE my_cte AS (
+    SELECT 1::DECIMAL(20, 5) AS a
+    UNION ALL
+    SELECT 2::DECIMAL(10, 2) FROM my_cte WHERE a < 2
+) SELECT count(*) FROM my_cte;
+----
+2
+
+# Safe widening within date and string types remains supported.
+query I
+WITH RECURSIVE my_cte AS (
+    SELECT arrow_cast(DATE '1970-01-01', 'Date64') AS a
+    UNION ALL
+    SELECT DATE '1970-01-02' FROM my_cte
+    WHERE a = arrow_cast(DATE '1970-01-01', 'Date64')
+) SELECT count(*) FROM my_cte;
+----
+2
+
+query I
+WITH RECURSIVE my_cte AS (
+    SELECT arrow_cast('a', 'LargeUtf8') AS a
+    UNION ALL
+    SELECT 'b' FROM my_cte WHERE a = 'a'
+) SELECT count(*) FROM my_cte;
+----
+2
+
+query I
+WITH RECURSIVE my_cte AS (
+    SELECT arrow_cast('a', 'Utf8View') AS a
+    UNION ALL
+    SELECT arrow_cast('b', 'LargeUtf8') FROM my_cte WHERE a = 'a'
+) SELECT count(*) FROM my_cte;
+----
+2
+
+query I
+WITH RECURSIVE my_cte AS (
+    SELECT arrow_cast(X'616263', 'Binary') AS a
+    UNION ALL
+    SELECT arrow_cast(X'646566', 'FixedSizeBinary(3)') FROM my_cte
+    WHERE a = X'616263'
+) SELECT count(*) FROM my_cte;
+----
+2
+
+# An integer wider than the floating-point mantissa can round back to the seed.
+query error DataFusion error: Error during planning: Recursive CTE 'my_cte' column 1 has type Float64 in the non-recursive term but Int64 in the recursive term
+EXPLAIN WITH RECURSIVE my_cte AS (
+    SELECT 9007199254740992::DOUBLE AS a
+    UNION ALL
+    SELECT a::BIGINT + 1 FROM my_cte WHERE a = 9007199254740992::DOUBLE
+) SELECT * FROM my_cte;
+
+# A floating-point recursive value cannot be represented at arbitrary decimal scale.
+query error DataFusion error: Error during planning: Recursive CTE 'my_cte' column 1 has type Decimal128.* in the non-recursive term but Float64 in the recursive term
+EXPLAIN WITH RECURSIVE my_cte AS (
+    SELECT 1::DECIMAL(30, 15) AS a
+    UNION ALL
+    SELECT a::DOUBLE + 0.1234567891234567::DOUBLE FROM my_cte WHERE a < 2
+) SELECT * FROM my_cte;
+
+# Nested numeric coercions must not bypass the column type check.
+query error DataFusion error: Error during planning: Recursive CTE 'my_cte' column 1 has type Struct.* in the non-recursive term but Struct.* in the recursive term
+EXPLAIN WITH RECURSIVE my_cte AS (
+    SELECT named_struct('n', 9007199254740992::DOUBLE) AS s
+    UNION ALL
+    SELECT named_struct('n', s['n']::BIGINT + 1) FROM my_cte
+    WHERE s['n'] = 9007199254740992::DOUBLE
+) SELECT * FROM my_cte;
+
+# A date seed must not silently coerce an integer recursive result.
+query error DataFusion error: Error during planning: Recursive CTE 'my_cte' column 1 has type Date32 in the non-recursive term but Int64 in the recursive term
+EXPLAIN WITH RECURSIVE my_cte AS (
+    SELECT DATE '1970-01-01' AS a
+    UNION ALL
+    SELECT 4294967296::BIGINT FROM my_cte WHERE a = DATE '1970-01-01'
+) SELECT * FROM my_cte;
+
+# A high-scale decimal seed has too few integer digits for an Int64 result.
+query error DataFusion error: Error during planning: Recursive CTE 'my_cte' column 1 has type Decimal128.* in the non-recursive term but Int64 in the recursive term
+EXPLAIN WITH RECURSIVE my_cte AS (
+    SELECT 1::DECIMAL(38, 37) AS a
+    UNION ALL
+    SELECT 123::BIGINT FROM my_cte WHERE a < 2
+) SELECT * FROM my_cte;
+
 # Test issue: https://github.com/apache/datafusion/issues/9794
 # Non-recursive term and recursive term have different number of columns
 query error DataFusion error: Error during planning: Non\-recursive term and recursive term must have the same number of columns \(1 != 3\)
@@ -987,8 +1107,8 @@ WITH RECURSIVE my_cte AS (
 ) SELECT * FROM my_cte;
 
 # Test issue: https://github.com/apache/datafusion/issues/9794
-# Non-recursive term and recursive term have different types, and cannot be casted
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Cast error: Cannot cast string 'abc' to value of Int64 type
+# Non-recursive term and recursive term have incompatible types.
+query error DataFusion error: Error during planning: Recursive CTE 'my_cte' column 1 has type Int64 in the non-recursive term but Utf8 in the recursive term
 WITH RECURSIVE my_cte AS (
     SELECT 1 AS a
     UNION ALL
