@@ -361,8 +361,9 @@ fn widen_nested_type(data_type: &DataType, sources: &[&DataType]) -> DataType {
                 DataType::LargeList(field)
             }
         }
-        // Parquet cannot represent unions. Arrow rejects nested evolution in
-        // the remaining container types before this pass.
+        // Parquet cannot represent unions. Arrow requires exact type equality
+        // for ListView, LargeListView, FixedSizeList, Map, Dictionary, and
+        // RunEndEncoded, so nested evolution in those types is rejected earlier.
         _ => data_type.clone(),
     }
 }
