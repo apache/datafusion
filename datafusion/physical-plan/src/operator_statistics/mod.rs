@@ -2845,28 +2845,44 @@ mod tests {
     /// operator or a provider that does not report one entry per field.
     #[test]
     fn test_wrong_column_statistics_count_is_rejected() {
-        // Two fields, one column statistics entry.
-        let source = MockSourceExec::with_column_stats(
-            make_schema(),
-            Precision::Exact(10),
-            vec![ColumnStatistics::new_unknown()],
-        );
-        let err = compute(&StatisticsRegistry::new(), &source).unwrap_err();
-        assert_contains!(
-            err.to_string(),
-            "MockSourceExec::statistics_from_inputs returned 1 column statistics"
-        );
+        // Two fields: one entry too few, and one too many.
+        for num_columns in [1, 3] {
+            let source = MockSourceExec::with_column_stats(
+                make_schema(),
+                Precision::Exact(10),
+                vec![ColumnStatistics::new_unknown(); num_columns],
+            );
+            let err = compute(&StatisticsRegistry::new(), &source).unwrap_err();
+            assert_contains!(
+                err.to_string(),
+                format!(
+                    "MockSourceExec::statistics_from_inputs returned {num_columns} column statistics"
+                )
+            );
+        }
 
-        let provider = ClosureStatisticsProvider::new(|_plan, _child_stats| {
-            Ok(StatisticsResult::Computed(ExtendedStatistics::from(
-                Statistics::default().with_num_rows(Precision::Exact(10)),
-            )))
-        });
-        let registry = StatisticsRegistry::with_providers(vec![Arc::new(provider)]);
-        let err = compute(&registry, make_source(10).as_ref()).unwrap_err();
-        assert_contains!(
-            err.to_string(),
-            "Statistics provider ClosureStatisticsProvider returned 0 column statistics for MockSourceExec"
-        );
+        // No entries, and one too many.
+        for num_columns in [0, 3] {
+            let provider = ClosureStatisticsProvider::new(move |_plan, _child_stats| {
+                Ok(StatisticsResult::Computed(ExtendedStatistics::from(
+                    Statistics {
+                        num_rows: Precision::Exact(10),
+                        total_byte_size: Precision::Absent,
+                        column_statistics: vec![
+                            ColumnStatistics::new_unknown();
+                            num_columns
+                        ],
+                    },
+                )))
+            });
+            let registry = StatisticsRegistry::with_providers(vec![Arc::new(provider)]);
+            let err = compute(&registry, make_source(10).as_ref()).unwrap_err();
+            assert_contains!(
+                err.to_string(),
+                format!(
+                    "Statistics provider ClosureStatisticsProvider returned {num_columns} column statistics for MockSourceExec"
+                )
+            );
+        }
     }
 }

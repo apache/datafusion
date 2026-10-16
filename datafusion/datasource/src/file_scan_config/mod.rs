@@ -2915,6 +2915,75 @@ mod tests {
         assert_eq!(partition_stats.total_byte_size, Precision::Exact(800));
     }
 
+    /// With a projection, as all built-in sources have, the statistics of the
+    /// table and of a file group may lack trailing columns, which are then
+    /// unknown, or have extra ones, which are ignored. Without a projection
+    /// they must hold one entry per table column.
+    #[test]
+    fn statistics_of_the_wrong_length() {
+        use datafusion_common::assert_contains;
+        use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        let table_schema = TableSchema::from(&schema);
+        let known = ColumnStatistics {
+            null_count: Precision::Exact(0),
+            ..ColumnStatistics::new_unknown()
+        };
+        for num_columns in [1, 3] {
+            let statistics = Statistics {
+                num_rows: Precision::Exact(10),
+                total_byte_size: Precision::Absent,
+                column_statistics: vec![known.clone(); num_columns],
+            };
+            let sources: [(Arc<dyn FileSource>, bool); 2] = [
+                (Arc::new(MockSource::new(table_schema.clone())), true),
+                (
+                    Arc::new(InexactSortPushdownSource::new(table_schema.clone())),
+                    false,
+                ),
+            ];
+            for (source, has_projection) in sources {
+                assert_eq!(source.projection().is_some(), has_projection);
+                let file_group =
+                    FileGroup::new(vec![PartitionedFile::new("test.parquet", 1024)])
+                        .with_statistics(Arc::new(statistics.clone()));
+                let config = FileScanConfigBuilder::new(
+                    ObjectStoreUrl::parse("test:///").unwrap(),
+                    source,
+                )
+                .with_file_groups(vec![file_group])
+                .with_statistics(statistics.clone())
+                .build();
+                let exec = DataSourceExec::from_data_source(config);
+                // The statistics of the table, then of the file group.
+                for partition in [None, Some(0)] {
+                    let result = StatisticsContext::new().compute(
+                        exec.as_ref(),
+                        &StatisticsArgs::new().with_partition(partition),
+                    );
+                    if has_projection {
+                        let mut expected = vec![known.clone(); 2];
+                        if num_columns == 1 {
+                            expected[1] = ColumnStatistics::new_unknown();
+                        }
+                        assert_eq!(result.unwrap().column_statistics, expected);
+                    } else {
+                        assert_contains!(
+                            result.unwrap_err().to_string(),
+                            format!(
+                                "DataSourceExec::statistics_from_inputs returned {num_columns} column statistics"
+                            )
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn test_statistics_with_filter() {
         assert_num_rows_with_filter(Precision::Absent, Precision::Absent);
