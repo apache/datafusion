@@ -4243,6 +4243,7 @@ impl Display for OutputFormat {
 #[cfg(test)]
 mod tests {
     use crate::assert_contains;
+    #[cfg(feature = "parquet")]
     use crate::config::TableParquetOptions;
     use crate::config::{
         ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ExtensionOptions,
