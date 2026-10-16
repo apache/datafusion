@@ -935,6 +935,39 @@ physical_plan
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 03)--DataSourceExec: partitions=1, partition_sizes=[1]
 
+# Regression for https://github.com/apache/datafusion/issues/25808
+statement ok
+CREATE TABLE po_25808(k INT) AS VALUES (0), (5);
+
+statement ok
+CREATE TABLE pb_25808(x INT, y INT) AS VALUES (1, 1), (1, 2), (2, 3);
+
+statement ok
+CREATE TABLE po_25808_duplicates(k INT) AS VALUES (0), (0);
+
+query II rowsort
+SELECT po_25808.k, s.x
+FROM po_25808, LATERAL (SELECT DISTINCT pb_25808.x FROM pb_25808 WHERE pb_25808.y > po_25808.k) AS s;
+----
+0 1
+0 2
+
+query II rowsort
+SELECT po_25808_duplicates.k, s.x
+FROM po_25808_duplicates, LATERAL (SELECT DISTINCT pb_25808.x FROM pb_25808 WHERE pb_25808.y > po_25808_duplicates.k) AS s;
+----
+0 1
+0 1
+0 2
+0 2
+
+query II rowsort
+SELECT po_25808.k, s.x
+FROM po_25808 JOIN LATERAL (SELECT DISTINCT pb_25808.x FROM pb_25808 WHERE pb_25808.y > po_25808.k) AS s ON TRUE;
+----
+0 1
+0 2
+
 ###########################################################
 # Cleanup
 ###########################################################
@@ -956,3 +989,12 @@ DROP TABLE t2;
 
 statement ok
 DROP TABLE t3;
+
+statement ok
+DROP TABLE po_25808_duplicates;
+
+statement ok
+DROP TABLE po_25808;
+
+statement ok
+DROP TABLE pb_25808;
