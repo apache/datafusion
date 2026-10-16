@@ -19,16 +19,19 @@ use std::process::Command;
 use std::sync::Arc;
 
 use datafusion_common::DFSchema;
+use datafusion_execution::TaskContext;
 use datafusion_expr::logical_plan::{EmptyRelation, LogicalPlan, LogicalPlanBuilder};
-use datafusion_proto::bytes::logical_plan_to_bytes;
+use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
 
 const CHILD_ENV: &str = "DATAFUSION_PROTO_ISSUE_23823_CHILD";
 const ALIAS_DEPTH_ENV: &str = "DATAFUSION_PROTO_ISSUE_23823_ALIAS_DEPTH";
 const TWO_MIB_TEST_NAME: &str =
-    "cases::stack_safety::logical_plan_serialization_fits_a_two_mib_stack";
+    "cases::stack_safety::logical_plan_serde_fits_a_two_mib_stack";
 #[cfg(feature = "recursive_protection")]
 const GROWABLE_STACK_TEST_NAME: &str =
-    "cases::stack_safety::deeply_nested_logical_plan_serialization_uses_a_growable_stack";
+    "cases::stack_safety::deeply_nested_logical_plan_serde_uses_a_growable_stack";
+
+const RECURSION_LIMIT_EXPECTED_DEPTH: usize = 20;
 
 fn deeply_aliased_plan(alias_depth: usize) -> LogicalPlan {
     let mut plan = LogicalPlan::EmptyRelation(EmptyRelation {
@@ -47,12 +50,26 @@ fn deeply_aliased_plan(alias_depth: usize) -> LogicalPlan {
     plan
 }
 
-fn serialize_on_two_mib_stack(alias_depth: usize) {
+fn serde_on_two_mib_stack(alias_depth: usize) {
     let plan = deeply_aliased_plan(alias_depth);
     std::thread::Builder::new()
         .name("two-megabyte-stack".into())
         .stack_size(2 * 1024 * 1024)
-        .spawn(move || logical_plan_to_bytes(&plan).unwrap())
+        .spawn(move || {
+            let bytes = logical_plan_to_bytes(&plan).unwrap();
+            match logical_plan_from_bytes(&bytes, &TaskContext::default()) {
+                Ok(_) => {}
+                Err(err)
+                    if err.to_string().contains("recursion limit")
+                        && alias_depth > RECURSION_LIMIT_EXPECTED_DEPTH =>
+                {
+                    // Ignore the error as it is expected for this depth.
+                }
+                res => {
+                    res.unwrap();
+                }
+            }
+        })
         .unwrap()
         .join()
         .unwrap();
@@ -61,7 +78,7 @@ fn serialize_on_two_mib_stack(alias_depth: usize) {
 fn run_in_child(test_name: &str, alias_depth: usize) {
     if std::env::var_os(CHILD_ENV).is_some() {
         let alias_depth = std::env::var(ALIAS_DEPTH_ENV).unwrap().parse().unwrap();
-        serialize_on_two_mib_stack(alias_depth);
+        serde_on_two_mib_stack(alias_depth);
         return;
     }
 
@@ -84,15 +101,18 @@ fn run_in_child(test_name: &str, alias_depth: usize) {
 }
 
 #[test]
-fn logical_plan_serialization_fits_a_two_mib_stack() {
+fn logical_plan_serde_fits_a_two_mib_stack() {
     // Ten aliases reproduce #23823. Use 100 to provide a safety margin while
     // verifying the dispatcher reduction without runtime stack growth.
     run_in_child(TWO_MIB_TEST_NAME, 100);
+    // Check also for a depth that does not trigger a recursion limit error
+    // on deserialization.
+    run_in_child(TWO_MIB_TEST_NAME, RECURSION_LIMIT_EXPECTED_DEPTH);
 }
 
 #[cfg(feature = "recursive_protection")]
 #[test]
-fn deeply_nested_logical_plan_serialization_uses_a_growable_stack() {
+fn deeply_nested_logical_plan_serde_uses_a_growable_stack() {
     // This depth exceeds the 2 MiB thread stack without recursive protection,
     // exercising the `recursive` stack-growth checkpoint.
     run_in_child(GROWABLE_STACK_TEST_NAME, 2_000);
