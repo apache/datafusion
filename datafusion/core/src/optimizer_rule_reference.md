@@ -91,4 +91,5 @@ in multiple phases.
 | 18    | `PushdownSort`                 | -                       | Pushes sort requirements into data sources that can already return sorted output.                            |
 | 19    | `EnsureCooperative`            | -                       | Wraps non-cooperative plan parts so long-running tasks yield fairly.                                         |
 | 20    | `FilterPushdown(Post)`         | post-optimization phase | Pushes dynamic filters at the end of optimization, after plan references stop moving.                        |
-| 21    | `SanityCheckPlan`              | -                       | Validates that the final physical plan meets ordering, distribution, and infinite-input safety requirements. |
+| 21    | `AdaptiveHashJoin`             | -                       | Lets partitioned hash joins pick their mode at runtime from the build side size, when enabled.               |
+| 22    | `SanityCheckPlan`              | -                       | Validates that the final physical plan meets ordering, distribution, and infinite-input safety requirements. |
