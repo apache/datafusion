@@ -2566,6 +2566,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "datafusion-property-tests"
+version = "55.1.0"
+dependencies = [
+ "arrow",
+ "async-trait",
+ "datafusion",
+ "datafusion-catalog",
+ "datafusion-common",
+ "datafusion-datasource",
+ "datafusion-execution",
+ "datafusion-expr",
+ "datafusion-ffi",
+ "datafusion-functions-aggregate",
+ "datafusion-functions-window",
+ "datafusion-physical-expr",
+ "datafusion-physical-plan",
+ "futures",
+ "insta",
+ "parking_lot",
+ "rand 0.9.4",
+ "tokio",
+]
+
+[[package]]
 name = "datafusion-proto"
 version = "55.1.0"
 dependencies = [

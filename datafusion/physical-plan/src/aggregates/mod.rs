@@ -2611,6 +2611,19 @@ impl ExecutionPlan for AggregateExec {
         )
     }
 
+    fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
+        let mut reset = Self {
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(&self)
+        };
+        // The dynamic filter and its bounds are updated during execution, so
+        // replace them with a new filter in its initial state
+        if reset.dynamic_filter.take().is_some() {
+            reset.init_dynamic_filter();
+        }
+        Ok(Arc::new(reset))
+    }
+
     fn apply_expressions(
         &self,
         f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
@@ -10003,6 +10016,62 @@ mod tests {
             lit(true),
         ));
         assert!(agg.set_dynamic_filter(df).is_err());
+        Ok(())
+    }
+
+    /// Test that [`AggregateExec::reset_state`] recreates the dynamic filter, so
+    /// that the bounds an execution published do not carry over into the next
+    #[tokio::test]
+    async fn test_reset_state_recreates_dynamic_filter() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let input = |values: Vec<i64>| -> Result<Arc<dyn ExecutionPlan>> {
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int64Array::from(values))],
+            )?;
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)
+                .map(|exec| exec as Arc<dyn ExecutionPlan>)
+        };
+        let agg: Arc<dyn ExecutionPlan> = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::new_single(vec![]),
+            vec![Arc::new(
+                AggregateExprBuilder::new(min_udaf(), vec![col("a", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("min_a")
+                    .build()?,
+            )],
+            vec![None],
+            input(vec![3, 5, 7])?,
+            Arc::clone(&schema),
+        )?);
+        let filter = |plan: &Arc<dyn ExecutionPlan>| {
+            let produced = plan.dynamic_expressions_produced();
+            assert_eq!(produced.len(), 1);
+            Arc::clone(&produced[0])
+        };
+        let task_ctx = Arc::new(TaskContext::default());
+
+        // Executing the aggregate tightens its filter to the minimum it saw
+        collect(agg.execute(0, Arc::clone(&task_ctx))?).await?;
+        let executed = filter(&agg);
+        assert_eq!(executed.to_string(), "DynamicFilter [ a@0 < 3 ]");
+
+        // After a reset, the aggregate has a new filter in its initial state
+        let reset = Arc::clone(&agg).reset_state()?;
+        let reset_filter = filter(&reset);
+        assert_ne!(reset_filter.expression_id(), executed.expression_id());
+        assert_eq!(reset_filter.to_string(), "DynamicFilter [ empty ]");
+
+        // Executed on other input, the reset aggregate's filter only reflects
+        // that input, and the original filter does not change
+        let reset = crate::execution_plan::replace_children_if_necessary(
+            reset,
+            vec![input(vec![10, 20])?],
+        )?;
+        collect(reset.execute(0, task_ctx)?).await?;
+        assert_eq!(filter(&reset).to_string(), "DynamicFilter [ a@0 < 10 ]");
+        assert_eq!(filter(&agg).to_string(), "DynamicFilter [ a@0 < 3 ]");
         Ok(())
     }
 }

@@ -1,0 +1,351 @@
+---
+source: datafusion/property-tests/tests/physical_plan/builtin_plans/mod.rs
+expression: output
+---
+## AggregateExec Partial and Final without GROUP BY
+  case seed 1:
+    AggregateExec: mode=Final, gby=[], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)]
+      CoalescePartitionsExec
+        AggregateExec: mode=Partial, gby=[], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)]
+          MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact
+    [invariant] cardinality_effect_bounds_num_rows at AggregateExec (root/0/0): cardinality_effect() is LowerEqual, but the partition 1 num_rows is Exact(1) for input partition 1 with num_rows Exact(0)
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [count(v)@0], constant: (heterogeneous)} refers to column 'count(v)'@0, but field 0 of schema() is 'count(v)[count]'
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [sum(v)@1], constant: (heterogeneous)} refers to column 'sum(v)'@1, but field 1 of schema() is 'sum(v)[sum]'
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [min(v)@2], constant: (heterogeneous)} refers to column 'min(v)'@2, but field 2 of schema() is 'min(v)[value]'
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [max(v)@3], constant: (heterogeneous)} refers to column 'max(v)'@3, but field 3 of schema() is 'max(v)[value]'
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [avg(f)@4], constant: (heterogeneous)} refers to column 'avg(f)'@4, but field 4 of schema() is 'avg(f)[count]'
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [sum(f)@5], constant: (heterogeneous)} refers to column 'sum(f)'@5, but field 5 of schema() is 'avg(f)[sum]'
+  case seed 2:
+    AggregateExec: mode=Final, gby=[], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)]
+      CoalescePartitionsExec
+        AggregateExec: mode=Partial, gby=[], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)]
+          MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact
+    [invariant] cardinality_effect_bounds_num_rows at AggregateExec (root/0/0): cardinality_effect() is LowerEqual, but the partition 1 num_rows is Exact(1) for input partition 1 with num_rows Exact(0)
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [count(v)@0], constant: (heterogeneous)} refers to column 'count(v)'@0, but field 0 of schema() is 'count(v)[count]'
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [sum(v)@1], constant: (heterogeneous)} refers to column 'sum(v)'@1, but field 1 of schema() is 'sum(v)[sum]'
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [min(v)@2], constant: (heterogeneous)} refers to column 'min(v)'@2, but field 2 of schema() is 'min(v)[value]'
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [max(v)@3], constant: (heterogeneous)} refers to column 'max(v)'@3, but field 3 of schema() is 'max(v)[value]'
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [avg(f)@4], constant: (heterogeneous)} refers to column 'avg(f)'@4, but field 4 of schema() is 'avg(f)[count]'
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [sum(f)@5], constant: (heterogeneous)} refers to column 'sum(f)'@5, but field 5 of schema() is 'avg(f)[sum]'
+  case 2 partitions:
+    AggregateExec: mode=Final, gby=[], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)]
+      CoalescePartitionsExec
+        AggregateExec: mode=Partial, gby=[], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)]
+          MockSourceExec: partitioning=UnknownPartitioning(2), partition_rows=[300, 300], statistics=Exact
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [count(v)@0], constant: (heterogeneous)} refers to column 'count(v)'@0, but field 0 of schema() is 'count(v)[count]'
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [sum(v)@1], constant: (heterogeneous)} refers to column 'sum(v)'@1, but field 1 of schema() is 'sum(v)[sum]'
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [min(v)@2], constant: (heterogeneous)} refers to column 'min(v)'@2, but field 2 of schema() is 'min(v)[value]'
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [max(v)@3], constant: (heterogeneous)} refers to column 'max(v)'@3, but field 3 of schema() is 'max(v)[value]'
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [avg(f)@4], constant: (heterogeneous)} refers to column 'avg(f)'@4, but field 4 of schema() is 'avg(f)[count]'
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [sum(f)@5], constant: (heterogeneous)} refers to column 'sum(f)'@5, but field 5 of schema() is 'avg(f)[sum]'
+  case 5 partitions:
+    AggregateExec: mode=Final, gby=[], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)]
+      CoalescePartitionsExec
+        AggregateExec: mode=Partial, gby=[], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)]
+          MockSourceExec: partitioning=UnknownPartitioning(5), partition_rows=[171, 85, 0, 257, 87], statistics=Exact
+    [invariant] cardinality_effect_bounds_num_rows at AggregateExec (root/0/0): cardinality_effect() is LowerEqual, but the partition 2 num_rows is Exact(1) for input partition 2 with num_rows Exact(0)
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [count(v)@0], constant: (heterogeneous)} refers to column 'count(v)'@0, but field 0 of schema() is 'count(v)[count]'
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [sum(v)@1], constant: (heterogeneous)} refers to column 'sum(v)'@1, but field 1 of schema() is 'sum(v)[sum]'
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [min(v)@2], constant: (heterogeneous)} refers to column 'min(v)'@2, but field 2 of schema() is 'min(v)[value]'
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [max(v)@3], constant: (heterogeneous)} refers to column 'max(v)'@3, but field 3 of schema() is 'max(v)[value]'
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [avg(f)@4], constant: (heterogeneous)} refers to column 'avg(f)'@4, but field 4 of schema() is 'avg(f)[count]'
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [sum(f)@5], constant: (heterogeneous)} refers to column 'sum(f)'@5, but field 5 of schema() is 'avg(f)[sum]'
+  case large input:
+    AggregateExec: mode=Final, gby=[], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)]
+      CoalescePartitionsExec
+        AggregateExec: mode=Partial, gby=[], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)]
+          MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[1600, 0, 3200], statistics=Exact
+    [invariant] cardinality_effect_bounds_num_rows at AggregateExec (root/0/0): cardinality_effect() is LowerEqual, but the partition 1 num_rows is Exact(1) for input partition 1 with num_rows Exact(0)
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [count(v)@0], constant: (heterogeneous)} refers to column 'count(v)'@0, but field 0 of schema() is 'count(v)[count]'
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [sum(v)@1], constant: (heterogeneous)} refers to column 'sum(v)'@1, but field 1 of schema() is 'sum(v)[sum]'
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [min(v)@2], constant: (heterogeneous)} refers to column 'min(v)'@2, but field 2 of schema() is 'min(v)[value]'
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [max(v)@3], constant: (heterogeneous)} refers to column 'max(v)'@3, but field 3 of schema() is 'max(v)[value]'
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [avg(f)@4], constant: (heterogeneous)} refers to column 'avg(f)'@4, but field 4 of schema() is 'avg(f)[count]'
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [sum(f)@5], constant: (heterogeneous)} refers to column 'sum(f)'@5, but field 5 of schema() is 'avg(f)[sum]'
+
+## AggregateExec Partial and Final without GROUP BY, min and max only
+  case seed 1:
+    AggregateExec: mode=Final, gby=[], aggr=[min(v), max(v)]
+      CoalescePartitionsExec
+        AggregateExec: mode=Partial, gby=[], aggr=[min(v), max(v)]
+          MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact
+    [invariant] cardinality_effect_bounds_num_rows at AggregateExec (root/0/0): cardinality_effect() is LowerEqual, but the partition 1 num_rows is Exact(1) for input partition 1 with num_rows Exact(0)
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [min(v)@0], constant: (heterogeneous)} refers to column 'min(v)'@0, but field 0 of schema() is 'min(v)[value]'
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [max(v)@1], constant: (heterogeneous)} refers to column 'max(v)'@1, but field 1 of schema() is 'max(v)[value]'
+  case seed 2:
+    AggregateExec: mode=Final, gby=[], aggr=[min(v), max(v)]
+      CoalescePartitionsExec
+        AggregateExec: mode=Partial, gby=[], aggr=[min(v), max(v)]
+          MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact
+    [invariant] cardinality_effect_bounds_num_rows at AggregateExec (root/0/0): cardinality_effect() is LowerEqual, but the partition 1 num_rows is Exact(1) for input partition 1 with num_rows Exact(0)
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [min(v)@0], constant: (heterogeneous)} refers to column 'min(v)'@0, but field 0 of schema() is 'min(v)[value]'
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [max(v)@1], constant: (heterogeneous)} refers to column 'max(v)'@1, but field 1 of schema() is 'max(v)[value]'
+  case 2 partitions:
+    AggregateExec: mode=Final, gby=[], aggr=[min(v), max(v)]
+      CoalescePartitionsExec
+        AggregateExec: mode=Partial, gby=[], aggr=[min(v), max(v)]
+          MockSourceExec: partitioning=UnknownPartitioning(2), partition_rows=[300, 300], statistics=Exact
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [min(v)@0], constant: (heterogeneous)} refers to column 'min(v)'@0, but field 0 of schema() is 'min(v)[value]'
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [max(v)@1], constant: (heterogeneous)} refers to column 'max(v)'@1, but field 1 of schema() is 'max(v)[value]'
+  case 5 partitions:
+    AggregateExec: mode=Final, gby=[], aggr=[min(v), max(v)]
+      CoalescePartitionsExec
+        AggregateExec: mode=Partial, gby=[], aggr=[min(v), max(v)]
+          MockSourceExec: partitioning=UnknownPartitioning(5), partition_rows=[171, 85, 0, 257, 87], statistics=Exact
+    [invariant] cardinality_effect_bounds_num_rows at AggregateExec (root/0/0): cardinality_effect() is LowerEqual, but the partition 2 num_rows is Exact(1) for input partition 2 with num_rows Exact(0)
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [min(v)@0], constant: (heterogeneous)} refers to column 'min(v)'@0, but field 0 of schema() is 'min(v)[value]'
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [max(v)@1], constant: (heterogeneous)} refers to column 'max(v)'@1, but field 1 of schema() is 'max(v)[value]'
+  case large input:
+    AggregateExec: mode=Final, gby=[], aggr=[min(v), max(v)]
+      CoalescePartitionsExec
+        AggregateExec: mode=Partial, gby=[], aggr=[min(v), max(v)]
+          MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[1600, 0, 3200], statistics=Exact
+    [invariant] cardinality_effect_bounds_num_rows at AggregateExec (root/0/0): cardinality_effect() is LowerEqual, but the partition 1 num_rows is Exact(1) for input partition 1 with num_rows Exact(0)
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [min(v)@0], constant: (heterogeneous)} refers to column 'min(v)'@0, but field 0 of schema() is 'min(v)[value]'
+    [invariant] expression_column_refs at AggregateExec (root/0/0): the equivalence class {members: [max(v)@1], constant: (heterogeneous)} refers to column 'max(v)'@1, but field 1 of schema() is 'max(v)[value]'
+
+## AggregateExec Partial and Final
+  case seed 1: no violations
+  case seed 2: no violations
+  case 2 partitions: no violations
+  case 5 partitions: no violations
+  case large input: no violations
+
+## AggregateExec Partial and FinalPartitioned
+  case seed 1:
+    AggregateExec: mode=FinalPartitioned, gby=[g@0 as g, h@1 as h], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)]
+      RepartitionExec: partitioning=Hash([g@0, h@1], 3), input_partitions=3
+        AggregateExec: mode=Partial, gby=[g@0 as g, h@1 as h], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)]
+          MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact
+    [invariant] invalid_partition_errors at RepartitionExec (root/0): the node has 3 output partitions, but execute(3) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
+    [invariant] reset_state_reexecution at RepartitionExec (root/0): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
+  case seed 2:
+    AggregateExec: mode=FinalPartitioned, gby=[g@0 as g, h@1 as h], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)]
+      RepartitionExec: partitioning=Hash([g@0, h@1], 3), input_partitions=3
+        AggregateExec: mode=Partial, gby=[g@0 as g, h@1 as h], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)]
+          MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact
+    [invariant] invalid_partition_errors at RepartitionExec (root/0): the node has 3 output partitions, but execute(3) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
+    [invariant] reset_state_reexecution at RepartitionExec (root/0): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
+  case 2 partitions:
+    AggregateExec: mode=FinalPartitioned, gby=[g@0 as g, h@1 as h], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)]
+      RepartitionExec: partitioning=Hash([g@0, h@1], 3), input_partitions=2
+        AggregateExec: mode=Partial, gby=[g@0 as g, h@1 as h], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)]
+          MockSourceExec: partitioning=UnknownPartitioning(2), partition_rows=[300, 300], statistics=Exact
+    [invariant] invalid_partition_errors at RepartitionExec (root/0): the node has 3 output partitions, but execute(3) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
+    [invariant] reset_state_reexecution at RepartitionExec (root/0): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
+  case 5 partitions:
+    AggregateExec: mode=FinalPartitioned, gby=[g@0 as g, h@1 as h], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)]
+      RepartitionExec: partitioning=Hash([g@0, h@1], 3), input_partitions=5
+        AggregateExec: mode=Partial, gby=[g@0 as g, h@1 as h], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)]
+          MockSourceExec: partitioning=UnknownPartitioning(5), partition_rows=[171, 85, 0, 257, 87], statistics=Exact
+    [invariant] invalid_partition_errors at RepartitionExec (root/0): the node has 3 output partitions, but execute(3) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
+    [invariant] reset_state_reexecution at RepartitionExec (root/0): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
+  case large input:
+    AggregateExec: mode=FinalPartitioned, gby=[g@0 as g, h@1 as h], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)]
+      RepartitionExec: partitioning=Hash([g@0, h@1], 3), input_partitions=3
+        AggregateExec: mode=Partial, gby=[g@0 as g, h@1 as h], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)]
+          MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[1600, 0, 3200], statistics=Exact
+    [invariant] invalid_partition_errors at RepartitionExec (root/0): the node has 3 output partitions, but execute(3) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
+    [invariant] reset_state_reexecution at RepartitionExec (root/0): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
+
+## AggregateExec Partial and FinalPartitioned on sorted input
+  case seed 1:
+    AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)], ordering_mode=Sorted
+      RepartitionExec: partitioning=Hash([g@0], 3), input_partitions=3, preserve_order=true, sort_exprs=g@0 ASC
+        AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)], ordering_mode=Sorted
+          MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, output_ordering=[g@0 ASC]
+    [invariant] invalid_partition_errors at RepartitionExec (root/0): the node has 3 output partitions, but execute(3) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
+    [invariant] reset_state_reexecution at RepartitionExec (root/0): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
+  case seed 2:
+    AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)], ordering_mode=Sorted
+      RepartitionExec: partitioning=Hash([g@0], 3), input_partitions=3, preserve_order=true, sort_exprs=g@0 ASC
+        AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)], ordering_mode=Sorted
+          MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact, output_ordering=[g@0 ASC]
+    [invariant] invalid_partition_errors at RepartitionExec (root/0): the node has 3 output partitions, but execute(3) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
+    [invariant] reset_state_reexecution at RepartitionExec (root/0): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
+  case 2 partitions:
+    AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)], ordering_mode=Sorted
+      RepartitionExec: partitioning=Hash([g@0], 3), input_partitions=2, preserve_order=true, sort_exprs=g@0 ASC
+        AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)], ordering_mode=Sorted
+          MockSourceExec: partitioning=UnknownPartitioning(2), partition_rows=[300, 300], statistics=Exact, output_ordering=[g@0 ASC]
+    [invariant] invalid_partition_errors at RepartitionExec (root/0): the node has 3 output partitions, but execute(3) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
+    [invariant] reset_state_reexecution at RepartitionExec (root/0): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
+  case 5 partitions:
+    AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)], ordering_mode=Sorted
+      RepartitionExec: partitioning=Hash([g@0], 3), input_partitions=5, preserve_order=true, sort_exprs=g@0 ASC
+        AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)], ordering_mode=Sorted
+          MockSourceExec: partitioning=UnknownPartitioning(5), partition_rows=[171, 85, 0, 257, 87], statistics=Exact, output_ordering=[g@0 ASC]
+    [invariant] invalid_partition_errors at RepartitionExec (root/0): the node has 3 output partitions, but execute(3) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
+    [invariant] reset_state_reexecution at RepartitionExec (root/0): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
+  case large input:
+    AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)], ordering_mode=Sorted
+      RepartitionExec: partitioning=Hash([g@0], 3), input_partitions=3, preserve_order=true, sort_exprs=g@0 ASC
+        AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)], ordering_mode=Sorted
+          MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[1600, 0, 3200], statistics=Exact, output_ordering=[g@0 ASC]
+    [invariant] invalid_partition_errors at RepartitionExec (root/0): the node has 3 output partitions, but execute(3) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
+    [invariant] reset_state_reexecution at RepartitionExec (root/0): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
+
+## AggregateExec Single
+  case seed 1: no violations
+  case seed 2: no violations
+  case 2 partitions: no violations
+  case 5 partitions: no violations
+  case large input: no violations
+
+## AggregateExec Single without GROUP BY
+  case seed 1: no violations
+  case seed 2: no violations
+  case 2 partitions: no violations
+  case 5 partitions: no violations
+  case large input: no violations
+
+## AggregateExec Single on sorted input
+  case seed 1: no violations
+  case seed 2: no violations
+  case 2 partitions: no violations
+  case 5 partitions: no violations
+  case large input: no violations
+
+## AggregateExec Single on partially sorted input
+  case seed 1: no violations
+  case seed 2: no violations
+  case 2 partitions: no violations
+  case 5 partitions: no violations
+  case large input: no violations
+
+## AggregateExec SinglePartitioned
+  case seed 1: no violations
+  case seed 2: no violations
+  case 2 partitions: no violations
+  case 5 partitions: no violations
+  case large input: no violations
+
+## AggregateExec Partial and FinalPartitioned with TopK limit
+  case seed 1:
+    AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[max(v)], lim=[5]
+      RepartitionExec: partitioning=Hash([g@0], 3), input_partitions=3
+        AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[max(v)], lim=[5]
+          MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact
+    [invariant] invalid_partition_errors at RepartitionExec (root/0): the node has 3 output partitions, but execute(3) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
+    [invariant] reset_state_reexecution at RepartitionExec (root/0): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
+    [invariant] exact_statistics_hold at AggregateExec (root/0/0): the overall statistics are false: distinct_count of g@0 is Exact(472), but the output has Exact(20); min_value of g@0 is Exact(Int32(1)), but the output has Exact(Int32(20)); max_value of g@0 is Exact(Int32(997)), but the output has Exact(Int32(932))
+    [invariant] exact_statistics_hold at AggregateExec (root/0/0): the partition 0 statistics are false: distinct_count of g@0 is Exact(187), but the output has Exact(10); min_value of g@0 is Exact(Int32(1)), but the output has Exact(Int32(20)); max_value of g@0 is Exact(Int32(997)), but the output has Exact(Int32(932))
+    [invariant] exact_statistics_hold at AggregateExec (root/0/0): the partition 2 statistics are false: distinct_count of g@0 is Exact(336), but the output has Exact(10); min_value of g@0 is Exact(Int32(1)), but the output has Exact(Int32(68)); max_value of g@0 is Exact(Int32(992)), but the output has Exact(Int32(792))
+  case seed 2:
+    AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[max(v)], lim=[5]
+      RepartitionExec: partitioning=Hash([g@0], 3), input_partitions=3
+        AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[max(v)], lim=[5]
+          MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[200, 0, 400], statistics=Exact
+    [invariant] exact_statistics_hold at AggregateExec (root): with the false exact statistics of its children replaced by the true values, the overall statistics are false: distinct_count of g@0 is Exact(20), but the output has Exact(19)
+    [invariant] invalid_partition_errors at RepartitionExec (root/0): the node has 3 output partitions, but execute(3) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
+    [invariant] reset_state_reexecution at RepartitionExec (root/0): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
+    [invariant] exact_statistics_hold at AggregateExec (root/0/0): the overall statistics are false: distinct_count of g@0 is Exact(457), but the output has Exact(20); min_value of g@0 is Exact(Int32(1)), but the output has Exact(Int32(32)); max_value of g@0 is Exact(Int32(993)), but the output has Exact(Int32(985))
+    [invariant] exact_statistics_hold at AggregateExec (root/0/0): the partition 0 statistics are false: distinct_count of g@0 is Exact(184), but the output has Exact(10); min_value of g@0 is Exact(Int32(5)), but the output has Exact(Int32(38)); max_value of g@0 is Exact(Int32(993)), but the output has Exact(Int32(976))
+    [invariant] exact_statistics_hold at AggregateExec (root/0/0): the partition 2 statistics are false: distinct_count of g@0 is Exact(330), but the output has Exact(10); min_value of g@0 is Exact(Int32(1)), but the output has Exact(Int32(32)); max_value of g@0 is Exact(Int32(990)), but the output has Exact(Int32(985))
+  case 2 partitions:
+    AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[max(v)], lim=[5]
+      RepartitionExec: partitioning=Hash([g@0], 3), input_partitions=2
+        AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[max(v)], lim=[5]
+          MockSourceExec: partitioning=UnknownPartitioning(2), partition_rows=[300, 300], statistics=Exact
+    [invariant] invalid_partition_errors at RepartitionExec (root/0): the node has 3 output partitions, but execute(3) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
+    [invariant] reset_state_reexecution at RepartitionExec (root/0): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
+    [invariant] exact_statistics_hold at AggregateExec (root/0/0): the overall statistics are false: distinct_count of g@0 is Exact(437), but the output has Exact(20); min_value of g@0 is Exact(Int32(1)), but the output has Exact(Int32(49)); max_value of g@0 is Exact(Int32(998)), but the output has Exact(Int32(887))
+    [invariant] exact_statistics_hold at AggregateExec (root/0/0): the partition 0 statistics are false: distinct_count of g@0 is Exact(256), but the output has Exact(10); min_value of g@0 is Exact(Int32(1)), but the output has Exact(Int32(49)); max_value of g@0 is Exact(Int32(997)), but the output has Exact(Int32(873))
+    [invariant] exact_statistics_hold at AggregateExec (root/0/0): the partition 1 statistics are false: distinct_count of g@0 is Exact(255), but the output has Exact(10); min_value of g@0 is Exact(Int32(4)), but the output has Exact(Int32(65)); max_value of g@0 is Exact(Int32(998)), but the output has Exact(Int32(887))
+  case 5 partitions:
+    AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[max(v)], lim=[5]
+      RepartitionExec: partitioning=Hash([g@0], 3), input_partitions=5
+        AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[max(v)], lim=[5]
+          MockSourceExec: partitioning=UnknownPartitioning(5), partition_rows=[171, 85, 0, 257, 87], statistics=Exact
+    [invariant] exact_statistics_hold at AggregateExec (root): with the false exact statistics of its children replaced by the true values, the overall statistics are false: distinct_count of g@0 is Exact(40), but the output has Exact(30); max_value of g@0 is Exact(Int32(892)), but the output has Exact(Int32(816))
+    [invariant] invalid_partition_errors at RepartitionExec (root/0): the node has 3 output partitions, but execute(3) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
+    [invariant] reset_state_reexecution at RepartitionExec (root/0): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
+    [invariant] exact_statistics_hold at AggregateExec (root/0/0): the overall statistics are false: distinct_count of g@0 is Exact(463), but the output has Exact(40); min_value of g@0 is Exact(Int32(1)), but the output has Exact(Int32(6)); max_value of g@0 is Exact(Int32(997)), but the output has Exact(Int32(892))
+    [invariant] exact_statistics_hold at AggregateExec (root/0/0): the partition 0 statistics are false: distinct_count of g@0 is Exact(157), but the output has Exact(10); min_value of g@0 is Exact(Int32(1)), but the output has Exact(Int32(83)); max_value of g@0 is Exact(Int32(996)), but the output has Exact(Int32(771))
+    [invariant] exact_statistics_hold at AggregateExec (root/0/0): the partition 1 statistics are false: distinct_count of g@0 is Exact(80), but the output has Exact(10); min_value of g@0 is Exact(Int32(11)), but the output has Exact(Int32(57)); max_value of g@0 is Exact(Int32(986)), but the output has Exact(Int32(892))
+    [invariant] exact_statistics_hold at AggregateExec (root/0/0): the partition 3 statistics are false: distinct_count of g@0 is Exact(231), but the output has Exact(10); min_value of g@0 is Exact(Int32(2)), but the output has Exact(Int32(94)); max_value of g@0 is Exact(Int32(997)), but the output has Exact(Int32(816))
+    [invariant] exact_statistics_hold at AggregateExec (root/0/0): the partition 4 statistics are false: distinct_count of g@0 is Exact(84), but the output has Exact(10); max_value of g@0 is Exact(Int32(980)), but the output has Exact(Int32(854))
+  case large input:
+    AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[max(v)], lim=[5]
+      RepartitionExec: partitioning=Hash([g@0], 3), input_partitions=3
+        AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[max(v)], lim=[5]
+          MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[1600, 0, 3200], statistics=Exact
+    [invariant] invalid_partition_errors at RepartitionExec (root/0): the node has 3 output partitions, but execute(3) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
+    [invariant] reset_state_reexecution at RepartitionExec (root/0): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
+    [invariant] exact_statistics_hold at AggregateExec (root/0/0): the overall statistics are false: distinct_count of g@0 is Exact(983), but the output has Exact(20); min_value of g@0 is Exact(Int32(0)), but the output has Exact(Int32(23)); max_value of g@0 is Exact(Int32(999)), but the output has Exact(Int32(987))
+    [invariant] exact_statistics_hold at AggregateExec (root/0/0): the partition 0 statistics are false: distinct_count of g@0 is Exact(794), but the output has Exact(10); min_value of g@0 is Exact(Int32(1)), but the output has Exact(Int32(23)); max_value of g@0 is Exact(Int32(999)), but the output has Exact(Int32(964))
+    [invariant] exact_statistics_hold at AggregateExec (root/0/0): the partition 2 statistics are false: distinct_count of g@0 is Exact(948), but the output has Exact(10); min_value of g@0 is Exact(Int32(0)), but the output has Exact(Int32(39)); max_value of g@0 is Exact(Int32(999)), but the output has Exact(Int32(987))
+
+## AggregateExec Single with DISTINCT limit
+  allowed batch_boundary_invariance: the limit is a soft limit: the aggregate stops after the input batch in which it has seen 5 groups, so how many and which groups it emits depends on batch boundaries, and only the LIMIT above it makes the result well defined (aggregates/mod.rs:859-864); it reports no fetch, so the check cannot know that
+  case seed 1:
+    AggregateExec: mode=Single, gby=[g@0 as g], aggr=[], lim=[5]
+      MockSourceExec: partitioning=UnknownPartitioning(1), partition_rows=[600], statistics=Exact
+    [invariant] exact_statistics_hold at AggregateExec (root): the overall statistics are false: distinct_count of g@0 is Exact(16), but the output has Exact(10); min_value of g@0 is Exact(Int32(0)), but the output has Exact(Int32(2)); max_value of g@0 is Exact(Int32(15)), but the output has Exact(Int32(12))
+    [invariant] exact_statistics_hold at AggregateExec (root): the partition 0 statistics are false: distinct_count of g@0 is Exact(16), but the output has Exact(10); min_value of g@0 is Exact(Int32(0)), but the output has Exact(Int32(2)); max_value of g@0 is Exact(Int32(15)), but the output has Exact(Int32(12))
+  case seed 2:
+    AggregateExec: mode=Single, gby=[g@0 as g], aggr=[], lim=[5]
+      MockSourceExec: partitioning=UnknownPartitioning(1), partition_rows=[600], statistics=Exact
+    [invariant] exact_statistics_hold at AggregateExec (root): the overall statistics are false: distinct_count of g@0 is Exact(16), but the output has Exact(8); min_value of g@0 is Exact(Int32(0)), but the output has Exact(Int32(1))
+    [invariant] exact_statistics_hold at AggregateExec (root): the partition 0 statistics are false: distinct_count of g@0 is Exact(16), but the output has Exact(8); min_value of g@0 is Exact(Int32(0)), but the output has Exact(Int32(1))
+  case 2 partitions:
+    AggregateExec: mode=Single, gby=[g@0 as g], aggr=[], lim=[5]
+      MockSourceExec: partitioning=UnknownPartitioning(1), partition_rows=[600], statistics=Exact
+    [invariant] exact_statistics_hold at AggregateExec (root): the overall statistics are false: distinct_count of g@0 is Exact(16), but the output has Exact(10)
+    [invariant] exact_statistics_hold at AggregateExec (root): the partition 0 statistics are false: distinct_count of g@0 is Exact(16), but the output has Exact(10)
+  case 5 partitions:
+    AggregateExec: mode=Single, gby=[g@0 as g], aggr=[], lim=[5]
+      MockSourceExec: partitioning=UnknownPartitioning(1), partition_rows=[600], statistics=Exact
+    [invariant] exact_statistics_hold at AggregateExec (root): the overall statistics are false: distinct_count of g@0 is Exact(16), but the output has Exact(10)
+    [invariant] exact_statistics_hold at AggregateExec (root): the partition 0 statistics are false: distinct_count of g@0 is Exact(16), but the output has Exact(10)
+  case large input:
+    AggregateExec: mode=Single, gby=[g@0 as g], aggr=[], lim=[5]
+      MockSourceExec: partitioning=UnknownPartitioning(1), partition_rows=[4800], statistics=Exact
+    [invariant] exact_statistics_hold at AggregateExec (root): the overall statistics are false: distinct_count of g@0 is Exact(16), but the output has Exact(5); max_value of g@0 is Exact(Int32(15)), but the output has Exact(Int32(12))
+    [invariant] exact_statistics_hold at AggregateExec (root): the partition 0 statistics are false: distinct_count of g@0 is Exact(16), but the output has Exact(5); max_value of g@0 is Exact(Int32(15)), but the output has Exact(Int32(12))
+
+## AggregateExec Partial and FinalPartitioned with ROLLUP
+  case seed 1:
+    AggregateExec: mode=FinalPartitioned, gby=[g@0 as g, h@1 as h, __grouping_id@2 as __grouping_id], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)]
+      RepartitionExec: partitioning=Hash([g@0, h@1, __grouping_id@2], 3), input_partitions=3
+        AggregateExec: mode=Partial, gby=[(NULL as g, NULL as h), (g@0 as g, NULL as h), (g@0 as g, h@1 as h)], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)]
+          MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[30, 0, 60], statistics=Exact
+    [invariant] invalid_partition_errors at RepartitionExec (root/0): the node has 3 output partitions, but execute(3) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
+    [invariant] reset_state_reexecution at RepartitionExec (root/0): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
+    [invariant] cardinality_effect_bounds_num_rows at AggregateExec (root/0/0): cardinality_effect() is LowerEqual, but the partition 1 num_rows is Exact(1) for input partition 1 with num_rows Exact(0)
+    [invariant] cardinality_effect_holds at AggregateExec (root/0/0): cardinality_effect() is LowerEqual, but the node produced 180 rows from 90 input rows
+  case seed 2:
+    AggregateExec: mode=FinalPartitioned, gby=[g@0 as g, h@1 as h, __grouping_id@2 as __grouping_id], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)]
+      RepartitionExec: partitioning=Hash([g@0, h@1, __grouping_id@2], 3), input_partitions=3
+        AggregateExec: mode=Partial, gby=[(NULL as g, NULL as h), (g@0 as g, NULL as h), (g@0 as g, h@1 as h)], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)]
+          MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[30, 0, 60], statistics=Exact
+    [invariant] invalid_partition_errors at RepartitionExec (root/0): the node has 3 output partitions, but execute(3) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
+    [invariant] reset_state_reexecution at RepartitionExec (root/0): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
+    [invariant] cardinality_effect_bounds_num_rows at AggregateExec (root/0/0): cardinality_effect() is LowerEqual, but the partition 1 num_rows is Exact(1) for input partition 1 with num_rows Exact(0)
+    [invariant] cardinality_effect_holds at AggregateExec (root/0/0): cardinality_effect() is LowerEqual, but the node produced 181 rows from 90 input rows
+  case 2 partitions:
+    AggregateExec: mode=FinalPartitioned, gby=[g@0 as g, h@1 as h, __grouping_id@2 as __grouping_id], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)]
+      RepartitionExec: partitioning=Hash([g@0, h@1, __grouping_id@2], 3), input_partitions=2
+        AggregateExec: mode=Partial, gby=[(NULL as g, NULL as h), (g@0 as g, NULL as h), (g@0 as g, h@1 as h)], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)]
+          MockSourceExec: partitioning=UnknownPartitioning(2), partition_rows=[45, 45], statistics=Exact
+    [invariant] invalid_partition_errors at RepartitionExec (root/0): the node has 3 output partitions, but execute(3) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
+    [invariant] reset_state_reexecution at RepartitionExec (root/0): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
+    [invariant] cardinality_effect_holds at AggregateExec (root/0/0): cardinality_effect() is LowerEqual, but the node produced 182 rows from 90 input rows
+  case 5 partitions:
+    AggregateExec: mode=FinalPartitioned, gby=[g@0 as g, h@1 as h, __grouping_id@2 as __grouping_id], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)]
+      RepartitionExec: partitioning=Hash([g@0, h@1, __grouping_id@2], 3), input_partitions=5
+        AggregateExec: mode=Partial, gby=[(NULL as g, NULL as h), (g@0 as g, NULL as h), (g@0 as g, h@1 as h)], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)]
+          MockSourceExec: partitioning=UnknownPartitioning(5), partition_rows=[25, 12, 0, 38, 15], statistics=Exact
+    [invariant] invalid_partition_errors at RepartitionExec (root/0): the node has 3 output partitions, but execute(3) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
+    [invariant] reset_state_reexecution at RepartitionExec (root/0): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
+    [invariant] cardinality_effect_bounds_num_rows at AggregateExec (root/0/0): cardinality_effect() is LowerEqual, but the partition 2 num_rows is Exact(1) for input partition 2 with num_rows Exact(0)
+    [invariant] cardinality_effect_holds at AggregateExec (root/0/0): cardinality_effect() is LowerEqual, but the node produced 184 rows from 90 input rows
+  case large input:
+    AggregateExec: mode=FinalPartitioned, gby=[g@0 as g, h@1 as h, __grouping_id@2 as __grouping_id], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)]
+      RepartitionExec: partitioning=Hash([g@0, h@1, __grouping_id@2], 3), input_partitions=3
+        AggregateExec: mode=Partial, gby=[(NULL as g, NULL as h), (g@0 as g, NULL as h), (g@0 as g, h@1 as h)], aggr=[count(v), sum(v), min(v), max(v), avg(f), sum(f)]
+          MockSourceExec: partitioning=UnknownPartitioning(3), partition_rows=[240, 0, 480], statistics=Exact
+    [invariant] invalid_partition_errors at RepartitionExec (root/0): the node has 3 output partitions, but execute(3) returned a stream that panicked when polled: partition not used yet; return an error for a partition at or past the partition count
+    [invariant] reset_state_reexecution at RepartitionExec (root/0): with a second execution of the same plan, without a reset: executing the node panicked: partition not used yet; return an error instead
+    [invariant] cardinality_effect_bounds_num_rows at AggregateExec (root/0/0): cardinality_effect() is LowerEqual, but the partition 1 num_rows is Exact(1) for input partition 1 with num_rows Exact(0)
+    [invariant] cardinality_effect_holds at AggregateExec (root/0/0): cardinality_effect() is LowerEqual, but the node produced 1311 rows from 720 input rows
