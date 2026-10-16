@@ -15,6 +15,79 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# custom_projection evaluates its SQL expression strings through a custom
+# execution plan that preserves row order. Its input has two partitions:
+# [(a=2, b=30), (a=1, b=10)] and [(a=3, b=20)].
+statement ok
+SET datafusion.execution.target_partitions = 2;
+
+# Identity and renaming allow the sort to move below the custom operator.
+query II
+SELECT * FROM custom_projection('a', 'b') ORDER BY a, b;
+----
+1 10
+2 30
+3 20
+
+query II
+SELECT * FROM custom_projection('a AS first', 'b AS second') ORDER BY first, second;
+----
+1 10
+2 30
+3 20
+
+# Renaming is transparent: keep the sort below the custom operator.
+statement ok
+SET datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT * FROM custom_projection('a AS first', 'b AS second') ORDER BY first, second;
+----
+physical_plan
+01)SortPreservingMergeExec: [first@0 ASC NULLS LAST, second@1 ASC NULLS LAST]
+02)--CustomProjectionExec: expr=[a@0 as first, b@1 as second]
+03)----SortExec: expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], preserve_partitioning=[true]
+04)------DataSourceExec: partitions=2, partition_sizes=[1, 1]
+
+statement ok
+SET datafusion.explain.physical_plan_only = false;
+
+# Reordering output columns requires sorting the custom operator's output.
+query II
+SELECT * FROM custom_projection('b', 'a') ORDER BY b, a;
+----
+10 1
+20 3
+30 2
+
+# The output schema is still [a, b], but a contains new values.
+query II
+SELECT * FROM custom_projection('a + b AS a', 'b') ORDER BY a, b;
+----
+11 10
+23 20
+32 30
+
+# Negating a reverses its order even though its name and type stay the same.
+query II
+SELECT * FROM custom_projection('-a AS a', 'b') ORDER BY a, b;
+----
+-3 20
+-2 30
+-1 10
+
+# Evaluate Boolean sort expressions against the custom operator's output.
+query BI
+SELECT * FROM custom_projection('b > 10 AS flag', 'a')
+ORDER BY flag AND (a > 1), a;
+----
+false 1
+true 2
+true 3
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
 #Sort Pushdown for ordered Parquet files
 statement ok
 SET datafusion.execution.parquet.pushdown_filters = true;
