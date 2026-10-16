@@ -45,7 +45,7 @@ fn chr_array(integer_array: &Int64Array) -> Result<ArrayRef> {
     if let Some(n) = nulls {
         for i in 0..len {
             if n.is_null(i) {
-                builder.append_placeholder();
+                builder.try_append_placeholder()?;
                 continue;
             }
             // SAFETY: bounds + null check above.
@@ -53,7 +53,7 @@ fn chr_array(integer_array: &Int64Array) -> Result<ArrayRef> {
             if let Ok(u) = u32::try_from(integer)
                 && let Some(c) = core::char::from_u32(u)
             {
-                builder.append_value(c.encode_utf8(&mut buf));
+                builder.try_append_value(c.encode_utf8(&mut buf))?;
                 continue;
             }
             return exec_err!("invalid Unicode scalar value: {integer}");
@@ -65,7 +65,7 @@ fn chr_array(integer_array: &Int64Array) -> Result<ArrayRef> {
             if let Ok(u) = u32::try_from(integer)
                 && let Some(c) = core::char::from_u32(u)
             {
-                builder.append_value(c.encode_utf8(&mut buf));
+                builder.try_append_value(c.encode_utf8(&mut buf))?;
                 continue;
             }
             return exec_err!("invalid Unicode scalar value: {integer}");

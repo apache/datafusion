@@ -17,7 +17,6 @@
 
 use std::marker::PhantomData;
 use std::mem::size_of;
-use std::ops::Range;
 use std::sync::Arc;
 
 use datafusion_common::utils::offset_span_len;
@@ -28,9 +27,8 @@ use datafusion_common::{
 
 use arrow::array::{
     Array, ArrayAccessor, ArrayDataBuilder, ArrayRef, BinaryArray, BinaryViewArray,
-    ByteView, GenericStringArray, LargeBinaryArray, LargeStringArray,
-    MAX_INLINE_VIEW_LEN, OffsetSizeTrait, StringArray, StringViewArray,
-    as_largestring_array, make_view,
+    ByteView, GenericStringArray, LargeBinaryArray, LargeStringArray, OffsetSizeTrait,
+    StringArray, StringViewArray, as_largestring_array, make_view,
 };
 use arrow::buffer::{Buffer, MutableBuffer, NullBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
@@ -422,8 +420,8 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
 
     /// See [`BulkNullStringArrayBuilder::append_value`].
     ///
-    /// Prefer [`Self::try_append_value`], which returns an error instead of
-    /// panicking.
+    /// Note: new call sites that need recoverable overflow handling should
+    /// prefer [`Self::try_append_value`].
     ///
     /// # Panics
     ///
@@ -436,8 +434,8 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
 
     /// See [`BulkNullStringArrayBuilder::append_placeholder`].
     ///
-    /// Prefer [`Self::try_append_placeholder`], which returns an error instead
-    /// of panicking.
+    /// Note: new call sites that need recoverable overflow handling should
+    /// prefer [`Self::try_append_placeholder`].
     #[inline]
     pub fn append_placeholder(&mut self) {
         self.try_append_placeholder()
@@ -462,20 +460,14 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
         mut map: F,
     ) -> Result<()> {
         self.try_append_bytes(src.len(), |value_buffer| {
-            // Copy, then map the bytes in place: a plain loop over a slice,
-            // which the compiler can vectorize.
-            let old_len = value_buffer.len();
-            value_buffer.extend_from_slice(src);
-            for b in &mut value_buffer.as_slice_mut()[old_len..] {
-                *b = map(*b);
-            }
+            value_buffer.extend(src.iter().map(|&b| map(b)));
         })
     }
 
     /// See [`BulkNullStringArrayBuilder::append_byte_map`].
     ///
-    /// Prefer [`Self::try_append_byte_map`], which returns an error instead of
-    /// panicking.
+    /// Note: new call sites that need recoverable overflow handling should
+    /// prefer [`Self::try_append_byte_map`].
     ///
     /// # Safety
     ///
@@ -523,8 +515,8 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
 
     /// See [`BulkNullStringArrayBuilder::append_with`].
     ///
-    /// Prefer [`Self::try_append_with`], which returns an error instead of
-    /// panicking.
+    /// Note: new call sites that need recoverable overflow handling should
+    /// prefer [`Self::try_append_with`].
     ///
     /// # Panics
     ///
@@ -737,8 +729,8 @@ impl StringViewArrayBuilder {
 
     /// See [`BulkNullStringArrayBuilder::append_value`].
     ///
-    /// Prefer [`Self::try_append_value`], which returns an error instead of
-    /// panicking.
+    /// Note: new call sites that need recoverable overflow handling should
+    /// prefer [`Self::try_append_value`].
     ///
     /// # Panics
     ///
@@ -763,6 +755,9 @@ impl StringViewArrayBuilder {
     }
 
     /// See [`BulkNullStringArrayBuilder::append_placeholder`].
+    ///
+    /// Note: new call sites that need recoverable overflow handling should
+    /// prefer [`Self::try_append_placeholder`].
     #[inline]
     pub fn append_placeholder(&mut self) {
         // Zero-length inline view — `length` field is 0, no buffer ref.
@@ -841,29 +836,26 @@ impl StringViewArrayBuilder {
     ///
     /// # Errors
     ///
-    /// Returns an error under the same conditions as
-    /// [`Self::try_append_value`].
+    /// Returns an error if `src.len()`, the in-progress buffer offset, or the
+    /// number of completed buffers exceeds `i32::MAX`.
     #[inline]
     pub unsafe fn try_append_byte_map<F: FnMut(u8) -> u8>(
         &mut self,
         src: &[u8],
         mut map: F,
     ) -> Result<()> {
-        if src.len() <= MAX_INLINE_LEN {
-            // An inline view holds the length in its low 4 bytes, followed by
-            // the value zero-padded to 12 bytes. Writing the mapped bytes
-            // straight into it is faster than going through `inline_view`.
-            let mut view = (src.len() as u128).to_le_bytes();
-            for (d, &b) in view[4..].iter_mut().zip(src) {
-                *d = map(b);
-            }
-            self.views.push(u128::from_le_bytes(view));
-            return Ok(());
-        }
-
         let length: u32 = i32::try_from(src.len())
             .map_err(|_| string_view_overflow_error("value length"))?
             as u32;
+        if length <= 12 {
+            let mut bytes = [0u8; 12];
+            for (d, &b) in bytes[..src.len()].iter_mut().zip(src) {
+                *d = map(b);
+            }
+            self.views.push(make_view(&bytes[..src.len()], 0, 0));
+            return Ok(());
+        }
+
         self.try_ensure_long_capacity(length)?;
 
         let cursor = self.in_progress.len();
@@ -874,7 +866,6 @@ impl StringViewArrayBuilder {
             .map_err(|_| string_view_overflow_error("buffer count"))?
             as u32;
         self.in_progress.extend(src.iter().map(|&b| map(b)));
-        // The prefix comes from the mapped bytes, not from `src`.
         self.views.push(Self::make_long_view_checked(
             length,
             buffer_index,
@@ -885,9 +876,6 @@ impl StringViewArrayBuilder {
     }
 
     /// See [`BulkNullStringArrayBuilder::append_byte_map`].
-    ///
-    /// Prefer [`Self::try_append_byte_map`], which returns an error instead of
-    /// panicking.
     ///
     /// # Safety
     ///
@@ -900,30 +888,40 @@ impl StringViewArrayBuilder {
     /// `src.len()`, the in-progress buffer offset, or the number of completed
     /// buffers exceeds `i32::MAX`.
     #[inline]
-    pub unsafe fn append_byte_map<F: FnMut(u8) -> u8>(&mut self, src: &[u8], map: F) {
-        // SAFETY: caller upholds this method's UTF-8 contract.
-        unsafe { self.try_append_byte_map(src, map) }
-            .expect("byte array offset overflow");
+    pub unsafe fn append_byte_map<F: FnMut(u8) -> u8>(&mut self, src: &[u8], mut map: F) {
+        let length: u32 =
+            i32::try_from(src.len()).expect("value length exceeds i32::MAX") as u32;
+        if length <= 12 {
+            let mut bytes = [0u8; 12];
+            for (d, &b) in bytes[..src.len()].iter_mut().zip(src) {
+                *d = map(b);
+            }
+            self.views.push(make_view(&bytes[..src.len()], 0, 0));
+            return;
+        }
+
+        self.ensure_long_capacity(length);
+
+        let cursor = self.in_progress.len();
+        let offset: u32 = i32::try_from(cursor).expect("offset exceeds i32::MAX") as u32;
+        self.in_progress.extend(src.iter().map(|&b| map(b)));
+        self.views
+            .push(self.make_long_view(length, offset, &self.in_progress[cursor..]));
     }
 
-    /// See [`BulkNullStringArrayBuilder::append_with`].
+    /// Fallible variant of [`Self::append_with`].
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics under the same conditions as [`Self::append_value`]: if the
-    /// row's byte length, the in-progress buffer offset, or the number of
-    /// completed buffers exceeds `i32::MAX`.
+    /// Returns an error if the row's byte length, the in-progress buffer
+    /// offset, or the number of completed buffers exceeds `i32::MAX`.
     #[inline]
-    pub fn append_with<F>(&mut self, f: F)
+    pub fn try_append_with<F>(&mut self, f: F) -> Result<()>
     where
         F: FnOnce(&mut StringViewWriter<'_>),
     {
-        let mut writer = StringViewWriter {
-            inline_buf: [0u8; 12],
-            inline_len: 0,
-            spill_cursor: None,
-            builder: self,
-        };
+        let start_len = self.in_progress.len();
+        let mut writer = StringViewWriter::new(self);
         f(&mut writer);
         // Destructure to release the borrow on `self` and pull out the
         // inline-buffer state by-value. Copy types only; the &mut self is
@@ -932,8 +930,88 @@ impl StringViewArrayBuilder {
             inline_buf,
             inline_len,
             spill_cursor,
+            error,
             ..
         } = writer;
+
+        if let Some(e) = error {
+            // A failed capacity check happens before any bytes of this row are
+            // written (the spill is the first write that touches
+            // `in_progress`), so rolling back to `start_len` restores the
+            // pre-call state.
+            self.in_progress.truncate(start_len);
+            return Err(e);
+        }
+
+        match spill_cursor {
+            None => {
+                self.views
+                    .push(make_view(&inline_buf[..inline_len as usize], 0, 0));
+            }
+            Some(start) => {
+                let end = self.in_progress.len();
+                let length = match i32::try_from(end - start) {
+                    Ok(l) => l as u32,
+                    Err(_) => {
+                        self.in_progress.truncate(start_len);
+                        return Err(string_view_overflow_error("value length"));
+                    }
+                };
+                let offset = match i32::try_from(start) {
+                    Ok(o) => o as u32,
+                    Err(_) => {
+                        self.in_progress.truncate(start_len);
+                        return Err(string_view_overflow_error("offset"));
+                    }
+                };
+                let buffer_index = match i32::try_from(self.completed.len()) {
+                    Ok(b) => b as u32,
+                    Err(_) => {
+                        self.in_progress.truncate(start_len);
+                        return Err(string_view_overflow_error("buffer count"));
+                    }
+                };
+                self.views.push(Self::make_long_view_checked(
+                    length,
+                    buffer_index,
+                    offset,
+                    &self.in_progress[start..],
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// See [`BulkNullStringArrayBuilder::append_with`].
+    ///
+    /// Note: new call sites that need recoverable overflow handling should
+    /// prefer [`Self::try_append_with`].
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same conditions as [`Self::try_append_with`] returns
+    /// an error.
+    #[inline]
+    pub fn append_with<F>(&mut self, f: F)
+    where
+        F: FnOnce(&mut StringViewWriter<'_>),
+    {
+        let mut writer = StringViewWriter::new(self);
+        f(&mut writer);
+        // Destructure to release the borrow on `self` and pull out the
+        // inline-buffer state by-value. Copy types only; the &mut self is
+        // dropped here, ending the borrow.
+        let StringViewWriter {
+            inline_buf,
+            inline_len,
+            spill_cursor,
+            error,
+            ..
+        } = writer;
+
+        if let Some(e) = error {
+            panic!("byte array offset overflow: {e}");
+        }
 
         match spill_cursor {
             None => {
@@ -1015,12 +1093,31 @@ pub(crate) struct StringViewWriter<'a> {
     /// `None` while the row fits inline; becomes `Some(start)` (offset of
     /// the row's first byte in `in_progress`) at first spill.
     spill_cursor: Option<usize>,
+    /// Set when a write could not be performed because the row would exceed
+    /// the builder's size limit. Once set, further writes are ignored and the
+    /// caller reports the error.
+    error: Option<DataFusionError>,
     builder: &'a mut StringViewArrayBuilder,
+}
+
+impl StringViewWriter<'_> {
+    fn new(builder: &mut StringViewArrayBuilder) -> StringViewWriter<'_> {
+        StringViewWriter {
+            inline_buf: [0u8; 12],
+            inline_len: 0,
+            spill_cursor: None,
+            error: None,
+            builder,
+        }
+    }
 }
 
 impl StringWriter for StringViewWriter<'_> {
     #[inline]
     fn write_str(&mut self, s: &str) {
+        if self.error.is_some() {
+            return;
+        }
         let bytes = s.as_bytes();
         if self.spill_cursor.is_some() {
             self.builder.in_progress.extend_from_slice(bytes);
@@ -1035,10 +1132,17 @@ impl StringWriter for StringViewWriter<'_> {
             return;
         }
 
-        // First spill of this row: `ensure_long_capacity` may flush the
+        // First spill of this row: `try_ensure_long_capacity` may flush the
         // current block, which is safe because no row-data for this row
         // is in it yet — the inline prefix is still in `inline_buf`.
-        self.builder.ensure_long_capacity(new_len as u32);
+        let Some(new_len_u32) = u32::try_from(new_len).ok() else {
+            self.error = Some(string_view_overflow_error("string view block size"));
+            return;
+        };
+        if let Err(e) = self.builder.try_ensure_long_capacity(new_len_u32) {
+            self.error = Some(e);
+            return;
+        }
         let cursor = self.builder.in_progress.len();
         self.builder
             .in_progress
@@ -1049,6 +1153,9 @@ impl StringWriter for StringViewWriter<'_> {
 
     #[inline]
     fn write_char(&mut self, c: char) {
+        if self.error.is_some() {
+            return;
+        }
         let len = c.len_utf8();
         if self.spill_cursor.is_some() {
             push_char_to_vec(&mut self.builder.in_progress, c);
@@ -1063,7 +1170,14 @@ impl StringWriter for StringViewWriter<'_> {
             return;
         }
 
-        self.builder.ensure_long_capacity(new_len as u32);
+        let Some(new_len_u32) = u32::try_from(new_len).ok() else {
+            self.error = Some(string_view_overflow_error("string view block size"));
+            return;
+        };
+        if let Err(e) = self.builder.try_ensure_long_capacity(new_len_u32) {
+            self.error = Some(e);
+            return;
+        }
         let cursor = self.builder.in_progress.len();
         self.builder
             .in_progress
@@ -1157,6 +1271,48 @@ pub(crate) trait BulkNullStringArrayBuilder {
     /// See [`append_value`](Self::append_value).
     unsafe fn append_byte_map<F: FnMut(u8) -> u8>(&mut self, src: &[u8], map: F);
 
+    /// Fallible variant of [`append_value`](Self::append_value).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the resulting array would exceed the
+    /// per-implementation size limit.
+    fn try_append_value(&mut self, value: &str) -> Result<()>;
+
+    /// Fallible variant of [`append_placeholder`](Self::append_placeholder).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the current array would exceed the
+    /// per-implementation size limit.
+    fn try_append_placeholder(&mut self) -> Result<()>;
+
+    /// Fallible variant of [`append_with`](Self::append_with).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the resulting array would exceed the
+    /// per-implementation size limit.
+    fn try_append_with<F>(&mut self, f: F) -> Result<()>
+    where
+        F: for<'a> FnOnce(&mut Self::Writer<'a>);
+
+    /// Fallible variant of [`append_byte_map`](Self::append_byte_map).
+    ///
+    /// # Safety
+    ///
+    /// See [`append_byte_map`](Self::append_byte_map).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the resulting array would exceed the
+    /// per-implementation size limit.
+    unsafe fn try_append_byte_map<F: FnMut(u8) -> u8>(
+        &mut self,
+        src: &[u8],
+        map: F,
+    ) -> Result<()>;
+
     /// Finalize into a concrete array using the caller-supplied null buffer.
     ///
     /// # Errors
@@ -1189,6 +1345,30 @@ impl<O: OffsetSizeTrait> BulkNullStringArrayBuilder for GenericStringArrayBuilde
         // SAFETY: contract forwarded.
         unsafe { GenericStringArrayBuilder::<O>::append_byte_map(self, src, map) }
     }
+    #[inline]
+    fn try_append_value(&mut self, value: &str) -> Result<()> {
+        GenericStringArrayBuilder::<O>::try_append_value(self, value)
+    }
+    #[inline]
+    fn try_append_placeholder(&mut self) -> Result<()> {
+        GenericStringArrayBuilder::<O>::try_append_placeholder(self)
+    }
+    #[inline]
+    fn try_append_with<F>(&mut self, f: F) -> Result<()>
+    where
+        F: for<'a> FnOnce(&mut Self::Writer<'a>),
+    {
+        GenericStringArrayBuilder::<O>::try_append_with(self, f)
+    }
+    #[inline]
+    unsafe fn try_append_byte_map<F: FnMut(u8) -> u8>(
+        &mut self,
+        src: &[u8],
+        map: F,
+    ) -> Result<()> {
+        // SAFETY: contract forwarded.
+        unsafe { GenericStringArrayBuilder::<O>::try_append_byte_map(self, src, map) }
+    }
     fn finish(self, nulls: Option<NullBuffer>) -> Result<ArrayRef> {
         Ok(Arc::new(GenericStringArrayBuilder::<O>::finish(
             self, nulls,
@@ -1219,85 +1399,71 @@ impl BulkNullStringArrayBuilder for StringViewArrayBuilder {
         // SAFETY: contract forwarded.
         unsafe { StringViewArrayBuilder::append_byte_map(self, src, map) }
     }
+    #[inline]
+    fn try_append_value(&mut self, value: &str) -> Result<()> {
+        StringViewArrayBuilder::try_append_value(self, value)
+    }
+    #[inline]
+    fn try_append_placeholder(&mut self) -> Result<()> {
+        StringViewArrayBuilder::try_append_placeholder(self)
+    }
+    #[inline]
+    fn try_append_with<F>(&mut self, f: F) -> Result<()>
+    where
+        F: for<'a> FnOnce(&mut Self::Writer<'a>),
+    {
+        StringViewArrayBuilder::try_append_with(self, f)
+    }
+    #[inline]
+    unsafe fn try_append_byte_map<F: FnMut(u8) -> u8>(
+        &mut self,
+        src: &[u8],
+        map: F,
+    ) -> Result<()> {
+        // SAFETY: contract forwarded.
+        unsafe { StringViewArrayBuilder::try_append_byte_map(self, src, map) }
+    }
     fn finish(self, nulls: Option<NullBuffer>) -> Result<ArrayRef> {
         Ok(Arc::new(StringViewArrayBuilder::finish(self, nulls)?))
     }
 }
 
-/// Values of at most this many bytes are stored inline in their view.
-pub(crate) const MAX_INLINE_LEN: usize = MAX_INLINE_VIEW_LEN as usize;
-
-/// Returns the view for a substring of the value an existing view refers to.
+/// Append a new view to the views buffer with the given substr.
+///
+/// Callers are responsible for their own null tracking.
+///
+/// # Safety
+///
+/// original_view must be a valid view (the format described on
+/// [`GenericByteViewArray`](arrow::array::GenericByteViewArray).
 ///
 /// # Arguments
-/// - view: The original view value
-/// - source: The bytes the original view refers to
-/// - range: The byte range within `source` of the substring to return a view for
+/// - views_buffer: The buffer to append the new view to
+/// - original_view: The original view value
+/// - substr: The substring to append. Must be a valid substring of the original view
+/// - start_offset: The start offset of the substring in the view
 ///
-/// Substrings longer than 12 bytes point into the same data buffer as `view`;
-/// shorter ones are stored inline in the new view.
-///
-/// This uses shifts and masks rather than [`make_view`], which picks copy code
-/// based on the substring's length; the CPU often mispredicts that choice when
-/// lengths vary from row to row.
-#[inline]
-pub(crate) fn sub_view(view: u128, source: &[u8], range: Range<usize>) -> u128 {
-    debug_assert!(range.start <= range.end && range.end <= source.len());
-
-    let len = range.end - range.start;
-    if len > MAX_INLINE_LEN {
-        // The substring has more than 12 bytes, so its 4-byte prefix is in bounds.
-        let prefix = source[range.start..range.start + 4].try_into().unwrap();
-        let original = ByteView::from(view);
-        return ByteView {
-            length: len as u32,
-            prefix: u32::from_le_bytes(prefix),
-            offset: original.offset + range.start as u32,
-            ..original
-        }
-        .as_u128();
-    }
-
-    // The substring's bytes, in the low-order bits. Any bits past the end of
-    // the substring are masked off by `inline_view`.
-    let bytes = if source.len() <= MAX_INLINE_LEN {
-        // `source` is stored in `view` itself, after its 4-byte length.
-        (view >> 32) >> (8 * range.start)
+/// LLVM is apparently overly eager to inline this function into some hot loops,
+/// which bloats them and regresses performance, so we disable inlining for now.
+#[inline(never)]
+pub(crate) fn append_view(
+    views_buffer: &mut Vec<u128>,
+    original_view: &u128,
+    substr: &str,
+    start_offset: u32,
+) {
+    let substr_len = substr.len();
+    let sub_view = if substr_len > 12 {
+        let view = ByteView::from(*original_view);
+        make_view(
+            substr.as_bytes(),
+            view.buffer_index,
+            view.offset + start_offset,
+        )
     } else {
-        // `source` has more than 12 bytes, so read the 12 bytes starting at
-        // `range.start`, or the last 12 bytes if that would run past the end,
-        // and skip any that come before `range.start`.
-        let window_start = range.start.min(source.len() - MAX_INLINE_LEN);
-        let window = source[window_start..window_start + MAX_INLINE_LEN]
-            .try_into()
-            .unwrap();
-        read_12_bytes(window) >> (8 * (range.start - window_start))
+        make_view(substr.as_bytes(), 0, 0)
     };
-    inline_view(bytes, len)
-}
-
-/// Returns the view for `substr`, which must be a slice of `string`, the value
-/// `view` refers to. See [`sub_view`].
-#[inline]
-pub(crate) fn substr_view(view: u128, string: &str, substr: &str) -> u128 {
-    let start = substr.as_ptr() as usize - string.as_ptr() as usize;
-    sub_view(view, string.as_bytes(), start..start + substr.len())
-}
-
-/// Reads `bytes` as a little-endian integer.
-#[inline]
-fn read_12_bytes(bytes: &[u8; 12]) -> u128 {
-    let low = u64::from_le_bytes(bytes[..8].try_into().unwrap());
-    let high = u32::from_le_bytes(bytes[8..].try_into().unwrap());
-    u128::from(low) | (u128::from(high) << 64)
-}
-
-/// Returns an inline view of the `len` low-order bytes of `bytes`.
-#[inline]
-fn inline_view(bytes: u128, len: usize) -> u128 {
-    debug_assert!(len <= MAX_INLINE_LEN);
-    let mask = (1u128 << (8 * len)) - 1;
-    ((bytes & mask) << 32) | len as u128
+    views_buffer.push(sub_view);
 }
 
 #[derive(Debug)]
@@ -1512,31 +1678,6 @@ pub(crate) fn widest_string_type(types: &[DataType]) -> DataType {
 mod tests {
     use super::*;
     use crate::utils::test::sliced_byte_array;
-
-    #[test]
-    fn sub_view_matches_make_view() {
-        let buffer_index = 3;
-        let offset = 100;
-        for source_len in 0..=40 {
-            // Include bytes >= 0x80 so that masking errors would show up.
-            let source: Vec<u8> = (0..source_len).map(|i| (i * 37 + 11) as u8).collect();
-            let view = make_view(&source, buffer_index, offset);
-            for start in 0..=source_len {
-                for end in start..=source_len {
-                    let expected = make_view(
-                        &source[start..end],
-                        buffer_index,
-                        offset + start as u32,
-                    );
-                    assert_eq!(
-                        sub_view(view, &source, start..end),
-                        expected,
-                        "source_len={source_len}, range={start}..{end}"
-                    );
-                }
-            }
-        }
-    }
 
     #[test]
     fn concat_capacity_uses_visible_bytes() -> Result<()> {
@@ -1796,28 +1937,16 @@ mod tests {
 
     #[test]
     fn string_view_builder_try_append_success_path() {
-        let mut builder = StringViewArrayBuilder::with_capacity(5);
+        let mut builder = StringViewArrayBuilder::with_capacity(3);
         builder.try_append_value("abc").unwrap();
         builder.try_append_placeholder().unwrap();
         builder.try_append_value("a long string value").unwrap();
-        // SAFETY: ASCII inputs and ASCII outputs.
-        unsafe {
-            builder
-                .try_append_byte_map(b"de", |b| b.to_ascii_uppercase())
-                .unwrap();
-            builder
-                .try_append_byte_map(b"a long mapped value", |b| b.to_ascii_uppercase())
-                .unwrap();
-        }
 
-        let nulls = Some(NullBuffer::from(vec![true, false, true, true, true]));
+        let nulls = Some(NullBuffer::from(vec![true, false, true]));
         let array = builder.finish(nulls).unwrap();
-        array.to_data().validate_full().unwrap();
         assert_eq!(array.value(0), "abc");
         assert!(array.is_null(1));
         assert_eq!(array.value(2), "a long string value");
-        assert_eq!(array.value(3), "DE");
-        assert_eq!(array.value(4), "A LONG MAPPED VALUE");
     }
 
     #[test]
