@@ -1,0 +1,34 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+
+description = "INTERSECT ALL and EXCEPT ALL across distinct, duplicate-heavy, and single-key inputs, with DISTINCT controls"
+
+[[options]]
+name = "rows"
+env = "SET_ROWS"
+default = "1000000"
+help = "Left input row count (positive integer); duplicate and skew cases use half as many right rows."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- set_operations --criterion --partitions 4"
+description = "Run all set-operation cases with Criterion."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- set_operations --subgroup skew --rows 10000000 --criterion --memory-limit 2G"
+description = "Stress large per-key expansion and record memory-pool peaks."
