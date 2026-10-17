@@ -1616,6 +1616,43 @@ async fn join_left_mark_different_columns_count_with_filter() -> Result<()> {
 }
 
 #[tokio::test]
+async fn join_semi_anti_mark_column_free_filter() -> Result<()> {
+    for join_type in [
+        LeftSemi, LeftAnti, LeftMark, RightSemi, RightAnti, RightMark,
+    ] {
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![4, 5, 7]),
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 30]),
+            ("b1", &vec![4, 5, 6]),
+            ("c2", &vec![70, 80, 90]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        )];
+        // A filter that reads no columns and rejects every pair.
+        let filter = JoinFilter::new(
+            Arc::new(Literal::new(ScalarValue::Boolean(Some(false)))),
+            vec![],
+            Arc::new(Schema::empty()),
+        );
+        let (_, batches) =
+            join_collect_with_filter(left, right, on, filter, join_type).await?;
+        let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        let expected = match join_type {
+            LeftSemi | RightSemi => 0,
+            _ => 3,
+        };
+        assert_eq!(rows, expected, "{join_type:?}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn join_right_mark_different_columns_count_with_filter() -> Result<()> {
     // select *
     // from t1
