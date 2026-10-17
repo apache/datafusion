@@ -138,6 +138,10 @@ impl ScalarUDFImpl for ToLocalTimeFunc {
         }
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [time_value] = take_function_args(self.name(), &args.args)?;
         to_local_time(time_value)

@@ -81,6 +81,10 @@ impl ScalarUDFImpl for MapFromArrays {
         Ok(Arc::new(Field::new(self.name(), map_type, nullable)))
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let last_value_wins =
             args.config_options.spark.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;

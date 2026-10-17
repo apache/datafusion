@@ -94,6 +94,10 @@ impl ScalarUDFImpl for TranslateFunc {
         Ok(arg_types[0].clone())
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         // When from and to are scalars, pre-build the translation map once
         if let (Some(from_str), Some(to_str)) = (

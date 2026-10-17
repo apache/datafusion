@@ -65,6 +65,106 @@ make_udf_function_with_config!(to_timestamp::ToTimestampNanosFunc, to_timestamp_
 // create UDF with config
 make_udf_function_with_config!(now::NowFunc, now);
 
+#[cfg(test)]
+mod strict_tests {
+    use super::*;
+    use arrow::datatypes::Field;
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{
+        ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
+    };
+    use std::sync::Arc;
+
+    #[test]
+    fn strict_datetime_functions_propagate_nulls() {
+        let timestamp =
+            ScalarValue::TimestampNanosecond(Some(1_700_000_000_000_000_000), None);
+        let cases = vec![
+            (
+                make_date(),
+                vec![
+                    ScalarValue::from(2024_i32),
+                    ScalarValue::from(1_i32),
+                    ScalarValue::from(2_i32),
+                ],
+            ),
+            (
+                make_time(),
+                vec![
+                    ScalarValue::from(1_i32),
+                    ScalarValue::from(2_i32),
+                    ScalarValue::from(3_i32),
+                ],
+            ),
+            (
+                to_char(),
+                vec![ScalarValue::Date32(Some(19000)), ScalarValue::from("%Y")],
+            ),
+            (to_char(), vec![timestamp.clone(), ScalarValue::from("%Y")]),
+            (to_local_time(), vec![timestamp]),
+        ];
+
+        for (func, valid_args) in cases {
+            assert!(func.is_strict(), "{} should be marked strict", func.name());
+
+            for null_mask in 0..(1 << valid_args.len()) {
+                let mut args = valid_args.clone();
+                for (arg_idx, arg) in args.iter_mut().enumerate() {
+                    if null_mask & (1 << arg_idx) != 0 {
+                        *arg = ScalarValue::try_new_null(&arg.data_type()).unwrap();
+                    }
+                }
+
+                let result =
+                    invoke_with_scalar_args(&func, args).unwrap_or_else(|error| {
+                        panic!(
+                            "{} failed for NULL mask {null_mask:b}: {error}",
+                            func.name()
+                        )
+                    });
+                let expected_null = null_mask != 0;
+                let result = result.into_array(1).unwrap();
+                assert_eq!(
+                    result.null_count() == result.len(),
+                    expected_null,
+                    "{} returned {result:?} for NULL mask {null_mask:0width$b}",
+                    func.name(),
+                    width = valid_args.len(),
+                );
+            }
+        }
+    }
+
+    fn invoke_with_scalar_args(
+        func: &ScalarUDF,
+        args: Vec<ScalarValue>,
+    ) -> Result<ColumnarValue> {
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Arc::new(Field::new(
+                    format!("arg_{idx}"),
+                    arg.data_type(),
+                    arg.is_null(),
+                ))
+            })
+            .collect::<Vec<_>>();
+        let scalar_arguments = args.iter().map(Some).collect::<Vec<_>>();
+        let return_field = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &scalar_arguments,
+        })?;
+        func.invoke_with_args(ScalarFunctionArgs {
+            args: args.into_iter().map(ColumnarValue::Scalar).collect(),
+            arg_fields,
+            number_rows: 1,
+            return_field,
+            config_options: Arc::new(Default::default()),
+        })
+    }
+}
+
 // we cannot currently use the export_functions macro since it doesn't handle
 // functions with varargs currently
 

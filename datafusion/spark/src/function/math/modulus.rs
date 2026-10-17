@@ -230,6 +230,10 @@ impl ScalarUDFImpl for SparkMod {
         Ok(arg_types[0].clone())
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         spark_mod(&args.args, args.config_options.execution.enable_ansi_mode)
     }
@@ -293,6 +297,10 @@ impl ScalarUDFImpl for SparkPmod {
             (DataType::Null, other) | (other, DataType::Null) => Ok(other.clone()),
             _ => Ok(arg_types[0].clone()),
         }
+    }
+
+    fn is_strict(&self) -> bool {
+        true
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

@@ -72,6 +72,10 @@ impl ScalarUDFImpl for SparkFactorial {
         Ok(Int64)
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         spark_factorial(&args.args)
     }

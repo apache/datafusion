@@ -859,6 +859,380 @@ where trunc(t1.b, -1) >= 10;
 NULL 40
 
 ###
+### Strict string function matrix
+###
+
+# Unary string function on the nullable side of a LEFT JOIN -> INNER JOIN.
+query TT
+explain
+select t1.a
+from t1 left join t2 on t1.a = t2.x
+where upper(t2.z) = 'P';
+----
+logical_plan
+01)Projection: t1.a
+02)--Inner Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a]
+04)----Projection: t2.x
+05)------Filter: upper(t2.z) = Utf8View("P")
+06)--------TableScan: t2 projection=[x, z]
+
+query I rowsort
+select t1.a
+from t1 left join t2 on t1.a = t2.x
+where upper(t2.z) = 'P';
+----
+1
+
+# Unary string function on the nullable side of a RIGHT JOIN -> INNER JOIN.
+query TT
+explain
+select t2.x
+from t1 right join t2 on t1.a = t2.x
+where character_length(t1.c) = 1;
+----
+logical_plan
+01)Projection: t2.x
+02)--Inner Join: t1.a = t2.x
+03)----Projection: t1.a
+04)------Filter: character_length(t1.c) = Int32(1)
+05)--------TableScan: t1 projection=[a, c]
+06)----TableScan: t2 projection=[x]
+
+query I rowsort
+select t2.x
+from t1 right join t2 on t1.a = t2.x
+where character_length(t1.c) = 1;
+----
+1
+2
+
+# Binary string function with the nullable column as its first argument.
+query TT
+explain
+select t1.a
+from t1 left join t2 on t1.a = t2.x
+where left(t2.z, 1) = 'q';
+----
+logical_plan
+01)Projection: t1.a
+02)--Inner Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a]
+04)----Projection: t2.x
+05)------Filter: left(t2.z, Int64(1)) = Utf8View("q")
+06)--------TableScan: t2 projection=[x, z]
+
+query I rowsort
+select t1.a
+from t1 left join t2 on t1.a = t2.x
+where left(t2.z, 1) = 'q';
+----
+2
+
+# Binary string function with the nullable column as its second argument.
+query TT
+explain
+select t1.a
+from t1 left join t2 on t1.a = t2.x
+where strpos('pq', t2.z) > 0;
+----
+logical_plan
+01)Projection: t1.a
+02)--Inner Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a]
+04)----Projection: t2.x
+05)------Filter: strpos(Utf8("pq"), t2.z) > Int32(0)
+06)--------TableScan: t2 projection=[x, z]
+
+query I rowsort
+select t1.a
+from t1 left join t2 on t1.a = t2.x
+where strpos('pq', t2.z) > 0;
+----
+1
+2
+
+# A strict string function on only the right side of a FULL JOIN -> RIGHT JOIN.
+query TT
+explain
+select t1.a, t2.z
+from t1 full join t2 on t1.a = t2.x
+where lower(t2.z) <> 'p';
+----
+logical_plan
+01)Projection: t1.a, t2.z
+02)--Right Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a]
+04)----Filter: lower(t2.z) != Utf8View("p")
+05)------TableScan: t2 projection=[x, z]
+
+query IT rowsort
+select t1.a, t2.z
+from t1 full join t2 on t1.a = t2.x
+where lower(t2.z) <> 'p';
+----
+2 q
+NULL r
+
+# A strict string function on only the left side of a FULL JOIN -> LEFT JOIN.
+query TT
+explain
+select t1.a, t1.c
+from t1 full join t2 on t1.a = t2.x
+where substr(t1.c, 1, 1) <> 'a';
+----
+logical_plan
+01)Projection: t1.a, t1.c
+02)--Left Join: t1.a = t2.x
+03)----Filter: substr(t1.c, Int64(1), Int64(1)) != Utf8View("a")
+04)------TableScan: t1 projection=[a, c]
+05)----TableScan: t2 projection=[x]
+
+query IT rowsort
+select t1.a, t1.c
+from t1 full join t2 on t1.a = t2.x
+where substr(t1.c, 1, 1) <> 'a';
+----
+2 b
+3 c
+NULL d
+
+# `concat` skips NULL arguments, so it is not strict and the LEFT JOIN stays:
+# the NULL-padded rows pass the filter.
+query TT
+explain
+select t1.a
+from t1 left join t2 on t1.a = t2.x
+where concat(t2.z, 'x') = 'x';
+----
+logical_plan
+01)Projection: t1.a
+02)--Filter: concat(t2.z, Utf8View("x")) = Utf8View("x")
+03)----Projection: t1.a, t2.z
+04)------Left Join: t1.a = t2.x
+05)--------TableScan: t1 projection=[a]
+06)--------TableScan: t2 projection=[x, z]
+
+query I rowsort
+select t1.a
+from t1 left join t2 on t1.a = t2.x
+where concat(t2.z, 'x') = 'x';
+----
+3
+NULL
+
+###
+### Strict regex and date/time function matrix
+###
+
+# Regex function on the nullable side of a LEFT JOIN -> INNER JOIN.
+query TT
+explain
+select t1.a
+from t1 left join t2 on t1.a = t2.x
+where regexp_replace(t2.z, 'p', 'x') = 'x';
+----
+logical_plan
+01)Projection: t1.a
+02)--Inner Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a]
+04)----Projection: t2.x
+05)------Filter: regexp_replace(t2.z, Utf8View("p"), Utf8View("x")) = Utf8View("x")
+06)--------TableScan: t2 projection=[x, z]
+
+query I rowsort
+select t1.a
+from t1 left join t2 on t1.a = t2.x
+where regexp_replace(t2.z, 'p', 'x') = 'x';
+----
+1
+
+# Regex function on the nullable side of a RIGHT JOIN -> INNER JOIN.
+query TT
+explain
+select t2.x
+from t1 right join t2 on t1.a = t2.x
+where regexp_count(t1.c, 'a') = 1;
+----
+logical_plan
+01)Projection: t2.x
+02)--Inner Join: t1.a = t2.x
+03)----Projection: t1.a
+04)------Filter: regexp_count(t1.c, Utf8View("a")) = Int64(1)
+05)--------TableScan: t1 projection=[a, c]
+06)----TableScan: t2 projection=[x]
+
+query I rowsort
+select t2.x
+from t1 right join t2 on t1.a = t2.x
+where regexp_count(t1.c, 'a') = 1;
+----
+1
+
+# Date function with the nullable column as one of its arguments.
+query TT
+explain
+select t1.a
+from t1 left join t2 on t1.a = t2.x
+where make_date(2024, 1, t2.x) > date '2024-01-01';
+----
+logical_plan
+01)Projection: t1.a
+02)--Inner Join: t1.a = t2.x
+03)----Filter: make_date(Int32(2024), Int32(1), t1.a) > Date32("2024-01-01")
+04)------TableScan: t1 projection=[a]
+05)----Filter: make_date(Int32(2024), Int32(1), t2.x) > Date32("2024-01-01")
+06)------TableScan: t2 projection=[x]
+
+query I rowsort
+select t1.a
+from t1 left join t2 on t1.a = t2.x
+where make_date(2024, 1, t2.x) > date '2024-01-01';
+----
+2
+
+# Nested strict functions still propagate the NULL.
+query TT
+explain
+select t1.a
+from t1 left join t2 on t1.a = t2.x
+where to_char(make_date(2024, 1, t2.x), '%d') = '02';
+----
+logical_plan
+01)Projection: t1.a
+02)--Inner Join: t1.a = t2.x
+03)----Filter: to_char(make_date(Int32(2024), Int32(1), t1.a), Utf8("%d")) = Utf8("02")
+04)------TableScan: t1 projection=[a]
+05)----Filter: to_char(make_date(Int32(2024), Int32(1), t2.x), Utf8("%d")) = Utf8("02")
+06)------TableScan: t2 projection=[x]
+
+query I rowsort
+select t1.a
+from t1 left join t2 on t1.a = t2.x
+where to_char(make_date(2024, 1, t2.x), '%d') = '02';
+----
+2
+
+# `regexp_match` ignores a NULL flags argument, so it is not strict and the
+# LEFT JOIN stays.
+query TT
+explain
+select t1.a
+from t1 left join t2 on t1.a = t2.x
+where regexp_match(t2.z, 'p') is not null;
+----
+logical_plan
+01)Projection: t1.a
+02)--Filter: regexp_match(t2.z, Utf8View("p")) IS NOT NULL
+03)----Projection: t1.a, t2.z
+04)------Left Join: t1.a = t2.x
+05)--------TableScan: t1 projection=[a]
+06)--------TableScan: t2 projection=[x, z]
+
+query I rowsort
+select t1.a
+from t1 left join t2 on t1.a = t2.x
+where regexp_match(t2.z, 'p') is not null;
+----
+1
+
+###
+### Strict hash, core and array function matrix
+###
+
+# Hash function on the nullable side of a LEFT JOIN -> INNER JOIN.
+query TT
+explain
+select t1.a
+from t1 left join t2 on t1.a = t2.x
+where md5(t2.z) = md5('p');
+----
+logical_plan
+01)Projection: t1.a
+02)--Inner Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a]
+04)----Projection: t2.x
+05)------Filter: md5(t2.z) = Utf8View("83878c91171338902e0fe0fb97a8c47a")
+06)--------TableScan: t2 projection=[x, z]
+
+query I rowsort
+select t1.a
+from t1 left join t2 on t1.a = t2.x
+where md5(t2.z) = md5('p');
+----
+1
+
+# `overlay` on the nullable side of a LEFT JOIN -> INNER JOIN.
+query TT
+explain
+select t1.a
+from t1 left join t2 on t1.a = t2.x
+where overlay(t2.z placing 'x' from 1) = 'x';
+----
+logical_plan
+01)Projection: t1.a
+02)--Inner Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a]
+04)----Projection: t2.x
+05)------Filter: overlay(t2.z, Utf8View("x"), Int64(1)) = Utf8("x")
+06)--------TableScan: t2 projection=[x, z]
+
+query I rowsort
+select t1.a
+from t1 left join t2 on t1.a = t2.x
+where overlay(t2.z placing 'x' from 1) = 'x';
+----
+1
+2
+
+# Nested strict array functions on the nullable side of a LEFT JOIN -> INNER JOIN.
+query TT
+explain
+select t1.a
+from t1 left join t2 on t1.a = t2.x
+where cardinality(range(t2.x)) = 2;
+----
+logical_plan
+01)Projection: t1.a
+02)--Inner Join: t1.a = t2.x
+03)----Filter: cardinality(range(CAST(t1.a AS Int64))) = UInt64(2)
+04)------TableScan: t1 projection=[a]
+05)----Filter: cardinality(range(CAST(t2.x AS Int64))) = UInt64(2)
+06)------TableScan: t2 projection=[x]
+
+query I rowsort
+select t1.a
+from t1 left join t2 on t1.a = t2.x
+where cardinality(range(t2.x)) = 2;
+----
+2
+
+# `make_array` keeps NULL elements, so it is not strict and the LEFT JOIN stays.
+query TT
+explain
+select t1.a
+from t1 left join t2 on t1.a = t2.x
+where cardinality(make_array(t2.y)) = 1;
+----
+logical_plan
+01)Projection: t1.a
+02)--Filter: cardinality(make_array(t2.y)) = UInt64(1)
+03)----Projection: t1.a, t2.y
+04)------Left Join: t1.a = t2.x
+05)--------TableScan: t1 projection=[a]
+06)--------TableScan: t2 projection=[x, y]
+
+query I rowsort
+select t1.a
+from t1 left join t2 on t1.a = t2.x
+where cardinality(make_array(t2.y)) = 1;
+----
+1
+2
+3
+NULL
+
+###
 ### Cleanup
 ###
 

@@ -87,6 +87,10 @@ impl ScalarUDFImpl for SparkBitGet {
         Ok(Arc::new(Field::new(self.name(), DataType::Int8, nullable)))
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(spark_bit_get, vec![])(&args.args)
     }

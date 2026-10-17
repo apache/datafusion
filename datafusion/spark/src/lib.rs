@@ -245,3 +245,257 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod strict_tests {
+    use super::*;
+    use arrow::datatypes::Field;
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::type_coercion::functions::fields_with_udf;
+    use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs};
+
+    fn udf(name: &str) -> Arc<ScalarUDF> {
+        all_default_scalar_functions()
+            .into_iter()
+            .find(|func| func.name() == name)
+            .unwrap_or_else(|| panic!("no Spark function named {name}"))
+    }
+
+    fn list(values: &[ScalarValue]) -> ScalarValue {
+        ScalarValue::List(ScalarValue::new_list_nullable(
+            values,
+            &values[0].data_type(),
+        ))
+    }
+
+    #[test]
+    fn strict_spark_functions_propagate_nulls() {
+        let date = ScalarValue::Date32(Some(19000));
+        let url = "http://spark.apache.org/path?query=1";
+        let cases: Vec<(&str, Vec<ScalarValue>)> = vec![
+            // array
+            (
+                "slice",
+                vec![
+                    list(&[
+                        ScalarValue::from(1_i64),
+                        ScalarValue::from(2_i64),
+                        ScalarValue::from(3_i64),
+                    ]),
+                    ScalarValue::from(2_i64),
+                    ScalarValue::from(2_i64),
+                ],
+            ),
+            // bitmap
+            ("bitmap_bit_position", vec![ScalarValue::from(1_i64)]),
+            ("bitmap_bucket_number", vec![ScalarValue::from(1_i64)]),
+            ("bitmap_count", vec![ScalarValue::Binary(Some(vec![1, 2]))]),
+            // bitwise
+            ("bit_count", vec![ScalarValue::from(7_i64)]),
+            (
+                "bit_get",
+                vec![ScalarValue::from(11_i64), ScalarValue::from(0_i32)],
+            ),
+            ("bitwise_not", vec![ScalarValue::from(1_i64)]),
+            // datetime
+            ("date_add", vec![date.clone(), ScalarValue::from(1_i32)]),
+            ("date_sub", vec![date.clone(), ScalarValue::from(1_i32)]),
+            ("last_day", vec![date.clone()]),
+            ("make_dt_interval", vec![ScalarValue::from(1_i32)]),
+            (
+                "make_dt_interval",
+                vec![ScalarValue::from(1_i32), ScalarValue::from(2_i32)],
+            ),
+            (
+                "make_dt_interval",
+                vec![
+                    ScalarValue::from(1_i32),
+                    ScalarValue::from(2_i32),
+                    ScalarValue::from(3_i32),
+                ],
+            ),
+            (
+                "make_dt_interval",
+                vec![
+                    ScalarValue::from(1_i32),
+                    ScalarValue::from(2_i32),
+                    ScalarValue::from(3_i32),
+                    ScalarValue::from(4.5_f64),
+                ],
+            ),
+            ("monthname", vec![date.clone()]),
+            ("weekday", vec![date]),
+            // hash
+            ("crc32", vec![ScalarValue::from("Spark")]),
+            ("sha1", vec![ScalarValue::from("Spark")]),
+            (
+                "sha2",
+                vec![ScalarValue::from("Spark"), ScalarValue::from(256_i32)],
+            ),
+            // map
+            (
+                "map_from_arrays",
+                vec![
+                    list(&[ScalarValue::from("a"), ScalarValue::from("b")]),
+                    list(&[ScalarValue::from(1_i64), ScalarValue::from(2_i64)]),
+                ],
+            ),
+            // math
+            ("abs", vec![ScalarValue::from(-1_i64)]),
+            (
+                "atan2",
+                vec![ScalarValue::from(0.5_f64), ScalarValue::from(1.0_f64)],
+            ),
+            ("bin", vec![ScalarValue::from(13_i64)]),
+            ("ceil", vec![ScalarValue::from(1.5_f64)]),
+            ("expm1", vec![ScalarValue::from(1.0_f64)]),
+            ("factorial", vec![ScalarValue::from(5_i32)]),
+            ("floor", vec![ScalarValue::from(1.5_f64)]),
+            ("hex", vec![ScalarValue::from(255_i64)]),
+            (
+                "hypot",
+                vec![ScalarValue::from(3.0_f64), ScalarValue::from(4.0_f64)],
+            ),
+            (
+                "mod",
+                vec![ScalarValue::from(10_i64), ScalarValue::from(3_i64)],
+            ),
+            ("negative", vec![ScalarValue::from(1_i64)]),
+            (
+                "pmod",
+                vec![ScalarValue::from(10_i64), ScalarValue::from(3_i64)],
+            ),
+            (
+                "pow",
+                vec![ScalarValue::from(2.0_f64), ScalarValue::from(3.0_f64)],
+            ),
+            ("rint", vec![ScalarValue::from(1.5_f64)]),
+            ("unhex", vec![ScalarValue::from("537061726B")]),
+            (
+                "width_bucket",
+                vec![
+                    ScalarValue::from(5.3_f64),
+                    ScalarValue::from(0.2_f64),
+                    ScalarValue::from(10.6_f64),
+                    ScalarValue::from(5_i32),
+                ],
+            ),
+            // string
+            ("ascii", vec![ScalarValue::from("a")]),
+            ("char", vec![ScalarValue::from(65_i64)]),
+            (
+                "ilike",
+                vec![ScalarValue::from("Spark"), ScalarValue::from("_PARK")],
+            ),
+            ("is_valid_utf8", vec![ScalarValue::from("abc")]),
+            ("length", vec![ScalarValue::from("abc")]),
+            (
+                "like",
+                vec![ScalarValue::from("Spark"), ScalarValue::from("_park")],
+            ),
+            ("luhn_check", vec![ScalarValue::from("79927398713")]),
+            ("make_valid_utf8", vec![ScalarValue::from("abc")]),
+            ("quote", vec![ScalarValue::from("abc")]),
+            ("soundex", vec![ScalarValue::from("Miller")]),
+            ("space", vec![ScalarValue::from(3_i32)]),
+            (
+                "substring",
+                vec![ScalarValue::from("Spark SQL"), ScalarValue::from(5_i32)],
+            ),
+            (
+                "substring",
+                vec![
+                    ScalarValue::from("Spark SQL"),
+                    ScalarValue::from(5_i32),
+                    ScalarValue::from(1_i32),
+                ],
+            ),
+            // url
+            (
+                "parse_url",
+                vec![ScalarValue::from(url), ScalarValue::from("HOST")],
+            ),
+            (
+                "parse_url",
+                vec![
+                    ScalarValue::from(url),
+                    ScalarValue::from("QUERY"),
+                    ScalarValue::from("query"),
+                ],
+            ),
+            ("try_url_decode", vec![ScalarValue::from("a%20b")]),
+            ("url_decode", vec![ScalarValue::from("a%20b")]),
+            ("url_encode", vec![ScalarValue::from("a b")]),
+        ];
+
+        for (name, valid_args) in cases {
+            let func = udf(name);
+            assert!(func.is_strict(), "{name} should be marked strict");
+            let valid_args = coerce(&func, valid_args);
+
+            for null_mask in 0..(1 << valid_args.len()) {
+                let mut args = valid_args.clone();
+                for (arg_idx, arg) in args.iter_mut().enumerate() {
+                    if null_mask & (1 << arg_idx) != 0 {
+                        *arg = ScalarValue::try_new_null(&arg.data_type()).unwrap();
+                    }
+                }
+
+                let result =
+                    invoke_with_scalar_args(&func, args).unwrap_or_else(|error| {
+                        panic!("{name} failed for NULL mask {null_mask:b}: {error}")
+                    });
+                let expected_null = null_mask != 0;
+                let result = result.into_array(1).unwrap();
+                assert_eq!(
+                    result.null_count() == result.len(),
+                    expected_null,
+                    "{name} returned {result:?} for NULL mask {null_mask:0width$b}",
+                    width = valid_args.len(),
+                );
+            }
+        }
+    }
+
+    /// Casts `args` to the types the function's signature coerces them to
+    fn coerce(func: &ScalarUDF, args: Vec<ScalarValue>) -> Vec<ScalarValue> {
+        let fields = args
+            .iter()
+            .map(|arg| Arc::new(Field::new("arg", arg.data_type(), true)))
+            .collect::<Vec<_>>();
+        let coerced_fields = fields_with_udf(&fields, func).unwrap();
+        args.iter()
+            .zip(&coerced_fields)
+            .map(|(arg, field)| arg.cast_to(field.data_type()).unwrap())
+            .collect()
+    }
+
+    fn invoke_with_scalar_args(
+        func: &ScalarUDF,
+        args: Vec<ScalarValue>,
+    ) -> Result<ColumnarValue> {
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Arc::new(Field::new(
+                    format!("arg_{idx}"),
+                    arg.data_type(),
+                    arg.is_null(),
+                ))
+            })
+            .collect::<Vec<_>>();
+        let scalar_arguments = args.iter().map(Some).collect::<Vec<_>>();
+        let return_field = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &scalar_arguments,
+        })?;
+        func.invoke_with_args(ScalarFunctionArgs {
+            args: args.into_iter().map(ColumnarValue::Scalar).collect(),
+            arg_fields,
+            number_rows: 1,
+            return_field,
+            config_options: Arc::new(Default::default()),
+        })
+    }
+}

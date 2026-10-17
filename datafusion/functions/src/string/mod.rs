@@ -63,6 +63,144 @@ make_udf_function!(to_hex::ToHexFunc, to_hex);
 make_udf_function!(upper::UpperFunc, upper);
 make_udf_function!(uuid::UuidFunc, uuid);
 make_udf_function!(contains::ContainsFunc, contains);
+#[cfg(test)]
+mod strict_tests {
+    use super::*;
+    use arrow::datatypes::Field;
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{
+        ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
+    };
+    use std::sync::Arc;
+
+    #[test]
+    fn strict_string_functions_propagate_nulls() {
+        let cases = vec![
+            (ascii(), vec![ScalarValue::from("abc")]),
+            (bit_length(), vec![ScalarValue::from("abc")]),
+            (btrim(), vec![ScalarValue::from(" abc ")]),
+            (
+                btrim(),
+                vec![ScalarValue::from("xabcx"), ScalarValue::from("x")],
+            ),
+            (chr(), vec![ScalarValue::from(65_i64)]),
+            (
+                contains(),
+                vec![ScalarValue::from("abc"), ScalarValue::from("b")],
+            ),
+            (
+                ends_with(),
+                vec![ScalarValue::from("abc"), ScalarValue::from("c")],
+            ),
+            (
+                levenshtein(),
+                vec![ScalarValue::from("kitten"), ScalarValue::from("sitting")],
+            ),
+            (lower(), vec![ScalarValue::from("ABC")]),
+            (ltrim(), vec![ScalarValue::from(" abc ")]),
+            (
+                ltrim(),
+                vec![ScalarValue::from("xabcx"), ScalarValue::from("x")],
+            ),
+            (octet_length(), vec![ScalarValue::from("abc")]),
+            (
+                octet_length(),
+                vec![ScalarValue::Binary(Some(b"abc".to_vec()))],
+            ),
+            (
+                repeat(),
+                vec![ScalarValue::from("ab"), ScalarValue::from(2_i64)],
+            ),
+            (
+                replace(),
+                vec![
+                    ScalarValue::from("abc"),
+                    ScalarValue::from("b"),
+                    ScalarValue::from("x"),
+                ],
+            ),
+            (rtrim(), vec![ScalarValue::from(" abc ")]),
+            (
+                rtrim(),
+                vec![ScalarValue::from("xabcx"), ScalarValue::from("x")],
+            ),
+            (
+                split_part(),
+                vec![
+                    ScalarValue::from("a,b"),
+                    ScalarValue::from(","),
+                    ScalarValue::from(1_i64),
+                ],
+            ),
+            (
+                starts_with(),
+                vec![ScalarValue::from("abc"), ScalarValue::from("a")],
+            ),
+            (to_hex(), vec![ScalarValue::from(255_i64)]),
+            (upper(), vec![ScalarValue::from("abc")]),
+        ];
+
+        for (func, valid_args) in cases {
+            assert!(func.is_strict(), "{} should be marked strict", func.name());
+
+            for null_mask in 0..(1 << valid_args.len()) {
+                let mut args = valid_args.clone();
+                for (arg_idx, arg) in args.iter_mut().enumerate() {
+                    if null_mask & (1 << arg_idx) != 0 {
+                        *arg = ScalarValue::try_new_null(&arg.data_type()).unwrap();
+                    }
+                }
+
+                let result =
+                    invoke_with_scalar_args(&func, args).unwrap_or_else(|error| {
+                        panic!(
+                            "{} failed for NULL mask {null_mask:b}: {error}",
+                            func.name()
+                        )
+                    });
+                let expected_null = null_mask != 0;
+                let result = result.into_array(1).unwrap();
+                assert_eq!(
+                    result.null_count() == result.len(),
+                    expected_null,
+                    "{} returned {result:?} for NULL mask {null_mask:0width$b}",
+                    func.name(),
+                    width = valid_args.len(),
+                );
+            }
+        }
+    }
+
+    fn invoke_with_scalar_args(
+        func: &ScalarUDF,
+        args: Vec<ScalarValue>,
+    ) -> Result<ColumnarValue> {
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Arc::new(Field::new(
+                    format!("arg_{idx}"),
+                    arg.data_type(),
+                    arg.is_null(),
+                ))
+            })
+            .collect::<Vec<_>>();
+        let scalar_arguments = args.iter().map(Some).collect::<Vec<_>>();
+        let return_field = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &scalar_arguments,
+        })?;
+        func.invoke_with_args(ScalarFunctionArgs {
+            args: args.into_iter().map(ColumnarValue::Scalar).collect(),
+            arg_fields,
+            number_rows: 1,
+            return_field,
+            config_options: Arc::new(Default::default()),
+        })
+    }
+}
+
 pub mod expr_fn {
     use datafusion_expr::Expr;
 

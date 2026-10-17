@@ -82,6 +82,10 @@ impl ScalarUDFImpl for ContainsFunc {
         Ok(Boolean)
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         contains(args.args.as_slice())
     }

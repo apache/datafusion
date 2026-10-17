@@ -286,3 +286,170 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod strict_tests {
+    use super::*;
+    use arrow::datatypes::Field;
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs};
+
+    fn udf(name: &str) -> Arc<ScalarUDF> {
+        all_default_nested_functions()
+            .into_iter()
+            .find(|func| func.name() == name)
+            .unwrap_or_else(|| panic!("no nested function named {name}"))
+    }
+
+    fn list(values: &[ScalarValue]) -> ScalarValue {
+        ScalarValue::List(ScalarValue::new_list_nullable(
+            values,
+            &values[0].data_type(),
+        ))
+    }
+
+    fn ints(values: &[i64]) -> ScalarValue {
+        list(
+            &values
+                .iter()
+                .map(|v| ScalarValue::from(*v))
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    fn floats(values: &[f64]) -> ScalarValue {
+        list(
+            &values
+                .iter()
+                .map(|v| ScalarValue::from(*v))
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    #[test]
+    fn strict_nested_functions_propagate_nulls() {
+        let int = ScalarValue::from;
+        let cases: Vec<(&str, Vec<ScalarValue>)> = vec![
+            ("array_add", vec![floats(&[1.0, 2.0]), floats(&[3.0, 4.0])]),
+            ("array_avg", vec![floats(&[1.0, 2.0, 3.0])]),
+            ("array_compact", vec![ints(&[1, 2])]),
+            ("array_distinct", vec![ints(&[1, 1, 2])]),
+            ("array_element", vec![ints(&[1, 2, 3]), int(2_i64)]),
+            ("array_except", vec![ints(&[1, 2, 3]), ints(&[2])]),
+            ("array_has", vec![ints(&[1, 2, 3]), int(2_i64)]),
+            ("array_intersect", vec![ints(&[1, 2]), ints(&[2, 3])]),
+            ("array_ndims", vec![ints(&[1, 2, 3])]),
+            ("array_normalize", vec![floats(&[3.0, 4.0])]),
+            ("array_product", vec![floats(&[1.0, 2.0, 3.0])]),
+            ("array_remove", vec![ints(&[1, 2, 3]), int(2_i64)]),
+            ("array_remove_all", vec![ints(&[1, 2, 2]), int(2_i64)]),
+            (
+                "array_remove_n",
+                vec![ints(&[1, 2, 2]), int(2_i64), int(1_i64)],
+            ),
+            ("array_reverse", vec![ints(&[1, 2, 3])]),
+            (
+                "array_scale",
+                vec![floats(&[1.0, 2.0]), ScalarValue::from(2.0_f64)],
+            ),
+            ("array_sort", vec![ints(&[3, 1, 2])]),
+            (
+                "array_sort",
+                vec![ints(&[3, 1, 2]), ScalarValue::from("DESC")],
+            ),
+            (
+                "array_sort",
+                vec![
+                    ints(&[3, 1, 2]),
+                    ScalarValue::from("DESC"),
+                    ScalarValue::from("NULLS FIRST"),
+                ],
+            ),
+            (
+                "array_subtract",
+                vec![floats(&[3.0, 4.0]), floats(&[1.0, 2.0])],
+            ),
+            ("array_sum", vec![floats(&[1.0, 2.0, 3.0])]),
+            ("array_union", vec![ints(&[1, 2]), ints(&[2, 3])]),
+            ("cardinality", vec![ints(&[1, 2, 3])]),
+            (
+                "cosine_distance",
+                vec![floats(&[1.0, 2.0]), floats(&[3.0, 4.0])],
+            ),
+            ("flatten", vec![list(&[ints(&[1, 2]), ints(&[3])])]),
+            ("generate_series", vec![int(5_i64)]),
+            ("generate_series", vec![int(1_i64), int(5_i64)]),
+            ("generate_series", vec![int(1_i64), int(5_i64), int(1_i64)]),
+            (
+                "inner_product",
+                vec![floats(&[1.0, 2.0]), floats(&[3.0, 4.0])],
+            ),
+            ("range", vec![int(5_i64)]),
+            ("range", vec![int(1_i64), int(5_i64)]),
+            ("range", vec![int(1_i64), int(5_i64), int(1_i64)]),
+        ];
+        let cases = cases
+            .into_iter()
+            .map(|(name, valid_args)| (udf(name), valid_args))
+            .collect::<Vec<_>>();
+
+        for (func, valid_args) in cases {
+            assert!(func.is_strict(), "{} should be marked strict", func.name());
+
+            for null_mask in 0..(1 << valid_args.len()) {
+                let mut args = valid_args.clone();
+                for (arg_idx, arg) in args.iter_mut().enumerate() {
+                    if null_mask & (1 << arg_idx) != 0 {
+                        *arg = ScalarValue::try_new_null(&arg.data_type()).unwrap();
+                    }
+                }
+
+                let result =
+                    invoke_with_scalar_args(&func, args).unwrap_or_else(|error| {
+                        panic!(
+                            "{} failed for NULL mask {null_mask:b}: {error}",
+                            func.name()
+                        )
+                    });
+                let expected_null = null_mask != 0;
+                let result = result.into_array(1).unwrap();
+                assert_eq!(
+                    result.null_count() == result.len(),
+                    expected_null,
+                    "{} returned {result:?} for NULL mask {null_mask:0width$b}",
+                    func.name(),
+                    width = valid_args.len(),
+                );
+            }
+        }
+    }
+
+    fn invoke_with_scalar_args(
+        func: &ScalarUDF,
+        args: Vec<ScalarValue>,
+    ) -> Result<ColumnarValue> {
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Arc::new(Field::new(
+                    format!("arg_{idx}"),
+                    arg.data_type(),
+                    arg.is_null(),
+                ))
+            })
+            .collect::<Vec<_>>();
+        let scalar_arguments = args.iter().map(Some).collect::<Vec<_>>();
+        let return_field = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &scalar_arguments,
+        })?;
+        func.invoke_with_args(ScalarFunctionArgs {
+            args: args.into_iter().map(ColumnarValue::Scalar).collect(),
+            arg_fields,
+            number_rows: 1,
+            return_field,
+            config_options: Arc::new(Default::default()),
+        })
+    }
+}

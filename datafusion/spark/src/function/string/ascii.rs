@@ -81,6 +81,10 @@ impl ScalarUDFImpl for SparkAscii {
         Ok(Arc::new(Field::new("ascii", DataType::Int32, nullable)))
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(ascii, vec![])(&args.args)
     }

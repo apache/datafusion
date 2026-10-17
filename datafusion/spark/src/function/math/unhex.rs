@@ -66,6 +66,10 @@ impl ScalarUDFImpl for SparkUnhex {
         Ok(DataType::Binary)
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         spark_unhex(&args.args)
     }

@@ -107,6 +107,10 @@ impl ScalarUDFImpl for LPadFunc {
         utf8_to_str_type(&arg_types[0], "lpad")
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs {
             args, number_rows, ..

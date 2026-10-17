@@ -79,6 +79,10 @@ impl ScalarUDFImpl for SparkBin {
         )))
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(spark_bin_inner, vec![])(&args.args)
     }

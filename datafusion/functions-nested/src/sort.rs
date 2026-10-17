@@ -140,6 +140,10 @@ impl ScalarUDFImpl for ArraySort {
         Ok(arg_types[0].clone())
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_sort_inner)(&args.args)
     }

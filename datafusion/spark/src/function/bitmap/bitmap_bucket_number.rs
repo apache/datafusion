@@ -80,6 +80,10 @@ impl ScalarUDFImpl for BitmapBucketNumber {
         )))
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(bitmap_bucket_number_inner, vec![])(&args.args)
     }

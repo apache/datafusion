@@ -62,6 +62,10 @@ impl ScalarUDFImpl for SparkSoundex {
         }
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(spark_soundex_inner, vec![])(&args.args)
     }
