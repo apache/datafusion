@@ -1616,10 +1616,10 @@ impl DefaultPhysicalPlanner {
                     && session_state.config().repartition_joins()
                     && !*null_aware;
 
-                // Only `HashJoinExec` implements null-aware semantics, and it
-                // needs equi-join keys to do so. Without them the join would be
-                // planned as a nested loop (or piecewise merge) join, which
-                // silently ignores the flag and returns wrong results for
+                // Only `HashJoinExec` and the null-aware `LeftAnti` path in `SortMergeJoinExec`
+                // implements null-aware semantics, and thoes need equi-join keys to do so.
+                // Without them the join would be planned as a nested loop (or piecewise merge)
+                // join, which silently ignores the flag and returns wrong results for
                 // `NOT IN` over a nullable subquery. Fail loudly instead.
                 if *null_aware && join_on.is_empty() {
                     return plan_err!(
