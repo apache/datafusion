@@ -43,9 +43,7 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::expr_schema::{cast_subquery, cast_subquery_columns};
-use datafusion_expr::logical_plan::{
-    Extension, MaterializedCte, MaterializedCteId, MaterializedCteScan, Subquery,
-};
+use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
     comparison_coercion_with_session_timezone, like_coercion, regex_coercion,
     type_union_coercion,
@@ -60,7 +58,8 @@ use datafusion_expr::type_coercion::{
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     AsOfJoin, AsOfMatch, Cast, DmlStatement, Expr, ExprSchemable, Join, Limit,
-    LogicalPlan, Operator, Projection, Union, ValueOrLambda, WindowFrame,
+    LogicalPlan, MaterializedCte, MaterializedCteId, MaterializedCtePlan,
+    MaterializedCteScan, Operator, Projection, Union, ValueOrLambda, WindowFrame,
     WindowFrameBound, WindowFrameUnits, WriteOp, is_false, is_not_false, is_not_true,
     is_not_unknown, is_true, is_unknown, lit, not,
 };
@@ -135,38 +134,32 @@ fn coerce_plan_and_subqueries(
     static EMPTY_SCHEMA: LazyLock<DFSchema> = LazyLock::new(DFSchema::empty);
 
     plan.transform_down_up_with_subqueries(
-        |plan| {
-            let cte = match &plan {
-                LogicalPlan::Extension(Extension { node }) => {
-                    node.as_any().downcast_ref::<MaterializedCte>().cloned()
-                }
-                _ => None,
-            };
-            let Some(cte) = cte else {
-                return Ok(Transformed::no(plan));
-            };
+        |plan| match plan {
             // Coercion can change the types of the body, for example the type
             // of a `NULL` column of a `UNION`. Coerce the body first, and give
             // its new schema to the scans before the continuation is coerced.
-            let body = coerce_plan_and_subqueries(cte.cte, config)?;
-            let continuation = with_materialized_cte_scan_schema(
-                cte.continuation,
-                cte.id,
-                body.schema(),
-            )?;
-            let continuation = coerce_plan_and_subqueries(continuation, config)?;
-            Ok(Transformed::new(
-                LogicalPlan::Extension(Extension {
-                    node: Arc::new(MaterializedCte {
-                        id: cte.id,
-                        name: cte.name,
-                        cte: body,
-                        continuation,
-                    }),
-                }),
-                true,
-                TreeNodeRecursion::Jump,
-            ))
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
+                let body =
+                    coerce_plan_and_subqueries(Arc::unwrap_or_clone(cte.cte), config)?;
+                let continuation = with_materialized_cte_scan_schema(
+                    Arc::unwrap_or_clone(cte.continuation),
+                    cte.id,
+                    body.schema(),
+                )?;
+                let continuation = coerce_plan_and_subqueries(continuation, config)?;
+                Ok(Transformed::new(
+                    LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
+                        MaterializedCte {
+                            cte: Arc::new(body),
+                            continuation: Arc::new(continuation),
+                            ..cte
+                        },
+                    )),
+                    true,
+                    TreeNodeRecursion::Jump,
+                ))
+            }
+            _ => Ok(Transformed::no(plan)),
         },
         |plan| {
             analyze_internal(
@@ -188,42 +181,32 @@ fn with_materialized_cte_scan_schema(
     body_schema: &DFSchemaRef,
 ) -> Result<LogicalPlan> {
     continuation
-        .transform_down_with_subqueries(|plan| {
-            let LogicalPlan::Extension(Extension { node }) = &plan else {
-                return Ok(Transformed::no(plan));
-            };
+        .transform_down_with_subqueries(|node| match node {
             // A nested occurrence of the same CTE owns the scans below it.
-            if node
-                .as_any()
-                .downcast_ref::<MaterializedCte>()
-                .is_some_and(|nested| nested.id == id)
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(ref nested))
+                if nested.id == id =>
             {
-                return Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump));
+                Ok(Transformed::new(node, false, TreeNodeRecursion::Jump))
             }
-            let Some(scan) =
-                node.as_any()
-                    .downcast_ref::<MaterializedCteScan>()
-                    .filter(|scan| {
-                        scan.id == id && scan.schema.inner() != body_schema.inner()
-                    })
-            else {
-                return Ok(Transformed::no(plan));
-            };
-            let qualifiers = scan.schema.iter().map(|(q, _)| q.cloned()).collect();
-            let schema = DFSchema::from_field_specific_qualified_schema(
-                qualifiers,
-                body_schema.inner(),
-            )?
-            .with_functional_dependencies(
-                body_schema.functional_dependencies().clone(),
-            )?;
-            Ok(Transformed::yes(LogicalPlan::Extension(Extension {
-                node: Arc::new(MaterializedCteScan {
-                    id: scan.id,
-                    name: scan.name.clone(),
-                    schema: Arc::new(schema),
-                }),
-            })))
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan))
+                if scan.id == id && scan.schema.inner() != body_schema.inner() =>
+            {
+                let qualifiers = scan.schema.iter().map(|(q, _)| q.cloned()).collect();
+                let schema = DFSchema::from_field_specific_qualified_schema(
+                    qualifiers,
+                    body_schema.inner(),
+                )?
+                .with_functional_dependencies(
+                    body_schema.functional_dependencies().clone(),
+                )?;
+                Ok(Transformed::yes(LogicalPlan::MaterializedCte(
+                    MaterializedCtePlan::Scan(MaterializedCteScan {
+                        schema: Arc::new(schema),
+                        ..scan
+                    }),
+                )))
+            }
+            _ => Ok(Transformed::no(node)),
         })
         .map(|t| t.data)
 }
