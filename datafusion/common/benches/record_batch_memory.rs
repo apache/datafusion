@@ -180,11 +180,44 @@ fn benchmark_shared_slices(c: &mut Criterion) {
     group.finish();
 }
 
+fn benchmark_count_uncount(c: &mut Criterion) {
+    let mut group = c.benchmark_group("record_batch_memory_size/count_uncount");
+
+    // Model the sort/window workload: batches are counted as they arrive and
+    // uncounted when they are dropped. Measure the full cycle.
+    for num_columns in [4, 16, 64] {
+        let batch = make_primitive_batch(8192, num_columns);
+        let slices = (0..32)
+            .map(|index| batch.slice(index * 256, 256))
+            .collect::<Vec<_>>();
+
+        group.bench_with_input(
+            BenchmarkId::from_parameter(num_columns),
+            &slices,
+            |bencher, slices| {
+                bencher.iter(|| {
+                    let mut counter = RecordBatchMemoryCounter::new();
+                    for batch in black_box(slices) {
+                        black_box(counter.count_batch(black_box(batch)));
+                    }
+                    for batch in black_box(slices) {
+                        black_box(counter.uncount_batch(black_box(batch)));
+                    }
+                    assert_eq!(counter.memory_usage(), 0);
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     benchmark_column_count,
     benchmark_row_count,
     benchmark_array_layout,
-    benchmark_shared_slices
+    benchmark_shared_slices,
+    benchmark_count_uncount
 );
 criterion_main!(benches);
