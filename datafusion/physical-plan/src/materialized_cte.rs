@@ -23,6 +23,32 @@
 //! partition of the body to completion and buffers the output; every scan then
 //! replays that buffer.
 //!
+//! The buffered output is not kept in the plan. It is kept in the
+//! [`RunState`] of the [`TaskContext`], so each run of a plan has its own
+//! output, and two runs of one plan that overlap do not share it. All
+//! `execute` calls of one run must get the same [`TaskContext`]. With a
+//! different [`TaskContext`] for each call, each call computes the body again.
+//!
+//! The output of a run is released when no scan can read it again: when each
+//! partition of each bound scan was executed in the run, and each of these
+//! executions has finished or was dropped. See `RunOutput`. Until then, the
+//! [`RunState`] holds the output, so a scan partition that is never executed
+//! keeps it until the run ends. A scan partition that is executed again after
+//! the release computes the body again, as a second run of the plan with the
+//! same [`TaskContext`] does.
+//!
+//! The plan nodes keep no state of a run, so the default
+//! [`ExecutionPlan::reset_state`] is correct for them: it returns a new node
+//! and the old node stays usable.
+//!
+//! `RecursiveQueryExec` executes its recursive term one time for each
+//! iteration, with the same [`TaskContext`]. It gives each iteration new
+//! outputs for the CTEs that the recursive term declares. See
+//! `with_new_materialized_cte_outputs`. Its recursive term can also read a
+//! CTE that is declared outside it, one time for each iteration. It holds the
+//! output of such a CTE until its last iteration. See
+//! `hold_materialized_cte_outputs`.
+//!
 //! The body is fully materialized before any scan yields a row. This is a
 //! pipeline break, but it cannot deadlock when two consumers of the same CTE
 //! are read at different rates (for example the build and probe side of one
@@ -40,6 +66,7 @@
 //! disk is written in pieces, so that the move does not raise the memory that
 //! each reader needs.
 
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -48,11 +75,11 @@ use std::task::{Context, Poll};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Result, Statistics, internal_err};
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use datafusion_execution::{SendableRecordBatchStream, SpillFile, TaskContext};
+use datafusion_execution::{RunState, SendableRecordBatchStream, SpillFile, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt, TryStreamExt};
@@ -85,7 +112,7 @@ struct BufferedPartition {
     spill_files: Vec<Arc<dyn SpillFile>>,
     /// The memory size of the largest batch in `spill_files` when decoded.
     max_spilled_batch_size: usize,
-    /// Holds `batches`. Released when the buffer is dropped.
+    /// Holds `batches`. Released when the output is dropped.
     reservation: MemoryReservation,
 }
 
@@ -179,7 +206,7 @@ struct MaterializedOutput {
     partitions: Vec<BufferedPartition>,
     spill_manager: SpillManager,
     /// Memory for the batches that the scans decode from the spill files.
-    /// Released when the buffer is dropped.
+    /// Released when the output is dropped.
     _replay_reservation: MemoryReservation,
 }
 
@@ -259,8 +286,218 @@ fn reserve_replay_memory(
     }
 }
 
-/// State shared by one [`MaterializedCteExec`] and all its
-/// [`MaterializedCteScanExec`]s.
+/// The output of one materialized CTE in one run of a plan, and the count of
+/// its readers.
+///
+/// The output is released when `not_executed` and `users` are both zero.
+/// Then each partition of each bound scan was executed, and each of these
+/// executions has finished or was dropped, so a plan in which each scan
+/// partition is executed one time cannot read the output again.
+///
+/// The count is of the partitions that can still be executed, not of the
+/// streams that are open. Thus the output is not released between two scans
+/// that are executed one after the other. A partition that is never executed
+/// (for example because the query was cancelled) keeps the output until the
+/// run ends, which is the time of release without this count.
+///
+/// The count does not know that a partition is executed more than one time.
+/// When a partition is executed after the release, a new [`RunOutput`] is
+/// created and the body is computed again. The scan never reads an empty
+/// output. An operator that executes a scan more than one time in a run must
+/// hold the output. See [`hold_materialized_cte_outputs`].
+struct RunOutput {
+    once: Arc<OnceAsync<MaterializedOutput>>,
+    /// For each bound scan, whether each of its partitions was executed.
+    executed: Vec<Vec<bool>>,
+    /// The number of partitions in `executed` that were not executed.
+    not_executed: usize,
+    /// The number of [`MaterializedCteOutputUse`]s: the scan streams that
+    /// are open, and the holds.
+    users: usize,
+}
+
+impl RunOutput {
+    fn new() -> Self {
+        Self {
+            once: Arc::default(),
+            executed: vec![],
+            not_executed: 0,
+            users: 0,
+        }
+    }
+
+    /// Add the scans in `scan_partitions` that are not yet counted.
+    fn add_scans(&mut self, scan_partitions: &[usize]) {
+        for &partitions in scan_partitions.iter().skip(self.executed.len()) {
+            self.executed.push(vec![false; partitions]);
+            self.not_executed += partitions;
+        }
+    }
+}
+
+/// The outputs of the materialized CTEs in one run of a plan, by CTE id.
+///
+/// The [`RunState`] of the [`TaskContext`] holds it. An output is removed
+/// when its last reader has finished (see [`RunOutput`]), or else it lives
+/// until the last [`TaskContext`] of the run is dropped.
+#[derive(Default)]
+struct MaterializedCteOutputs {
+    /// The outputs of the enclosing execution. `None` for a whole run.
+    parent: Option<Arc<MaterializedCteOutputs>>,
+    /// The CTEs that have their own output here when `parent` is set. The
+    /// output of every other CTE is the output in `parent`.
+    renewed: HashSet<u64>,
+    outputs: Mutex<HashMap<u64, RunOutput>>,
+}
+
+impl MaterializedCteOutputs {
+    /// Register a reader of the output of the CTE `id`, and return the
+    /// output. The output is created, empty, if there is none.
+    ///
+    /// `scan` is the index and the partition of the scan that is executed.
+    /// `None` registers a hold: a reader that does not execute a scan.
+    /// The output is not released before the returned
+    /// [`MaterializedCteOutputUse`] is dropped.
+    fn start_use(
+        self: &Arc<Self>,
+        id: u64,
+        scan_partitions: &[usize],
+        scan: Option<(usize, usize)>,
+    ) -> (Arc<OnceAsync<MaterializedOutput>>, MaterializedCteOutputUse) {
+        if let Some(parent) = &self.parent
+            && !self.renewed.contains(&id)
+        {
+            return parent.start_use(id, scan_partitions, scan);
+        }
+        let mut outputs = self.outputs.lock();
+        let output = outputs.entry(id).or_insert_with(RunOutput::new);
+        output.add_scans(scan_partitions);
+        output.users += 1;
+        if let Some((scan, partition)) = scan
+            && let Some(executed) = output
+                .executed
+                .get_mut(scan)
+                .and_then(|scan| scan.get_mut(partition))
+            && !*executed
+        {
+            *executed = true;
+            output.not_executed -= 1;
+        }
+        let in_use = MaterializedCteOutputUse {
+            outputs: Arc::clone(self),
+            id,
+        };
+        (Arc::clone(&output.once), in_use)
+    }
+}
+
+/// One reader of the output of a materialized CTE in a run: a scan stream
+/// that is open, or a hold. To drop it ends the read, and releases the output
+/// if no reader remains and none can start. See [`RunOutput`].
+pub(crate) struct MaterializedCteOutputUse {
+    outputs: Arc<MaterializedCteOutputs>,
+    id: u64,
+}
+
+impl Drop for MaterializedCteOutputUse {
+    fn drop(&mut self) {
+        let released = {
+            let mut outputs = self.outputs.outputs.lock();
+            // An output is removed only when it has no users, so this is the
+            // output that `start_use` returned.
+            let Some(output) = outputs.get_mut(&self.id) else {
+                return;
+            };
+            output.users -= 1;
+            if output.users == 0 && output.not_executed == 0 {
+                outputs.remove(&self.id)
+            } else {
+                None
+            }
+        };
+        // Drop the output without the lock. If the body has not completed,
+        // this drops the streams of the body, which can be the last users of
+        // other outputs in the same map.
+        drop(released);
+    }
+}
+
+/// Return the ids of the materialized CTEs that `plan` declares.
+pub(crate) fn materialized_cte_ids(plan: &Arc<dyn ExecutionPlan>) -> HashSet<u64> {
+    let mut ids = HashSet::new();
+    plan.apply(|node| {
+        if let Some(cte) = node.downcast_ref::<MaterializedCteExec>() {
+            ids.insert(cte.buffer.id);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .expect("the closure does not fail");
+    ids
+}
+
+/// Return a copy of `context` in which the materialized CTEs `ids` have no
+/// output, so that they are computed again. All other CTEs keep the output
+/// that they have in `context`.
+///
+/// `RecursiveQueryExec` calls this for each iteration with the CTEs that its
+/// recursive term declares. A CTE that is declared outside the recursive term
+/// and read inside it is not in `ids`, so it is computed one time for the
+/// whole query.
+pub(crate) fn with_new_materialized_cte_outputs(
+    context: &TaskContext,
+    ids: &HashSet<u64>,
+) -> TaskContext {
+    let run_state = context.run_state();
+    let outputs = MaterializedCteOutputs {
+        parent: Some(run_state.get_or_init()),
+        renewed: ids.clone(),
+        outputs: Mutex::default(),
+    };
+    let run_state = RunState::new_child(Arc::clone(run_state), Arc::new(outputs));
+    context.clone().with_run_state(Arc::new(run_state))
+}
+
+/// Hold the outputs of the materialized CTEs that `plan` reads and that are
+/// not in `declared`, until the returned values are dropped.
+///
+/// `RecursiveQueryExec` calls this with its recursive term, and the CTEs that
+/// the recursive term declares. It executes the recursive term one time for
+/// each iteration, so the scans of a CTE that is declared outside it are
+/// executed more than one time in a run. Without the hold, the output would
+/// be released after an iteration, and the next iteration would compute the
+/// body again.
+pub(crate) fn hold_materialized_cte_outputs(
+    plan: &Arc<dyn ExecutionPlan>,
+    declared: &HashSet<u64>,
+    context: &TaskContext,
+) -> Vec<MaterializedCteOutputUse> {
+    let mut buffers = HashMap::new();
+    plan.apply(|node| {
+        if let Some(scan) = node.downcast_ref::<MaterializedCteScanExec>()
+            && let Some(buffer) = &scan.buffer
+            && !declared.contains(&buffer.id)
+        {
+            buffers.insert(buffer.id, Arc::clone(buffer));
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .expect("the closure does not fail");
+    if buffers.is_empty() {
+        return vec![];
+    }
+    let outputs = context.run_state().get_or_init::<MaterializedCteOutputs>();
+    buffers
+        .values()
+        .map(|buffer| {
+            let scan_partitions = buffer.scan_partitions.lock().clone();
+            outputs.start_use(buffer.id, &scan_partitions, None).1
+        })
+        .collect()
+}
+
+/// The plan-time state shared by one [`MaterializedCteExec`] and all its
+/// [`MaterializedCteScanExec`]s. It holds no output: the output of a run is in
+/// the [`RunState`] of the [`TaskContext`] of that run.
 pub struct MaterializedCteBuffer {
     id: u64,
     name: String,
@@ -269,7 +506,6 @@ pub struct MaterializedCteBuffer {
     /// the final plan. A scan can run the body before the owning
     /// `MaterializedCteExec` executes, for example from a scalar subquery.
     body: Mutex<Option<Arc<dyn ExecutionPlan>>>,
-    output: Mutex<Arc<OnceAsync<MaterializedOutput>>>,
     /// The partition count of every scan bound to this buffer.
     scan_partitions: Mutex<Vec<usize>>,
     metrics: ExecutionPlanMetricsSet,
@@ -289,7 +525,6 @@ impl MaterializedCteBuffer {
             id,
             name: name.into(),
             body: Mutex::new(None),
-            output: Mutex::new(Arc::default()),
             scan_partitions: Mutex::new(vec![]),
             metrics: ExecutionPlanMetricsSet::new(),
         }
@@ -304,26 +539,33 @@ impl MaterializedCteBuffer {
         *self.body.lock() = Some(body);
     }
 
-    fn reset(&self) {
-        *self.output.lock() = Arc::default();
-    }
-
     /// Return a future that resolves once the body has been fully buffered.
-    /// The body runs at most once, whichever consumer asks first.
+    /// The body runs at most once for each run, whichever consumer asks
+    /// first. The run is identified by the [`RunState`] of `context`.
+    ///
+    /// `scan` is the index and the partition of the scan that reads the
+    /// output, or `None` for a hold. The caller must keep the returned
+    /// [`MaterializedCteOutputUse`] until it has read the output. See
+    /// [`MaterializedCteOutputs::start_use`].
     fn materialize(
         self: &Arc<Self>,
         context: Arc<TaskContext>,
-    ) -> Result<OnceFut<MaterializedOutput>> {
+        scan: Option<(usize, usize)>,
+    ) -> Result<(OnceFut<MaterializedOutput>, MaterializedCteOutputUse)> {
         let Some(body) = self.body.lock().clone() else {
             return internal_err!("MaterializedCte {} has no body", self.name);
         };
-        let once = Arc::clone(&self.output.lock());
-        let name = self.name.clone();
         let scan_partitions = self.scan_partitions.lock().clone();
+        let (once, in_use) = context
+            .run_state()
+            .get_or_init::<MaterializedCteOutputs>()
+            .start_use(self.id, &scan_partitions, scan);
+        let name = self.name.clone();
         let metrics = self.metrics.clone();
-        once.try_once(move || {
+        let output = once.try_once(move || {
             Ok(buffer_body(name, body, scan_partitions, context, metrics))
-        })
+        })?;
+        Ok((output, in_use))
     }
 }
 
@@ -463,8 +705,9 @@ fn replay(
 ///
 /// Holds the [`MaterializedOutput`], and with it the memory reservations of
 /// the buffered batches and of the spill reads, until the replay is dropped.
-/// The scan can outlive its plan, for example when the plan is dropped after
-/// `execute`, so the output must not be released earlier.
+/// The scan can outlive its plan and the [`TaskContext`] of its run, for
+/// example when both are dropped after `execute`, so the output must not be
+/// released earlier.
 struct ReplayStream {
     stream: BoxStream<'static, Result<RecordBatch>>,
     _output: Arc<MaterializedOutput>,
@@ -478,6 +721,36 @@ impl Stream for ReplayStream {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         self.stream.poll_next_unpin(cx)
+    }
+}
+
+/// The stream of one scan partition. It is a reader of the output from the
+/// call of `execute` until it ends, returns an error, or is dropped.
+struct ScanStream {
+    /// `None` after the end of the stream. Declared before `in_use`, so that
+    /// it drops its reference to the output first.
+    stream: Option<BoxStream<'static, Result<RecordBatch>>>,
+    in_use: Option<MaterializedCteOutputUse>,
+}
+
+impl Stream for ScanStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        let Some(stream) = self.stream.as_mut() else {
+            return Poll::Ready(None);
+        };
+        let item = futures::ready!(stream.poll_next_unpin(cx));
+        if !matches!(item, Some(Ok(_))) {
+            // The scan does not read the output again. Do not wait for the
+            // consumer to drop the stream.
+            self.stream = None;
+            self.in_use = None;
+        }
+        Poll::Ready(item)
     }
 }
 
@@ -573,23 +846,6 @@ impl ExecutionPlan for MaterializedCteExec {
         )
     }
 
-    /// Clears the shared buffer in place and returns `self`.
-    ///
-    /// This is an exception to the `reset_state` contract, which expects a
-    /// new node and leaves the old node unchanged. `RecursiveQueryExec` resets
-    /// the recursive term before each iteration, and a `MATERIALIZED` CTE in
-    /// that term must be computed again. A new buffer would also need new
-    /// scans, and a scan in a scalar subquery is not below this node, so this
-    /// node cannot rebind it. `ScalarSubqueryExec::reset_state` does the same.
-    ///
-    /// Two overlapping runs of one plan share this buffer. Nothing in
-    /// DataFusion does that today. See
-    /// <https://github.com/apache/datafusion/issues/26229>.
-    fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
-        self.buffer.reset();
-        Ok(self)
-    }
-
     fn maintains_input_order(&self) -> Vec<bool> {
         vec![false, true]
     }
@@ -664,6 +920,8 @@ pub struct MaterializedCteScanExec {
     name: String,
     schema: SchemaRef,
     buffer: Option<Arc<MaterializedCteBuffer>>,
+    /// The index of this scan in the scans that are bound to `buffer`.
+    scan_index: usize,
     metrics: ExecutionPlanMetricsSet,
     cache: Arc<PlanProperties>,
 }
@@ -688,6 +946,7 @@ impl MaterializedCteScanExec {
             name: name.into(),
             schema,
             buffer: None,
+            scan_index: 0,
             metrics: ExecutionPlanMetricsSet::new(),
             cache: Arc::new(cache),
         }
@@ -695,15 +954,17 @@ impl MaterializedCteScanExec {
 
     /// Bind this scan to the buffer of its [`MaterializedCteExec`].
     pub fn bind(&self, buffer: Arc<MaterializedCteBuffer>) -> Self {
-        buffer
-            .scan_partitions
-            .lock()
-            .push(self.cache.partitioning.partition_count());
+        let scan_index = {
+            let mut scan_partitions = buffer.scan_partitions.lock();
+            scan_partitions.push(self.cache.partitioning.partition_count());
+            scan_partitions.len() - 1
+        };
         Self {
             id: self.id,
             name: self.name.clone(),
             schema: Arc::clone(&self.schema),
             buffer: Some(buffer),
+            scan_index,
             metrics: ExecutionPlanMetricsSet::new(),
             cache: Arc::clone(&self.cache),
         }
@@ -780,7 +1041,8 @@ impl ExecutionPlan for MaterializedCteScanExec {
                 self.name
             );
         };
-        let mut output = buffer.materialize(context)?;
+        let (mut output, in_use) =
+            buffer.materialize(context, Some((self.scan_index, partition)))?;
         let output_partitions = self.cache.partitioning.partition_count();
         let baseline = BaselineMetrics::new(&self.metrics, partition);
         let stream = futures::stream::once(async move {
@@ -789,11 +1051,15 @@ impl ExecutionPlan for MaterializedCteScanExec {
         })
         .try_flatten()
         .inspect_ok(move |batch| baseline.record_output(batch.num_rows()));
+        let stream = ScanStream {
+            stream: Some(stream.boxed()),
+            in_use: Some(in_use),
+        };
         // The replay of in-memory batches never returns `Pending`, so it must
         // consume the Tokio budget explicitly.
         Ok(Box::pin(cooperative(RecordBatchStreamAdapter::new(
             Arc::clone(&self.schema),
-            Box::pin(stream),
+            stream,
         ))))
     }
 
@@ -822,12 +1088,14 @@ mod tests {
     use super::*;
     use crate::common::collect;
     use crate::empty::EmptyExec;
+    use crate::execution_plan::reset_plan_states;
     use crate::filter_pushdown::PushedDown;
     use crate::test::TestMemoryExec;
     use arrow::array::{Array, Int32Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_physical_expr::expressions::{col, lit};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn parent_filters_go_to_the_continuation_only() -> Result<()> {
@@ -888,13 +1156,14 @@ mod tests {
             .build_arc()?;
         let context = Arc::new(TaskContext::default().with_runtime(runtime));
 
-        let mut once = buffer.materialize(Arc::clone(&context))?;
+        let (mut once, hold) = buffer.materialize(Arc::clone(&context), None)?;
         let output = std::future::poll_fn(|cx| once.get_shared(cx)).await?;
         let partition = &output.partitions[0];
         assert!(
             partition.spill_files.len() > 1,
             "the prefix was not spilled"
         );
+        let spill_paths = spill_paths(&output);
         assert!(partition.max_spilled_batch_size > 0);
         // The pool holds the in-memory prefix and one decoded batch per scan.
         let reserved =
@@ -902,19 +1171,23 @@ mod tests {
         assert_eq!(context.memory_pool().reserved(), reserved);
         assert!(reserved <= memory_limit);
 
-        // The replay streams keep the reservations after the plan is dropped.
+        // The replay streams keep the reservations after the plan and the
+        // context of the run are dropped.
         let mut streams = scans
             .iter()
             .map(|scan| scan.execute(0, Arc::clone(&context)))
             .collect::<Result<Vec<_>>>()?;
-        drop((once, output, scans, exec, buffer));
+        let pool = Arc::clone(context.memory_pool());
+        drop((once, output, scans, exec, buffer, context));
         // Once every stream has returned a batch, only the streams hold the
         // buffered output.
         let mut firsts = vec![];
         for stream in &mut streams {
             firsts.push(stream.next().await.transpose()?.unwrap());
         }
-        assert_eq!(context.memory_pool().reserved(), reserved);
+        drop(hold);
+        assert_eq!(pool.reserved(), reserved);
+        assert!(spill_paths.iter().all(|path| path.exists()));
 
         for (stream, first) in streams.into_iter().zip(firsts) {
             let mut batches = vec![first];
@@ -928,7 +1201,8 @@ mod tests {
                 .collect();
             assert_eq!(values, (0..10_000).collect::<Vec<_>>());
         }
-        assert_eq!(context.memory_pool().reserved(), 0);
+        assert_eq!(pool.reserved(), 0);
+        assert!(!spill_paths.iter().any(|path| path.exists()));
         Ok(())
     }
 
@@ -966,7 +1240,8 @@ mod tests {
             .build_arc()?;
         let context = Arc::new(TaskContext::default().with_runtime(runtime));
 
-        let mut once = buffer.materialize(Arc::clone(&context))?;
+        // The hold keeps the output between the two scans.
+        let (mut once, _hold) = buffer.materialize(Arc::clone(&context), None)?;
         let output = std::future::poll_fn(|cx| once.get_shared(cx)).await?;
         let partition = &output.partitions[0];
         assert!(partition.batches.is_empty(), "the large batch is in memory");
@@ -984,6 +1259,424 @@ mod tests {
                 .collect();
             assert_eq!(values, (0..6500).collect::<Vec<_>>());
         }
+        Ok(())
+    }
+
+    /// Counts the `execute` calls of `input`.
+    #[derive(Debug)]
+    struct CountingExec {
+        input: Arc<dyn ExecutionPlan>,
+        executions: Arc<AtomicUsize>,
+    }
+
+    impl DisplayAs for CountingExec {
+        fn fmt_as(&self, _: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "CountingExec")
+        }
+    }
+
+    impl ExecutionPlan for CountingExec {
+        fn name(&self) -> &'static str {
+            "CountingExec"
+        }
+
+        fn properties(&self) -> &Arc<PlanProperties> {
+            self.input.properties()
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![&self.input]
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            mut children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                executions: Arc::clone(&self.executions),
+            }))
+        }
+
+        fn execute(
+            &self,
+            partition: usize,
+            context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            self.executions.fetch_add(1, Ordering::Relaxed);
+            self.input.execute(partition, context)
+        }
+    }
+
+    /// A plan `MaterializedCteExec(body, scan)` whose body has the rows
+    /// `0..rows` in batches of one row, and the count of body executions.
+    fn counting_plan(rows: i32) -> Result<(Arc<dyn ExecutionPlan>, Arc<AtomicUsize>)> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batches = (0..rows)
+            .map(|i| {
+                let values = Int32Array::from(vec![i]);
+                RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(values)])
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let executions = Arc::new(AtomicUsize::new(0));
+        let body = Arc::new(CountingExec {
+            input: TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?,
+            executions: Arc::clone(&executions),
+        });
+        let buffer = Arc::new(MaterializedCteBuffer::new(0, "c"));
+        let scan = MaterializedCteScanExec::new(0, "c", schema, 1);
+        let scan = Arc::new(scan.bind(Arc::clone(&buffer)));
+        let plan = Arc::new(MaterializedCteExec::new(body, scan, buffer));
+        Ok((plan, executions))
+    }
+
+    /// The paths of the spill files of `output`.
+    fn spill_paths(output: &MaterializedOutput) -> Vec<std::path::PathBuf> {
+        output
+            .partitions
+            .iter()
+            .flat_map(|partition| &partition.spill_files)
+            .map(|file| file.path().expect("a local file").to_path_buf())
+            .collect()
+    }
+
+    fn values(batches: &[RecordBatch]) -> Vec<i32> {
+        batches
+            .iter()
+            .flat_map(|b| {
+                let array = b.column(0).as_any().downcast_ref::<Int32Array>();
+                array.unwrap().values().to_vec()
+            })
+            .collect()
+    }
+
+    /// Two runs of one plan overlap. Each run has its own `TaskContext`, so
+    /// each run computes the body and holds its own output.
+    #[tokio::test]
+    async fn overlapping_runs_do_not_share_the_output() -> Result<()> {
+        let (plan, executions) = counting_plan(3)?;
+        let context_1 = Arc::new(TaskContext::default());
+        let context_2 = Arc::new(TaskContext::default());
+
+        let mut run_1 = plan.execute(0, Arc::clone(&context_1))?;
+        let first = run_1.next().await.transpose()?.unwrap();
+        assert_eq!(executions.load(Ordering::Relaxed), 1);
+        assert!(context_1.memory_pool().reserved() > 0);
+        assert_eq!(context_2.memory_pool().reserved(), 0);
+
+        // The second run starts and completes while the first run is open.
+        let run_2 = collect(plan.execute(0, Arc::clone(&context_2))?).await?;
+        assert_eq!(values(&run_2), vec![0, 1, 2]);
+        assert_eq!(executions.load(Ordering::Relaxed), 2);
+        // The end of the second run releases its output only.
+        assert_eq!(context_2.memory_pool().reserved(), 0);
+        assert!(context_1.memory_pool().reserved() > 0);
+
+        // One more scan in the first run, while that run is open, replays
+        // the output of that run.
+        let again = collect(plan.execute(0, Arc::clone(&context_1))?).await?;
+        assert_eq!(values(&again), vec![0, 1, 2]);
+        assert_eq!(executions.load(Ordering::Relaxed), 2);
+        assert!(context_1.memory_pool().reserved() > 0);
+
+        let mut run_1_batches = vec![first];
+        run_1_batches.extend(collect(run_1).await?);
+        assert_eq!(values(&run_1_batches), vec![0, 1, 2]);
+        assert_eq!(context_1.memory_pool().reserved(), 0);
+        Ok(())
+    }
+
+    /// `reset_state` returns a new plan and does not change the old plan or
+    /// the output of a run.
+    #[tokio::test]
+    async fn reset_state_leaves_the_old_plan_usable() -> Result<()> {
+        let (plan, executions) = counting_plan(3)?;
+        let context = Arc::new(TaskContext::default());
+
+        let mut stream = plan.execute(0, Arc::clone(&context))?;
+        let first = stream.next().await.transpose()?.unwrap();
+        assert_eq!(executions.load(Ordering::Relaxed), 1);
+
+        let reset = reset_plan_states(Arc::clone(&plan))?;
+        assert!(!Arc::ptr_eq(&plan, &reset));
+
+        // A scan of the old plan that starts after the reset, in the run
+        // that is open, replays the output of that run.
+        let old = collect(plan.execute(0, Arc::clone(&context))?).await?;
+        assert_eq!(values(&old), vec![0, 1, 2]);
+        assert_eq!(executions.load(Ordering::Relaxed), 1);
+
+        // The new plan in the same run also replays that output.
+        let new = collect(reset.execute(0, Arc::clone(&context))?).await?;
+        assert_eq!(values(&new), vec![0, 1, 2]);
+        assert_eq!(executions.load(Ordering::Relaxed), 1);
+
+        let mut batches = vec![first];
+        batches.extend(collect(stream).await?);
+        assert_eq!(values(&batches), vec![0, 1, 2]);
+        assert_eq!(executions.load(Ordering::Relaxed), 1);
+
+        // The new plan in a new run computes the body again.
+        let new = collect(reset.execute(0, Arc::new(TaskContext::default()))?).await?;
+        assert_eq!(values(&new), vec![0, 1, 2]);
+        assert_eq!(executions.load(Ordering::Relaxed), 2);
+        Ok(())
+    }
+
+    /// A context from `with_new_materialized_cte_outputs` computes the given
+    /// CTEs again and keeps the output of the other CTEs.
+    #[tokio::test]
+    async fn new_outputs_are_only_for_the_given_ctes() -> Result<()> {
+        let (plan, executions) = counting_plan(3)?;
+        let context = Arc::new(TaskContext::default());
+        // A stream that is open keeps the output of its context.
+        let _open = plan.execute(0, Arc::clone(&context))?;
+        collect(plan.execute(0, Arc::clone(&context))?).await?;
+        assert_eq!(executions.load(Ordering::Relaxed), 1);
+
+        // The CTE has the id 0, so it keeps its output.
+        let other = with_new_materialized_cte_outputs(&context, &HashSet::from([1]));
+        collect(plan.execute(0, Arc::new(other))?).await?;
+        assert_eq!(executions.load(Ordering::Relaxed), 1);
+
+        let ids = materialized_cte_ids(&plan);
+        assert_eq!(ids, HashSet::from([0]));
+        let renewed = Arc::new(with_new_materialized_cte_outputs(&context, &ids));
+        let _open_renewed = plan.execute(0, Arc::clone(&renewed))?;
+        collect(plan.execute(0, Arc::clone(&renewed))?).await?;
+        collect(plan.execute(0, Arc::clone(&renewed))?).await?;
+        assert_eq!(executions.load(Ordering::Relaxed), 2);
+
+        // A nested context reads the CTEs that it does not renew from the
+        // enclosing context.
+        let nested = with_new_materialized_cte_outputs(&renewed, &HashSet::new());
+        collect(plan.execute(0, Arc::new(nested))?).await?;
+        assert_eq!(executions.load(Ordering::Relaxed), 2);
+
+        // The first context still has its output.
+        collect(plan.execute(0, context)?).await?;
+        assert_eq!(executions.load(Ordering::Relaxed), 2);
+        Ok(())
+    }
+
+    /// A plan with a body of two partitions (the rows `0..rows` in batches of
+    /// 100 rows, one half in each partition), and two scans of two partitions
+    /// each. Also returns the count of body executions.
+    #[expect(clippy::type_complexity)]
+    fn two_scans_plan(
+        rows: i32,
+    ) -> Result<(
+        Arc<MaterializedCteExec>,
+        [Arc<MaterializedCteScanExec>; 2],
+        Arc<AtomicUsize>,
+    )> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let partition = |range: std::ops::Range<i32>| {
+            range
+                .step_by(100)
+                .map(|i| {
+                    let values = Int32Array::from_iter_values(i..i + 100);
+                    RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(values)])
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()
+        };
+        let partitions = [partition(0..rows / 2)?, partition(rows / 2..rows)?];
+        let executions = Arc::new(AtomicUsize::new(0));
+        let body = Arc::new(CountingExec {
+            input: TestMemoryExec::try_new_exec(&partitions, Arc::clone(&schema), None)?,
+            executions: Arc::clone(&executions),
+        });
+        let buffer = Arc::new(MaterializedCteBuffer::new(0, "c"));
+        let scan = MaterializedCteScanExec::new(0, "c", Arc::clone(&schema), 2);
+        let scans = [
+            Arc::new(scan.bind(Arc::clone(&buffer))),
+            Arc::new(scan.bind(Arc::clone(&buffer))),
+        ];
+        let exec = Arc::new(MaterializedCteExec::new(
+            body,
+            Arc::new(EmptyExec::new(schema)),
+            buffer,
+        ));
+        Ok((exec, scans, executions))
+    }
+
+    /// The memory reservations and the spill files are released when the
+    /// last partition of the last scan finishes. The plan, the context of the
+    /// run and the finished streams are still alive.
+    #[tokio::test]
+    async fn output_is_released_when_the_last_scan_partition_finishes() -> Result<()> {
+        let (exec, scans, executions) = two_scans_plan(10_000)?;
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(20_000, 1.0)
+            .build_arc()?;
+        let context = Arc::new(TaskContext::default().with_runtime(runtime));
+        let pool = Arc::clone(context.memory_pool());
+
+        // Read the first three scan partitions one after the other. The
+        // output is not released between them, because the other partitions
+        // can still be executed.
+        let mut paths = vec![];
+        for (scan, partition) in [(0, 0), (1, 1), (0, 1)] {
+            let mut stream = scans[scan].execute(partition, Arc::clone(&context))?;
+            let mut batches = vec![];
+            while let Some(batch) = stream.next().await.transpose()? {
+                batches.push(batch);
+            }
+            let start = partition as i32 * 5000;
+            assert_eq!(values(&batches), (start..start + 5000).collect::<Vec<_>>());
+            // The stream has ended but is not dropped.
+            assert!(pool.reserved() > 0);
+            if paths.is_empty() {
+                let (mut once, _hold) =
+                    exec.buffer.materialize(Arc::clone(&context), None)?;
+                let output = std::future::poll_fn(|cx| once.get_shared(cx)).await?;
+                paths = spill_paths(&output);
+                assert!(!paths.is_empty(), "the body did not spill");
+            }
+            assert!(paths.iter().all(|path| path.exists()));
+        }
+
+        let mut last = scans[1].execute(0, Arc::clone(&context))?;
+        let mut batches = vec![];
+        while let Some(batch) = last.next().await.transpose()? {
+            // The last reader is open.
+            assert!(pool.reserved() > 0);
+            batches.push(batch);
+        }
+        assert_eq!(values(&batches), (0..5000).collect::<Vec<_>>());
+        // The stream has ended. The stream, the plan and the context of the
+        // run are alive.
+        assert_eq!(pool.reserved(), 0);
+        assert!(!paths.iter().any(|path| path.exists()));
+        assert_eq!(executions.load(Ordering::Relaxed), 2);
+        drop((last, exec, context));
+        Ok(())
+    }
+
+    /// A scan stream that is dropped before it is polled, or before its end,
+    /// does not keep the output.
+    #[tokio::test]
+    async fn output_is_released_when_scan_streams_are_dropped_early() -> Result<()> {
+        let (_exec, scans, executions) = two_scans_plan(1000)?;
+        let context = Arc::new(TaskContext::default());
+        let pool = Arc::clone(context.memory_pool());
+
+        // Not polled.
+        let unpolled = scans[0].execute(0, Arc::clone(&context))?;
+        // Dropped after one batch, as below a `LIMIT`.
+        let mut limited = scans[0].execute(1, Arc::clone(&context))?;
+        limited.next().await.transpose()?.unwrap();
+        let mut partial = scans[1].execute(0, Arc::clone(&context))?;
+        partial.next().await.transpose()?.unwrap();
+        let full = collect(scans[1].execute(1, Arc::clone(&context))?).await?;
+        assert_eq!(values(&full), (500..1000).collect::<Vec<_>>());
+
+        // Each scan partition was executed, and three streams are open.
+        assert!(pool.reserved() > 0);
+        drop(unpolled);
+        drop(limited);
+        assert!(pool.reserved() > 0);
+        drop(partial);
+        assert_eq!(pool.reserved(), 0);
+        assert_eq!(executions.load(Ordering::Relaxed), 2);
+        Ok(())
+    }
+
+    /// When every scan stream is dropped before the body completes, the body
+    /// is cancelled and its memory is released.
+    #[tokio::test]
+    async fn body_is_cancelled_when_all_scan_streams_are_dropped() -> Result<()> {
+        let (_exec, scans, _) = two_scans_plan(1000)?;
+        let context = Arc::new(TaskContext::default());
+        let streams = [(0, 0), (0, 1), (1, 0), (1, 1)].map(|(scan, partition)| {
+            scans[scan].execute(partition, Arc::clone(&context))
+        });
+        drop(streams);
+        let outputs = context.run_state().get_or_init::<MaterializedCteOutputs>();
+        assert!(outputs.outputs.lock().is_empty());
+        assert_eq!(context.memory_pool().reserved(), 0);
+        Ok(())
+    }
+
+    /// A scan partition that is never executed keeps the output until the
+    /// context of the run is dropped. The other scans read correct rows.
+    #[tokio::test]
+    async fn partition_that_is_not_executed_keeps_the_output() -> Result<()> {
+        let (_exec, scans, executions) = two_scans_plan(1000)?;
+        let context = Arc::new(TaskContext::default());
+        let pool = Arc::clone(context.memory_pool());
+
+        for (scan, partition) in [(0, 0), (0, 1), (1, 0)] {
+            let batches =
+                collect(scans[scan].execute(partition, Arc::clone(&context))?).await?;
+            let start = partition as i32 * 500;
+            assert_eq!(values(&batches), (start..start + 500).collect::<Vec<_>>());
+        }
+        // Partition 1 of the second scan can still be executed.
+        assert!(pool.reserved() > 0);
+        assert_eq!(executions.load(Ordering::Relaxed), 2);
+        drop(context);
+        assert_eq!(pool.reserved(), 0);
+        Ok(())
+    }
+
+    /// A scan partition that is executed after the release of the output
+    /// computes the body again. It does not read an empty output.
+    #[tokio::test]
+    async fn scan_after_the_release_computes_the_body_again() -> Result<()> {
+        let (plan, executions) = counting_plan(3)?;
+        let context = Arc::new(TaskContext::default());
+        let pool = Arc::clone(context.memory_pool());
+
+        let first = collect(plan.execute(0, Arc::clone(&context))?).await?;
+        assert_eq!(values(&first), vec![0, 1, 2]);
+        assert_eq!(executions.load(Ordering::Relaxed), 1);
+        assert_eq!(pool.reserved(), 0);
+
+        // The same scan partition, in the same run.
+        let mut late = plan.execute(0, Arc::clone(&context))?;
+        let mut batches = vec![late.next().await.transpose()?.unwrap()];
+        assert_eq!(executions.load(Ordering::Relaxed), 2);
+        assert!(pool.reserved() > 0);
+        batches.extend(collect(late).await?);
+        assert_eq!(values(&batches), vec![0, 1, 2]);
+        // The new output is released in the same way.
+        assert_eq!(pool.reserved(), 0);
+        Ok(())
+    }
+
+    /// A hold keeps the output for scans that are executed again, as the
+    /// recursive term of a recursive query is.
+    #[tokio::test]
+    async fn hold_keeps_the_output_between_executions() -> Result<()> {
+        let (plan, executions) = counting_plan(3)?;
+        let cte = plan.downcast_ref::<MaterializedCteExec>().unwrap();
+        let context = Arc::new(TaskContext::default());
+        let pool = Arc::clone(context.memory_pool());
+
+        // The continuation reads the CTE and does not declare it.
+        let holds =
+            hold_materialized_cte_outputs(&cte.continuation, &HashSet::new(), &context);
+        assert_eq!(holds.len(), 1);
+        // The plan declares the CTE, so there is nothing to hold.
+        let ids = materialized_cte_ids(&plan);
+        assert!(hold_materialized_cte_outputs(&plan, &ids, &context).is_empty());
+
+        for _ in 0..3 {
+            let batches = collect(plan.execute(0, Arc::clone(&context))?).await?;
+            assert_eq!(values(&batches), vec![0, 1, 2]);
+            assert_eq!(executions.load(Ordering::Relaxed), 1);
+            assert!(pool.reserved() > 0);
+        }
+        drop(holds);
+        assert_eq!(pool.reserved(), 0);
         Ok(())
     }
 }

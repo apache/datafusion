@@ -593,3 +593,41 @@ async fn test_recursive_cte_batch_schema_stable_with_order_by_limit() -> Result<
     }
     Ok(())
 }
+
+/// The output of a materialized CTE is released when its last scan finishes.
+/// The plan and the `TaskContext` of the run are still alive.
+#[tokio::test]
+async fn materialized_cte_output_is_released_after_the_last_scan() -> Result<()> {
+    use futures::StreamExt;
+
+    // sqlparser only parses `[NOT] MATERIALIZED` for the PostgreSQL dialect.
+    let config = SessionConfig::new()
+        .with_target_partitions(4)
+        .set_str("datafusion.sql_parser.dialect", "PostgreSQL");
+    let ctx = SessionContext::new_with_config(config);
+    // The CTE is read by the two inputs of a join and by a scalar subquery.
+    let plan = ctx
+        .sql(
+            "WITH c AS MATERIALIZED (SELECT value AS v FROM generate_series(1, 20000)) \
+             SELECT count(*) FROM c a JOIN c b ON a.v = b.v \
+             WHERE a.v <= (SELECT max(v) FROM c)",
+        )
+        .await?
+        .create_physical_plan()
+        .await?;
+    let displayed = displayable(plan.as_ref()).indent(true).to_string();
+    assert_eq!(displayed.matches("MaterializedCteScanExec").count(), 3);
+
+    let task_ctx = ctx.task_ctx();
+    let pool = Arc::clone(task_ctx.memory_pool());
+    let mut stream =
+        datafusion::physical_plan::execute_stream(Arc::clone(&plan), task_ctx.clone())?;
+    let mut rows = 0;
+    while let Some(batch) = stream.next().await.transpose()? {
+        rows += batch.column(0).as_primitive::<Int64Type>().value(0);
+    }
+    assert_eq!(rows, 20000);
+    assert_eq!(pool.reserved(), 0);
+    drop((stream, plan, task_ctx));
+    Ok(())
+}
