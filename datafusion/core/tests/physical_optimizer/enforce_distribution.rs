@@ -33,6 +33,7 @@ use arrow::array::{
 };
 use arrow::compute::SortOptions;
 use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
+use datafusion::assert_batches_sorted_eq;
 use datafusion::config::ConfigOptions;
 use datafusion::datasource::MemTable;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
@@ -1016,89 +1017,133 @@ fn date_trunc_expr(
     )))
 }
 
-#[tokio::test]
-async fn range_transform_uncombined_aggregate_is_idempotent() -> Result<()> {
-    let hour = 3_600_000_000_000;
-    for (precision, expected_exchanges, expected_groups) in [
-        ("hour", 0, vec![(0, 2), (hour, 2), (2 * hour, 2)]),
-        ("day", 1, vec![(0, 6)]),
-    ] {
-        let input = timestamp_range_input(hour)?;
-        let input_schema = input.schema();
-        let group_by = PhysicalGroupBy::new_single(vec![(
-            date_trunc_expr(input.as_ref(), precision)?,
-            "bucket".to_string(),
-        )]);
-        let count = Arc::new(
-            AggregateExprBuilder::new(
-                count_udaf(),
-                vec![col("timestamp", &input_schema)?],
-            )
+/// Builds separate Partial and Final stages without projected range metadata.
+/// This exercises checking group locality through the partial stage's input.
+fn partial_final_date_trunc_count(
+    input: Arc<dyn ExecutionPlan>,
+    precision: &str,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let input_schema = input.schema();
+    let group_by = PhysicalGroupBy::new_single(vec![(
+        date_trunc_expr(input.as_ref(), precision)?,
+        "bucket".to_string(),
+    )]);
+    let count = Arc::new(
+        AggregateExprBuilder::new(count_udaf(), vec![col("timestamp", &input_schema)?])
             .schema(Arc::clone(&input_schema))
             .alias("count")
             .build()?,
-        );
-        let partial = Arc::new(AggregateExec::try_new(
-            AggregateMode::Partial,
-            group_by.clone(),
-            vec![Arc::clone(&count)],
-            vec![None],
-            input,
-            Arc::clone(&input_schema),
-        )?);
-        assert!(matches!(
-            partial.properties().output_partitioning(),
-            Partitioning::UnknownPartitioning(2)
-        ));
-        let aggregate = Arc::new(AggregateExec::try_new(
-            AggregateMode::FinalPartitioned,
-            group_by.as_final(),
-            vec![count],
-            vec![None],
-            partial,
-            input_schema,
-        )?);
-        let config = TestConfig::default()
-            .with_query_execution_partitions(2)
-            .config;
+    );
+    let partial = Arc::new(AggregateExec::try_new(
+        AggregateMode::Partial,
+        group_by.clone(),
+        vec![Arc::clone(&count)],
+        vec![None],
+        input,
+        Arc::clone(&input_schema),
+    )?);
+    assert!(matches!(
+        partial.properties().output_partitioning(),
+        Partitioning::UnknownPartitioning(2)
+    ));
+
+    Ok(Arc::new(AggregateExec::try_new(
+        AggregateMode::FinalPartitioned,
+        group_by.as_final(),
+        vec![count],
+        vec![None],
+        partial,
+        input_schema,
+    )?))
+}
+
+#[tokio::test]
+async fn aligned_hour_groups_avoid_shuffle_through_partial_aggregate() -> Result<()> {
+    let hour = 3_600_000_000_000;
+    let input = timestamp_range_input(hour)?;
+    let aggregate = partial_final_date_trunc_count(input, "hour")?;
+    let config = TestConfig::default()
+        .with_query_execution_partitions(2)
+        .config;
+    let optimized = EnsureRequirements::new().optimize(aggregate, &config)?;
+    SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config)?;
+
+    assert_plan!(
+        optimized,
+        @r"
+    AggregateExec: mode=FinalPartitioned, gby=[bucket@0 as bucket], aggr=[count]
+      AggregateExec: mode=Partial, gby=[date_trunc(hour, timestamp@0) as bucket], aggr=[count]
+        DataSourceExec: partitions=2, partition_sizes=[1, 1]
+    "
+    );
+
+    let batches = collect(optimized, SessionContext::new().task_ctx()).await?;
+    assert_batches_sorted_eq!(
+        [
+            "+---------------------+-------+",
+            "| bucket              | count |",
+            "+---------------------+-------+",
+            "| 1970-01-01T00:00:00 | 2     |",
+            "| 1970-01-01T01:00:00 | 2     |",
+            "| 1970-01-01T02:00:00 | 2     |",
+            "+---------------------+-------+",
+        ],
+        &batches
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn crossing_day_groups_keep_shuffle_through_partial_aggregate() -> Result<()> {
+    let hour = 3_600_000_000_000;
+    let input = timestamp_range_input(hour)?;
+    let aggregate = partial_final_date_trunc_count(input, "day")?;
+    let config = TestConfig::default()
+        .with_query_execution_partitions(2)
+        .config;
+    let optimized = EnsureRequirements::new().optimize(aggregate, &config)?;
+    SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config)?;
+
+    assert_plan!(
+        optimized,
+        @r"
+    AggregateExec: mode=FinalPartitioned, gby=[bucket@0 as bucket], aggr=[count]
+      RepartitionExec: partitioning=Hash([bucket@0], 2), input_partitions=2
+        AggregateExec: mode=Partial, gby=[date_trunc(day, timestamp@0) as bucket], aggr=[count]
+          DataSourceExec: partitions=2, partition_sizes=[1, 1]
+    "
+    );
+
+    let batches = collect(optimized, SessionContext::new().task_ctx()).await?;
+    assert_batches_sorted_eq!(
+        [
+            "+---------------------+-------+",
+            "| bucket              | count |",
+            "+---------------------+-------+",
+            "| 1970-01-01T00:00:00 | 6     |",
+            "+---------------------+-------+",
+        ],
+        &batches
+    );
+    Ok(())
+}
+
+#[test]
+fn range_transform_aggregate_optimization_is_idempotent() -> Result<()> {
+    let hour = 3_600_000_000_000;
+    let config = TestConfig::default()
+        .with_query_execution_partitions(2)
+        .config;
+
+    for precision in ["hour", "day"] {
+        let input = timestamp_range_input(hour)?;
+        let aggregate = partial_final_date_trunc_count(input, precision)?;
         let optimized = EnsureRequirements::new().optimize(aggregate, &config)?;
         SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config)?;
-        let rendered = displayable(optimized.as_ref()).indent(true).to_string();
-        assert_eq!(
-            rendered.matches("RepartitionExec:").count(),
-            expected_exchanges,
-            "{precision}: {rendered}"
-        );
-        assert!(rendered.contains("mode=Partial,"), "{rendered}");
-        assert!(rendered.contains("mode=FinalPartitioned,"), "{rendered}");
         let reoptimized =
             EnsureRequirements::new().optimize(Arc::clone(&optimized), &config)?;
         SanityCheckPlan::new().optimize(Arc::clone(&reoptimized), &config)?;
         assert_plan!(optimized, reoptimized);
-
-        let batches = collect(reoptimized, SessionContext::new().task_ctx()).await?;
-        let mut groups = batches
-            .iter()
-            .flat_map(|batch| {
-                let buckets = batch
-                    .column(0)
-                    .as_any()
-                    .downcast_ref::<TimestampNanosecondArray>()
-                    .unwrap();
-                let counts = batch
-                    .column(1)
-                    .as_any()
-                    .downcast_ref::<Int64Array>()
-                    .unwrap();
-                buckets
-                    .values()
-                    .iter()
-                    .copied()
-                    .zip(counts.values().iter().copied())
-            })
-            .collect::<Vec<_>>();
-        groups.sort_unstable();
-        assert_eq!(groups, expected_groups, "{precision}");
     }
     Ok(())
 }
