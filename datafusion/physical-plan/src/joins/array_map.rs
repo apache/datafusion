@@ -19,7 +19,7 @@ use arrow_schema::DataType;
 use num_traits::AsPrimitive;
 use std::mem::size_of;
 
-use crate::joins::chain::traverse_chain;
+use crate::joins::chain::emit_grouped_rows;
 use crate::joins::join_hash_map::ProbeOffset;
 use crate::joins::join_hash_map::ProbeOffset::{AtRow, MidChain};
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray};
@@ -56,8 +56,10 @@ macro_rules! downcast_supported_integer {
 
 /// A dense map for single-column integer join keys within a limited range.
 ///
-/// Maps join keys to build-side indices using direct array indexing:
-/// `data[val - min_val_in_build_side] -> val_idx_in_build_side + 1`.
+/// Maps join keys to build-side indices using direct array indexing, at the
+/// slot `val - min_val_in_build_side`. When no key has more than one build
+/// row, the slot holds that row (+1). Otherwise every key's build rows are
+/// stored next to each other, see [`KeyRows::Grouped`].
 ///
 /// NULL values are ignored on both the build side and the probe side.
 ///
@@ -102,15 +104,27 @@ macro_rules! downcast_supported_integer {
 /// This correctly maps `-5` to index `0`, `0` to index `5`, etc.
 #[derive(Debug)]
 pub struct ArrayMap {
-    // data[probSideVal-offset] -> valIdxInBuildSide + 1; 0 for absent
-    data: Vec<u32>,
+    // The build rows of each key
+    rows: KeyRows,
     // min val in buildSide
     offset: u64,
-    // next[buildSideIdx] -> next matching valIdxInBuildSide + 1; 0 for end of chain.
-    // If next is empty, it means there are no duplicate keys (no conflicts).
-    // It uses the same chain-based conflict resolution as [`JoinHashMapType`].
-    next: Vec<u32>,
     num_of_distinct_key: usize,
+}
+
+/// The build rows of the keys of an [`ArrayMap`], by slot (`key - offset`).
+#[derive(Debug)]
+enum KeyRows {
+    /// No key has more than one build row: `data[slot]` is the key's build
+    /// row + 1, or `0` if the key is absent.
+    Unique { data: Vec<u32> },
+    /// Some key has more than one build row. The build rows of the key in
+    /// `slot` are `rows[starts[slot]..starts[slot + 1]]`, in build order, and
+    /// `starts` has one more element than there are slots.
+    ///
+    /// A probe row with a repeated key reads its matches from one place in
+    /// `rows`. Following a chain from row to row instead costs a dependent
+    /// load for every match, a cache miss when the build side is large.
+    Grouped { starts: Vec<u32>, rows: Vec<u32> },
 }
 
 impl ArrayMap {
@@ -149,8 +163,11 @@ impl ArrayMap {
         if range >= usize::MAX as u64 {
             return usize::MAX;
         }
-        let size = (range + 1) as usize;
-        size.saturating_mul(size_of::<u32>())
+        // One slot more than the key range, for the end of the last key's rows
+        // if some key repeats
+        let slots = (range + 2) as usize;
+        slots
+            .saturating_mul(size_of::<u32>())
             .saturating_add(num_rows.saturating_mul(size_of::<u32>()))
     }
 
@@ -180,60 +197,88 @@ impl ArrayMap {
         }
         let size = (range + 1) as usize;
 
-        let mut data: Vec<u32> = vec![0; size];
-        let mut next: Vec<u32> = vec![];
-        let mut num_of_distinct_key = 0;
-
         downcast_supported_integer!(
             array.data_type() => (
-                fill_data,
+                build,
                 array,
                 min_val,
-                &mut data,
-                &mut next,
-                &mut num_of_distinct_key
+                size
             )
-        )?;
-
-        Ok(Self {
-            data,
-            offset: min_val,
-            next,
-            num_of_distinct_key,
-        })
+        )
     }
 
-    fn fill_data<T: ArrowNumericType>(
+    fn build<T: ArrowNumericType>(
         array: &ArrayRef,
-        offset_val: u64,
-        data: &mut [u32],
-        next: &mut Vec<u32>,
-        num_of_distinct_key: &mut usize,
-    ) -> Result<()>
+        offset: u64,
+        size: usize,
+    ) -> Result<Self>
     where
         T::Native: AsPrimitive<u64>,
     {
         let arr = array.as_primitive::<T>();
-        // Iterate in reverse to maintain FIFO order when there are duplicate keys.
-        for (i, val) in arr.iter().enumerate().rev() {
-            if let Some(val) = val {
-                let key: u64 = val.as_();
-                let Some(idx) = Self::key_to_index(key, offset_val, data.len()) else {
-                    return internal_err!("failed build Array idx >= data.len()");
-                };
-
-                if data[idx] != 0 {
-                    if next.is_empty() {
-                        *next = vec![0; array.len()]
-                    }
-                    next[i] = data[idx]
-                } else {
-                    *num_of_distinct_key += 1;
-                }
-                data[idx] = (i) as u32 + 1;
+        let mut data: Vec<u32> = vec![0; size];
+        let mut num_of_distinct_key = 0;
+        let mut unique = true;
+        for (i, val) in arr.iter().enumerate() {
+            let Some(val) = val else { continue };
+            let Some(idx) = Self::key_to_index(val.as_(), offset, size) else {
+                return internal_err!("failed build Array idx >= data.len()");
+            };
+            if data[idx] != 0 {
+                unique = false;
+                break;
             }
+            data[idx] = i as u32 + 1;
+            num_of_distinct_key += 1;
         }
-        Ok(())
+        if unique {
+            return Ok(Self {
+                rows: KeyRows::Unique { data },
+                offset,
+                num_of_distinct_key,
+            });
+        }
+
+        // Some key repeats, so group the build rows by key with a counting
+        // sort, reusing the allocation. First count each key's rows...
+        let mut starts = data;
+        starts.fill(0);
+        // One more slot, for the end of the last key's rows
+        starts.reserve_exact(1);
+        starts.push(0);
+        num_of_distinct_key = 0;
+        for val in arr.iter().flatten() {
+            let Some(idx) = Self::key_to_index(val.as_(), offset, size) else {
+                return internal_err!("failed build Array idx >= data.len()");
+            };
+            if starts[idx] == 0 {
+                num_of_distinct_key += 1;
+            }
+            starts[idx] += 1;
+        }
+        // ...then turn the counts into the end of each key's rows...
+        let mut end = 0;
+        for count in &mut starts[..size] {
+            end += *count;
+            *count = end;
+        }
+        starts[size] = end;
+        // ...and place the rows from the last to the first, which moves the
+        // end of each key's rows back to their start and keeps them in order.
+        let mut rows = vec![0; end as usize];
+        for (i, val) in arr.iter().enumerate().rev() {
+            let Some(val) = val else { continue };
+            // In range: every key was checked when it was counted.
+            let idx = val.as_().wrapping_sub(offset) as usize;
+            starts[idx] -= 1;
+            rows[starts[idx] as usize] = i as u32;
+        }
+
+        Ok(Self {
+            rows: KeyRows::Grouped { starts, rows },
+            offset,
+            num_of_distinct_key,
+        })
     }
 
     pub fn num_of_distinct_key(&self) -> usize {
@@ -242,7 +287,12 @@ impl ArrayMap {
 
     /// Returns the memory usage of this [`ArrayMap`] in bytes.
     pub fn size(&self) -> usize {
-        self.data.capacity() * size_of::<u32>() + self.next.capacity() * size_of::<u32>()
+        match &self.rows {
+            KeyRows::Unique { data } => data.capacity() * size_of::<u32>(),
+            KeyRows::Grouped { starts, rows } => {
+                (starts.capacity() + rows.capacity()) * size_of::<u32>()
+            }
+        }
     }
 
     pub fn get_matched_indices_with_limit_offset(
@@ -274,14 +324,27 @@ impl ArrayMap {
         )
     }
 
-    /// Looks up `key` (a raw probe value cast to `u64`) in the build side,
-    /// returning the 1-based build-side slot if the key maps to a non-empty
-    /// bucket, or `None` otherwise.
+    /// Returns the slot of `key` (a raw probe value cast to `u64`), or `None`
+    /// if it is outside the build side's key range.
     #[inline]
-    fn get_value(&self, key: u64) -> Option<u32> {
-        let idx = Self::key_to_index(key, self.offset, self.data.len())?;
-        let value = self.data[idx];
-        (value != 0).then_some(value)
+    fn slot(&self, key: u64) -> Option<usize> {
+        let slots = match &self.rows {
+            KeyRows::Unique { data } => data.len(),
+            KeyRows::Grouped { starts, .. } => starts.len() - 1,
+        };
+        Self::key_to_index(key, self.offset, slots)
+    }
+
+    /// Returns whether `key` (a raw probe value cast to `u64`) has a build row.
+    #[inline]
+    fn contains(&self, key: u64) -> bool {
+        let Some(slot) = self.slot(key) else {
+            return false;
+        };
+        match &self.rows {
+            KeyRows::Unique { data } => data[slot] != 0,
+            KeyRows::Grouped { starts, .. } => starts[slot] != starts[slot + 1],
+        }
     }
 
     fn lookup_and_get_indices<T: ArrowNumericType>(
@@ -302,86 +365,111 @@ impl ArrayMap {
 
         let have_null = arr.null_count() > 0;
 
-        if self.next.is_empty() {
-            debug_assert!(
-                matches!(current_offset, AtRow { .. }),
-                "since the next offset is empty, mid-chain is not possible"
-            );
-            let rows = match current_offset {
-                AtRow { row } => row,
-                MidChain { row, .. } => row,
-            };
-            for prob_idx in rows..arr.len() {
-                if build_indices.len() == limit {
-                    return Ok(Some(AtRow { row: prob_idx }));
-                }
-
-                // short circuit
-                if have_null && arr.is_null(prob_idx) {
-                    continue;
-                }
-                // SAFETY: prob_idx is guaranteed to be within bounds by the loop range.
-                let prob_val: u64 = unsafe { arr.value_unchecked(prob_idx) }.as_();
-                let Some(build_value) = self.get_value(prob_val) else {
-                    continue;
+        match &self.rows {
+            KeyRows::Unique { data } => {
+                debug_assert!(
+                    matches!(current_offset, AtRow { .. }),
+                    "unique keys cannot have mid-chain"
+                );
+                let rows = match current_offset {
+                    AtRow { row } => row,
+                    MidChain { row, .. } => row,
                 };
-                build_indices.push((build_value - 1) as u64);
-                probe_indices.push(prob_idx as u32);
+                for prob_idx in rows..arr.len() {
+                    if build_indices.len() == limit {
+                        return Ok(Some(AtRow { row: prob_idx }));
+                    }
+
+                    // short circuit
+                    if have_null && arr.is_null(prob_idx) {
+                        continue;
+                    }
+                    // SAFETY: prob_idx is guaranteed to be within bounds by the loop range.
+                    let prob_val: u64 = unsafe { arr.value_unchecked(prob_idx) }.as_();
+                    let Some(slot) =
+                        Self::key_to_index(prob_val, self.offset, data.len())
+                    else {
+                        continue;
+                    };
+                    let build_value = data[slot];
+                    if build_value == 0 {
+                        continue;
+                    }
+                    build_indices.push((build_value - 1) as u64);
+                    probe_indices.push(prob_idx as u32);
+                }
             }
-        } else {
-            let mut remaining_output = limit;
-            let to_skip = match current_offset {
-                // `AtRow` indicates that `idx` processing hasn't been started
-                AtRow { row: idx } => idx,
-                // Otherwise, process remaining `idx` matches by traversing `next_chain`,
-                // to start with the next index
-                MidChain {
-                    row: idx,
-                    next: next_idx,
-                } => {
-                    let is_last = idx == arr.len() - 1;
-                    if let Some(next_offset) = traverse_chain(
-                        &self.next,
-                        idx,
-                        next_idx as u32,
+            KeyRows::Grouped { starts, rows } => {
+                let slots = starts.len() - 1;
+                let mut remaining_output = limit;
+                let to_skip = match current_offset {
+                    // `AtRow` indicates that `idx` processing hasn't been started
+                    AtRow { row: idx } => idx,
+                    // Otherwise, emit the rest of `idx`'s matches, from position
+                    // `next` in `rows`
+                    MidChain {
+                        row: idx,
+                        next: next_pos,
+                    } => {
+                        // SAFETY: `idx` is a probe row that matched before.
+                        let prob_val: u64 = unsafe { arr.value_unchecked(idx) }.as_();
+                        let Some(slot) = Self::key_to_index(prob_val, self.offset, slots)
+                        else {
+                            return internal_err!(
+                                "ArrayMap resumed at an unmatched probe row"
+                            );
+                        };
+                        let is_last = idx == arr.len() - 1;
+                        if let Some(next_offset) = emit_grouped_rows(
+                            rows,
+                            next_pos as usize,
+                            starts[slot + 1] as usize,
+                            idx,
+                            &mut remaining_output,
+                            probe_indices,
+                            build_indices,
+                            is_last,
+                        ) {
+                            return Ok(Some(next_offset));
+                        }
+                        idx + 1
+                    }
+                };
+
+                for prob_side_idx in to_skip..arr.len() {
+                    if remaining_output == 0 {
+                        return Ok(Some(AtRow { row: prob_side_idx }));
+                    }
+
+                    if have_null && arr.is_null(prob_side_idx) {
+                        continue;
+                    }
+
+                    // SAFETY: prob_idx is guaranteed to be within bounds by the loop range.
+                    let prob_val: u64 =
+                        unsafe { arr.value_unchecked(prob_side_idx) }.as_();
+                    let Some(slot) = Self::key_to_index(prob_val, self.offset, slots)
+                    else {
+                        continue;
+                    };
+                    let (start, end) = (starts[slot] as usize, starts[slot + 1] as usize);
+                    if start == end {
+                        continue;
+                    }
+
+                    let is_last = prob_side_idx == arr.len() - 1;
+                    if let Some(offset) = emit_grouped_rows(
+                        rows,
+                        start,
+                        end,
+                        prob_side_idx,
                         &mut remaining_output,
                         probe_indices,
                         build_indices,
                         is_last,
                     ) {
-                        return Ok(Some(next_offset));
+                        return Ok(Some(offset));
                     }
-                    idx + 1
-                }
-            };
-
-            for prob_side_idx in to_skip..arr.len() {
-                if remaining_output == 0 {
-                    return Ok(Some(AtRow { row: prob_side_idx }));
-                }
-
-                if have_null && arr.is_null(prob_side_idx) {
-                    continue;
-                }
-
-                let is_last = prob_side_idx == arr.len() - 1;
-
-                // SAFETY: prob_idx is guaranteed to be within bounds by the loop range.
-                let prob_val: u64 = unsafe { arr.value_unchecked(prob_side_idx) }.as_();
-                let Some(build_idx) = self.get_value(prob_val) else {
-                    continue;
-                };
-
-                if let Some(offset) = traverse_chain(
-                    &self.next,
-                    prob_side_idx,
-                    build_idx,
-                    &mut remaining_output,
-                    probe_indices,
-                    build_indices,
-                    is_last,
-                ) {
-                    return Ok(Some(offset));
                 }
             }
         }
@@ -420,7 +508,7 @@ impl ArrayMap {
             }
             // SAFETY: i is within bounds [0, arr.len())
             let key: u64 = unsafe { arr.value_unchecked(i) }.as_();
-            self.get_value(key).is_some()
+            self.contains(key)
         });
         Ok(BooleanArray::new(buffer, None))
     }
@@ -456,12 +544,93 @@ mod tests {
             results.push((prob_idx.clone(), build_idx.clone(), next));
         }
 
+        // Key 1's rows are at positions 0 and 1 of the grouped rows, so the
+        // first call stops before position 1.
         let expected = vec![
-            (vec![0], vec![0], Some(MidChain { row: 0, next: 2 })),
+            (vec![0], vec![0], Some(MidChain { row: 0, next: 1 })),
             (vec![0], vec![1], Some(AtRow { row: 1 })),
             (vec![1], vec![2], None),
         ];
         assert_eq!(results, expected);
+        Ok(())
+    }
+
+    /// Collects every match of `probe`, `limit` at a time.
+    fn all_matches(
+        map: &ArrayMap,
+        probe: &[ArrayRef],
+        limit: usize,
+    ) -> Result<Vec<(u32, u64)>> {
+        let mut matches = vec![];
+        let (mut probe_indices, mut build_indices) = (vec![], vec![]);
+        let mut offset = AtRow { row: 0 };
+        loop {
+            let next = map.get_matched_indices_with_limit_offset(
+                probe,
+                limit,
+                offset,
+                &mut probe_indices,
+                &mut build_indices,
+            )?;
+            assert!(probe_indices.len() <= limit);
+            matches.extend(
+                probe_indices
+                    .iter()
+                    .copied()
+                    .zip(build_indices.iter().copied()),
+            );
+            match next {
+                Some(next) => offset = next,
+                None => return Ok(matches),
+            }
+        }
+    }
+
+    #[test]
+    fn test_array_map_grouped_rows_keep_build_order() -> Result<()> {
+        // Keys -5 to 17 that repeat, with NULLs
+        let build_keys: Vec<Option<i32>> = (0..300)
+            .map(|i| (i % 11 != 0).then_some((i * 37 % 23) - 5))
+            .collect();
+        let build: ArrayRef = Arc::new(Int32Array::from(build_keys.clone()));
+        let map = ArrayMap::try_new(&build, -5_i32 as u64, 17_i32 as u64)?;
+        assert!(matches!(map.rows, KeyRows::Grouped { .. }));
+        assert_eq!(map.num_of_distinct_key(), 23);
+        assert!(
+            map.size()
+                <= ArrayMap::estimate_memory_size(-5_i32 as u64, 17_i32 as u64, 300)
+        );
+
+        // Probe keys that repeat, are out of range, or are NULL
+        let probe_keys: Vec<Option<i32>> = (0..60)
+            .map(|i| (i % 13 != 4).then_some((i * 5 % 31) - 8))
+            .collect();
+        let probe = [Arc::new(Int32Array::from(probe_keys.clone())) as ArrayRef];
+
+        // Each probe row matches the build rows with its key, in build order
+        let expected: Vec<(u32, u64)> = probe_keys
+            .iter()
+            .enumerate()
+            .flat_map(|(p, probe_key)| {
+                build_keys
+                    .iter()
+                    .enumerate()
+                    .filter_map(move |(b, build_key)| {
+                        (probe_key.is_some() && probe_key == build_key)
+                            .then_some((p as u32, b as u64))
+                    })
+            })
+            .collect();
+        assert!(!expected.is_empty());
+        for limit in [1, 2, 3, 7, 13, 8192] {
+            assert_eq!(all_matches(&map, &probe, limit)?, expected, "limit {limit}");
+        }
+
+        let contains = map.contain_keys(&probe)?;
+        for (p, probe_key) in probe_keys.iter().enumerate() {
+            let has_match = probe_key.is_some() && build_keys.contains(probe_key);
+            assert_eq!(contains.value(p), has_match, "probe row {p}");
+        }
         Ok(())
     }
 
@@ -520,7 +689,8 @@ mod tests {
 
         assert_eq!(prob_indices, vec![1, 1, 3]);
         assert_eq!(build_indices, vec![0, 1, 0]);
-        assert_eq!(result_offset, Some(MidChain { row: 3, next: 2 }));
+        // Resume at position 1 of key 1's grouped rows.
+        assert_eq!(result_offset, Some(MidChain { row: 3, next: 1 }));
         Ok(())
     }
 
