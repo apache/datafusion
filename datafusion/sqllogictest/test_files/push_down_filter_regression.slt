@@ -146,7 +146,7 @@ physical_plan
 01)AggregateExec: mode=Final, gby=[], aggr=[max(agg_dyn_test.id)]
 02)--CoalescePartitionsExec
 03)----AggregateExec: mode=Partial, gby=[], aggr=[max(agg_dyn_test.id)]
-04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-01/j5fUeSDQo22oPyPU.parquet, WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-02/j5fUeSDQo22oPyPU.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-03/j5fUeSDQo22oPyPU.parquet, WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-04/j5fUeSDQo22oPyPU.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 > 1 AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 1, required_guarantees=[]
+04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-01/j5fUeSDQo22oPyPU.parquet, WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-02/j5fUeSDQo22oPyPU.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-03/j5fUeSDQo22oPyPU.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 > 1 AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 1, required_guarantees=[]
 
 query I
 select max(id) from agg_dyn_test where id > 1;
