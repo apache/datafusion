@@ -1398,13 +1398,9 @@ Timestamp(ns, "+00:00") 2024-07-01T06:00:00Z
 ##########
 ## SECTION 16: DST boundaries
 ##
-## KNOWN WRONG, and the single largest divergence in this file: DataFusion
-## cannot represent an ambiguous or non-existent local time in a named zone at
-## all. Every route into a named zone -- a column cast, `AT TIME ZONE`, a
-## string literal, or `::timestamptz` under a session zone -- fails with an
-## error, where PostgreSQL resolves the value.
-##
-## PostgreSQL's answers, for reference:
+## Casting a naive timestamp into a named zone (a column cast or
+## `AT TIME ZONE`) resolves an ambiguous or non-existent local time the way
+## PostgreSQL does, since https://github.com/apache/arrow-rs/pull/11038:
 ##   ambiguous 2024-11-03 01:30:00 America/Denver -> 2024-11-03 01:30:00-07
 ##       (the second, standard-time occurrence)
 ##   nonexistent 2024-03-10 02:30:00 America/Denver -> 2024-03-10 03:30:00-06
@@ -1412,19 +1408,17 @@ Timestamp(ns, "+00:00") 2024-07-01T06:00:00Z
 ##   ambiguous 2024-10-27 02:30:00 Europe/Brussels -> 2024-10-27 02:30:00+01
 ##   nonexistent 2024-03-31 02:30:00 Europe/Brussels -> 2024-03-31 03:30:00+02
 ##
-## Note that the column path and the literal path fail with *different* errors
-## even though the value is identical: the column path reports
-## "Cannot cast timezone to different timezone" from the Arrow cast kernel,
-## while the literal path is folded by `simplify_expressions` and reports
-## "error computing timezone offset" from the Arrow timestamp parser.
+## KNOWN WRONG: the *parsing* routes into a named zone -- a string literal cast
+## to a timestamp with a named zone, or `::timestamptz` under a session zone --
+## still fail with "error computing timezone offset" from the Arrow timestamp
+## parser, where PostgreSQL resolves the value.
 ##
-## See https://github.com/apache/datafusion/issues/25084 and the arrow-rs fix
-## https://github.com/apache/arrow-rs/pull/11038
+## See https://github.com/apache/datafusion/issues/25084
 ##########
 
 # --- US fall back: 2024-11-03 01:30:00 America/Denver occurs twice ---
 
-# The naive value itself is fine; only the move into a named zone fails.
+# The naive value itself is fine
 query P
 SELECT '2024-11-03 01:30:00'::timestamp
 ----
@@ -1433,25 +1427,29 @@ SELECT '2024-11-03 01:30:00'::timestamp
 statement ok
 CREATE TABLE dst_ambiguous AS VALUES ('2024-11-03 01:30:00'::timestamp)
 
-# These expectations match only the stable `Arrow error: ...` tail. The wrapper
-# chain above it (optimizer rule, field context) is not what these cases pin,
-# and it changed in https://github.com/apache/datafusion/pull/24920.
-query error Arrow error: Cast error: Cannot cast timezone to different timezone
+# The ambiguous wall clock resolves to the second (standard time) occurrence
+query P
 SELECT column1 AT TIME ZONE 'America/Denver' FROM dst_ambiguous
+----
+2024-11-03T01:30:00-07:00
 
-query error Arrow error: Cast error: Cannot cast timezone to different timezone
+query P
 SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("America/Denver"))') FROM dst_ambiguous
+----
+2024-11-03T01:30:00-07:00
 
-# The same wall clock arriving as a string literal instead of a column
+# The same wall clock arriving as a string literal instead of a column still
+# fails, as it goes through the timestamp parser rather than the cast kernel
 query error Arrow\ error:\ Parser\ error:\ Error\ parsing\ timestamp\ from\ '2024\-11\-03T01:30:00':\ error\ computing\ timezone\ offset
 SELECT arrow_cast('2024-11-03T01:30:00', 'Timestamp(Nanosecond, Some("America/Denver"))')
 
-query error Arrow\ error:\ Cast\ error:\ Cannot\ cast\ timezone\ to\ different\ timezone
+query P
 SELECT TIMESTAMP '2024-11-03 01:30:00' AT TIME ZONE 'America/Denver'
+----
+2024-11-03T01:30:00-07:00
 
-# Both instants are representable when the offset is spelled out explicitly --
-# it is only the *resolution* of a bare wall clock that fails. Note the two
-# rows differ solely in the rendered offset.
+# Both instants are representable when the offset is spelled out explicitly.
+# Note the two rows differ solely in the rendered offset.
 query PP
 SELECT arrow_cast('2024-11-03T07:30:00Z', 'Timestamp(Nanosecond, Some("America/Denver"))'),
        arrow_cast('2024-11-03T08:30:00Z', 'Timestamp(Nanosecond, Some("America/Denver"))')
@@ -1463,17 +1461,23 @@ SELECT arrow_cast('2024-11-03T07:30:00Z', 'Timestamp(Nanosecond, Some("America/D
 statement ok
 CREATE TABLE dst_nonexistent AS VALUES ('2024-03-10 02:30:00'::timestamp)
 
-query error Arrow error: Cast error: Cannot cast timezone to different timezone
+query P
 SELECT column1 AT TIME ZONE 'America/Denver' FROM dst_nonexistent
+----
+2024-03-10T03:30:00-06:00
 
-query error Arrow error: Cast error: Cannot cast timezone to different timezone
+query P
 SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("America/Denver"))') FROM dst_nonexistent
+----
+2024-03-10T03:30:00-06:00
 
 query error Arrow\ error:\ Parser\ error:\ Error\ parsing\ timestamp\ from\ '2024\-03\-10T02:30:00':\ error\ computing\ timezone\ offset
 SELECT arrow_cast('2024-03-10T02:30:00', 'Timestamp(Nanosecond, Some("America/Denver"))')
 
-query error Arrow\ error:\ Cast\ error:\ Cannot\ cast\ timezone\ to\ different\ timezone
+query P
 SELECT TIMESTAMP '2024-03-10 02:30:00' AT TIME ZONE 'America/Denver'
+----
+2024-03-10T03:30:00-06:00
 
 statement ok
 SET datafusion.execution.time_zone = 'America/Denver'
@@ -1492,11 +1496,17 @@ RESET datafusion.execution.time_zone
 statement ok
 CREATE TABLE dst_eu AS VALUES ('2024-10-27 02:30:00'::timestamp), ('2024-03-31 02:30:00'::timestamp)
 
-query error Arrow error: Cast error: Cannot cast timezone to different timezone
+query P
 SELECT column1 AT TIME ZONE 'Europe/Brussels' FROM dst_eu
+----
+2024-10-27T02:30:00+01:00
+2024-03-31T03:30:00+02:00
 
-query error Arrow error: Cast error: Cannot cast timezone to different timezone
+query P
 SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("Europe/Brussels"))') FROM dst_eu
+----
+2024-10-27T02:30:00+01:00
+2024-03-31T03:30:00+02:00
 
 query error Arrow\ error:\ Parser\ error:\ Error\ parsing\ timestamp\ from\ '2024\-10\-27T02:30:00':\ error\ computing\ timezone\ offset
 SELECT arrow_cast('2024-10-27T02:30:00', 'Timestamp(Nanosecond, Some("Europe/Brussels"))')
@@ -1517,9 +1527,9 @@ statement ok
 RESET datafusion.execution.time_zone
 
 # A tz-aware column crossing the fall-back boundary. Constructing the values
-# from explicit UTC instants sidesteps the failure above, so the behaviour of
-# date_trunc / date_bin / date_part / interval arithmetic across a repeated
-# hour can still be pinned down.
+# from explicit UTC instants covers both occurrences of the repeated hour, so
+# the behaviour of date_trunc / date_bin / date_part / interval arithmetic
+# across it can be pinned down.
 statement ok
 CREATE TABLE dst_cross AS
 SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("America/Denver"))') AS ts
