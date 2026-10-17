@@ -890,6 +890,107 @@ statement ok
 DROP TABLE t_struct_filter;
 
 ##########
+# IS NULL / IS NOT NULL on a whole struct column is pushed down and reads one
+# leaf, since the decoder rebuilds the struct's null bitmap from any leaf.
+# See https://github.com/apache/datafusion/issues/21795.
+##########
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+statement ok
+COPY (
+  SELECT column1 as id, column2 as s
+  FROM VALUES
+    (1, {x: 10, y: 100}),
+    (2, NULL),
+    (3, {x: 30, y: 300}),
+    (4, NULL)
+) TO 'test_files/scratch/parquet_filter_pushdown/struct_null_check.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE t_struct_null_check
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_filter_pushdown/struct_null_check.parquet';
+
+# The predicate lands in DataSourceExec with no FilterExec above it.
+query TT
+EXPLAIN SELECT id FROM t_struct_null_check WHERE s IS NOT NULL ORDER BY id;
+----
+logical_plan
+01)Sort: t_struct_null_check.id ASC NULLS LAST
+02)--Projection: t_struct_null_check.id
+03)----Filter: t_struct_null_check.s IS NOT NULL
+04)------TableScan: t_struct_null_check projection=[id, s], partial_filters=[t_struct_null_check.s IS NOT NULL]
+physical_plan
+01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/struct_null_check.parquet]]}, projection=[id], file_type=parquet, predicate=s@1 IS NOT NULL, sort_order_for_reorder=[id@0 ASC NULLS LAST], pruning_predicate=s_null_count@1 != row_count@0, required_guarantees=[]
+
+query I
+SELECT id FROM t_struct_null_check WHERE s IS NOT NULL ORDER BY id;
+----
+1
+3
+
+query I
+SELECT id FROM t_struct_null_check WHERE s IS NULL ORDER BY id;
+----
+2
+4
+
+query II
+SELECT id, s['x'] FROM t_struct_null_check WHERE s IS NOT NULL AND s['x'] > 1 ORDER BY id;
+----
+1 10
+3 30
+
+# Row group 1 holds non-null structs whose `x` is null in every row; it must
+# not be pruned by the leaf's null count.
+statement ok
+COPY (
+  SELECT column1 as id, column2 as s
+  FROM VALUES
+    (1, named_struct('x', arrow_cast(NULL, 'Int32'), 'y', 100)),
+    (2, named_struct('x', arrow_cast(NULL, 'Int32'), 'y', 200)),
+    (3, named_struct('x', arrow_cast(NULL, 'Int32'), 'y', 300)),
+    (4, NULL),
+    (5, NULL),
+    (6, NULL)
+) TO 'test_files/scratch/parquet_filter_pushdown/struct_null_leaf.parquet'
+STORED AS PARQUET
+OPTIONS (max_row_group_size 3);
+
+statement ok
+CREATE EXTERNAL TABLE t_struct_null_leaf
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_filter_pushdown/struct_null_leaf.parquet';
+
+query I
+SELECT id FROM t_struct_null_leaf WHERE s IS NOT NULL ORDER BY id;
+----
+1
+2
+3
+
+query I
+SELECT id FROM t_struct_null_leaf WHERE s IS NULL ORDER BY id;
+----
+4
+5
+6
+
+# Clean up
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+statement ok
+DROP TABLE t_struct_null_check;
+
+statement ok
+DROP TABLE t_struct_null_leaf;
+
+##########
 # Filters on struct fields, with pushdown enabled, where the declared table
 # schema differs from the physical file schema and the scan therefore has to
 # adapt the struct column.
