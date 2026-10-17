@@ -3398,6 +3398,18 @@ async fn collect_left_input(
             offset += batch.num_rows();
         }
 
+        // Store the rows of each repeated key next to each other, so that a
+        // probe reads its matches in order. Keep the chain if the memory for
+        // the groups is not available.
+        if let Some(size) = hashmap.grouped_rows_size()
+            && reservation.try_grow(size).is_ok()
+        {
+            metrics.build_mem_used.add(size);
+            let freed = hashmap.group_rows();
+            reservation.shrink(freed);
+            metrics.build_mem_used.sub(freed);
+        }
+
         // Merge all batches into a single batch, so we can directly index into the arrays
         let batch = if prepared {
             concat_batches(&schema, batches.iter().rev())?

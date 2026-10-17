@@ -79,7 +79,7 @@ impl JoinHashMapType for PruningJoinHashMap {
             (head, []) => Cow::Borrowed(head),
             _ => Cow::Owned(self.next.iter().copied().collect()),
         };
-        get_matched_indices::<u64>(&self.map, &next, iter, deleted_offset)
+        get_matched_indices::<u64>(&self.map, &next, &[], iter, deleted_offset)
     }
 
     fn get_matched_indices_with_limit_offset(
@@ -96,6 +96,7 @@ impl JoinHashMapType for PruningJoinHashMap {
         get_matched_indices_with_limit_offset::<u64>(
             &self.map,
             &next,
+            &[],
             self.map.len() == next.len(),
             hash_values,
             valid_keys,
