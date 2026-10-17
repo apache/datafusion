@@ -2560,3 +2560,56 @@ RESET datafusion.optimizer.max_passes;
 
 statement ok
 SET datafusion.execution.target_partitions = 4;
+
+#####################
+# Union inputs that take different leaf pushdown paths
+#####################
+
+# A union matches its inputs by position. The first input is a projection over
+# a limit, so the extraction merges into that projection. The second input is
+# a bare limit, so the extraction gets a new projection. Both inputs must still
+# place the extracted alias at the same position.
+
+statement ok
+CREATE TABLE union_leaf_a (s STRUCT<y VARCHAR>, k VARCHAR) AS VALUES (named_struct('y', 'struct-a'), 'column-a');
+
+statement ok
+CREATE TABLE union_leaf_b (s STRUCT<y VARCHAR>, k VARCHAR) AS VALUES (named_struct('y', 'struct-b'), 'column-b');
+
+query T
+SELECT get_field(s, 'y') AS y FROM (
+  SELECT s, k2 AS k FROM (SELECT s, k AS k2 FROM union_leaf_a LIMIT 10)
+  UNION ALL
+  (SELECT s, k FROM union_leaf_b LIMIT 10)
+) ORDER BY y;
+----
+struct-a
+struct-b
+
+statement ok
+CREATE TABLE union_leaf_c (k VARCHAR, s STRUCT<x DOUBLE, y VARCHAR>) AS VALUES ('ka', named_struct('x', 1.5, 'y', 'ya'));
+
+statement ok
+CREATE TABLE union_leaf_d (k VARCHAR, s STRUCT<x DOUBLE, y VARCHAR>) AS VALUES ('kb', named_struct('x', 2.5, 'y', 'yb'));
+
+query RT
+SELECT get_field(s, 'x') AS x, get_field(s, 'y') AS y FROM (
+  SELECT k2 AS k, s FROM (SELECT k AS k2, s FROM union_leaf_c LIMIT 10)
+  UNION ALL
+  (SELECT k, s FROM union_leaf_d LIMIT 10)
+) ORDER BY x;
+----
+1.5 ya
+2.5 yb
+
+statement ok
+DROP TABLE union_leaf_a;
+
+statement ok
+DROP TABLE union_leaf_b;
+
+statement ok
+DROP TABLE union_leaf_c;
+
+statement ok
+DROP TABLE union_leaf_d;
