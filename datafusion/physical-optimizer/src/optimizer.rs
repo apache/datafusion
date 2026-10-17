@@ -87,14 +87,16 @@
 //!         Aggregate(Partial)
 //!   ```
 //!
-//! Contributions to DataFusion's built-in rules for custom optimizer pipelines
-//! should follow these guidelines:
+//! For custom optimizer pipelines:
 //!
-//! - Downstream projects can expect plan validity under recomposition and may add
-//!   unit tests for built-in rules to guard against correctness regressions.
-//! - Extensions should first try to address coverage gaps downstream for plan
-//!   shapes that the default rule order cannot produce. If extending a built-in
-//!   rule is preferable or necessary, open a DataFusion issue to discuss it.
+//! - Reordering optimizer rules must still result in a valid plan, subject to the
+//!   correctness requirements above. Downstream projects may add unit tests for
+//!   built-in rules to guard against correctness regressions.
+//! - Extending built-in rules to match plan shapes that the default rule order
+//!   cannot produce is discouraged. Prefer adding a custom optimizer rule that
+//!   transforms the plan into a standard shape recognized by built-in rules.
+//!   If extending a built-in rule is still necessary, please open a DataFusion
+//!   issue to discuss it.
 
 use std::fmt::Debug;
 use std::sync::Arc;
