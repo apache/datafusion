@@ -19,6 +19,18 @@
 //!
 //! This parser implements DataFusion specific statements such as
 //! `CREATE EXTERNAL TABLE`
+//!
+//! # Syntax vs Semantics
+//!
+//! Like [`sqlparser`], this parser checks *syntax* only: it answers whether the
+//! text is a well formed statement, not whether that statement means anything.
+//! Semantic checks (unknown columns, invalid types, contradictory options, ...)
+//! belong on the [`LogicalPlan`] so that they also apply to plans built by the
+//! DataFrame API, Substrait, and other frontends. See the [Syntax vs Semantics]
+//! specification for where to put such checks.
+//!
+//! [`LogicalPlan`]: datafusion_expr::LogicalPlan
+//! [Syntax vs Semantics]: https://datafusion.apache.org/contributor-guide/specification/syntax-vs-semantics.html
 
 use datafusion_common::DataFusionError;
 use datafusion_common::config::{ConfigNonZeroUsize, SqlParserOptions};
