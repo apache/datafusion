@@ -50,9 +50,9 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{OUTER_REFERENCE_COLUMN_PREFIX, UNNEST_COLUMN_PREFIX};
 use datafusion_expr::{
-    Aggregate, AsOfJoin, BinaryExpr, Distinct, Expr, FetchType, JoinConstraint, JoinType,
-    LogicalPlan, LogicalPlanBuilder, Operator, Projection, SkipType, Sort, SortExpr,
-    TableScan, Unnest, UserDefinedLogicalNode, Window, expr::Alias,
+    Aggregate, AsOfJoin, BinaryExpr, Distinct, Expr, FetchType, Join, JoinConstraint,
+    JoinType, LogicalPlan, LogicalPlanBuilder, Operator, Projection, SkipType, Sort,
+    SortExpr, TableScan, Unnest, UserDefinedLogicalNode, Window, expr::Alias,
 };
 use sqlparser::ast::{self, Ident, OrderByKind, SetExpr, TableAliasColumnDef};
 use std::{collections::HashSet, sync::Arc, vec};
@@ -1468,185 +1468,7 @@ impl Unparser<'_> {
                 select.distinct(Some(select_distinct));
                 self.select_to_sql_recursively(input, query, select, relation)
             }
-            LogicalPlan::Join(join) => {
-                let mut table_scan_filters = vec![];
-                let (left_plan, right_plan) = match join.join_type {
-                    JoinType::RightSemi | JoinType::RightAnti => {
-                        (&join.right, &join.left)
-                    }
-                    _ => (&join.left, &join.right),
-                };
-                // If there's an outer projection plan, it will already set up the projection.
-                // In that case, we don't need to worry about setting up the projection here.
-                // The outer projection plan will handle projecting the correct columns.
-                let already_projected = select.already_projected();
-
-                let left_plan = Self::extract_join_input_table_scan_filters(
-                    left_plan,
-                    &mut table_scan_filters,
-                )?;
-                let left_plan = if already_projected {
-                    Self::unwrap_qualified_passthrough_join_projection(left_plan)
-                } else {
-                    left_plan
-                };
-
-                self.select_to_sql_recursively(
-                    left_plan.as_ref(),
-                    query,
-                    select,
-                    relation,
-                )?;
-
-                let left_projection: Option<Vec<ast::SelectItem>> = if !already_projected
-                {
-                    Some(select.pop_projections())
-                } else {
-                    None
-                };
-
-                let right_plan = Self::extract_join_input_table_scan_filters(
-                    right_plan,
-                    &mut table_scan_filters,
-                )?;
-
-                let mut right_relation = RelationBuilder::default();
-                if already_projected
-                    && let Some(nested_relation) =
-                        self.join_input_to_nested_relation(right_plan.as_ref(), query)?
-                {
-                    right_relation = nested_relation;
-                } else {
-                    self.select_to_sql_recursively(
-                        right_plan.as_ref(),
-                        query,
-                        select,
-                        &mut right_relation,
-                    )?;
-                }
-
-                let (join_filters, where_filters) = Self::split_join_on_and_where_filters(
-                    join.join_type,
-                    join.filter.as_ref(),
-                    table_scan_filters,
-                );
-                for filter in where_filters {
-                    let filter_expr = self.expr_to_sql(&filter)?;
-                    select.selection(Some(filter_expr));
-                }
-
-                let join_constraint = self.join_constraint_to_sql(
-                    join.join_constraint,
-                    &join.on,
-                    join_filters.as_ref(),
-                )?;
-
-                let right_projection: Option<Vec<ast::SelectItem>> = if !already_projected
-                {
-                    Some(select.pop_projections())
-                } else {
-                    None
-                };
-
-                match join.join_type {
-                    JoinType::LeftSemi
-                    | JoinType::LeftAnti
-                    | JoinType::LeftMark
-                    | JoinType::RightSemi
-                    | JoinType::RightAnti
-                    | JoinType::RightMark => {
-                        let mut query_builder = QueryBuilder::default();
-                        let mut from = TableWithJoinsBuilder::default();
-                        let mut exists_select: SelectBuilder = SelectBuilder::default();
-                        from.relation(right_relation);
-                        exists_select.push_from(from);
-                        if let Some(filter) = &join.filter {
-                            exists_select.selection(Some(self.expr_to_sql(filter)?));
-                        }
-                        for (left, right) in &join.on {
-                            exists_select.selection(Some(
-                                self.expr_to_sql(&left.clone().eq(right.clone()))?,
-                            ));
-                        }
-                        exists_select.projection(vec![ast::SelectItem::UnnamedExpr(
-                            ast::Expr::value(ast::Value::Number("1".to_string(), false)),
-                        )]);
-                        query_builder.body(Box::new(SetExpr::Select(Box::new(
-                            exists_select.build()?,
-                        ))));
-
-                        let negated = match join.join_type {
-                            JoinType::LeftSemi
-                            | JoinType::RightSemi
-                            | JoinType::LeftMark
-                            | JoinType::RightMark => false,
-                            JoinType::LeftAnti | JoinType::RightAnti => true,
-                            _ => unreachable!(),
-                        };
-                        let exists_expr = ast::Expr::Exists {
-                            subquery: Box::new(query_builder.build()?),
-                            negated,
-                        };
-
-                        match join.join_type {
-                            JoinType::LeftMark | JoinType::RightMark => {
-                                let source_schema =
-                                    if join.join_type == JoinType::LeftMark {
-                                        right_plan.schema()
-                                    } else {
-                                        left_plan.schema()
-                                    };
-                                let (table_ref, _) = source_schema.qualified_field(0);
-                                let column = self.col_to_sql(&Column::new(
-                                    table_ref.cloned(),
-                                    "mark",
-                                ))?;
-                                select.replace_mark(&column, &exists_expr);
-                            }
-                            _ => {
-                                select.selection(Some(exists_expr));
-                            }
-                        }
-                        if let Some(projection) = left_projection {
-                            select.projection(projection);
-                        }
-                    }
-                    JoinType::Inner
-                    | JoinType::Left
-                    | JoinType::Right
-                    | JoinType::Full => {
-                        let Ok(Some(relation)) = right_relation.build() else {
-                            return internal_err!("Failed to build right relation");
-                        };
-                        let ast_join = ast::Join {
-                            relation,
-                            global: false,
-                            join_operator: self
-                                .join_operator_to_sql(join.join_type, join_constraint)?,
-                        };
-                        let mut from = select.pop_from().unwrap();
-                        from.push_join(ast_join);
-                        select.push_from(from);
-                        if !already_projected {
-                            let Some(left_projection) = left_projection else {
-                                return internal_err!("Left projection is missing");
-                            };
-
-                            let Some(right_projection) = right_projection else {
-                                return internal_err!("Right projection is missing");
-                            };
-
-                            let projection = left_projection
-                                .into_iter()
-                                .chain(right_projection)
-                                .collect();
-                            select.projection(projection);
-                        }
-                    }
-                }
-
-                Ok(())
-            }
+            LogicalPlan::Join(join) => self.join_to_sql(join, query, select, relation),
             LogicalPlan::AsOfJoin(join) => {
                 self.asof_join_to_sql(join, query, select, relation)
             }
@@ -1944,6 +1766,178 @@ impl Unparser<'_> {
                 not_impl_err!("Unsupported operator: {plan:?}")
             }
         }
+    }
+
+    // Keep join-specific locals out of the recursive plan unparser's stack frame.
+    #[inline(never)]
+    fn join_to_sql(
+        &self,
+        join: &Join,
+        query: &mut Option<QueryBuilder>,
+        select: &mut SelectBuilder,
+        relation: &mut RelationBuilder,
+    ) -> Result<()> {
+        let mut table_scan_filters = vec![];
+        let (left_plan, right_plan) = match join.join_type {
+            JoinType::RightSemi | JoinType::RightAnti => (&join.right, &join.left),
+            _ => (&join.left, &join.right),
+        };
+        // If there's an outer projection plan, it will already set up the projection.
+        // In that case, we don't need to worry about setting up the projection here.
+        // The outer projection plan will handle projecting the correct columns.
+        let already_projected = select.already_projected();
+
+        let left_plan = Self::extract_join_input_table_scan_filters(
+            left_plan,
+            &mut table_scan_filters,
+        )?;
+        let left_plan = if already_projected {
+            Self::unwrap_qualified_passthrough_join_projection(left_plan)
+        } else {
+            left_plan
+        };
+
+        self.select_to_sql_recursively(left_plan.as_ref(), query, select, relation)?;
+
+        let left_projection: Option<Vec<ast::SelectItem>> = if !already_projected {
+            Some(select.pop_projections())
+        } else {
+            None
+        };
+
+        let right_plan = Self::extract_join_input_table_scan_filters(
+            right_plan,
+            &mut table_scan_filters,
+        )?;
+
+        let mut right_relation = RelationBuilder::default();
+        if already_projected
+            && let Some(nested_relation) =
+                self.join_input_to_nested_relation(right_plan.as_ref(), query)?
+        {
+            right_relation = nested_relation;
+        } else {
+            self.select_to_sql_recursively(
+                right_plan.as_ref(),
+                query,
+                select,
+                &mut right_relation,
+            )?;
+        }
+
+        let (join_filters, where_filters) = Self::split_join_on_and_where_filters(
+            join.join_type,
+            join.filter.as_ref(),
+            table_scan_filters,
+        );
+        for filter in where_filters {
+            let filter_expr = self.expr_to_sql(&filter)?;
+            select.selection(Some(filter_expr));
+        }
+
+        let join_constraint = self.join_constraint_to_sql(
+            join.join_constraint,
+            &join.on,
+            join_filters.as_ref(),
+        )?;
+
+        let right_projection: Option<Vec<ast::SelectItem>> = if !already_projected {
+            Some(select.pop_projections())
+        } else {
+            None
+        };
+
+        match join.join_type {
+            JoinType::LeftSemi
+            | JoinType::LeftAnti
+            | JoinType::LeftMark
+            | JoinType::RightSemi
+            | JoinType::RightAnti
+            | JoinType::RightMark => {
+                let mut query_builder = QueryBuilder::default();
+                let mut from = TableWithJoinsBuilder::default();
+                let mut exists_select: SelectBuilder = SelectBuilder::default();
+                from.relation(right_relation);
+                exists_select.push_from(from);
+                if let Some(filter) = &join.filter {
+                    exists_select.selection(Some(self.expr_to_sql(filter)?));
+                }
+                for (left, right) in &join.on {
+                    exists_select.selection(Some(
+                        self.expr_to_sql(&left.clone().eq(right.clone()))?,
+                    ));
+                }
+                exists_select.projection(vec![ast::SelectItem::UnnamedExpr(
+                    ast::Expr::value(ast::Value::Number("1".to_string(), false)),
+                )]);
+                query_builder
+                    .body(Box::new(SetExpr::Select(Box::new(exists_select.build()?))));
+
+                let negated = match join.join_type {
+                    JoinType::LeftSemi
+                    | JoinType::RightSemi
+                    | JoinType::LeftMark
+                    | JoinType::RightMark => false,
+                    JoinType::LeftAnti | JoinType::RightAnti => true,
+                    _ => unreachable!(),
+                };
+                let exists_expr = ast::Expr::Exists {
+                    subquery: Box::new(query_builder.build()?),
+                    negated,
+                };
+
+                match join.join_type {
+                    JoinType::LeftMark | JoinType::RightMark => {
+                        let source_schema = if join.join_type == JoinType::LeftMark {
+                            right_plan.schema()
+                        } else {
+                            left_plan.schema()
+                        };
+                        let (table_ref, _) = source_schema.qualified_field(0);
+                        let column =
+                            self.col_to_sql(&Column::new(table_ref.cloned(), "mark"))?;
+                        select.replace_mark(&column, &exists_expr);
+                    }
+                    _ => {
+                        select.selection(Some(exists_expr));
+                    }
+                }
+                if let Some(projection) = left_projection {
+                    select.projection(projection);
+                }
+            }
+            JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
+                let Ok(Some(relation)) = right_relation.build() else {
+                    return internal_err!("Failed to build right relation");
+                };
+                let ast_join = ast::Join {
+                    relation,
+                    global: false,
+                    join_operator: self
+                        .join_operator_to_sql(join.join_type, join_constraint)?,
+                };
+                let mut from = select.pop_from().unwrap();
+                from.push_join(ast_join);
+                select.push_from(from);
+                if !already_projected {
+                    let Some(left_projection) = left_projection else {
+                        return internal_err!("Left projection is missing");
+                    };
+
+                    let Some(right_projection) = right_projection else {
+                        return internal_err!("Right projection is missing");
+                    };
+
+                    let projection = left_projection
+                        .into_iter()
+                        .chain(right_projection)
+                        .collect();
+                    select.projection(projection);
+                }
+            }
+        }
+
+        Ok(())
     }
 
     // Keep ASOF-specific locals out of the recursive plan unparser's stack frame.
