@@ -18,11 +18,11 @@
 //! A wrapper around `hashbrown::HashTable` that allows entries to be tracked by index
 
 use crate::aggregates::group_values::HashValue;
-use crate::aggregates::topk::heap::Comparable;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::{
-    Array, ArrayRef, ArrowPrimitiveType, LargeStringArray, PrimitiveArray, StringArray,
-    StringViewArray, builder::PrimitiveBuilder, cast::AsArray, downcast_primitive,
+    Array, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, LargeStringArray,
+    PrimitiveArray, StringArray, StringViewArray, builder::PrimitiveBuilder,
+    cast::AsArray, downcast_primitive,
 };
 use arrow::array::{ArrayAccessor, StringArrayType};
 use arrow::datatypes::{DataType, i256};
@@ -132,10 +132,7 @@ where
 }
 
 // An implementation of ArrowHashTable for any `ArrowPrimitiveType` key
-struct PrimitiveHashTable<VAL: ArrowPrimitiveType>
-where
-    Option<<VAL as ArrowPrimitiveType>::Native>: Comparable,
-{
+struct PrimitiveHashTable<VAL: ArrowPrimitiveType> {
     owned: PrimitiveArray<VAL>,
     map: TopKHashTable<VAL::Native>,
     rnd: RandomState,
@@ -224,7 +221,8 @@ where
 
 impl<VAL: ArrowPrimitiveType> PrimitiveHashTable<VAL>
 where
-    Option<<VAL as ArrowPrimitiveType>::Native>: Comparable + HashValue,
+    VAL::Native: HashValue,
+    Option<VAL::Native>: HashValue,
 {
     pub fn new(limit: usize, value_type: DataType) -> Self {
         Self {
@@ -238,20 +236,25 @@ where
     /// Computes the id and its hash for the given row, for hash table lookups
     #[inline]
     fn id_and_hash(&self, row_idx: usize) -> (Option<VAL::Native>, u64) {
-        let id: Option<VAL::Native> = some_value(&self.owned, row_idx);
+        let id = some_value(&self.owned, row_idx).map(HashValue::canonicalize);
         let hash: u64 = id.hash(&self.rnd);
         (id, hash)
     }
 
     #[inline]
     fn eq_fn(id: Option<VAL::Native>) -> impl Fn(&Option<VAL::Native>) -> bool {
-        move |mi| id == *mi
+        move |mi| match (id, *mi) {
+            (Some(left), Some(right)) => left.is_eq(right),
+            (None, None) => true,
+            _ => false,
+        }
     }
 }
 
 impl<VAL: ArrowPrimitiveType> ArrowHashTable for PrimitiveHashTable<VAL>
 where
-    Option<<VAL as ArrowPrimitiveType>::Native>: Comparable + HashValue,
+    VAL::Native: HashValue,
+    Option<VAL::Native>: HashValue,
 {
     fn set_batch(&mut self, ids: ArrayRef) {
         self.owned = ids.as_primitive().clone();
@@ -306,7 +309,7 @@ where
     }
 }
 
-impl<ID: PartialEq> TopKHashTable<ID> {
+impl<ID> TopKHashTable<ID> {
     pub fn new(limit: usize, capacity: usize) -> Self {
         Self {
             map: HashTable::with_capacity(capacity),
@@ -324,11 +327,8 @@ impl<ID: PartialEq> TopKHashTable<ID> {
 
     /// Remove the entry stored at `map_idx`, freeing its store slot for reuse
     fn remove_at(&mut self, map_idx: usize) {
-        let item_to_remove = &self.store[map_idx];
-        let hash = item_to_remove.hash;
-        let id_to_remove = &item_to_remove.id;
-
-        let eq = |idx: &usize| self.store[*idx].id == *id_to_remove;
+        let hash = self.store[map_idx].hash;
+        let eq = |idx: &usize| *idx == map_idx;
         let hasher = |idx: &usize| self.store[*idx].hash;
         match self.map.entry(hash, eq, hasher) {
             Entry::Occupied(entry) => {
@@ -622,14 +622,91 @@ pub fn new_hash_table(
 mod tests {
     use super::*;
     use arrow::array::TimestampMillisecondArray;
+    use arrow::datatypes::{Float16Type, Float32Type, Float64Type};
     use arrow_schema::TimeUnit;
     use std::collections::BTreeMap;
 
-    fn assert_nulls<ID: PartialEq>(map: &TopKHashTable<ID>, expected: &[usize]) {
+    fn assert_nulls<ID>(map: &TopKHashTable<ID>, expected: &[usize]) {
         assert_eq!(map.null_count, expected.len());
         let mut actual = Vec::new();
         assert_eq!(map.null_map_idxs(&mut actual), expected.len());
         assert_eq!(actual, expected);
+    }
+
+    fn check_float_keys<T: ArrowPrimitiveType>(
+        nan: T::Native,
+        other_nan: T::Native,
+        negative_zero: T::Native,
+    ) -> Result<()> {
+        let ids: ArrayRef = Arc::new(PrimitiveArray::<T>::from_iter_values([
+            nan,
+            nan,
+            other_nan,
+            negative_zero,
+            T::Native::default(),
+        ]));
+        let data_type = ids.data_type().clone();
+        let mut ht = new_hash_table(3, data_type.clone())?;
+        ht.set_batch(Arc::clone(&ids));
+
+        let (nan_idx, kind) = ht.find_or_insert(0, 0);
+        assert_eq!(kind, InsertKind::New);
+        assert_eq!(ht.find_or_insert(1, 0), (nan_idx, InsertKind::Existing));
+        let (_, kind) = ht.find_or_insert(2, 0);
+        assert_eq!(kind, InsertKind::New);
+        let (zero_idx, kind) = ht.find_or_insert(3, 0);
+        assert_eq!(kind, InsertKind::New);
+        assert_eq!(ht.find_or_insert(4, 0), (zero_idx, InsertKind::Existing));
+        assert_eq!(ht.len(), 3);
+        let keys = ht.take_all(vec![zero_idx]);
+        assert!(
+            keys.as_primitive::<T>()
+                .value(0)
+                .is_eq(T::Native::default())
+        );
+
+        // A NaN key must also survive NULL aggregate value transitions.
+        assert!(ht.insert_null(0));
+        assert!(!ht.insert_null(1));
+        let (nan_idx, kind) = ht.find_or_insert(1, 0);
+        assert_eq!(kind, InsertKind::ReplacedNull);
+        ht.take_all(vec![nan_idx]);
+        assert!(ht.insert_null(0));
+        assert!(ht.remove_if_null(1));
+        assert_eq!(ht.len(), 0);
+
+        let mut ht = new_hash_table(1, data_type)?;
+        ht.set_batch(ids);
+        ht.find_or_insert(0, 0);
+        let (zero_idx, kind) = ht.find_or_insert(3, 0);
+        assert_eq!(kind, InsertKind::New);
+        assert_eq!(ht.len(), 1);
+        let keys = ht.take_all(vec![zero_idx]);
+        assert!(
+            keys.as_primitive::<T>()
+                .value(0)
+                .is_eq(T::Native::default())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn should_handle_float_keys() -> Result<()> {
+        check_float_keys::<Float16Type>(
+            f16::from_bits(0x7e00),
+            f16::from_bits(0x7e01),
+            f16::from_bits(0x8000),
+        )?;
+        check_float_keys::<Float32Type>(
+            f32::NAN,
+            f32::from_bits(f32::NAN.to_bits() + 1),
+            -0.0,
+        )?;
+        check_float_keys::<Float64Type>(
+            f64::NAN,
+            f64::from_bits(f64::NAN.to_bits() + 1),
+            -0.0,
+        )
     }
 
     #[test]
