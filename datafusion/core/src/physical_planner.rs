@@ -1617,7 +1617,7 @@ impl DefaultPhysicalPlanner {
                     && !*null_aware;
 
                 // Only `HashJoinExec` and the null-aware `LeftAnti` path in `SortMergeJoinExec`
-                // implements null-aware semantics, and thoes need equi-join keys to do so.
+                // implements null-aware semantics, and those need equi-join keys to do so.
                 // Without them the join would be planned as a nested loop (or piecewise merge)
                 // join, which silently ignores the flag and returns wrong results for
                 // `NOT IN` over a nullable subquery. Fail loudly instead.
