@@ -1321,7 +1321,7 @@ mod tests {
     }
 
     #[test]
-    fn test_unsupported_distinct_handling_is_not_rewritten() {
+    fn test_unsupported_distinct_handling_is_rewritten() {
         let table_scan = test_table_scan().unwrap();
 
         // approx_median returns DistinctHandling::Unsupported
@@ -1335,22 +1335,23 @@ mod tests {
         ));
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(vec![col("a")], vec![aggr_expr])
+            .aggregate(vec![col("a")], vec![aggr_expr, sum(col("c"))])
             .unwrap()
             .build()
             .unwrap();
 
         // The rule should rewrite the plan because approx_median doesn't support DISTINCT natively,
-        // so it requires SingleDistinctToGroupBy to deduplicate the input.
+        // so it requires SingleDistinctToGroupBy to deduplicate the input even when accompanied
+        // by non-distinct aggregates.
         let rule: Arc<dyn OptimizerRule + Send + Sync> =
             Arc::new(SingleDistinctToGroupBy::new());
         assert_optimized_plan_eq_display_indent_snapshot!(
             rule,
             plan,
             @r"
-        Projection: test.a, approx_median(alias1) AS approx_median(DISTINCT test.b) [a:UInt32, approx_median(DISTINCT test.b):Float64;N]
-          Aggregate: groupBy=[[test.a]], aggr=[[approx_median(alias1)]] [a:UInt32, approx_median(alias1):Float64;N]
-            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]
+        Projection: test.a, approx_median(alias1) AS approx_median(DISTINCT test.b), sum(alias2) AS sum(test.c) [a:UInt32, approx_median(DISTINCT test.b):Float64;N, sum(test.c):UInt64;N]
+          Aggregate: groupBy=[[test.a]], aggr=[[approx_median(alias1), sum(alias2)]] [a:UInt32, approx_median(alias1):Float64;N, sum(alias2):UInt64;N]
+            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[sum(test.c) AS alias2]] [a:UInt32, alias1:UInt32, alias2:UInt64;N]
               TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         ",
         ).unwrap();
