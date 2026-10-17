@@ -48,7 +48,7 @@ use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
 use crate::session::{FFI_SessionRef, ForeignSession};
 use crate::statistics::{deserialize_statistics, serialize_statistics};
 use crate::table_source::{FFI_TableProviderFilterPushDown, FFI_TableType};
-use crate::util::{FFI_Option, FFI_Result};
+use crate::util::{FFI_Option, FFI_Result, WithRuntimeExt};
 use crate::{df_result, sresult_return};
 
 /// A stable struct for sharing [`TableProvider`] across FFI boundaries.
@@ -321,10 +321,11 @@ unsafe extern "C" fn scan_fn_wrapper(
         let plan = sresult_return!(
             internal_provider
                 .scan(session, projections.as_deref(), &filters, limit.into())
+                .with_runtime(runtime.as_ref())
                 .await
         );
 
-        FFI_Result::Ok(FFI_ExecutionPlan::new(plan, runtime.clone()))
+        FFI_Result::Ok(FFI_ExecutionPlan::new(plan, runtime))
     }
     .into_ffi()
 }
@@ -358,10 +359,11 @@ unsafe extern "C" fn insert_into_fn_wrapper(
         let plan = sresult_return!(
             internal_provider
                 .insert_into(session, input, insert_op)
+                .with_runtime(runtime.as_ref())
                 .await
         );
 
-        FFI_Result::Ok(FFI_ExecutionPlan::new(plan, runtime.clone()))
+        FFI_Result::Ok(FFI_ExecutionPlan::new(plan, runtime))
     }
     .into_ffi()
 }
@@ -396,7 +398,12 @@ unsafe extern "C" fn delete_from_fn_wrapper(
             logical_codec.as_ref(),
         ));
 
-        let plan = sresult_return!(internal_provider.delete_from(session, filters).await);
+        let plan = sresult_return!(
+            internal_provider
+                .delete_from(session, filters)
+                .with_runtime(runtime.as_ref())
+                .await
+        );
 
         FFI_Result::Ok(FFI_ExecutionPlan::new(plan, runtime))
     }
@@ -461,6 +468,7 @@ unsafe extern "C" fn update_fn_wrapper(
         let plan = sresult_return!(
             internal_provider
                 .update(session, assignments, filters)
+                .with_runtime(runtime.as_ref())
                 .await
         );
 
@@ -488,7 +496,12 @@ unsafe extern "C" fn truncate_fn_wrapper(
                 })
         );
 
-        let plan = sresult_return!(internal_provider.truncate(session).await);
+        let plan = sresult_return!(
+            internal_provider
+                .truncate(session)
+                .with_runtime(runtime.as_ref())
+                .await
+        );
 
         FFI_Result::Ok(FFI_ExecutionPlan::new(plan, runtime))
     }
@@ -1319,5 +1332,113 @@ mod tests {
         assert_eq!(task_ctx.session_id(), ctx_b.task_ctx().session_id());
 
         Ok(())
+    }
+
+    /// A provider whose async methods fail unless they are polled inside a
+    /// tokio runtime context, as happens when they need a timer or `spawn`.
+    #[derive(Debug)]
+    struct RuntimeRequiredProvider;
+
+    fn require_runtime(method: &str) -> Result<Arc<dyn ExecutionPlan>> {
+        match Handle::try_current() {
+            Ok(_) => Ok(dml_count_plan()),
+            Err(e) => Err(DataFusionError::Internal(format!(
+                "{method} was polled outside a tokio runtime: {e}"
+            ))),
+        }
+    }
+
+    #[async_trait]
+    impl TableProvider for RuntimeRequiredProvider {
+        fn schema(&self) -> SchemaRef {
+            dml_count_plan().schema()
+        }
+
+        fn table_type(&self) -> TableType {
+            TableType::Base
+        }
+
+        async fn scan(
+            &self,
+            _state: &dyn Session,
+            _projection: Option<&[usize]>,
+            _filters: &[Expr],
+            _limit: Option<usize>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            require_runtime("scan")
+        }
+
+        async fn insert_into(
+            &self,
+            _state: &dyn Session,
+            _input: Arc<dyn ExecutionPlan>,
+            _insert_op: InsertOp,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            require_runtime("insert_into")
+        }
+
+        async fn delete_from(
+            &self,
+            _state: &dyn Session,
+            _filters: Vec<Expr>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            require_runtime("delete_from")
+        }
+
+        async fn update(
+            &self,
+            _state: &dyn Session,
+            _assignments: Vec<(String, Expr)>,
+            _filters: Vec<Expr>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            require_runtime("update")
+        }
+
+        async fn truncate(&self, _state: &dyn Session) -> Result<Arc<dyn ExecutionPlan>> {
+            require_runtime("truncate")
+        }
+    }
+
+    /// The consumer of an `FFI_TableProvider` may poll its futures from a
+    /// thread with no tokio context, or one belonging to a different copy of
+    /// tokio (e.g. datafusion-python). The provider's async methods must still
+    /// run inside the runtime registered with `FFI_TableProvider::new`, as
+    /// `execute` and record batch stream polling already do.
+    #[test]
+    fn test_ffi_table_provider_async_methods_enter_runtime() -> Result<()> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("failed to build tokio runtime");
+
+        let ctx = Arc::new(SessionContext::new());
+        let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
+        let task_ctx_provider = FFI_TaskContextProvider::from(&task_ctx_provider);
+
+        let mut ffi_provider = FFI_TableProvider::new(
+            Arc::new(RuntimeRequiredProvider),
+            true,
+            Some(runtime.handle().clone()),
+            task_ctx_provider,
+            None,
+        );
+        ffi_provider.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_table_provider: Arc<dyn TableProvider> = (&ffi_provider).into();
+
+        // `#[test]` threads have no tokio context, so only the registered
+        // runtime can satisfy `Handle::try_current` inside the provider.
+        assert!(Handle::try_current().is_err());
+
+        let state = ctx.state();
+        let provider = foreign_table_provider.as_ref();
+        futures::executor::block_on(async {
+            provider.scan(&state, None, &[], None).await?;
+            provider
+                .insert_into(&state, dml_count_plan(), InsertOp::Append)
+                .await?;
+            provider.delete_from(&state, vec![]).await?;
+            provider.update(&state, vec![], vec![]).await?;
+            provider.truncate(&state).await?;
+            Ok(())
+        })
     }
 }
