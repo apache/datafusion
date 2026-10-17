@@ -1003,9 +1003,24 @@ async fn prune_decimal_eq() {
         .with_expected_rows(2)
         .test_row_group_prune()
         .await;
+    // Maximum-precision decimal widening accepts this aligned literal, so
+    // Bloom-filter pruning evaluates it just like the equivalent source cast.
     RowGroupPruningTest::new()
         .with_scenario(Scenario::DecimalLargePrecision)
         .with_query("SELECT * FROM t where decimal_col = 4.00")
+        .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(2))
+        .with_pruned_by_stats(Some(1))
+        .with_pruned_files(Some(0))
+        .with_matched_by_bloom_filter(Some(2))
+        .with_pruned_by_bloom_filter(Some(0))
+        .with_expected_rows(2)
+        .test_row_group_prune()
+        .await;
+    // A source-typed decimal literal exposes a usable Bloom-filter guarantee.
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::DecimalLargePrecision)
+        .with_query("SELECT * FROM t where decimal_col = cast(4.00 as decimal(38,2))")
         .with_expected_errors(Some(0))
         .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
