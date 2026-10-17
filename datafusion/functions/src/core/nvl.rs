@@ -15,12 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use crate::core::coalesce::CoalesceFunc;
-use arrow::datatypes::{DataType, FieldRef};
-use datafusion_common::Result;
+use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
+use datafusion_expr::type_coercion::functions::fields_with_udf;
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
+    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
     ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
@@ -59,9 +62,9 @@ pub struct NVLFunc {
     aliases: Vec<String>,
 }
 
-/// Currently supported types by the nvl/ifnull function.
-/// The order of these types correspond to the order on which coercion applies
-/// This should thus be from least informative to most informative
+/// Argument types that keep nvl's original coercion, ordered from least to
+/// most informative. Other argument types are coerced the way coalesce does,
+/// falling back to the original coercion when coalesce cannot unify them.
 static SUPPORTED_NVL_TYPES: &[DataType] = &[
     DataType::Boolean,
     DataType::UInt8,
@@ -79,6 +82,26 @@ static SUPPORTED_NVL_TYPES: &[DataType] = &[
     DataType::LargeUtf8,
 ];
 
+/// nvl's original coercion: both arguments become the first type in
+/// [`SUPPORTED_NVL_TYPES`] that both can be coerced to.
+fn uniform_coercion(arg_types: &[DataType]) -> Result<Vec<DataType>> {
+    let uniform = ScalarUDF::new_from_impl(CoalesceFunc {
+        signature: Signature::uniform(
+            2,
+            SUPPORTED_NVL_TYPES.to_vec(),
+            Volatility::Immutable,
+        ),
+    });
+    let fields: Vec<FieldRef> = arg_types
+        .iter()
+        .map(|t| Arc::new(Field::new("", t.clone(), true)))
+        .collect();
+    Ok(fields_with_udf(&fields, &uniform)?
+        .iter()
+        .map(|f| f.data_type().clone())
+        .collect())
+}
+
 impl Default for NVLFunc {
     fn default() -> Self {
         Self::new()
@@ -89,11 +112,7 @@ impl NVLFunc {
     pub fn new() -> Self {
         Self {
             coalesce: CoalesceFunc {
-                signature: Signature::uniform(
-                    2,
-                    SUPPORTED_NVL_TYPES.to_vec(),
-                    Volatility::Immutable,
-                ),
+                signature: Signature::user_defined(Volatility::Immutable),
             },
             aliases: vec![String::from("ifnull")],
         }
@@ -138,6 +157,23 @@ impl ScalarUDFImpl for NVLFunc {
 
     fn short_circuits(&self) -> bool {
         self.coalesce.short_circuits()
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 2 {
+            return exec_err!(
+                "nvl expects exactly two arguments, but received {}",
+                arg_types.len()
+            );
+        }
+        let listed = arg_types
+            .iter()
+            .all(|t| t.is_null() || SUPPORTED_NVL_TYPES.contains(t));
+        if !listed && let Ok(coerced) = self.coalesce.coerce_types(arg_types) {
+            return Ok(coerced);
+        }
+
+        uniform_coercion(arg_types)
     }
 
     fn aliases(&self) -> &[String] {
