@@ -2850,11 +2850,38 @@ logical_plan
 03)--SubqueryAlias: __correlated_sq_1
 04)----TableScan: nia_right_with_null projection=[y]
 physical_plan
-01)SortMergeJoinExec: join_type=LeftAnti, on=[(x@0, y@0)]
+01)SortMergeJoinExec: join_type=LeftAnti, on=[(x@0, y@0)], null_aware
 02)--SortExec: expr=[x@0 ASC], preserve_partitioning=[false]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 04)--SortExec: expr=[y@0 ASC], preserve_partitioning=[false]
 05)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Tree-formatted plans must also distinguish null-aware joins from ordinary anti joins.
+query TT
+EXPLAIN FORMAT TREE SELECT x FROM nia_left WHERE x NOT IN (SELECT y FROM nia_right_with_null);
+----
+physical_plan
+01)┌───────────────────────────┐
+02)│     SortMergeJoinExec     │
+03)│    --------------------   │
+04)│    join_type: LeftAnti    │
+05)│                           ├──────────────┐
+06)│         null_aware        │              │
+07)│                           │              │
+08)│        on: (x = y)        │              │
+09)└─────────────┬─────────────┘              │
+10)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+11)│          SortExec         ││          SortExec         │
+12)│    --------------------   ││    --------------------   │
+13)│          x@0 ASC          ││          y@0 ASC          │
+14)└─────────────┬─────────────┘└─────────────┬─────────────┘
+15)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+16)│       DataSourceExec      ││       DataSourceExec      │
+17)│    --------------------   ││    --------------------   │
+18)│         bytes: 112        ││         bytes: 176        │
+19)│       format: memory      ││       format: memory      │
+20)│          rows: 4          ││          rows: 2          │
+21)└───────────────────────────┘└───────────────────────────┘
 
 # Subquery has no NULL -> NOT IN behaves like a normal anti join.
 query I
