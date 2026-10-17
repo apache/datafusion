@@ -46,10 +46,13 @@ use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::metrics::MetricValue;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::ProjectionExec;
-use datafusion_physical_plan::sorts::partitioned_topk::PartitionedTopKExec;
+use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::sorts::partitioned_topk::{
+    PartitionedTopKExec, WindowFnKind,
+};
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, create_udwf_window_expr};
-use datafusion_physical_plan::{ExecutionPlan, InputOrderMode};
+use datafusion_physical_plan::{ExecutionPlan, InputOrderMode, Partitioning};
 use insta::assert_snapshot;
 
 fn schema() -> Arc<Schema> {
@@ -455,6 +458,137 @@ fn two_window_exprs_keep_the_window_node() -> Result<()> {
       PartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@0], order=[val@1 ASC]
         PlaceholderRowExec
     "#);
+    Ok(())
+}
+
+/// `ROW_NUMBER() AS rn, RANK() AS rk` over `PARTITION BY pk ORDER BY val`.
+/// Output: `[pk@0, val@1, rn@2, rk@3]`.
+fn build_rn_rk_window() -> Result<Arc<dyn ExecutionPlan>> {
+    let s = schema();
+    let input: Arc<dyn ExecutionPlan> = Arc::new(PlaceholderRowExec::new(Arc::clone(&s)));
+    let partition_by = vec![col("pk", &s)?];
+    let order_by = vec![PhysicalSortExpr::new_default(col("val", &s)?).asc()];
+    let window_expr = |udwf: Arc<datafusion_expr::WindowUDF>, name: &str| {
+        Ok::<_, datafusion_common::DataFusionError>(Arc::new(StandardWindowExpr::new(
+            create_udwf_window_expr(&udwf, &[], &s, name.to_string(), false)?,
+            &partition_by,
+            &order_by,
+            Arc::new(WindowFrame::new_bounds(
+                WindowFrameUnits::Rows,
+                WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+                WindowFrameBound::CurrentRow,
+            )),
+        )))
+    };
+    Ok(Arc::new(BoundedWindowAggExec::try_new(
+        vec![
+            window_expr(row_number_udwf(), "rn")?,
+            window_expr(rank_udwf(), "rk")?,
+        ],
+        input,
+        InputOrderMode::Sorted,
+        true,
+    )?))
+}
+
+/// A `ProjectionExec` passing through `input`'s columns at `indices`.
+fn project(
+    input: Arc<dyn ExecutionPlan>,
+    indices: &[usize],
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let schema = input.schema();
+    let exprs: Vec<(Arc<dyn datafusion_physical_expr::PhysicalExpr>, String)> = indices
+        .iter()
+        .map(|&i| {
+            let name = schema.field(i).name();
+            (
+                Arc::new(Column::new(name, i))
+                    as Arc<dyn datafusion_physical_expr::PhysicalExpr>,
+                name.to_string(),
+            )
+        })
+        .collect();
+    Ok(Arc::new(ProjectionExec::try_new(exprs, input)?))
+}
+
+/// `FilterExec(<column idx of input> <= 3)`, with the literal in the column's type.
+fn filter_lteq_3(
+    input: Arc<dyn ExecutionPlan>,
+    idx: usize,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let schema = input.schema();
+    let field = schema.field(idx);
+    let predicate = Arc::new(BinaryExpr::new(
+        Arc::new(Column::new(field.name(), idx)),
+        Operator::LtEq,
+        lit(ScalarValue::UInt64(Some(3)).cast_to(field.data_type())?),
+    ));
+    Ok(Arc::new(FilterExec::try_new(predicate, input)?))
+}
+
+/// The ranking function the rewrite chose, or `None` if it did not fire.
+fn rewritten_fn(plan: Arc<dyn ExecutionPlan>) -> Result<Option<WindowFnKind>> {
+    let optimized = optimize(plan)?;
+    Ok(find_partitioned_topk(&optimized).map(|p| {
+        p.downcast_ref::<PartitionedTopKExec>()
+            .expect("find_partitioned_topk returns a PartitionedTopKExec")
+            .fn_kind()
+    }))
+}
+
+/// Stacked projections are resolved top-down: each one maps an index into its
+/// output to one into its input. Bottom-up, `rk@0` would follow `pk@0` and then
+/// `rk@2` to `rn` in the window's output.
+#[test]
+fn stacked_projections_resolve_top_down() -> Result<()> {
+    let lower = project(build_rn_rk_window()?, &[0, 2, 3])?; // [pk, rn, rk]
+    let upper = project(lower, &[2, 0])?; // [rk, pk]
+    assert_eq!(
+        rewritten_fn(filter_lteq_3(upper, 0)?)?,
+        Some(WindowFnKind::Rank)
+    );
+    Ok(())
+}
+
+/// A `RepartitionExec` keeps its input's schema, so the index passes through it.
+#[test]
+fn repartition_between_passes_the_index_through() -> Result<()> {
+    let repartition: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+        build_rn_rk_window()?,
+        Partitioning::RoundRobinBatch(4),
+    )?);
+    let projection = project(repartition, &[0, 3])?; // [pk, rk]
+    assert_eq!(
+        rewritten_fn(filter_lteq_3(projection, 1)?)?,
+        Some(WindowFnKind::Rank)
+    );
+    Ok(())
+}
+
+/// A column the projection computes has no single window column behind it,
+/// so the rule leaves the plan alone. `x` sits at index 2 so that treating it
+/// as a pass-through would land on `rn` rather than be rejected as an input
+/// column.
+#[test]
+fn computed_projection_column_no_change() -> Result<()> {
+    let window = build_rn_rk_window()?;
+    let rk_plus_one: Arc<dyn datafusion_physical_expr::PhysicalExpr> =
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("rk", 3)),
+            Operator::Plus,
+            lit(ScalarValue::UInt64(Some(1))),
+        ));
+    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+        vec![
+            (Arc::new(Column::new("pk", 0)) as _, "pk".to_string()),
+            (Arc::new(Column::new("val", 1)) as _, "val".to_string()),
+            (rk_plus_one, "x".to_string()),
+        ],
+        window,
+    )?);
+    let plan = filter_lteq_3(projection, 2)?;
+    let before = plan_str(plan.as_ref());
+    assert_eq!(plan_str(optimize(plan)?.as_ref()), before);
     Ok(())
 }
 
