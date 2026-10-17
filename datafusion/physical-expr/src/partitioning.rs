@@ -782,8 +782,8 @@ impl Partitioning {
             == PartitioningSatisfaction::Exact
     }
 
-    /// Returns the relationship between this [`Partitioning`] and the
-    /// `required` [`Distribution`].
+    /// Returns how this [`Partitioning`] satisfies the partitioning scheme mandated
+    /// by the `required` [`Distribution`].
     #[expect(
         deprecated,
         reason = "HashPartitioned is accepted during the KeyPartitioned migration"
