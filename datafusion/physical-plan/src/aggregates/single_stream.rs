@@ -330,6 +330,19 @@ impl Aggregating {
         self.spill_context.as_ref().is_some_and(|s| s.has_spills())
     }
 
+    /// Sorts and spills the groups aggregated so far as one run, and shrinks
+    /// `reservation` to the emptied table.
+    fn spill(
+        hash_table: &mut AggregateHashTable<SingleMarker>,
+        spill_context: &mut AggregateSpill,
+        reservation: &MemoryReservation,
+    ) -> Result<()> {
+        spill_context.sort_and_spill(hash_table.take_state_batch()?)?;
+        reservation
+            .try_resize(hash_table.memory_size())
+            .map_err(|e| e.context("Decreasing allocation after spilling should succeed"))
+    }
+
     /// See the "Optimization: DISTINCT LIMIT Soft Limit" section in
     /// [`SingleHashAggregateStream`] for details.
     fn hit_soft_group_limit(&self, context: &SingleHashAggregateContext) -> bool {
@@ -350,6 +363,17 @@ impl Aggregating {
 
         while let Some(batch) = self.input.next().await.transpose()? {
             let _timer = elapsed_compute.timer();
+
+            // If the hash table cannot grow to hold the groups of this batch
+            // while it still holds its current table, spill first.
+            if !self
+                .hash_table
+                .try_reserve_hash_table_growth(reservation, batch.num_rows())?
+                && let Some(spill_context) = self.spill_context.as_mut()
+            {
+                Self::spill(&mut self.hash_table, spill_context, reservation)?;
+            }
+
             self.hash_table.aggregate_batch(&batch)?;
 
             match reservation.try_resize(self.reservation_size()) {
@@ -365,14 +389,7 @@ impl Aggregating {
                         0,
                         "Single hash aggregate ran out of memory with no aggregated groups"
                     );
-                    spill_context.sort_and_spill(self.hash_table.take_state_batch()?)?;
-                    reservation
-                        .try_resize(self.hash_table.memory_size())
-                        .map_err(|e| {
-                            e.context(
-                                "Decreasing allocation after spilling should succeed",
-                            )
-                        })?;
+                    Self::spill(&mut self.hash_table, spill_context, reservation)?;
                     continue;
                 }
                 Err(e) => return Err(e),

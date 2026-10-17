@@ -307,7 +307,25 @@ impl PartialHashAggregateStream {
 
             let mut last_state = HandleInputResult::ProcessNext;
             while let Some(batch) = self.input.next().await.transpose()? {
-                let timer = elapsed_compute.timer();
+                let mut timer = elapsed_compute.timer();
+
+                // If the hash table cannot grow to hold the groups of this
+                // batch while it still holds its current table, emit first.
+                if !hash_table
+                    .try_reserve_hash_table_growth(&self.reservation, batch.num_rows())?
+                {
+                    let materialized_group_states =
+                        self.take_early_emit_states(&mut hash_table)?;
+                    timer.stop();
+                    self.emit_on_memory_pressure(
+                        materialized_group_states,
+                        &mut emitter,
+                        hash_table.memory_size(),
+                    )
+                    .await?;
+                    timer.restart();
+                }
+
                 last_state = self.handle_input_batch(&batch, &mut hash_table)?;
 
                 match last_state {
@@ -317,13 +335,8 @@ impl PartialHashAggregateStream {
                         break;
                     }
                     HandleInputResult::OOM => {
-                        let materialized_group_states = hash_table.take_state_batch()?.ok_or_else(|| {
-                            internal_datafusion_err!(
-                                "Partial hash aggregate ran out of memory with no aggregated groups"
-                            )
-                        })?;
-
-                        self.early_emit_count.add(1);
+                        let materialized_group_states =
+                            self.take_early_emit_states(&mut hash_table)?;
                         timer.done();
                         self.emit_on_memory_pressure(
                             materialized_group_states,
@@ -427,6 +440,22 @@ impl PartialHashAggregateStream {
             Err(DataFusionError::ResourcesExhausted(_)) => Ok(HandleInputResult::OOM),
             Err(e) => Err(e),
         }
+    }
+
+    /// Takes the partial states of the groups aggregated so far, to emit them
+    /// on memory pressure.
+    fn take_early_emit_states(
+        &mut self,
+        hash_table: &mut AggregateHashTable<PartialMarker>,
+    ) -> Result<RecordBatch> {
+        let materialized_group_states =
+            hash_table.take_state_batch()?.ok_or_else(|| {
+                internal_datafusion_err!(
+                    "Partial hash aggregate ran out of memory with no aggregated groups"
+                )
+            })?;
+        self.early_emit_count.add(1);
+        Ok(materialized_group_states)
     }
 
     /// Emit a materialized partial-state batch in `batch_size` slices.
@@ -690,6 +719,16 @@ impl FinalHashAggregateStream {
 
         while let Some(batch) = self.input.next().await.transpose()? {
             let _timer = elapsed_compute.timer();
+
+            // If the hash table cannot grow to hold the groups of this batch
+            // while it still holds its current table, spill first.
+            if !hash_table
+                .try_reserve_hash_table_growth(&self.reservation, batch.num_rows())?
+                && let Some(spill_context) = spill_context.as_mut()
+            {
+                self.spill(hash_table, spill_context)?;
+            }
+
             hash_table.aggregate_batch(&batch)?;
 
             // Soft group limits are usually small and rarely coincide with
@@ -728,25 +767,7 @@ impl FinalHashAggregateStream {
                         "Final hash aggregate ran out of memory with no aggregated groups"
                     );
 
-                    // Sorts and spills one complete in-memory state run
-
-                    // Go to the next state to perform spilling the aggregated
-                    // groups so far.
-                    let result = hash_table
-                        .take_state_batch()
-                        .and_then(|batch| spill_context.sort_and_spill(batch));
-
-                    // Spilling shrinks the aggregate table and releases its accumulated
-                    // memory. Update the reservation accordingly.
-                    self.reservation
-                        .try_resize(hash_table.memory_size())
-                        .map_err(|e| {
-                            e.context(
-                                "Decreasing allocation after spilling should succeed",
-                            )
-                        })?;
-
-                    result?;
+                    self.spill(hash_table, spill_context)?;
 
                     // One sorted run was written; resume reading the original input.
                 }
@@ -755,6 +776,28 @@ impl FinalHashAggregateStream {
         }
 
         Ok(())
+    }
+
+    /// Sorts and spills one complete in-memory state run: the groups
+    /// aggregated so far.
+    fn spill(
+        &mut self,
+        hash_table: &mut AggregateHashTable<FinalMarker>,
+        spill_context: &mut AggregateSpill,
+    ) -> Result<()> {
+        let result = hash_table
+            .take_state_batch()
+            .and_then(|batch| spill_context.sort_and_spill(batch));
+
+        // Spilling shrinks the aggregate table and releases its accumulated
+        // memory. Update the reservation accordingly.
+        self.reservation
+            .try_resize(hash_table.memory_size())
+            .map_err(|e| {
+                e.context("Decreasing allocation after spilling should succeed")
+            })?;
+
+        result
     }
 
     /// Produce output from spills
@@ -856,14 +899,16 @@ mod tests {
 
     use super::*;
     use crate::aggregates::GroupClusteringMode;
+    use crate::aggregates::aggregate_hash_table::SingleMarker;
     use crate::aggregates::{AggregateMode, PhysicalGroupBy};
     use crate::common::collect;
     use crate::execution_plan::ExecutionPlan;
+    use crate::metrics::MetricsSet;
     use crate::test::TestMemoryExec;
     use crate::test::exec::BarrierExec;
 
-    use arrow::array::{AsArray, Int32Array, Int64Array, StringViewArray};
-    use arrow::datatypes::{DataType, Field, Int32Type, Schema};
+    use arrow::array::{ArrayRef, AsArray, Int32Array, Int64Array, StringViewArray};
+    use arrow::datatypes::{DataType, Field, Int32Type, Int64Type, Schema};
     use datafusion_common::Result;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::{
@@ -872,7 +917,9 @@ mod tests {
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::{min_max::min_udaf, sum::sum_udaf};
-    use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+    use datafusion_physical_expr::aggregate::{
+        AggregateExprBuilder, AggregateFunctionExpr,
+    };
     use datafusion_physical_expr::expressions::col;
     use futures::channel::mpsc;
     use futures::{FutureExt, StreamExt};
@@ -1659,6 +1706,192 @@ mod tests {
         }
         drop(streams);
         assert_eq!(pool.reserved(), 0);
+        Ok(())
+    }
+
+    /// A batch with the keys `keys` and `v` equal to `k`, in `schema`: the
+    /// input of `SUM(v) GROUP BY k`, or its partial states.
+    fn key_batch(schema: &SchemaRef, keys: std::ops::Range<i64>) -> RecordBatch {
+        let column = || Arc::new(Int64Array::from_iter_values(keys.clone())) as ArrayRef;
+        RecordBatch::try_new(Arc::clone(schema), vec![column(), column()]).unwrap()
+    }
+
+    /// Returns the fewest new groups that make `table` grow its hash table, and
+    /// the size of the larger table.
+    fn hash_table_growth<M>(table: &AggregateHashTable<M>) -> (usize, usize) {
+        let new_groups = (1..=1_000_000)
+            .find(|&rows| table.hash_table_growth_size(rows) > 0)
+            .expect("the hash table grows before it holds a million more groups");
+        (new_groups, table.hash_table_growth_size(new_groups))
+    }
+
+    /// Runs `SUM(v) GROUP BY k` in `mode` over keys `0..1000`, then the fewest
+    /// new keys that grow the hash table that holds the first ones. The memory
+    /// limit holds the table after either batch, but not the larger hash table
+    /// on top of the table that holds the first batch.
+    ///
+    /// Returns the output, the number of keys and the aggregate's metrics.
+    async fn aggregate_until_hash_table_grows(
+        mode: AggregateMode,
+    ) -> Result<(Vec<RecordBatch>, usize, MetricsSet)> {
+        const BATCH_SIZE: usize = 128;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int64, false),
+            Field::new("v", DataType::Int64, false),
+        ]));
+        let groups = PhysicalGroupBy::new_single(vec![(col("k", &schema)?, "k".into())]);
+        let sum: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
+            AggregateExprBuilder::new(sum_udaf(), vec![col("v", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("sum")
+                .build()?,
+        )];
+        let partial_schema = AggregateExec::try_new(
+            AggregateMode::Partial,
+            groups.clone(),
+            sum.clone(),
+            vec![None],
+            TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(&schema), None)?,
+            Arc::clone(&schema),
+        )?
+        .schema();
+        // The final aggregate reads the partial states, `k` and `sum[sum]`
+        let (input_schema, groups) = match mode {
+            AggregateMode::Final => (Arc::clone(&partial_schema), groups.as_final()),
+            _ => (Arc::clone(&schema), groups),
+        };
+        let aggregate = |batches: Vec<RecordBatch>| {
+            AggregateExec::try_new(
+                mode,
+                groups.clone(),
+                sum.clone(),
+                vec![None],
+                TestMemoryExec::try_new_exec(
+                    &[batches],
+                    Arc::clone(&input_schema),
+                    None,
+                )?,
+                Arc::clone(&schema),
+            )
+        };
+
+        // Aggregate the first batch into the table that the stream builds, and
+        // measure what the stream reserves for it. The spilling streams also
+        // reserve a sort index per group.
+        let first = key_batch(&input_schema, 0..1000);
+        let probe = aggregate(vec![])?;
+        let sort_indices = |groups: usize| groups * size_of::<u32>();
+        let (table_size, (new_groups, growth)) = match mode {
+            AggregateMode::Partial => {
+                let mut table = AggregateHashTable::<PartialMarker>::new(
+                    &probe,
+                    0,
+                    probe.schema(),
+                    BATCH_SIZE,
+                )?;
+                table.aggregate_batch(&first)?;
+                (table.memory_size(), hash_table_growth(&table))
+            }
+            AggregateMode::Final => {
+                let mut table = AggregateHashTable::<FinalMarker>::new(
+                    &probe,
+                    0,
+                    probe.schema(),
+                    BATCH_SIZE,
+                )?;
+                table.aggregate_batch(&first)?;
+                let indices = sort_indices(table.building_group_count());
+                (table.memory_size() + indices, hash_table_growth(&table))
+            }
+            AggregateMode::Single => {
+                let mut table = AggregateHashTable::<SingleMarker>::new(
+                    &probe,
+                    0,
+                    probe.schema(),
+                    Arc::clone(&partial_schema),
+                    BATCH_SIZE,
+                )?;
+                table.aggregate_batch(&first)?;
+                let indices = sort_indices(table.building_group_count());
+                (table.memory_size() + indices, hash_table_growth(&table))
+            }
+            mode => unreachable!("{mode:?}"),
+        };
+        let num_keys = 1000 + new_groups;
+        let second = key_batch(&input_schema, 1000..num_keys as i64);
+
+        let pool = Arc::new(GreedyMemoryPool::new(table_size + growth - 1));
+        let context = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(BATCH_SIZE))
+                .with_runtime(
+                    RuntimeEnvBuilder::new()
+                        .with_memory_pool(pool)
+                        .build_arc()?,
+                ),
+        );
+        let aggregate = aggregate(vec![first, second])?;
+        let output = collect(aggregate.execute(0, context)?).await?;
+        Ok((output, num_keys, aggregate.metrics().unwrap()))
+    }
+
+    /// Asserts that `output` has each key in `0..num_keys` once, with a sum
+    /// equal to the key.
+    fn assert_sums_by_key(output: &[RecordBatch], num_keys: usize) {
+        let mut sums = BTreeMap::new();
+        for batch in output {
+            let keys = batch.column(0).as_primitive::<Int64Type>();
+            let values = batch.column(1).as_primitive::<Int64Type>();
+            for (key, value) in keys.values().iter().zip(values.values()) {
+                assert!(sums.insert(*key, *value).is_none(), "key {key} repeated");
+            }
+        }
+        let expected: BTreeMap<_, _> =
+            (0..num_keys as i64).map(|key| (key, key)).collect();
+        assert_eq!(sums, expected);
+    }
+
+    #[tokio::test]
+    async fn final_hash_spills_before_the_hash_table_grows() -> Result<()> {
+        let (output, num_keys, metrics) =
+            aggregate_until_hash_table_grows(AggregateMode::Final).await?;
+        assert_sums_by_key(&output, num_keys);
+        // The groups of the first batch, then those of the second
+        assert_eq!(metrics.spill_count(), Some(2));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn single_hash_spills_before_the_hash_table_grows() -> Result<()> {
+        let (output, num_keys, metrics) =
+            aggregate_until_hash_table_grows(AggregateMode::Single).await?;
+        assert_sums_by_key(&output, num_keys);
+        // The groups of the first batch, then those of the second
+        assert_eq!(metrics.spill_count(), Some(2));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn partial_hash_emits_before_the_hash_table_grows() -> Result<()> {
+        let (output, num_keys, metrics) =
+            aggregate_until_hash_table_grows(AggregateMode::Partial).await?;
+        assert_sums_by_key(&output, num_keys);
+        assert_eq!(
+            metrics.sum_by_name("early_emit_count").unwrap().as_usize(),
+            1
+        );
+        // The groups of the first batch are emitted before the second batch is
+        // aggregated, so no output batch mixes the groups of both
+        let from_first_batch: Vec<bool> = output
+            .iter()
+            .map(|batch| {
+                let keys = batch.column(0).as_primitive::<Int64Type>().values();
+                let first = keys[0] < 1000;
+                assert!(keys.iter().all(|key| (*key < 1000) == first));
+                first
+            })
+            .collect();
+        assert!(from_first_batch.is_sorted_by(|a, b| a >= b));
         Ok(())
     }
 }

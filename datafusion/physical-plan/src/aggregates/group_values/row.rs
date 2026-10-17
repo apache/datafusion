@@ -27,6 +27,7 @@ use arrow::row::{RowConverter, Rows, SortField};
 use datafusion_common::Result;
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
+use datafusion_common::utils::memory::estimate_hash_table_growth;
 use datafusion_common::utils::normalize_float_zero;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::{EmitTo, GroupSelection};
@@ -202,6 +203,10 @@ impl GroupValues for GroupValuesRows {
             + self.rows_buffer.size()
             - size_of::<Rows>()
             + self.hashes_buffer.allocated_size()
+    }
+
+    fn hash_table_growth_size(&self, num_groups: usize) -> usize {
+        estimate_hash_table_growth(&self.map, num_groups)
     }
 
     fn is_empty(&self) -> bool {

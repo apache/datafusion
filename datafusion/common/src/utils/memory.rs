@@ -31,6 +31,7 @@ use arrow::buffer::Buffer;
 use arrow::datatypes::DataType;
 use arrow::downcast_primitive_array;
 use arrow::record_batch::RecordBatch;
+use hashbrown::hash_table::HashTable;
 use std::mem::size_of;
 use std::num::NonZero;
 use std::sync::Arc;
@@ -117,6 +118,40 @@ pub fn estimate_memory_size<T>(num_elements: usize, fixed_size: usize) -> Result
         .ok_or_else(|| {
             _exec_datafusion_err!("usize overflow while estimating the number of buckets")
         })
+}
+
+/// Estimates the size in bytes of the table that a hashbrown [`HashTable`]
+/// allocates to make room for `additional` more entries, or returns 0 if they
+/// fit in its capacity.
+///
+/// A table that grows allocates the larger table before it moves the entries
+/// and frees the current one, so for a moment it holds both. Memory accounting
+/// that measures the table before or after inserting misses the larger table,
+/// which reserving this size before inserting covers.
+///
+/// Returns `usize::MAX` if the estimate overflows.
+///
+/// # Example
+///
+/// ```rust
+/// # use datafusion_common::utils::memory::estimate_hash_table_growth;
+/// # use hashbrown::hash_table::HashTable;
+/// let table: HashTable<u64> = HashTable::with_capacity(100);
+/// let capacity = table.capacity();
+/// // The table holds `capacity` entries without growing
+/// assert_eq!(estimate_hash_table_growth(&table, capacity), 0);
+/// // One more entry makes it allocate a larger table
+/// assert!(estimate_hash_table_growth(&table, capacity + 1) > table.allocation_size());
+/// ```
+pub fn estimate_hash_table_growth<T>(table: &HashTable<T>, additional: usize) -> usize {
+    let required = table.len().saturating_add(additional);
+    if required <= table.capacity() {
+        return 0;
+    }
+    // A full table grows to hold at least one more entry than its capacity,
+    // which doubles its buckets
+    let capacity = required.max(table.capacity().saturating_add(1));
+    estimate_memory_size::<T>(capacity, 0).unwrap_or(usize::MAX)
 }
 
 /// Calculate total used memory of this batch.
@@ -511,7 +546,9 @@ impl BufferIdSet {
 mod tests {
     use std::{collections::HashSet, mem::size_of};
 
-    use super::estimate_memory_size;
+    use hashbrown::hash_table::HashTable;
+
+    use super::{estimate_hash_table_growth, estimate_memory_size};
 
     #[test]
     fn test_estimate_memory() {
@@ -538,6 +575,42 @@ mod tests {
         let estimated = estimate_memory_size::<u32>(num_elements, fixed_size);
 
         assert!(estimated.is_err());
+    }
+
+    #[test]
+    fn test_estimate_hash_table_growth() {
+        let hasher = |value: &u64| *value;
+        let mut table: HashTable<u64> = HashTable::with_capacity(1000);
+        let capacity = table.capacity();
+        for value in 0..capacity as u64 {
+            table.insert_unique(value, value, hasher);
+        }
+        assert_eq!(estimate_hash_table_growth(&table, 0), 0);
+
+        // The estimate leaves out hashbrown's trailing group of control bytes
+        let assert_estimate = |estimated: usize, allocated: usize| {
+            assert!(
+                estimated <= allocated && allocated - estimated <= 16,
+                "estimated {estimated} bytes, allocated {allocated}"
+            );
+        };
+
+        // One more entry doubles the table
+        let estimated = estimate_hash_table_growth(&table, 1);
+        let before = table.allocation_size();
+        table.insert_unique(u64::MAX, u64::MAX, hasher);
+        assert!(table.allocation_size() >= 2 * before - 16);
+        assert_estimate(estimated, table.allocation_size());
+
+        // Many more entries grow it several times
+        let additional = 10 * table.capacity();
+        let estimated = estimate_hash_table_growth(&table, additional);
+        for value in capacity as u64..(capacity + additional) as u64 {
+            table.insert_unique(value, value, hasher);
+        }
+        assert_estimate(estimated, table.allocation_size());
+
+        assert_eq!(estimate_hash_table_growth(&table, usize::MAX), usize::MAX);
     }
 }
 
