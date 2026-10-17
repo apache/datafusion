@@ -359,7 +359,7 @@ mod tests {
             optimizer_ctx,
             rules,
             plan,
-            @r"
+            @"
         Projection: test.a, min(alias1) AS min(DISTINCT test.b), sum(alias1) AS sum(DISTINCT test.b)
           Aggregate: groupBy=[[test.a]], aggr=[[min(alias1), sum(alias1)]]
             Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]]
