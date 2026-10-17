@@ -17,6 +17,10 @@
 
 mod utils;
 
+/// Run all tests that are found in the `cases` directory
+#[cfg(feature = "integration-tests")]
+mod cases;
+
 /// Add an additional module here for convenience to scope this to only
 /// when the feature integration-tests is built
 #[cfg(feature = "integration-tests")]

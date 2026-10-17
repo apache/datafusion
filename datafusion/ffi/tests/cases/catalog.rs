@@ -15,11 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod utils;
-
-/// Add an additional module here for convenience to scope this to only
-/// when the feature integration-tests is built
-#[cfg(feature = "integration-tests")]
 mod tests {
     use std::sync::Arc;
 
@@ -29,7 +24,7 @@ mod tests {
     #[tokio::test]
     async fn test_catalog() -> datafusion_common::Result<()> {
         let module = get_module()?;
-        let (ctx, codec) = super::utils::ctx_and_codec();
+        let (ctx, codec) = crate::utils::ctx_and_codec();
 
         let ffi_catalog = (module.create_catalog)(codec);
         let foreign_catalog: Arc<dyn CatalogProvider> = (&ffi_catalog).into();
@@ -50,7 +45,7 @@ mod tests {
     #[tokio::test]
     async fn test_catalog_list() -> datafusion_common::Result<()> {
         let module = get_module()?;
-        let (ctx, codec) = super::utils::ctx_and_codec();
+        let (ctx, codec) = crate::utils::ctx_and_codec();
 
         let ffi_catalog_list = (module.create_catalog_list)(codec);
         let foreign_catalog_list: Arc<dyn CatalogProviderList> =
