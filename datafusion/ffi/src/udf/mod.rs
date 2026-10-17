@@ -26,6 +26,7 @@ use arrow::ffi::{FFI_ArrowSchema, from_ffi, to_ffi};
 use arrow_schema::FieldRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result, internal_err};
+use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::functions::fields_with_udf;
 use datafusion_expr::{
@@ -43,6 +44,7 @@ use crate::arrow_wrappers::{WrappedArray, WrappedSchema};
 use crate::config::FFI_ConfigOptions;
 use crate::expr::columnar_value::FFI_ColumnarValue;
 use crate::expr::expr_properties::FFI_ExprProperties;
+use crate::expr::interval::FFI_Interval;
 use crate::placement::FFI_ExpressionPlacement;
 use crate::util::{
     FFI_Option, FFI_Result, rvec_wrapped_to_vec_datatype, vec_datatype_to_rvec_wrapped,
@@ -123,6 +125,12 @@ pub struct FFI_ScalarUDF {
         udf: &Self,
         inputs: SVec<FFI_ExprProperties>,
     ) -> FFI_Result<bool>,
+
+    /// FFI equivalent to [`ScalarUDFImpl::evaluate_bounds`].
+    pub evaluate_bounds: unsafe extern "C" fn(
+        udf: &Self,
+        inputs: SVec<FFI_Interval>,
+    ) -> FFI_Result<FFI_Interval>,
 
     /// FFI equivalent to [`ScalarUDFImpl::with_updated_config`].
     pub with_updated_config:
@@ -219,6 +227,25 @@ unsafe extern "C" fn with_updated_config_fn_wrapper(
         .map(|updated| Arc::new(updated).into());
 
     FFI_Result::Ok(updated.into())
+}
+
+unsafe extern "C" fn evaluate_bounds_fn_wrapper(
+    udf: &FFI_ScalarUDF,
+    inputs: SVec<FFI_Interval>,
+) -> FFI_Result<FFI_Interval> {
+    let inputs = sresult_return!(
+        inputs
+            .into_iter()
+            .map(Interval::try_from)
+            .collect::<Result<Vec<_>>>()
+    );
+    let inputs = inputs.iter().collect::<Vec<_>>();
+
+    sresult!(
+        udf.inner()
+            .evaluate_bounds(&inputs)
+            .and_then(FFI_Interval::try_from)
+    )
 }
 
 unsafe extern "C" fn invoke_with_args_fn_wrapper(
@@ -320,6 +347,7 @@ impl From<Arc<ScalarUDF>> for FFI_ScalarUDF {
             private_data: Box::into_raw(private_data).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
             preserves_lex_ordering: preserves_lex_ordering_fn_wrapper,
+            evaluate_bounds: evaluate_bounds_fn_wrapper,
             with_updated_config: with_updated_config_fn_wrapper,
         }
     }
@@ -548,6 +576,18 @@ impl ScalarUDFImpl for ForeignScalarUDF {
 
         Some(ScalarUDF::new_from_shared_impl(updated.into()))
     }
+
+    fn evaluate_bounds(&self, inputs: &[&Interval]) -> Result<Interval> {
+        let inputs = inputs
+            .iter()
+            .map(|interval| FFI_Interval::try_from(*interval))
+            .collect::<Result<SVec<_>>>()?;
+
+        unsafe {
+            df_result!((self.udf.evaluate_bounds)(&self.udf, inputs))
+                .and_then(Interval::try_from)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -601,6 +641,15 @@ mod tests {
             Some(ScalarUDF::from(Self {
                 signature: self.signature.clone(),
             }))
+        }
+
+        fn evaluate_bounds(&self, inputs: &[&Interval]) -> Result<Interval> {
+            inputs
+                .first()
+                .map(|interval| (*interval).clone())
+                .ok_or_else(|| {
+                    DataFusionError::Internal("expected one input".to_string())
+                })
         }
     }
 
@@ -693,6 +742,13 @@ mod tests {
                 .unwrap()
         );
         assert!(foreign_udf.preserves_lex_ordering(&[]).is_err());
+
+        let interval = Interval::try_new(
+            datafusion_common::ScalarValue::Int64(Some(2)),
+            datafusion_common::ScalarValue::Int64(Some(8)),
+        )?;
+        assert_eq!(foreign_udf.evaluate_bounds(&[&interval])?, interval);
+        assert!(foreign_udf.evaluate_bounds(&[]).is_err());
 
         let updated = foreign_udf
             .with_updated_config(&ConfigOptions::default())
