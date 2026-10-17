@@ -50,6 +50,8 @@ SELECT count(DISTINCT x) FROM (SELECT x FROM r UNION ALL SELECT x FROM r)
 
 # The table is scanned once, below MaterializedCteExec, and each reference is
 # a MaterializedCteScanExec. The filter of each reference stays above its scan.
+# Each reference has a filter, so the body is also filtered with the
+# disjunction of the two filters.
 query TT
 EXPLAIN WITH c AS MATERIALIZED (SELECT k, v * 2 AS v2 FROM t)
 SELECT k FROM c WHERE v2 > 30
@@ -60,23 +62,28 @@ logical_plan
 01)MaterializedCte: name=c
 02)--SubqueryAlias: c
 03)----Projection: t.k, CAST(t.v AS Int64) * Int64(2) AS v2
-04)------TableScan: t projection=[k, v]
-05)--Union
-06)----Projection: c.k
-07)------Filter: c.v2 > Int64(30)
-08)--------MaterializedCteScan: name=c
-09)----Projection: c.k
-10)------Filter: c.v2 < Int64(30)
-11)--------MaterializedCteScan: name=c
+04)------Filter: __common_expr_2 > Int64(30) OR __common_expr_2 < Int64(30)
+05)--------Projection: CAST(t.v AS Int64) * Int64(2) AS __common_expr_2, t.k, t.v
+06)----------TableScan: t projection=[k, v]
+07)--Union
+08)----Projection: c.k
+09)------Filter: c.v2 > Int64(30)
+10)--------MaterializedCteScan: name=c
+11)----Projection: c.k
+12)------Filter: c.v2 < Int64(30)
+13)--------MaterializedCteScan: name=c
 physical_plan
 01)MaterializedCteExec: name=c
-02)--ProjectionExec: expr=[k@0 as k, CAST(v@1 AS Int64) * 2 as v2]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)--UnionExec
-05)----FilterExec: v2@1 > 30, projection=[k@0]
-06)------MaterializedCteScanExec: name=c
-07)----FilterExec: v2@1 < 30, projection=[k@0]
-08)------MaterializedCteScanExec: name=c
+02)--ProjectionExec: expr=[k@1 as k, CAST(v@2 AS Int64) * 2 as v2]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------FilterExec: __common_expr_2@0 > 30 OR __common_expr_2@0 < 30
+05)--------ProjectionExec: expr=[CAST(v@1 AS Int64) * 2 as __common_expr_2, k@0 as k, v@1 as v]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)--UnionExec
+08)----FilterExec: v2@1 > 30, projection=[k@0]
+09)------MaterializedCteScanExec: name=c
+10)----FilterExec: v2@1 < 30, projection=[k@0]
+11)------MaterializedCteScanExec: name=c
 
 query I rowsort
 WITH c AS MATERIALIZED (SELECT k, v * 2 AS v2 FROM t)
@@ -414,6 +421,518 @@ SELECT * FROM (
 ) s WHERE s.v = 10
 ----
 1 10
+
+# Filters that all the references have are pushed into the body as one
+# disjunction. The Parquet table shows that the filter goes down to the scan.
+statement ok
+COPY (
+  SELECT * FROM (VALUES
+    ('2026-01-01', 1), ('2026-01-01', 2), ('2026-01-02', 3),
+    ('2026-01-03', 4), ('2026-01-04', 5)
+  ) AS v(day, n)
+) TO 'test_files/scratch/cte_materialized/events.parquet' STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE events STORED AS PARQUET
+LOCATION 'test_files/scratch/cte_materialized/events.parquet';
+
+# The body reads only the two days that the references read. Each reference
+# keeps its filter, because the body has the rows of the two references.
+query TT
+EXPLAIN WITH c AS MATERIALIZED (SELECT * FROM events)
+SELECT * FROM c WHERE day = '2026-01-01'
+UNION ALL
+SELECT * FROM c WHERE day = '2026-01-02'
+----
+logical_plan
+01)MaterializedCte: name=c
+02)--SubqueryAlias: c
+03)----Filter: events.day = Utf8View("2026-01-01") OR events.day = Utf8View("2026-01-02")
+04)------TableScan: events projection=[day, n], partial_filters=[events.day = Utf8View("2026-01-01") OR events.day = Utf8View("2026-01-02")]
+05)--Union
+06)----Filter: c.day = Utf8View("2026-01-01")
+07)------MaterializedCteScan: name=c
+08)----Filter: c.day = Utf8View("2026-01-02")
+09)------MaterializedCteScan: name=c
+physical_plan
+01)MaterializedCteExec: name=c
+02)--FilterExec: day@0 = 2026-01-01 OR day@0 = 2026-01-02
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/cte_materialized/events.parquet]]}, projection=[day, n], file_type=parquet, predicate=day@0 = 2026-01-01 OR day@0 = 2026-01-02, pruning_predicate=day_null_count@2 != row_count@3 AND day_min@0 <= 2026-01-01 AND 2026-01-01 <= day_max@1 OR day_null_count@2 != row_count@3 AND day_min@0 <= 2026-01-02 AND 2026-01-02 <= day_max@1, required_guarantees=[day in (2026-01-01, 2026-01-02)]
+05)--UnionExec
+06)----FilterExec: day@0 = 2026-01-01
+07)------MaterializedCteScanExec: name=c
+08)----FilterExec: day@0 = 2026-01-02
+09)------MaterializedCteScanExec: name=c
+
+query TI rowsort
+WITH c AS MATERIALIZED (SELECT * FROM events)
+SELECT * FROM c WHERE day = '2026-01-01'
+UNION ALL
+SELECT * FROM c WHERE day = '2026-01-02'
+----
+2026-01-01 1
+2026-01-01 2
+2026-01-02 3
+
+# One reference has no filter, so it reads all the rows of the body. The body
+# is not filtered.
+query TT
+EXPLAIN WITH c AS MATERIALIZED (SELECT * FROM events)
+SELECT * FROM c WHERE day = '2026-01-01'
+UNION ALL
+SELECT * FROM c
+----
+logical_plan
+01)MaterializedCte: name=c
+02)--SubqueryAlias: c
+03)----TableScan: events projection=[day, n]
+04)--Union
+05)----Filter: c.day = Utf8View("2026-01-01")
+06)------MaterializedCteScan: name=c
+07)----MaterializedCteScan: name=c
+physical_plan
+01)MaterializedCteExec: name=c
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/cte_materialized/events.parquet]]}, projection=[day, n], file_type=parquet
+03)--UnionExec
+04)----FilterExec: day@0 = 2026-01-01
+05)------MaterializedCteScanExec: name=c
+06)----MaterializedCteScanExec: name=c
+
+query TI rowsort
+WITH c AS MATERIALIZED (SELECT * FROM events)
+SELECT * FROM c WHERE day = '2026-01-04'
+UNION ALL
+SELECT * FROM c
+----
+2026-01-01 1
+2026-01-01 2
+2026-01-02 3
+2026-01-03 4
+2026-01-04 5
+2026-01-04 5
+
+# A reference with only a volatile filter counts as a reference without a
+# filter.
+query TT
+EXPLAIN WITH c AS MATERIALIZED (SELECT * FROM events)
+SELECT * FROM c WHERE day = '2026-01-01'
+UNION ALL
+SELECT * FROM c WHERE random() < 2
+----
+logical_plan
+01)MaterializedCte: name=c
+02)--SubqueryAlias: c
+03)----TableScan: events projection=[day, n]
+04)--Union
+05)----Filter: c.day = Utf8View("2026-01-01")
+06)------MaterializedCteScan: name=c
+07)----Filter: random() < Float64(2)
+08)------MaterializedCteScan: name=c
+physical_plan
+01)MaterializedCteExec: name=c
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/cte_materialized/events.parquet]]}, projection=[day, n], file_type=parquet
+03)--UnionExec
+04)----FilterExec: day@0 = 2026-01-01
+05)------MaterializedCteScanExec: name=c
+06)----FilterExec: random() < 2
+07)------MaterializedCteScanExec: name=c
+
+# Only the deterministic part of a filter goes into the body.
+query TT
+EXPLAIN WITH c AS MATERIALIZED (SELECT * FROM events)
+SELECT * FROM c WHERE day = '2026-01-01'
+UNION ALL
+SELECT * FROM c WHERE n > 3 AND random() < 2
+----
+logical_plan
+01)MaterializedCte: name=c
+02)--SubqueryAlias: c
+03)----Filter: events.day = Utf8View("2026-01-01") OR events.n > Int64(3)
+04)------TableScan: events projection=[day, n], partial_filters=[events.day = Utf8View("2026-01-01") OR events.n > Int64(3)]
+05)--Union
+06)----Filter: c.day = Utf8View("2026-01-01")
+07)------MaterializedCteScan: name=c
+08)----Filter: c.n > Int64(3) AND random() < Float64(2)
+09)------MaterializedCteScan: name=c
+physical_plan
+01)MaterializedCteExec: name=c
+02)--FilterExec: day@0 = 2026-01-01 OR n@1 > 3
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/cte_materialized/events.parquet]]}, projection=[day, n], file_type=parquet, predicate=day@0 = 2026-01-01 OR n@1 > 3, pruning_predicate=day_null_count@2 != row_count@3 AND day_min@0 <= 2026-01-01 AND 2026-01-01 <= day_max@1 OR n_null_count@5 != row_count@3 AND n_max@4 > 3, required_guarantees=[]
+05)--UnionExec
+06)----FilterExec: day@0 = 2026-01-01
+07)------MaterializedCteScanExec: name=c
+08)----FilterExec: n@1 > 3 AND random() < 2
+09)------MaterializedCteScanExec: name=c
+
+query TI rowsort
+WITH c AS MATERIALIZED (SELECT * FROM events)
+SELECT * FROM c WHERE day = '2026-01-01'
+UNION ALL
+SELECT * FROM c WHERE n > 3 AND random() < 2
+----
+2026-01-01 1
+2026-01-01 2
+2026-01-03 4
+2026-01-04 5
+
+# The references have aliases, and the body has other column names than the
+# references. The filters of the two sides of the join go into the body.
+query TT
+EXPLAIN WITH c(d, m) AS MATERIALIZED (SELECT day, n * 10 FROM events)
+SELECT a.d, a.m, b.m FROM c a JOIN c b ON a.d = b.d
+WHERE a.m < 20 AND b.m >= 20
+----
+logical_plan
+01)MaterializedCte: name=c
+02)--SubqueryAlias: c
+03)----Projection: events.day AS d, events.n * Int64(10) AS m
+04)------Filter: __common_expr_2 < Int64(20) OR __common_expr_2 >= Int64(20)
+05)--------Projection: events.n * Int64(10) AS __common_expr_2, events.day, events.n
+06)----------TableScan: events projection=[day, n], partial_filters=[events.n * Int64(10) < Int64(20) OR events.n * Int64(10) >= Int64(20)]
+07)--Projection: a.d, a.m, b.m
+08)----Inner Join: a.d = b.d
+09)------SubqueryAlias: a
+10)--------Filter: c.m < Int64(20)
+11)----------MaterializedCteScan: name=c
+12)------SubqueryAlias: b
+13)--------Filter: c.m >= Int64(20)
+14)----------MaterializedCteScan: name=c
+physical_plan
+01)MaterializedCteExec: name=c
+02)--ProjectionExec: expr=[day@0 as d, n@1 * 10 as m]
+03)----FilterExec: __common_expr_2@0 < 20 OR __common_expr_2@0 >= 20, projection=[day@1, n@2]
+04)------ProjectionExec: expr=[n@1 * 10 as __common_expr_2, day@0 as day, n@1 as n]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/cte_materialized/events.parquet]]}, projection=[day, n], file_type=parquet, predicate=n@1 * 10 < 20 OR n@1 * 10 >= 20
+07)--HashJoinExec: mode=Partitioned, join_type=Inner, on=[(d@0, d@0)], projection=[d@0, m@1, m@3]
+08)----RepartitionExec: partitioning=Hash([d@0], 4), input_partitions=4
+09)------FilterExec: m@1 < 20
+10)--------MaterializedCteScanExec: name=c
+11)----RepartitionExec: partitioning=Hash([d@0], 4), input_partitions=4
+12)------FilterExec: m@1 >= 20
+13)--------MaterializedCteScanExec: name=c
+
+query TII
+WITH c(d, m) AS MATERIALIZED (SELECT day, n * 10 FROM events)
+SELECT a.d, a.m, b.m FROM c a JOIN c b ON a.d = b.d
+WHERE a.m < 20 AND b.m >= 20
+----
+2026-01-01 10 20
+
+# One reference is in a scalar subquery and one is in the main query.
+query TT
+EXPLAIN WITH c AS MATERIALIZED (SELECT * FROM events)
+SELECT day, n FROM c
+WHERE n < 3 AND day = (SELECT min(day) FROM c WHERE n > 0)
+----
+logical_plan
+01)MaterializedCte: name=c
+02)--SubqueryAlias: c
+03)----Filter: events.n < Int64(3) OR events.n > Int64(0)
+04)------TableScan: events projection=[day, n], partial_filters=[events.n < Int64(3) OR events.n > Int64(0)]
+05)--Filter: c.n < Int64(3) AND c.day = (<subquery>)
+06)----Subquery:
+07)------Aggregate: groupBy=[[]], aggr=[[min(c.day)]]
+08)--------Projection: c.day
+09)----------Filter: c.n > Int64(0)
+10)------------MaterializedCteScan: name=c
+11)----MaterializedCteScan: name=c
+physical_plan
+01)ScalarSubqueryExec: subqueries=1
+02)--MaterializedCteExec: name=c
+03)----FilterExec: n@1 < 3 OR n@1 > 0
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/cte_materialized/events.parquet]]}, projection=[day, n], file_type=parquet, predicate=n@1 < 3 OR n@1 > 0, pruning_predicate=n_null_count@1 != row_count@2 AND n_min@0 < 3 OR n_null_count@1 != row_count@2 AND n_max@3 > 0, required_guarantees=[]
+06)----FilterExec: n@1 < 3 AND day@0 = scalar_subquery(<pending>)
+07)------MaterializedCteScanExec: name=c
+08)--AggregateExec: mode=Final, gby=[], aggr=[min(c.day)]
+09)----CoalescePartitionsExec
+10)------AggregateExec: mode=Partial, gby=[], aggr=[min(c.day)]
+11)--------FilterExec: n@1 > 0, projection=[day@0]
+12)----------MaterializedCteScanExec: name=c
+
+query TI rowsort
+WITH c AS MATERIALIZED (SELECT * FROM events)
+SELECT day, n FROM c
+WHERE n < 3 AND day = (SELECT min(day) FROM c WHERE n > 0)
+----
+2026-01-01 1
+2026-01-01 2
+
+# The reference in the scalar subquery has no filter, so the body is not
+# filtered.
+query TT
+EXPLAIN WITH c AS MATERIALIZED (SELECT * FROM events)
+SELECT day, n FROM c
+WHERE n > 4 AND day > (SELECT min(day) FROM c)
+----
+logical_plan
+01)MaterializedCte: name=c
+02)--SubqueryAlias: c
+03)----TableScan: events projection=[day, n]
+04)--Filter: c.n > Int64(4) AND c.day > (<subquery>)
+05)----Subquery:
+06)------Aggregate: groupBy=[[]], aggr=[[min(c.day)]]
+07)--------Projection: c.day
+08)----------MaterializedCteScan: name=c
+09)----MaterializedCteScan: name=c
+physical_plan
+01)ScalarSubqueryExec: subqueries=1
+02)--MaterializedCteExec: name=c
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/cte_materialized/events.parquet]]}, projection=[day, n], file_type=parquet
+04)----FilterExec: n@1 > 4 AND day@0 > scalar_subquery(<pending>)
+05)------MaterializedCteScanExec: name=c
+06)--AggregateExec: mode=Final, gby=[], aggr=[min(c.day)]
+07)----CoalescePartitionsExec
+08)------AggregateExec: mode=Partial, gby=[], aggr=[min(c.day)]
+09)--------ProjectionExec: expr=[day@0 as day]
+10)----------MaterializedCteScanExec: name=c
+
+query TI
+WITH c AS MATERIALIZED (SELECT * FROM events)
+SELECT day, n FROM c
+WHERE n > 4 AND day > (SELECT min(day) FROM c)
+----
+2026-01-04 5
+
+# A reference in a correlated subquery. The filter with the outer reference
+# becomes a join condition, and the other filter of that reference goes into
+# the body.
+query TT
+EXPLAIN WITH c AS MATERIALIZED (SELECT * FROM events)
+SELECT n FROM c o
+WHERE o.n < 4 AND EXISTS (SELECT 1 FROM c i WHERE i.day = o.day AND i.n > 1)
+----
+logical_plan
+01)MaterializedCte: name=c
+02)--SubqueryAlias: c
+03)----Filter: events.n < Int64(4) OR events.n > Int64(1)
+04)------TableScan: events projection=[day, n], partial_filters=[events.n < Int64(4) OR events.n > Int64(1)]
+05)--Projection: o.n
+06)----LeftSemi Join: o.day = __correlated_sq_1.day
+07)------SubqueryAlias: o
+08)--------Filter: c.n < Int64(4)
+09)----------MaterializedCteScan: name=c
+10)------SubqueryAlias: __correlated_sq_1
+11)--------SubqueryAlias: i
+12)----------Projection: c.day
+13)------------Filter: c.n > Int64(1)
+14)--------------MaterializedCteScan: name=c
+physical_plan
+01)MaterializedCteExec: name=c
+02)--FilterExec: n@1 < 4 OR n@1 > 1
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/cte_materialized/events.parquet]]}, projection=[day, n], file_type=parquet, predicate=n@1 < 4 OR n@1 > 1, pruning_predicate=n_null_count@1 != row_count@2 AND n_min@0 < 4 OR n_null_count@1 != row_count@2 AND n_max@3 > 1, required_guarantees=[]
+05)--HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(day@0, day@0)], projection=[n@1]
+06)----RepartitionExec: partitioning=Hash([day@0], 4), input_partitions=4
+07)------FilterExec: n@1 < 4
+08)--------MaterializedCteScanExec: name=c
+09)----RepartitionExec: partitioning=Hash([day@0], 4), input_partitions=4
+10)------FilterExec: n@1 > 1, projection=[day@0]
+11)--------MaterializedCteScanExec: name=c
+
+query I rowsort
+WITH c AS MATERIALIZED (SELECT * FROM events)
+SELECT n FROM c o
+WHERE o.n < 4 AND EXISTS (SELECT 1 FROM c i WHERE i.day = o.day AND i.n > 1)
+----
+1
+2
+3
+
+# The CTE c is read by the body of the CTE d and by the main query. The filter
+# in the body of d is a filter of a reference to c as all others. The CTE d has
+# a reference without a filter, so its body gets no new filter.
+query TT
+EXPLAIN WITH c AS MATERIALIZED (SELECT * FROM events),
+  d AS MATERIALIZED (SELECT n FROM c WHERE n < 2)
+SELECT n FROM d UNION ALL SELECT n FROM c WHERE n > 4
+----
+logical_plan
+01)MaterializedCte: name=c
+02)--SubqueryAlias: c
+03)----Filter: events.n < Int64(2) OR events.n > Int64(4)
+04)------TableScan: events projection=[day, n], partial_filters=[events.n < Int64(2) OR events.n > Int64(4)]
+05)--MaterializedCte: name=d
+06)----SubqueryAlias: d
+07)------Filter: c.n < Int64(2)
+08)--------Projection: c.n
+09)----------MaterializedCteScan: name=c
+10)----Union
+11)------MaterializedCteScan: name=d
+12)------Filter: c.n > Int64(4)
+13)--------Projection: c.n
+14)----------MaterializedCteScan: name=c
+physical_plan
+01)MaterializedCteExec: name=c
+02)--FilterExec: n@1 < 2 OR n@1 > 4
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/cte_materialized/events.parquet]]}, projection=[day, n], file_type=parquet, predicate=n@1 < 2 OR n@1 > 4, pruning_predicate=n_null_count@1 != row_count@2 AND n_min@0 < 2 OR n_null_count@1 != row_count@2 AND n_max@3 > 4, required_guarantees=[]
+05)--MaterializedCteExec: name=d
+06)----FilterExec: n@0 < 2
+07)------ProjectionExec: expr=[n@1 as n]
+08)--------MaterializedCteScanExec: name=c
+09)----UnionExec
+10)------MaterializedCteScanExec: name=d
+11)------FilterExec: n@0 > 4
+12)--------ProjectionExec: expr=[n@1 as n]
+13)----------MaterializedCteScanExec: name=c
+
+query I rowsort
+WITH c AS MATERIALIZED (SELECT * FROM events),
+  d AS MATERIALIZED (SELECT n FROM c WHERE n < 2)
+SELECT n FROM d UNION ALL SELECT n FROM c WHERE n > 4
+----
+1
+5
+
+# A volatile body is not filtered. A filter above the volatile projection
+# would be correct, but the physical filter pushdown gives a copy of it, with
+# random() in the place of x, to the Parquet scan. With pushdown_filters, the
+# scan would then remove rows with a second value of random().
+# Each row has one value of x, thus it is in one of the two references and the
+# total is always 5.
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+query TT
+EXPLAIN WITH c AS MATERIALIZED (SELECT n, random() AS x FROM events)
+SELECT n FROM c WHERE x < 0.5
+UNION ALL
+SELECT n FROM c WHERE x >= 0.5
+----
+logical_plan
+01)MaterializedCte: name=c
+02)--SubqueryAlias: c
+03)----Projection: events.n, random() AS x
+04)------TableScan: events projection=[n]
+05)--Union
+06)----Projection: c.n
+07)------Filter: c.x < Float64(0.5)
+08)--------MaterializedCteScan: name=c
+09)----Projection: c.n
+10)------Filter: c.x >= Float64(0.5)
+11)--------MaterializedCteScan: name=c
+physical_plan
+01)MaterializedCteExec: name=c
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/cte_materialized/events.parquet]]}, projection=[n, random() as x], file_type=parquet
+03)--UnionExec
+04)----FilterExec: x@1 < 0.5, projection=[n@0]
+05)------MaterializedCteScanExec: name=c
+06)----FilterExec: x@1 >= 0.5, projection=[n@0]
+07)------MaterializedCteScanExec: name=c
+
+query I rowsort
+WITH c AS MATERIALIZED (SELECT n, random() AS x FROM events)
+SELECT n FROM c WHERE x < 0.5
+UNION ALL
+SELECT n FROM c WHERE x >= 0.5
+----
+1
+2
+3
+4
+5
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+# A body with a limit. The new filter stays above the limit.
+query TT
+EXPLAIN WITH c AS MATERIALIZED (SELECT * FROM events ORDER BY n LIMIT 3)
+SELECT n FROM c WHERE n > 2
+UNION ALL
+SELECT n FROM c WHERE n > 4
+----
+logical_plan
+01)MaterializedCte: name=c
+02)--SubqueryAlias: c
+03)----Filter: events.n > Int64(2) OR events.n > Int64(4)
+04)------Sort: events.n ASC NULLS LAST, fetch=3
+05)--------TableScan: events projection=[day, n]
+06)--Union
+07)----Filter: c.n > Int64(2)
+08)------Projection: c.n
+09)--------MaterializedCteScan: name=c
+10)----Filter: c.n > Int64(4)
+11)------Projection: c.n
+12)--------MaterializedCteScan: name=c
+physical_plan
+01)MaterializedCteExec: name=c
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+03)----FilterExec: n@1 > 2 OR n@1 > 4
+04)------SortExec: TopK(fetch=3), expr=[n@1 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/cte_materialized/events.parquet]]}, projection=[day, n], file_type=parquet, predicate=DynamicFilter [ empty ], sort_order_for_reorder=[n@1 ASC NULLS LAST], dynamic_rg_pruning=eligible
+06)--UnionExec
+07)----FilterExec: n@0 > 2
+08)------ProjectionExec: expr=[n@1 as n]
+09)--------MaterializedCteScanExec: name=c
+10)----FilterExec: n@0 > 4
+11)------ProjectionExec: expr=[n@1 as n]
+12)--------MaterializedCteScanExec: name=c
+
+query I
+WITH c AS MATERIALIZED (SELECT * FROM events ORDER BY n LIMIT 3)
+SELECT n FROM c WHERE n > 2
+UNION ALL
+SELECT n FROM c WHERE n > 4
+----
+3
+
+# A recursive body. The new filter stays above the RecursiveQuery, so the
+# recursion is not changed: the rows with n > 2 need the rows with n <= 2.
+query TT
+EXPLAIN WITH RECURSIVE r AS MATERIALIZED (
+  SELECT 1 AS n UNION ALL SELECT n + 1 FROM r WHERE n < 5
+)
+SELECT n FROM r WHERE n = 3 UNION ALL SELECT n FROM r WHERE n > 4
+----
+logical_plan
+01)MaterializedCte: name=r
+02)--SubqueryAlias: r
+03)----Filter: n = Int64(3) OR n > Int64(4)
+04)------RecursiveQuery: is_distinct=false
+05)--------Projection: Int64(1) AS n
+06)----------EmptyRelation: rows=1
+07)--------Projection: r.n + Int64(1)
+08)----------Filter: r.n < Int64(5)
+09)------------TableScan: r projection=[n]
+10)--Union
+11)----Filter: r.n = Int64(3)
+12)------MaterializedCteScan: name=r
+13)----Filter: r.n > Int64(4)
+14)------MaterializedCteScan: name=r
+physical_plan
+01)MaterializedCteExec: name=r
+02)--FilterExec: n@0 = 3 OR n@0 > 4
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------RecursiveQueryExec: name=r, is_distinct=false
+05)--------ProjectionExec: expr=[CAST(1 AS Int64) as n]
+06)----------PlaceholderRowExec
+07)--------CoalescePartitionsExec
+08)----------ProjectionExec: expr=[n@0 + 1 as n]
+09)------------FilterExec: n@0 < 5
+10)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+11)----------------WorkTableExec: name=r
+12)--UnionExec
+13)----FilterExec: n@0 = 3
+14)------MaterializedCteScanExec: name=r
+15)----FilterExec: n@0 > 4
+16)------MaterializedCteScanExec: name=r
+
+query I rowsort
+WITH RECURSIVE r AS MATERIALIZED (
+  SELECT 1 AS n UNION ALL SELECT n + 1 FROM r WHERE n < 5
+)
+SELECT n FROM r WHERE n = 3 UNION ALL SELECT n FROM r WHERE n > 4
+----
+3
+5
+
+statement ok
+DROP TABLE events;
 
 # Spill: the body does not fit in the memory limit, so it is written to disk
 # and replayed from there by every reference. Part of the in-memory prefix is

@@ -36,9 +36,9 @@ use datafusion_expr::dml::CopyTo;
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{
     Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement, Distinct,
-    DistinctOn, DmlStatement, Explain, Expr, Extension, Filter, Join, Limit, Projection,
-    RecursiveQuery, Repartition, Sort, Statement, Subquery, SubqueryAlias, Union, Unnest,
-    Window,
+    DistinctOn, DmlStatement, Explain, Expr, Extension, Filter, Join, Limit,
+    MaterializedCte, MaterializedCtePlan, Projection, RecursiveQuery, Repartition, Sort,
+    Statement, Subquery, SubqueryAlias, Union, Unnest, Window,
 };
 
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
@@ -61,6 +61,7 @@ use crate::plan_signature::LogicalPlanSignature;
 use crate::propagate_empty_relation::PropagateEmptyRelation;
 use crate::push_down_filter::PushDownFilter;
 use crate::push_down_limit::PushDownLimit;
+use crate::push_down_materialized_cte_filter::PushDownMaterializedCteFilter;
 use crate::replace_distinct_aggregate::ReplaceDistinctWithAggregate;
 use crate::rewrite_set_comparison::RewriteSetComparison;
 use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
@@ -306,6 +307,7 @@ impl Optimizer {
             // Filters can't be pushed down past Limits, we should do PushDownFilter after PushDownLimit
             Arc::new(PushDownLimit::new()),
             Arc::new(PushDownFilter::new()),
+            Arc::new(PushDownMaterializedCteFilter::new()),
             Arc::new(EliminateAggregateDistinct::new()),
             Arc::new(SingleDistinctToGroupBy::new()),
             // The previous optimizations added expressions and projections,
@@ -443,6 +445,15 @@ fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
             let r = f(Arc::make_mut(recursive_term))?;
             s || r
         }
+        LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(MaterializedCte {
+            cte,
+            continuation,
+            ..
+        })) => {
+            let b = f(Arc::make_mut(cte))?;
+            let c = f(Arc::make_mut(continuation))?;
+            b || c
+        }
         LogicalPlan::Statement(Statement::Prepare(p)) => f(Arc::make_mut(&mut p.input))?,
         LogicalPlan::Extension(Extension { node }) => {
             let inputs = node.inputs();
@@ -471,6 +482,7 @@ fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
         LogicalPlan::TableScan { .. }
         | LogicalPlan::EmptyRelation { .. }
         | LogicalPlan::Values { .. }
+        | LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_))
         | LogicalPlan::DescribeTable(_)
         | LogicalPlan::Ddl(DdlStatement::CreateExternalTable(_))
         | LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(_))
