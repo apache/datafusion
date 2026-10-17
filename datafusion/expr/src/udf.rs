@@ -364,13 +364,13 @@ impl ScalarUDF {
         self.inner.output_ordering(inputs)
     }
 
-    /// See [`ScalarUDFImpl::supports_range_partitioning_analysis`] for more details.
-    pub fn supports_range_partitioning_analysis(
+    /// See [`ScalarUDFImpl::supports_range_key_locality_analysis`] for more details.
+    pub fn supports_range_key_locality_analysis(
         &self,
         argument_types: &[DataType],
     ) -> bool {
         self.inner
-            .supports_range_partitioning_analysis(argument_types)
+            .supports_range_key_locality_analysis(argument_types)
     }
 
     pub fn preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
@@ -1011,7 +1011,7 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// This does not claim a concrete partition layout or cross-input
     /// co-partitioning compatibility. Boundary evaluation errors cause the
     /// analysis to return `false`. This capability is not transported across FFI.
-    fn supports_range_partitioning_analysis(&self, _argument_types: &[DataType]) -> bool {
+    fn supports_range_key_locality_analysis(&self, _argument_types: &[DataType]) -> bool {
         false
     }
 
@@ -1237,9 +1237,9 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.output_ordering(inputs)
     }
 
-    fn supports_range_partitioning_analysis(&self, argument_types: &[DataType]) -> bool {
+    fn supports_range_key_locality_analysis(&self, argument_types: &[DataType]) -> bool {
         self.inner
-            .supports_range_partitioning_analysis(argument_types)
+            .supports_range_key_locality_analysis(argument_types)
     }
 
     fn preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
@@ -1325,9 +1325,9 @@ mod tests {
     }
 
     #[test]
-    fn range_partitioning_analysis_is_disabled_by_default() {
+    fn range_key_locality_analysis_is_disabled_by_default() {
         let function = test_func("range_function", "a");
-        assert!(!function.supports_range_partitioning_analysis(&[DataType::Int64]));
+        assert!(!function.supports_range_key_locality_analysis(&[DataType::Int64]));
     }
 
     fn test_func(name: &'static str, parameter: &'static str) -> ScalarUDF {

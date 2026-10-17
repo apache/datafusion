@@ -1738,6 +1738,9 @@ pub fn ensure_distribution_with_stats(
                 Distribution::HashPartitioned(_) | Distribution::KeyPartitioned(_) => {
                     let child_partitions =
                         child.plan.output_partitioning().partition_count();
+                    // An aggregate can avoid repartitioning if all rows for each group
+                    // are already in one input partition, even when the ordinary
+                    // distribution check fails (#25344). This does not prove join co-partitioning.
                     let partitioning_satisfied = input_distributions
                         .child_satisfaction(
                             child_idx,

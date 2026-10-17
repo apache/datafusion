@@ -159,8 +159,11 @@ impl ScalarFunctionExpr {
     }
 
     /// Returns whether this function expression's argument types have been
-    /// explicitly audited as candidates for range-partitioning analysis.
-    pub(crate) fn supports_range_partitioning_analysis(
+    /// explicitly audited as candidates for range-key locality analysis.
+    ///
+    /// See [`ScalarUDFImpl::supports_range_key_locality_analysis`] for the safety
+    /// requirements.
+    pub(crate) fn supports_range_key_locality_analysis(
         &self,
         input_schema: &Schema,
     ) -> Result<bool> {
@@ -171,7 +174,7 @@ impl ScalarFunctionExpr {
             .collect::<Result<Vec<_>>>()?;
         Ok(self
             .fun
-            .supports_range_partitioning_analysis(&argument_types))
+            .supports_range_key_locality_analysis(&argument_types))
     }
 
     /// Given an arbitrary PhysicalExpr attempt to downcast it to a ScalarFunctionExpr

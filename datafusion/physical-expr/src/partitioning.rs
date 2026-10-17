@@ -674,7 +674,7 @@ fn range_transform_keeps_keys_local(
     })
 }
 
-fn is_audited_range_transform(
+fn range_transform_proves_key_locality(
     candidate: &Arc<dyn PhysicalExpr>,
     range_key: &Arc<dyn PhysicalExpr>,
     range: &RangePartitioning,
@@ -686,7 +686,7 @@ fn is_audited_range_transform(
     let schema = eq_properties.schema();
     if datafusion_physical_expr_common::physical_expr::is_volatile(candidate)
         || !function
-            .supports_range_partitioning_analysis(schema)
+            .supports_range_key_locality_analysis(schema)
             .unwrap_or(false)
         || !eq_properties.is_same_direction_ordered_transform(candidate, range_key)
     {
@@ -712,13 +712,15 @@ fn range_partitioning_keeps_keys_local(
     eq_properties: &EquivalenceProperties,
     allow_subset: bool,
 ) -> bool {
+    // Currently, transform locality analysis only supports single-key ranges.
+    // Extending the proof to compound range keys is tracked in #24644.
     if range.ordering().len() != 1 || required_exprs.is_empty() {
         return false;
     }
 
     let range_key = &range.ordering()[0].expr;
     let has_audited_transform = required_exprs.iter().any(|required| {
-        is_audited_range_transform(required, range_key, range, eq_properties)
+        range_transform_proves_key_locality(required, range_key, range, eq_properties)
     });
 
     has_audited_transform && (required_exprs.len() == 1 || allow_subset)
