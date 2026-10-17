@@ -1,0 +1,175 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# GROUPING SETS uses at most 64 distinct columns in its internal bitmap.
+# Ordinary GROUP BY does not need that bitmap.
+
+statement ok
+CREATE TABLE grouping_width_input AS
+SELECT
+    CAST(0 AS INT) AS c0, CAST(1 AS INT) AS c1, CAST(2 AS INT) AS c2, CAST(3 AS INT) AS c3, CAST(4 AS INT) AS c4,
+    CAST(5 AS INT) AS c5, CAST(6 AS INT) AS c6, CAST(7 AS INT) AS c7, CAST(8 AS INT) AS c8, CAST(9 AS INT) AS c9,
+    CAST(10 AS INT) AS c10, CAST(11 AS INT) AS c11, CAST(12 AS INT) AS c12, CAST(13 AS INT) AS c13, CAST(14 AS INT) AS c14,
+    CAST(15 AS INT) AS c15, CAST(16 AS INT) AS c16, CAST(17 AS INT) AS c17, CAST(18 AS INT) AS c18, CAST(19 AS INT) AS c19,
+    CAST(20 AS INT) AS c20, CAST(21 AS INT) AS c21, CAST(22 AS INT) AS c22, CAST(23 AS INT) AS c23, CAST(24 AS INT) AS c24,
+    CAST(25 AS INT) AS c25, CAST(26 AS INT) AS c26, CAST(27 AS INT) AS c27, CAST(28 AS INT) AS c28, CAST(29 AS INT) AS c29,
+    CAST(30 AS INT) AS c30, CAST(31 AS INT) AS c31, CAST(32 AS INT) AS c32, CAST(33 AS INT) AS c33, CAST(34 AS INT) AS c34,
+    CAST(35 AS INT) AS c35, CAST(36 AS INT) AS c36, CAST(37 AS INT) AS c37, CAST(38 AS INT) AS c38, CAST(39 AS INT) AS c39,
+    CAST(40 AS INT) AS c40, CAST(41 AS INT) AS c41, CAST(42 AS INT) AS c42, CAST(43 AS INT) AS c43, CAST(44 AS INT) AS c44,
+    CAST(45 AS INT) AS c45, CAST(46 AS INT) AS c46, CAST(47 AS INT) AS c47, CAST(48 AS INT) AS c48, CAST(49 AS INT) AS c49,
+    CAST(50 AS INT) AS c50, CAST(51 AS INT) AS c51, CAST(52 AS INT) AS c52, CAST(53 AS INT) AS c53, CAST(54 AS INT) AS c54,
+    CAST(55 AS INT) AS c55, CAST(56 AS INT) AS c56, CAST(57 AS INT) AS c57, CAST(58 AS INT) AS c58, CAST(59 AS INT) AS c59,
+    CAST(60 AS INT) AS c60, CAST(61 AS INT) AS c61, CAST(62 AS INT) AS c62, CAST(63 AS INT) AS c63, CAST(64 AS INT) AS c64;
+
+# Reject 65 grouping columns: high bit.
+
+statement error Grouping sets support at most 64 grouping columns, got 65
+SELECT GROUPING(c0)
+FROM grouping_width_input
+GROUP BY GROUPING SETS ((
+    c0, c1, c2, c3, c4, c5, c6, c7,
+    c8, c9, c10, c11, c12, c13, c14, c15,
+    c16, c17, c18, c19, c20, c21, c22, c23,
+    c24, c25, c26, c27, c28, c29, c30, c31,
+    c32, c33, c34, c35, c36, c37, c38, c39,
+    c40, c41, c42, c43, c44, c45, c46, c47,
+    c48, c49, c50, c51, c52, c53, c54, c55,
+    c56, c57, c58, c59, c60, c61, c62, c63,
+    c64
+), ());
+
+# Reject 65 grouping columns: low bit.
+
+statement error Grouping sets support at most 64 grouping columns, got 65
+SELECT GROUPING(c64)
+FROM grouping_width_input
+GROUP BY GROUPING SETS ((
+    c0, c1, c2, c3, c4, c5, c6, c7,
+    c8, c9, c10, c11, c12, c13, c14, c15,
+    c16, c17, c18, c19, c20, c21, c22, c23,
+    c24, c25, c26, c27, c28, c29, c30, c31,
+    c32, c33, c34, c35, c36, c37, c38, c39,
+    c40, c41, c42, c43, c44, c45, c46, c47,
+    c48, c49, c50, c51, c52, c53, c54, c55,
+    c56, c57, c58, c59, c60, c61, c62, c63,
+    c64
+), ());
+
+# Reject 65 grouping columns: all bits.
+
+statement error Grouping sets support at most 64 grouping columns, got 65
+SELECT GROUPING(
+    c0, c1, c2, c3, c4, c5, c6, c7,
+    c8, c9, c10, c11, c12, c13, c14, c15,
+    c16, c17, c18, c19, c20, c21, c22, c23,
+    c24, c25, c26, c27, c28, c29, c30, c31,
+    c32, c33, c34, c35, c36, c37, c38, c39,
+    c40, c41, c42, c43, c44, c45, c46, c47,
+    c48, c49, c50, c51, c52, c53, c54, c55,
+    c56, c57, c58, c59, c60, c61, c62, c63,
+    c64
+)
+FROM grouping_width_input
+GROUP BY GROUPING SETS ((
+    c0, c1, c2, c3, c4, c5, c6, c7,
+    c8, c9, c10, c11, c12, c13, c14, c15,
+    c16, c17, c18, c19, c20, c21, c22, c23,
+    c24, c25, c26, c27, c28, c29, c30, c31,
+    c32, c33, c34, c35, c36, c37, c38, c39,
+    c40, c41, c42, c43, c44, c45, c46, c47,
+    c48, c49, c50, c51, c52, c53, c54, c55,
+    c56, c57, c58, c59, c60, c61, c62, c63,
+    c64
+), ());
+
+# Reject 65 grouping columns: without GROUPING.
+
+statement error Grouping sets support at most 64 grouping columns, got 65
+SELECT COUNT(*)
+FROM grouping_width_input
+GROUP BY GROUPING SETS ((
+    c0, c1, c2, c3, c4, c5, c6, c7,
+    c8, c9, c10, c11, c12, c13, c14, c15,
+    c16, c17, c18, c19, c20, c21, c22, c23,
+    c24, c25, c26, c27, c28, c29, c30, c31,
+    c32, c33, c34, c35, c36, c37, c38, c39,
+    c40, c41, c42, c43, c44, c45, c46, c47,
+    c48, c49, c50, c51, c52, c53, c54, c55,
+    c56, c57, c58, c59, c60, c61, c62, c63,
+    c64
+), ());
+
+# 63 columns still execute, including extraction of the first and last bits.
+
+query III rowsort
+SELECT GROUPING(c0), GROUPING(c62), GROUPING(c0, c62)
+FROM grouping_width_input
+GROUP BY GROUPING SETS ((
+    c0, c1, c2, c3, c4, c5, c6, c7,
+    c8, c9, c10, c11, c12, c13, c14, c15,
+    c16, c17, c18, c19, c20, c21, c22, c23,
+    c24, c25, c26, c27, c28, c29, c30, c31,
+    c32, c33, c34, c35, c36, c37, c38, c39,
+    c40, c41, c42, c43, c44, c45, c46, c47,
+    c48, c49, c50, c51, c52, c53, c54, c55,
+    c56, c57, c58, c59, c60, c61, c62
+), ());
+----
+0 0 0
+1 1 3
+
+# 64 columns can be planned. Execution at this boundary has separate kernel coverage.
+
+statement ok
+CREATE VIEW grouping_width_64 AS
+SELECT GROUPING(c0) AS g_first, GROUPING(c63) AS g_last, GROUPING(c0, c63) AS g_pair
+FROM grouping_width_input
+GROUP BY GROUPING SETS ((
+    c0, c1, c2, c3, c4, c5, c6, c7,
+    c8, c9, c10, c11, c12, c13, c14, c15,
+    c16, c17, c18, c19, c20, c21, c22, c23,
+    c24, c25, c26, c27, c28, c29, c30, c31,
+    c32, c33, c34, c35, c36, c37, c38, c39,
+    c40, c41, c42, c43, c44, c45, c46, c47,
+    c48, c49, c50, c51, c52, c53, c54, c55,
+    c56, c57, c58, c59, c60, c61, c62, c63
+), ());
+
+query TTT
+DESCRIBE grouping_width_64;
+----
+g_first Int32 YES
+g_last Int32 YES
+g_pair Int32 YES
+
+# The capacity limit does not apply to an ordinary 65-column GROUP BY.
+
+query I
+SELECT GROUPING(c0)
+FROM grouping_width_input
+GROUP BY
+    c0, c1, c2, c3, c4, c5, c6, c7,
+    c8, c9, c10, c11, c12, c13, c14, c15,
+    c16, c17, c18, c19, c20, c21, c22, c23,
+    c24, c25, c26, c27, c28, c29, c30, c31,
+    c32, c33, c34, c35, c36, c37, c38, c39,
+    c40, c41, c42, c43, c44, c45, c46, c47,
+    c48, c49, c50, c51, c52, c53, c54, c55,
+    c56, c57, c58, c59, c60, c61, c62, c63,
+    c64;
+----
+0
