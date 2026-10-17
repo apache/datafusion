@@ -91,6 +91,7 @@ use datafusion_proto_models::protobuf::{
 };
 
 use crate::ExecutionPlan;
+use crate::materialized_cte::MaterializedCteBuffer;
 
 pub use datafusion_proto_models::ProtoDecoderRegistry;
 // Not public API: see `decode_execution_plan`.
@@ -181,6 +182,16 @@ pub trait ExecutionPlanDecode {
 
     /// Reconstruct a window UDF from its name and optional payload.
     fn decode_udwf(&self, name: &str, payload: Option<&[u8]>) -> Result<Arc<WindowUDF>>;
+
+    /// The buffer of the materialized CTE that has the id `encoded_id` in the
+    /// encoded plan. Every call for one id during the decoding of one plan
+    /// must return the same buffer. See
+    /// [`DecodedMaterializedCteBuffers`](crate::materialized_cte::DecodedMaterializedCteBuffers).
+    fn materialized_cte_buffer(
+        &self,
+        encoded_id: u64,
+        name: &str,
+    ) -> Result<Arc<MaterializedCteBuffer>>;
 }
 
 /// Context handed to [`ExecutionPlan::try_to_proto`].
@@ -412,6 +423,16 @@ impl<'a> ExecutionPlanDecodeCtx<'a> {
         payload: Option<&[u8]>,
     ) -> Result<Arc<WindowUDF>> {
         self.decoder.decode_udwf(name, payload)
+    }
+
+    /// The buffer that a decoded `MaterializedCteExec` shares with the decoded
+    /// `MaterializedCteScanExec`s that have the same `encoded_id`.
+    pub fn materialized_cte_buffer(
+        &self,
+        encoded_id: u64,
+        name: &str,
+    ) -> Result<Arc<MaterializedCteBuffer>> {
+        self.decoder.materialized_cte_buffer(encoded_id, name)
     }
 
     /// An expression-level decode context backed by this plan context, bound to

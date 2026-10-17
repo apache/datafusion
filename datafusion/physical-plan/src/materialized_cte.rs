@@ -40,6 +40,7 @@
 //! disk is written in pieces, so that the move does not raise the memory that
 //! each reader needs.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -49,10 +50,11 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
-use datafusion_common::{Result, Statistics, internal_err};
+use datafusion_common::{Result, Statistics, exec_err, internal_err};
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::{SendableRecordBatchStream, SpillFile, TaskContext};
+use datafusion_expr::MaterializedCteId;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt, TryStreamExt};
@@ -300,6 +302,11 @@ impl MaterializedCteBuffer {
         self.id
     }
 
+    /// The name of the CTE.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
     fn set_body(&self, body: Arc<dyn ExecutionPlan>) {
         *self.body.lock() = Some(body);
     }
@@ -314,8 +321,13 @@ impl MaterializedCteBuffer {
         self: &Arc<Self>,
         context: Arc<TaskContext>,
     ) -> Result<OnceFut<MaterializedOutput>> {
+        // A plan from the planner always has the body. A decoded plan does
+        // not have it when the plan was split between the body and a scan.
         let Some(body) = self.body.lock().clone() else {
-            return internal_err!("MaterializedCte {} has no body", self.name);
+            return exec_err!(
+                "The materialized CTE {} has a MaterializedCteScanExec but no MaterializedCteExec in this plan. The body and the scans of a materialized CTE must be in one plan and run in one process",
+                self.name
+            );
         };
         let once = Arc::clone(&self.output.lock());
         let name = self.name.clone();
@@ -324,6 +336,36 @@ impl MaterializedCteBuffer {
         once.try_once(move || {
             Ok(buffer_body(name, body, scan_partitions, context, metrics))
         })
+    }
+}
+
+/// The buffers of the materialized CTEs in one decoded plan.
+///
+/// A [`MaterializedCteExec`] and its [`MaterializedCteScanExec`]s are encoded
+/// as separate nodes that have the same id. The decoder of each node asks for
+/// the buffer of that id, so all of them share one buffer, in any decode
+/// order. A scan in a scalar subquery is not below its `MaterializedCteExec`,
+/// so one registry must be used for the whole plan.
+///
+/// The ids in an encoded plan come from another process and can be equal to
+/// the ids of plans made in this process. Each buffer therefore gets a new id
+/// from [`MaterializedCteId::next`].
+#[derive(Debug, Default)]
+pub struct DecodedMaterializedCteBuffers {
+    /// The buffers, by the id in the encoded plan.
+    buffers: Mutex<HashMap<u64, Arc<MaterializedCteBuffer>>>,
+}
+
+impl DecodedMaterializedCteBuffers {
+    /// Return the buffer of the CTE that has the id `encoded_id` in the
+    /// encoded plan. The first call for an id creates the buffer.
+    pub fn buffer(&self, encoded_id: u64, name: &str) -> Arc<MaterializedCteBuffer> {
+        let mut buffers = self.buffers.lock();
+        let buffer = buffers.entry(encoded_id).or_insert_with(|| {
+            let id = MaterializedCteId::next().as_u64();
+            Arc::new(MaterializedCteBuffer::new(id, name))
+        });
+        Arc::clone(buffer)
     }
 }
 
@@ -655,6 +697,81 @@ impl ExecutionPlan for MaterializedCteExec {
         // continuation handles it.
         Ok(FilterPushdownPropagation::if_any(child_pushdown_result))
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `MaterializedCteExec` is a compile error here until it is either
+        // serialized or explicitly documented as not needing to be.
+        let Self {
+            body,
+            continuation,
+            // Only the id and the name are encoded. The decoder makes a new
+            // buffer and shares it with the scans that have the same id.
+            buffer,
+            // Copied from the continuation's properties, recomputed on decode.
+            cache: _,
+        } = self;
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::MaterializedCte(
+                    Box::new(protobuf::MaterializedCteExecNode {
+                        id: buffer.id(),
+                        name: buffer.name().to_string(),
+                        body: Some(Box::new(ctx.encode_child(body)?)),
+                        continuation: Some(Box::new(ctx.encode_child(continuation)?)),
+                    }),
+                ),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl MaterializedCteExec {
+    /// Reconstruct a [`MaterializedCteExec`] from its protobuf representation.
+    ///
+    /// The node shares the buffer that the decode context holds for its id
+    /// with the decoded [`MaterializedCteScanExec`]s of the same id.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+
+        let cte = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::MaterializedCte,
+            "MaterializedCteExec",
+        );
+        // Destructure exhaustively so that a new field on
+        // `MaterializedCteExecNode` is a compile error here rather than a
+        // silently dropped field.
+        let protobuf::MaterializedCteExecNode {
+            id,
+            name,
+            body,
+            continuation,
+        } = &**cte;
+        let body =
+            ctx.decode_required_child(body.as_deref(), "MaterializedCteExec", "body")?;
+        let continuation = ctx.decode_required_child(
+            continuation.as_deref(),
+            "MaterializedCteExec",
+            "continuation",
+        )?;
+        let buffer = ctx.materialized_cte_buffer(*id, name)?;
+        // A second node would replace the body that the scans read.
+        if buffer.body.lock().is_some() {
+            return internal_err!("Two MaterializedCteExec nodes have the id {id}");
+        }
+        Ok(Arc::new(Self::new(body, continuation, buffer)))
+    }
 }
 
 /// Reads the buffered output of a [`MaterializedCteExec`] body.
@@ -814,6 +931,90 @@ impl ExecutionPlan for MaterializedCteScanExec {
         _args: &StatisticsArgs,
     ) -> Result<Arc<Statistics>> {
         Ok(Arc::new(Statistics::new_unknown(&self.schema)))
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        _ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_common::utils::usize_to_wire;
+        use datafusion_proto_models::protobuf;
+
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `MaterializedCteScanExec` is a compile error here until it is
+        // either serialized or explicitly documented as not needing to be.
+        let Self {
+            id,
+            name,
+            schema,
+            // The decoder binds the scan to the buffer of `id` again.
+            buffer: _,
+            // Runtime metrics, created empty on decode.
+            metrics: _,
+            cache,
+        } = self;
+        let partitions = usize_to_wire(
+            cache.partitioning.partition_count(),
+            "MaterializedCteScanExec",
+            "partitions",
+        )?;
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::MaterializedCteScan(
+                    protobuf::MaterializedCteScanExecNode {
+                        id: *id,
+                        name: name.clone(),
+                        schema: Some(schema.as_ref().try_into()?),
+                        partitions,
+                    },
+                ),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl MaterializedCteScanExec {
+    /// Reconstruct a [`MaterializedCteScanExec`] from its protobuf
+    /// representation.
+    ///
+    /// The scan is bound to the buffer that the decode context holds for its
+    /// id. The decoded [`MaterializedCteExec`] of the same id gives that
+    /// buffer its body. If the decoded plan has no such node, the scan fails
+    /// when it is executed.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::utils::usize_from_wire;
+        use datafusion_proto_models::protobuf;
+
+        let scan = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::MaterializedCteScan,
+            "MaterializedCteScanExec",
+        );
+        // Destructure exhaustively so that a new field on
+        // `MaterializedCteScanExecNode` is a compile error here rather than a
+        // silently dropped field.
+        let protobuf::MaterializedCteScanExecNode {
+            id,
+            name,
+            schema,
+            partitions,
+        } = scan;
+        let schema = schema.as_ref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "MaterializedCteScanExec is missing required field 'schema'"
+            )
+        })?;
+        let schema = Arc::new(arrow::datatypes::Schema::try_from(schema)?);
+        let partitions =
+            usize_from_wire(*partitions, "MaterializedCteScanExec", "partitions")?;
+        let buffer = ctx.materialized_cte_buffer(*id, name)?;
+        let scan = Self::new(buffer.id(), name, schema, partitions);
+        Ok(Arc::new(scan.bind(buffer)))
     }
 }
 
