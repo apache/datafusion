@@ -19,17 +19,18 @@
 //! `(group, rows, width, nulls, batch_size)` combination and sweeps
 //! across the given `--ndvs`. All timed iterations run in a single process.
 
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
 use clap::Parser;
 use datafusion::error::Result;
 use datafusion_benchmarks::dict_encoding_sweep::{
-    Encoding, TableSpec, build_batches, build_dim_batches, chunk_info, csv_header,
-    distinct_values_for, groups, make_session_parallel, register_table,
+    Encoding, Query, SourceEncoding, TableSpec, build_batches, build_dim_batches,
+    chunk_info, csv_header, distinct_values_for, groups, make_parquet_session,
+    make_session_parallel, register_parquet_table, register_table,
     register_table_partitioned, run_cell, run_cell_replan, split_batches_round_robin,
-    stats, write_csv_row,
+    stats, write_csv_row, write_parquet_source,
 };
 use datafusion_common::instant::Instant;
 
@@ -44,7 +45,7 @@ static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 #[derive(Debug, Parser)]
 #[command(about = "Utf8View vs Dictionary<Int32, Utf8> sweep driver")]
 struct Cli {
-    /// Operator group (scan, filter, projection, aggregation, join, sort, window, other)
+    /// Operator group. Use parquet_scan for the physical-source encoding matrix.
     #[arg(long)]
     group: String,
 
@@ -77,7 +78,7 @@ struct Cli {
     #[arg(long, default_value_t = 1)]
     target_partitions: usize,
 
-    /// Rows per shared dictionary values-array chunk.
+    /// Rows per shared dictionary values-array chunk; Parquet row-group size.
     #[arg(long, default_value_t = 500_000)]
     dict_chunk: usize,
 
@@ -156,6 +157,11 @@ async fn main() -> Result<()> {
     let mut writer = BufWriter::new(file);
     if needs_header {
         writeln!(writer, "{}", csv_header()).expect("header");
+    }
+
+    if cli.group == "parquet_scan" {
+        run_parquet_scan(&cli, &selected, &git_sha, &mut writer).await?;
+        return Ok(());
     }
 
     for query in &selected {
@@ -267,6 +273,7 @@ async fn main() -> Result<()> {
                 &git_sha,
                 &cli.group,
                 query.id,
+                SourceEncoding::Memory,
                 Encoding::Utf8View,
                 &spec,
                 cli.process_id,
@@ -283,6 +290,7 @@ async fn main() -> Result<()> {
                 &git_sha,
                 &cli.group,
                 query.id,
+                SourceEncoding::Memory,
                 Encoding::Dictionary,
                 &spec,
                 cli.process_id,
@@ -312,6 +320,144 @@ async fn main() -> Result<()> {
                 ms(d_p75)
             );
             eprintln!("  ratio dict/view = {:.3}", d_med as f64 / v_med as f64);
+        }
+    }
+
+    Ok(())
+}
+
+async fn run_parquet_scan(
+    cli: &Cli,
+    queries: &[Query],
+    git_sha: &str,
+    writer: &mut BufWriter<File>,
+) -> Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+
+    for &ndv in &cli.ndvs {
+        let spec = TableSpec {
+            rows: cli.rows,
+            ndv,
+            width_bytes: cli.width,
+            null_rate: cli.nulls,
+            batch_size: cli.batch_size,
+            dict_chunk_rows: cli.dict_chunk,
+            seed: cli.seed,
+        };
+        let distinct_values = distinct_values_for(&spec);
+
+        let gen_start = Instant::now();
+        let source_batches = build_batches(&spec, Encoding::Utf8View, &distinct_values);
+        eprintln!(
+            "[parquet-data] rows={} ndv={} width={} nulls={} batches={} (gen {:.2}s)",
+            spec.rows,
+            spec.ndv,
+            spec.width_bytes,
+            spec.null_rate,
+            source_batches.len(),
+            gen_start.elapsed().as_secs_f64(),
+        );
+
+        for source_encoding in [
+            SourceEncoding::ParquetPlain,
+            SourceEncoding::ParquetRleDictionary,
+        ] {
+            let path = temp_dir.path().join(format!(
+                "ndv_{}_{}.parquet",
+                ndv,
+                source_encoding.as_str()
+            ));
+            write_parquet_source(
+                &path,
+                &source_batches,
+                source_encoding,
+                cli.dict_chunk,
+                spec.ndv,
+                spec.width_bytes,
+            )?;
+            let file_size = std::fs::metadata(&path)?.len();
+            let note = format!("file_bytes={file_size}");
+            eprintln!(
+                "  source={} file_bytes={file_size}",
+                source_encoding.as_str()
+            );
+
+            let ctx_view = make_parquet_session(
+                cli.batch_size,
+                cli.target_partitions,
+                Encoding::Utf8View,
+            );
+            let ctx_dict = make_parquet_session(
+                cli.batch_size,
+                cli.target_partitions,
+                Encoding::Dictionary,
+            );
+            register_parquet_table(&ctx_view, "t", &path, Encoding::Utf8View).await?;
+            register_parquet_table(&ctx_dict, "t", &path, Encoding::Dictionary).await?;
+
+            for query in queries {
+                let sql = query.sql.resolve(&distinct_values);
+                eprintln!(
+                    "[cell] group=parquet_scan q={} source={} rows={} ndv={} batch={} row_group={}",
+                    query.id,
+                    source_encoding.as_str(),
+                    spec.rows,
+                    spec.ndv,
+                    spec.batch_size,
+                    spec.dict_chunk_rows,
+                );
+                eprintln!("  sql: {sql}");
+
+                // Parquet scan plans own one-shot file stream state. Re-plan
+                // each drain so warmups cannot exhaust the timed scans.
+                let (view_times, dict_times) =
+                    run_cell_replan(&sql, &ctx_view, &ctx_dict, cli.warmups, cli.iters)
+                        .await?;
+
+                let (view_median, view_min, view_p25, view_p75) = stats(view_times);
+                let (dict_median, dict_min, dict_p25, dict_p75) = stats(dict_times);
+                write_csv_row(
+                    writer,
+                    git_sha,
+                    "parquet_scan",
+                    query.id,
+                    source_encoding,
+                    Encoding::Utf8View,
+                    &spec,
+                    cli.process_id,
+                    view_median,
+                    view_min,
+                    view_p25,
+                    view_p75,
+                    cli.iters,
+                    &note,
+                )?;
+                write_csv_row(
+                    writer,
+                    git_sha,
+                    "parquet_scan",
+                    query.id,
+                    source_encoding,
+                    Encoding::Dictionary,
+                    &spec,
+                    cli.process_id,
+                    dict_median,
+                    dict_min,
+                    dict_p25,
+                    dict_p75,
+                    cli.iters,
+                    &note,
+                )?;
+                writer.flush()?;
+
+                let milliseconds = |nanoseconds: u128| nanoseconds as f64 / 1.0e6;
+                eprintln!(
+                    "  view: median {:.3} ms; dict: median {:.3} ms; dict/view {:.3}",
+                    milliseconds(view_median),
+                    milliseconds(dict_median),
+                    dict_median as f64 / view_median as f64,
+                );
+            }
         }
     }
 

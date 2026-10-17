@@ -1148,11 +1148,16 @@ adjacent chunks at RG boundaries.
 ## Dictionary vs Utf8View Encoding Sweep
 
 `dict_encoding_sweep` compares `Dictionary<Int32, Utf8>` against `Utf8View` for
-the same operator across a cardinality sweep. For each cell it generates two
-in-memory tables (one per encoding) that share values, SQL text, and seed; it
-then interleaves warmup + timed iterations of both encodings so cache and
-thermal state stay symmetric. Median / min / p25 / p75 runtimes (nanoseconds)
-are appended to a CSV.
+the same operator across a cardinality sweep. Most groups generate two
+in-memory tables (one per encoding) that share values, SQL text, and seed. The
+`parquet_scan` group instead writes the same rows with both `PLAIN` and
+`RLE_DICTIONARY` physical encodings, then scans each file as both Arrow output
+representations. File generation is outside the timed region and the harness
+verifies the actual physical encoding before recording results.
+
+Warmup and timed iterations are interleaved between Arrow output encodings so
+cache and thermal state stay symmetric. Median / min / p25 / p75 runtimes
+(nanoseconds) are appended to a CSV.
 
 The intent is to make it easy for other engineers to reproduce where dictionary
 encoding wins, where it loses, and at which NDV it crosses over, without
@@ -1165,6 +1170,7 @@ Pass `--group` to pick one of:
 | Group | Queries |
 |-------|---------|
 | `scan` | `scan_k`, `scan_all`, `scan_count_star`, `scan_count_k` |
+| `parquet_scan` | `scan_k`, `scan_all`; runs the `PLAIN`/`RLE_DICTIONARY` × `Utf8View`/dictionary matrix |
 | `filter` | `filter_eq`, `filter_ne`, `filter_in10`, `filter_like_prefix`, `filter_gt`, `filter_1pct_group` |
 | `project` | `proj_length`, `proj_substr`, `proj_upper`, `proj_concat`, `proj_case_like` |
 | `aggregation` | `agg_count_distinct_k`, `agg_group_count_k`, `agg_group_sum_v_k`, `agg_group_count_kw`, `agg_having_k` |
@@ -1192,6 +1198,24 @@ cargo build --release --bin dict_encoding_sweep -p datafusion-benchmarks
   --output /tmp/dict_sweep/filter_1m.csv
 ```
 
+For scan-level Parquet decoding, one invocation produces four rows per query
+and NDV: `PLAIN→Utf8View`, `PLAIN→Dictionary`,
+`RLE_DICTIONARY→Utf8View`, and `RLE_DICTIONARY→Dictionary`.
+
+```bash
+./target/release/dict_encoding_sweep \
+  --group parquet_scan --query scan_k --rows 1000000 \
+  --ndvs 10,100,500,1000,2000,4000,8192 \
+  --iters 15 --warmups 3 \
+  --output /tmp/dict_sweep/parquet_scan_1m.csv
+```
+
+The generated Parquet files are uncompressed so the measurements emphasize
+page decoding and Arrow array construction. `k` is the only column whose
+physical encoding changes. An explicit target schema requests both Arrow
+representations from both files, making source encoding and output
+representation independent axes.
+
 Useful flags:
 
 | Flag | Default | Notes |
@@ -1204,7 +1228,7 @@ Useful flags:
 | `--nulls` | `0.0` | Null fraction in column `k`. |
 | `--batch-size` | `8192` | Session + record-batch size. |
 | `--target-partitions` | `1` | Set `>1` to force `RepartitionExec` nodes. |
-| `--dict-chunk` | `500000` | Rows per shared dictionary values-array chunk. |
+| `--dict-chunk` | `500000` | Rows per shared dictionary values-array chunk; also the Parquet row-group size for `parquet_scan`. |
 | `--iters` | `15` | Timed iterations per cell per encoding. |
 | `--warmups` | `3` | Untimed warmup iterations per cell per encoding. |
 
@@ -1213,11 +1237,15 @@ Useful flags:
 The output CSV uses one row per `(encoding, cell)`. Columns:
 
 ```
-git_sha, group, query_id, encoding, rows, ndv, width_bytes, null_rate,
+git_sha, group, query_id, source_encoding, encoding, rows, ndv, width_bytes, null_rate,
 batch_size, dict_chunk_rows, process_id,
 median_ns, min_ns, p25_ns, p75_ns, iters, note
 ```
 
+`source_encoding` is `memory`, `parquet_plain`, or
+`parquet_rle_dictionary`. Parquet rows include the generated file size in
+`note`.
+
 Pair the two rows for the same cell by `(group, query_id, rows, ndv,
-width_bytes, null_rate, batch_size, dict_chunk_rows)` and divide
+width_bytes, null_rate, batch_size, dict_chunk_rows, source_encoding)` and divide
 `dict.median_ns / view.median_ns` to get the per-cell speedup.

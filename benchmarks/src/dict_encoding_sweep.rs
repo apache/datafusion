@@ -16,7 +16,8 @@
 // under the License.
 
 //! Standalone harness for comparing `Utf8View` vs `Dictionary<Int32, Utf8>`
-//! across operators and cardinalities.
+//! across operators and cardinalities, including Parquet scans that vary the
+//! physical source encoding independently from the Arrow output type.
 //!
 //! Data generation is seeded and deterministic. For dictionary batches, every
 //! chunk of `dict_chunk_rows` rows shares one `values` array; subsequent
@@ -25,8 +26,10 @@
 //! Timing interleaves view/dict iterations to make cache and thermal state
 //! symmetric. Statistics reported: median / min / p25 / p75 (nanoseconds).
 
+use std::fs::File;
 use std::hint::black_box;
 use std::io::Write;
+use std::path::Path;
 use std::sync::Arc;
 
 use datafusion_common::instant::Instant;
@@ -39,9 +42,14 @@ use arrow::buffer::NullBuffer;
 use arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
 use datafusion::datasource::MemTable;
 use datafusion::physical_plan::{ExecutionPlan, execute_stream};
-use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
 use datafusion_common::Result;
 use futures::StreamExt;
+use parquet::arrow::ArrowWriter;
+use parquet::basic::{Compression, Encoding as ParquetEncoding};
+use parquet::file::properties::WriterProperties;
+use parquet::file::reader::{FileReader, SerializedFileReader};
+use parquet::schema::types::ColumnPath;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -56,6 +64,27 @@ impl Encoding {
         match self {
             Encoding::Utf8View => "utf8view",
             Encoding::Dictionary => "dictionary",
+        }
+    }
+}
+
+/// Physical source supplying batches to the operator under test.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceEncoding {
+    /// Pre-built Arrow batches registered through a [`MemTable`].
+    Memory,
+    /// A Parquet file whose `k` column uses only plain data pages.
+    ParquetPlain,
+    /// A Parquet file whose `k` column uses dictionary data pages.
+    ParquetRleDictionary,
+}
+
+impl SourceEncoding {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Memory => "memory",
+            Self::ParquetPlain => "parquet_plain",
+            Self::ParquetRleDictionary => "parquet_rle_dictionary",
         }
     }
 }
@@ -249,7 +278,7 @@ fn build_dictionary(
     )
 }
 
-fn schema_for(encoding: Encoding) -> Schema {
+pub fn schema_for(encoding: Encoding) -> Schema {
     let k_type = match encoding {
         Encoding::Utf8View => DataType::Utf8View,
         Encoding::Dictionary => {
@@ -261,6 +290,74 @@ fn schema_for(encoding: Encoding) -> Schema {
         Field::new("v", DataType::Int64, false),
         Field::new("w", DataType::Int32, false),
     ])
+}
+
+/// Write `batches` to a Parquet file with the requested physical encoding for
+/// `k`, and verify every row group actually uses that encoding.
+pub fn write_parquet_source(
+    path: &Path,
+    batches: &[RecordBatch],
+    source_encoding: SourceEncoding,
+    row_group_size: usize,
+    ndv: usize,
+    width_bytes: usize,
+) -> Result<()> {
+    assert!(!batches.is_empty(), "at least one batch is required");
+    assert!(
+        row_group_size > 0,
+        "row_group_size must be greater than zero"
+    );
+    assert!(
+        source_encoding != SourceEncoding::Memory,
+        "memory is not a Parquet source encoding"
+    );
+
+    let key_path = ColumnPath::from("k");
+    let mut properties = WriterProperties::builder()
+        .set_compression(Compression::UNCOMPRESSED)
+        .set_dictionary_enabled(false)
+        .set_column_encoding(key_path.clone(), ParquetEncoding::PLAIN)
+        .set_max_row_group_row_count(Some(row_group_size));
+
+    if source_encoding == SourceEncoding::ParquetRleDictionary {
+        // Keep the dictionary large enough for the complete NDV so this case
+        // cannot silently fall back to plain pages at higher cardinalities.
+        let dictionary_page_size = ndv
+            .saturating_mul(width_bytes.saturating_add(8))
+            .max(1024 * 1024);
+        properties = properties
+            .set_column_dictionary_enabled(key_path, true)
+            .set_column_dictionary_page_size_limit(
+                ColumnPath::from("k"),
+                dictionary_page_size,
+            );
+    }
+
+    let file = File::create(path)?;
+    let mut writer =
+        ArrowWriter::try_new(file, batches[0].schema(), Some(properties.build()))?;
+    for batch in batches {
+        writer.write(batch)?;
+    }
+    writer.close()?;
+
+    let reader = SerializedFileReader::new(File::open(path)?)?;
+    for (row_group_idx, row_group) in reader.metadata().row_groups().iter().enumerate() {
+        let encodings: Vec<_> = row_group.column(0).encodings().collect();
+        let has_dictionary_pages = encodings.iter().any(|encoding| {
+            matches!(
+                encoding,
+                ParquetEncoding::PLAIN_DICTIONARY | ParquetEncoding::RLE_DICTIONARY
+            )
+        });
+        let expected = source_encoding == SourceEncoding::ParquetRleDictionary;
+        assert_eq!(
+            has_dictionary_pages, expected,
+            "row group {row_group_idx} has encodings {encodings:?}, expected {source_encoding:?}"
+        );
+    }
+
+    Ok(())
 }
 
 fn dim_schema_for(encoding: Encoding) -> Schema {
@@ -377,6 +474,48 @@ pub fn make_session_parallel(
         .with_target_partitions(target_partitions)
         .with_batch_size(batch_size);
     SessionContext::new_with_config(cfg)
+}
+
+/// Create a session configured to decode Parquet strings into `encoding`.
+pub fn make_parquet_session(
+    batch_size: usize,
+    target_partitions: usize,
+    encoding: Encoding,
+) -> SessionContext {
+    let mut cfg = SessionConfig::new()
+        .with_target_partitions(target_partitions)
+        .with_batch_size(batch_size);
+    let parquet = &mut cfg.options_mut().execution.parquet;
+    parquet.schema_force_view_types = encoding == Encoding::Utf8View;
+    parquet.enable_rle_to_dictionary = encoding == Encoding::Dictionary;
+    SessionContext::new_with_config(cfg)
+}
+
+/// Register a Parquet file using an explicit target Arrow representation.
+pub async fn register_parquet_table(
+    ctx: &SessionContext,
+    name: &str,
+    path: &Path,
+    encoding: Encoding,
+) -> Result<()> {
+    let schema = schema_for(encoding);
+    let path = path.to_string_lossy();
+    ctx.register_parquet(
+        name,
+        path.as_ref(),
+        ParquetReadOptions::default()
+            .schema(&schema)
+            .skip_metadata(true),
+    )
+    .await?;
+    let table = ctx.table(name).await?;
+    let actual = table.schema().field_with_unqualified_name("k")?.data_type();
+    let expected = schema.field_with_name("k")?.data_type();
+    assert_eq!(
+        actual, expected,
+        "registered Parquet table returned {actual:?}, expected {expected:?}"
+    );
+    Ok(())
 }
 
 pub fn register_table(
@@ -510,7 +649,7 @@ pub fn stats(mut times: Vec<u128>) -> (u128, u128, u128, u128) {
 }
 
 pub fn csv_header() -> &'static str {
-    "git_sha,group,query_id,encoding,rows,ndv,width_bytes,null_rate,batch_size,\
+    "git_sha,group,query_id,source_encoding,encoding,rows,ndv,width_bytes,null_rate,batch_size,\
      dict_chunk_rows,process_id,median_ns,min_ns,p25_ns,p75_ns,iters,note"
 }
 
@@ -520,6 +659,7 @@ pub fn write_csv_row<W: Write>(
     git_sha: &str,
     group: &str,
     query_id: &str,
+    source_encoding: SourceEncoding,
     encoding: Encoding,
     spec: &TableSpec,
     process_id: u32,
@@ -532,10 +672,11 @@ pub fn write_csv_row<W: Write>(
 ) -> std::io::Result<()> {
     writeln!(
         out,
-        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
         git_sha,
         group,
         query_id,
+        source_encoding.as_str(),
         encoding.as_str(),
         spec.rows,
         spec.ndv,
@@ -579,6 +720,20 @@ pub mod groups {
         Query {
             id: "scan_count_k",
             sql: SqlSpec::Static("SELECT count(k) FROM t"),
+        },
+    ];
+
+    pub const PARQUET_SCAN: &[Query] = &[
+        // Project only the string column to isolate decoding and Arrow array construction.
+        Query {
+            id: "scan_k",
+            sql: SqlSpec::Static("SELECT k FROM t"),
+        },
+        // Include the numeric payloads to show how the string-column difference
+        // changes when fixed-width decoding is also required.
+        Query {
+            id: "scan_all",
+            sql: SqlSpec::Static("SELECT k, v, w FROM t"),
         },
     ];
 
@@ -900,6 +1055,7 @@ pub mod groups {
     pub fn get(name: &str) -> Option<&'static [Query]> {
         match name {
             "scan" => Some(SCAN),
+            "parquet_scan" => Some(PARQUET_SCAN),
             "filter" => Some(FILTER),
             "aggregation" => Some(AGGREGATION),
             "join" => Some(JOIN),
@@ -917,6 +1073,7 @@ pub mod groups {
     pub fn names() -> &'static [&'static str] {
         &[
             "scan",
+            "parquet_scan",
             "filter",
             "aggregation",
             "join",
@@ -928,5 +1085,59 @@ pub mod groups {
             "coalesce_partitions",
             "spm",
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn parquet_scan_matrix_uses_requested_encodings() -> Result<()> {
+        let spec = TableSpec {
+            rows: 1024,
+            ndv: 16,
+            width_bytes: 16,
+            null_rate: 0.1,
+            batch_size: 256,
+            dict_chunk_rows: 512,
+            seed: 42,
+        };
+        let distinct_values = distinct_values_for(&spec);
+        let batches = build_batches(&spec, Encoding::Utf8View, &distinct_values);
+        let temp_dir = tempfile::tempdir()?;
+
+        for source_encoding in [
+            SourceEncoding::ParquetPlain,
+            SourceEncoding::ParquetRleDictionary,
+        ] {
+            let path = temp_dir
+                .path()
+                .join(format!("{}.parquet", source_encoding.as_str()));
+            write_parquet_source(
+                &path,
+                &batches,
+                source_encoding,
+                spec.dict_chunk_rows,
+                spec.ndv,
+                spec.width_bytes,
+            )?;
+
+            for output_encoding in [Encoding::Utf8View, Encoding::Dictionary] {
+                let ctx = make_parquet_session(spec.batch_size, 1, output_encoding);
+                register_parquet_table(&ctx, "t", &path, output_encoding).await?;
+                let output = ctx.sql("SELECT k FROM t").await?.collect().await?;
+                assert_eq!(
+                    output.iter().map(RecordBatch::num_rows).sum::<usize>(),
+                    1024
+                );
+                assert!(output.iter().all(|batch| {
+                    batch.column(0).data_type()
+                        == schema_for(output_encoding).field(0).data_type()
+                }));
+            }
+        }
+
+        Ok(())
     }
 }
