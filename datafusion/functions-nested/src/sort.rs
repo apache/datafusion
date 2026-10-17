@@ -26,6 +26,7 @@ use arrow::array::{
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::datatypes::{ArrowNativeTypeOp, DataType, FieldRef};
 use arrow::row::{RowConverter, Rows, SortField};
+use arrow::util::bit_iterator::BitIterator;
 use arrow::{compute, compute::SortOptions, downcast_primitive_array};
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_string_array};
 use datafusion_common::utils::{ListCoercion, offset_span};
@@ -338,28 +339,29 @@ fn sort_rows_with_nulls<N: ArrowNativeTypeOp, O: OffsetSizeTrait>(
             continue;
         }
 
-        let null_count = src_nulls.slice(start, row_len).null_count();
-        let valid_count = row_len - null_count;
-
-        // Compact valid values directly into the target region of the output
-        // buffer: after nulls (if nulls_first) or at the start (if nulls_last).
-        let valid_offset = if nulls_first { null_count } else { 0 };
-        let mut write_pos = out_start + valid_offset;
-        for (i, &value) in src_values[start..end].iter().enumerate() {
-            if src_nulls.is_valid(start + i) {
+        // Compact valid values to the start of the row's output region,
+        // counting them on the way, and sort them there.
+        let validity_bits =
+            BitIterator::new(src_nulls.validity(), src_nulls.offset() + start, row_len);
+        let mut write_pos = out_start;
+        for (&value, is_valid) in src_values[start..end].iter().zip(validity_bits) {
+            if is_valid {
                 out_values[write_pos] = value;
                 write_pos += 1;
             }
         }
+        let valid_count = write_pos - out_start;
+        let null_count = row_len - valid_count;
 
-        sort_row(
-            &mut out_values
-                [out_start + valid_offset..out_start + valid_offset + valid_count],
-            descending,
-        );
+        sort_row(&mut out_values[out_start..write_pos], descending);
 
-        // Build validity bits
+        // Build validity bits. With nulls_first, move the sorted values after
+        // the NULLs and reset the slots the NULLs now occupy.
         if nulls_first {
+            if null_count > 0 {
+                out_values.copy_within(out_start..write_pos, out_start + null_count);
+                out_values[out_start..out_start + null_count].fill(N::default());
+            }
             validity.append_n(null_count, false);
             validity.append_n(valid_count, true);
         } else {
@@ -489,5 +491,63 @@ fn order_nulls_first(modifier: &str) -> Result<bool> {
         _ => exec_err!(
             "the third parameter of array_sort expects NULLS FIRST or NULLS LAST"
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::array::{Array, ArrayRef, Int32Array, ListArray, StringArray};
+    use arrow::buffer::OffsetBuffer;
+    use arrow::datatypes::{DataType, Field, Int32Type};
+    use std::sync::Arc;
+
+    #[test]
+    fn test_sliced_list() -> datafusion_common::Result<()> {
+        crate::utils::tests::check_sliced_list_behavior(|input| {
+            super::array_sort_inner(&[Arc::clone(input)])
+        })
+    }
+
+    #[test]
+    fn test_sliced_values() -> datafusion_common::Result<()> {
+        // Slicing the child array makes its validity bitmap start partway
+        // through a byte.
+        let values = Int32Array::from(vec![
+            Some(0),
+            Some(0),
+            Some(0),
+            Some(3),
+            None,
+            Some(1),
+            Some(2),
+            None,
+        ]);
+        let input: ArrayRef = Arc::new(ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::from_lengths([3, 2]),
+            Arc::new(values.slice(3, 5)),
+            None,
+        ));
+        for (nulls, expected) in [
+            (
+                "NULLS FIRST",
+                [vec![None, Some(1), Some(3)], vec![None, Some(2)]],
+            ),
+            (
+                "NULLS LAST",
+                [vec![Some(1), Some(3), None], vec![Some(2), None]],
+            ),
+        ] {
+            let result = super::array_sort_inner(&[
+                Arc::clone(&input),
+                Arc::new(StringArray::from(vec!["ASC"; 2])),
+                Arc::new(StringArray::from(vec![nulls; 2])),
+            ])?;
+            let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(
+                expected.into_iter().map(Some),
+            );
+            assert_eq!(result.as_ref(), &expected as &dyn Array, "{nulls}");
+        }
+        Ok(())
     }
 }
