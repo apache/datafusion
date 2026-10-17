@@ -1176,7 +1176,7 @@ impl BitwiseSortMergeJoinStream {
     }
 
     /// Initializes the inner input's empty/NULL summary for null-aware joins.
-    async fn initialized_null_aware(&mut self) -> Result<()> {
+    async fn initialize_null_aware(&mut self) -> Result<()> {
         if self.subquery_state != SubqueryState::Pending {
             return Ok(());
         }
@@ -1192,12 +1192,12 @@ impl BitwiseSortMergeJoinStream {
         }
 
         // Keep the first nonempty inner batch at offset 0 for the merge scan.
-        // The complete right input need to be sorted with NULLS FIRST.
-        let first_batch_has_null = self.inner_key_arrays[0]
+        // The complete right input must be sorted with NULLS FIRST.
+        let first_key_is_null = self.inner_key_arrays[0]
             .logical_nulls()
             .is_some_and(|null_keys| null_keys.is_null(0));
 
-        self.subquery_state = if first_batch_has_null {
+        self.subquery_state = if first_key_is_null {
             SubqueryState::HasNull
         } else {
             SubqueryState::NonEmptyNoNull
@@ -1212,14 +1212,14 @@ impl BitwiseSortMergeJoinStream {
         &mut self,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
-        self.initialized_null_aware().await?;
+        self.initialize_null_aware().await?;
         match self.null_aware {
             None => {}
             Some(NullAwareMode::LeftAnti)
                 if self.subquery_state == SubqueryState::HasNull =>
             {
                 // NOT IN cannot be TRUE for any outer row when the inner
-                // input contains a NULL key. (following NOT IN semetic)
+                // input contains a NULL key. (following NOT IN semetics)
                 return Ok(());
             }
             Some(NullAwareMode::LeftAnti) => {}
