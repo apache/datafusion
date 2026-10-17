@@ -28,7 +28,9 @@ use arrow::datatypes::{DataType, Field, FieldRef};
 #[cfg(debug_assertions)]
 use datafusion_common::assert_or_internal_err;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{Result, ScalarValue, not_impl_err};
+use datafusion_common::{
+    ColumnStatistics, Result, ScalarValue, Statistics, not_impl_err,
+};
 use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::placement::ExpressionPlacement;
@@ -55,6 +57,70 @@ pub struct StructFieldMapping {
     /// For `named_struct('a', col1, 'b', col2)`, this would be:
     /// `[(["a"], 1), (["b"], 3)]` — field `"a"` comes from arg index 1.
     pub fields: Vec<(Vec<ScalarValue>, usize)>,
+}
+
+/// A path of struct field names from the root of an argument down to a nested
+/// field, for example `["a", "b"]` for `s.a.b`.
+///
+/// Each component is a literal field name, which may itself contain dots. A
+/// path that ends at a struct refers to that struct's whole subtree; a data
+/// source that cannot narrow to a subtree reads the whole argument instead.
+pub type FieldPath = Vec<String>;
+
+/// Capability of scalar functions that read only part of their nested
+/// (struct) arguments.
+///
+/// Data sources use this to decode only the parts of a nested column that a
+/// call actually reads. For example, a Parquet scan evaluating
+/// `get_field(s, 'a')` only needs the leaves under `s.a`, not every leaf of
+/// `s`. The function is still evaluated as usual, on an argument from which
+/// the unread struct fields have been removed.
+///
+/// Obtained through [`ScalarUDFImpl::as_nested_input_access`].
+pub trait NestedInputAccess {
+    /// Returns, for each argument, the struct field paths this call reads, or
+    /// `None` to read that argument whole. The result may be shorter than the
+    /// argument list; missing trailing entries also mean "read whole".
+    ///
+    /// `args` describes the call's arguments against the schema being
+    /// planned for: a table schema during planning, or one file's physical
+    /// schema when that file is opened. The answer may differ between them,
+    /// for example when nested layouts differ between files.
+    ///
+    /// # Contract
+    ///
+    /// Evaluating the call on arguments narrowed to the returned paths must
+    /// produce the same values, return field and errors as evaluating it on
+    /// the full arguments. Narrowing removes every struct field that is not
+    /// on a returned path, and keeps the validity of the struct ancestors of
+    /// the fields that remain. Paths must only traverse struct fields. A path
+    /// that is invalid for the argument type causes the whole argument to be
+    /// read.
+    fn required_fields(&self, args: &ReturnFieldArgs) -> Vec<Option<Vec<FieldPath>>>;
+
+    /// Returns statistics of this call's output within one container of rows,
+    /// such as a Parquet row group or page, derived from statistics of the
+    /// fields it reads. Returns `None` if nothing is known.
+    ///
+    /// `inputs.num_rows` is the number of rows in the container, and
+    /// `inputs.column_statistics` holds one entry per path returned by
+    /// [`Self::required_fields`] for the same `args`: the paths of the first
+    /// argument in order, then those of the next argument, and so on. A path
+    /// that does not name a primitive field has unknown statistics.
+    ///
+    /// # Contract
+    ///
+    /// The result must be sound for every row in the container: each non-null
+    /// output value must lie within `min_value` and `max_value`, and
+    /// `null_count` must be exact when marked exact. Readers skip containers
+    /// based on it, so an unsound result silently drops rows.
+    fn output_statistics(
+        &self,
+        _args: &ReturnFieldArgs,
+        _inputs: &Statistics,
+    ) -> Option<ColumnStatistics> {
+        None
+    }
 }
 
 /// Logical representation of a Scalar User Defined Function.
@@ -396,6 +462,13 @@ impl ScalarUDF {
     /// See [`ScalarUDFImpl::placement`] for more details.
     pub fn placement(&self, args: &[ExpressionPlacement]) -> ExpressionPlacement {
         self.inner.placement(args)
+    }
+
+    /// Returns this function's [`NestedInputAccess`] capability, if any.
+    ///
+    /// See [`ScalarUDFImpl::as_nested_input_access`] for more details.
+    pub fn as_nested_input_access(&self) -> Option<&dyn NestedInputAccess> {
+        self.inner.as_nested_input_access()
     }
 }
 
@@ -1069,6 +1142,20 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     fn placement(&self, _args: &[ExpressionPlacement]) -> ExpressionPlacement {
         ExpressionPlacement::KeepInPlace
     }
+
+    /// Returns this function's [`NestedInputAccess`] capability, if it reads
+    /// only part of its nested arguments.
+    ///
+    /// Data sources use it to avoid decoding nested fields the call never
+    /// reads. Implement [`NestedInputAccess`] and return `Some(self)` to opt
+    /// in. Combine this with [`Self::placement`] returning
+    /// [`ExpressionPlacement::MoveTowardsLeafNodes`] so that the call is moved
+    /// into the scan, where the data source can see it.
+    ///
+    /// The default returns `None`, meaning arguments are read whole.
+    fn as_nested_input_access(&self) -> Option<&dyn NestedInputAccess> {
+        None
+    }
 }
 
 impl dyn ScalarUDFImpl {
@@ -1223,6 +1310,10 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
 
     fn placement(&self, args: &[ExpressionPlacement]) -> ExpressionPlacement {
         self.inner.placement(args)
+    }
+
+    fn as_nested_input_access(&self) -> Option<&dyn NestedInputAccess> {
+        self.inner.as_nested_input_access()
     }
 }
 
