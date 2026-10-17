@@ -81,33 +81,51 @@ pub(crate) fn prepare_list_filter<O: OffsetSizeTrait>(
         let mut kept_count = 0;
         // Set bits stored under NULL rows, which the result does not keep.
         let mut hidden_count = 0;
+        // The valid rows so far end at element `covered`, with `set_before_covered`
+        // set bits before it. Elements between there and the next valid row
+        // belong to NULL rows, which are handled together when that valid row
+        // is reached, or after the last row.
+        let mut covered = 0;
+        let mut set_before_covered = 0;
         // NULL list rows are usually empty, so reuse `keep` until a NULL row
         // stores elements. Copy the bits of the preceding rows when that first
         // happens.
         let mut keep_mask: Option<BooleanBufferBuilder> = None;
-        for (row, window) in list_offsets.windows(2).enumerate() {
-            let start = window[0].as_usize() - first_offset;
-            let end = window[1].as_usize() - first_offset;
-            let len = end - start;
-            let bit_start = keep.offset() + start;
-            if list.is_valid(row) {
-                kept_count = set_bits.count_before(end) - hidden_count;
-                if let Some(keep_mask) = &mut keep_mask {
-                    keep_mask
-                        .append_packed_range(bit_start..bit_start + len, keep.values());
-                }
-            } else if len != 0 {
-                hidden_count += set_bits.count_range(start, end);
+        let clear_null_rows =
+            |keep_mask: &mut Option<BooleanBufferBuilder>, start: usize, end: usize| {
                 keep_mask
                     .get_or_insert_with(|| {
                         let mut builder = BooleanBufferBuilder::new(keep.len());
-                        builder
-                            .append_packed_range(keep.offset()..bit_start, keep.values());
+                        builder.append_packed_range(
+                            keep.offset()..keep.offset() + start,
+                            keep.values(),
+                        );
                         builder
                     })
-                    .append_n(len, false);
+                    .append_n(end - start, false);
+            };
+        for (row, window) in list_offsets.windows(2).enumerate() {
+            if list.is_valid(row) {
+                let start = window[0].as_usize() - first_offset;
+                let end = window[1].as_usize() - first_offset;
+                if start != covered {
+                    hidden_count += set_bits.count_before(start) - set_before_covered;
+                    clear_null_rows(&mut keep_mask, covered, start);
+                }
+                set_before_covered = set_bits.count_before(end);
+                kept_count = set_before_covered - hidden_count;
+                if let Some(keep_mask) = &mut keep_mask {
+                    keep_mask.append_packed_range(
+                        keep.offset() + start..keep.offset() + end,
+                        keep.values(),
+                    );
+                }
+                covered = end;
             }
             offsets.push(O::usize_as(kept_count));
+        }
+        if covered != span_len {
+            clear_null_rows(&mut keep_mask, covered, span_len);
         }
         keep_mask
             .map(BooleanBufferBuilder::build)

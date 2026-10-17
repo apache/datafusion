@@ -17,12 +17,11 @@
 
 //! [`ScalarUDFImpl`] definitions for array_compact function.
 
-use crate::utils::{empty_list_values, make_scalar_function};
+use crate::utils::{empty_list_values, make_scalar_function, prepare_list_filter};
 use arrow::array::types::ByteArrayType;
 use arrow::array::{
-    Array, ArrayRef, ArrowPrimitiveType, AsArray, BooleanArray, BooleanBufferBuilder,
-    GenericByteArray, GenericListArray, OffsetSizeTrait, PrimitiveArray,
-    downcast_primitive_array,
+    Array, ArrayRef, ArrowPrimitiveType, AsArray, BooleanArray, GenericByteArray,
+    GenericListArray, OffsetSizeTrait, PrimitiveArray, downcast_primitive_array,
 };
 use arrow::buffer::{BooleanBuffer, NullBuffer, OffsetBuffer};
 use arrow::compute::filter;
@@ -218,37 +217,9 @@ fn compact_non_primitive<O: OffsetSizeTrait>(
     list_array: &GenericListArray<O>,
     values_nulls: &NullBuffer,
 ) -> Result<(OffsetBuffer<O>, ArrayRef)> {
-    let list_offsets = list_array.offsets();
-    let first_offset = list_offsets[0].as_usize();
-    let mut offsets = Vec::with_capacity(list_array.len() + 1);
-    offsets.push(O::zero());
-    let mut kept_count = 0;
-    // Element validity is already the keep bitmap unless NULL rows hide elements.
-    let mut keep_mask =
-        (list_array.null_count() != 0).then(|| BooleanBufferBuilder::new(values.len()));
-    for (row, window) in list_offsets.windows(2).enumerate() {
-        let start = window[0].as_usize() - first_offset;
-        let len = window[1].as_usize() - window[0].as_usize();
-        if list_array.is_valid(row) {
-            let bit_start = values_nulls.offset() + start;
-            kept_count += values_nulls.buffer().count_set_bits_offset(bit_start, len);
-            if let Some(keep_mask) = &mut keep_mask {
-                // Skip elements belonging to preceding NULL rows.
-                keep_mask.resize(start);
-                keep_mask.append_packed_range(
-                    bit_start..bit_start + len,
-                    values_nulls.validity(),
-                );
-            }
-        }
-        offsets.push(O::usize_as(kept_count));
-    }
-    let keep_mask = keep_mask
-        .map(|mut keep_mask| {
-            keep_mask.resize(values.len());
-            keep_mask.finish()
-        })
-        .unwrap_or_else(|| values_nulls.inner().clone());
+    // Keep the non-NULL elements, except those stored under NULL rows.
+    let (offsets, keep_mask) = prepare_list_filter(list_array, values_nulls.inner());
+    let kept_count = offsets.last().as_usize();
     let output = match values.data_type() {
         DataType::Utf8 => {
             copy_byte_spans(values.as_string::<i32>(), &keep_mask, kept_count)
@@ -264,7 +235,7 @@ fn compact_non_primitive<O: OffsetSizeTrait>(
         }
         _ => filter(values, &BooleanArray::new(keep_mask, None))?,
     };
-    Ok((OffsetBuffer::new(offsets.into()), output))
+    Ok((offsets, output))
 }
 
 /// Copy spans of retained strings or binary values. The keep bitmap excludes
