@@ -859,9 +859,10 @@ impl From<&HashJoinExec> for HashJoinExecBuilder {
 ///
 /// When using the standard `JoinHashMap`, hash join uses LIFO data structure as a hash table,
 /// and in order to retain original build-side input order while obtaining data during probe phase,
-/// hash table is updated by iterating batch sequence in reverse order -- it allows to
-/// keep rows with smaller indices "on the top" of hash table, and still maintain
-/// correct indexing for concatenated build-side data batch.
+/// hash table is updated by iterating batch sequence in reverse order, which keeps rows
+/// with smaller indices "on the top" of hash table. The concatenated build-side batch keeps
+/// the build side's input order, so each batch is inserted with the offset of its first row
+/// in that concatenated batch.
 ///
 /// Example of build phase for 3 record batches:
 ///
@@ -872,9 +873,9 @@ impl From<&HashJoinExec> for HashJoinExecBuilder {
 ///                                                                         ┌───────────────────────────┐
 ///                             hashmap.insert(row-hash, row-idx + offset)  │                      idx  │
 ///            ┌───────┐                                                    │          ┌───────┐        │
-///            │ Row 1 │        1) update_hash for batch 3 with offset 0    │          │ Row 6 │    0   │
-///   Batch 1  │       │           - hashmap.insert(Row 7, idx 1)           │ Batch 3  │       │        │
-///            │ Row 2 │           - hashmap.insert(Row 6, idx 0)           │          │ Row 7 │    1   │
+///            │ Row 1 │        1) update_hash for batch 3 with offset 5    │          │ Row 1 │    0   │
+///   Batch 1  │       │           - hashmap.insert(Row 7, idx 6)           │ Batch 1  │       │        │
+///            │ Row 2 │           - hashmap.insert(Row 6, idx 5)           │          │ Row 2 │    1   │
 ///            └───────┘                                                    │          └───────┘        │
 ///                                                                         │                           │
 ///            ┌───────┐                                                    │          ┌───────┐        │
@@ -886,9 +887,9 @@ impl From<&HashJoinExec> for HashJoinExecBuilder {
 ///            └───────┘                                                    │          └───────┘        │
 ///                                                                         │                           │
 ///            ┌───────┐                                                    │          ┌───────┐        │
-///            │ Row 6 │        3) update_hash for batch 1 with offset 5    │          │ Row 1 │    5   │
-///   Batch 3  │       │           - hashmap.insert(Row 2, idx 6)           │ Batch 1  │       │        │
-///            │ Row 7 │           - hashmap.insert(Row 1, idx 5)           │          │ Row 2 │    6   │
+///            │ Row 6 │        3) update_hash for batch 1 with offset 0    │          │ Row 6 │    5   │
+///   Batch 3  │       │           - hashmap.insert(Row 2, idx 1)           │ Batch 3  │       │        │
+///            │ Row 7 │           - hashmap.insert(Row 1, idx 0)           │          │ Row 7 │    6   │
 ///            └───────┘                                                    │          └───────┘        │
 ///                                                                         │                           │
 ///                                                                         └───────────────────────────┘
@@ -3148,8 +3149,8 @@ fn estimate_concat_allocation(array: &dyn Array) -> Result<usize> {
     }
 }
 
-/// Concatenates the build side `batches` into a single batch, in reverse order
-/// if `reverse` is set, keeping `reservation` ahead of the actual memory usage.
+/// Concatenates the build side `batches` into a single batch, keeping
+/// `reservation` ahead of the actual memory usage.
 ///
 /// `inputs_reserved` is the memory `reservation` already holds for `batches`.
 /// The copy is reserved before it is made, and once `batches` are dropped the
@@ -3157,7 +3158,6 @@ fn estimate_concat_allocation(array: &dyn Array) -> Result<usize> {
 fn concat_build_batches(
     schema: &SchemaRef,
     batches: Vec<RecordBatch>,
-    reverse: bool,
     inputs_reserved: usize,
     reservation: &mut MemoryReservation,
     metrics: &BuildProbeJoinMetrics,
@@ -3177,11 +3177,7 @@ fn concat_build_batches(
     reservation.try_grow(copy_size)?;
     metrics.build_mem_used.add(copy_size);
 
-    let batch = if reverse {
-        concat_batches(schema, batches.iter().rev())?
-    } else {
-        concat_batches(schema, batches.iter())?
-    };
+    let batch = concat_batches(schema, batches.iter())?;
     drop(batches);
 
     // The inputs are gone: only hold on to what the concatenated batch retains,
@@ -3347,7 +3343,6 @@ async fn collect_left_input(
             concat_build_batches(
                 &schema,
                 std::mem::take(&mut batches),
-                false,
                 input_bytes,
                 &mut reservation,
                 &metrics,
@@ -3378,10 +3373,13 @@ async fn collect_left_input(
         }
         // The maximum is known: avoid geometric growth and its excess capacity.
         let mut hashes_buffer = Vec::with_capacity(max_batch_rows);
-        let mut offset = 0;
+        let mut offset = num_rows;
 
-        // Updating hashmap starting from the last batch
+        // Update the hashmap starting from the last batch, so rows with smaller
+        // indices end up on top of the chains. Each batch is indexed at its
+        // position in the forward concatenation below.
         for batch in batches.iter().rev() {
+            offset -= batch.num_rows();
             hashes_buffer.clear();
             hashes_buffer.resize(batch.num_rows(), 0);
             update_hash(
@@ -3395,17 +3393,15 @@ async fn collect_left_input(
                 true,
                 null_equality,
             )?;
-            offset += batch.num_rows();
         }
 
         // Merge all batches into a single batch, so we can directly index into the arrays
         let batch = if prepared {
-            concat_batches(&schema, batches.iter().rev())?
+            concat_batches(&schema, batches.iter())?
         } else {
             concat_build_batches(
                 &schema,
                 std::mem::take(&mut batches),
-                true,
                 input_bytes,
                 &mut reservation,
                 &metrics,
@@ -5484,6 +5480,123 @@ mod tests {
         let batch = build_table_i32(a, b, c);
         let schema = batch.schema();
         TestMemoryExec::try_new_exec(&[vec![batch.clone(), batch]], schema, None).unwrap()
+    }
+
+    /// Unmatched build rows of a `LeftAnti` join are emitted in build index
+    /// order, so the concatenated build batch must keep the input batch order.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn join_left_anti_keeps_build_order_across_batches(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
+        let batch1 = build_table_i32(
+            ("a1", &vec![1, 2]),
+            ("b1", &vec![10, 20]),
+            ("c1", &vec![7, 8]),
+        );
+        let batch2 = build_table_i32(
+            ("a1", &vec![3, 4]),
+            ("b1", &vec![3000, 4000]),
+            ("c1", &vec![9, 10]),
+        );
+        let schema = batch1.schema();
+        let left =
+            TestMemoryExec::try_new_exec(&[vec![batch1, batch2]], schema, None).unwrap();
+        let right = build_table(("a2", &vec![1]), ("b1", &vec![1]), ("c2", &vec![1]));
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        )];
+
+        let (columns, batches, metrics) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::LeftAnti,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
+
+        assert_eq!(columns, vec!["a1", "b1", "c1"]);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches), @r"
+            +----+------+----+
+            | a1 | b1   | c1 |
+            +----+------+----+
+            | 1  | 10   | 7  |
+            | 2  | 20   | 8  |
+            | 3  | 3000 | 9  |
+            | 4  | 4000 | 10 |
+            +----+------+----+
+            ");
+        }
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
+        Ok(())
+    }
+
+    /// Build rows sharing a key across build batches are matched in build
+    /// order, which relies on the hash map chains putting smaller build
+    /// indices first.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn join_inner_keeps_build_order_for_duplicate_keys_across_batches(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
+        let batch1 = build_table_i32(
+            ("a1", &vec![1, 2]),
+            ("b1", &vec![5, 6]),
+            ("c1", &vec![7, 8]),
+        );
+        let batch2 = build_table_i32(
+            ("a1", &vec![3, 4]),
+            ("b1", &vec![5, 6]),
+            ("c1", &vec![9, 10]),
+        );
+        let schema = batch1.schema();
+        let left =
+            TestMemoryExec::try_new_exec(&[vec![batch1, batch2]], schema, None).unwrap();
+        let right = build_table(
+            ("a2", &vec![10, 20]),
+            ("b1", &vec![5, 6]),
+            ("c2", &vec![70, 80]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        )];
+
+        let (columns, batches, metrics) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
+
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches), @r"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b1 | c2 |
+            +----+----+----+----+----+----+
+            | 1  | 5  | 7  | 10 | 5  | 70 |
+            | 3  | 5  | 9  | 10 | 5  | 70 |
+            | 2  | 6  | 8  | 20 | 6  | 80 |
+            | 4  | 6  | 10 | 20 | 6  | 80 |
+            +----+----+----+----+----+----+
+            ");
+        }
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
+        Ok(())
     }
 
     /// `probe_hit_rate` and `avg_fanout` must count each probe row once, even
@@ -8512,24 +8625,17 @@ mod tests {
         let schema = batches[0].schema();
         let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
 
-        for reverse in [false, true] {
-            let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
-            let (mut reservation, inputs_reserved) = reserve_inputs(&batches, &pool)?;
-            let expected = if reverse {
-                concat_batches(&schema, batches.iter().rev())?
-            } else {
-                concat_batches(&schema, batches.iter())?
-            };
-            let batch = concat_build_batches(
-                &schema,
-                batches.clone(),
-                reverse,
-                inputs_reserved,
-                &mut reservation,
-                &metrics,
-            )?;
-            assert_eq!(batch, expected);
-        }
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let (mut reservation, inputs_reserved) = reserve_inputs(&batches, &pool)?;
+        let expected = concat_batches(&schema, batches.iter())?;
+        let batch = concat_build_batches(
+            &schema,
+            batches,
+            inputs_reserved,
+            &mut reservation,
+            &metrics,
+        )?;
+        assert_eq!(batch, expected);
         Ok(())
     }
 
@@ -8547,7 +8653,6 @@ mod tests {
         let err = concat_build_batches(
             &schema,
             batches.clone(),
-            false,
             inputs_reserved,
             &mut reservation,
             &metrics,
@@ -8562,7 +8667,6 @@ mod tests {
         let batch = concat_build_batches(
             &schema,
             batches,
-            false,
             inputs_reserved,
             &mut reservation,
             &metrics,
@@ -8585,7 +8689,6 @@ mod tests {
         let batch = concat_build_batches(
             &schema,
             batches,
-            true,
             inputs_reserved,
             &mut reservation,
             &metrics,
@@ -8618,7 +8721,6 @@ mod tests {
         let batch = concat_build_batches(
             &schema,
             batches,
-            false,
             inputs_reserved,
             &mut reservation,
             &metrics,
