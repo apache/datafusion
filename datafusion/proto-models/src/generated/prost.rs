@@ -1232,6 +1232,8 @@ pub struct CastNode {
     >,
     #[prost(bool, optional, tag = "4")]
     pub nullable: ::core::option::Option<bool>,
+    #[prost(bool, optional, tag = "5")]
+    pub is_implicit: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TryCastNode {
@@ -1246,6 +1248,8 @@ pub struct TryCastNode {
     >,
     #[prost(bool, optional, tag = "4")]
     pub nullable: ::core::option::Option<bool>,
+    #[prost(bool, optional, tag = "5")]
+    pub is_implicit: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SortExprNode {

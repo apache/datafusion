@@ -33,8 +33,8 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 use crate::expr::{
     AggregateFunction, AggregateFunctionParams, ExprListDisplay, WindowFunctionParams,
-    schema_name_from_exprs, schema_name_from_exprs_comma_separated_without_space,
-    schema_name_from_sorts,
+    schema_name_from_aggregate_args, schema_name_from_exprs,
+    schema_name_from_function_args, schema_name_from_sorts,
 };
 use crate::function::{
     AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs,
@@ -1088,7 +1088,7 @@ impl<'a> UdafSchemaNameBuilder<'a> {
             "{}({}{})",
             name,
             if *distinct { "DISTINCT " } else { "" },
-            schema_name_from_exprs_comma_separated_without_space(args)?
+            schema_name_from_aggregate_args(args)?
         ))?;
 
         if let Some(null_treatment) = null_treatment {
@@ -1266,13 +1266,13 @@ impl<'a> UdafWindowFunctionSchemaNameBuilder<'a> {
             schema_name.write_fmt(format_args!(
                 "{}(DISTINCT {})",
                 name,
-                schema_name_from_exprs(args)?
+                schema_name_from_function_args(args)?
             ))?;
         } else {
             schema_name.write_fmt(format_args!(
                 "{}({})",
                 name,
-                schema_name_from_exprs(args)?
+                schema_name_from_function_args(args)?
             ))?;
         }
 
@@ -1943,6 +1943,73 @@ mod test {
                 "my_agg(value)[ordering_1]",
             ]
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_udaf_schema_name_with_cast_distinction() -> Result<()> {
+        use crate::expr::{AggregateFunctionParams, WindowFunctionParams};
+        use crate::{
+            UdafSchemaNameBuilder, UdafWindowFunctionSchemaNameBuilder, WindowFrame,
+            cast, col,
+        };
+
+        let col_x = col("x");
+        let cast_x = cast(col_x.clone(), DataType::Float32);
+
+        let params1 = AggregateFunctionParams {
+            args: vec![col_x.clone()],
+            distinct: false,
+            filter: None,
+            order_by: vec![],
+            null_treatment: None,
+        };
+        let params2 = AggregateFunctionParams {
+            args: vec![cast_x.clone()],
+            distinct: false,
+            filter: None,
+            order_by: vec![],
+            null_treatment: None,
+        };
+
+        let name1 = UdafSchemaNameBuilder::new("sum", &params1).build()?;
+        let name2 = UdafSchemaNameBuilder::new("sum", &params2).build()?;
+        assert_eq!(name1, "sum(x)");
+        assert_eq!(name2, "sum(CAST(x AS Float32))");
+        assert_ne!(name1, name2);
+
+        let win_params1 = WindowFunctionParams {
+            args: vec![col_x],
+            partition_by: vec![],
+            order_by: vec![],
+            window_frame: WindowFrame::new(None),
+            filter: None,
+            null_treatment: None,
+            distinct: false,
+        };
+        let win_params2 = WindowFunctionParams {
+            args: vec![cast_x],
+            partition_by: vec![],
+            order_by: vec![],
+            window_frame: WindowFrame::new(None),
+            filter: None,
+            null_treatment: None,
+            distinct: false,
+        };
+        let win_name1 =
+            UdafWindowFunctionSchemaNameBuilder::new("sum", &win_params1).build()?;
+        let win_name2 =
+            UdafWindowFunctionSchemaNameBuilder::new("sum", &win_params2).build()?;
+        assert_eq!(
+            win_name1,
+            "sum(x) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
+        );
+        assert_eq!(
+            win_name2,
+            "sum(CAST(x AS Float32)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
+        );
+        assert_ne!(win_name1, win_name2);
 
         Ok(())
     }

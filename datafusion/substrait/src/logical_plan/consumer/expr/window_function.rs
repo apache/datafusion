@@ -18,7 +18,7 @@
 use super::aggregate_function::validate_aggregation_phase;
 use crate::logical_plan::consumer::{
     SubstraitConsumer, from_substrait_func_args, from_substrait_rex_vec,
-    from_substrait_sorts, substrait_fun_name,
+    from_substrait_sorts, mark_implicit_coercion_casts, substrait_fun_name,
 };
 use datafusion::common::{
     DFSchema, ScalarValue, not_impl_err, plan_datafusion_err, plan_err, substrait_err,
@@ -96,11 +96,21 @@ pub async fn from_window_function(
     // Datafusion does not support aggregate functions with no arguments, so
     // we inject a dummy argument that does not affect the query, but allows
     // us to bypass this limitation.
-    let args = if fun.name() == "count" && window.arguments.is_empty() {
+    let mut args = if fun.name() == "count" && window.arguments.is_empty() {
         vec![Expr::Literal(ScalarValue::Int64(Some(1)), None)]
     } else {
         from_substrait_func_args(consumer, &window.arguments, input_schema).await?
     };
+
+    match &fun {
+        WindowFunctionDefinition::AggregateUDF(udaf) => {
+            mark_implicit_coercion_casts(udaf.as_ref(), &mut args, input_schema)?;
+        }
+        WindowFunctionDefinition::WindowUDF(udwf) => {
+            mark_implicit_coercion_casts(udwf.as_ref(), &mut args, input_schema)?;
+        }
+    }
+
     let distinct =
         match AggregationInvocation::try_from(window.invocation).map_err(|e| {
             plan_datafusion_err!(

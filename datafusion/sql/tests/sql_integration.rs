@@ -6111,3 +6111,23 @@ fn test_reserved_column_name_explain_copy() {
         "Error during planning: __common_expr_1 is a reserved DataFusion column name, please use another name"
     );
 }
+
+#[test]
+fn test_aggregate_with_and_without_cast_on_same_column() {
+    let sql = "SELECT sum(age) AS a, sum(CAST(age AS FLOAT)) AS b FROM person";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(
+        plan.schema().field_names(),
+        ["a".to_string(), "b".to_string()]
+    );
+
+    let sql_unaliased = "SELECT sum(age), sum(CAST(age AS FLOAT)) FROM person";
+    let plan_unaliased = logical_plan(sql_unaliased).unwrap();
+    assert_eq!(
+        plan_unaliased.schema().field_names(),
+        [
+            "sum(person.age)".to_string(),
+            "sum(CAST(person.age AS Float32))".to_string()
+        ]
+    );
+}

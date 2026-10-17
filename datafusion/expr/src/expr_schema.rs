@@ -665,14 +665,14 @@ impl ExprSchemable for Expr {
                 func.return_field_from_args(args)
             }
             // _ => Ok((self.get_type(schema)?, self.nullable(schema)?)),
-            Expr::Cast(Cast { expr, field }) => expr
+            Expr::Cast(Cast { expr, field, .. }) => expr
                 .to_field(schema)
                 .map(|(_table_ref, src)| cast_output_field(&src, field, false)),
             Expr::Placeholder(Placeholder {
                 id: _,
                 field: Some(field),
             }) => Ok(Arc::clone(field).renamed(&schema_name)),
-            Expr::TryCast(TryCast { expr, field }) => expr
+            Expr::TryCast(TryCast { expr, field, .. }) => expr
                 .to_field(schema)
                 .map(|(_table_ref, src)| cast_output_field(&src, field, true)),
             Expr::LambdaVariable(LambdaVariable {
@@ -773,7 +773,10 @@ impl ExprSchemable for Expr {
                 Expr::ScalarSubquery(subquery) => {
                     Ok(Expr::ScalarSubquery(cast_subquery(subquery, cast_to_type)?))
                 }
-                _ => Ok(Expr::Cast(Cast::new(Box::new(self), cast_to_type.clone()))),
+                _ => Ok(Expr::Cast(Cast::new_implicit(
+                    Box::new(self),
+                    cast_to_type.clone(),
+                ))),
             }
         } else {
             plan_err!("Cannot automatically convert {this_type} to {cast_to_type}")
@@ -1526,15 +1529,9 @@ mod tests {
             use_try_cast: bool,
         ) -> Expr {
             if use_try_cast {
-                Expr::TryCast(TryCast {
-                    expr: Box::new(expr),
-                    field: target_field,
-                })
+                Expr::TryCast(TryCast::new_from_field(Box::new(expr), target_field))
             } else {
-                Expr::Cast(Cast {
-                    expr: Box::new(expr),
-                    field: target_field,
-                })
+                Expr::Cast(Cast::new_from_field(Box::new(expr), target_field))
             }
         }
 

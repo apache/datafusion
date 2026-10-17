@@ -986,12 +986,38 @@ pub enum GetFieldAccess {
 }
 
 /// Cast expression
-#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+#[derive(Clone, Debug)]
 pub struct Cast {
     /// The expression being cast
     pub expr: Box<Expr>,
     /// The `DataType` the expression will yield
     pub field: FieldRef,
+    /// Whether this cast was inserted implicitly by type coercion or the optimizer
+    pub is_implicit: bool,
+}
+
+impl PartialEq for Cast {
+    fn eq(&self, other: &Self) -> bool {
+        self.expr == other.expr && self.field == other.field
+    }
+}
+
+impl Eq for Cast {}
+
+impl PartialOrd for Cast {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.expr.partial_cmp(&other.expr) {
+            Some(Ordering::Equal) => self.field.partial_cmp(&other.field),
+            other => other,
+        }
+    }
+}
+
+impl Hash for Cast {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.expr.hash(state);
+        self.field.hash(state);
+    }
 }
 
 impl Cast {
@@ -1000,21 +1026,71 @@ impl Cast {
         Self {
             expr,
             field: data_type.into_nullable_field_ref(),
+            is_implicit: false,
         }
     }
 
     pub fn new_from_field(expr: Box<Expr>, field: FieldRef) -> Self {
-        Self { expr, field }
+        Self {
+            expr,
+            field,
+            is_implicit: false,
+        }
+    }
+
+    /// Create a new implicit Cast expression (inserted by optimizer/analyzer type coercion)
+    pub fn new_implicit(expr: Box<Expr>, data_type: DataType) -> Self {
+        Self::new_implicit_from_field(expr, data_type.into_nullable_field_ref())
+    }
+
+    /// Create a new implicit Cast expression from a field
+    pub fn new_implicit_from_field(expr: Box<Expr>, field: FieldRef) -> Self {
+        Self {
+            expr,
+            field,
+            is_implicit: true,
+        }
+    }
+
+    /// Returns true if this cast was implicitly inserted by type coercion
+    pub fn is_implicit(&self) -> bool {
+        self.is_implicit
     }
 }
 
 /// TryCast Expression
-#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+#[derive(Clone, Debug)]
 pub struct TryCast {
     /// The expression being cast
     pub expr: Box<Expr>,
     /// The `DataType` the expression will yield
     pub field: FieldRef,
+    /// Whether this try cast was inserted implicitly by type coercion or the optimizer
+    pub is_implicit: bool,
+}
+
+impl PartialEq for TryCast {
+    fn eq(&self, other: &Self) -> bool {
+        self.expr == other.expr && self.field == other.field
+    }
+}
+
+impl Eq for TryCast {}
+
+impl PartialOrd for TryCast {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.expr.partial_cmp(&other.expr) {
+            Some(Ordering::Equal) => self.field.partial_cmp(&other.field),
+            other => other,
+        }
+    }
+}
+
+impl Hash for TryCast {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.expr.hash(state);
+        self.field.hash(state);
+    }
 }
 
 impl TryCast {
@@ -1023,11 +1099,35 @@ impl TryCast {
         Self {
             expr,
             field: data_type.into_nullable_field_ref(),
+            is_implicit: false,
         }
     }
 
     pub fn new_from_field(expr: Box<Expr>, field: FieldRef) -> Self {
-        Self { expr, field }
+        Self {
+            expr,
+            field,
+            is_implicit: false,
+        }
+    }
+
+    /// Create a new implicit TryCast expression
+    pub fn new_implicit(expr: Box<Expr>, data_type: DataType) -> Self {
+        Self::new_implicit_from_field(expr, data_type.into_nullable_field_ref())
+    }
+
+    /// Create a new implicit TryCast expression from a field
+    pub fn new_implicit_from_field(expr: Box<Expr>, field: FieldRef) -> Self {
+        Self {
+            expr,
+            field,
+            is_implicit: true,
+        }
+    }
+
+    /// Returns true if this try_cast was implicitly inserted by type coercion
+    pub fn is_implicit(&self) -> bool {
+        self.is_implicit
     }
 }
 
@@ -1650,7 +1750,7 @@ impl Expr {
     ///
     /// [`Schema`]: arrow::datatypes::Schema
     pub fn schema_name(&self) -> impl Display + '_ {
-        SchemaDisplay(self)
+        SchemaDisplay(self, false)
     }
 
     /// Human readable display formatting for this expression.
@@ -2570,20 +2670,24 @@ impl NormalizeEq for Expr {
                 Expr::Cast(Cast {
                     expr: self_expr,
                     field: self_field,
+                    ..
                 }),
                 Expr::Cast(Cast {
                     expr: other_expr,
                     field: other_field,
+                    ..
                 }),
             )
             | (
                 Expr::TryCast(TryCast {
                     expr: self_expr,
                     field: self_field,
+                    ..
                 }),
                 Expr::TryCast(TryCast {
                     expr: other_expr,
                     field: other_field,
+                    ..
                 }),
             ) => self_field == other_field && self_expr.normalize_eq(other_expr),
             (
@@ -2903,8 +3007,12 @@ impl HashNode for Expr {
                 when_then_expr: _when_then_expr,
                 else_expr: _else_expr,
             }) => {}
-            Expr::Cast(Cast { expr: _expr, field })
-            | Expr::TryCast(TryCast { expr: _expr, field }) => {
+            Expr::Cast(Cast {
+                expr: _expr, field, ..
+            })
+            | Expr::TryCast(TryCast {
+                expr: _expr, field, ..
+            }) => {
                 field.hash(state);
             }
             Expr::ScalarFunction(ScalarFunction { func, args: _args }) => {
@@ -3071,7 +3179,17 @@ fn rewrite_placeholder_from_subquery(
     }
 }
 
-struct SchemaDisplay<'a>(&'a Expr);
+fn is_null_literal(expr: &Expr) -> bool {
+    match expr {
+        Expr::Literal(l, _) => l.is_null(),
+        Expr::Cast(Cast { expr, .. }) | Expr::TryCast(TryCast { expr, .. }) => {
+            is_null_literal(expr)
+        }
+        _ => false,
+    }
+}
+
+struct SchemaDisplay<'a>(&'a Expr, bool);
 impl Display for SchemaDisplay<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.0 {
@@ -3111,13 +3229,18 @@ impl Display for SchemaDisplay<'_> {
                 write!(
                     f,
                     "{} {not}BETWEEN {} AND {}",
-                    SchemaDisplay(expr),
-                    SchemaDisplay(low),
-                    SchemaDisplay(high),
+                    SchemaDisplay(expr, self.1),
+                    SchemaDisplay(low, self.1),
+                    SchemaDisplay(high, self.1),
                 )
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                write!(f, "{} {op} {}", SchemaDisplay(left), SchemaDisplay(right))
+                write!(
+                    f,
+                    "{} {op} {}",
+                    SchemaDisplay(left, false),
+                    SchemaDisplay(right, false)
+                )
             }
             Expr::Case(Case {
                 expr,
@@ -3127,27 +3250,59 @@ impl Display for SchemaDisplay<'_> {
                 write!(f, "CASE ")?;
 
                 if let Some(e) = expr {
-                    write!(f, "{} ", SchemaDisplay(e))?;
+                    write!(f, "{} ", SchemaDisplay(e, self.1))?;
                 }
 
                 for (when, then) in when_then_expr {
                     write!(
                         f,
                         "WHEN {} THEN {} ",
-                        SchemaDisplay(when),
-                        SchemaDisplay(then),
+                        SchemaDisplay(when, self.1),
+                        SchemaDisplay(then, self.1),
                     )?;
                 }
 
                 if let Some(e) = else_expr {
-                    write!(f, "ELSE {} ", SchemaDisplay(e))?;
+                    write!(f, "ELSE {} ", SchemaDisplay(e, self.1))?;
                 }
 
                 write!(f, "END")
             }
-            // Cast expr is not shown to be consistent with Postgres and Spark <https://github.com/apache/datafusion/pull/3222>
-            Expr::Cast(Cast { expr, .. }) | Expr::TryCast(TryCast { expr, .. }) => {
-                write!(f, "{}", SchemaDisplay(expr))
+            // Cast expr is not shown to be consistent with Postgres and Spark <https://github.com/apache/datafusion/pull/3222>,
+            // unless preserve_casts is true (e.g. in function argument schema names) and the cast is explicit and non-null.
+            Expr::Cast(cast) => {
+                if cast.is_implicit() {
+                    write!(f, "{}", SchemaDisplay(&cast.expr, self.1))
+                } else if !self.1 || is_null_literal(&cast.expr) {
+                    write!(f, "{}", SchemaDisplay(&cast.expr, false))
+                } else {
+                    let formatted = format_type_and_metadata(
+                        cast.field.data_type(),
+                        Some(cast.field.metadata()),
+                    );
+                    write!(
+                        f,
+                        "CAST({} AS {formatted})",
+                        SchemaDisplay(&cast.expr, true)
+                    )
+                }
+            }
+            Expr::TryCast(try_cast) => {
+                if try_cast.is_implicit() {
+                    write!(f, "{}", SchemaDisplay(&try_cast.expr, self.1))
+                } else if !self.1 || is_null_literal(&try_cast.expr) {
+                    write!(f, "{}", SchemaDisplay(&try_cast.expr, false))
+                } else {
+                    let formatted = format_type_and_metadata(
+                        try_cast.field.data_type(),
+                        Some(try_cast.field.metadata()),
+                    );
+                    write!(
+                        f,
+                        "TRY_CAST({} AS {formatted})",
+                        SchemaDisplay(&try_cast.expr, true)
+                    )
+                }
             }
             Expr::InList(InList {
                 expr,
@@ -3157,9 +3312,9 @@ impl Display for SchemaDisplay<'_> {
                 let inlist_name = schema_name_from_exprs(list)?;
 
                 if *negated {
-                    write!(f, "{} NOT IN {}", SchemaDisplay(expr), inlist_name)
+                    write!(f, "{} NOT IN {}", SchemaDisplay(expr, self.1), inlist_name)
                 } else {
-                    write!(f, "{} IN {}", SchemaDisplay(expr), inlist_name)
+                    write!(f, "{} IN {}", SchemaDisplay(expr, self.1), inlist_name)
                 }
             }
             Expr::Exists(Exists { negated: true, .. }) => write!(f, "NOT EXISTS"),
@@ -3177,15 +3332,15 @@ impl Display for SchemaDisplay<'_> {
             Expr::GroupingSet(GroupingSet::Rollup(exprs)) => {
                 write!(f, "ROLLUP ({})", schema_name_from_exprs(exprs)?)
             }
-            Expr::IsNull(expr) => write!(f, "{} IS NULL", SchemaDisplay(expr)),
+            Expr::IsNull(expr) => write!(f, "{} IS NULL", SchemaDisplay(expr, self.1)),
             Expr::IsNotNull(expr) => {
-                write!(f, "{} IS NOT NULL", SchemaDisplay(expr))
+                write!(f, "{} IS NOT NULL", SchemaDisplay(expr, self.1))
             }
             Expr::IsUnknown(expr) => {
-                write!(f, "{} IS UNKNOWN", SchemaDisplay(expr))
+                write!(f, "{} IS UNKNOWN", SchemaDisplay(expr, self.1))
             }
             Expr::IsNotUnknown(expr) => {
-                write!(f, "{} IS NOT UNKNOWN", SchemaDisplay(expr))
+                write!(f, "{} IS NOT UNKNOWN", SchemaDisplay(expr, self.1))
             }
             Expr::InSubquery(InSubquery { negated: true, .. }) => {
                 write!(f, "NOT IN")
@@ -3196,14 +3351,18 @@ impl Display for SchemaDisplay<'_> {
                 op,
                 quantifier,
                 ..
-            }) => write!(f, "{} {op} {quantifier}", SchemaDisplay(expr.as_ref())),
-            Expr::IsTrue(expr) => write!(f, "{} IS TRUE", SchemaDisplay(expr)),
-            Expr::IsFalse(expr) => write!(f, "{} IS FALSE", SchemaDisplay(expr)),
+            }) => write!(
+                f,
+                "{} {op} {quantifier}",
+                SchemaDisplay(expr.as_ref(), self.1)
+            ),
+            Expr::IsTrue(expr) => write!(f, "{} IS TRUE", SchemaDisplay(expr, self.1)),
+            Expr::IsFalse(expr) => write!(f, "{} IS FALSE", SchemaDisplay(expr, self.1)),
             Expr::IsNotTrue(expr) => {
-                write!(f, "{} IS NOT TRUE", SchemaDisplay(expr))
+                write!(f, "{} IS NOT TRUE", SchemaDisplay(expr, self.1))
             }
             Expr::IsNotFalse(expr) => {
-                write!(f, "{} IS NOT FALSE", SchemaDisplay(expr))
+                write!(f, "{} IS NOT FALSE", SchemaDisplay(expr, self.1))
             }
             Expr::Like(Like {
                 negated,
@@ -3215,10 +3374,10 @@ impl Display for SchemaDisplay<'_> {
                 write!(
                     f,
                     "{} {}{} {}",
-                    SchemaDisplay(expr),
+                    SchemaDisplay(expr, self.1),
                     if *negated { "NOT " } else { "" },
                     if *case_insensitive { "ILIKE" } else { "LIKE" },
-                    SchemaDisplay(pattern),
+                    SchemaDisplay(pattern, self.1),
                 )?;
 
                 if let Some(char) = escape_char {
@@ -3227,11 +3386,11 @@ impl Display for SchemaDisplay<'_> {
 
                 Ok(())
             }
-            Expr::Negative(expr) => write!(f, "(- {})", SchemaDisplay(expr)),
-            Expr::Not(expr) => write!(f, "NOT {}", SchemaDisplay(expr)),
+            Expr::Negative(expr) => write!(f, "(- {})", SchemaDisplay(expr, self.1)),
+            Expr::Not(expr) => write!(f, "NOT {}", SchemaDisplay(expr, self.1)),
             Expr::Unnest(Unnest { expr, outer }) => {
                 let name = if *outer { "UNNEST_OUTER" } else { "UNNEST" };
-                write!(f, "{name}({})", SchemaDisplay(expr))
+                write!(f, "{name}({})", SchemaDisplay(expr, self.1))
             }
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
                 match func.schema_name(args) {
@@ -3256,13 +3415,13 @@ impl Display for SchemaDisplay<'_> {
                 write!(
                     f,
                     "{} {} {}",
-                    SchemaDisplay(expr),
+                    SchemaDisplay(expr, self.1),
                     if *negated {
                         "NOT SIMILAR TO"
                     } else {
                         "SIMILAR TO"
                     },
-                    SchemaDisplay(pattern),
+                    SchemaDisplay(pattern, self.1),
                 )?;
                 if let Some(char) = escape_char {
                     write!(f, " CHAR '{char}'")?;
@@ -3358,7 +3517,7 @@ impl Display for SchemaDisplay<'_> {
                     f,
                     "({}) -> {}",
                     display_comma_separated(params),
-                    SchemaDisplay(body)
+                    SchemaDisplay(body, self.1)
                 )
             }
             Expr::LambdaVariable(c) => f.write_str(&c.name),
@@ -3535,7 +3694,12 @@ impl Display for SqlDisplay<'_> {
                 }
             }
             Expr::Lambda(Lambda { params, body }) => {
-                write!(f, "({}) -> {}", params.join(", "), SchemaDisplay(body))
+                write!(
+                    f,
+                    "({}) -> {}",
+                    params.join(", "),
+                    SchemaDisplay(body, false)
+                )
             }
             _ => write!(f, "{}", self.0),
         }
@@ -3550,7 +3714,21 @@ impl Display for SqlDisplay<'_> {
 pub(crate) fn schema_name_from_exprs_comma_separated_without_space(
     exprs: &[Expr],
 ) -> Result<String, fmt::Error> {
-    schema_name_from_exprs_inner(exprs, ",")
+    schema_name_from_exprs_inner(exprs, ",", false)
+}
+
+/// Get schema_name for aggregate argument expressions, preserving explicit casts
+pub(crate) fn schema_name_from_aggregate_args(
+    exprs: &[Expr],
+) -> Result<String, fmt::Error> {
+    schema_name_from_exprs_inner(exprs, ",", true)
+}
+
+/// Get schema_name for function argument expressions, preserving explicit casts
+pub(crate) fn schema_name_from_function_args(
+    exprs: &[Expr],
+) -> Result<String, fmt::Error> {
+    schema_name_from_exprs_inner(exprs, ", ", true)
 }
 
 /// Formats a list of `&Expr` with a custom separator using SQL display format
@@ -3587,16 +3765,20 @@ impl Display for ExprListDisplay<'_> {
 
 /// Get schema_name for Vector of expressions
 pub fn schema_name_from_exprs(exprs: &[Expr]) -> Result<String, fmt::Error> {
-    schema_name_from_exprs_inner(exprs, ", ")
+    schema_name_from_exprs_inner(exprs, ", ", false)
 }
 
-fn schema_name_from_exprs_inner(exprs: &[Expr], sep: &str) -> Result<String, fmt::Error> {
+fn schema_name_from_exprs_inner(
+    exprs: &[Expr],
+    sep: &str,
+    preserve_casts: bool,
+) -> Result<String, fmt::Error> {
     let mut s = String::new();
     for (i, e) in exprs.iter().enumerate() {
         if i > 0 {
             write!(&mut s, "{sep}")?;
         }
-        write!(&mut s, "{}", SchemaDisplay(e))?;
+        write!(&mut s, "{}", SchemaDisplay(e, preserve_casts))?;
     }
 
     Ok(s)
@@ -3653,12 +3835,12 @@ impl Display for Expr {
                 }
                 write!(f, "END")
             }
-            Expr::Cast(Cast { expr, field }) => {
+            Expr::Cast(Cast { expr, field, .. }) => {
                 let formatted =
                     format_type_and_metadata(field.data_type(), Some(field.metadata()));
                 write!(f, "CAST({expr} AS {formatted})")
             }
-            Expr::TryCast(TryCast { expr, field }) => {
+            Expr::TryCast(TryCast { expr, field, .. }) => {
                 let formatted =
                     format_type_and_metadata(field.data_type(), Some(field.metadata()));
                 write!(f, "TRY_CAST({expr} AS {formatted})")
@@ -4265,10 +4447,10 @@ mod test {
 
     #[test]
     fn format_cast() -> Result<()> {
-        let expr = Expr::Cast(Cast {
-            expr: Box::new(Expr::Literal(ScalarValue::Float32(Some(1.23)), None)),
-            field: DataType::Utf8.into_nullable_field_ref(),
-        });
+        let expr = Expr::Cast(Cast::new_from_field(
+            Box::new(Expr::Literal(ScalarValue::Float32(Some(1.23)), None)),
+            DataType::Utf8.into_nullable_field_ref(),
+        ));
         let expected_canonical = "CAST(Float32(1.23) AS Utf8)";
         assert_eq!(expected_canonical, format!("{expr}"));
         // Note that CAST intentionally has a name that is different from its `Display`
@@ -4554,7 +4736,8 @@ mod test {
             format!(
                 "{}",
                 SchemaDisplay(
-                    &lit(1).alias_qualified("table_name".into(), "column_name")
+                    &lit(1).alias_qualified("table_name".into(), "column_name"),
+                    false
                 )
             ),
             "table_name.column_name"
@@ -4566,9 +4749,97 @@ mod test {
         assert_eq!(
             format!(
                 "{}",
-                SchemaDisplay(&lit(1).alias_qualified(None::<&str>, "column_name"))
+                SchemaDisplay(
+                    &lit(1).alias_qualified(None::<&str>, "column_name"),
+                    false
+                )
             ),
             "column_name"
+        );
+    }
+
+    #[test]
+    fn test_schema_name_top_level_cast() {
+        use arrow::datatypes::DataType;
+
+        let col_x = col("x");
+        let cast_expr = crate::cast(col_x.clone(), DataType::Float32);
+        assert_eq!(cast_expr.schema_name().to_string(), "x");
+
+        let try_cast_expr = crate::try_cast(col_x.clone(), DataType::Float32);
+        assert_eq!(try_cast_expr.schema_name().to_string(), "x");
+
+        let compound_top_level = cast_expr + lit(1);
+        assert_eq!(compound_top_level.schema_name().to_string(), "x + Int32(1)");
+    }
+
+    #[test]
+    fn test_schema_name_function_args_cast() {
+        use arrow::datatypes::DataType;
+
+        let col_x = col("x");
+        let cast_expr = crate::cast(col_x.clone(), DataType::Float32);
+        let try_cast_expr = crate::try_cast(col_x.clone(), DataType::Float32);
+
+        // Aggregate arguments preserve explicit casts
+        assert_eq!(
+            schema_name_from_aggregate_args(std::slice::from_ref(&col_x)).unwrap(),
+            "x"
+        );
+        assert_eq!(
+            schema_name_from_aggregate_args(std::slice::from_ref(&cast_expr)).unwrap(),
+            "CAST(x AS Float32)"
+        );
+        assert_eq!(
+            schema_name_from_aggregate_args(std::slice::from_ref(&try_cast_expr))
+                .unwrap(),
+            "TRY_CAST(x AS Float32)"
+        );
+
+        let compound_nested = cast_expr.clone() + lit(1);
+        assert_eq!(
+            schema_name_from_aggregate_args(&[compound_nested]).unwrap(),
+            "x + Int32(1)"
+        );
+
+        // Implicit casts should strip even when formatting aggregate args
+        let implicit_cast = Expr::Cast(Cast::new_implicit(
+            Box::new(col_x.clone()),
+            DataType::Float32,
+        ));
+        assert_eq!(
+            schema_name_from_aggregate_args(std::slice::from_ref(&implicit_cast))
+                .unwrap(),
+            "x"
+        );
+
+        // Cast of NULL literal should strip to "NULL" even in aggregate args
+        let null_cast = crate::cast(lit(ScalarValue::Null), DataType::Int64);
+        assert_eq!(
+            schema_name_from_aggregate_args(std::slice::from_ref(&null_cast)).unwrap(),
+            "NULL"
+        );
+
+        let compound_implicit_nested = implicit_cast + lit(1);
+        assert_eq!(
+            schema_name_from_aggregate_args(&[compound_implicit_nested]).unwrap(),
+            "x + Int32(1)"
+        );
+
+        // Scalar function / expression arguments strip casts to preserve schema-name optimizer invariants
+        assert_eq!(
+            schema_name_from_exprs_comma_separated_without_space(std::slice::from_ref(
+                &cast_expr
+            ))
+            .unwrap(),
+            "x"
+        );
+        assert_eq!(
+            schema_name_from_exprs_comma_separated_without_space(std::slice::from_ref(
+                &try_cast_expr
+            ))
+            .unwrap(),
+            "x"
         );
     }
 

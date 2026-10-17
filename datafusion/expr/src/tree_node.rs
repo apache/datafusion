@@ -247,12 +247,28 @@ impl TreeNode for Expr {
                 .update_data(|(new_expr, new_when_then_expr, new_else_expr)| {
                     Expr::Case(Case::new(new_expr, new_when_then_expr, new_else_expr))
                 }),
-            Expr::Cast(Cast { expr, field }) => expr
-                .map_elements(f)?
-                .update_data(|be| Expr::Cast(Cast::new_from_field(be, field))),
-            Expr::TryCast(TryCast { expr, field }) => expr
-                .map_elements(f)?
-                .update_data(|be| Expr::TryCast(TryCast::new_from_field(be, field))),
+            Expr::Cast(Cast {
+                expr,
+                field,
+                is_implicit,
+            }) => expr.map_elements(f)?.update_data(|be| {
+                Expr::Cast(Cast {
+                    expr: be,
+                    field,
+                    is_implicit,
+                })
+            }),
+            Expr::TryCast(TryCast {
+                expr,
+                field,
+                is_implicit,
+            }) => expr.map_elements(f)?.update_data(|be| {
+                Expr::TryCast(TryCast {
+                    expr: be,
+                    field,
+                    is_implicit,
+                })
+            }),
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
                 args.map_elements(f)?.map_data(|new_args| {
                     Ok(Expr::ScalarFunction(ScalarFunction::new_udf(

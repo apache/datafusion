@@ -653,7 +653,8 @@ impl ConstEvaluator {
             Expr::HigherOrderFunction(HigherOrderFunction { func, .. }) => {
                 Self::volatility_ok(func.signature().volatility)
             }
-            Expr::Cast(Cast { expr, field }) | Expr::TryCast(TryCast { expr, field }) => {
+            Expr::Cast(Cast { expr, field, .. })
+            | Expr::TryCast(TryCast { expr, field, .. }) => {
                 if let (
                     Ok(DataType::Struct(source_fields)),
                     DataType::Struct(target_fields),

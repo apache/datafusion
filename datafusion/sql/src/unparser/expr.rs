@@ -263,7 +263,7 @@ impl Unparser<'_> {
                     end_token: AttachedToken::empty(),
                 })
             }
-            Expr::Cast(Cast { expr, field }) => Ok(self.cast_to_sql(expr, field)?),
+            Expr::Cast(Cast { expr, field, .. }) => Ok(self.cast_to_sql(expr, field)?),
             Expr::Literal(value, _) => Ok(self.scalar_to_sql(value)?),
             Expr::Alias(Alias { expr, .. }) => self.expr_to_sql_inner(expr),
             Expr::WindowFunction(window_fun) => {
@@ -570,7 +570,7 @@ impl Unparser<'_> {
                     )
                 })
             }
-            Expr::TryCast(TryCast { expr, field }) => {
+            Expr::TryCast(TryCast { expr, field, .. }) => {
                 let inner_expr = self.expr_to_sql_inner(expr)?;
                 Ok(ast::Expr::Cast {
                     kind: ast::CastKind::TryCast,
