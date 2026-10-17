@@ -29,7 +29,9 @@ use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_execution::{FunctionRegistry, TaskContext};
 use datafusion_expr::WindowFunctionDefinition;
-use datafusion_physical_expr::expressions::{LambdaExpr, LambdaVariable};
+use datafusion_physical_expr::expressions::{
+    LambdaExpr, LambdaVariable, NormalizeFloatZeroExpr,
+};
 use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion_physical_expr::{
     HigherOrderFunctionExpr, PhysicalSortExpr, ScalarFunctionExpr,
@@ -290,6 +292,9 @@ pub fn parse_physical_expr_with_converter(
         ExprType::IsNotNullExpr(_) => IsNotNullExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::NotExpr(_) => NotExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::Negative(_) => NegativeExpr::try_from_proto(proto, &decode_ctx)?,
+        ExprType::NormalizeFloatZero(_) => {
+            NormalizeFloatZeroExpr::try_from_proto(proto, &decode_ctx)?
+        }
         ExprType::InList(_) => InListExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::Case(_) => CaseExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::Cast(_) => CastExpr::try_from_proto(proto, &decode_ctx)?,
