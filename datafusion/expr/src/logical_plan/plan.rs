@@ -44,8 +44,8 @@ use crate::logical_plan::{DmlStatement, Statement, WriteOp};
 use crate::utils::{
     check_aggregate_and_window_nesting, check_no_window_functions,
     enumerate_grouping_sets, expr_to_columns, exprlist_to_fields,
-    find_out_reference_exprs, grouping_set_expr_count, grouping_set_to_exprlist,
-    merge_schema, passthrough_field_index, split_conjunction,
+    find_out_reference_exprs, get_unnested_list_field, grouping_set_expr_count,
+    grouping_set_to_exprlist, merge_schema, passthrough_field_index, split_conjunction,
 };
 use crate::{
     BinaryExpr, CreateMemoryTable, CreateView, Execute, Expr, ExprSchemable, GroupingSet,
@@ -5299,13 +5299,15 @@ fn get_unnested_columns(
         | DataType::LargeList(_)
         | DataType::ListView(_)
         | DataType::LargeListView(_) => {
-            let data_type = get_unnested_list_datatype_recursive(data_type, depth)?;
-            let new_field = Arc::new(Field::new(
-                col_name, data_type,
-                // Unnesting may produce NULLs even if the list is not null.
-                // For example: unnest([1], []) -> 1, null
-                true,
-            ));
+            let field = get_unnested_list_field(data_type, depth)?;
+            let new_field = Arc::new(
+                field
+                    .clone()
+                    .with_name(col_name)
+                    // Unnesting may produce NULLs even if the list is not null.
+                    // For example: unnest([1], []) -> 1, null
+                    .with_nullable(true),
+            );
             let column = Column::from_name(col_name);
             // let column = Column::from((None, &new_field));
             qualified_columns.push((column, new_field));
@@ -5328,29 +5330,6 @@ fn get_unnested_columns(
         }
     }
     Ok(qualified_columns)
-}
-
-// Get the data type of a multi-dimensional type after unnesting it
-// with a given depth
-fn get_unnested_list_datatype_recursive(
-    data_type: &DataType,
-    depth: usize,
-) -> Result<DataType> {
-    match data_type {
-        DataType::List(field)
-        | DataType::FixedSizeList(field, _)
-        | DataType::LargeList(field)
-        | DataType::ListView(field)
-        | DataType::LargeListView(field) => {
-            if depth == 1 {
-                return Ok(field.data_type().clone());
-            }
-            return get_unnested_list_datatype_recursive(field.data_type(), depth - 1);
-        }
-        _ => {}
-    }
-
-    internal_err!("trying to unnest on invalid data type {data_type}")
 }
 
 #[cfg(test)]
