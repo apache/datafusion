@@ -1901,9 +1901,38 @@ config_namespace! {
         /// This uses the deduplicated row count once the build side has been evaluated.
         ///
         /// The default is 150 values per partition.
+        /// The same limit applies to the sum over all build partitions: the dynamic filter of a
+        /// hash join uses one InList of all build keys only when the partitions together have at
+        /// most this many distinct values, and a bloom filter otherwise
+        /// (see `hash_join_bloom_filter_fpp`).
         /// This is inspired by Trino's `max-filter-keys-per-column` setting.
         /// See: <https://trino.io/docs/current/admin/dynamic-filtering.html#dynamic-filter-collection-thresholds>
         pub hash_join_inlist_pushdown_max_distinct_values: usize, default = 150
+
+        /// Target false positive probability of the bloom filter in the dynamic
+        /// filter of a hash join.
+        ///
+        /// When the build side of a hash join has more distinct keys than
+        /// `hash_join_inlist_pushdown_max_distinct_values` (over all partitions),
+        /// the dynamic filter tests probe rows against one bloom filter of all
+        /// build side keys. The filter is sized for the number of distinct build
+        /// keys at this probability, and is built the first time a probe batch is
+        /// evaluated (it is never built when the scan only uses the dynamic filter
+        /// for statistics pruning).
+        pub hash_join_bloom_filter_fpp: f64, default = 0.01
+
+        /// Maximum size, in bytes, of the bloom filter (per join key column) in
+        /// the dynamic filter of a hash join. A build side with more distinct keys
+        /// than fit at `hash_join_bloom_filter_fpp` gets a filter of this size
+        /// with a higher false positive probability.
+        pub hash_join_bloom_filter_max_bytes: usize, default = 128 * 1024 * 1024
+
+        /// The bloom filter of a hash join dynamic filter is not used when its
+        /// estimated false positive probability is above this value (the filter
+        /// is saturated). Then the dynamic filter tests only the min/max bounds of
+        /// the build keys, because a saturated filter removes few rows and costs
+        /// CPU time for each probe row.
+        pub hash_join_bloom_filter_max_fpp: f64, default = 0.15
 
         /// The default filter selectivity used by Filter Statistics
         /// when an exact selectivity cannot be determined. Valid values are

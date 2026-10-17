@@ -1158,14 +1158,14 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     #[cfg(not(feature = "force_hash_collisions"))]
     insta::assert_snapshot!(
         format_plan_for_test(&plan),
-        @r"
+        @"
     - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
     -   CoalescePartitionsExec
     -     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
     -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
     -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ CASE hash_repartition % 12 WHEN 5 THEN a@0 >= ab AND a@0 <= ab AND b@1 >= bb AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:ab,c1:bb}]) WHEN 8 THEN a@0 >= aa AND a@0 <= aa AND b@1 >= ba AND b@1 <= ba AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}]) ELSE false END ]
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:ab,c1:bb}, {c0:aa,c1:ba}]) ]
     "
     );
 
@@ -1374,14 +1374,14 @@ async fn test_hashjoin_dynamic_filter_pushdown_range_partitioned() {
     // Now check what our filter looks like
     insta::assert_snapshot!(
         format_plan_for_test(&plan),
-        @r"
+        @"
     - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
     -   CoalescePartitionsExec
     -     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
     -       RepartitionExec: partitioning=Range([a@0 ASC, b@1 ASC], [(aa, bb)], 2), input_partitions=1
     -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     -       RepartitionExec: partitioning=Range([a@0 ASC, b@1 ASC], [(aa, bb)], 2), input_partitions=1
-    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ CASE range_partition WHEN 0 THEN a@0 >= aa AND a@0 <= aa AND b@1 >= ba AND b@1 <= ba AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}]) WHEN 1 THEN a@0 >= ab AND a@0 <= ab AND b@1 >= bb AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:ab,c1:bb}]) ELSE false END ]
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}, {c0:ab,c1:bb}]) ]
     "
     );
 
@@ -3941,11 +3941,11 @@ async fn test_hashjoin_hash_table_pushdown_partitioned() {
     config.optimizer.enable_dynamic_filter_pushdown = true;
     let (plan, batches) = optimize_and_collect_pushdown_plan(plan, config).await;
 
-    // Verify that hash_lookup is used instead of IN (SET)
+    // Verify that a bloom filter is used instead of IN (SET)
     let plan_str = format_plan_for_test(&plan).to_string();
     assert!(
-        plan_str.contains("hash_lookup"),
-        "Expected hash_lookup in plan but got: {plan_str}"
+        plan_str.contains("bloom_filter"),
+        "Expected bloom_filter in plan but got: {plan_str}"
     );
     assert!(
         !plan_str.contains("IN (SET)"),
@@ -3975,7 +3975,7 @@ async fn test_hashjoin_hash_table_pushdown_partitioned() {
 
 // Ported to push_down_filter_parquet.slt (`hl_build`/`hl_probe` fixture).
 // Rust version retained only because the slt port cannot hand-wire the
-// RepartitionExec-above-probe shape this test uses; the hash_lookup vs
+// RepartitionExec-above-probe shape this test uses; the bloom_filter vs
 // IN (SET) invariant is captured in the slt port.
 #[tokio::test]
 async fn test_hashjoin_hash_table_pushdown_collect_left() {
@@ -4042,11 +4042,11 @@ async fn test_hashjoin_hash_table_pushdown_collect_left() {
     config.optimizer.enable_dynamic_filter_pushdown = true;
     let (plan, batches) = optimize_and_collect_pushdown_plan(plan, config).await;
 
-    // Verify that hash_lookup is used instead of IN (SET)
+    // Verify that a bloom filter is used instead of IN (SET)
     let plan_str = format_plan_for_test(&plan).to_string();
     assert!(
-        plan_str.contains("hash_lookup"),
-        "Expected hash_lookup in plan but got: {plan_str}"
+        plan_str.contains("bloom_filter"),
+        "Expected bloom_filter in plan but got: {plan_str}"
     );
     assert!(
         !plan_str.contains("IN (SET)"),

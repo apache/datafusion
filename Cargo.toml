@@ -408,3 +408,24 @@ debug = false
 debug-assertions = false
 strip = "debuginfo"
 incremental = false
+
+# TODO: remove once arrow-rs releases the `Sbbf` APIs of
+# https://github.com/apache/arrow-rs/pull/11641 (used by the hash join bloom filter)
+[patch.crates-io]
+arrow = { git = "https://github.com/adriangb/arrow-rs.git", rev = "2f6464e2af7df6e07387c5d1695762f97979a15f" }
+arrow-arith = { git = "https://github.com/adriangb/arrow-rs.git", rev = "2f6464e2af7df6e07387c5d1695762f97979a15f" }
+arrow-array = { git = "https://github.com/adriangb/arrow-rs.git", rev = "2f6464e2af7df6e07387c5d1695762f97979a15f" }
+arrow-avro = { git = "https://github.com/adriangb/arrow-rs.git", rev = "2f6464e2af7df6e07387c5d1695762f97979a15f" }
+arrow-buffer = { git = "https://github.com/adriangb/arrow-rs.git", rev = "2f6464e2af7df6e07387c5d1695762f97979a15f" }
+arrow-cast = { git = "https://github.com/adriangb/arrow-rs.git", rev = "2f6464e2af7df6e07387c5d1695762f97979a15f" }
+arrow-csv = { git = "https://github.com/adriangb/arrow-rs.git", rev = "2f6464e2af7df6e07387c5d1695762f97979a15f" }
+arrow-data = { git = "https://github.com/adriangb/arrow-rs.git", rev = "2f6464e2af7df6e07387c5d1695762f97979a15f" }
+arrow-flight = { git = "https://github.com/adriangb/arrow-rs.git", rev = "2f6464e2af7df6e07387c5d1695762f97979a15f" }
+arrow-ipc = { git = "https://github.com/adriangb/arrow-rs.git", rev = "2f6464e2af7df6e07387c5d1695762f97979a15f" }
+arrow-json = { git = "https://github.com/adriangb/arrow-rs.git", rev = "2f6464e2af7df6e07387c5d1695762f97979a15f" }
+arrow-ord = { git = "https://github.com/adriangb/arrow-rs.git", rev = "2f6464e2af7df6e07387c5d1695762f97979a15f" }
+arrow-row = { git = "https://github.com/adriangb/arrow-rs.git", rev = "2f6464e2af7df6e07387c5d1695762f97979a15f" }
+arrow-schema = { git = "https://github.com/adriangb/arrow-rs.git", rev = "2f6464e2af7df6e07387c5d1695762f97979a15f" }
+arrow-select = { git = "https://github.com/adriangb/arrow-rs.git", rev = "2f6464e2af7df6e07387c5d1695762f97979a15f" }
+arrow-string = { git = "https://github.com/adriangb/arrow-rs.git", rev = "2f6464e2af7df6e07387c5d1695762f97979a15f" }
+parquet = { git = "https://github.com/adriangb/arrow-rs.git", rev = "2f6464e2af7df6e07387c5d1695762f97979a15f" }

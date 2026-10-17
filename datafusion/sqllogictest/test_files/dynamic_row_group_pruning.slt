@@ -340,7 +340,7 @@ explain analyze select rgsel.b from dim join rgsel on dim.column1 = rgsel.b;
 Plan with Metrics
 01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(column1@0, b@0)], projection=[b@1], metrics=[output_rows=3, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=1, build_mem_used=<slt:ignore>, array_map_created_count=0, build_input_batches=1, build_input_rows=3, input_batches=2, input_rows=3, build_time=<slt:ignore>, join_time=<slt:ignore>, avg_fanout=100% (3/3), output_rows_skew=0%, probe_hit_rate=100% (3/3)]
 02)--DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
-03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_row_group_pruning/rgsel.parquet]]}, projection=[b], file_type=parquet, predicate=DynamicFilter [ b@1 >= 1000 AND b@1 <= 3050 AND hash_lookup ], dynamic_rg_pruning=eligible, pruning_predicate=b_null_count@1 != row_count@2 AND b_max@0 >= 1000 AND b_null_count@1 != row_count@2 AND b_min@3 <= 3050 AND b_null_count@1 != row_count@2 AND KEY_RANGE_BITMAP(b_min@3, b_max@0, 3/4096 buckets), required_guarantees=[], metrics=[output_rows=3, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=2, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=4 total → 2 matched, page_index_pages_pruned=20 total → 3 matched, page_index_rows_pruned=200 total → 30 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, bytes_processed=<slt:ignore>, bytes_scanned=<slt:ignore>, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=3, pushdown_rows_pruned=27, row_groups_pruned_dynamic_filter=0, predicate_cache_inner_records=200, predicate_cache_records=13, bloom_filter_eval_time=<slt:ignore>, metadata_load_time=<slt:ignore>, page_index_eval_time=<slt:ignore>, row_pushdown_eval_time=<slt:ignore>, statistics_eval_time=<slt:ignore>, time_elapsed_opening=<slt:ignore>, time_elapsed_processing=<slt:ignore>, time_elapsed_scanning_total=<slt:ignore>, time_elapsed_scanning_until_data=<slt:ignore>, output_rows_skew=<slt:ignore>, scan_efficiency_ratio=<slt:ignore>]
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_row_group_pruning/rgsel.parquet]]}, projection=[b], file_type=parquet, predicate=DynamicFilter [ b@1 >= 1000 AND b@1 <= 3050 AND bloom_filter ], dynamic_rg_pruning=eligible, pruning_predicate=b_null_count@1 != row_count@2 AND b_max@0 >= 1000 AND b_null_count@1 != row_count@2 AND b_min@3 <= 3050 AND b_null_count@1 != row_count@2 AND KEY_RANGE_BITMAP(b_min@3, b_max@0, 3/4096 buckets), required_guarantees=[], metrics=[output_rows=3, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=2, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=4 total → 2 matched, page_index_pages_pruned=20 total → 3 matched, page_index_rows_pruned=200 total → 30 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, bytes_processed=<slt:ignore>, bytes_scanned=<slt:ignore>, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=3, pushdown_rows_pruned=27, row_groups_pruned_dynamic_filter=0, predicate_cache_inner_records=200, predicate_cache_records=13, bloom_filter_eval_time=<slt:ignore>, metadata_load_time=<slt:ignore>, page_index_eval_time=<slt:ignore>, row_pushdown_eval_time=<slt:ignore>, statistics_eval_time=<slt:ignore>, time_elapsed_opening=<slt:ignore>, time_elapsed_processing=<slt:ignore>, time_elapsed_scanning_total=<slt:ignore>, time_elapsed_scanning_until_data=<slt:ignore>, output_rows_skew=<slt:ignore>, scan_efficiency_ratio=<slt:ignore>]
 
 statement ok
 RESET datafusion.optimizer.hash_join_inlist_pushdown_max_distinct_values;
@@ -356,6 +356,69 @@ drop table rgsel;
 # default = num_cpus and leak modified config out of this file).
 statement ok
 set datafusion.execution.target_partitions = 4;
+
+statement ok
+RESET datafusion.execution.parquet.pushdown_filters;
+
+# Partitioned hash join with filter pushdown off. The dynamic filter is one
+# global filter (no `CASE hash_repartition % N` routing). The probe scan uses it
+# only for statistics pruning, so the bloom filter is never built, but the
+# key-range bitmap merged from all build partitions prunes row groups 1 and 2,
+# which the [5, 390] bounds alone cannot prune.
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold = 0;
+
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold_rows = 0;
+
+statement ok
+set datafusion.optimizer.hash_join_inlist_pushdown_max_distinct_values = 0;
+
+statement ok
+COPY (SELECT CAST(i AS BIGINT) AS k FROM generate_series(0, 399) AS t(i))
+TO 'test_files/scratch/dynamic_row_group_pruning/pdoff_probe.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' '100');
+
+statement ok
+CREATE EXTERNAL TABLE pdoff_probe STORED AS PARQUET
+LOCATION 'test_files/scratch/dynamic_row_group_pruning/pdoff_probe.parquet';
+
+statement ok
+CREATE TABLE pdoff_build AS SELECT CAST(column1 AS BIGINT) AS k FROM (VALUES (5), (17), (390));
+
+query TT
+explain analyze select pdoff_probe.k from pdoff_build join pdoff_probe on pdoff_build.k = pdoff_probe.k;
+----
+Plan with Metrics
+01)HashJoinExec: mode=Partitioned, join_type=Inner, on=[(k@0, k@0)], projection=[k@1], metrics=[output_rows=3, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=1, build_mem_used=<slt:ignore>, array_map_created_count=1, build_input_batches=1, build_input_rows=3, input_batches=2, input_rows=200, build_time=<slt:ignore>, join_time=<slt:ignore>, avg_fanout=100% (3/3), output_rows_skew=<slt:ignore>, probe_hit_rate=1.5% (3/200)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_row_group_pruning/pdoff_probe.parquet]]}, projection=[k], output_ordering=[k@0 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ k@0 >= 5 AND k@0 <= 390 AND bloom_filter ], dynamic_rg_pruning=eligible, pruning_predicate=k_null_count@1 != row_count@2 AND k_max@0 >= 5 AND k_null_count@1 != row_count@2 AND k_min@3 <= 390 AND k_null_count@1 != row_count@2 AND KEY_RANGE_BITMAP(k_min@3, k_max@0, 3/512 buckets), required_guarantees=[], metrics=[output_rows=200, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=2, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=4 total → 2 matched, page_index_pages_pruned=2 total → 2 matched, page_index_rows_pruned=200 total → 200 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, bytes_processed=<slt:ignore>, bytes_scanned=<slt:ignore>, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=0, pushdown_rows_pruned=0, row_groups_pruned_dynamic_filter=0, predicate_cache_inner_records=0, predicate_cache_records=0, bloom_filter_eval_time=<slt:ignore>, metadata_load_time=<slt:ignore>, page_index_eval_time=<slt:ignore>, row_pushdown_eval_time=<slt:ignore>, statistics_eval_time=<slt:ignore>, time_elapsed_opening=<slt:ignore>, time_elapsed_processing=<slt:ignore>, time_elapsed_scanning_total=<slt:ignore>, time_elapsed_scanning_until_data=<slt:ignore>, output_rows_skew=<slt:ignore>, scan_efficiency_ratio=<slt:ignore>]
+
+query I rowsort
+select pdoff_probe.k from pdoff_build join pdoff_probe on pdoff_build.k = pdoff_probe.k;
+----
+17
+390
+5
+
+statement ok
+drop table pdoff_build;
+
+statement ok
+drop table pdoff_probe;
+
+statement ok
+RESET datafusion.optimizer.hash_join_inlist_pushdown_max_distinct_values;
+
+statement ok
+RESET datafusion.optimizer.hash_join_single_partition_threshold;
+
+statement ok
+RESET datafusion.optimizer.hash_join_single_partition_threshold_rows;
 
 statement ok
 RESET datafusion.execution.parquet.pushdown_filters;

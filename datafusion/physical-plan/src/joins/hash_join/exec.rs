@@ -34,7 +34,8 @@ use crate::joins::array_map::ArrayMap;
 use crate::joins::hash_join::inlist_builder::build_struct_inlist_values;
 use crate::joins::hash_join::probe_completion::{ProbeCompletion, ProbeSideSummary};
 use crate::joins::hash_join::shared_bounds::{
-    ColumnBounds, PartitionBounds, PushdownStrategy, SharedBuildAccumulator,
+    ColumnBounds, GlobalFilterOptions, PartitionBounds, PushdownStrategy,
+    SharedBuildAccumulator,
 };
 use crate::joins::hash_join::stream::{
     BuildSide, BuildSideInitialState, HashJoinStream, HashJoinStreamState,
@@ -1893,6 +1894,7 @@ impl ExecutionPlan for HashJoinExec {
                             repartition_random_state,
                             self.null_equality,
                             null_aware,
+                            GlobalFilterOptions::new(context.session_config().options()),
                         ))
                     })))
                 })
@@ -10269,9 +10271,7 @@ mod tests {
     ///
     /// Here the build-side logical NULL lives in exactly one build partition, so
     /// the `keys_have_null` flag has to survive the per-partition aggregation in
-    /// `build_partitioned_filter` and widen the *routed* filter as a whole: the
-    /// probe NULL is routed to a single `CASE` branch, and OR-ing `IS NULL` into
-    /// that one branch would still drop it for every other route.
+    /// `build_partitioned_filter` and widen the global filter as a whole.
     #[tokio::test]
     async fn test_partitioned_null_equal_dynamic_filter_keeps_probe_nulls_for_build_logical_null()
     -> Result<()> {
@@ -10350,22 +10350,11 @@ mod tests {
 
         dynamic_filter.wait_complete().await;
         let filter = dynamic_filter.current()?.to_string();
-        // The aggregated build-side NULL must widen the routed filter once, at the
-        // top: `c2 IS NULL OR CASE hash(c2) % 4 WHEN ... END`.
-        //
-        // Under `force_hash_collisions` every key hashes to the same value, so the
-        // repartition routes all build rows to a single partition and
-        // `build_partitioned_filter` collapses to that partition's filter with no
-        // routing `CASE`. The NULL widening this test guards is asserted either way.
-        if cfg!(not(feature = "force_hash_collisions")) {
-            assert!(
-                filter.contains("CASE"),
-                "expected a routed partitioned filter, got: {filter}"
-            );
-        }
+        // The aggregated build-side NULL must widen the global filter once, at the
+        // top: `c2 IS NULL OR <filter of all partitions>`.
         assert!(
             filter.starts_with("c2@0 IS NULL OR"),
-            "expected the IS NULL disjunct to wrap the whole routed filter, got: {filter}"
+            "expected the IS NULL disjunct to wrap the whole filter, got: {filter}"
         );
 
         // The NULL-NULL row (d1 = 200, d2 = 20) is only produced if the probe
