@@ -36,9 +36,9 @@ use datafusion_expr::utils::{
     collect_subquery_cols, conjunction, find_join_exprs, split_conjunction,
 };
 use datafusion_expr::{
-    BinaryExpr, Cast, Distinct, EmptyRelation, Expr, ExprSchemable, Extension, FetchType,
-    LogicalPlan, LogicalPlanBuilder, MaterializedCte, Operator, SkipType,
-    UserDefinedLogicalNodeCore, expr, lit,
+    BinaryExpr, Cast, Distinct, EmptyRelation, Expr, ExprSchemable, FetchType,
+    LogicalPlan, LogicalPlanBuilder, MaterializedCte, MaterializedCtePlan, Operator,
+    SkipType, expr, lit,
 };
 
 /// This struct rewrite the sub query plan by pull up the correlated
@@ -164,35 +164,25 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             LogicalPlan::Subquery(_) => {
                 Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
             }
-            LogicalPlan::Extension(Extension { node })
-                if node.as_any().is::<MaterializedCte>() =>
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(ref cte))
+                if !cte.cte.all_out_ref_exprs().is_empty() =>
             {
-                let cte = node.as_any().downcast_ref::<MaterializedCte>().unwrap();
-                if !cte.cte.all_out_ref_exprs().is_empty() {
-                    // A correlated body would have to run once per outer row.
-                    return Ok(
-                        self.stop_pull_up(LogicalPlan::Extension(Extension { node }))
-                    );
-                }
+                // A correlated body would have to run once per outer row.
+                Ok(self.stop_pull_up(plan))
+            }
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
                 // Only the continuation can hold correlated expressions. Rewrite
                 // it alone, so that the body shared by every scan keeps its schema.
-                let continuation = cte.continuation.clone().rewrite(self)?;
-                if !continuation.transformed {
-                    return Ok(Transformed::new(
-                        LogicalPlan::Extension(Extension { node }),
-                        false,
-                        TreeNodeRecursion::Jump,
-                    ));
-                }
-                let cte = cte.with_exprs_and_inputs(
-                    vec![],
-                    vec![cte.cte.clone(), continuation.data],
-                )?;
+                let continuation =
+                    Arc::unwrap_or_clone(cte.continuation).rewrite(self)?;
                 Ok(Transformed::new(
-                    LogicalPlan::Extension(Extension {
-                        node: Arc::new(cte),
-                    }),
-                    true,
+                    LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
+                        MaterializedCte {
+                            continuation: Arc::new(continuation.data),
+                            ..cte
+                        },
+                    )),
+                    continuation.transformed,
                     TreeNodeRecursion::Jump,
                 ))
             }
@@ -299,6 +289,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             | LogicalPlan::SubqueryAlias(_)
             | LogicalPlan::TableScan(_)
             | LogicalPlan::EmptyRelation(_)
+            | LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_))
             | LogicalPlan::Values(_) => {
                 if plan.contains_outer_reference() {
                     // the unsupported cases, the plan expressions contain out
