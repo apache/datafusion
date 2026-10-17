@@ -235,9 +235,24 @@ fn rsplit_nth<'a>(string: &'a str, delimiter: &str, n: usize) -> Option<&'a str>
         // uses memchr::memrchr and is notably faster than `str::rsplit(&str)`,
         // even for a single character string.
         string.rsplit(delimiter.as_bytes()[0] as char).nth(n)
+    } else if delimiter_can_overlap(delimiter.as_bytes()) {
+        // Searching from the right can find different matches than
+        // searching from the left, so count the fields from the left.
+        let fields = string.matches(delimiter).count() + 1;
+        if n >= fields {
+            return None;
+        }
+        split_nth(string, delimiter, fields - 1 - n)
     } else {
         string.rsplit(delimiter).nth(n)
     }
+}
+
+/// Returns true if a proper prefix of `delimiter` is also a suffix (e.g. `::`
+/// or `aba`), so that two matches of it can overlap.
+fn delimiter_can_overlap(delimiter: &[u8]) -> bool {
+    let len = delimiter.len();
+    (1..len).any(|k| delimiter[..k] == delimiter[len - k..])
 }
 
 /// Fast path for `split_part(array, scalar_delimiter, scalar_position)`.
@@ -357,10 +372,17 @@ where
                 "split_part index {position} exceeds minimum supported value"
             )
         })?;
-        let finder_rev = memmem::FinderRev::new(delim_bytes);
-        map_strings(string_array, builder, |s| {
-            rsplit_nth_finder(s, &finder_rev, delim_len, idx)
-        })
+        if delimiter_can_overlap(delim_bytes) {
+            let finder = memmem::Finder::new(delim_bytes);
+            map_strings(string_array, builder, |s| {
+                rsplit_nth_overlapping_finder(s, &finder, delim_len, idx)
+            })
+        } else {
+            let finder_rev = memmem::FinderRev::new(delim_bytes);
+            map_strings(string_array, builder, |s| {
+                rsplit_nth_finder(s, &finder_rev, delim_len, idx)
+            })
+        }
     }
 }
 
@@ -438,6 +460,22 @@ fn rsplit_nth_finder<'a>(
     }
 }
 
+/// Like `rsplit_nth_finder` but finds the delimiters from the left, so the
+/// fields match those of `split_nth_finder` when delimiter matches overlap.
+#[inline]
+fn rsplit_nth_overlapping_finder<'a>(
+    string: &'a str,
+    finder: &memmem::Finder,
+    delim_len: usize,
+    n: usize,
+) -> Option<&'a str> {
+    let fields = finder.find_iter(string.as_bytes()).count() + 1;
+    if n >= fields {
+        return None;
+    }
+    split_nth_finder(string, finder, delim_len, fields - 1 - n)
+}
+
 /// Zero-copy scalar fast path for `StringViewArray` inputs.
 ///
 /// Instead of copying substring bytes into a new buffer, constructs
@@ -481,10 +519,17 @@ fn split_part_scalar_view(
                 "split_part index {position} exceeds minimum supported value"
             )
         })?;
-        let finder_rev = memmem::FinderRev::new(delimiter.as_bytes());
-        split_view_loop(string_view_array, views, &mut views_buf, |s| {
-            rsplit_nth_finder(s, &finder_rev, delimiter.len(), idx)
-        });
+        if delimiter_can_overlap(delimiter.as_bytes()) {
+            let finder = memmem::Finder::new(delimiter.as_bytes());
+            split_view_loop(string_view_array, views, &mut views_buf, |s| {
+                rsplit_nth_overlapping_finder(s, &finder, delimiter.len(), idx)
+            });
+        } else {
+            let finder_rev = memmem::FinderRev::new(delimiter.as_bytes());
+            split_view_loop(string_view_array, views, &mut views_buf, |s| {
+                rsplit_nth_finder(s, &finder_rev, delimiter.len(), idx)
+            });
+        }
     }
 
     let views_buf = ScalarBuffer::from(views_buf);
