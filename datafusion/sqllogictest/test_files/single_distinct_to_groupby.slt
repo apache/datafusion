@@ -142,10 +142,9 @@ query TT
 EXPLAIN SELECT g, sum(v) AS sum_v, count(DISTINCT xi) AS distinct_xi FROM t GROUP BY g;
 ----
 logical_plan
-01)Projection: t.g, sum(alias2) AS sum_v, count(alias1) AS distinct_xi
-02)--Aggregate: groupBy=[[t.g]], aggr=[[sum(alias2), count(alias1)]]
-03)----Aggregate: groupBy=[[t.g, t.xi AS alias1]], aggr=[[sum(CAST(t.v AS Int64)) AS alias2]]
-04)------TableScan: t projection=[g, xi, v]
+01)Projection: t.g, sum(t.v) AS sum_v, count(DISTINCT t.xi) AS distinct_xi
+02)--Aggregate: groupBy=[[t.g]], aggr=[[sum(CAST(t.v AS Int64)), count(DISTINCT t.xi)]]
+03)----TableScan: t projection=[g, xi, v]
 
 statement ok
 set datafusion.explain.logical_plan_only = false;
