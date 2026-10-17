@@ -30,7 +30,9 @@ use datafusion_common::cast::{
     as_fixed_size_list_array, as_float64_array, as_generic_list_array,
     as_large_list_array, as_large_list_view_array, as_list_array, as_list_view_array,
 };
-use datafusion_common::utils::{SetBitCounter, offset_span, offset_span_len};
+use datafusion_common::utils::{
+    SetBitCounter, offset_span, offset_span_len, rows_have_nulls,
+};
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
 
 use datafusion_expr::ColumnarValue;
@@ -591,6 +593,20 @@ pub(crate) fn needs_norm_scale(sum_of_squares: f64, len: usize) -> bool {
     !(min_unscaled..f64::INFINITY).contains(&sum_of_squares)
 }
 
+/// Returns a bitmap whose bit `i` is set if row `i` of `list` contains a NULL
+/// element, or `None` if the elements have no validity bitmap.
+pub(crate) fn rows_with_null_elements<O: OffsetSizeTrait>(
+    list: &GenericListArray<O>,
+) -> Option<BooleanBuffer> {
+    let nulls = list.values().nulls()?;
+    let offsets = list.offsets();
+    Some(rows_have_nulls(
+        nulls,
+        offsets[0].as_usize(),
+        offsets[1..].iter().map(|end| end.as_usize()),
+    ))
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -819,7 +835,9 @@ pub(crate) mod tests {
     pub(crate) fn check_sliced_list_behavior(
         run: impl Fn(&ArrayRef) -> Result<ArrayRef>,
     ) -> Result<()> {
-        let padding = 8192;
+        // Not a multiple of 64, so the visible elements start partway through a
+        // 64-bit word of the child's validity bitmap.
+        let padding = 8195;
         let visible = vec![Some(3.0), None, Some(4.0), Some(9.0), Some(9.0)];
         let values = Float64Array::from_iter(
             std::iter::repeat_n(Some(1.0), padding)
