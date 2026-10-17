@@ -5,7 +5,7 @@
 pub struct LogicalPlanNode {
     #[prost(
         oneof = "logical_plan_node::LogicalPlanType",
-        tags = "1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35"
+        tags = "1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37"
     )]
     pub logical_plan_type: ::core::option::Option<logical_plan_node::LogicalPlanType>,
 }
@@ -81,6 +81,10 @@ pub mod logical_plan_node {
         EmptyTableScan(super::EmptyTableScanNode),
         #[prost(message, tag = "35")]
         AsOfJoin(::prost::alloc::boxed::Box<super::AsOfJoinNode>),
+        #[prost(message, tag = "36")]
+        MaterializedCte(::prost::alloc::boxed::Box<super::MaterializedCteNode>),
+        #[prost(message, tag = "37")]
+        MaterializedCteScan(super::MaterializedCteScanNode),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1396,7 +1400,7 @@ pub mod table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1488,6 +1492,10 @@ pub mod physical_plan_node {
         ),
         #[prost(message, tag = "41")]
         AsOfJoin(::prost::alloc::boxed::Box<super::AsOfJoinExecNode>),
+        #[prost(message, tag = "42")]
+        MaterializedCte(::prost::alloc::boxed::Box<super::MaterializedCteExecNode>),
+        #[prost(message, tag = "43")]
+        MaterializedCteScan(super::MaterializedCteScanExecNode),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2652,6 +2660,31 @@ pub struct CteWorkTableScanNode {
     #[prost(message, optional, tag = "2")]
     pub schema: ::core::option::Option<super::datafusion_common::Schema>,
 }
+/// `WITH name AS MATERIALIZED (cte) continuation`
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MaterializedCteNode {
+    /// Binds the scans in `continuation` to this node.
+    #[prost(uint64, tag = "1")]
+    pub id: u64,
+    #[prost(string, tag = "2")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(message, optional, boxed, tag = "3")]
+    pub cte: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
+    #[prost(message, optional, boxed, tag = "4")]
+    pub continuation: ::core::option::Option<
+        ::prost::alloc::boxed::Box<LogicalPlanNode>,
+    >,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MaterializedCteScanNode {
+    /// The id of the MaterializedCteNode that this scan reads.
+    #[prost(uint64, tag = "1")]
+    pub id: u64,
+    #[prost(string, tag = "2")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "3")]
+    pub schema: ::core::option::Option<super::datafusion_common::DfSchema>,
+}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EmptyTableScanNode {
     #[prost(message, optional, tag = "1")]
@@ -2813,6 +2846,34 @@ pub struct ScalarSubqueryExecNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
     #[prost(message, repeated, tag = "2")]
     pub subqueries: ::prost::alloc::vec::Vec<PhysicalPlanNode>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MaterializedCteExecNode {
+    /// Binds the scans to this node. The id is valid in one encoded plan only:
+    /// the decoder allocates a new id.
+    #[prost(uint64, tag = "1")]
+    pub id: u64,
+    #[prost(string, tag = "2")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(message, optional, boxed, tag = "3")]
+    pub body: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, optional, boxed, tag = "4")]
+    pub continuation: ::core::option::Option<
+        ::prost::alloc::boxed::Box<PhysicalPlanNode>,
+    >,
+}
+/// Reads the buffered output of the MaterializedCteExecNode with the same id.
+/// That node must be in the same encoded plan.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MaterializedCteScanExecNode {
+    #[prost(uint64, tag = "1")]
+    pub id: u64,
+    #[prost(string, tag = "2")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "3")]
+    pub schema: ::core::option::Option<super::datafusion_common::Schema>,
+    #[prost(uint64, tag = "4")]
+    pub partitions: u64,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalScalarSubqueryExprNode {

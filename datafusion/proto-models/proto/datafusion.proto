@@ -64,6 +64,8 @@ message LogicalPlanNode {
     DmlNode dml = 33;
     EmptyTableScanNode empty_table_scan = 34;
     AsOfJoinNode as_of_join = 35;
+    MaterializedCteNode materialized_cte = 36;
+    MaterializedCteScanNode materialized_cte_scan = 37;
   }
 }
 
@@ -941,6 +943,8 @@ message PhysicalPlanNode {
     ScalarSubqueryExecNode scalar_subquery = 39;
     PiecewiseMergeJoinExecNode piecewise_merge_join = 40;
     AsOfJoinExecNode as_of_join = 41;
+    MaterializedCteExecNode materialized_cte = 42;
+    MaterializedCteScanExecNode materialized_cte_scan = 43;
   }
 }
 
@@ -1768,6 +1772,22 @@ message CteWorkTableScanNode {
   datafusion_common.Schema schema = 2;
 }
 
+// `WITH name AS MATERIALIZED (cte) continuation`
+message MaterializedCteNode {
+  // Binds the scans in `continuation` to this node.
+  uint64 id = 1;
+  string name = 2;
+  LogicalPlanNode cte = 3;
+  LogicalPlanNode continuation = 4;
+}
+
+message MaterializedCteScanNode {
+  // The id of the MaterializedCteNode that this scan reads.
+  uint64 id = 1;
+  string name = 2;
+  datafusion_common.DfSchema schema = 3;
+}
+
 message EmptyTableScanNode {
   TableReference table_name = 1;
   datafusion_common.Schema schema = 2;
@@ -1868,6 +1888,24 @@ message BufferExecNode {
 message ScalarSubqueryExecNode {
   PhysicalPlanNode input = 1;
   repeated PhysicalPlanNode subqueries = 2;
+}
+
+message MaterializedCteExecNode {
+  // Binds the scans to this node. The id is valid in one encoded plan only:
+  // the decoder allocates a new id.
+  uint64 id = 1;
+  string name = 2;
+  PhysicalPlanNode body = 3;
+  PhysicalPlanNode continuation = 4;
+}
+
+// Reads the buffered output of the MaterializedCteExecNode with the same id.
+// That node must be in the same encoded plan.
+message MaterializedCteScanExecNode {
+  uint64 id = 1;
+  string name = 2;
+  datafusion_common.Schema schema = 3;
+  uint64 partitions = 4;
 }
 
 message PhysicalScalarSubqueryExprNode {

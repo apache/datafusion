@@ -54,6 +54,7 @@ use datafusion_proto_models::protobuf::{
 
 use crate::ExecutionPlan;
 use crate::empty::EmptyExec;
+use crate::materialized_cte::MaterializedCteBuffer;
 use crate::proto::{ExecutionPlanDecode, ExecutionPlanEncode};
 
 /// The schema shared by the stub child plans: `a: Int32, b: Int32`.
@@ -318,6 +319,14 @@ impl ExecutionPlanDecode for StubPlanDecoder {
     fn decode_udwf(&self, name: &str, _payload: Option<&[u8]>) -> Result<Arc<WindowUDF>> {
         internal_err!("stub decoder cannot decode the window UDF {name}")
     }
+
+    fn materialized_cte_buffer(
+        &self,
+        _encoded_id: u64,
+        name: &str,
+    ) -> Result<Arc<MaterializedCteBuffer>> {
+        internal_err!("stub decoder cannot decode the materialized CTE {name}")
+    }
 }
 
 /// Minimal extension plans for the [`crate::proto::registry`] tests.
@@ -525,5 +534,15 @@ impl ExecutionPlanDecode for UnreachablePlanDecoder {
         _payload: Option<&[u8]>,
     ) -> Result<Arc<WindowUDF>> {
         unreachable!("decode_udwf must not be reached when the node is rejected")
+    }
+
+    fn materialized_cte_buffer(
+        &self,
+        _encoded_id: u64,
+        _name: &str,
+    ) -> Result<Arc<MaterializedCteBuffer>> {
+        unreachable!(
+            "materialized_cte_buffer must not be reached when the node is rejected"
+        )
     }
 }
