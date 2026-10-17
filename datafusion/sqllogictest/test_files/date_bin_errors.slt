@@ -17,11 +17,11 @@
 
 # Tests for DATE_BIN error handling with out-of-range values
 
-# Test case from issue #20219 - should return NULL instead of panicking
-query P
-select date_bin(interval '1637426858 months', to_timestamp_millis(1040292460), timestamp '1984-01-07 00:00:00');
+# Issue #20219: this stride must not panic. The bin fits in milliseconds (#25855).
+query I
+select arrow_cast(date_bin(interval '1637426858 months', to_timestamp_millis(1040292460), timestamp '1984-01-07 00:00:00'), 'Int64');
 ----
-NULL
+-4306016287785600000
 
 # Issue #22528: negative sub-second source with month interval.
 query P
@@ -36,12 +36,12 @@ from values (to_timestamp_millis(-1040292460)) t(c);
 ----
 1969-12-07T00:00:00
 
-# Array path should return NULL for per-row overflow.
-query P
-select date_bin(interval '1637426858 months', c, timestamp '1984-01-07 00:00:00')
+# Array path matches the scalar path above.
+query I
+select arrow_cast(date_bin(interval '1637426858 months', c, timestamp '1984-01-07 00:00:00'), 'Int64')
 from values (to_timestamp_millis(1040292460)) t(c);
 ----
-NULL
+-4306016287785600000
 
 # Large stride causing overflow - should return NULL
 query P
@@ -53,25 +53,42 @@ select date_bin(
 ----
 NULL
 
-# Another large stride test
-query P
-select date_bin(
+# Same millisecond bin as the first query.
+query I
+select arrow_cast(date_bin(
   interval '1637426858 months',
   to_timestamp_millis(-1040292000),
   timestamp '1984-01-07 00:00:00'
-) as b;
+), 'Int64');
 ----
-NULL
+-4306016287785600000
 
-# Test with 1900-01-01 timestamp
-query P
-select date_bin(
+# 1900-01-01 lands in that same bin.
+query I
+select arrow_cast(date_bin(
   interval '1637426858 months',
   to_timestamp_millis(-2208988800000),
   timestamp '1984-01-07 00:00:00'
-) as b;
+), 'Int64');
 ----
-NULL
+-4306016287785600000
+
+# Issue #25855: month stride past DateTime<Utc>, bin still fits.
+query I
+select arrow_cast(
+  date_bin(interval '1 month', arrow_cast(10000000000000, 'Timestamp(Second, None)')),
+  'Int64'
+);
+----
+9999998294400
+
+query I
+select arrow_cast(
+  date_bin(interval '1 month', arrow_cast(-10000000000000, 'Timestamp(Second, None)')),
+  'Int64'
+);
+----
+-10000001059200
 
 # source - origin overflows i64 nanoseconds
 query P
