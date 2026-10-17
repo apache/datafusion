@@ -17,6 +17,7 @@
 
 //! Defines common code used in execution plans
 
+use std::any::Any;
 use std::fs;
 use std::fs::metadata;
 use std::sync::Arc;
@@ -42,6 +43,15 @@ pub(crate) type SharedMemoryReservation = Arc<MemoryReservation>;
 /// Create a vector of record batches from a stream
 pub async fn collect(stream: SendableRecordBatchStream) -> Result<Vec<RecordBatch>> {
     stream.try_collect::<Vec<_>>().await
+}
+
+/// The message of a caught panic payload.
+pub(crate) fn panic_message(panic: &(dyn Any + Send)) -> String {
+    panic
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| panic.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown panic".to_string())
 }
 
 /// Recursively builds a list of files in a directory with a given extension

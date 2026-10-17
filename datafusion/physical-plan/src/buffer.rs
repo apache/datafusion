@@ -18,6 +18,7 @@
 //! [`BufferExec`] decouples production and consumption on messages by buffering the input in the
 //! background up to a certain capacity.
 
+use crate::common::panic_message;
 use crate::execution_plan::{
     CardinalityEffect, EvaluationType, SchedulingType, replace_children_if_necessary,
 };
@@ -437,11 +438,7 @@ impl<T: Send + SizedMessage + 'static> MemoryBufferedStream<T> {
                             Ok(Some(item_or_err)) => item_or_err,
                             Ok(None) => break, // stream finished
                             Err(panic) => {
-                                let msg = panic
-                                    .downcast_ref::<&str>()
-                                    .map(|s| s.to_string())
-                                    .or_else(|| panic.downcast_ref::<String>().cloned())
-                                    .unwrap_or_else(|| "unknown panic".to_string());
+                                let msg = panic_message(&*panic);
                                 let _ = batch_tx.send(internal_err!(
                                     "BufferExec input stream panicked: {msg}"
                                 ));

@@ -27,7 +27,10 @@ use crate::aggregates::group_values::{GroupValues, new_group_values};
 use crate::aggregates::order::GroupClustering;
 use crate::common::project_plan_to_schema;
 use crate::execution_plan::{Boundedness, EmissionType, reset_plan_states};
-use crate::materialized_cte::{materialized_cte_ids, with_new_materialized_cte_outputs};
+use crate::materialized_cte::{
+    MaterializedCteOutputUse, hold_materialized_cte_outputs, materialized_cte_ids,
+    with_new_materialized_cte_outputs,
+};
 use crate::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput,
 };
@@ -288,6 +291,10 @@ struct RecursiveQueryStream {
     /// The materialized CTEs that the recursive term declares. They are
     /// computed again in each iteration.
     materialized_cte_ids: HashSet<u64>,
+    /// Holds the outputs of the materialized CTEs that the recursive term
+    /// reads and does not declare. Each iteration reads them again, so they
+    /// must not be released before the last iteration.
+    _materialized_cte_holds: Vec<MaterializedCteOutputUse>,
     /// The static part (static term) as a stream. If the processing of this
     /// part is completed, then it will be None.
     static_stream: Option<SendableRecordBatchStream>,
@@ -324,11 +331,17 @@ impl RecursiveQueryStream {
             .then(|| DistinctDeduplicator::new(Arc::clone(&schema), &task_context))
             .transpose()?;
         let materialized_cte_ids = materialized_cte_ids(&recursive_term);
+        let materialized_cte_holds = hold_materialized_cte_outputs(
+            &recursive_term,
+            &materialized_cte_ids,
+            &task_context,
+        );
         Ok(Self {
             task_context,
             work_table,
             recursive_term,
             materialized_cte_ids,
+            _materialized_cte_holds: materialized_cte_holds,
             static_stream: Some(static_stream),
             recursive_stream: None,
             schema,

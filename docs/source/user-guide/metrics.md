@@ -201,6 +201,17 @@ Thus `agg_expr_0_*` is `sum(t.a)`, `agg_expr_1_*` is `sum(t.b)`, and
 `agg_expr_2_*` is `count(t.c)`. In verbose output, the corresponding
 `aggregate` labels provide the same mapping per partition.
 
+### MaterializedCteExec
+
+`MaterializedCteExec` reports the metrics of the fan-outs that stream the CTE body to its scans. The spill metrics (`spill_count`, `spilled_bytes`, `spilled_rows`) are per body partition.
+
+| Metric              | Description                                                              |
+| ------------------- | ------------------------------------------------------------------------ |
+| buffered_rows       | Number of body rows that were appended to the logs of the fan-outs.      |
+| retired_batches     | Number of batches that were dropped because every scan had read them.    |
+| peak_buffered_bytes | Peak memory of the in-memory batches of all logs of the CTE, in bytes.   |
+| producer_wait_time  | Time that the task of each body partition waited for a scan to catch up. |
+
 ## TODO
 
 Add metrics for the remaining operators
