@@ -686,6 +686,7 @@ impl ExprSchemable for Expr {
                     Ok(Arc::new(
                         utils::get_unnested_list_field(&data_type, 1)?
                             .clone()
+                            .with_name(&schema_name)
                             .with_nullable(nullable),
                     ))
                 } else {
