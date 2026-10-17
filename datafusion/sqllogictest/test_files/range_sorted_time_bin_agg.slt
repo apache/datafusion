@@ -29,10 +29,20 @@
 # 1. Range([timestamp]) and output_ordering=[key, timestamp]
 # 2. Two file_groups, so the two 60-minute streams run in parallel
 #
-# date_bin is a negative control: even aligned bins retain the hash shuffle
-# because date_bin can produce NULL from non-null inputs and is not admitted
-# to range analysis. Timezone-less date_trunc is admitted, but only removes
-# the shuffle when every split keeps the resulting groups partition-local.
+# Improvement opportunity:
+# In this fixture, date_bin(60s) is monotonic in timestamp and the hour split
+# is aligned to bin boundaries, so (key, time_bin) is partition-disjoint.
+# Aggregation could be a single streaming SinglePartitioned step with no
+# hash shuffle.
+#
+# This optimization exists for timezone-less date_trunc when every split
+# keeps groups partition-local. Extending it to date_bin is future work
+# requiring a safety audit, including its null behavior (#25344).
+#
+# Today's date_bin plan still hash-repartitions:
+#   Partial AggregateExec (ordering_mode=Sorted)
+#     -> RepartitionExec Hash([key, date_bin(...)])
+#     -> FinalPartitioned AggregateExec (ordering_mode=Sorted)
 
 statement ok
 set datafusion.explain.physical_plan_only = true;
@@ -77,9 +87,11 @@ physical_plan DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion
 ##########
 # TEST 2: Filtered time-bin aggregation.
 # GROUP BY keys are (key, date_bin(timestamp)). Input is sorted on those keys
-# and the split aligns with the bins in this data. The function remains
-# default-denied by range analysis, so Partial + hash RepartitionExec + Final
-# is retained even though ordering_mode=Sorted is recognized.
+# and the split aligns with the bins in this data, so the groups are
+# partition-local. Timezone-less date_trunc can already avoid the shuffle;
+# extending this optimization to date_bin awaits its safety audit (#25344).
+# Until then, Partial + hash RepartitionExec + Final is retained even though
+# ordering_mode=Sorted is recognized.
 ##########
 
 query TT
@@ -110,8 +122,9 @@ k2 2024-01-01T01:30:00 30
 k2 2024-01-01T01:45:00 5
 
 ##########
-# TEST 3: Same aggregation without the col4 filter. The scan still has two
-# 60-minute file groups, and date_bin still requires a hash repartition.
+# TEST 3: Same aggregation without the col4 filter. The groups remain
+# partition-local, but date_bin retains the hash shuffle pending its
+# safety audit (#25344).
 ##########
 
 query TT

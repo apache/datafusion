@@ -922,7 +922,7 @@ fn partial_aggregate_input_keeps_groups_local(
     plan.downcast_ref::<AggregateExec>()
         .is_some_and(|aggregate| {
             aggregate.mode() == &AggregateMode::Partial
-                && aggregate.groups_are_partition_local(
+                && aggregate.input_keeps_groups_local(
                     aggregate.input().as_ref(),
                     allow_subset_satisfy_partitioning,
                 )
@@ -1751,7 +1751,7 @@ pub fn ensure_distribution_with_stats(
                         .is_satisfied()
                         || plan.downcast_ref::<AggregateExec>().is_some_and(
                             |aggregate| {
-                                aggregate.groups_are_partition_local(
+                                aggregate.input_keeps_groups_local(
                                     child.plan.as_ref(),
                                     allow_subset_satisfy_partitioning,
                                 )

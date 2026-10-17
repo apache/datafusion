@@ -176,7 +176,7 @@ pub fn check_plan_sanity(
         let accepts_partition_local_groups = plan
             .downcast_ref::<AggregateExec>()
             .is_some_and(|aggregate| {
-                aggregate.groups_are_partition_local(child.as_ref(), true)
+                aggregate.input_keeps_groups_local(child.as_ref(), true)
             });
         if !distribution_satisfaction.is_satisfied() && !accepts_partition_local_groups {
             let plan_str = get_plan_string(plan);

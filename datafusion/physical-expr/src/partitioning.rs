@@ -632,7 +632,7 @@ fn checked_adjacent_timestamp(
 /// The argument is the same for descending ranges, but `successor(xᵢ)` must be
 /// used instead. Null preservation is also required so the transform cannot
 /// introduce a null group outside the source partition selected by null order.
-fn range_transform_keeps_keys_local(
+fn range_splits_separate_transformed_keys(
     function: &Arc<dyn PhysicalExpr>,
     range_key: &Arc<dyn PhysicalExpr>,
     range: &RangePartitioning,
@@ -703,7 +703,7 @@ fn range_transform_proves_key_locality(
     }
 
     range_argument_count == 1
-        && range_transform_keeps_keys_local(candidate, range_key, range, schema)
+        && range_splits_separate_transformed_keys(candidate, range_key, range, schema)
 }
 
 fn range_partitioning_keeps_keys_local(
@@ -719,11 +719,11 @@ fn range_partitioning_keeps_keys_local(
     }
 
     let range_key = &range.ordering()[0].expr;
-    let has_audited_transform = required_exprs.iter().any(|required| {
+    let has_key_locality_proof = required_exprs.iter().any(|required| {
         range_transform_proves_key_locality(required, range_key, range, eq_properties)
     });
 
-    has_audited_transform && (required_exprs.len() == 1 || allow_subset)
+    has_key_locality_proof && (required_exprs.len() == 1 || allow_subset)
 }
 
 /// Represents how a [`Partitioning`] satisfies a [`Distribution`] requirement.
