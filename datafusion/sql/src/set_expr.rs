@@ -162,14 +162,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .union_by_name_distinct(right_plan)?
                 .build(),
             (SetOperator::Intersect, SetQuantifier::All) => {
-                LogicalPlanBuilder::intersect(left_plan, right_plan, true)
+                LogicalPlanBuilder::intersect_all(
+                    left_plan,
+                    right_plan,
+                    &self.row_number_for_set_operation()?,
+                )
             }
             (SetOperator::Intersect, SetQuantifier::Distinct | SetQuantifier::None) => {
                 LogicalPlanBuilder::intersect(left_plan, right_plan, false)
             }
-            (SetOperator::Except, SetQuantifier::All) => {
-                LogicalPlanBuilder::except(left_plan, right_plan, true)
-            }
+            (SetOperator::Except, SetQuantifier::All) => LogicalPlanBuilder::except_all(
+                left_plan,
+                right_plan,
+                &self.row_number_for_set_operation()?,
+            ),
             (SetOperator::Except, SetQuantifier::Distinct | SetQuantifier::None) => {
                 LogicalPlanBuilder::except(left_plan, right_plan, false)
             }
@@ -177,5 +183,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 not_impl_err!("{op} {quantifier} not implemented")
             }
         }
+    }
+
+    fn row_number_for_set_operation(&self) -> Result<Arc<datafusion_expr::WindowUDF>> {
+        let Some(row_number) = self.context_provider.get_window_meta("row_number") else {
+            return plan_err!(
+                "INTERSECT ALL and EXCEPT ALL require the row_number window function, which is not registered"
+            );
+        };
+        Ok(row_number)
     }
 }
