@@ -60,13 +60,13 @@ regex.workspace = true
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { workspace = true }
 snmalloc-rs = { version = "0.7", optional = true }
+tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
 tokio-util = { version = "0.7.17" }
 toml = "1.1.3"
 
 [dev-dependencies]
 datafusion-proto = { workspace = true, features = ["parquet"] }
-tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 
 [[bench]]

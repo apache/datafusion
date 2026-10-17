@@ -19,6 +19,7 @@
 pub mod cancellation;
 pub mod clickbench;
 pub mod dict;
+pub mod dict_encoding_sweep;
 pub mod h2o;
 pub mod hj;
 pub mod imdb;
