@@ -41,6 +41,7 @@ use datafusion_common::{
     DataFusionError, NullEquality, Result, ScalarValue, SharedResult,
     assert_or_internal_err,
 };
+use datafusion_execution::memory_pool::MemoryPool;
 use datafusion_expr::Operator;
 use datafusion_functions::core::r#struct as struct_func;
 use datafusion_physical_expr::expressions::{
@@ -134,12 +135,15 @@ pub(crate) struct BuildKeys {
 
 /// Options for the global dynamic filter of a hash join, from the session
 /// configuration.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct GlobalFilterOptions {
     /// Use an InList when all partitions together have at most this many
     /// distinct keys (`hash_join_dynamic_filter_inlist_max_distinct_values`).
     pub(crate) inlist_max_distinct_values: usize,
     pub(crate) bloom_filter: BloomFilterOptions,
+    /// Pool that the bloom filter memory is charged to. `None` (tests only)
+    /// does not track the memory.
+    pub(crate) memory_pool: Option<Arc<dyn MemoryPool>>,
 }
 
 impl GlobalFilterOptions {
@@ -153,7 +157,14 @@ impl GlobalFilterOptions {
                 max_bytes: optimizer.hash_join_bloom_filter_max_bytes,
                 max_fpp: optimizer.hash_join_bloom_filter_max_fpp,
             },
+            memory_pool: None,
         }
+    }
+
+    /// Charge the bloom filter memory to `pool`.
+    pub(crate) fn with_memory_pool(mut self, pool: Arc<dyn MemoryPool>) -> Self {
+        self.memory_pool = Some(pool);
+        self
     }
 }
 
@@ -999,6 +1010,7 @@ impl SharedBuildAccumulator {
                         .collect(),
                     num_distinct,
                     self.global_filter_options.bloom_filter,
+                    self.global_filter_options.memory_pool.clone(),
                     pruning_bitmap,
                 )) as Arc<dyn PhysicalExpr>)
             }
@@ -1546,6 +1558,29 @@ mod tests {
         .unwrap();
         let expr = current_expr(&acc);
         case_expr(&expr);
+    }
+
+    /// With a memory pool too small for the bloom filter, the global filter
+    /// keeps every build key: it falls back to the bounds (and the pruning
+    /// bitmap), and the join results stay correct.
+    #[test]
+    fn small_memory_pool_falls_back_to_bounds() {
+        use datafusion_execution::memory_pool::GreedyMemoryPool;
+        let mut acc = make_partitioned_expr_accumulator_for_test(2);
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1024));
+        acc.global_filter_options.memory_pool = Some(Arc::clone(&pool));
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported_map((0..1000).map(|k| k * 4).collect()),
+            reported_map((0..1000).map(|k| k * 4 + 1).collect()),
+        ]))
+        .unwrap();
+        let expr = current_expr(&acc);
+        let result = eval_bool(&expr, (-10..4010).collect());
+        for (k, pass) in (-10..4010).zip(result) {
+            // Bounds only: every key in [0, 3997] passes, nothing outside
+            assert_eq!(pass, (0..=3997).contains(&k), "key {k}");
+        }
+        assert_eq!(pool.reserved(), 0);
     }
 
     /// The bloom filter carries one key-range bitmap for all partitions, so scans

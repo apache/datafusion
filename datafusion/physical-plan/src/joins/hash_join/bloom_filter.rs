@@ -27,6 +27,7 @@ use arrow::buffer::BooleanBuffer;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr_common::dyn_eq::DynHash;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, PhysicalExprRef};
@@ -66,22 +67,70 @@ struct LazyBloomFilter {
     /// Sum of the distinct keys of all build partitions.
     num_distinct: usize,
     options: BloomFilterOptions,
-    /// One filter per key column. `None` for a column whose filter is saturated.
-    filters: OnceLock<Vec<Option<Sbbf>>>,
+    /// Pool that the filter memory is charged to
+    memory_pool: Option<Arc<dyn MemoryPool>>,
+    /// One filter per key column. `None` for a column whose filter is saturated,
+    /// or for every column when the memory pool could not hold the filters.
+    filters: OnceLock<BuiltFilters>,
+}
+
+/// The filters, and the reservation for their memory. The reservation is
+/// released when the expression (and thus this value) is dropped.
+struct BuiltFilters {
+    filters: Vec<Option<Sbbf>>,
+    _reservation: Option<MemoryReservation>,
 }
 
 impl LazyBloomFilter {
     fn filters(&self) -> Result<&[Option<Sbbf>]> {
-        if let Some(filters) = self.filters.get() {
-            return Ok(filters);
+        if let Some(built) = self.filters.get() {
+            return Ok(&built.filters);
         }
         let mut input = self.input.lock();
-        if let Some(filters) = self.filters.get() {
-            return Ok(filters);
+        if let Some(built) = self.filters.get() {
+            return Ok(&built.filters);
         }
         let partitions = input.take().unwrap_or_default();
-        let filters = build_filters(&partitions, self.num_distinct, self.options)?;
-        Ok(self.filters.get_or_init(|| filters))
+        let built = self.build(&partitions)?;
+        Ok(&self.filters.get_or_init(|| built).filters)
+    }
+
+    /// Reserves the memory, then builds the filters. When the pool cannot hold
+    /// the filters, no filter is built: the dynamic filter then tests only the
+    /// bounds (and keeps range pruning), and the query does not fail.
+    fn build(&self, partitions: &[Vec<ArrayRef>]) -> Result<BuiltFilters> {
+        let num_columns = partitions.first().map(Vec::len).unwrap_or(0);
+        let num_bytes = filter_bytes(self.num_distinct, self.options);
+        let num_rows: usize = partitions
+            .iter()
+            .filter_map(|p| p.first())
+            .map(|a| a.len())
+            .sum();
+        // The filters, plus the hashes that a parallel fill holds for a moment
+        let peak = num_bytes * num_columns + num_rows * size_of::<u64>();
+        let reservation = match &self.memory_pool {
+            Some(pool) => {
+                let reservation =
+                    MemoryConsumer::new("HashJoinBloomFilter").register(pool);
+                if reservation.try_grow(peak).is_err() {
+                    return Ok(BuiltFilters {
+                        filters: vec![None; num_columns],
+                        _reservation: None,
+                    });
+                }
+                Some(reservation)
+            }
+            None => None,
+        };
+        let filters = build_filters(partitions, num_bytes, self.options)?;
+        if let Some(reservation) = &reservation {
+            reservation
+                .resize(filters.iter().flatten().map(|f| f.num_blocks() * 32).sum());
+        }
+        Ok(BuiltFilters {
+            filters,
+            _reservation: reservation,
+        })
     }
 }
 
@@ -92,13 +141,21 @@ fn bytes_for_ndv_fpp(ndv: usize, fpp: f64) -> usize {
     (bits / 8.0) as usize
 }
 
+/// Bytes of one filter (before folding), as `Sbbf::new_with_num_of_bytes`
+/// allocates them (rounded to a power of two, at least 32).
+fn filter_bytes(num_distinct: usize, options: BloomFilterOptions) -> usize {
+    bytes_for_ndv_fpp(num_distinct, options.fpp)
+        .min(options.max_bytes)
+        .max(32)
+        .next_power_of_two()
+}
+
 fn build_filters(
     partitions: &[Vec<ArrayRef>],
-    num_distinct: usize,
+    num_bytes: usize,
     options: BloomFilterOptions,
 ) -> Result<Vec<Option<Sbbf>>> {
     let num_columns = partitions.first().map(Vec::len).unwrap_or(0);
-    let num_bytes = bytes_for_ndv_fpp(num_distinct, options.fpp).min(options.max_bytes);
     (0..num_columns)
         .map(|column| {
             let mut filter = Sbbf::new_with_num_of_bytes(num_bytes);
@@ -215,6 +272,7 @@ impl BloomFilterExpr {
         partitions: Vec<Vec<ArrayRef>>,
         num_distinct: usize,
         options: BloomFilterOptions,
+        memory_pool: Option<Arc<dyn MemoryPool>>,
         pruning_bitmap: Option<Arc<KeyRangeBitmap>>,
     ) -> Self {
         Self {
@@ -223,6 +281,7 @@ impl BloomFilterExpr {
                 input: Mutex::new(Some(partitions)),
                 num_distinct,
                 options,
+                memory_pool,
                 filters: OnceLock::new(),
             }),
             pruning_bitmap,
@@ -388,6 +447,7 @@ mod tests {
             num_distinct,
             options,
             None,
+            None,
         )
     }
 
@@ -473,6 +533,46 @@ mod tests {
         assert!(expr.filter.filters().unwrap()[0].is_none());
     }
 
+    fn int_expr_with_pool(keys: Vec<i64>, pool: Arc<dyn MemoryPool>) -> BloomFilterExpr {
+        let num_distinct = keys.len();
+        BloomFilterExpr::new(
+            vec![Arc::new(Column::new("k", 0))],
+            vec![vec![Arc::new(Int64Array::from(keys)) as ArrayRef]],
+            num_distinct,
+            OPTIONS,
+            Some(pool),
+            None,
+        )
+    }
+
+    /// The filter memory is charged to the pool and released on drop.
+    #[test]
+    fn memory_is_reserved_and_released() {
+        use datafusion_execution::memory_pool::GreedyMemoryPool;
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(64 << 20));
+        let expr = int_expr_with_pool((0..100_000).collect(), Arc::clone(&pool));
+        assert_eq!(pool.reserved(), 0, "nothing is reserved before the build");
+        let batch = int_batch(vec![Some(1), Some(-1)]);
+        assert_eq!(eval(&expr, &batch), vec![true, false]);
+        let built = expr.filter.filters().unwrap()[0].as_ref().unwrap();
+        assert_eq!(pool.reserved(), built.num_blocks() * 32);
+        drop(expr);
+        assert_eq!(pool.reserved(), 0);
+    }
+
+    /// When the pool cannot hold the filter, no filter is built and every row
+    /// passes (the dynamic filter still tests the bounds). The query does not fail.
+    #[test]
+    fn small_memory_pool_skips_the_filter() {
+        use datafusion_execution::memory_pool::GreedyMemoryPool;
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1024));
+        let expr = int_expr_with_pool((0..100_000).collect(), Arc::clone(&pool));
+        let batch = int_batch(vec![Some(1), Some(-1), Some(500_000)]);
+        assert_eq!(eval(&expr, &batch), vec![true, true, true]);
+        assert!(expr.filter.filters().unwrap()[0].is_none());
+        assert_eq!(pool.reserved(), 0);
+    }
+
     #[test]
     fn multi_column_keys() {
         let partitions = vec![vec![
@@ -484,6 +584,7 @@ mod tests {
             partitions,
             2,
             OPTIONS,
+            None,
             None,
         );
         let schema = Schema::new(vec![

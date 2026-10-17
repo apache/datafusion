@@ -1894,7 +1894,8 @@ impl ExecutionPlan for HashJoinExec {
                             repartition_random_state,
                             self.null_equality,
                             null_aware,
-                            GlobalFilterOptions::new(context.session_config().options()),
+                            GlobalFilterOptions::new(context.session_config().options())
+                                .with_memory_pool(Arc::clone(context.memory_pool())),
                         ))
                     })))
                 })
