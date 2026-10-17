@@ -1418,8 +1418,8 @@ config_namespace! {
         /// values as UTC-adjusted instants, so callers that need the resulting
         /// Arrow type to be timezone-aware (e.g. for Spark `TimestampType`
         /// semantics) should set this to `"UTC"`. No effect when `coerce_int96`
-        /// is `None`.
-        pub coerce_int96_tz: Option<String>, default = None
+        /// is `None`, but the value is still validated when it is set.
+        pub coerce_int96_tz: Option<ConfigTimeZone>, default = None
 
         /// (reading) Use any available bloom filters when reading parquet files
         pub bloom_filter_on_read: bool, default = true
@@ -5081,6 +5081,48 @@ mod tests {
         let mut scalar = DFTimeUnit::Microsecond;
         assert!(ConfigField::set(&mut scalar, "typo", "ns").is_err());
         assert_eq!(scalar, DFTimeUnit::Microsecond);
+    }
+
+    #[test]
+    fn test_parquet_coerce_int96_tz_validation() {
+        use crate::config::ConfigOptions;
+
+        const KEY: &str = "datafusion.execution.parquet.coerce_int96_tz";
+        let mut config = ConfigOptions::default();
+        let tz = |config: &ConfigOptions| {
+            config
+                .execution
+                .parquet
+                .coerce_int96_tz
+                .as_ref()
+                .map(|tz| tz.to_string())
+        };
+        assert_eq!(tz(&config), None);
+
+        // Valid values are kept exactly as written, with or without coerce_int96.
+        for value in ["UTC", "America/Los_Angeles", "+08:00", "-0530", "+08"] {
+            config.set(KEY, value).unwrap();
+            assert_eq!(tz(&config).as_deref(), Some(value));
+        }
+
+        // A rejected value leaves the previous one in place.
+        for value in ["Not/A_Timezone", "utc", "08:00", ""] {
+            let err = config.set(KEY, value).unwrap_err();
+            assert_contains!(err.to_string(), format!("Invalid time zone: {value}."));
+            assert_eq!(tz(&config).as_deref(), Some("+08"));
+        }
+
+        // Reset restores None, and an invalid update leaves it unset.
+        config.reset(KEY).unwrap();
+        assert_eq!(tz(&config), None);
+        assert!(config.set(KEY, "Not/A_Timezone").is_err());
+        assert_eq!(tz(&config), None);
+
+        // The option has no nested fields.
+        config.set(KEY, "UTC").unwrap();
+        assert!(config.set(&format!("{KEY}.typo"), "UTC").is_err());
+        assert!(config.reset(&format!("{KEY}.typo")).is_err());
+        assert_eq!(tz(&config).as_deref(), Some("UTC"));
     }
 
     #[cfg(feature = "parquet")]
