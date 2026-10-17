@@ -16,3 +16,5 @@
 // under the License.
 
 mod pruned_partition_list;
+
+mod file_statistics_pruning;

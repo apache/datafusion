@@ -23,6 +23,7 @@ use crate::{ListingOptions, ListingTableConfig};
 use arrow::datatypes::{Field, Metadata, Schema, SchemaBuilder, SchemaRef};
 use async_trait::async_trait;
 use datafusion_catalog::{ScanArgs, ScanResult, Session, TableProvider};
+use datafusion_common::pruning::PrunableStatistics;
 use datafusion_common::stats::{Precision, is_known_empty};
 use datafusion_common::{
     Constraints, DFSchema, SchemaExt, Statistics, internal_datafusion_err, plan_err,
@@ -54,6 +55,7 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::limit::GlobalLimitExec;
+use datafusion_pruning::PruningPredicateBuilder;
 use futures::future::BoxFuture;
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use object_store::ObjectStore;
@@ -669,7 +671,12 @@ impl ListingTable {
             statistics,
             grouped_by_partition: partitioned_by_file_group,
         } = self
-            .list_files_for_scan(state, &partition_filters, statistic_file_limit)
+            .list_files_for_scan_inner(
+                state,
+                &partition_filters,
+                &filters,
+                statistic_file_limit,
+            )
             .await?;
 
         // if no files need to be read, return an `EmptyExec`
@@ -921,15 +928,28 @@ impl ListingTable {
         filters: &'a [Expr],
         limit: Option<usize>,
     ) -> datafusion_common::Result<ListFilesResult> {
+        self.list_files_for_scan_inner(ctx, filters, &[], limit)
+            .await
+    }
+
+    async fn list_files_for_scan_inner<'a>(
+        &'a self,
+        ctx: &'a dyn Session,
+        partition_filters: &'a [Expr],
+        data_filters: &'a [Expr],
+        limit: Option<usize>,
+    ) -> datafusion_common::Result<ListFilesResult> {
+        // Declared layouts must retain their partition identities, including empty groups.
         if let Some(output_partitioning) = self.options.output_partitioning.as_ref() {
             self.list_files_for_declared_output_partitioning(
                 ctx,
                 output_partitioning,
-                filters,
+                partition_filters,
             )
             .await
         } else {
-            self.list_files_for_regular_scan(ctx, filters, limit).await
+            self.list_files_for_regular_scan(ctx, partition_filters, data_filters, limit)
+                .await
         }
     }
 
@@ -985,10 +1005,47 @@ impl ListingTable {
         get_files_with_limit(files, file_limit, ctx.config().collect_statistics()).await
     }
 
+    /// Remove only files whose collected statistics prove the filter cannot match.
+    /// This performs no I/O and leaves the normal row filters in place.
+    fn prune_files_by_statistics(
+        &self,
+        ctx: &dyn Session,
+        filters: &[Expr],
+        files: FileGroup,
+    ) -> FileGroup {
+        if !ctx.config().collect_statistics() || self.expr_adapter_factory.is_some() {
+            return files;
+        }
+        // Custom adapters can change values relative to file statistics, and volatile
+        // expressions must not be evaluated while planning.
+        let Some(filter) = filters
+            .iter()
+            .filter(|f| !f.is_volatile())
+            .cloned()
+            .reduce(Expr::and)
+        else {
+            return files;
+        };
+        let Ok(schema) = DFSchema::try_from(self.table_schema.as_ref().clone()) else {
+            return files;
+        };
+        let Ok(predicate) = ctx.create_physical_expr(filter, &schema) else {
+            return files;
+        };
+        let Some(predicate) = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(&self.table_schema))
+            .build(predicate)
+        else {
+            return files;
+        };
+        prune_collected_files(&predicate, &self.file_schema, files)
+    }
+
     async fn list_files_for_regular_scan<'a>(
         &'a self,
         ctx: &'a dyn Session,
         filters: &'a [Expr],
+        data_filters: &'a [Expr],
         limit: Option<usize>,
     ) -> datafusion_common::Result<ListFilesResult> {
         let file_group_count = ctx.config().target_partitions();
@@ -1010,6 +1067,7 @@ impl ListingTable {
         let (file_group, inexact_stats) = self
             .collect_files_for_scan(ctx, &store, filters, limit)
             .await?;
+        let file_group = self.prune_files_by_statistics(ctx, data_filters, file_group);
 
         // Threshold: 0 = disabled, N > 0 = enabled when distinct_keys >= N
         //
@@ -1259,6 +1317,34 @@ async fn get_files_with_limit(
     Ok((file_group, inexact_stats))
 }
 
+/// Keep a file unless the pruning predicate proves it cannot contain a match.
+fn prune_collected_files(
+    predicate: &datafusion_pruning::PruningPredicate,
+    file_schema: &SchemaRef,
+    files: FileGroup,
+) -> FileGroup {
+    FileGroup::new(
+        files
+            .into_inner()
+            .into_iter()
+            .filter(|file| {
+                let Some(statistics) = &file.statistics else {
+                    return true;
+                };
+                // One unknown file must not hide the exact bounds of another file.
+                let statistics = PrunableStatistics::new(
+                    vec![Arc::clone(statistics)],
+                    Arc::clone(file_schema),
+                );
+                predicate
+                    .prune(&statistics)
+                    .map(|keep| keep != [false])
+                    .unwrap_or(true)
+            })
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1419,5 +1505,137 @@ mod tests {
 
         let result = derive_common_ordering_from_files(&file_groups);
         assert_eq!(result, Some(ordering));
+    }
+    fn prune_test_files(expr: Expr, statistics: Vec<Option<Statistics>>) -> Vec<String> {
+        use arrow::datatypes::DataType;
+        let schema = Arc::new(Schema::new(vec![Field::new("d", DataType::Int64, true)]));
+        let physical = datafusion_physical_expr::create_physical_expr(
+            &expr,
+            &DFSchema::try_from(schema.as_ref().clone()).unwrap(),
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )
+        .unwrap();
+        let predicate = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(&schema))
+            .try_build(physical)
+            .unwrap();
+        let files = FileGroup::new(
+            statistics
+                .into_iter()
+                .enumerate()
+                .map(|(i, stats)| {
+                    let mut file = PartitionedFile::new(format!("f{i}"), 10);
+                    file.statistics = stats.map(Arc::new);
+                    file
+                })
+                .collect(),
+        );
+        prune_collected_files(&predicate, &schema, files)
+            .iter()
+            .map(|f| f.object_meta.location.to_string())
+            .collect()
+    }
+
+    fn bounds(
+        min: Precision<datafusion_common::ScalarValue>,
+        max: Precision<datafusion_common::ScalarValue>,
+    ) -> Statistics {
+        Statistics {
+            num_rows: Precision::Exact(10),
+            column_statistics: vec![datafusion_common::ColumnStatistics {
+                min_value: min,
+                max_value: max,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn statistics_pruning_keeps_missing_and_inexact_bounds() {
+        use datafusion_expr::{col, lit};
+        let exact = |v: i64| Precision::Exact(v.into());
+        let inexact = |v: i64| Precision::Inexact(v.into());
+        assert_eq!(
+            prune_test_files(
+                col("d").gt_eq(lit(20_i64)),
+                vec![
+                    None,
+                    Some(bounds(Precision::Absent, Precision::Absent)),
+                    Some(bounds(inexact(0), inexact(9))),
+                    Some(bounds(exact(0), exact(9))),
+                    Some(bounds(exact(20), exact(29)))
+                ]
+            ),
+            ["f0", "f1", "f2", "f4"]
+        );
+    }
+
+    #[test]
+    fn statistics_pruning_uses_independent_bounds() {
+        use datafusion_expr::{col, lit};
+        assert_eq!(
+            prune_test_files(
+                col("d").lt(lit(20_i64)),
+                vec![
+                    Some(bounds(Precision::Exact(30_i64.into()), Precision::Absent)),
+                    Some(bounds(Precision::Absent, Precision::Exact(10_i64.into())))
+                ]
+            ),
+            ["f1"]
+        );
+    }
+
+    #[test]
+    fn statistics_pruning_preserves_null_semantics() {
+        use datafusion_expr::{col, lit};
+        let mut all_null = bounds(Precision::Absent, Precision::Absent);
+        all_null.column_statistics[0].null_count = Precision::Exact(10);
+        let mut no_null = bounds(
+            Precision::Exact(0_i64.into()),
+            Precision::Exact(9_i64.into()),
+        );
+        no_null.column_statistics[0].null_count = Precision::Exact(0);
+        assert_eq!(
+            prune_test_files(
+                col("d").is_null(),
+                vec![Some(all_null.clone()), Some(no_null.clone())]
+            ),
+            ["f0"]
+        );
+        assert_eq!(
+            prune_test_files(
+                col("d").is_not_null(),
+                vec![Some(all_null.clone()), Some(no_null.clone())]
+            ),
+            ["f1"]
+        );
+        assert!(
+            prune_test_files(col("d").eq(lit(5_i64)), vec![Some(all_null)]).is_empty()
+        );
+        assert_eq!(
+            prune_test_files(
+                col("d").eq(lit(5_i64)).or(col("d").is_null()),
+                vec![Some(no_null)]
+            ),
+            ["f0"]
+        );
+    }
+
+    #[test]
+    fn statistics_pruning_keeps_file_on_evaluation_error() {
+        use datafusion_expr::{col, lit};
+        // A malformed statistics type cannot establish that the file is empty.
+        assert_eq!(
+            prune_test_files(
+                col("d").gt(lit(10_i64)),
+                vec![Some(bounds(
+                    Precision::Exact("invalid".into()),
+                    Precision::Exact("invalid".into())
+                ))]
+            ),
+            ["f0"]
+        );
     }
 }
