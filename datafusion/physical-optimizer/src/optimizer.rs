@@ -16,6 +16,87 @@
 // under the License.
 
 //! Physical optimizer traits
+//!
+//! # Physical Optimizer Contract
+//!
+//! This section explains the contract for extending or replacing the default
+//! list of optimizer rules.
+//!
+//! [`PhysicalOptimizer::new`] defines the default rule sequence:
+//!
+//! ```text
+//! // Default rules
+//! let rules = vec![
+//!     rule1,
+//!     rule2,
+//!     rule3,
+//!     rule4,
+//!     // ...
+//! ];
+//! ```
+//!
+//! It's recommended to keep the default rule order and using supported configuration
+//! options to disable optimizations. These variations preserve correctness. For
+//! example, `SET datafusion.optimizer.enable_distinct_aggregation_soft_limit = false`
+//! disables the distinct aggregation soft-limit optimization. Custom pipelines
+//! require more care, as described below.
+//!
+//! ## Custom Optimizer Pipelines
+//!
+//! The following extension pipeline can expect built-in optimizer rules to preserve
+//! plan validity, but not to provide complete optimization coverage.
+//!
+//! ```text
+//! // Custom rules
+//! let rules = vec![
+//!     rule3,
+//!     extension_rule_1,
+//!     rule1,
+//! ];
+//! ```
+//!
+//! - **Plan Validity:** Applying `rule1` after `rule3` should preserve query
+//!   semantics and return a valid plan without internal errors or invalid
+//!   plan shapes.
+//!
+//!   The pipeline must still satisfy requirements needed for correctness. For
+//!   example, [`EnsureRequirements`] enforces input distribution and ordering.
+//!   Some constraints remain implicit or are documented only in individual rules.
+//!
+//! - **Optimization Coverage:** A non-default rule order may expose rules to
+//!   plan shapes they do not recognize, causing them to miss optimizations
+//!   that would apply in the default pipeline.
+//!
+//!   For example, [`LimitedDistinctAggregation`] runs before [`EnsureRequirements`]
+//!   and [`CombinePartialFinalAggregate`], so it only targets the canonical shape. To keep
+//!   its implementation simple, it does not guarantee optimization coverage for
+//!   non-canonical shapes produced by extension pipelines.
+//!
+//!   ```txt
+//!   -- Canonical (default pipeline):
+//!   -- Built-in rule recognize and optimize this shape
+//!   Limit
+//!     Aggregate(Final)
+//!       Aggregate(Partial)
+//!
+//!   -- Non-canonical (repartitioning inserted first):
+//!   -- Built-in rule skip the optimization
+//!   Limit
+//!     Aggregate(Final)
+//!       Repartition
+//!         Aggregate(Partial)
+//!   ```
+//!
+//! For custom optimizer pipelines:
+//!
+//! - Reordering optimizer rules must still result in a valid plan, subject to the
+//!   correctness requirements above. Downstream projects may add unit tests for
+//!   built-in rules to guard against correctness regressions.
+//! - Extending built-in rules to match plan shapes that the default rule order
+//!   cannot produce is discouraged. Prefer adding a custom optimizer rule that
+//!   transforms the plan into a standard shape recognized by built-in rules.
+//!   If extending a built-in rule is still necessary, please open a DataFusion
+//!   issue to discuss it.
 
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -211,6 +292,9 @@ impl PhysicalOptimizer {
     }
 
     /// Create a new optimizer with the given rules
+    ///
+    /// See the [module documentation](self) for the contract governing non-default
+    /// optimizer pipelines.
     pub fn with_rules(rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>) -> Self {
         Self { rules }
     }
