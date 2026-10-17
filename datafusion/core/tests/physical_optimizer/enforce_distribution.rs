@@ -1169,15 +1169,23 @@ async fn range_transform_locality_does_not_satisfy_join_distribution() -> Result
         .config;
     let optimized = EnsureRequirements::new().optimize(join, &config)?;
     SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config)?;
-    for child in optimized.children() {
-        assert!(child.is::<RepartitionExec>());
-        assert!(matches!(
-            child.output_partitioning(),
-            Partitioning::Hash(_, 2)
-        ));
-    }
+    assert_plan!(
+        optimized,
+        @r"
+    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(date_trunc(hour, timestamp@0), date_trunc(hour, timestamp@0))]
+      RepartitionExec: partitioning=Hash([date_trunc(hour, timestamp@0)], 2), input_partitions=2
+        DataSourceExec: partitions=2, partition_sizes=[1, 1]
+      RepartitionExec: partitioning=Hash([date_trunc(hour, timestamp@0)], 2), input_partitions=2
+        DataSourceExec: partitions=2, partition_sizes=[1, 1]
+    "
+    );
+
     let batches = collect(optimized, SessionContext::new().task_ctx()).await?;
-    assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 12);
+    assert_eq!(
+        batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+        3 * 2 * 2,
+        "three hour buckets, each joining two left rows with two right rows"
+    );
     Ok(())
 }
 

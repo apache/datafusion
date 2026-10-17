@@ -1403,11 +1403,63 @@ mod tests {
         )])
     }
 
-    fn assert_date_trunc_partition_images<T: arrow::array::types::ArrowTimestampType>()
-    -> Result<()> {
+    /// Assigns sample rows to source ranges and evaluates whole arrays,
+    /// independently of the optimizer's boundary-adjacency proof.
+    fn date_trunc_partition_images_are_disjoint<
+        T: arrow::array::types::ArrowTimestampType,
+    >(
+        function: &Arc<dyn PhysicalExpr>,
+        splits: &[i64],
+        options: SortOptions,
+        schema: &SchemaRef,
+    ) -> Result<bool> {
         use arrow::array::{PrimitiveArray, RecordBatch};
         use datafusion_common::HashSet;
 
+        let mut partitions = vec![vec![]; splits.len() + 1];
+        let rows = splits
+            .iter()
+            .flat_map(|split| [Some(split - 1), Some(*split), Some(split + 1)])
+            .chain([None, None]);
+        for value in rows {
+            let index = match value {
+                None if options.nulls_first => 0,
+                None => splits.len(),
+                Some(value) => splits
+                    .iter()
+                    .filter(|split| {
+                        if options.descending {
+                            value <= **split
+                        } else {
+                            value >= **split
+                        }
+                    })
+                    .count(),
+            };
+            partitions[index].push(value);
+        }
+        let images = partitions
+            .into_iter()
+            .map(|values| {
+                let input = Arc::new(PrimitiveArray::<T>::from_iter(values));
+                let batch = RecordBatch::try_new(Arc::clone(schema), vec![input])?;
+                let output = function.evaluate(&batch)?.into_array(batch.num_rows())?;
+                (0..output.len())
+                    .map(|i| ScalarValue::try_from_array(&output, i))
+                    .collect::<Result<HashSet<_>>>()
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(images.iter().enumerate().all(|(i, left)| {
+            images
+                .iter()
+                .skip(i + 1)
+                .all(|right| left.is_disjoint(right))
+        }))
+    }
+
+    fn assert_date_trunc_partition_images<T: arrow::array::types::ArrowTimestampType>()
+    -> Result<()> {
         let ticks_per_second = match T::UNIT {
             TimeUnit::Second => 1,
             TimeUnit::Millisecond => 1_000,
@@ -1422,24 +1474,79 @@ mod tests {
         let properties = EquivalenceProperties::new(Arc::clone(&schema));
 
         let mut cases = vec![
-            ("hour", false, vec![-hour, 0, hour], true),
-            ("hour", false, vec![-hour + 1, 1, hour + 1], false),
-            ("day", false, vec![-hour, 0, hour], false),
-            ("hour", true, vec![-hour, 0, hour], false),
-            ("hour", true, vec![-hour - 1, -1, hour - 1], true),
+            (
+                "aligned ascending hours",
+                "hour",
+                false,
+                vec![-hour, 0, hour],
+                true,
+            ),
+            (
+                "unaligned ascending hours",
+                "hour",
+                false,
+                vec![-hour + 1, 1, hour + 1],
+                false,
+            ),
+            (
+                "days cross hourly splits",
+                "day",
+                false,
+                vec![-hour, 0, hour],
+                false,
+            ),
+            (
+                "descending splits inside hour buckets",
+                "hour",
+                true,
+                vec![-hour, 0, hour],
+                false,
+            ),
+            (
+                "descending splits between hour buckets",
+                "hour",
+                true,
+                vec![-hour - 1, -1, hour - 1],
+                true,
+            ),
         ];
         for (precision, divisor) in [("millisecond", 1_000), ("microsecond", 1_000_000)] {
             let width = (ticks_per_second / divisor).max(1);
             cases.extend([
-                (precision, false, vec![-width, 0, width], true),
+                (
+                    "aligned ascending subsecond splits",
+                    precision,
+                    false,
+                    vec![-width, 0, width],
+                    true,
+                ),
                 // In particular, microsecond input with millisecond precision
                 // must reject split -999: both adjacent array values map to -1000.
-                (precision, false, vec![-width + 1], width == 1),
-                (precision, true, vec![-width, 0, width], width == 1),
-                (precision, true, vec![-width - 1, -1, width - 1], true),
+                (
+                    "offset ascending subsecond split",
+                    precision,
+                    false,
+                    vec![-width + 1],
+                    width == 1,
+                ),
+                (
+                    "descending splits at subsecond bucket starts",
+                    precision,
+                    true,
+                    vec![-width, 0, width],
+                    width == 1,
+                ),
+                (
+                    "descending splits at subsecond bucket ends",
+                    precision,
+                    true,
+                    vec![-width - 1, -1, width - 1],
+                    true,
+                ),
             ]);
         }
-        for (precision, descending, source_splits, expect_disjoint) in cases {
+        for (description, precision, descending, source_splits, expect_disjoint) in cases
+        {
             for nulls_first in [false, true] {
                 let options = SortOptions::new(descending, nulls_first);
                 let mut splits = source_splits.clone();
@@ -1470,56 +1577,16 @@ mod tests {
                 ));
                 assert_eq!(
                     range.keeps_keys_local(&[Arc::clone(&function)], &properties, false),
-                    expect_disjoint
-                );
-
-                // Assign rows by source-domain comparisons, independently of
-                // the optimizer's adjacency check, then evaluate whole arrays.
-                let mut partitions = vec![vec![]; splits.len() + 1];
-                let rows = splits
-                    .iter()
-                    .flat_map(|split| [Some(split - 1), Some(*split), Some(split + 1)])
-                    .chain([None, None]);
-                for value in rows {
-                    let index = match value {
-                        None if nulls_first => 0,
-                        None => splits.len(),
-                        Some(value) => splits
-                            .iter()
-                            .filter(|split| {
-                                if descending {
-                                    value <= **split
-                                } else {
-                                    value >= **split
-                                }
-                            })
-                            .count(),
-                    };
-                    partitions[index].push(value);
-                }
-                let images = partitions
-                    .into_iter()
-                    .map(|values| {
-                        let input = Arc::new(PrimitiveArray::<T>::from_iter(values));
-                        let batch =
-                            RecordBatch::try_new(Arc::clone(&schema), vec![input])?;
-                        let output =
-                            function.evaluate(&batch)?.into_array(batch.num_rows())?;
-                        (0..output.len())
-                            .map(|i| ScalarValue::try_from_array(&output, i))
-                            .collect::<Result<HashSet<_>>>()
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                let disjoint = images.iter().enumerate().all(|(i, left)| {
-                    images
-                        .iter()
-                        .skip(i + 1)
-                        .all(|right| left.is_disjoint(right))
-                });
-                assert_eq!(
-                    disjoint,
                     expect_disjoint,
-                    "{precision}, {:?}, {options:?}, splits={splits:?}",
+                    "optimizer: {description}, {precision}, {:?}, {options:?}, splits={splits:?}",
+                    T::UNIT
+                );
+                assert_eq!(
+                    date_trunc_partition_images_are_disjoint::<T>(
+                        &function, &splits, options, &schema,
+                    )?,
+                    expect_disjoint,
+                    "array evaluation: {description}, {precision}, {:?}, {options:?}, splits={splits:?}",
                     T::UNIT
                 );
             }
@@ -1721,21 +1788,19 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        deprecated,
-        reason = "test intentionally constructs a malformed range split"
-    )]
-    fn range_transform_key_locality_fails_closed() -> Result<()> {
+    fn range_transform_rejects_null_or_minimum_timestamp_splits() -> Result<()> {
         let fixture = PartitioningTestFixture::new(vec![(
             "timestamp",
             DataType::Timestamp(TimeUnit::Nanosecond, None),
         )])?;
-        let trunc_hour = date_trunc_of(fixture.col(0), "hour", None);
-        let required = vec![trunc_hour];
+        let required = vec![date_trunc_of(fixture.col(0), "hour", None)];
 
         for (description, split) in [
             ("null", timestamp_split(None, None)),
-            ("minimum", timestamp_split(Some(i64::MIN), None)),
+            (
+                "minimum has no predecessor",
+                timestamp_split(Some(i64::MIN), None),
+            ),
         ] {
             assert_key_locality(
                 description,
@@ -1746,7 +1811,20 @@ mod tests {
                 false,
             );
         }
+        Ok(())
+    }
 
+    #[test]
+    #[expect(
+        deprecated,
+        reason = "test intentionally constructs a malformed range split"
+    )]
+    fn range_transform_rejects_split_type_mismatch() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        )])?;
+        let required = vec![date_trunc_of(fixture.col(0), "hour", None)];
         let mismatched_split = Partitioning::Range(RangePartitioning::new(
             fixture.range_ordering([0]),
             vec![SplitPoint::new(vec![ScalarValue::Int64(Some(10))])],
@@ -1759,7 +1837,15 @@ mod tests {
             false,
             false,
         );
+        Ok(())
+    }
 
+    #[test]
+    fn range_transform_rejects_boundary_evaluation_errors() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        )])?;
         let invalid_precision =
             vec![date_trunc_of(fixture.col(0), "not-a-precision", None)];
         let aligned = fixture.range_partitioning(
@@ -1774,13 +1860,17 @@ mod tests {
             false,
             false,
         );
+        Ok(())
+    }
 
-        let timezone_fixture = PartitioningTestFixture::new(vec![(
+    #[test]
+    fn range_transform_rejects_timezone_annotated_timestamps() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![(
             "timestamp",
             DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
         )])?;
-        let timezone_trunc = date_trunc_of(timezone_fixture.col(0), "hour", Some("UTC"));
-        let timezone_range = timezone_fixture.range_partitioning(
+        let trunc_hour = date_trunc_of(fixture.col(0), "hour", Some("UTC"));
+        let range = fixture.range_partitioning(
             [0],
             vec![timestamp_split(
                 Some(1_704_070_800_000_000_000),
@@ -1789,9 +1879,9 @@ mod tests {
         );
         assert_key_locality(
             "timezone-aware date_trunc is not audited",
-            &timezone_range,
-            &[timezone_trunc],
-            &timezone_fixture.eq_properties,
+            &range,
+            &[trunc_hour],
+            &fixture.eq_properties,
             false,
             false,
         );
