@@ -25,30 +25,44 @@ use datafusion_common::{
     tree_node::{TreeNode, TreeNodeRecursion},
 };
 use datafusion_expr::{
-    Extension, LogicalPlan, LogicalPlanBuilder, MaterializedCte, MaterializedCteId,
-    MaterializedCteScan, TableSource,
+    LogicalPlan, LogicalPlanBuilder, MaterializedCte, MaterializedCteId,
+    MaterializedCtePlan, MaterializedCteScan, TableSource,
 };
 use sqlparser::ast::{CteAsMaterialized, Ident, Query, SetExpr, SetOperator, With};
 
-/// A `WITH x AS MATERIALIZED (...)` CTE whose body must wrap the query that
-/// declared it. See [`MaterializedCte`].
+/// A materialized CTE whose body must wrap the query that declared it. See
+/// [`MaterializedCte`].
 pub(crate) struct PendingMaterializedCte {
     id: MaterializedCteId,
     name: String,
     cte: LogicalPlan,
+    /// `false` for `WITH x AS MATERIALIZED (...)`, `true` when the query has
+    /// no directive and automatic materialization is enabled.
+    automatic: bool,
 }
 
 impl PendingMaterializedCte {
     /// Wrap `continuation` so that its scans of this CTE read one shared result.
-    pub(crate) fn wrap(self, continuation: LogicalPlan) -> LogicalPlan {
-        LogicalPlan::Extension(Extension {
-            node: Arc::new(MaterializedCte {
-                id: self.id,
-                name: self.name,
-                cte: self.cte,
-                continuation,
-            }),
-        })
+    pub(crate) fn wrap(self, continuation: LogicalPlan) -> Result<LogicalPlan> {
+        let automatic = self.automatic;
+        let cte = MaterializedCte::try_new(
+            self.id,
+            self.name,
+            Arc::new(self.cte),
+            Arc::new(continuation),
+        )?
+        .with_automatic(automatic);
+        // A DDL statement (`SELECT INTO`) must stay the root of the plan, so
+        // an automatic CTE is inlined here, as if the option was off.
+        if automatic && matches!(cte.continuation().as_ref(), LogicalPlan::Ddl(_)) {
+            return cte.inline();
+        }
+        Ok(LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)))
+    }
+
+    /// Returns `true` when the query asked for this CTE with `AS MATERIALIZED`.
+    pub(crate) fn is_explicit(&self) -> bool {
+        !self.automatic
     }
 }
 
@@ -59,6 +73,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<Vec<PendingMaterializedCte>> {
         let is_recursive = with.recursive;
+        // Without a directive, a CTE of a `WITH RECURSIVE` block is always
+        // inlined, as before.
+        let automatic_enabled = !is_recursive
+            && self
+                .context_provider
+                .options()
+                .optimizer
+                .enable_automatic_cte_materialization;
         let mut materialized = vec![];
         // Process CTEs from top to bottom
         for cte in with.cte_tables {
@@ -84,8 +106,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             // A body that refers to an outer query would have to run once
             // per outer row, which is not supported. Such a CTE is inlined,
             // as if MATERIALIZED was not given.
-            let is_materialized = cte.materialized
-                == Some(CteAsMaterialized::Materialized)
+            //
+            // Without a directive, the CTE is planned as an automatic
+            // materialized CTE when the option is on, and the optimizer
+            // decides if it stays materialized (`InlineAutomaticCtes`).
+            // `NOT MATERIALIZED` always inlines the CTE here.
+            let automatic = cte.materialized.is_none() && automatic_enabled;
+            let is_materialized = (automatic
+                || cte.materialized == Some(CteAsMaterialized::Materialized))
                 && cte_plan.all_out_ref_exprs().is_empty();
             let final_plan = if is_recursive {
                 LogicalPlanBuilder::from(cte_plan)
@@ -101,17 +129,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // of the body. The body is already planned, so a reference
                 // of a recursive CTE to itself stays a work table scan.
                 let id = MaterializedCteId::next();
-                let scan = LogicalPlan::Extension(Extension {
-                    node: Arc::new(MaterializedCteScan {
+                let scan = LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(
+                    MaterializedCteScan::new(
                         id,
-                        name: cte_name.clone(),
-                        schema: Arc::clone(final_plan.schema()),
-                    }),
-                });
+                        cte_name.clone(),
+                        Arc::clone(final_plan.schema()),
+                    ),
+                ));
                 materialized.push(PendingMaterializedCte {
                     id,
                     name: cte_name.clone(),
                     cte: final_plan,
+                    automatic,
                 });
                 planner_context.insert_cte(cte_name, scan);
                 continue;

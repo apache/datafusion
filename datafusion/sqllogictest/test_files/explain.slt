@@ -176,6 +176,7 @@ initial_logical_plan
 logical_plan after resolve_grouping_function SAME TEXT AS ABOVE
 logical_plan after type_coercion SAME TEXT AS ABOVE
 analyzed_logical_plan SAME TEXT AS ABOVE
+logical_plan after inline_automatic_ctes SAME TEXT AS ABOVE
 logical_plan after rewrite_set_comparison SAME TEXT AS ABOVE
 logical_plan after optimize_unions SAME TEXT AS ABOVE
 logical_plan after unions_to_filter SAME TEXT AS ABOVE
@@ -202,6 +203,7 @@ logical_plan after common_sub_expression_eliminate SAME TEXT AS ABOVE
 logical_plan after extract_leaf_expressions SAME TEXT AS ABOVE
 logical_plan after push_down_leaf_projections SAME TEXT AS ABOVE
 logical_plan after optimize_projections TableScan: simple_explain_test projection=[a, b, c]
+logical_plan after inline_automatic_ctes SAME TEXT AS ABOVE
 logical_plan after rewrite_set_comparison SAME TEXT AS ABOVE
 logical_plan after optimize_unions SAME TEXT AS ABOVE
 logical_plan after unions_to_filter SAME TEXT AS ABOVE
@@ -592,6 +594,7 @@ initial_logical_plan
 logical_plan after resolve_grouping_function SAME TEXT AS ABOVE
 logical_plan after type_coercion SAME TEXT AS ABOVE
 analyzed_logical_plan SAME TEXT AS ABOVE
+logical_plan after inline_automatic_ctes SAME TEXT AS ABOVE
 logical_plan after rewrite_set_comparison SAME TEXT AS ABOVE
 logical_plan after optimize_unions SAME TEXT AS ABOVE
 logical_plan after unions_to_filter SAME TEXT AS ABOVE
@@ -618,6 +621,7 @@ logical_plan after common_sub_expression_eliminate SAME TEXT AS ABOVE
 logical_plan after extract_leaf_expressions SAME TEXT AS ABOVE
 logical_plan after push_down_leaf_projections SAME TEXT AS ABOVE
 logical_plan after optimize_projections TableScan: simple_explain_test projection=[a, b, c]
+logical_plan after inline_automatic_ctes SAME TEXT AS ABOVE
 logical_plan after rewrite_set_comparison SAME TEXT AS ABOVE
 logical_plan after optimize_unions SAME TEXT AS ABOVE
 logical_plan after unions_to_filter SAME TEXT AS ABOVE

@@ -36,9 +36,9 @@ use datafusion_expr::dml::CopyTo;
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{
     Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement, Distinct,
-    DistinctOn, DmlStatement, Explain, Expr, Extension, Filter, Join, Limit, Projection,
-    RecursiveQuery, Repartition, Sort, Statement, Subquery, SubqueryAlias, Union, Unnest,
-    Window,
+    DistinctOn, DmlStatement, Explain, Expr, Extension, Filter, Join, Limit,
+    MaterializedCte, MaterializedCtePlan, Projection, RecursiveQuery, Repartition, Sort,
+    Statement, Subquery, SubqueryAlias, Union, Unnest, Window,
 };
 
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
@@ -55,6 +55,7 @@ use crate::eliminate_outer_join::EliminateOuterJoin;
 use crate::extract_equijoin_predicate::ExtractEquijoinPredicate;
 use crate::extract_leaf_expressions::{ExtractLeafExpressions, PushDownLeafProjections};
 use crate::filter_null_join_keys::FilterNullJoinKeys;
+use crate::inline_automatic_ctes::InlineAutomaticCtes;
 use crate::optimize_projections::OptimizeProjections;
 use crate::optimize_unions::OptimizeUnions;
 use crate::plan_signature::LogicalPlanSignature;
@@ -286,6 +287,7 @@ impl Optimizer {
         //   (e.g. if the plan doesn't contain any of the nodes you are looking for
         //    return `Transformed::no`; only works if you control the traversal).
         let rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
+            Arc::new(InlineAutomaticCtes::new()),
             Arc::new(RewriteSetComparison::new()),
             Arc::new(OptimizeUnions::new()),
             Arc::new(UnionsToFilter::new()),
@@ -443,6 +445,15 @@ fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
             let r = f(Arc::make_mut(recursive_term))?;
             s || r
         }
+        LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(MaterializedCte {
+            cte,
+            continuation,
+            ..
+        })) => {
+            let b = f(Arc::make_mut(cte))?;
+            let c = f(Arc::make_mut(continuation))?;
+            b || c
+        }
         LogicalPlan::Statement(Statement::Prepare(p)) => f(Arc::make_mut(&mut p.input))?,
         LogicalPlan::Extension(Extension { node }) => {
             let inputs = node.inputs();
@@ -471,6 +482,7 @@ fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
         LogicalPlan::TableScan { .. }
         | LogicalPlan::EmptyRelation { .. }
         | LogicalPlan::Values { .. }
+        | LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_))
         | LogicalPlan::DescribeTable(_)
         | LogicalPlan::Ddl(DdlStatement::CreateExternalTable(_))
         | LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(_))

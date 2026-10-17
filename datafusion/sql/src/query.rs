@@ -98,14 +98,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }?;
 
         let plan = self.pipe_operators(plan, pipe_operators, planner_context)?;
-        if !materialized_ctes.is_empty() && matches!(plan, LogicalPlan::Ddl(_)) {
+        if matches!(plan, LogicalPlan::Ddl(_))
+            && materialized_ctes.iter().any(|cte| cte.is_explicit())
+        {
             return not_impl_err!("MATERIALIZED CTEs are not supported with SELECT INTO");
         }
         // A later CTE may read an earlier one, so the first CTE is the outermost.
-        Ok(materialized_ctes
+        materialized_ctes
             .into_iter()
             .rev()
-            .fold(plan, |plan, cte| cte.wrap(plan)))
+            .try_fold(plan, |plan, cte| cte.wrap(plan))
     }
 
     /// Apply pipe operators to a plan

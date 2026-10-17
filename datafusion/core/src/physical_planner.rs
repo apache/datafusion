@@ -94,7 +94,8 @@ use datafusion_expr::physical_planning_context::{
 use datafusion_expr::utils::{expr_to_columns, split_conjunction};
 use datafusion_expr::{
     Analyze, BinaryExpr, DescribeTable, DmlStatement, Explain, ExplainFormat, Extension,
-    FetchType, Filter, JoinType, Operator, RecursiveQuery, SkipType, StringifiedPlan,
+    FetchType, Filter, JoinType, MaterializedCte, MaterializedCteId, MaterializedCtePlan,
+    MaterializedCteScan, Operator, RecursiveQuery, SkipType, StringifiedPlan,
     WindowFrame, WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{
@@ -260,19 +261,14 @@ impl DefaultPhysicalPlanner {
 ///
 /// Returns `None` when `plan` has no materialized CTE.
 ///
-/// [`MaterializedCte`]: datafusion_expr::MaterializedCte
 /// [`ViewTable`]: crate::datasource::ViewTable
 fn renumber_materialized_ctes(plan: &LogicalPlan) -> Result<Option<LogicalPlan>> {
-    fn as_cte(plan: &LogicalPlan) -> Option<&datafusion_expr::MaterializedCte> {
-        match plan {
-            LogicalPlan::Extension(Extension { node }) => node.as_any().downcast_ref(),
-            _ => None,
-        }
-    }
-
     let mut has_cte = false;
     plan.apply_with_subqueries(|node| {
-        if as_cte(node).is_some() {
+        if matches!(
+            node,
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(_))
+        ) {
             has_cte = true;
             return Ok(TreeNodeRecursion::Stop);
         }
@@ -284,55 +280,83 @@ fn renumber_materialized_ctes(plan: &LogicalPlan) -> Result<Option<LogicalPlan>>
 
     plan.clone()
         .transform_down_with_subqueries(|node| {
-            let Some(cte) = as_cte(&node) else {
+            let LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) = node else {
                 return Ok(Transformed::no(node));
             };
             let old_id = cte.id;
-            let new_id = datafusion_expr::MaterializedCteId::next();
-            let continuation = cte
-                .continuation
-                .clone()
-                .transform_down_with_subqueries(|node| {
+            let new_id = MaterializedCteId::next();
+            let continuation = Arc::unwrap_or_clone(cte.continuation)
+                .transform_down_with_subqueries(|node| match node {
                     // A nested occurrence of the same CTE owns the scans below
                     // it, and is renumbered on its own.
-                    if as_cte(&node).is_some_and(|nested| nested.id == old_id) {
-                        return Ok(Transformed::new(
-                            node,
-                            false,
-                            TreeNodeRecursion::Jump,
-                        ));
+                    LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
+                        ref nested,
+                    )) if nested.id == old_id => {
+                        Ok(Transformed::new(node, false, TreeNodeRecursion::Jump))
                     }
-                    let LogicalPlan::Extension(Extension { node: scan }) = &node else {
-                        return Ok(Transformed::no(node));
-                    };
-                    match scan
-                        .as_any()
-                        .downcast_ref::<datafusion_expr::MaterializedCteScan>()
+                    LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan))
+                        if scan.id == old_id =>
                     {
-                        Some(scan) if scan.id == old_id => {
-                            let scan = datafusion_expr::MaterializedCteScan {
+                        Ok(Transformed::yes(LogicalPlan::MaterializedCte(
+                            MaterializedCtePlan::Scan(MaterializedCteScan {
                                 id: new_id,
-                                ..scan.clone()
-                            };
-                            Ok(Transformed::yes(LogicalPlan::Extension(Extension {
-                                node: Arc::new(scan),
-                            })))
-                        }
-                        _ => Ok(Transformed::no(node)),
+                                ..scan
+                            }),
+                        )))
                     }
+                    _ => Ok(Transformed::no(node)),
                 })?
                 .data;
-            let cte = datafusion_expr::MaterializedCte {
-                id: new_id,
-                name: cte.name.clone(),
-                cte: cte.cte.clone(),
-                continuation,
-            };
-            Ok(Transformed::yes(LogicalPlan::Extension(Extension {
-                node: Arc::new(cte),
-            })))
+            Ok(Transformed::yes(LogicalPlan::MaterializedCte(
+                MaterializedCtePlan::Cte(MaterializedCte {
+                    id: new_id,
+                    continuation: Arc::new(continuation),
+                    ..cte
+                }),
+            )))
         })
         .map(|t| Some(t.data))
+}
+
+/// The body of the automatic [`MaterializedCte`] with this id is unbounded, so
+/// the CTE must be inlined. This error does not reach the user:
+/// `create_initial_plan` handles it.
+#[derive(Debug)]
+struct UnboundedAutomaticCte(MaterializedCteId);
+
+impl std::fmt::Display for UnboundedAutomaticCte {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "The automatic materialized CTE {} reads an unbounded source",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for UnboundedAutomaticCte {}
+
+/// Replace each occurrence of the [`MaterializedCte`] `id` in `plan` with its
+/// continuation, in which each scan is a copy of the body. A copy of the body
+/// can hold another materialized CTE, so the CTEs get new ids.
+fn inline_materialized_cte(
+    plan: &LogicalPlan,
+    id: MaterializedCteId,
+) -> Result<LogicalPlan> {
+    let inlined = plan
+        .clone()
+        .transform_up_with_subqueries(|node| match node {
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte))
+                if cte.id == id =>
+            {
+                Ok(Transformed::yes(cte.inline()?))
+            }
+            _ => Ok(Transformed::no(node)),
+        })?;
+    if !inlined.transformed {
+        return internal_err!("The materialized CTE {id} is not in the plan");
+    }
+    Ok(renumber_materialized_ctes(&inlined.data)?.unwrap_or(inlined.data))
 }
 
 /// Point every [`MaterializedCteScanExec`] at the buffer of the
@@ -520,6 +544,38 @@ impl DefaultPhysicalPlanner {
     /// [`ScalarSubqueryExpr`]: datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr
     /// [`BoxFuture`]: futures::future::BoxFuture
     fn create_initial_plan<'a>(
+        &'a self,
+        logical_plan: &'a LogicalPlan,
+        session_state: &'a dyn Session,
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            // An automatic materialized CTE with an unbounded body cannot be
+            // buffered. The query worked before the CTE was materialized, so
+            // inline the CTE and plan again.
+            let mut inlined: Option<LogicalPlan> = None;
+            loop {
+                let plan = inlined.as_ref().unwrap_or(logical_plan);
+                let result = self.create_initial_plan_once(plan, session_state).await;
+                let id = match &result {
+                    Err(e) => match e.find_root() {
+                        DataFusionError::External(e) => {
+                            e.downcast_ref::<UnboundedAutomaticCte>().map(|e| e.0)
+                        }
+                        _ => None,
+                    },
+                    Ok(_) => None,
+                };
+                let Some(id) = id else {
+                    return result;
+                };
+                inlined = Some(inline_materialized_cte(plan, id)?);
+            }
+        })
+    }
+
+    /// Plans `logical_plan` and its uncorrelated scalar subqueries. See
+    /// [`Self::create_initial_plan`].
+    fn create_initial_plan_once<'a>(
         &'a self,
         logical_plan: &'a LogicalPlan,
         session_state: &'a dyn Session,
@@ -836,6 +892,16 @@ impl DefaultPhysicalPlanner {
             }) => {
                 let output_schema = Arc::clone(output_schema.inner());
                 self.plan_describe(&Arc::clone(schema), output_schema)?
+            }
+
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan)) => {
+                // Unbound until `bind_materialized_cte_scans` runs on the whole plan.
+                Arc::new(MaterializedCteScanExec::new(
+                    scan.id.as_u64(),
+                    &scan.name,
+                    Arc::clone(scan.schema.inner()),
+                    session_state.config().target_partitions(),
+                ))
             }
 
             // 1 Child
@@ -1871,36 +1937,22 @@ impl DefaultPhysicalPlanner {
                 )?)
             }
 
-            // N Children
-            LogicalPlan::Union(_) => UnionExec::try_new(children.vec())?,
-            LogicalPlan::Extension(Extension { node })
-                if node.as_any().is::<datafusion_expr::MaterializedCte>() =>
-            {
-                let cte = node
-                    .as_any()
-                    .downcast_ref::<datafusion_expr::MaterializedCte>()
-                    .unwrap();
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
                 let [body, continuation] = children.two()?;
                 // A CTE that nothing reads is never evaluated.
-                let mut is_referenced = false;
-                cte.continuation.apply_with_subqueries(|node| {
-                    if let LogicalPlan::Extension(Extension { node }) = node
-                        && let Some(scan) =
-                            node.as_any()
-                                .downcast_ref::<datafusion_expr::MaterializedCteScan>()
-                        && scan.id == cte.id
-                    {
-                        is_referenced = true;
-                        return Ok(TreeNodeRecursion::Stop);
-                    }
-                    Ok(TreeNodeRecursion::Continue)
-                })?;
-                if !is_referenced {
+                if cte.scans()?.is_empty() {
                     return Ok(continuation);
                 }
                 // The body is fully buffered before a scan yields a row, so an
                 // unbounded body would never produce output.
                 if body.boundedness().is_unbounded() {
+                    // The user did not ask for this CTE to be materialized.
+                    // `create_initial_plan` inlines it and plans again.
+                    if cte.is_automatic() {
+                        return Err(DataFusionError::External(Box::new(
+                            UnboundedAutomaticCte(cte.id),
+                        )));
+                    }
                     return plan_err!(
                         "MATERIALIZED CTE {} reads an unbounded source, which cannot be materialized",
                         cte.name
@@ -1910,21 +1962,9 @@ impl DefaultPhysicalPlanner {
                     Arc::new(MaterializedCteBuffer::new(cte.id.as_u64(), &cte.name));
                 Arc::new(MaterializedCteExec::new(body, continuation, buffer))
             }
-            LogicalPlan::Extension(Extension { node })
-                if node.as_any().is::<datafusion_expr::MaterializedCteScan>() =>
-            {
-                let scan = node
-                    .as_any()
-                    .downcast_ref::<datafusion_expr::MaterializedCteScan>()
-                    .unwrap();
-                // Unbound until `bind_materialized_cte_scans` runs on the whole plan.
-                Arc::new(MaterializedCteScanExec::new(
-                    scan.id.as_u64(),
-                    &scan.name,
-                    Arc::clone(scan.schema.inner()),
-                    session_state.config().target_partitions(),
-                ))
-            }
+
+            // N Children
+            LogicalPlan::Union(_) => UnionExec::try_new(children.vec())?,
             LogicalPlan::Extension(Extension { node }) => {
                 let mut maybe_plan = None;
                 let children = children.vec();
@@ -2730,7 +2770,8 @@ fn extract_dml_filters(
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
             | LogicalPlan::Unnest(_)
-            | LogicalPlan::RecursiveQuery(_) => {
+            | LogicalPlan::RecursiveQuery(_)
+            | LogicalPlan::MaterializedCte(_) => {
                 // No filters to extract from leaf/meta plans
             }
             // Plans with inputs (may contain filters in children)
