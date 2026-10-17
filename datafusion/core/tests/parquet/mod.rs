@@ -428,7 +428,7 @@ impl ContextWithParquet {
 
         // find the parquet metrics
         let parquet_metrics =
-            MetricsFinder::find_metrics(physical_plan.as_ref()).unwrap();
+            MetricsFinder::find_metrics(physical_plan.as_ref()).unwrap_or_default();
 
         let result_rows = results.iter().map(|b| b.num_rows()).sum();
 

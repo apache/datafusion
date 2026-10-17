@@ -322,7 +322,12 @@ async fn explain_analyze_parquet_pruning_metrics() {
         let expected_metrics =
             format!("files_ranges_pruned_statistics={expected_pruning_metrics}");
 
-        assert_metrics!(&plan, "DataSourceExec", &expected_metrics);
+        if l_orderkey == 10 {
+            assert!(plan.contains("EmptyExec"), "{plan}");
+            assert!(!plan.contains("DataSourceExec"), "{plan}");
+        } else {
+            assert_metrics!(&plan, "DataSourceExec", &expected_metrics);
+        }
     }
 }
 

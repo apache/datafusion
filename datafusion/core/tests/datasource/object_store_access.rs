@@ -1566,3 +1566,50 @@ impl ObjectStore for RequestCountingObjectStore {
         unimplemented!()
     }
 }
+
+#[tokio::test]
+async fn listing_statistics_pruning_adds_no_object_store_requests() {
+    let unfiltered = Test::new().with_single_file_parquet().await;
+    unfiltered
+        .session_context
+        .sql("SET datafusion.execution.collect_statistics = true")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    unfiltered.object_store.clear_requests();
+    unfiltered
+        .session_context
+        .sql("select * from parquet_table")
+        .await
+        .unwrap()
+        .create_physical_plan()
+        .await
+        .unwrap();
+    let baseline = unfiltered.requests();
+    let filtered = Test::new().with_single_file_parquet().await;
+    filtered
+        .session_context
+        .sql("SET datafusion.execution.collect_statistics = true")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    filtered.object_store.clear_requests();
+    let plan = filtered
+        .session_context
+        .sql("select * from parquet_table where a > 1000")
+        .await
+        .unwrap()
+        .create_physical_plan()
+        .await
+        .unwrap();
+    let display = datafusion_physical_plan::displayable(plan.as_ref())
+        .indent(true)
+        .to_string();
+    assert!(display.contains("EmptyExec"), "{display}");
+    assert!(!display.contains("DataSourceExec"), "{display}");
+    assert_eq!(filtered.requests(), baseline);
+}
