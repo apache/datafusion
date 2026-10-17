@@ -29,7 +29,8 @@ use crate::joins::PartitionMode;
 use crate::joins::hash_join::exec::{HASH_JOIN_SEED, NullAwareMode};
 use crate::joins::hash_join::inlist_builder::build_struct_fields;
 use crate::joins::hash_join::partitioned_hash_eval::{
-    HashExpr, HashTableLookupExpr, SeededRandomState,
+    HashExpr, HashTableLookupExpr, PartitionLookup, PartitionedLookupExpr,
+    SeededRandomState,
 };
 use crate::joins::key_range_bitmap::KeyRangeBitmap;
 use crate::repartition::RangeExpr;
@@ -84,6 +85,25 @@ impl PartitionBounds {
 
     pub(crate) fn get_column_bounds(&self, index: usize) -> Option<&ColumnBounds> {
         self.column_bounds.get(index)
+    }
+
+    /// Bounds covering both `self` and `other`, or `None` if they do not
+    /// describe the same columns.
+    fn union(self, other: &PartitionBounds) -> Option<PartitionBounds> {
+        if self.column_bounds.len() != other.column_bounds.len() {
+            return None;
+        }
+        let column_bounds = self
+            .column_bounds
+            .into_iter()
+            .zip(&other.column_bounds)
+            .map(|(a, b)| {
+                let min = if b.min < a.min { b.min.clone() } else { a.min };
+                let max = if b.max > a.max { b.max.clone() } else { a.max };
+                ColumnBounds::new(min, max)
+            })
+            .collect();
+        Some(PartitionBounds::new(column_bounds))
     }
 }
 
@@ -668,6 +688,10 @@ impl SharedBuildAccumulator {
         let mut empty_partition_ids = Vec::new();
         let mut has_canceled_unknown = false;
         let mut keys_have_null = false;
+        // Per-partition lookups for `PartitionedLookupExpr`; `None` once a
+        // partition needs a predicate that expression cannot route to.
+        let mut lookups = Some(Vec::with_capacity(partition_filters.capacity()));
+        let mut merged_bounds: Option<PartitionBounds> = None;
 
         for (partition_id, partition) in partitions.into_iter().enumerate() {
             match partition {
@@ -677,6 +701,9 @@ impl SharedBuildAccumulator {
                 }) => {
                     empty_partition_ids.push(partition_id);
                     partition_filters.push(lit(false));
+                    if let Some(lookups) = &mut lookups {
+                        lookups.push(PartitionLookup::Const(false));
+                    }
                 }
                 PartitionStatus::Reported(PartitionData {
                     bounds,
@@ -685,6 +712,20 @@ impl SharedBuildAccumulator {
                 }) => {
                     real_partition_ids.push(partition_id);
                     keys_have_null |= partition_keys_have_null;
+                    lookups = match (&pushdown, lookups) {
+                        (PushdownStrategy::Map(map, _), Some(mut lookups))
+                            if matches!(map.as_ref(), Map::HashMap(_)) =>
+                        {
+                            lookups.push(PartitionLookup::Map(Arc::clone(map)));
+                            Some(lookups)
+                        }
+                        _ => None,
+                    };
+                    merged_bounds = match (merged_bounds, real_partition_ids.len()) {
+                        (None, 1) => Some(bounds.clone()),
+                        (Some(merged), _) => merged.union(&bounds),
+                        (None, _) => None,
+                    };
                     let membership_expr = create_membership_predicate(
                         &self.on_right,
                         pushdown,
@@ -700,6 +741,9 @@ impl SharedBuildAccumulator {
                 PartitionStatus::CanceledUnknown => {
                     has_canceled_unknown = true;
                     partition_filters.push(lit(true));
+                    if let Some(lookups) = &mut lookups {
+                        lookups.push(PartitionLookup::Const(true));
+                    }
                     // A canceled partition's build content is unknown, so it
                     // may hold a NULL key.
                     keys_have_null = true;
@@ -729,6 +773,22 @@ impl SharedBuildAccumulator {
             // Only one build partition contains rows, so its filter covers every
             // possible probe match without routing.
             Arc::clone(&partition_filters[real_partition_ids[0]])
+        } else if let Some(lookups) = lookups.filter(|lookups| {
+            self.probe_range_partitioning.is_none()
+                && lookups.iter().any(|l| matches!(l, PartitionLookup::Map(_)))
+        }) {
+            // Every partition is a hash table, so route rows to the right table
+            // directly instead of through a CASE over per-partition filters.
+            let membership = Arc::new(PartitionedLookupExpr::new(
+                self.on_right.clone(),
+                self.repartition_random_state.clone(),
+                HASH_JOIN_SEED,
+                lookups,
+            )) as Arc<dyn PhysicalExpr>;
+            let bounds = merged_bounds
+                .and_then(|bounds| create_bounds_predicate(&self.on_right, &bounds));
+            combine_membership_and_bounds(Some(membership), bounds)
+                .expect("membership predicate is always present")
         } else {
             // Builds the shared sparse `CASE` for partition filter routing.
             // Without cancellation, omitted branches are known empty and safely fall
@@ -919,6 +979,7 @@ pub(super) fn completed_partitions_for_test(acc: &SharedBuildAccumulator) -> usi
 mod tests {
     use super::*;
 
+    use crate::joins::join_hash_map::JoinHashMapU32;
     use arrow::array::{ArrayRef, BooleanArray, Float64Array, Int32Array};
     use arrow::compute::SortOptions;
     use arrow::record_batch::RecordBatch;
@@ -1133,6 +1194,45 @@ mod tests {
         );
         let expr = current_expr(&acc);
         assert_literal_bool(&expr, true);
+    }
+
+    fn hash_map() -> PushdownStrategy {
+        PushdownStrategy::Map(
+            Arc::new(Map::HashMap(Box::new(JoinHashMapU32::with_capacity(1)))),
+            None,
+        )
+    }
+
+    #[test]
+    fn partitioned_hash_map_partitions_route_without_case() {
+        let acc = make_partitioned_expr_accumulator_for_test(3);
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(hash_map(), bounds(5, 10)),
+            reported(PushdownStrategy::Empty, no_bounds()),
+            reported(hash_map(), bounds(1, 7)),
+        ]))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        assert!(expr.downcast_ref::<CaseExpr>().is_none());
+        assert_eq!(
+            expr.to_string(),
+            "probe_key@0 >= 1 AND probe_key@0 <= 10 AND partitioned_hash_lookup(3)"
+        );
+    }
+
+    #[test]
+    fn partitioned_in_list_partition_keeps_case() {
+        let acc = make_partitioned_expr_accumulator_for_test(2);
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(hash_map(), no_bounds()),
+            reported(in_list(&[2]), no_bounds()),
+        ]))
+        .unwrap();
+
+        assert!(current_expr(&acc).downcast_ref::<CaseExpr>().is_some());
     }
 
     #[test]
