@@ -21,11 +21,11 @@ use crate::function::map::utils::{
     get_list_offsets, get_list_values, map_from_keys_values_offsets_nulls,
     map_type_from_key_value_types,
 };
-use arrow::array::{Array, ArrayRef, NullBufferBuilder, StructArray};
+use arrow::array::{Array, ArrayRef, StructArray};
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::config::MapKeyDedupPolicy;
-use datafusion_common::utils::take_function_args;
+use datafusion_common::utils::{rows_have_nulls, take_function_args};
 use datafusion_common::{Result, exec_err, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -125,24 +125,14 @@ fn map_from_entries_inner(args: &[ArrayRef], last_value_wins: bool) -> Result<Ar
             ),
         }?;
 
+    // A row with a NULL entry is NULL.
     let entries_with_nulls = entries_values.nulls().and_then(|entries_inner_nulls| {
-        let mut builder = NullBufferBuilder::new_with_len(0);
-        let mut cur_offset = entries_offsets
-            .first()
-            .map(|offset| *offset as usize)
-            .unwrap_or(0);
-
-        for next_offset in entries_offsets.iter().skip(1) {
-            let num_entries = *next_offset as usize - cur_offset;
-            builder.append(
-                entries_inner_nulls
-                    .slice(cur_offset, num_entries)
-                    .null_count()
-                    == 0,
-            );
-            cur_offset = *next_offset as usize;
-        }
-        builder.finish()
+        let has_nulls = rows_have_nulls(
+            entries_inner_nulls,
+            entries_offsets[0] as usize,
+            entries_offsets[1..].iter().map(|&end| end as usize),
+        );
+        Some(NullBuffer::new(!&has_nulls)).filter(|nulls| nulls.null_count() != 0)
     });
 
     let res_nulls = NullBuffer::union(entries.nulls(), entries_with_nulls.as_ref());
@@ -161,7 +151,36 @@ fn map_from_entries_inner(args: &[ArrayRef], last_value_wins: bool) -> Result<Ar
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::{Int32Array, ListArray};
+    use arrow::buffer::OffsetBuffer;
     use arrow::datatypes::Fields;
+
+    #[test]
+    fn sliced_entries_match_full_result() -> Result<()> {
+        // 40 rows of 3 entries with unique keys; every 7th entry is NULL.
+        let entries = StructArray::new(
+            Fields::from(vec![
+                Field::new("key", DataType::Int32, false),
+                Field::new("value", DataType::Int32, true),
+            ]),
+            vec![
+                Arc::new(Int32Array::from_iter_values((0..120).map(|i| i % 3))),
+                Arc::new(Int32Array::from_iter_values(0..120)),
+            ],
+            Some(NullBuffer::from_iter((0..120).map(|i| i % 7 != 3))),
+        );
+        let list: ArrayRef = Arc::new(ListArray::new(
+            Arc::new(Field::new_list_field(entries.data_type().clone(), true)),
+            OffsetBuffer::from_repeated_length(3, 40),
+            Arc::new(entries),
+            None,
+        ));
+        // The first visible entry is past the first 64-bit word.
+        let full = map_from_entries_inner(&[Arc::clone(&list)], false)?;
+        let sliced = map_from_entries_inner(&[list.slice(23, 15)], false)?;
+        assert_eq!(sliced.as_ref(), full.slice(23, 15).as_ref());
+        Ok(())
+    }
 
     fn make_entries_field(array_nullable: bool, element_nullable: bool) -> FieldRef {
         let struct_type = DataType::Struct(Fields::from(vec![
