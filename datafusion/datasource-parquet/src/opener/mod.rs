@@ -69,7 +69,9 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
 };
-use datafusion_pruning::{FilePruner, PruningPredicate, PruningPredicateBuilder};
+use datafusion_pruning::{
+    FilePruner, PruningPredicate, PruningPredicateBuilder, PruningPredicateCache,
+};
 
 #[cfg(feature = "parquet_encryption")]
 use datafusion_common::config::EncryptionFactoryOptions;
@@ -312,6 +314,10 @@ pub(super) struct ParquetMorselizer {
     /// Per-scan virtual-column state (validation already performed). `None`
     /// when no virtual columns are requested — the common path.
     pub(crate) virtual_state: Option<Arc<VirtualColumnsState>>,
+    /// Shared by the [`FilePruner`]s of this partition's files, so files with
+    /// the same partition values build their pruning predicate once, and again
+    /// only when a dynamic filter in it changes.
+    pub(crate) pruning_predicate_cache: PruningPredicateCache,
 }
 
 impl fmt::Debug for ParquetMorselizer {
@@ -955,6 +961,7 @@ impl ParquetMorselizer {
                 &partitioned_file,
                 predicate_creation_errors.clone(),
             )
+            .map(|pruner| pruner.with_cache(self.pruning_predicate_cache.clone()))
         });
 
         let byte_progress = ByteProgress::new(
@@ -2648,6 +2655,7 @@ mod test {
                 reverse_row_groups: self.reverse_row_groups,
                 sort_order_for_reorder: None,
                 virtual_state,
+                pruning_predicate_cache: PruningPredicateCache::default(),
             })
         }
     }
@@ -3292,6 +3300,54 @@ mod test {
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
+    }
+
+    /// A scan's files share their file pruners' pruning predicate, but each
+    /// file is still pruned by its own partition values, whichever file was
+    /// opened before it.
+    #[tokio::test]
+    async fn test_prune_on_partition_values_of_each_file_of_a_scan() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let batch = record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap();
+        let file_schema = batch.schema();
+        let mut files = vec![];
+        for part in [1, 2] {
+            let path = format!("part={part}/file.parquet");
+            let size = write_parquet(Arc::clone(&store), &path, batch.clone()).await;
+            let mut file = PartitionedFile::new(path, u64::try_from(size).unwrap())
+                .with_statistics(Arc::new(Statistics::new_unknown(&file_schema)));
+            file.partition_values = vec![ScalarValue::Int32(Some(part))];
+            files.push(file);
+        }
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("part", DataType::Int32, false),
+            Field::new("a", DataType::Int32, false),
+        ]));
+        let expr = col("part").eq(lit(1));
+        let predicate = make_dynamic_expr(logical2physical(&expr, &table_schema));
+        // Without row group pruning, only the file pruner skips a file.
+        let opener = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_table_schema(
+                TableSchemaBuilder::from(&file_schema)
+                    .with_table_partition_cols(vec![Arc::new(Field::new(
+                        "part",
+                        DataType::Int32,
+                        false,
+                    ))])
+                    .build(),
+            )
+            .with_projection_indices(&[0])
+            .with_predicate(predicate)
+            .with_row_group_stats_pruning(false)
+            .build();
+
+        let (one, two) = (&files[0], &files[1]);
+        for (file, rows) in [(one, 3), (one, 3), (two, 0), (two, 0), (one, 3)] {
+            let stream = open_file(&opener, file.clone()).await.unwrap();
+            let (_, num_rows) = count_batches_and_rows(stream).await;
+            assert_eq!(num_rows, rows, "{}", file.object_meta.location);
+        }
     }
 
     #[tokio::test]

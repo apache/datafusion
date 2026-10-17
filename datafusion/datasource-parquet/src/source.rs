@@ -70,6 +70,7 @@ use datafusion_physical_plan::filter_pushdown::{
 };
 use datafusion_physical_plan::metrics::Count;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+use datafusion_pruning::PruningPredicateCache;
 use log::warn;
 
 #[cfg(feature = "parquet_encryption")]
@@ -669,6 +670,7 @@ impl FileSource for ParquetSource {
             reverse_row_groups: self.reverse_row_groups,
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             virtual_state,
+            pruning_predicate_cache: PruningPredicateCache::default(),
         }))
     }
 
