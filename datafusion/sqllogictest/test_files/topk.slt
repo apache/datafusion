@@ -466,13 +466,113 @@ ORDER BY c0 DESC, c1 LIMIT 2;
 5 0
 5 1
 
-# Same query with several partitions. The SLT runner uses 4, so this also
-# restores its setting.
-statement ok
-set datafusion.execution.target_partitions = 4;
+# Control: a constant with the same value in every partition is still removed
+# from the TopK key
+query TT
+EXPLAIN SELECT 1 AS c0, id AS c1 FROM heterogeneous_const
+UNION ALL
+SELECT 1 AS c0, id AS c1 FROM heterogeneous_const WHERE g = 0
+ORDER BY c0, c1 LIMIT 2;
+----
+physical_plan
+01)SortPreservingMergeExec: [c0@0 ASC NULLS LAST, c1@1 ASC NULLS LAST], fetch=2
+02)--SortExec: TopK(fetch=2), expr=[c1@1 ASC NULLS LAST], preserve_partitioning=[true]
+03)----UnionExec
+04)------ProjectionExec: expr=[1 as c0, id@0 as c1]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)------ProjectionExec: expr=[1 as c0, id@0 as c1]
+07)--------FilterExec: g@1 = 0, projection=[id@0]
+08)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT 1 AS c0, id AS c1 FROM heterogeneous_const
+UNION ALL
+SELECT 1 AS c0, id AS c1 FROM heterogeneous_const WHERE g = 0
+ORDER BY c0, c1 LIMIT 2;
+----
+1 0
+1 0
+
+# Control: without a fetch the sort is pushed into each arm, where `c0` has a
+# single value, and the merge above the union sorts on the full key
+query TT
+EXPLAIN SELECT 5 AS c0, id AS c1 FROM heterogeneous_const
+UNION ALL
+SELECT 1 AS c0, id AS c1 FROM heterogeneous_const WHERE g = 0
+ORDER BY c0, c1;
+----
+physical_plan
+01)SortPreservingMergeExec: [c0@0 ASC NULLS LAST, c1@1 ASC NULLS LAST]
+02)--UnionExec
+03)----SortExec: expr=[c1@1 ASC NULLS LAST], preserve_partitioning=[false]
+04)------ProjectionExec: expr=[5 as c0, id@0 as c1]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)----SortExec: expr=[c1@1 ASC NULLS LAST], preserve_partitioning=[false]
+07)------ProjectionExec: expr=[1 as c0, id@0 as c1]
+08)--------FilterExec: g@1 = 0, projection=[id@0]
+09)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query II
 SELECT 5 AS c0, id AS c1 FROM heterogeneous_const
+UNION ALL
+SELECT 1 AS c0, id AS c1 FROM heterogeneous_const WHERE g = 0
+ORDER BY c0, c1;
+----
+1 0
+1 1
+5 0
+5 1
+5 2
+5 3
+5 4
+
+# With OFFSET the TopK fetches LIMIT + OFFSET rows. Three `c0 = 1` rows are
+# needed, and a threshold on `c1` alone from the `c0 = 5` arm would cut the third
+statement ok
+CREATE TABLE heterogeneous_const_offset(id BIGINT, g BIGINT) AS VALUES (0, 0), (1, 0), (2, 0), (3, 1), (4, 1);
+
+query II
+SELECT 5 AS c0, id AS c1 FROM heterogeneous_const_offset
+UNION ALL
+SELECT 1 AS c0, id AS c1 FROM heterogeneous_const_offset WHERE g = 0
+ORDER BY c0, c1 LIMIT 2 OFFSET 1;
+----
+1 1
+1 2
+
+statement ok
+DROP TABLE heterogeneous_const_offset;
+
+# Three arms give the TopK three partitions. The `c0 = 1` arm is the last one,
+# and both other arms would publish a threshold that cuts its rows. The SLT
+# runner uses 4 partitions, so this also restores its setting.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+query TT
+EXPLAIN SELECT 5 AS c0, id AS c1 FROM heterogeneous_const
+UNION ALL
+SELECT 3 AS c0, id AS c1 FROM heterogeneous_const
+UNION ALL
+SELECT 1 AS c0, id AS c1 FROM heterogeneous_const WHERE g = 0
+ORDER BY c0, c1 LIMIT 2;
+----
+physical_plan
+01)SortPreservingMergeExec: [c0@0 ASC NULLS LAST, c1@1 ASC NULLS LAST], fetch=2
+02)--SortExec: TopK(fetch=2), expr=[c0@0 ASC NULLS LAST, c1@1 ASC NULLS LAST], preserve_partitioning=[true], sort_prefix=[c0@0 ASC NULLS LAST]
+03)----UnionExec
+04)------ProjectionExec: expr=[5 as c0, id@0 as c1]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)------ProjectionExec: expr=[3 as c0, id@0 as c1]
+07)--------DataSourceExec: partitions=1, partition_sizes=[1]
+08)------ProjectionExec: expr=[1 as c0, id@0 as c1]
+09)--------FilterExec: g@1 = 0, projection=[id@0]
+10)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT 5 AS c0, id AS c1 FROM heterogeneous_const
+UNION ALL
+SELECT 3 AS c0, id AS c1 FROM heterogeneous_const
 UNION ALL
 SELECT 1 AS c0, id AS c1 FROM heterogeneous_const WHERE g = 0
 ORDER BY c0, c1 LIMIT 2;
