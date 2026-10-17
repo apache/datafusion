@@ -20,7 +20,7 @@
 //!
 //! HashJoinExec is getting incrementally migrated to separated streams, see issue
 //! for detail:
-//! - TODO(open the issue)
+//! - <https://github.com/apache/datafusion/issues/26361>
 
 use std::sync::Arc;
 

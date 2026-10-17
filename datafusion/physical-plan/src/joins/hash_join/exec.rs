@@ -1911,7 +1911,7 @@ impl ExecutionPlan for HashJoinExec {
         let batch_size = context.session_config().batch_size();
 
         // Should use regular hash join path?
-        // TODO: add issue link
+        // See https://github.com/apache/datafusion/issues/26361.
         let regular_join = context
             .session_config()
             .options()
