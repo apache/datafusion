@@ -137,7 +137,7 @@ pub(crate) struct BuildKeys {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct GlobalFilterOptions {
     /// Use an InList when all partitions together have at most this many
-    /// distinct keys (`hash_join_inlist_pushdown_max_distinct_values`).
+    /// distinct keys (`hash_join_dynamic_filter_inlist_max_distinct_values`).
     pub(crate) inlist_max_distinct_values: usize,
     pub(crate) bloom_filter: BloomFilterOptions,
 }
@@ -147,7 +147,7 @@ impl GlobalFilterOptions {
         let optimizer = &config.optimizer;
         Self {
             inlist_max_distinct_values: optimizer
-                .hash_join_inlist_pushdown_max_distinct_values,
+                .hash_join_dynamic_filter_inlist_max_distinct_values,
             bloom_filter: BloomFilterOptions {
                 fpp: optimizer.hash_join_bloom_filter_fpp,
                 max_bytes: optimizer.hash_join_bloom_filter_max_bytes,
@@ -928,7 +928,7 @@ impl SharedBuildAccumulator {
     ///
     /// `min` and `max` are the global bounds. `membership` is an InList of the
     /// keys of all partitions when they have at most
-    /// `hash_join_inlist_pushdown_max_distinct_values` distinct keys together,
+    /// `hash_join_dynamic_filter_inlist_max_distinct_values` distinct keys together,
     /// and a [`BloomFilterExpr`] otherwise. The filter is true for every build
     /// key, whatever the partitioning of the build and probe sides, so it is
     /// correct for hash, range and collect-left joins.

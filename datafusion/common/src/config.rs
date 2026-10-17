@@ -1901,13 +1901,19 @@ config_namespace! {
         /// This uses the deduplicated row count once the build side has been evaluated.
         ///
         /// The default is 150 values per partition.
-        /// The same limit applies to the sum over all build partitions: the dynamic filter of a
-        /// hash join uses one InList of all build keys only when the partitions together have at
-        /// most this many distinct values, and a bloom filter otherwise
-        /// (see `hash_join_bloom_filter_fpp`).
         /// This is inspired by Trino's `max-filter-keys-per-column` setting.
         /// See: <https://trino.io/docs/current/admin/dynamic-filtering.html#dynamic-filter-collection-thresholds>
         pub hash_join_inlist_pushdown_max_distinct_values: usize, default = 150
+
+        /// Maximum number of distinct build side keys, over all partitions of a hash join,
+        /// for the global dynamic filter to test membership with one InList of all keys.
+        /// Above this limit the dynamic filter uses a bloom filter
+        /// (see `hash_join_bloom_filter_fpp`).
+        ///
+        /// Every partition must also use an InList by itself
+        /// (`hash_join_inlist_pushdown_max_distinct_values` and `hash_join_inlist_pushdown_max_size`).
+        /// For larger sets, a bloom filter is cheaper per probe row than an InList.
+        pub hash_join_dynamic_filter_inlist_max_distinct_values: usize, default = 20
 
         /// Target false positive probability of the bloom filter in the dynamic
         /// filter of a hash join.
