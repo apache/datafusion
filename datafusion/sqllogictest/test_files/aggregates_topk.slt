@@ -871,3 +871,31 @@ drop table topk_parquet_keys;
 
 statement ok
 drop table topk_parquet;
+
+# Repeated NaN keys must form one group. Evicting that group must also work.
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+query RI
+SELECT k, MAX(v) FROM (VALUES
+  (CAST('NaN' AS DOUBLE), 1),
+  (CAST('NaN' AS DOUBLE), 2),
+  (CAST(0 AS DOUBLE), 3)
+) AS t(k, v)
+GROUP BY k ORDER BY MAX(v) DESC NULLS LAST LIMIT 3;
+----
+0 3
+NaN 2
+
+query RI
+SELECT k, MAX(v) FROM (VALUES
+  (CAST('NaN' AS DOUBLE), 1),
+  (CAST('NaN' AS DOUBLE), 2),
+  (CAST(0 AS DOUBLE), 3)
+) AS t(k, v)
+GROUP BY k ORDER BY MAX(v) DESC NULLS LAST LIMIT 1;
+----
+0 3
+
+statement ok
+set datafusion.execution.target_partitions = 4;
