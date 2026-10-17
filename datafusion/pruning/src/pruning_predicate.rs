@@ -1362,6 +1362,16 @@ fn verify_support_type_for_prune(from_type: &DataType, to_type: &DataType) -> Re
         }
         _ => to_type,
     };
+    // Casting a timestamp to a time-of-day wraps at midnight and does not
+    // preserve ordering across day boundaries. Casting timestamp min/max
+    // statistics could therefore produce invalid bounds and prune matches.
+    if matches!(from_type, DataType::Timestamp(_, _))
+        && matches!(to_type, DataType::Time32(_) | DataType::Time64(_))
+    {
+        return plan_err!(
+            "Try Cast/Cast with from type {from_type} to type {to_type} is not supported"
+        );
+    }
     // If both types are strings or both are not strings (number, timestamp, etc)
     // then we can compare them.
     // PruningPredicate does not support casting of strings to numbers and such.
@@ -4982,6 +4992,46 @@ mod tests {
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_cast_timestamp_to_time() {
+        let schema = Schema::new(vec![Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Second, None),
+            false,
+        )]);
+
+        for (time_type, literal) in [
+            (
+                DataType::Time32(TimeUnit::Second),
+                ScalarValue::Time32Second(Some(0)),
+            ),
+            (
+                DataType::Time32(TimeUnit::Millisecond),
+                ScalarValue::Time32Millisecond(Some(0)),
+            ),
+            (
+                DataType::Time64(TimeUnit::Microsecond),
+                ScalarValue::Time64Microsecond(Some(0)),
+            ),
+            (
+                DataType::Time64(TimeUnit::Nanosecond),
+                ScalarValue::Time64Nanosecond(Some(0)),
+            ),
+        ] {
+            for expr in [
+                cast(col("ts"), time_type.clone()).eq(lit(literal.clone())),
+                try_cast(col("ts"), time_type).eq(lit(literal)),
+            ] {
+                let predicate_expr = test_build_predicate_expression(
+                    &expr,
+                    &schema,
+                    &mut RequiredColumns::new(),
+                );
+                assert_eq!(predicate_expr.to_string(), "true");
+            }
+        }
     }
 
     #[test]
