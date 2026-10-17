@@ -62,6 +62,7 @@ use datafusion_physical_plan::joins::{
     PiecewiseMergeJoinExec, SortMergeJoinExec, SymmetricHashJoinExec,
 };
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion_physical_plan::memory::LazyMemoryExec;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::proto::{
@@ -1146,6 +1147,48 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
 pub trait PhysicalPlanNodeExt: Sized {
     /// Returns a reference to the underlying [`protobuf::PhysicalPlanNode`].
     fn node(&self) -> &protobuf::PhysicalPlanNode;
+
+    /// Compatibility helper for callers migrating to generator-owned encoding.
+    #[deprecated(note = "Match GenerateSeriesName directly instead")]
+    fn generate_series_name_to_str(name: protobuf::GenerateSeriesName) -> &'static str {
+        match name {
+            protobuf::GenerateSeriesName::GsGenerateSeries => "generate_series",
+            protobuf::GenerateSeriesName::GsRange => "range",
+        }
+    }
+
+    /// Decode the legacy payload through the generator-owned implementation.
+    #[deprecated(note = "Use generate_series::proto::try_from_proto instead")]
+    fn try_into_generate_series_physical_plan(
+        &self,
+        generate_series: &protobuf::GenerateSeriesNode,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        generate_series::proto::try_from_proto(generate_series)
+    }
+
+    /// Compatibility helper for callers migrating to generator-owned encoding.
+    #[deprecated(note = "Use GenerateSeriesName variants directly instead")]
+    fn str_to_generate_series_name(name: &str) -> Result<protobuf::GenerateSeriesName> {
+        match name {
+            "generate_series" => Ok(protobuf::GenerateSeriesName::GsGenerateSeries),
+            "range" => Ok(protobuf::GenerateSeriesName::GsRange),
+            _ => internal_err!("unknown name: {name}"),
+        }
+    }
+
+    /// Encode through the plan hook, preserving unsupported-generator fallback.
+    #[deprecated(
+        note = "Use ExecutionPlan::try_to_proto or AsExecutionPlan::try_from_physical_plan instead"
+    )]
+    fn try_from_lazy_memory_exec(
+        exec: &LazyMemoryExec,
+    ) -> Result<Option<protobuf::PhysicalPlanNode>> {
+        let encoder = ConverterPlanEncoder {
+            codec: &DefaultPhysicalExtensionCodec {},
+            proto_converter: &DefaultPhysicalProtoConverter {},
+        };
+        exec.try_to_proto(&ExecutionPlanEncodeCtx::new(&encoder))
+    }
 
     fn try_into_physical_plan_with_converter(
         &self,

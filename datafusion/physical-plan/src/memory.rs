@@ -164,8 +164,12 @@ pub trait LazyBatchGenerator: Send + Sync + fmt::Debug + fmt::Display {
     ///
     /// The returned node carries the generator's arguments and batch size;
     /// [`LazyMemoryExec`] supplies its output schema. The current wire format
-    /// only represents a single generate-series generator. Returning `None`
-    /// leaves serialization to the execution plan's extension codec.
+    /// only represents a single generate-series generator. Returning `Some(node)`
+    /// opts into reconstruction as a built-in series generator: its rows, batch
+    /// boundaries, and schema must match this generator after `reset_state()`.
+    /// The payload must describe the initial state, not the current cursor.
+    /// Returning `Ok(None)` leaves serialization to the execution plan's extension
+    /// codec. Returning `Err` stops serialization without extension fallback.
     #[cfg(feature = "proto")]
     fn try_to_proto(
         &self,

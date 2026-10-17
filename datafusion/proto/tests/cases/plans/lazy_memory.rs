@@ -28,7 +28,7 @@ use datafusion_physical_plan::common::collect;
 use datafusion_physical_plan::memory::{LazyBatchGenerator, LazyMemoryExec};
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
-    PhysicalProtoConverterExtension,
+    PhysicalPlanNodeExt, PhysicalProtoConverterExtension,
 };
 use datafusion_proto::protobuf::{self, PhysicalPlanNode};
 use parking_lot::RwLock;
@@ -165,8 +165,26 @@ async fn lazy_memory_legacy_wire_roundtrip() -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Clone)]
-struct HookGenerator(protobuf::GenerateSeriesNode);
+#[derive(Debug)]
+struct HookGenerator {
+    payload: protobuf::GenerateSeriesNode,
+    inner: Arc<RwLock<dyn LazyBatchGenerator>>,
+}
+
+impl HookGenerator {
+    fn new(payload: protobuf::GenerateSeriesNode) -> Result<Self> {
+        let mut executable = payload.clone();
+        executable.schema = int_node()?.schema;
+        let plan = datafusion_functions_table::generate_series::proto::try_from_proto(
+            &executable,
+        )?;
+        let exec = plan.downcast_ref::<LazyMemoryExec>().unwrap();
+        Ok(Self {
+            payload,
+            inner: Arc::clone(&exec.generators()[0]),
+        })
+    }
+}
 
 impl fmt::Display for HookGenerator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -179,29 +197,102 @@ impl LazyBatchGenerator for HookGenerator {
         self
     }
     fn generate_next_batch(&mut self) -> Result<Option<RecordBatch>> {
-        Ok(None)
+        self.inner.write().generate_next_batch()
     }
     fn reset_state(&self) -> Arc<RwLock<dyn LazyBatchGenerator>> {
-        Arc::new(RwLock::new(self.clone()))
+        Arc::new(RwLock::new(Self {
+            payload: self.payload.clone(),
+            inner: self.inner.read().reset_state(),
+        }))
     }
     fn try_to_proto(&self) -> Result<Option<protobuf::GenerateSeriesNode>> {
-        Ok(Some(self.0.clone()))
+        Ok(Some(self.payload.clone()))
     }
 }
 
-#[test]
-fn lazy_memory_dispatches_to_generator_hook() -> Result<()> {
+#[tokio::test]
+async fn lazy_memory_dispatches_to_generator_hook() -> Result<()> {
     let mut payload = int_node()?;
     // The plan, rather than the generator, supplies the authoritative schema.
     payload.schema = None;
-    let generator = Arc::new(RwLock::new(HookGenerator(payload)));
+    let generator = Arc::new(RwLock::new(HookGenerator::new(payload)?));
+    // Consume the original cursor: serialization must still describe reset state.
+    assert_eq!(
+        generator.write().generate_next_batch()?.unwrap().num_rows(),
+        2
+    );
     let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
-    let plan = Arc::new(LazyMemoryExec::try_new(schema, vec![generator])?);
+    let plan: Arc<dyn ExecutionPlan> =
+        Arc::new(LazyMemoryExec::try_new(schema, vec![generator])?);
     let encoded = PhysicalPlanNode::try_from_physical_plan(
-        plan,
+        Arc::clone(&plan),
         &DefaultPhysicalExtensionCodec {},
     )?;
     assert_eq!(encoded, plan_node(int_node()?));
+    let ctx = Arc::new(TaskContext::default());
+    let decoded =
+        encoded.try_into_physical_plan(&ctx, &DefaultPhysicalExtensionCodec {})?;
+    assert_eq!(decoded.schema(), plan.schema());
+    for _ in 0..2 {
+        let original = collect(plan.execute(0, Arc::clone(&ctx))?).await?;
+        let roundtrip = collect(decoded.execute(0, Arc::clone(&ctx))?).await?;
+        assert_eq!(original, roundtrip);
+        assert_eq!(
+            original
+                .iter()
+                .map(RecordBatch::num_rows)
+                .collect::<Vec<_>>(),
+            vec![2, 1]
+        );
+        let rows: Vec<i64> = original
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap()
+                    .values()
+                    .to_vec()
+            })
+            .collect();
+        assert_eq!(rows, vec![3, 2, 1]);
+    }
+    Ok(())
+}
+
+#[test]
+#[expect(
+    deprecated,
+    reason = "Verify downstream callers of the compatibility methods"
+)]
+fn lazy_memory_legacy_helpers_forward_to_hooks() -> Result<()> {
+    for (name, variant) in [
+        (
+            "generate_series",
+            protobuf::GenerateSeriesName::GsGenerateSeries,
+        ),
+        ("range", protobuf::GenerateSeriesName::GsRange),
+    ] {
+        assert_eq!(PhysicalPlanNode::generate_series_name_to_str(variant), name);
+        assert_eq!(
+            PhysicalPlanNode::str_to_generate_series_name(name)?,
+            variant
+        );
+    }
+    assert!(PhysicalPlanNode::str_to_generate_series_name("unknown").is_err());
+    let node = int_node()?;
+    let plan = plan_node(node.clone()).try_into_generate_series_physical_plan(&node)?;
+    let exec = plan.downcast_ref::<LazyMemoryExec>().unwrap();
+    assert_eq!(
+        PhysicalPlanNode::try_from_lazy_memory_exec(exec)?,
+        Some(plan_node(node))
+    );
+    let opaque = LazyMemoryExec::try_new(
+        Arc::new(Schema::empty()),
+        vec![Arc::new(RwLock::new(OpaqueGenerator))],
+    )?;
+    assert_eq!(PhysicalPlanNode::try_from_lazy_memory_exec(&opaque)?, None);
     Ok(())
 }
 
@@ -257,7 +348,7 @@ fn lazy_memory_preserves_extension_fallback() -> Result<()> {
     let opaque: Arc<RwLock<dyn LazyBatchGenerator>> =
         Arc::new(RwLock::new(OpaqueGenerator));
     let supported: Arc<RwLock<dyn LazyBatchGenerator>> =
-        Arc::new(RwLock::new(HookGenerator(int_node()?)));
+        Arc::new(RwLock::new(HookGenerator::new(int_node()?)?));
     for generators in [
         vec![],
         vec![opaque],
