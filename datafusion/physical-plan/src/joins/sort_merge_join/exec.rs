@@ -515,6 +515,11 @@ impl DisplayAs for SortMergeJoinExec {
                     } else {
                         ""
                     };
+                let display_null_aware = if self.null_aware() {
+                    ", null_aware"
+                } else {
+                    ""
+                };
                 let display_projections = match &self.projection {
                     Some(projection) => format!(
                         ", projection=[{}]",
@@ -532,7 +537,7 @@ impl DisplayAs for SortMergeJoinExec {
                 };
                 write!(
                     f,
-                    "{}: join_type={:?}, on=[{}]{}{}{}",
+                    "{}: join_type={:?}, on=[{}]{}{}{}{}",
                     Self::static_name(),
                     self.join_type,
                     on,
@@ -541,6 +546,7 @@ impl DisplayAs for SortMergeJoinExec {
                         |f| format!(", filter={}", f.expression())
                     ),
                     display_null_equality,
+                    display_null_aware,
                     display_projections,
                 )
             }
@@ -561,6 +567,10 @@ impl DisplayAs for SortMergeJoinExec {
 
                 if self.null_equality() == NullEquality::NullEqualsNull {
                     writeln!(f, "NullsEqual: true")?;
+                }
+
+                if self.null_aware() {
+                    writeln!(f, "null_aware")?;
                 }
 
                 Ok(())
