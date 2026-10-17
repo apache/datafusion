@@ -767,6 +767,27 @@ FROM (VALUES ('a.b.c'), ('x.y')) AS t(column1)
 c b
 y x
 
+# Negative positions count back over the same fields as positive positions,
+# even when delimiter matches overlap
+query TTTT
+SELECT
+  split_part(column1, '::', 2),
+  split_part(column1, '::', -1),
+  split_part(column1, '::', -2),
+  split_part(arrow_cast(column1, 'Utf8View'), '::', -1)
+FROM (VALUES ('foo:::bar'), ('a::b')) AS t(column1)
+----
+:bar :bar foo :bar
+b b a b
+
+query TT
+SELECT split_part(column1, column2, -1), split_part(column1, column2, -2)
+FROM (VALUES ('foo:::bar', '::'), ('x|||y', '||'), ('ababaZ', 'aba')) AS t(column1, column2)
+----
+:bar foo
+|y x
+baZ (empty)
+
 # Empty delimiter with column input
 query TT
 SELECT
