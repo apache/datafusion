@@ -23,6 +23,21 @@
 //! partition of the body to completion and buffers the output; every scan then
 //! replays that buffer.
 //!
+//! The buffered output is not kept in the plan. It is kept in the
+//! [`RunState`] of the [`TaskContext`], so each run of a plan has its own
+//! output, and two runs of one plan that overlap do not share it. All
+//! `execute` calls of one run must get the same [`TaskContext`]. With a
+//! different [`TaskContext`] for each call, each call computes the body again.
+//!
+//! The plan nodes keep no state of a run, so the default
+//! [`ExecutionPlan::reset_state`] is correct for them: it returns a new node
+//! and the old node stays usable.
+//!
+//! `RecursiveQueryExec` executes its recursive term one time for each
+//! iteration, with the same [`TaskContext`]. It gives each iteration new
+//! outputs for the CTEs that the recursive term declares. See
+//! `with_new_materialized_cte_outputs`.
+//!
 //! The body is fully materialized before any scan yields a row. This is a
 //! pipeline break, but it cannot deadlock when two consumers of the same CTE
 //! are read at different rates (for example the build and probe side of one
@@ -40,6 +55,7 @@
 //! disk is written in pieces, so that the move does not raise the memory that
 //! each reader needs.
 
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -48,11 +64,11 @@ use std::task::{Context, Poll};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Result, Statistics, internal_err};
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use datafusion_execution::{SendableRecordBatchStream, SpillFile, TaskContext};
+use datafusion_execution::{RunState, SendableRecordBatchStream, SpillFile, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt, TryStreamExt};
@@ -259,8 +275,69 @@ fn reserve_replay_memory(
     }
 }
 
-/// State shared by one [`MaterializedCteExec`] and all its
-/// [`MaterializedCteScanExec`]s.
+/// The outputs of the materialized CTEs in one run of a plan, by CTE id.
+///
+/// The [`RunState`] of the [`TaskContext`] holds it, so an output lives until
+/// the last [`TaskContext`] of the run and the last replay of the output are
+/// dropped.
+#[derive(Default)]
+struct MaterializedCteOutputs {
+    /// The outputs of the enclosing execution. `None` for a whole run.
+    parent: Option<Arc<MaterializedCteOutputs>>,
+    /// The CTEs that have their own output here when `parent` is set. The
+    /// output of every other CTE is the output in `parent`.
+    renewed: HashSet<u64>,
+    outputs: Mutex<HashMap<u64, Arc<OnceAsync<MaterializedOutput>>>>,
+}
+
+impl MaterializedCteOutputs {
+    /// Return the output of the CTE `id`. The first call creates it, empty.
+    fn get(&self, id: u64) -> Arc<OnceAsync<MaterializedOutput>> {
+        match &self.parent {
+            Some(parent) if !self.renewed.contains(&id) => parent.get(id),
+            _ => Arc::clone(self.outputs.lock().entry(id).or_default()),
+        }
+    }
+}
+
+/// Return the ids of the materialized CTEs that `plan` declares.
+pub(crate) fn materialized_cte_ids(plan: &Arc<dyn ExecutionPlan>) -> HashSet<u64> {
+    let mut ids = HashSet::new();
+    plan.apply(|node| {
+        if let Some(cte) = node.downcast_ref::<MaterializedCteExec>() {
+            ids.insert(cte.buffer.id);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .expect("the closure does not fail");
+    ids
+}
+
+/// Return a copy of `context` in which the materialized CTEs `ids` have no
+/// output, so that they are computed again. All other CTEs keep the output
+/// that they have in `context`.
+///
+/// `RecursiveQueryExec` calls this for each iteration with the CTEs that its
+/// recursive term declares. A CTE that is declared outside the recursive term
+/// and read inside it is not in `ids`, so it is computed one time for the
+/// whole query.
+pub(crate) fn with_new_materialized_cte_outputs(
+    context: &TaskContext,
+    ids: &HashSet<u64>,
+) -> TaskContext {
+    let run_state = context.run_state();
+    let outputs = MaterializedCteOutputs {
+        parent: Some(run_state.get_or_init()),
+        renewed: ids.clone(),
+        outputs: Mutex::default(),
+    };
+    let run_state = RunState::new_child(Arc::clone(run_state), Arc::new(outputs));
+    context.clone().with_run_state(Arc::new(run_state))
+}
+
+/// The plan-time state shared by one [`MaterializedCteExec`] and all its
+/// [`MaterializedCteScanExec`]s. It holds no output: the output of a run is in
+/// the [`RunState`] of the [`TaskContext`] of that run.
 pub struct MaterializedCteBuffer {
     id: u64,
     name: String,
@@ -269,7 +346,6 @@ pub struct MaterializedCteBuffer {
     /// the final plan. A scan can run the body before the owning
     /// `MaterializedCteExec` executes, for example from a scalar subquery.
     body: Mutex<Option<Arc<dyn ExecutionPlan>>>,
-    output: Mutex<Arc<OnceAsync<MaterializedOutput>>>,
     /// The partition count of every scan bound to this buffer.
     scan_partitions: Mutex<Vec<usize>>,
     metrics: ExecutionPlanMetricsSet,
@@ -289,7 +365,6 @@ impl MaterializedCteBuffer {
             id,
             name: name.into(),
             body: Mutex::new(None),
-            output: Mutex::new(Arc::default()),
             scan_partitions: Mutex::new(vec![]),
             metrics: ExecutionPlanMetricsSet::new(),
         }
@@ -304,12 +379,9 @@ impl MaterializedCteBuffer {
         *self.body.lock() = Some(body);
     }
 
-    fn reset(&self) {
-        *self.output.lock() = Arc::default();
-    }
-
     /// Return a future that resolves once the body has been fully buffered.
-    /// The body runs at most once, whichever consumer asks first.
+    /// The body runs at most once for each run, whichever consumer asks
+    /// first. The run is identified by the [`RunState`] of `context`.
     fn materialize(
         self: &Arc<Self>,
         context: Arc<TaskContext>,
@@ -317,7 +389,10 @@ impl MaterializedCteBuffer {
         let Some(body) = self.body.lock().clone() else {
             return internal_err!("MaterializedCte {} has no body", self.name);
         };
-        let once = Arc::clone(&self.output.lock());
+        let once = context
+            .run_state()
+            .get_or_init::<MaterializedCteOutputs>()
+            .get(self.id);
         let name = self.name.clone();
         let scan_partitions = self.scan_partitions.lock().clone();
         let metrics = self.metrics.clone();
@@ -573,23 +648,6 @@ impl ExecutionPlan for MaterializedCteExec {
         )
     }
 
-    /// Clears the shared buffer in place and returns `self`.
-    ///
-    /// This is an exception to the `reset_state` contract, which expects a
-    /// new node and leaves the old node unchanged. `RecursiveQueryExec` resets
-    /// the recursive term before each iteration, and a `MATERIALIZED` CTE in
-    /// that term must be computed again. A new buffer would also need new
-    /// scans, and a scan in a scalar subquery is not below this node, so this
-    /// node cannot rebind it. `ScalarSubqueryExec::reset_state` does the same.
-    ///
-    /// Two overlapping runs of one plan share this buffer. Nothing in
-    /// DataFusion does that today. See
-    /// <https://github.com/apache/datafusion/issues/26229>.
-    fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
-        self.buffer.reset();
-        Ok(self)
-    }
-
     fn maintains_input_order(&self) -> Vec<bool> {
         vec![false, true]
     }
@@ -822,12 +880,14 @@ mod tests {
     use super::*;
     use crate::common::collect;
     use crate::empty::EmptyExec;
+    use crate::execution_plan::reset_plan_states;
     use crate::filter_pushdown::PushedDown;
     use crate::test::TestMemoryExec;
     use arrow::array::{Array, Int32Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_physical_expr::expressions::{col, lit};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn parent_filters_go_to_the_continuation_only() -> Result<()> {
@@ -908,8 +968,8 @@ mod tests {
             .map(|scan| scan.execute(0, Arc::clone(&context)))
             .collect::<Result<Vec<_>>>()?;
         drop((once, output, scans, exec, buffer));
-        // Once every stream has returned a batch, only the streams hold the
-        // buffered output.
+        // Once every stream has returned a batch, only the streams and the
+        // context hold the buffered output.
         let mut firsts = vec![];
         for stream in &mut streams {
             firsts.push(stream.next().await.transpose()?.unwrap());
@@ -928,7 +988,11 @@ mod tests {
                 .collect();
             assert_eq!(values, (0..10_000).collect::<Vec<_>>());
         }
-        assert_eq!(context.memory_pool().reserved(), 0);
+        // The context of the run holds the output until it is dropped.
+        let pool = Arc::clone(context.memory_pool());
+        assert_eq!(pool.reserved(), reserved);
+        drop(context);
+        assert_eq!(pool.reserved(), 0);
         Ok(())
     }
 
@@ -984,6 +1048,198 @@ mod tests {
                 .collect();
             assert_eq!(values, (0..6500).collect::<Vec<_>>());
         }
+        Ok(())
+    }
+
+    /// Counts the `execute` calls of `input`.
+    #[derive(Debug)]
+    struct CountingExec {
+        input: Arc<dyn ExecutionPlan>,
+        executions: Arc<AtomicUsize>,
+    }
+
+    impl DisplayAs for CountingExec {
+        fn fmt_as(&self, _: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "CountingExec")
+        }
+    }
+
+    impl ExecutionPlan for CountingExec {
+        fn name(&self) -> &'static str {
+            "CountingExec"
+        }
+
+        fn properties(&self) -> &Arc<PlanProperties> {
+            self.input.properties()
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![&self.input]
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            mut children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                executions: Arc::clone(&self.executions),
+            }))
+        }
+
+        fn execute(
+            &self,
+            partition: usize,
+            context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            self.executions.fetch_add(1, Ordering::Relaxed);
+            self.input.execute(partition, context)
+        }
+    }
+
+    /// A plan `MaterializedCteExec(body, scan)` whose body has the rows
+    /// `0..rows` in batches of one row, and the count of body executions.
+    fn counting_plan(rows: i32) -> Result<(Arc<dyn ExecutionPlan>, Arc<AtomicUsize>)> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batches = (0..rows)
+            .map(|i| {
+                let values = Int32Array::from(vec![i]);
+                RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(values)])
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let executions = Arc::new(AtomicUsize::new(0));
+        let body = Arc::new(CountingExec {
+            input: TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?,
+            executions: Arc::clone(&executions),
+        });
+        let buffer = Arc::new(MaterializedCteBuffer::new(0, "c"));
+        let scan = MaterializedCteScanExec::new(0, "c", schema, 1);
+        let scan = Arc::new(scan.bind(Arc::clone(&buffer)));
+        let plan = Arc::new(MaterializedCteExec::new(body, scan, buffer));
+        Ok((plan, executions))
+    }
+
+    fn values(batches: &[RecordBatch]) -> Vec<i32> {
+        batches
+            .iter()
+            .flat_map(|b| {
+                let array = b.column(0).as_any().downcast_ref::<Int32Array>();
+                array.unwrap().values().to_vec()
+            })
+            .collect()
+    }
+
+    /// Two runs of one plan overlap. Each run has its own `TaskContext`, so
+    /// each run computes the body and holds its own output.
+    #[tokio::test]
+    async fn overlapping_runs_do_not_share_the_output() -> Result<()> {
+        let (plan, executions) = counting_plan(3)?;
+        let context_1 = Arc::new(TaskContext::default());
+        let context_2 = Arc::new(TaskContext::default());
+
+        let mut run_1 = plan.execute(0, Arc::clone(&context_1))?;
+        let first = run_1.next().await.transpose()?.unwrap();
+        assert_eq!(executions.load(Ordering::Relaxed), 1);
+        assert!(context_1.memory_pool().reserved() > 0);
+        assert_eq!(context_2.memory_pool().reserved(), 0);
+
+        // The second run starts and completes while the first run is open.
+        let run_2 = collect(plan.execute(0, Arc::clone(&context_2))?).await?;
+        assert_eq!(values(&run_2), vec![0, 1, 2]);
+        assert_eq!(executions.load(Ordering::Relaxed), 2);
+        assert!(context_2.memory_pool().reserved() > 0);
+
+        // To drop the second run releases its output only.
+        drop(context_2);
+        let mut run_1_batches = vec![first];
+        run_1_batches.extend(collect(run_1).await?);
+        assert_eq!(values(&run_1_batches), vec![0, 1, 2]);
+
+        // One more scan in the first run replays the output of that run.
+        let again = collect(plan.execute(0, Arc::clone(&context_1))?).await?;
+        assert_eq!(values(&again), vec![0, 1, 2]);
+        assert_eq!(executions.load(Ordering::Relaxed), 2);
+
+        // The output lives until the context of the run is dropped.
+        let pool = Arc::clone(context_1.memory_pool());
+        assert!(pool.reserved() > 0);
+        drop(context_1);
+        assert_eq!(pool.reserved(), 0);
+        Ok(())
+    }
+
+    /// `reset_state` returns a new plan and does not change the old plan or
+    /// the output of a run.
+    #[tokio::test]
+    async fn reset_state_leaves_the_old_plan_usable() -> Result<()> {
+        let (plan, executions) = counting_plan(3)?;
+        let context = Arc::new(TaskContext::default());
+
+        let mut stream = plan.execute(0, Arc::clone(&context))?;
+        let first = stream.next().await.transpose()?.unwrap();
+        assert_eq!(executions.load(Ordering::Relaxed), 1);
+
+        let reset = reset_plan_states(Arc::clone(&plan))?;
+        assert!(!Arc::ptr_eq(&plan, &reset));
+
+        // A scan of the old plan that starts after the reset, in the run
+        // that is open, replays the output of that run.
+        let old = collect(plan.execute(0, Arc::clone(&context))?).await?;
+        assert_eq!(values(&old), vec![0, 1, 2]);
+        let mut batches = vec![first];
+        batches.extend(collect(stream).await?);
+        assert_eq!(values(&batches), vec![0, 1, 2]);
+        assert_eq!(executions.load(Ordering::Relaxed), 1);
+
+        // The new plan in the same run also replays that output.
+        let new = collect(reset.execute(0, Arc::clone(&context))?).await?;
+        assert_eq!(values(&new), vec![0, 1, 2]);
+        assert_eq!(executions.load(Ordering::Relaxed), 1);
+
+        // The new plan in a new run computes the body again.
+        let new = collect(reset.execute(0, Arc::new(TaskContext::default()))?).await?;
+        assert_eq!(values(&new), vec![0, 1, 2]);
+        assert_eq!(executions.load(Ordering::Relaxed), 2);
+        Ok(())
+    }
+
+    /// A context from `with_new_materialized_cte_outputs` computes the given
+    /// CTEs again and keeps the output of the other CTEs.
+    #[tokio::test]
+    async fn new_outputs_are_only_for_the_given_ctes() -> Result<()> {
+        let (plan, executions) = counting_plan(3)?;
+        let context = Arc::new(TaskContext::default());
+        collect(plan.execute(0, Arc::clone(&context))?).await?;
+        assert_eq!(executions.load(Ordering::Relaxed), 1);
+
+        // The CTE has the id 0, so it keeps its output.
+        let other = with_new_materialized_cte_outputs(&context, &HashSet::from([1]));
+        collect(plan.execute(0, Arc::new(other))?).await?;
+        assert_eq!(executions.load(Ordering::Relaxed), 1);
+
+        let ids = materialized_cte_ids(&plan);
+        assert_eq!(ids, HashSet::from([0]));
+        let renewed = Arc::new(with_new_materialized_cte_outputs(&context, &ids));
+        collect(plan.execute(0, Arc::clone(&renewed))?).await?;
+        collect(plan.execute(0, Arc::clone(&renewed))?).await?;
+        assert_eq!(executions.load(Ordering::Relaxed), 2);
+
+        // A nested context reads the CTEs that it does not renew from the
+        // enclosing context.
+        let nested = with_new_materialized_cte_outputs(&renewed, &HashSet::new());
+        collect(plan.execute(0, Arc::new(nested))?).await?;
+        assert_eq!(executions.load(Ordering::Relaxed), 2);
+
+        // The first context still has its output.
+        collect(plan.execute(0, context)?).await?;
+        assert_eq!(executions.load(Ordering::Relaxed), 2);
         Ok(())
     }
 }
