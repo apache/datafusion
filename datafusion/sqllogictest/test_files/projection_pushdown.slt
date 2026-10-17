@@ -2560,3 +2560,38 @@ RESET datafusion.optimizer.max_passes;
 
 statement ok
 SET datafusion.execution.target_partitions = 4;
+
+#####################
+# A sort key that a filter makes constant, read through a duplicate extraction alias
+# See https://github.com/apache/datafusion/issues/26391
+#####################
+
+# The filter and the projection each extract `s['k']`, under two aliases. The
+# filter moves into the scan, and the scan computes both aliases. The sort key
+# `c` reads the second alias, and the filter's constant reads the first. The
+# planner must still know that `c` is a constant after the projections merge.
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = true;
+
+statement ok
+COPY (SELECT * FROM (VALUES ({k: 'a'}, 1), ({k: 'b'}, 2)) AS v(s, id))
+TO 'test_files/scratch/projection_pushdown/duplicate_alias.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE duplicate_alias STORED AS PARQUET
+LOCATION 'test_files/scratch/projection_pushdown/duplicate_alias.parquet';
+
+query TI
+SELECT upper(s['k']) AS c, synth
+FROM (SELECT s, id + 1 AS synth FROM duplicate_alias) AS v
+WHERE upper(s['k']) = 'A'
+ORDER BY synth, c;
+----
+A 2
+
+statement ok
+DROP TABLE duplicate_alias;
+
+statement ok
+RESET datafusion.execution.parquet.pushdown_filters;
