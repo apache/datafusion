@@ -17,8 +17,8 @@
 
 //! This module provides a function to estimate the memory size of a HashTable prior to allocation
 
-use crate::Result;
 use crate::error::_exec_datafusion_err;
+use crate::{HashMap, HashSet, Result};
 use arrow::array::types::{
     ByteArrayType, ByteViewType, Int8Type, Int16Type, Int32Type, Int64Type,
     RunEndIndexType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
@@ -166,39 +166,15 @@ pub fn get_record_batch_memory_size(batch: &RecordBatch) -> usize {
 /// referenced, so counting unique buffers in full reflects the memory the
 /// batches actually retain.
 ///
-/// # Releasing batches
-///
-/// Operators that retain batches incrementally and drop them later (sort,
-/// window, sort-merge join, TopK) can use [`Self::uncount_batch`] to release
-/// a batch's contribution. The counter tracks a reference count per buffer:
-/// a buffer's capacity is added when its count goes from 0 to 1 and
-/// subtracted when it returns to 0.
-///
-/// **Contract**: a batch must be uncounted *before* its buffers are dropped.
-/// The counter identifies buffers by their data-pointer address and does not
-/// keep them alive.
-///
-/// ```text
-/// ───────────────────────┬────────────────────────────
-/// step                   │ memory_usage()
-/// ───────────────────────┼────────────────────────────
-/// count_batch(slice1)    │ 4 MB (parent buffer counted)
-/// count_batch(slice2)    │ 4 MB (already counted)
-/// uncount_batch(slice1)  │ 4 MB (slice2 still uses it)
-/// uncount_batch(slice2)  │ 0
-/// ───────────────────────┴────────────────────────────
-/// ```
+/// This counter only adds. Use [`RecordBatchMemoryTracker`] when batches are
+/// dropped one at a time and their memory must be released.
 #[derive(Debug, Default)]
 pub struct RecordBatchMemoryCounter {
-    /// Reference-counted buffer tracker. Each buffer (identified by its
-    /// data-pointer address) maps to its current reference count. A buffer's
-    /// capacity is added to `memory_usage` when its count goes from 0→1 and
-    /// subtracted when it returns to 0.
-    counted_buffers: BufferIdMap,
-    /// Array objects counted by [`Self::count_batch_with_array_overhead`],
-    /// tracked with reference counts so that overhead is released only when
-    /// the last batch holding that `ArrayRef` is uncounted.
-    counted_arrays: hashbrown::HashMap<usize, u32>,
+    /// Start addresses of `Buffer`s that have already been counted (instead of
+    /// actual used data region's pointer represented by current `Array`)
+    counted_buffers: BufferIdSet,
+    /// Array objects already counted by [`Self::count_batch_with_array_overhead`]
+    counted_arrays: HashSet<usize>,
     /// Total memory of all counted allocations
     memory_usage: usize,
 }
@@ -214,7 +190,7 @@ impl RecordBatchMemoryCounter {
         let previous_memory_usage = self.memory_usage;
 
         for array in batch.columns() {
-            self.visit_array_buffers(array.as_ref(), BufferOp::Count);
+            self.count_array_memory_size(array.as_ref());
         }
 
         self.memory_usage - previous_memory_usage
@@ -224,7 +200,7 @@ impl RecordBatchMemoryCounter {
     /// been counted before.
     pub fn count_array(&mut self, array: &dyn Array) -> usize {
         let previous_memory_usage = self.memory_usage;
-        self.visit_array_buffers(array, BufferOp::Count);
+        self.count_array_memory_size(array);
         self.memory_usage - previous_memory_usage
     }
 
@@ -240,8 +216,9 @@ impl RecordBatchMemoryCounter {
         let mut array_overhead = 0;
 
         for array in batch.columns() {
-            array_overhead +=
-                count_unique_array_object_memory_size(array, &mut self.counted_arrays);
+            array_overhead += count_unique_array_object_memory_size(array, &mut |id| {
+                self.counted_arrays.insert(id)
+            });
         }
 
         total_size += array_overhead;
@@ -249,19 +226,107 @@ impl RecordBatchMemoryCounter {
         total_size
     }
 
-    /// Release the buffers of `batch`, returning the bytes freed.
-    ///
-    /// Each buffer's reference count is decremented; the buffer's capacity is
-    /// returned (and subtracted from [`Self::memory_usage`]) only when its
-    /// count reaches zero. Buffers that were never counted are silently
-    /// ignored (their count is already zero).
-    pub fn uncount_batch(&mut self, batch: &RecordBatch) -> usize {
+    /// Total memory of all counted allocations.
+    pub fn memory_usage(&self) -> usize {
+        self.memory_usage
+    }
+
+    /// Count the memory usage of `array` and its children recursively.
+    fn count_array_memory_size(&mut self, array: &dyn Array) {
+        visit_array_buffers(array, self);
+    }
+}
+
+impl BufferVisitor for RecordBatchMemoryCounter {
+    fn visit(&mut self, buffer: &Buffer) {
+        if self.counted_buffers.insert(buffer.data_ptr().addr()) {
+            self.memory_usage += buffer.capacity();
+        }
+    }
+}
+
+/// Like [`RecordBatchMemoryCounter`], but batches can also be released.
+///
+/// Operators that retain batches incrementally and drop them later (sort,
+/// window, sort-merge join, TopK) count a batch when they retain it and
+/// [`Self::uncount_batch`] it when they drop it. The tracker keeps a reference
+/// count per buffer: a buffer's capacity is added when its count goes from 0
+/// to 1 and subtracted when it returns to 0.
+///
+/// **Contract**: a batch must be uncounted *before* its buffers are dropped.
+/// The tracker identifies buffers by their data-pointer address and does not
+/// keep them alive.
+///
+/// ```text
+/// ───────────────────────┬────────────────────────────
+/// step                   │ memory_usage()
+/// ───────────────────────┼────────────────────────────
+/// count_batch(slice1)    │ 4 MB (parent buffer counted)
+/// count_batch(slice2)    │ 4 MB (already counted)
+/// uncount_batch(slice1)  │ 4 MB (slice2 still uses it)
+/// uncount_batch(slice2)  │ 0
+/// ───────────────────────┴────────────────────────────
+/// ```
+#[derive(Debug, Default)]
+pub struct RecordBatchMemoryTracker {
+    /// Reference count of each retained buffer, keyed by its start address
+    counted_buffers: BufferIdMap,
+    /// Reference count of each Array object counted by
+    /// [`Self::count_batch_with_array_overhead`]
+    counted_arrays: HashMap<usize, u32>,
+    /// Total memory of all retained allocations
+    memory_usage: usize,
+}
+
+impl RecordBatchMemoryTracker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Count `batch`, returning the memory used by its buffers that were not
+    /// already retained.
+    pub fn count_batch(&mut self, batch: &RecordBatch) -> usize {
         let previous_memory_usage = self.memory_usage;
+        for array in batch.columns() {
+            self.count_array_memory_size(array.as_ref());
+        }
+        self.memory_usage - previous_memory_usage
+    }
+
+    /// Count `array`, returning the memory used by its buffers that were not
+    /// already retained.
+    pub fn count_array(&mut self, array: &dyn Array) -> usize {
+        let previous_memory_usage = self.memory_usage;
+        self.count_array_memory_size(array);
+        self.memory_usage - previous_memory_usage
+    }
+
+    /// Like [`RecordBatchMemoryCounter::count_batch_with_array_overhead`].
+    pub fn count_batch_with_array_overhead(&mut self, batch: &RecordBatch) -> usize {
+        let mut total_size = self.count_batch(batch);
+        let mut array_overhead = 0;
 
         for array in batch.columns() {
-            self.visit_array_buffers(array.as_ref(), BufferOp::Uncount);
+            array_overhead += count_unique_array_object_memory_size(array, &mut |id| {
+                let count = self.counted_arrays.entry(id).or_insert(0);
+                *count += 1;
+                *count == 1
+            });
         }
 
+        total_size += array_overhead;
+        self.memory_usage += array_overhead;
+        total_size
+    }
+
+    /// Release the buffers of `batch`, returning the bytes freed: the sizes of
+    /// buffers no other counted batch retains. Buffers that were never
+    /// counted are ignored.
+    pub fn uncount_batch(&mut self, batch: &RecordBatch) -> usize {
+        let previous_memory_usage = self.memory_usage;
+        for array in batch.columns() {
+            self.uncount_array_memory_size(array.as_ref());
+        }
         previous_memory_usage - self.memory_usage
     }
 
@@ -270,22 +335,33 @@ impl RecordBatchMemoryCounter {
     /// See [`Self::uncount_batch`] for semantics.
     pub fn uncount_array(&mut self, array: &dyn Array) -> usize {
         let previous_memory_usage = self.memory_usage;
-        self.visit_array_buffers(array, BufferOp::Uncount);
+        self.uncount_array_memory_size(array);
         previous_memory_usage - self.memory_usage
     }
 
-    /// Inverse of [`Self::count_batch_with_array_overhead`]: releases buffer
-    /// memory and array-object overhead for `batch`.
-    ///
-    /// Array-object overhead is released when the array identity (pointer) is
-    /// removed from the tracked set.
+    /// Inverse of [`Self::count_batch_with_array_overhead`].
     pub fn uncount_batch_with_array_overhead(&mut self, batch: &RecordBatch) -> usize {
         let mut total_released = self.uncount_batch(batch);
         let mut array_overhead = 0;
 
         for array in batch.columns() {
+            // Releases the overhead of each array object no other counted
+            // batch still holds
             array_overhead +=
-                uncount_unique_array_object_memory_size(array, &mut self.counted_arrays);
+                count_unique_array_object_memory_size(array, &mut |id| match self
+                    .counted_arrays
+                    .get_mut(&id)
+                {
+                    Some(count) if *count > 1 => {
+                        *count -= 1;
+                        false
+                    }
+                    Some(_) => {
+                        self.counted_arrays.remove(&id);
+                        true
+                    }
+                    None => false,
+                });
         }
 
         total_released += array_overhead;
@@ -293,204 +369,180 @@ impl RecordBatchMemoryCounter {
         total_released
     }
 
-    /// Total memory of all counted allocations.
+    /// Total memory of all retained allocations.
     pub fn memory_usage(&self) -> usize {
         self.memory_usage
     }
 
-    /// Apply `op` to `buffer`: increment or decrement its reference count and
-    /// adjust `memory_usage` accordingly.
-    #[inline(always)]
-    fn apply_buffer_op(&mut self, buffer: &Buffer, op: BufferOp) {
-        let addr = buffer.data_ptr().addr();
-        match op {
-            BufferOp::Count => {
-                if self.counted_buffers.increment(addr) {
-                    self.memory_usage += buffer.capacity();
-                }
-            }
-            BufferOp::Uncount => {
-                if self.counted_buffers.decrement(addr) {
-                    self.memory_usage =
-                        self.memory_usage.saturating_sub(buffer.capacity());
-                }
-            }
-        }
+    fn count_array_memory_size(&mut self, array: &dyn Array) {
+        visit_array_buffers(array, self);
     }
 
-    /// Walk `array`'s buffers recursively, applying `op` to each.
-    fn visit_array_buffers(&mut self, array: &dyn Array, op: BufferOp) {
-        if let Some(nulls) = array.nulls() {
-            self.apply_buffer_op(nulls.buffer(), op);
-        }
-
-        downcast_primitive_array! {
-            array => self.apply_buffer_op(array.values().inner(), op),
-            DataType::Null => {}
-            DataType::Boolean => {
-                self.apply_buffer_op(array.as_boolean().values().inner(), op);
-            }
-            DataType::Binary => {
-                self.visit_byte_array_buffers(array.as_binary::<i32>(), op);
-            }
-            DataType::LargeBinary => {
-                self.visit_byte_array_buffers(array.as_binary::<i64>(), op);
-            }
-            DataType::Utf8 => {
-                self.visit_byte_array_buffers(array.as_string::<i32>(), op);
-            }
-            DataType::LargeUtf8 => {
-                self.visit_byte_array_buffers(array.as_string::<i64>(), op);
-            }
-            DataType::BinaryView => {
-                self.visit_byte_view_array_buffers(array.as_binary_view(), op);
-            }
-            DataType::Utf8View => {
-                self.visit_byte_view_array_buffers(array.as_string_view(), op);
-            }
-            DataType::FixedSizeBinary(_) => {
-                self.apply_buffer_op(array.as_fixed_size_binary().values(), op);
-            }
-            DataType::List(_) => {
-                self.visit_list_array_buffers(array.as_list::<i32>(), op);
-            }
-            DataType::LargeList(_) => {
-                self.visit_list_array_buffers(array.as_list::<i64>(), op);
-            }
-            DataType::ListView(_) => {
-                self.visit_list_view_array_buffers(array.as_list_view::<i32>(), op);
-            }
-            DataType::LargeListView(_) => {
-                self.visit_list_view_array_buffers(array.as_list_view::<i64>(), op);
-            }
-            DataType::FixedSizeList(_, _) => {
-                self.visit_array_buffers(
-                    array.as_fixed_size_list().values().as_ref(),
-                    op,
-                );
-            }
-            DataType::Struct(_) => {
-                for child in array.as_struct().columns() {
-                    self.visit_array_buffers(child.as_ref(), op);
-                }
-            }
-            DataType::Union(_, _) => {
-                let array = array.as_union();
-                self.apply_buffer_op(array.type_ids().inner(), op);
-                if let Some(offsets) = array.offsets() {
-                    self.apply_buffer_op(offsets.inner(), op);
-                }
-                for (type_id, _) in array.fields().iter() {
-                    self.visit_array_buffers(array.child(type_id).as_ref(), op);
-                }
-            }
-            DataType::Dictionary(_, _) => {
-                let array = array.as_any_dictionary();
-                self.visit_array_buffers(array.keys(), op);
-                self.visit_array_buffers(array.values().as_ref(), op);
-            }
-            DataType::Map(_, _) => {
-                let array = array.as_map();
-                self.apply_buffer_op(array.offsets().inner().inner(), op);
-                self.visit_array_buffers(array.entries(), op);
-            }
-            DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
-                DataType::Int16 => self.visit_run_array_buffers::<Int16Type>(array, op),
-                DataType::Int32 => self.visit_run_array_buffers::<Int32Type>(array, op),
-                DataType::Int64 => self.visit_run_array_buffers::<Int64Type>(array, op),
-                _ => self.visit_array_data_buffers(&array.to_data(), op),
-            },
-            _ => self.visit_array_data_buffers(&array.to_data(), op),
-        }
+    fn uncount_array_memory_size(&mut self, array: &dyn Array) {
+        visit_array_buffers(array, &mut Uncount(self));
     }
+}
 
-    fn visit_byte_array_buffers<T: ByteArrayType>(
-        &mut self,
-        array: &GenericByteArray<T>,
-        op: BufferOp,
-    ) {
-        self.apply_buffer_op(array.offsets().inner().inner(), op);
-        self.apply_buffer_op(array.values(), op);
-    }
-
-    fn visit_byte_view_array_buffers<T: ByteViewType>(
-        &mut self,
-        array: &GenericByteViewArray<T>,
-        op: BufferOp,
-    ) {
-        self.apply_buffer_op(array.views().inner(), op);
-        for buffer in array.data_buffers().iter() {
-            self.apply_buffer_op(buffer, op);
-        }
-    }
-
-    fn visit_list_array_buffers<O: arrow::array::OffsetSizeTrait>(
-        &mut self,
-        array: &GenericListArray<O>,
-        op: BufferOp,
-    ) {
-        self.apply_buffer_op(array.offsets().inner().inner(), op);
-        self.visit_array_buffers(array.values().as_ref(), op);
-    }
-
-    fn visit_list_view_array_buffers<O: arrow::array::OffsetSizeTrait>(
-        &mut self,
-        array: &GenericListViewArray<O>,
-        op: BufferOp,
-    ) {
-        self.apply_buffer_op(array.offsets().inner(), op);
-        self.apply_buffer_op(array.sizes().inner(), op);
-        self.visit_array_buffers(array.values().as_ref(), op);
-    }
-
-    fn visit_run_array_buffers<R: RunEndIndexType>(
-        &mut self,
-        array: &dyn Array,
-        op: BufferOp,
-    ) {
-        if let Some(array) = array.as_any().downcast_ref::<RunArray<R>>() {
-            self.apply_buffer_op(array.run_ends().inner().inner(), op);
-            self.visit_array_buffers(array.values().as_ref(), op);
-        } else {
-            self.visit_array_data_buffers(&array.to_data(), op);
-        }
-    }
-
-    fn visit_array_data_buffers(
-        &mut self,
-        array_data: &arrow::array::ArrayData,
-        op: BufferOp,
-    ) {
-        for buffer in array_data.buffers() {
-            self.apply_buffer_op(buffer, op);
-        }
-        if let Some(nulls) = array_data.nulls() {
-            self.apply_buffer_op(nulls.buffer(), op);
-        }
-        for child in array_data.child_data() {
-            self.visit_array_data_buffers(child, op);
+/// Counting visitor: retains each buffer once more.
+impl BufferVisitor for RecordBatchMemoryTracker {
+    fn visit(&mut self, buffer: &Buffer) {
+        if self.counted_buffers.increment(buffer.data_ptr().addr()) {
+            self.memory_usage += buffer.capacity();
         }
     }
 }
 
-/// Direction of a buffer accounting operation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BufferOp {
-    /// Increment the reference count; add capacity on 0→1 transition.
-    Count,
-    /// Decrement the reference count; release capacity on 1→0 transition.
-    Uncount,
+/// Releasing visitor for [`RecordBatchMemoryTracker::uncount_array_memory_size`].
+struct Uncount<'a>(&'a mut RecordBatchMemoryTracker);
+
+impl BufferVisitor for Uncount<'_> {
+    fn visit(&mut self, buffer: &Buffer) {
+        if self.0.counted_buffers.decrement(buffer.data_ptr().addr()) {
+            self.0.memory_usage -= buffer.capacity();
+        }
+    }
 }
 
-/// Counts the unique Array object memory retained by `array` and its children.
+/// Receives each buffer found by [`visit_array_buffers`].
+trait BufferVisitor {
+    fn visit(&mut self, buffer: &Buffer);
+}
+
+/// Calls `visitor` on every buffer of `array` and its children, recursively.
+fn visit_array_buffers(array: &dyn Array, visitor: &mut impl BufferVisitor) {
+    if let Some(nulls) = array.nulls() {
+        visitor.visit(nulls.buffer());
+    }
+
+    downcast_primitive_array! {
+        array => visitor.visit(array.values().inner()),
+        DataType::Null => {}
+        DataType::Boolean => visitor.visit(array.as_boolean().values().inner()),
+        DataType::Binary => visit_byte_array_buffers(array.as_binary::<i32>(), visitor),
+        DataType::LargeBinary => visit_byte_array_buffers(array.as_binary::<i64>(), visitor),
+        DataType::Utf8 => visit_byte_array_buffers(array.as_string::<i32>(), visitor),
+        DataType::LargeUtf8 => visit_byte_array_buffers(array.as_string::<i64>(), visitor),
+        DataType::BinaryView => {
+            visit_byte_view_array_buffers(array.as_binary_view(), visitor)
+        }
+        DataType::Utf8View => visit_byte_view_array_buffers(array.as_string_view(), visitor),
+        DataType::FixedSizeBinary(_) => visitor.visit(array.as_fixed_size_binary().values()),
+        DataType::List(_) => visit_list_array_buffers(array.as_list::<i32>(), visitor),
+        DataType::LargeList(_) => visit_list_array_buffers(array.as_list::<i64>(), visitor),
+        DataType::ListView(_) => {
+            visit_list_view_array_buffers(array.as_list_view::<i32>(), visitor)
+        }
+        DataType::LargeListView(_) => {
+            visit_list_view_array_buffers(array.as_list_view::<i64>(), visitor)
+        }
+        DataType::FixedSizeList(_, _) => {
+            visit_array_buffers(array.as_fixed_size_list().values().as_ref(), visitor)
+        }
+        DataType::Struct(_) => {
+            for child in array.as_struct().columns() {
+                visit_array_buffers(child.as_ref(), visitor);
+            }
+        }
+        DataType::Union(_, _) => {
+            let array = array.as_union();
+            visitor.visit(array.type_ids().inner());
+            if let Some(offsets) = array.offsets() {
+                visitor.visit(offsets.inner());
+            }
+            for (type_id, _) in array.fields().iter() {
+                visit_array_buffers(array.child(type_id).as_ref(), visitor);
+            }
+        }
+        DataType::Dictionary(_, _) => {
+            let array = array.as_any_dictionary();
+            visit_array_buffers(array.keys(), visitor);
+            visit_array_buffers(array.values().as_ref(), visitor);
+        }
+        DataType::Map(_, _) => {
+            let array = array.as_map();
+            visitor.visit(array.offsets().inner().inner());
+            visit_array_buffers(array.entries(), visitor);
+        }
+        DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
+            DataType::Int16 => visit_run_array_buffers::<Int16Type>(array, visitor),
+            DataType::Int32 => visit_run_array_buffers::<Int32Type>(array, visitor),
+            DataType::Int64 => visit_run_array_buffers::<Int64Type>(array, visitor),
+            _ => visit_array_data_buffers(&array.to_data(), visitor),
+        },
+        _ => visit_array_data_buffers(&array.to_data(), visitor),
+    }
+}
+
+fn visit_byte_array_buffers<T: ByteArrayType>(
+    array: &GenericByteArray<T>,
+    visitor: &mut impl BufferVisitor,
+) {
+    visitor.visit(array.offsets().inner().inner());
+    visitor.visit(array.values());
+}
+
+fn visit_byte_view_array_buffers<T: ByteViewType>(
+    array: &GenericByteViewArray<T>,
+    visitor: &mut impl BufferVisitor,
+) {
+    visitor.visit(array.views().inner());
+    for buffer in array.data_buffers().iter() {
+        visitor.visit(buffer);
+    }
+}
+
+fn visit_list_array_buffers<O: arrow::array::OffsetSizeTrait>(
+    array: &GenericListArray<O>,
+    visitor: &mut impl BufferVisitor,
+) {
+    visitor.visit(array.offsets().inner().inner());
+    visit_array_buffers(array.values().as_ref(), visitor);
+}
+
+fn visit_list_view_array_buffers<O: arrow::array::OffsetSizeTrait>(
+    array: &GenericListViewArray<O>,
+    visitor: &mut impl BufferVisitor,
+) {
+    visitor.visit(array.offsets().inner());
+    visitor.visit(array.sizes().inner());
+    visit_array_buffers(array.values().as_ref(), visitor);
+}
+
+fn visit_run_array_buffers<R: RunEndIndexType>(
+    array: &dyn Array,
+    visitor: &mut impl BufferVisitor,
+) {
+    if let Some(array) = array.as_any().downcast_ref::<RunArray<R>>() {
+        visitor.visit(array.run_ends().inner().inner());
+        visit_array_buffers(array.values().as_ref(), visitor);
+    } else {
+        visit_array_data_buffers(&array.to_data(), visitor);
+    }
+}
+
+fn visit_array_data_buffers(
+    array_data: &arrow::array::ArrayData,
+    visitor: &mut impl BufferVisitor,
+) {
+    for buffer in array_data.buffers() {
+        visitor.visit(buffer);
+    }
+    if let Some(nulls) = array_data.nulls() {
+        visitor.visit(nulls.buffer());
+    }
+    for child in array_data.child_data() {
+        visit_array_data_buffers(child, visitor);
+    }
+}
+
+/// Counts the Array object memory of `array` and its children whose identity
+/// `first_seen` reports as new; children of an already seen array are skipped.
 fn count_unique_array_object_memory_size(
     array: &ArrayRef,
-    counted_arrays: &mut hashbrown::HashMap<usize, u32>,
+    first_seen: &mut impl FnMut(usize) -> bool,
 ) -> usize {
     let array_ptr = Arc::as_ptr(array).cast::<()>() as usize;
-    let count = counted_arrays.entry(array_ptr).or_insert(0);
-    *count += 1;
-    if *count > 1 {
+    if !first_seen(array_ptr) {
         return 0;
     }
 
@@ -506,40 +558,7 @@ fn count_unique_array_object_memory_size(
     own_overhead
         + children
             .into_iter()
-            .map(|child| count_unique_array_object_memory_size(child, counted_arrays))
-            .sum::<usize>()
-}
-
-/// Inverse of [`count_unique_array_object_memory_size`]: decrements array
-/// identity refcounts and returns the released overhead when the count hits 0.
-fn uncount_unique_array_object_memory_size(
-    array: &ArrayRef,
-    counted_arrays: &mut hashbrown::HashMap<usize, u32>,
-) -> usize {
-    let array_ptr = Arc::as_ptr(array).cast::<()>() as usize;
-    let hashbrown::hash_map::Entry::Occupied(mut entry) = counted_arrays.entry(array_ptr)
-    else {
-        return 0;
-    };
-    *entry.get_mut() -= 1;
-    if *entry.get() > 0 {
-        return 0;
-    }
-    entry.remove();
-
-    let children = array_children(array);
-    let children_overhead: usize = children
-        .iter()
-        .map(|child| child.get_array_memory_size() - child.get_buffer_memory_size())
-        .sum();
-    let own_overhead = array.get_array_memory_size()
-        - array.get_buffer_memory_size()
-        - children_overhead;
-
-    own_overhead
-        + children
-            .into_iter()
-            .map(|child| uncount_unique_array_object_memory_size(child, counted_arrays))
+            .map(|child| count_unique_array_object_memory_size(child, first_seen))
             .sum::<usize>()
 }
 
@@ -597,6 +616,49 @@ fn array_children(array: &ArrayRef) -> Vec<&ArrayRef> {
     }
 }
 
+/// Tracks a small number of buffers inline, avoiding a heap allocation for
+/// typical batches, and promotes to a hash set when more buffers are seen.
+#[derive(Debug)]
+struct BufferIdSet {
+    inline: [Option<NonZero<usize>>; INLINE_BUFFER_IDS],
+    len: usize,
+    overflow: Option<HashSet<NonZero<usize>>>,
+}
+
+impl Default for BufferIdSet {
+    fn default() -> Self {
+        Self {
+            inline: [None; INLINE_BUFFER_IDS],
+            len: 0,
+            overflow: None,
+        }
+    }
+}
+
+impl BufferIdSet {
+    fn insert(&mut self, buffer_id: NonZero<usize>) -> bool {
+        if let Some(overflow) = &mut self.overflow {
+            return overflow.insert(buffer_id);
+        }
+
+        if self.inline[..self.len].contains(&Some(buffer_id)) {
+            return false;
+        }
+
+        if self.len < INLINE_BUFFER_IDS {
+            self.inline[self.len] = Some(buffer_id);
+            self.len += 1;
+            return true;
+        }
+
+        let mut overflow = HashSet::with_capacity(INLINE_BUFFER_IDS + 1);
+        overflow.extend(self.inline.iter().flatten().copied());
+        let inserted = overflow.insert(buffer_id);
+        self.overflow = Some(overflow);
+        inserted
+    }
+}
+
 /// Reference-counted buffer tracker with an inline fast path.
 ///
 /// Tracks buffer addresses with their reference counts. The first
@@ -619,7 +681,7 @@ struct BufferIdMap {
     len: usize,
     /// Overflow storage used when more than `INLINE_BUFFER_IDS` distinct
     /// buffers are tracked.
-    overflow: Option<hashbrown::HashMap<NonZero<usize>, u32>>,
+    overflow: Option<HashMap<NonZero<usize>, u32>>,
 }
 
 impl Default for BufferIdMap {
@@ -662,7 +724,7 @@ impl BufferIdMap {
         }
 
         // Promote to overflow.
-        let mut overflow = hashbrown::HashMap::with_capacity(INLINE_BUFFER_IDS + 1);
+        let mut overflow = HashMap::with_capacity(INLINE_BUFFER_IDS + 1);
         for i in 0..self.len {
             if let Some(id) = self.ids[i] {
                 overflow.insert(id, self.counts[i]);
@@ -789,12 +851,13 @@ mod record_batch_tests {
     }
 
     fn assert_array_memory_size_matches(array: &dyn Array) {
-        let mut counter = RecordBatchMemoryCounter::new();
-        let counted = counter.count_array(array);
+        let counted = RecordBatchMemoryCounter::new().count_array(array);
         assert_eq!(counted, array_data_memory_size(array));
-        // Round-trip: uncounting the same array should release everything.
-        assert_eq!(counter.uncount_array(array), counted);
-        assert_eq!(counter.memory_usage(), 0);
+        // The tracker counts the same, and uncounting releases everything.
+        let mut tracker = RecordBatchMemoryTracker::new();
+        assert_eq!(tracker.count_array(array), counted);
+        assert_eq!(tracker.uncount_array(array), counted);
+        assert_eq!(tracker.memory_usage(), 0);
     }
 
     #[test]
@@ -1326,7 +1389,7 @@ mod record_batch_tests {
 
         let buffer_size = get_record_batch_memory_size(&batch);
 
-        let mut counter = RecordBatchMemoryCounter::new();
+        let mut counter = RecordBatchMemoryTracker::new();
 
         // count_batch(slice1) → buffer_size (parent buffer counted)
         assert_eq!(counter.count_batch(&slice1), buffer_size);
@@ -1473,7 +1536,7 @@ mod record_batch_tests {
         ];
 
         for (name, first, second) in &cases {
-            let mut counter = RecordBatchMemoryCounter::new();
+            let mut counter = RecordBatchMemoryTracker::new();
             let counted1 = counter.count_array(first.as_ref());
             assert!(counted1 > 0, "{name}: first should count some buffers");
             let counted2 = counter.count_array(second.as_ref());
@@ -1501,7 +1564,7 @@ mod record_batch_tests {
             // releases nothing.
             if counted2 == 0 {
                 // Re-run to verify the exact pattern from the issue.
-                let mut c2 = RecordBatchMemoryCounter::new();
+                let mut c2 = RecordBatchMemoryTracker::new();
                 c2.count_array(first.as_ref());
                 c2.count_array(second.as_ref());
                 assert_eq!(
@@ -1522,7 +1585,7 @@ mod record_batch_tests {
             .map(|i| Arc::new(Int32Array::from(vec![i as i32])) as ArrayRef)
             .collect();
 
-        let mut counter = RecordBatchMemoryCounter::new();
+        let mut counter = RecordBatchMemoryTracker::new();
         let mut total_counted = 0usize;
         for array in &arrays {
             total_counted += counter.count_array(array.as_ref());
@@ -1542,7 +1605,7 @@ mod record_batch_tests {
     #[test]
     fn test_uncount_never_counted_is_noop() {
         let array = Int32Array::from(vec![1, 2, 3]);
-        let mut counter = RecordBatchMemoryCounter::new();
+        let mut counter = RecordBatchMemoryTracker::new();
 
         // Uncounting something never counted should return 0 and not panic.
         assert_eq!(counter.uncount_array(&array), 0);
@@ -1552,7 +1615,7 @@ mod record_batch_tests {
     #[test]
     fn test_double_uncount_does_not_underflow() {
         let array = Int32Array::from(vec![1, 2, 3]);
-        let mut counter = RecordBatchMemoryCounter::new();
+        let mut counter = RecordBatchMemoryTracker::new();
 
         counter.count_array(&array);
         counter.uncount_array(&array);
@@ -1579,7 +1642,7 @@ mod record_batch_tests {
         )
         .unwrap();
 
-        let mut counter = RecordBatchMemoryCounter::new();
+        let mut counter = RecordBatchMemoryTracker::new();
         let counted = counter.count_batch_with_array_overhead(&batch);
         assert!(counted > 0);
         assert_eq!(counter.memory_usage(), counted);
@@ -1600,7 +1663,7 @@ mod record_batch_tests {
         let b1 =
             RecordBatch::try_new(Arc::clone(&schema), vec![Arc::clone(&col)]).unwrap();
         let b2 = b1.clone();
-        let mut counter = RecordBatchMemoryCounter::new();
+        let mut counter = RecordBatchMemoryTracker::new();
         let full = counter.count_batch_with_array_overhead(&b1);
         counter.count_batch_with_array_overhead(&b2);
         // b2 shares the ArrayRef, so uncounting b1 should release nothing.
@@ -1624,7 +1687,7 @@ mod record_batch_tests {
                 .unwrap()
                 .slice(3, 3);
 
-        let mut counter = RecordBatchMemoryCounter::new();
+        let mut counter = RecordBatchMemoryTracker::new();
         let counted1 = counter.count_batch_with_array_overhead(&batch1);
         let _counted2 = counter.count_batch_with_array_overhead(&batch2);
         assert!(counted1 > 0);
@@ -1700,7 +1763,7 @@ mod record_batch_tests {
             seed >> 33
         };
 
-        let mut counter = RecordBatchMemoryCounter::new();
+        let mut counter = RecordBatchMemoryTracker::new();
 
         // Reference model: map from buffer addr -> (refcount, capacity).
         let mut ref_map: HashMap<NonZero<usize>, (u32, usize)> = HashMap::new();

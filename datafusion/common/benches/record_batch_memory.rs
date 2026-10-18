@@ -27,7 +27,7 @@ use arrow::datatypes::{DataType, Field, Int64Type, Schema};
 use arrow::record_batch::RecordBatch;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_common::utils::memory::{
-    RecordBatchMemoryCounter, get_record_batch_memory_size,
+    RecordBatchMemoryCounter, RecordBatchMemoryTracker, get_record_batch_memory_size,
 };
 
 fn make_batch(columns: Vec<ArrayRef>) -> RecordBatch {
@@ -196,7 +196,7 @@ fn benchmark_count_uncount(c: &mut Criterion) {
             &slices,
             |bencher, slices| {
                 bencher.iter(|| {
-                    let mut counter = RecordBatchMemoryCounter::new();
+                    let mut counter = RecordBatchMemoryTracker::new();
                     for batch in black_box(slices) {
                         black_box(counter.count_batch(black_box(batch)));
                     }
