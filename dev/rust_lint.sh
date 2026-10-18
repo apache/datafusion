@@ -137,6 +137,8 @@ declare -a READONLY_STEPS=(
   "ci/scripts/check_no_cargo_install_in_workflows.sh|false"
   "ci/scripts/check_asf_yaml_status_checks.py|false"
   "ci/scripts/check_rust_workflow_skips.py|false"
+  "ci/scripts/test_rust_workflow_skips.py|false"
+  "ci/scripts/test_fork_ci_status.cjs|false"
   "ci/scripts/check_large_files.sh|false"
   "ci/scripts/markdown_link_check.sh|false"
   "ci/scripts/security_audit.sh|false"

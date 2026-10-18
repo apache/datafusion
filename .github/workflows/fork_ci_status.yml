@@ -170,8 +170,8 @@ jobs:
                     head_sha: sha,
                     per_page: 10,
                   });
-                  const run =
-                    data.workflow_runs.find((r) => r.event === 'push') || data.workflow_runs[0];
+                  // A newer manual run can replace a cancelled push run.
+                  const run = data.workflow_runs[0];
                   if (run) return run;
                 } catch (error) {
                   // 404 when the fork has Actions disabled or lacks the workflow.
@@ -200,6 +200,17 @@ jobs:
               }
             }
 
+            async function createCheck(pr, attempts) {
+              const fork = { owner: pr.head.repo.owner.login, repo: pr.head.repo.name };
+              const sha = pr.head.sha;
+              const run = await findRun(fork, sha, attempts);
+              const payload = run
+                ? runPayload(fork, sha, run)
+                : missingPayload(fork, sha, await workflowState(fork));
+              await github.rest.checks.create({ ...upstream, name: CHECK, head_sha: sha, ...payload });
+              core.info(`Created ${CHECK} for ${sha}: ${payload.conclusion || payload.status}`);
+            }
+
             async function notify() {
               const pr = context.payload.pull_request;
               // Only fork PRs to main skip jobs upstream; release branches have
@@ -208,19 +219,11 @@ jobs:
                 core.info('Not a fork pull request to main; nothing to mirror.');
                 return;
               }
-              const fork = { owner: pr.head.repo.owner.login, repo: pr.head.repo.name };
-              const sha = pr.head.sha;
-              const run = await findRun(fork, sha, 12);
-              const payload = run
-                ? runPayload(fork, sha, run)
-                : missingPayload(fork, sha, await workflowState(fork));
-              await github.rest.checks.create({ ...upstream, name: CHECK, head_sha: sha, ...payload });
-              core.info(`Created ${CHECK} for ${sha}: ${payload.conclusion || payload.status}`);
+              await createCheck(pr, 12);
             }
 
-            // Bring one pull request's check in line with its fork run. A check
-            // without a run keeps looking for one; a check with a run picks up
-            // progress and reruns.
+            // Discover the latest run again, since a manual run can replace the
+            // recorded run, and the fork can delete old runs.
             async function syncCheck(pr) {
               const { data } = await github.rest.checks.listForRef({
                 ...upstream,
@@ -229,32 +232,22 @@ jobs:
                 per_page: 5,
               });
               const check = data.check_runs[0];
-              if (!check || !check.output || !check.output.text) return;
+              if (!check) {
+                // Recover if the initial notification failed before creating a check.
+                await createCheck(pr, 1);
+                return;
+              }
+              if (!check.output || !check.output.text) return;
               let params;
               try {
                 params = JSON.parse(check.output.text);
               } catch {
                 return;
               }
-              const fork = { owner: params.owner, repo: params.repo };
-              const sha = params.head_sha || pr.head.sha;
-              let run = null;
-              if (params.run_id) {
-                try {
-                  ({ data: run } = await github.rest.actions.getWorkflowRun({
-                    owner: fork.owner,
-                    repo: fork.repo,
-                    run_id: params.run_id,
-                  }));
-                } catch (error) {
-                  // The fork deleted the run or disabled Actions.
-                  core.info(`Run for #${pr.number} unavailable: ${error.message}`);
-                  return;
-                }
-              } else {
-                run = await findRun(fork, sha, 1);
-                if (!run) return;
-              }
+              const fork = { owner: pr.head.repo.owner.login, repo: pr.head.repo.name };
+              const sha = pr.head.sha;
+              const run = await findRun(fork, sha, 1);
+              if (!run) return;
               const payload = runPayload(fork, sha, run);
               if (
                 payload.status === check.status &&
