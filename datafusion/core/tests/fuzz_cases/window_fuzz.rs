@@ -792,21 +792,17 @@ pub(crate) fn make_staggered_batches<const STREAM: bool>(
 ) -> Vec<RecordBatch> {
     // use a random number generator to pick a random sized output
     let mut rng = StdRng::seed_from_u64(random_seed);
-    let mut input123: Vec<(Option<i32>, Option<i32>, Option<i32>)> =
-        vec![(None, None, None); len];
     let mut input4: Vec<Option<i32>> = vec![None; len];
     let mut input5: Vec<String> = vec!["".to_string(); len];
     let random_key = |rng: &mut StdRng| {
         let value = rng.random_range(0..n_distinct) as i32;
         (!rng.random_bool(null_pct)).then_some(value)
     };
-    for v in &mut input123 {
-        *v = (
-            random_key(&mut rng),
-            random_key(&mut rng),
-            random_key(&mut rng),
-        )
-    }
+    let keys: [ArrayRef; 3] = std::array::from_fn(|_| {
+        Arc::new(Int32Array::from_iter(
+            (0..len).map(|_| random_key(&mut rng)),
+        )) as _
+    });
     for v in &mut input4 {
         let value = rng.random();
         *v = (!rng.random_bool(null_pct)).then_some(value);
@@ -815,11 +811,6 @@ pub(crate) fn make_staggered_batches<const STREAM: bool>(
         *v = generate_random_string(&mut rng, 1);
     }
     input5.sort();
-    let keys: [ArrayRef; 3] = [
-        Arc::new(Int32Array::from_iter(input123.iter().map(|k| k.0))),
-        Arc::new(Int32Array::from_iter(input123.iter().map(|k| k.1))),
-        Arc::new(Int32Array::from_iter(input123.iter().map(|k| k.2))),
-    ];
     let sort_columns: Vec<SortColumn> = keys
         .iter()
         .zip(sort_options)
