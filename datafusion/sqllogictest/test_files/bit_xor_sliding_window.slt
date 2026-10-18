@@ -35,9 +35,9 @@ SELECT x,
 FROM t
 ORDER BY i;
 ----
-5|5|5
-NULL|NULL|NULL
-6|6|6
+5 5 5
+NULL NULL NULL
+6 6 6
 
 # A wider frame where every value left after it was added
 statement ok
