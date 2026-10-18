@@ -33,7 +33,6 @@ use datafusion_common::Result;
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, DefaultPhysicalProtoConverter,
 };
-#[cfg(target_pointer_width = "32")]
 use datafusion_proto::protobuf;
 use datafusion_proto::protobuf::PhysicalPlanNode;
 use std::sync::Arc;
@@ -63,6 +62,51 @@ fn roundtrip_global_skip_no_limit() -> Result<()> {
         10,
         None, // no limit
     )))
+}
+
+/// Plans written before 56.0.0 can carry a `required_ordering` on limit
+/// nodes. The decoder must accept them and ignore the field. The sort
+/// expression has no `expr`, so a decoder that still reads the field fails.
+#[test]
+fn limit_decode_ignores_required_ordering() -> Result<()> {
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let required_ordering = vec![protobuf::PhysicalSortExprNode {
+        expr: None,
+        asc: false,
+        nulls_first: true,
+    }];
+    let input = || Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
+
+    let global: Arc<dyn ExecutionPlan> =
+        Arc::new(GlobalLimitExec::new(input(), 3, Some(25)));
+    let mut node = PhysicalPlanNode::try_from_physical_plan(global, &codec)?;
+    let Some(protobuf::physical_plan_node::PhysicalPlanType::GlobalLimit(limit)) =
+        &mut node.physical_plan_type
+    else {
+        panic!("expected GlobalLimitExecNode");
+    };
+    limit.required_ordering = required_ordering.clone();
+    let decoded = node.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
+    let decoded = decoded
+        .downcast_ref::<GlobalLimitExec>()
+        .expect("expected GlobalLimitExec");
+    assert_eq!((decoded.skip(), decoded.fetch()), (3, Some(25)));
+
+    let local: Arc<dyn ExecutionPlan> = Arc::new(LocalLimitExec::new(input(), 25));
+    let mut node = PhysicalPlanNode::try_from_physical_plan(local, &codec)?;
+    let Some(protobuf::physical_plan_node::PhysicalPlanType::LocalLimit(limit)) =
+        &mut node.physical_plan_type
+    else {
+        panic!("expected LocalLimitExecNode");
+    };
+    limit.required_ordering = required_ordering;
+    let decoded = node.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
+    let decoded = decoded
+        .downcast_ref::<LocalLimitExec>()
+        .expect("expected LocalLimitExec");
+    assert_eq!(decoded.fetch(), 25);
+    Ok(())
 }
 
 #[cfg(target_pointer_width = "64")]
