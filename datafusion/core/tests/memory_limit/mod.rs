@@ -549,7 +549,7 @@ async fn sort_merge_join_no_spill() {
         ])
         .with_memory_limit(1_000)
         .with_config(config)
-        .with_scenario(Scenario::AccessLogStreaming)
+        .with_scenario(Scenario::AccessLogStreamingByPodTime)
         .run()
         .await
 }
@@ -568,7 +568,7 @@ async fn sort_merge_join_spill() {
         .with_memory_limit(1_000)
         .with_config(config)
         .with_disk_manager_builder(DiskManagerBuilder::default())
-        .with_scenario(Scenario::AccessLogStreaming)
+        .with_scenario(Scenario::AccessLogStreamingByPodTime)
         .with_expected_success()
         .run()
         .await
@@ -1428,6 +1428,11 @@ enum Scenario {
     /// [`StreamingTable`]
     AccessLogStreaming,
 
+    /// [`Self::AccessLogStreaming`], sorted by `pod, time`, with a
+    /// [`StreamingTable`] that declares that order. A sort merge join on
+    /// `pod, time` then needs no sort.
+    AccessLogStreamingByPodTime,
+
     /// N partitions of sorted, dictionary encoded strings.
     DictionaryStrings {
         partitions: usize,
@@ -1489,6 +1494,23 @@ impl Scenario {
                 .with_infinite_table(true);
                 Arc::new(table)
             }
+            Self::AccessLogStreamingByPodTime => {
+                let batches = access_log_batches_by_pod_time();
+                let table = StreamingTable::try_new(
+                    batches[0].schema(),
+                    vec![Arc::new(DummyStreamPartition {
+                        schema: batches[0].schema(),
+                        batches,
+                    })],
+                )
+                .unwrap()
+                .with_infinite_table(true)
+                .with_sort_order(vec![
+                    datafusion_expr::col("pod").sort(true, true),
+                    datafusion_expr::col("time").sort(true, true),
+                ]);
+                Arc::new(table)
+            }
             Self::DictionaryStrings {
                 partitions,
                 single_row_batches,
@@ -1537,7 +1559,7 @@ impl Scenario {
                 // has a memory budget which we'll likely hit first)
                 Some(vec![Arc::new(JoinSelection::new())])
             }
-            Self::AccessLogStreaming => {
+            Self::AccessLogStreaming | Self::AccessLogStreamingByPodTime => {
                 // Disable all physical optimizer rules except the
                 // JoinSelection rule to avoid sorts or repartition,
                 // as they also have memory budgets that may be hit
@@ -1610,6 +1632,26 @@ fn access_log_batches() -> Vec<RecordBatch> {
     AccessLogGenerator::new()
         .with_row_limit(1000)
         .with_max_batch_size(50)
+        .collect()
+}
+
+/// [`access_log_batches`] sorted by `pod, time`, in batches of 50 rows
+fn access_log_batches_by_pod_time() -> Vec<RecordBatch> {
+    let batches = access_log_batches();
+    let batch = arrow::compute::concat_batches(&batches[0].schema(), &batches).unwrap();
+    let sort_column = |name: &str| arrow::compute::SortColumn {
+        values: Arc::clone(batch.column_by_name(name).unwrap()),
+        options: Some(SortOptions::default()),
+    };
+    let indices = arrow::compute::lexsort_to_indices(
+        &[sort_column("pod"), sort_column("time")],
+        None,
+    )
+    .unwrap();
+    let batch = arrow::compute::take_record_batch(&batch, &indices).unwrap();
+    (0..batch.num_rows())
+        .step_by(50)
+        .map(|offset| batch.slice(offset, 50.min(batch.num_rows() - offset)))
         .collect()
 }
 

@@ -28,16 +28,21 @@ use crate::physical_optimizer::test_utils::{
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
+use datafusion::execution::SessionStateBuilder;
+use datafusion::execution::session_state::SessionState;
 use datafusion::prelude::{CsvReadOptions, SessionContext};
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{JoinType, NullEquality, Result, ScalarValue};
 use datafusion_physical_expr::expressions::{Literal, col};
 use datafusion_physical_expr::{Partitioning, RangePartitioning, SplitPoint};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion_physical_plan::joins::{StreamJoinPartitionMode, SymmetricHashJoinExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::{ExecutionPlan, displayable};
 
 use async_trait::async_trait;
@@ -1010,5 +1015,118 @@ async fn test_union_with_sorts_and_constants() -> Result<()> {
 
     assert_sanity_check(&plan, true);
 
+    Ok(())
+}
+
+/// Removes every [`SortExec`], standing in for a rule that breaks ordering
+/// requirements.
+///
+/// [`SortExec`]: datafusion_physical_plan::sorts::sort::SortExec
+#[derive(Debug)]
+struct RemoveSorts;
+
+impl PhysicalOptimizerRule for RemoveSorts {
+    fn optimize(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        _config: &ConfigOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        plan.transform_up(|plan| {
+            if plan.is::<SortExec>() {
+                Ok(Transformed::yes(Arc::clone(plan.children()[0])))
+            } else {
+                Ok(Transformed::no(plan))
+            }
+        })
+        .data()
+    }
+
+    fn name(&self) -> &str {
+        "remove_sorts"
+    }
+
+    fn schema_check(&self) -> bool {
+        true
+    }
+}
+
+async fn plan_window_query(state: SessionState) -> Result<Arc<dyn ExecutionPlan>> {
+    let ctx = SessionContext::new_with_state(state);
+    ctx.sql("CREATE TABLE t(a INT) AS VALUES (3), (1), (2)")
+        .await?
+        .collect()
+        .await?;
+    ctx.sql("SELECT a, row_number() OVER (ORDER BY a) AS rn FROM t")
+        .await?
+        .create_physical_plan()
+        .await
+}
+
+/// A rule appended after the default rules is checked, and the error names it.
+#[tokio::test]
+async fn test_final_check_names_appended_rule() -> Result<()> {
+    let state = SessionStateBuilder::new()
+        .with_default_features()
+        .with_physical_optimizer_rule(Arc::new(RemoveSorts))
+        .build();
+    let error = plan_window_query(state).await.unwrap_err().to_string();
+    assert!(
+        error.starts_with(
+            "SanityCheckPlan: order and distribution requirements stopped holding \
+             after physical optimizer rule 'remove_sorts'"
+        ),
+        "{error}"
+    );
+    assert!(
+        error.contains("does not satisfy order requirements"),
+        "{error}"
+    );
+    Ok(())
+}
+
+/// A custom rule list is checked too.
+#[tokio::test]
+async fn test_final_check_names_rule_in_custom_pipeline() -> Result<()> {
+    let state = SessionStateBuilder::new()
+        .with_default_features()
+        .with_physical_optimizer_rules(vec![
+            Arc::new(EnsureRequirements::new()),
+            Arc::new(RemoveSorts),
+        ])
+        .build();
+    let error = plan_window_query(state).await.unwrap_err().to_string();
+    assert!(
+        error.starts_with(
+            "SanityCheckPlan: order and distribution requirements stopped holding \
+             after physical optimizer rule 'remove_sorts'"
+        ),
+        "{error}"
+    );
+    Ok(())
+}
+
+/// Without `EnsureRequirements`, the window's sort is never added.
+#[tokio::test]
+async fn test_final_check_without_ensure_requirements() -> Result<()> {
+    let state = SessionStateBuilder::new()
+        .with_default_features()
+        .with_physical_optimizer_rules(vec![Arc::new(RemoveSorts)])
+        .build();
+    let error = plan_window_query(state).await.unwrap_err().to_string();
+    assert!(
+        error.starts_with(
+            "SanityCheckPlan: no physical optimizer rule produced a plan that \
+             satisfies the order and distribution requirements"
+        ),
+        "{error}"
+    );
+    Ok(())
+}
+
+/// The default rules produce a plan that passes the final check.
+#[tokio::test]
+async fn test_final_check_passes_default_rules() -> Result<()> {
+    let state = SessionStateBuilder::new().with_default_features().build();
+    plan_window_query(state).await?;
     Ok(())
 }
