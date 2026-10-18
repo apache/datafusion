@@ -408,3 +408,25 @@ debug = false
 debug-assertions = false
 strip = "debuginfo"
 incremental = false
+
+# TODO: remove once arrow-rs releases the `Sbbf` APIs of
+# (branch sbbf-batch-union-apis-60 = arrow-rs 60.0.0 + #11088 + the commits of)
+# https://github.com/apache/arrow-rs/pull/11641 (used by the hash join bloom filter)
+[patch.crates-io]
+arrow = { git = "https://github.com/adriangb/arrow-rs.git", rev = "927b52e09f6044e739228001c37b4fc12327d3e9" }
+arrow-arith = { git = "https://github.com/adriangb/arrow-rs.git", rev = "927b52e09f6044e739228001c37b4fc12327d3e9" }
+arrow-array = { git = "https://github.com/adriangb/arrow-rs.git", rev = "927b52e09f6044e739228001c37b4fc12327d3e9" }
+arrow-avro = { git = "https://github.com/adriangb/arrow-rs.git", rev = "927b52e09f6044e739228001c37b4fc12327d3e9" }
+arrow-buffer = { git = "https://github.com/adriangb/arrow-rs.git", rev = "927b52e09f6044e739228001c37b4fc12327d3e9" }
+arrow-cast = { git = "https://github.com/adriangb/arrow-rs.git", rev = "927b52e09f6044e739228001c37b4fc12327d3e9" }
+arrow-csv = { git = "https://github.com/adriangb/arrow-rs.git", rev = "927b52e09f6044e739228001c37b4fc12327d3e9" }
+arrow-data = { git = "https://github.com/adriangb/arrow-rs.git", rev = "927b52e09f6044e739228001c37b4fc12327d3e9" }
+arrow-flight = { git = "https://github.com/adriangb/arrow-rs.git", rev = "927b52e09f6044e739228001c37b4fc12327d3e9" }
+arrow-ipc = { git = "https://github.com/adriangb/arrow-rs.git", rev = "927b52e09f6044e739228001c37b4fc12327d3e9" }
+arrow-json = { git = "https://github.com/adriangb/arrow-rs.git", rev = "927b52e09f6044e739228001c37b4fc12327d3e9" }
+arrow-ord = { git = "https://github.com/adriangb/arrow-rs.git", rev = "927b52e09f6044e739228001c37b4fc12327d3e9" }
+arrow-row = { git = "https://github.com/adriangb/arrow-rs.git", rev = "927b52e09f6044e739228001c37b4fc12327d3e9" }
+arrow-schema = { git = "https://github.com/adriangb/arrow-rs.git", rev = "927b52e09f6044e739228001c37b4fc12327d3e9" }
+arrow-select = { git = "https://github.com/adriangb/arrow-rs.git", rev = "927b52e09f6044e739228001c37b4fc12327d3e9" }
+arrow-string = { git = "https://github.com/adriangb/arrow-rs.git", rev = "927b52e09f6044e739228001c37b4fc12327d3e9" }
+parquet = { git = "https://github.com/adriangb/arrow-rs.git", rev = "927b52e09f6044e739228001c37b4fc12327d3e9" }
