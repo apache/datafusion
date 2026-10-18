@@ -38,7 +38,7 @@ use log::debug;
 
 use crate::covariance::CovarianceAccumulator;
 use crate::stddev::StddevAccumulator;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, not_impl_err};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
     function::{AccumulatorArgs, StateFieldsArgs},
@@ -108,7 +108,10 @@ impl AggregateUDFImpl for Correlation {
         Ok(DataType::Float64)
     }
 
-    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        if acc_args.is_distinct {
+            return not_impl_err!("CORR(DISTINCT) aggregations are not available");
+        }
         Ok(Box::new(CorrelationAccumulator::try_new()?))
     }
 
@@ -139,8 +142,8 @@ impl AggregateUDFImpl for Correlation {
         self.doc()
     }
 
-    fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
-        true
+    fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
+        !args.is_distinct
     }
 
     fn create_groups_accumulator(
@@ -152,9 +155,8 @@ impl AggregateUDFImpl for Correlation {
     }
 
     fn distinct_handling(&self) -> DistinctHandling {
-        // Duplicate-sensitive, but the accumulator does not read
-        // `is_distinct` and today silently returns the non-distinct answer.
-        // The tag records the intent; enforcement is a follow-up change.
+        // The accumulator rejects `DISTINCT` with `not_impl_err!`, so the
+        // planner has to deduplicate the input first.
         DistinctHandling::Unsupported
     }
 }

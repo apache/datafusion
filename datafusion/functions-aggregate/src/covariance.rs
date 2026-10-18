@@ -20,7 +20,7 @@
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{as_float64_array, as_uint64_array};
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, not_impl_err};
 use datafusion_expr::DistinctHandling;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
@@ -118,7 +118,10 @@ impl AggregateUDFImpl for CovarianceSample {
         .collect())
     }
 
-    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        if acc_args.is_distinct {
+            return not_impl_err!("COVAR_SAMP(DISTINCT) aggregations are not available");
+        }
         Ok(Box::new(CovarianceAccumulator::try_new(StatsType::Sample)?))
     }
 
@@ -131,9 +134,8 @@ impl AggregateUDFImpl for CovarianceSample {
     }
 
     fn distinct_handling(&self) -> DistinctHandling {
-        // Duplicate-sensitive, but the accumulator does not read
-        // `is_distinct` and today silently returns the non-distinct answer.
-        // The tag records the intent; enforcement is a follow-up change.
+        // The accumulator rejects `DISTINCT` with `not_impl_err!`, so the
+        // planner has to deduplicate the input first.
         DistinctHandling::Unsupported
     }
 }
@@ -205,7 +207,10 @@ impl AggregateUDFImpl for CovariancePopulation {
         .collect())
     }
 
-    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        if acc_args.is_distinct {
+            return not_impl_err!("COVAR_POP(DISTINCT) aggregations are not available");
+        }
         Ok(Box::new(CovarianceAccumulator::try_new(
             StatsType::Population,
         )?))
@@ -216,9 +221,8 @@ impl AggregateUDFImpl for CovariancePopulation {
     }
 
     fn distinct_handling(&self) -> DistinctHandling {
-        // Duplicate-sensitive, but the accumulator does not read
-        // `is_distinct` and today silently returns the non-distinct answer.
-        // The tag records the intent; enforcement is a follow-up change.
+        // The accumulator rejects `DISTINCT` with `not_impl_err!`, so the
+        // planner has to deduplicate the input first.
         DistinctHandling::Unsupported
     }
 }
